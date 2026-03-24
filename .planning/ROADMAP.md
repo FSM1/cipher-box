@@ -171,13 +171,13 @@ Plans:
 
 Plans:
 
-- [ ] 23-01-PLAN.md -- Cargo workspace scaffold + cipherbox-crypto crate extraction
-- [ ] 23-02-PLAN.md -- cipherbox-core crate extraction (domain types, metadata, IPNS records)
-- [ ] 23-03-PLAN.md -- cipherbox-api-client crate + shared test vectors extraction
-- [ ] 23-04-PLAN.md -- cipherbox-fuse crate extraction (platform-agnostic + platform modules)
+- [x] 23-01-PLAN.md -- Cargo workspace scaffold + cipherbox-crypto crate extraction
+- [x] 23-02-PLAN.md -- cipherbox-core crate extraction (domain types, metadata, IPNS records)
+- [x] 23-03-PLAN.md -- cipherbox-api-client crate + shared test vectors extraction
+- [x] 23-04-PLAN.md -- cipherbox-fuse crate extraction (platform-agnostic + platform modules)
 - [x] 23-05-PLAN.md -- cipherbox-sdk crate extraction (sync, queue, state, registry)
-- [ ] 23-06-PLAN.md -- Desktop app thin shell cleanup + full workspace verification
-- [ ] 23-07-PLAN.md -- CI workspace builds + Release Please + cross-language parity gate
+- [x] 23-06-PLAN.md -- Desktop app thin shell cleanup + full workspace verification
+- [x] 23-07-PLAN.md -- CI workspace builds + Release Please + cross-language parity gate
 - [x] 23-08-PLAN.md -- Gap closure: Move Windows WinFsp operations to crates/fuse/src/platform/windows/
 
 ## Progress

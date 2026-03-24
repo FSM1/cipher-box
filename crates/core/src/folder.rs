@@ -16,7 +16,7 @@ use cipherbox_crypto::error::CryptoError;
 
 #[derive(Debug, Error)]
 pub enum FolderError {
-    #[error("Encryption failed")]
+    #[error("Crypto operation failed")]
     EncryptionFailed(#[from] CryptoError),
     #[error("Serialization failed")]
     SerializationFailed,

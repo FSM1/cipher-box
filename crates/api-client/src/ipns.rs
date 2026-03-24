@@ -34,9 +34,23 @@ pub async fn resolve_ipns(
         });
     }
 
-    resp.json::<IpnsResolveResponse>()
+    let status = resp.status().as_u16();
+    let body: IpnsResolveResponse = resp
+        .json()
         .await
-        .map_err(|e| ApiError::DeserializationFailed(format!("IPNS resolve response: {}", e)))
+        .map_err(|e| ApiError::DeserializationFailed(format!("IPNS resolve response: {}", e)))?;
+
+    if !body.success || body.cid.is_empty() {
+        return Err(ApiError::ApiResponse {
+            status,
+            message: format!(
+                "IPNS resolve unsuccessful: success={}, cid='{}'",
+                body.success, body.cid
+            ),
+        });
+    }
+
+    Ok(body)
 }
 
 /// Publish a signed IPNS record via the backend.
