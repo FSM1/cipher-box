@@ -27,6 +27,9 @@ base64 = "0.22"
 prost = "0.13"
 ciborium = "0.2"
 
+# Critical section (std impl for ecies pure mode)
+critical-section = { version = "1", features = ["std"] }
+
 # Error handling
 thiserror = "2"
 log = "0.4"
