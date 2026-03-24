@@ -1271,11 +1271,19 @@
           btn.textContent = '[ Resolving vault... ]';
 
           try {
-            // 1. Resolve IPNS to CID
-            const cid = await resolveIpns(directRootIpnsName, ipnsGateway);
-
-            // 2. Fetch blob from IPFS
-            const blobBytes = await fetchFromIpfs(cid, ipfsGateway);
+            // Fetch vault blob via IPFS gateway's /ipns/ path (resolves + fetches in one request)
+            // This avoids delegated routing API complexity and CORS issues with Kubo API
+            let blobBytes;
+            try {
+              const ipnsUrl = `${ipfsGateway}/ipns/${directRootIpnsName}`;
+              const resp = await fetch(ipnsUrl);
+              if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
+              blobBytes = new Uint8Array(await resp.arrayBuffer());
+            } catch (gatewayErr) {
+              // Fallback: resolve IPNS separately then fetch content
+              const cid = await resolveIpns(directRootIpnsName, ipnsGateway);
+              blobBytes = await fetchFromIpfs(cid, ipfsGateway);
+            }
 
             // 3. Detect version
             if (detectBlobVersion(blobBytes) !== 2) {
