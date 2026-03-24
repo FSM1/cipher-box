@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "716c90051044",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T06:13:50.847637Z",
+  "branch": "fix/vault-key-ipns-separation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "a074cfeab421",
+  "token_usage": {
+    "input_tokens": 80,
+    "cache_creation_tokens": 83096,
+    "cache_read_tokens": 3961092,
+    "output_tokens": 19945,
+    "api_call_count": 64
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Monitor PR #349 for new automated reviewer comments (CodeRabbit, Copilot) and automatically resolve them using /resolve-pr-reviews when detected.",
+    "outcome": "Successfully set up a 5-minute polling cron job, resolved 4 Copilot review threads (3 doc fixes + 1 real bug in recovery.html), and then manually fixed an additional 'outside diff range' CodeRabbit comment about an overly broad try/catch in useAuth.ts.",
+    "learnings": {
+      "repo": [
+        "VaultBlobV2 type was removed — functions that previously returned VaultBlobV2 now return Uint8Array directly",
+        "v2 vault blobs are key-only (ECIES-wrapped rootFolderKey), not key + metadata as older docs stated",
+        "recovery.html had a critical bug where vault key IPNS name was used for root folder traversal — requires deriving two separate IPNS names",
+        "IPNS derivation uses separate HKDF info constants for vault key IPNS vs root folder IPNS",
+        "fetchFromIpfs uses Axios and throws with error.response.status === 404 for missing CIDs, meaning a broad catch around IPFS/IPNS calls could falsely treat network errors as 'new user'"
+      ],
+      "code": [
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Encryption table incorrectly described v2 blob as 'ECIES (key) + AES-256-GCM (metadata)' — it is key-only"
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 304,
+          "end_line": 304,
+          "finding": "Referenced VaultBlobV2 type which no longer exists; functions return Uint8Array"
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 441,
+          "end_line": 441,
+          "finding": "IPNS table described v2 blob as 'ECIES key + metadata' — corrected to 'ECIES-wrapped rootFolderKey only'"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1312,
+          "end_line": 1312,
+          "finding": "directRootIpnsName was derived as vault key IPNS name but used as root folder IPNS name for folder traversal — real bug requiring separate derivation"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 102,
+          "end_line": 135,
+          "finding": "Overly broad try/catch: getVault() 404 should mean 'new user' but the catch covered all IPFS/IPNS calls, so a missing CID anywhere could incorrectly trigger vault re-initialization"
+        }
+      ],
+      "workflow": [
+        "CronCreate with recurring:true can be used to poll GitHub GraphQL API for PR review thread state every 5 minutes",
+        "gh api graphql with --jq filtering is effective for counting unresolved review threads by bot authors",
+        "Outside-diff-range review comments don't appear in normal thread queries and require fetching the specific review by ID",
+        "Cron jobs auto-expire after 7 days; CronDelete needed to cancel sooner",
+        "pnpm typecheck was sufficient to validate the useAuth.ts structural change before committing"
+      ]
+    },
+    "friction": [
+      "GitHub API timed out on one polling tick (transient network issue), causing a false 'unable to confirm' response",
+      "Outside-diff-range Copilot comments were not caught by the automated polling query and required manual user intervention to surface",
+      "recovery.html IPNS fix required multiple iterative reads to locate the right function and call sites due to file size",
+      "useAuth.ts indentation became inconsistent after the structural refactor and required a follow-up edit to fix"
+    ],
+    "open_items": [
+      "Cron monitor (job ID cadb6bcb) still running — will auto-expire in 7 days unless cancelled with CronDelete",
+      "useAuth.ts commit was staged but transcript ends before push/reply — unclear if that fix was fully pushed and the review thread replied to and resolved",
+      "The 'outside diff range' Copilot review (review ID 3996563546) may still have open threads if the reply/resolve step wasn't completed"
+    ]
+  }
+}
