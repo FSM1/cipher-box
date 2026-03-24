@@ -25,7 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material (gap closure in progress) (completed 2026-03-24)
 - [ ] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing
 - [ ] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, k6 load testing, and capacity documentation
-- [ ] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript
+- [x] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (completed 2026-03-24)
 
 ## Phase Details
 
@@ -167,7 +167,7 @@ Plans:
 4. CI runs workspace-level builds on macOS, Linux, and Windows with cross-language parity gate
 5. No duplicated crypto, domain, or API logic remains in the desktop app
 
-**Plans:** 6/7 plans executed
+**Plans:** 7/7 plans complete
 
 Plans:
 
@@ -193,7 +193,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 20. Vault Migration                       | 6/6       | Complete       | 2026-03-24  | -          |
 | 21. BYO-IPFS Node Support                 | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
-| 23. Rust SDK Extraction                   | 6/7       | In Progress    |             | -          |
+| 23. Rust SDK Extraction                   | 7/7       | Complete       | 2026-03-24  | -          |
 
 ---
 
