@@ -1,0 +1,180 @@
+https://github.com/FSM1/cipher-box/pull/352#issuecomment-4118656558 codecov is reporting very little test coverage of a lot of the rust code changes. can we now increase test coverage for the rust codebase?
+
+---
+
+<task-notification>
+<task-id>a033dc804a3eb6b6b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/a033dc804a3eb6b6b.output</output-file>
+<status>completed</status>
+<summary>Agent "Write crypto crate unit tests" completed</summary>
+<result>All 75 unit tests pass (plus the 5 pre-existing cross-language integration tests). Here is a summary of what was added to each file:
+
+**`crates/crypto/src/aes.rs`** (7 tests): encrypt/decrypt round-trip, seal/unseal round-trip, wrong key failure, corrupted ciphertext failure, empty plaintext round-trip, too-short sealed data failure, unseal with wrong key failure.
+
+**`crates/crypto/src/aes_ctr.rs`** (10 tests): encrypt/decrypt round-trip, full range decrypt, partial from start, mid-block offset (byte 7), spanning multiple blocks (offset 100, len 500), single byte, empty ciphertext, start beyond data, invalid range, empty plaintext round-trip.
+
+**`crates/crypto/src/ecies.rs`** (6 tests): wrap/unwrap round-trip with generated keypair, unwrap with wrong private key, wrap with invalid public key (all zeros), wrap with wrong-size public key, unwrap truncated ciphertext, unwrap with invalid private key size.
+
+**`crates/crypto/src/ed25519.rs`** (10 tests): keypair size validation, sign/verify round-trip, verify wrong message, verify wrong key, sign with invalid key size, verify with bad signature size, verify with bad public key size, get_public_key determinism, get_public_key matches generated, get_public_key invalid size.
+
+**`crates/crypto/src/hkdf.rs`** (11 tests): vault/vault_key/registry/bin/file derivation all return 32-byte keys with "k"-prefixed names, determinism check, different derivation paths produce different outputs, vault vs vault_key differ, file_id < 10 chars fails, exactly 10 chars succeeds, 9 chars fails.
+
+**`crates/crypto/src/ipns_name.rs`** (14 tests): name starts with "k", same key determinism, different keys differ, varint encoding for 0/1/127/128/255/300/16384, base36 empty/single byte/leading zeros, libp2p public key protobuf format validation.
+
+**`crates/crypto/src/utils.rs`** (17 tests): hex round-trip, hex lowercase, odd-length fails, invalid chars fails, empty string, generate_file_key size and randomness, generate_iv size and randomness, generate_random_bytes for various lengths, clear_bytes zeros all and handles empty, UUID v4 format validation (length, dashes, version nibble, variant nibble), mime_from_extension known/case-insensitive/unknown.</result>
+<usage><total_tokens>44787</total_tokens><tool_uses>18</tool_uses><duration_ms>139248</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/a033dc804a3eb6b6b.output
+
+---
+
+<task-notification>
+<task-id>ad4c3ca16f63ece16</task-id>
+<tool-use-id>toolu_018jQ5act81qD6YoChawAntX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/ad4c3ca16f63ece16.output</output-file>
+<status>completed</status>
+<summary>Agent "Write SDK crate unit tests" completed</summary>
+<result>All 33 tests pass. Here is a summary of what was added to each file:
+
+### `/Users/michael/Code/cipher-box/crates/sdk/src/queue.rs` (12 tests)
+- `new_creates_empty_queue` -- verifies `WriteQueue::new()` starts empty
+- `enqueue_adds_items_and_len_reflects_count` -- verifies `enqueue` increments `len()`
+- `is_empty_returns_correct_values` -- true when empty, false when populated
+- `default_creates_queue_with_max_retries_5` -- verifies `Default` impl
+- `process_dequeues_in_fifo_order` -- uses an order-tracking mock `UploadHandler` to confirm FIFO
+- `process_success_removes_items` -- successful uploads remove items from queue
+- `process_failure_increments_retries_and_requeues` -- failed items get requeued with incremented retry count, dropped after exceeding `max_retries`
+- `process_empty_queue_returns_zero` -- processing empty queue returns `Ok(0)`
+
+Two mock `UploadHandler` implementations (`AlwaysOk`, `AlwaysFail`) plus an `OrderTracker` for FIFO verification.
+
+### `/Users/michael/Code/cipher-box/crates/sdk/src/state.rs` (4 tests)
+- `new_creates_state_with_none_fields` -- all `RwLock` fields are `None`, `is_authenticated` is false
+- `fields_are_writable_and_readable` -- write values then read them back
+- `clear_zeros_all_sensitive_byte_fields` -- populates all fields with non-zero data, calls `clear()`, verifies everything is `None`/`false`
+- `sync_status_variants` -- verifies `SyncStatus` enum equality/inequality
+
+### `/Users/michael/Code/cipher-box/crates/sdk/src/registry.rs` (13 tests)
+- `device_info_construction_and_field_access` -- build `DeviceInfo`, verify all fields
+- `device_info_clone` -- clone preserves values
+- `device_platform_enum_variants` -- all 4 variants exist and are distinct
+- `device_auth_status_variants` -- all 3 variants exist and are distinct
+- `get_device_platform_returns_valid_variant` -- returns a known platform variant
+- `get_device_model_returns_non_empty_string` -- non-empty string
+- `get_device_name_returns_non_empty_string` -- non-empty string
+- `device_auth_status_serde_roundtrip` -- serialize + deserialize preserves value
+- `device_platform_serde_roundtrip` -- serialize + deserialize preserves value
+- `device_platform_serde_uses_lowercase` -- confirms `#[serde(rename_all = "lowercase")]`
+- `device_auth_status_serde_uses_lowercase` -- confirms lowercase serialization
+- `device_registry_serde_roundtrip` -- full `DeviceRegistry` with a `DeviceEntry` round-trips through JSON
+- `now_ms_returns_reasonable_timestamp` -- returns value after 2020-01-01
+
+### `/Users/michael/Code/cipher-box/crates/sdk/src/error.rs` (8 tests)
+- `display_sync_error` / `display_queue_error` / `display_registry_error` / `display_key_state_error` / `display_not_authenticated` -- verify `Display` output for each string-carrying variant
+- `error_variants_are_constructible` -- all variants can be built
+- `error_is_debug_printable` -- `Debug` impl works
+- `error_implements_std_error` -- confirms `SdkError` is a valid `Box<dyn std::error::Error>`</result>
+<usage><total_tokens>38736</total_tokens><tool_uses>13</tool_uses><duration_ms>136951</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/ad4c3ca16f63ece16.output
+
+---
+
+<task-notification>
+<task-id>aecf37ffe975bad8b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/aecf37ffe975bad8b.output</output-file>
+<status>completed</status>
+<summary>Agent "Write core crate unit tests" completed</summary>
+<result>6 test functions in decrypt.rs. All 55 tests pass (8+10+6+6+9+2+14 = 55). That matches perfectly.
+
+Here is a summary of what was done:
+
+**Files modified:**
+
+1. `/Users/michael/Code/cipher-box/crates/core/Cargo.toml` -- Added `ecies` as a dev-dependency for generating secp256k1 keypairs in bin.rs tests.
+
+2. `/Users/michael/Code/cipher-box/crates/core/src/folder.rs` -- Added 8 tests:
+   - `encrypt_decrypt_folder_metadata_empty_children` - Round-trip with empty children
+   - `encrypt_decrypt_folder_metadata_with_children` - Round-trip with folder + file entries
+   - `decrypt_folder_metadata_wrong_key_returns_error` - Wrong key error case
+   - `encrypt_decrypt_file_metadata_round_trip` - File metadata round-trip
+   - `version_field_preserved_in_folder_metadata` - Version field preservation
+   - `decrypt_folder_metadata_rejects_non_v2` - Rejects v1 metadata
+   - `file_metadata_default_encryption_mode` - Default "GCM" when field missing
+   - `file_metadata_with_versions_round_trip` - File metadata with VersionEntry
+
+3. `/Users/michael/Code/cipher-box/crates/core/src/ipns.rs` -- Added 10 tests:
+   - `create_ipns_record_produces_valid_fields` - Field correctness
+   - `create_ipns_record_v2_signature_verifiable` - V2 signature verification
+   - `format_validity_timestamp_epoch_zero` - Epoch 0 formatting
+   - `format_validity_timestamp_known_date` - Known date (2024-01-01)
+   - `format_validity_timestamp_with_nanos` - Nanosecond precision
+   - `civil_from_days_epoch` - Day 0 = 1970-01-01
+   - `civil_from_days_one_year` - Day 365 = 1971-01-01
+   - `civil_from_days_leap_year` - 1972-02-29 leap year
+   - `build_cbor_data_produces_valid_cbor` - CBOR validity and key presence
+   - `different_sequences_produce_different_output` - Sequence 0 vs 100
+
+4. `/Users/michael/Code/cipher-box/crates/core/src/bin.rs` -- Added 6 tests:
+   - `empty_bin_metadata_returns_v1_with_empty_entries` - Factory function
+   - `encrypt_decrypt_bin_metadata_round_trip` - ECIES round-trip
+   - `encrypt_decrypt_bin_metadata_with_entries` - Round-trip with multiple entries
+   - `decrypt_bin_metadata_wrong_key_returns_error` - Wrong key error
+   - `bin_item_type_serializes_lowercase` - Enum serialization
+   - `bin_metadata_camel_case_fields` - camelCase in JSON
+
+5. `/Users/michael/Code/cipher-box/crates/core/src/decrypt.rs` -- Added 6 tests:
+   - `decrypt_metadata_from_ipfs_public_round_trip` - Folder metadata via JSON format
+   - `decrypt_file_metadata_from_ipfs_public_round_trip` - File metadata via JSON format
+   - `invalid_json_input_returns_error` - Bad JSON
+   - `invalid_base64_in_data_field_returns_error` - Bad base64
+   - `invalid_iv_hex_returns_error` - Bad IV hex
+   - `wrong_key_returns_decryption_error` - Wrong decryption key
+
+6. `/Users/michael/Code/cipher-box/crates/core/src/registry.rs` -- Added 9 tests:
+   - `device_registry_serde_round_trip` - Full serialize/deserialize
+   - `camel_case_field_names_in_json` - camelCase field verification
+   - `device_auth_status_serializes_lowercase` - Enum serialization
+   - `platform_serializes_lowercase` - Platform enum serialization
+   - `optional_fields_skipped_when_none` - None fields as null
+   - `optional_fields_present_when_some` - Some fields present
+   - `empty_devices_registry_round_trip` - Empty devices array
+   - `platform_deserializes_from_lowercase` - Deserialization
+   - `auth_status_deserializes_from_lowercase` - Deserialization
+
+7. `/Users/michael/Code/cipher-box/crates/core/src/vault_blob.rs` -- Added 2 tests to fill gaps:
+   - `test_detect_empty_blob_defaults_to_v1` - Empty input edge case
+   - `test_large_key_round_trip` - Max size (65535 bytes) round-trip</result>
+<usage><total_tokens>74670</total_tokens><tool_uses>46</tool_uses><duration_ms>333615</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/aecf37ffe975bad8b.output
+
+---
+
+ok the windows cargo check is failing, and so is the cross-language vector parity https://github.com/FSM1/cipher-box/actions/runs/23495322643/job/68374806551?pr=352
+
+---
+
+/resolve-pr-reviews
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23495979656/job/68377196343?pr=352 desktop windows cargo check is still failing
+
+---
+
+/resolve-pr-reviews
+
+---
+
+continue please
+
+---
+
+/resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews

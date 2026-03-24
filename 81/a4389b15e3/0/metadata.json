@@ -1,0 +1,118 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "81a4389b15e3",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T19:19:41.480725Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "e8350bc26dfb",
+  "token_usage": {
+    "input_tokens": 281,
+    "cache_creation_tokens": 493768,
+    "cache_read_tokens": 39524687,
+    "output_tokens": 52100,
+    "api_call_count": 248
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Complete Phase 23 (Rust SDK Extraction) gap closure execution, run a security review on the extracted crates, fix security findings, add test coverage to address low Codecov scores, and merge the work into a PR.",
+    "outcome": "All 8 plans of Phase 23 executed and verified; PR #352 created with 163 new unit tests, two HIGH security fixes (Ed25519 zeroization, Zeroizing return type), multiple CI fixes, and all CodeRabbit/Copilot review comments resolved across three rounds.",
+    "learnings": {
+      "repo": [
+        "fuser (Unix FUSE library) is vendored at apps/desktop/src-tauri/vendor/fuser and patched via workspace [patch.crates-io], causing it to be resolved on all platforms including Windows even when unused",
+        "The workspace uses [patch.crates-io] for fuser, which forces Cargo to resolve and attempt to compile it on all targets regardless of feature flags — fixed by moving fuser to [target.'cfg(unix)'.dependencies]",
+        "ed25519-dalek's SigningKey does not zero on drop unless the 'zeroize' feature is explicitly enabled in workspace Cargo.toml",
+        "generate_ed25519_keypair callers were wrapping the returned Vec\u003cu8\u003e in redundant Zeroizing::new() — the function now returns Zeroizing\u003cVec\u003cu8\u003e\u003e directly",
+        "CI collects Rust coverage via cargo llvm-cov --workspace on Linux; any added unit tests automatically improve Codecov reporting",
+        "The cross-language parity job was missing pnpm version: 10 in its setup-node step, causing it to fail",
+        "IpnsPublishRequest derived Debug, leaking encrypted IPNS key material in log output — requires custom Debug impl",
+        "fetch_and_populate_folder and resolve_file_pointers_blocking existed in both macOS/Linux and Windows operations.rs files but had no external callers — dead code across both platform paths"
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "line": 1,
+          "end_line": 30,
+          "finding": "generate_ed25519_keypair returned bare Vec\u003cu8\u003e for private key; changed to Zeroizing\u003cVec\u003cu8\u003e\u003e to ensure memory zeroing on drop"
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 472,
+          "end_line": 500,
+          "finding": "Callers wrapped generate_ed25519_keypair result in redundant Zeroizing::new(); also Zeroizing\u003cVec\u003cu8\u003e\u003e.try_into() for [u8;32] requires .into_inner() first since Zeroizing doesn't implement TryInto\u003c[u8;32]\u003e"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "ipns_private_key.try_into() for [u8;32] fails with Zeroizing\u003cVec\u003cu8\u003e\u003e; must call .into_inner().try_into()"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/build.rs",
+          "line": 1,
+          "end_line": 15,
+          "finding": "Vendored fuser build.rs panics on Windows via unimplemented!() — added early return for Windows target, though the real fix was moving fuser to cfg(unix) target dependencies"
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 102,
+          "end_line": 102,
+          "finding": "Copy-paste bug: app_version field was being set to device_info.device_id instead of device_info.app_version — caught by Copilot review"
+        },
+        {
+          "path": "crates/crypto/src/ipns_name.rs",
+          "line": 13,
+          "end_line": 25,
+          "finding": "Key length cast to u8 via 'as u8' would silently truncate for keys \u003e255 bytes; changed to u16 with proper varint encoding"
+        },
+        {
+          "path": "crates/api-client/src/client.rs",
+          "line": 115,
+          "end_line": 115,
+          "finding": "get_bytes method existed but had zero callers — removed as dead code rather than fixing missing status code check"
+        },
+        {
+          "path": "crates/fuse/src/platform/linux.rs",
+          "line": 17,
+          "end_line": 40,
+          "finding": "Temp directory cleanup was happening before unmount, leaving filesystem in inconsistent state on error paths; moved cleanup after unmount in all code paths"
+        },
+        {
+          "path": "crates/api-client/src/auth.rs",
+          "line": 67,
+          "end_line": 67,
+          "finding": "? operator on logout was propagating transport errors that should be best-effort; changed to match to handle gracefully"
+        }
+      ],
+      "workflow": [
+        "GSD execute-phase workflow: when a subagent disconnects mid-execution, check git log for completed task commits, verify acceptance criteria, then manually complete bookkeeping (SUMMARY.md, STATE.md, ROADMAP.md) rather than re-running the whole plan",
+        "Cargo workspace [patch.crates-io] applies to ALL workspace members regardless of feature flags — use [target.'cfg(unix)'.dependencies] to truly gate Unix-only crates from Windows compilation",
+        "CodeRabbit runs multiple review rounds as new commits are pushed; each round generates new unresolved threads requiring another resolve-pr-comments pass",
+        "1Password SSH agent can transiently fail to sign commits; retrying after a pause resolves the issue most of the time",
+        "Parallel subagent test writing (one agent per crate) is effective for adding coverage quickly — all three agents completed independently without conflicts",
+        "Security review should be committed to .planning/security/ and included in PRs as documentation artifacts"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent failed to sign commits multiple times throughout the session, requiring repeated retries",
+      "API connection refused mid-wave-execution caused the gsd-executor subagent to disconnect, requiring manual resume and bookkeeping",
+      "Windows cargo check failed twice: first due to vendored fuser build.rs panicking, then again because moving the build.rs fix wasn't enough — the Rust source itself compiled on Windows via the workspace patch",
+      "CodeRabbit posted the same ECIES min-size comment across three separate review rounds despite being marked 'not applicable' each time",
+      "gh CLI log fetching required multiple attempts with different flags to extract actual compiler errors from CI job output",
+      "Zeroizing\u003cVec\u003cu8\u003e\u003e.try_into::\u003c[u8;32]\u003e() doesn't work directly — requires .into_inner() first, which wasn't immediately obvious"
+    ],
+    "open_items": [
+      "AES-CTR ciphertext integrity: client doesn't verify IPFS CID after fetching bytes, meaning a malicious relay could serve tampered ciphertext with predictable bit-flip impact — MEDIUM finding left unaddressed",
+      "file_ipns_private_key in write_ops.rs uses ed25519_dalek directly (not generate_ed25519_keypair) and returns plain Vec\u003cu8\u003e without Zeroizing — secondary key generation path not covered by the zeroization fix",
+      "build_folder_metadata extracts Zeroizing\u003cVec\u003cu8\u003e\u003e via .to_vec() returning plain Vec\u003cu8\u003e — the extraction pattern leaks zeroization protection for inode-stored keys passed to spawn_metadata_publish",
+      "ed25519-dalek zeroize feature now enabled workspace-wide — should verify no other crates have conflicting feature requirements",
+      "~30 test case suggestions from the security review (attack scenarios, replay/nonce-reuse, padding oracle) were generated but not implemented as actual tests"
+    ]
+  }
+}
