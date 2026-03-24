@@ -111,10 +111,10 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
 1. New users get vault blob v2 format on first login, with rootFolderKey ECIES-wrapped in the blob header and readable without any database round-trip
-2. Existing users are lazily migrated to vault blob v2 on their next folder metadata publish, with the DB copy retained as a permanent fallback
+2. All vaults use v2 format — DB crypto columns (encryptedRootFolderKey, encryptedRootIpnsPrivateKey, migratedAt) dropped entirely
 3. The standalone recovery tool parses vault blob v2 and extracts rootFolderKey without needing the CipherBox API or database
 4. The desktop app (Rust) parses vault blob v2 and uses the embedded rootFolderKey for FUSE mount initialization
-5. The encryptedRootIpnsPrivateKey column is deprecated from the vaults table (HKDF derivation is the canonical path)
+5. The encryptedRootIpnsPrivateKey column is dropped from the vaults table (HKDF derivation is the canonical path)
 
 **Plans:** 6/6 plans complete
 

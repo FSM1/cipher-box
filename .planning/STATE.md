@@ -82,11 +82,11 @@ Recent for v1.1:
 - Desktop root folder detected by inode::ROOT_INO at publish call sites (simpler than modifying build_folder_metadata return type)
 - Desktop initialize_vault produces v2 blob for new users from day one (not just on migration)
 - decrypt_metadata_from_ipfs_public transparently handles both v1 JSON and v2 binary blobs
-- VaultExportDto crypto fields made nullable (string | null) to reflect migrated user state
+- VaultExportDto returns only rootIpnsName and derivationMethod (crypto columns dropped)
 - Recovery tool IPNS resolution uses gateway /ipns/ HEAD request with redirect following (most reliable without API dependency)
 - fetchAndDecryptMetadata handles both v1 JSON and v2 binary blobs transparently for folder sync
-- Non-blocking lazy migration via fire-and-forget async IIFE with retry-on-next-login for resilience
 - Zero-crypto vault schema: server stores only ownerPublicKey and rootIpnsName, all crypto material lives exclusively in IPFS v2 blobs
+- DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) fully dropped — no fallback paths
 
 ### Roadmap Evolution
 

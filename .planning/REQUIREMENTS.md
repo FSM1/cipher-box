@@ -17,9 +17,9 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 ### Vault Migration
 
 - [x] **VAULT-01**: rootFolderKey embedded in IPFS vault blob v2 format (ECIES-wrapped in blob header)
-- [x] **VAULT-02**: Client reads rootFolderKey from IPFS blob on login, falls back to DB vaults table
-- [x] **VAULT-03**: Lazy migration writes vault blob v2 on next folder metadata publish
-- [x] **VAULT-04**: encryptedRootIpnsPrivateKey column deprecated from vaults table (HKDF-derivable)
+- [x] **VAULT-02**: Client reads rootFolderKey exclusively from IPFS v2 blob on login (DB crypto columns dropped)
+- [x] **VAULT-03**: All vaults migrated to v2 — dead migration code removed, DB columns dropped
+- [x] **VAULT-04**: encryptedRootIpnsPrivateKey column dropped from vaults table (HKDF-derivable)
 - [x] **VAULT-05**: Recovery tool updated to parse vault blob v2 format
 - [x] **VAULT-06**: Desktop app (Rust) parses vault blob v2 format
 
