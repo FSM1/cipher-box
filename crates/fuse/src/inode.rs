@@ -426,7 +426,7 @@ impl InodeTable {
                     let modified = UNIX_EPOCH + Duration::from_millis(file_pointer.modified_at);
 
                     // Check if the existing inode already has resolved metadata
-                    let (resolved, existing_kind) = if let Some(existing) = existing_ino
+                    let (_resolved, existing_kind) = if let Some(existing) = existing_ino
                         .and_then(|ino| self.inodes.get(&ino))
                     {
                         match &existing.kind {

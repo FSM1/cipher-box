@@ -149,7 +149,7 @@ fn main() {
                     .center()
                     .resizable(false)
                     .visible(false)
-                    .on_page_load(|webview, payload| {
+                    .on_page_load(|_webview, payload| {
                         log::info!(
                             "Webview page load: url={}, event={:?}",
                             payload.url(),

@@ -4,29 +4,25 @@
 //! All FUSE data structures, operations, and platform logic live in the crate.
 //! This module handles Tauri-specific mount orchestration (AppState -> CipherBoxFS).
 
-// Re-export everything from the crate for existing call sites
+// Re-export crate types and functions used by desktop FUSE submodules.
+// These are consumed via `crate::fuse::inode::*`, `crate::fuse::helpers::*`, etc.
+#[allow(unused_imports)]
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use cipherbox_fuse::{
     CipherBoxFS, PublishCoordinator, PendingRefresh, PendingContent, UploadComplete,
-    encrypt_metadata_to_json, merge_folder_children, spawn_metadata_publish,
-    spawn_bin_entry_publish, mount_point,
+    encrypt_metadata_to_json, spawn_bin_entry_publish, mount_point,
 };
 
+#[allow(unused_imports)]
 pub use cipherbox_fuse::inode;
-pub use cipherbox_fuse::cache;
+#[allow(unused_imports)]
 pub use cipherbox_fuse::file_handle;
+#[allow(unused_imports)]
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use cipherbox_fuse::helpers;
+#[allow(unused_imports)]
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use cipherbox_fuse::constants;
-#[cfg(feature = "fuse")]
-pub use cipherbox_fuse::operations;
-#[cfg(feature = "fuse")]
-pub use cipherbox_fuse::read_ops;
-#[cfg(feature = "fuse")]
-pub use cipherbox_fuse::write_ops;
-#[cfg(feature = "fuse")]
-pub use cipherbox_fuse::dir_ops;
 #[cfg(feature = "winfsp")]
 pub mod windows;
 

@@ -1,6 +1,6 @@
 //! Background sync daemon command.
 
-use tauri::{Manager, State};
+use tauri::State;
 
 use crate::state::AppState;
 

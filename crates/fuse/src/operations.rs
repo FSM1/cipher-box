@@ -6,6 +6,7 @@
 //! - `dir_ops`: readdir, opendir, releasedir, statfs
 
 #[cfg(feature = "fuse")]
+#[allow(dead_code)] // Functions extracted for future use; desktop still calls its own copies
 pub(crate) mod implementation {
     use fuser::{
         Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,

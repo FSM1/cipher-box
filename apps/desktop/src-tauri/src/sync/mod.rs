@@ -5,7 +5,6 @@
 //! the bridge that converts SDK `SyncStatus` to Tauri `TrayStatus`.
 
 // Re-export SDK types that the desktop app uses directly
-pub use cipherbox_sdk::queue::{QueuedWrite, UploadHandler, WriteQueue};
 pub use cipherbox_sdk::sync::SYNC_INTERVAL;
 pub use cipherbox_sdk::SyncDaemon;
 

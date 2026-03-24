@@ -9,7 +9,6 @@
 use std::sync::Arc;
 
 use cipherbox_api_client::ApiClient;
-use cipherbox_core::registry::{DeviceAuthStatus, DeviceEntry, DevicePlatform, DeviceRegistry};
 use cipherbox_sdk::registry::DeviceInfo;
 
 /// Register this desktop device in the encrypted device registry.
@@ -84,7 +83,7 @@ fn get_or_create_device_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use cipherbox_core::registry::{DeviceAuthStatus, DeviceEntry, DevicePlatform, DeviceRegistry};
 
     #[test]
     fn test_device_registry_serialization() {
