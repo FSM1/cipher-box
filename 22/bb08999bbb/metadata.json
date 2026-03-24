@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "22bb08999bbb",
+  "strategy": "manual-commit",
+  "branch": "fix/vault-key-ipns-separation",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/22/bb08999bbb/0/metadata.json",
+      "transcript": "/22/bb08999bbb/0/full.jsonl",
+      "content_hash": "/22/bb08999bbb/0/content_hash.txt",
+      "prompt": "/22/bb08999bbb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 314,
+    "cache_creation_tokens": 290101,
+    "cache_read_tokens": 50214067,
+    "output_tokens": 81102,
+    "api_call_count": 278
+  }
+}
