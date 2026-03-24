@@ -319,7 +319,7 @@ fn spawn_metadata_publish(
             let lock = coordinator.get_lock(&ipns_name);
             let _guard = lock.lock().await;
 
-            // Encrypt metadata (CPU)
+            // Encrypt metadata (CPU) -- all folders use v1 JSON (including root)
             let json_bytes = encrypt_metadata_to_json(&metadata, &folder_key)?;
 
             // Resolve current IPNS sequence number (monotonic cache fallback)

@@ -11,14 +11,37 @@ import { useDeviceRegistryStore } from '../stores/device-registry.store';
 import { clearAllUserStores } from '../lib/clear-user-stores';
 import { initSdkClient } from '../lib/sdk-provider';
 // api-config.ts handles setApiClientConfig at module load time
-import { initializeVault, encryptVaultKeys, decryptVaultKeys } from '@cipherbox/core';
-import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
+import {
+  initializeVault,
+  detectBlobVersion,
+  deserializeVaultBlobV2,
+  serializeVaultBlobV2,
+  encryptFolderMetadata,
+} from '@cipherbox/core';
+import type { FolderMetadata } from '@cipherbox/core';
+import {
+  deriveIpnsName,
+  deriveVaultIpnsKeypair,
+  deriveVaultKeyIpnsKeypair,
+  bytesToHex,
+  wrapKey,
+  unwrapKey,
+} from '@cipherbox/crypto';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
 import { initializeBin } from '../services/bin.service';
 import { useBinStore } from '../stores/bin.store';
 import { vaultControllerGetConfig } from '@cipherbox/api-client';
+import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../services/ipns.service';
+import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
+
+// Module-level deduplication for vault init/load.
+// Multiple React effects can call initializeOrLoadVault concurrently after
+// page reload (session restore + login flow). Without deduplication, both
+// see getVault() → 404, both attempt vault init, and the second hits a
+// duplicate key constraint on folder_ipns.
+let vaultInitPromise: Promise<void> | null = null;
 
 export function useAuth() {
   const navigate = useNavigate();
@@ -71,59 +94,112 @@ export function useAuth() {
    * Initialize vault for new users or load existing vault keys.
    * Called after successful backend authentication.
    * Uses Core Kit's getVaultKeypair() instead of PnP provider.
+   *
+   * Deduplicated at module level: concurrent callers share a single
+   * in-flight promise to prevent double vault init on page reload.
    */
   const initializeOrLoadVault = useCallback(async (): Promise<void> => {
-    // Get user's secp256k1 keypair from Core Kit TSS export
-    const userKeypair = await getVaultKeypair();
+    if (vaultInitPromise) return vaultInitPromise;
+    const doInit = async () => {
+      // Get user's secp256k1 keypair from Core Kit TSS export
+      const userKeypair = await getVaultKeypair();
 
-    if (!userKeypair) {
-      throw new Error('Failed to get vault keypair from Core Kit');
-    }
-
-    // Store keypair in auth store for crypto operations
-    setVaultKeypair(userKeypair);
-
-    try {
-      // Try to fetch existing vault
-      const existingVault = await vaultApi.getVault();
-
-      // Store TEE keys if available
-      if (existingVault.teeKeys) {
-        useAuthStore.getState().setTeeKeys(existingVault.teeKeys);
+      if (!userKeypair) {
+        throw new Error('Failed to get vault keypair from Core Kit');
       }
 
-      // Vault exists - decrypt keys and load into store
-      // decryptVaultKeys derives the IPNS public key internally from the decrypted private key
-      const decryptedVault = await decryptVaultKeys(
-        {
-          encryptedRootFolderKey: hexToBytes(existingVault.encryptedRootFolderKey),
-          encryptedIpnsPrivateKey: hexToBytes(existingVault.encryptedRootIpnsPrivateKey),
-        },
-        userKeypair.privateKey
-      );
+      // Store keypair in auth store for crypto operations
+      setVaultKeypair(userKeypair);
 
-      setVaultKeys({
-        rootFolderKey: decryptedVault.rootFolderKey,
-        rootIpnsKeypair: decryptedVault.rootIpnsKeypair,
-        rootIpnsName: existingVault.rootIpnsName,
-        vaultId: existingVault.id,
-      });
-    } catch (error) {
-      const is404 = (error as { response?: { status?: number } })?.response?.status === 404;
+      // Isolate getVault() so only its 404 triggers new-user initialization.
+      // Downstream errors (IPNS resolve, IPFS fetch) must not be misclassified.
+      let existingVault: Awaited<ReturnType<typeof vaultApi.getVault>> | null = null;
+      try {
+        existingVault = await vaultApi.getVault();
+      } catch (error) {
+        const is404 = (error as { response?: { status?: number } })?.response?.status === 404;
+        if (!is404) {
+          console.error('[useAuth] Failed to load vault:', error);
+          throw error;
+        }
+      }
 
-      if (is404) {
-        // New user - initialize vault
-        console.log(
-          '[Auth] New user on Core Kit. If migrating from PnP, vault re-initialization may be needed.'
-        );
+      if (existingVault) {
+        // Store TEE keys if available
+        if (existingVault.teeKeys) {
+          useAuthStore.getState().setTeeKeys(existingVault.teeKeys);
+        }
+
+        // Read rootFolderKey from dedicated vault key IPNS (separate from root folder IPNS)
+        const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
+
+        const resolved = await resolveIpnsRecord(vaultKeyKeypair.ipnsName);
+        if (!resolved) throw new Error('Vault key IPNS name not found');
+
+        const blobBytes = await fetchFromIpfs(resolved.cid);
+
+        if (detectBlobVersion(blobBytes) !== 2) {
+          throw new Error('Vault key blob is not v2 format');
+        }
+
+        const encKey = deserializeVaultBlobV2(blobBytes);
+        const rootFolderKey = await unwrapKey(encKey, userKeypair.privateKey);
+
+        // Root folder IPNS keypair is the original vault derivation
+        const rootIpnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
+
+        setVaultKeys({
+          rootFolderKey,
+          rootIpnsKeypair,
+          rootIpnsName: existingVault.rootIpnsName,
+          vaultId: existingVault.id,
+        });
+      } else {
+        // New user -- initialize vault with separate key blob + folder metadata
+        console.log('[Auth] New user -- initializing vault');
         const newVault = await initializeVault(userKeypair.privateKey);
-        const encryptedVault = await encryptVaultKeys(newVault, userKeypair.publicKey);
         const rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey);
 
+        // Derive vault key IPNS keypair (separate from root folder IPNS)
+        const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
+        const vaultKeyIpnsName = vaultKeyKeypair.ipnsName;
+
+        // 1. Publish v2 key blob to vault key IPNS (rootFolderKey storage — key only, no metadata)
+        const encryptedRootFolderKey = await wrapKey(newVault.rootFolderKey, userKeypair.publicKey);
+        const v2Blob = serializeVaultBlobV2(encryptedRootFolderKey);
+
+        const keyBlobUpload = await addToIpfs(new Blob([v2Blob as BlobPart]));
+        const keyPublishResult = await createAndPublishIpnsRecord({
+          ipnsPrivateKey: vaultKeyKeypair.privateKey,
+          ipnsName: vaultKeyIpnsName,
+          metadataCid: keyBlobUpload.cid,
+          sequenceNumber: 0n,
+          expectedSequenceNumber: undefined,
+        });
+        if (!keyPublishResult.success) {
+          throw new Error('Failed to publish vault key blob to IPNS');
+        }
+
+        // 2. Publish folder metadata using v1 encrypted envelope format on IPFS ({iv, data});
+        //    FolderMetadata.version remains 'v2' (metadata schema version).
+        const emptyMetadata: FolderMetadata = { version: 'v2', children: [] };
+        const encrypted = await encryptFolderMetadata(emptyMetadata, newVault.rootFolderKey);
+        const metadataBlob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
+        const metadataUpload = await addToIpfs(metadataBlob);
+        const folderPublishResult = await createAndPublishIpnsRecord({
+          ipnsPrivateKey: newVault.rootIpnsKeypair.privateKey,
+          ipnsName: rootIpnsName,
+          metadataCid: metadataUpload.cid,
+          sequenceNumber: 0n,
+          expectedSequenceNumber: undefined,
+        });
+        if (!folderPublishResult.success) {
+          throw new Error('Failed to publish initial root folder metadata');
+        }
+
+        // 3. Register vault with API (no crypto fields -- IPFS-only)
         const storedVault = await vaultApi.initVault({
           ownerPublicKey: bytesToHex(userKeypair.publicKey),
-          encryptedRootFolderKey: bytesToHex(encryptedVault.encryptedRootFolderKey),
-          encryptedRootIpnsPrivateKey: bytesToHex(encryptedVault.encryptedIpnsPrivateKey),
           rootIpnsName,
         });
 
@@ -138,111 +214,112 @@ export function useAuth() {
           vaultId: storedVault.id,
           isNewVault: true,
         });
-      } else {
-        console.error('[useAuth] Failed to load vault:', error);
-        throw error;
       }
-    }
 
-    // Initialize SDK client with decrypted vault keys
-    const vaultState = useVaultStore.getState();
-    const authState = useAuthStore.getState();
-    if (vaultState.rootFolderKey && vaultState.rootIpnsKeypair && vaultState.rootIpnsName) {
-      const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + '/api';
-      const getAccessToken = async () => {
-        const state = useAuthStore.getState();
-        return state.accessToken || '';
-      };
+      // Initialize SDK client with decrypted vault keys
+      const vaultState = useVaultStore.getState();
+      const authState = useAuthStore.getState();
+      if (vaultState.rootFolderKey && vaultState.rootIpnsKeypair && vaultState.rootIpnsName) {
+        const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + '/api';
+        const getAccessToken = async () => {
+          const state = useAuthStore.getState();
+          return state.accessToken || '';
+        };
 
-      // @cipherbox/api-client is configured in lib/api-config.ts at module load time.
+        // @cipherbox/api-client is configured in lib/api-config.ts at module load time.
 
-      const sdkClient = initSdkClient({
-        apiUrl,
-        getAccessToken,
-        vaultKeypair: {
-          publicKey: userKeypair.publicKey,
-          privateKey: userKeypair.privateKey,
-        },
-        rootIpnsName: vaultState.rootIpnsName,
-        rootFolderKey: vaultState.rootFolderKey,
-        teeKeys: authState.teeKeys ?? undefined,
-        shareCallbacks: {
-          getCoveringShares: async (folderIpnsName: string) => {
-            const { findCoveringShares } = await import('../services/share.service');
-            const folders = useFolderStore.getState().folders;
-            // Find the folder ID from IPNS name for ancestor traversal
-            const folderId =
-              Object.keys(folders).find((id) => folders[id].ipnsName === folderIpnsName) ?? null;
-            return findCoveringShares(folderIpnsName, folders, folderId);
+        const sdkClient = initSdkClient({
+          apiUrl,
+          getAccessToken,
+          vaultKeypair: {
+            publicKey: userKeypair.publicKey,
+            privateKey: userKeypair.privateKey,
           },
-          addShareKeys: async (shareId, keys) => {
-            const { addShareKeys } = await import('../services/share.service');
-            await addShareKeys(shareId, keys);
+          rootIpnsName: vaultState.rootIpnsName,
+          rootFolderKey: vaultState.rootFolderKey,
+          teeKeys: authState.teeKeys ?? undefined,
+          shareCallbacks: {
+            getCoveringShares: async (folderIpnsName: string) => {
+              const { findCoveringShares } = await import('../services/share.service');
+              const folders = useFolderStore.getState().folders;
+              // Find the folder ID from IPNS name for ancestor traversal
+              const folderId =
+                Object.keys(folders).find((id) => folders[id].ipnsName === folderIpnsName) ?? null;
+              return findCoveringShares(folderIpnsName, folders, folderId);
+            },
+            addShareKeys: async (shareId, keys) => {
+              const { addShareKeys } = await import('../services/share.service');
+              await addShareKeys(shareId, keys);
+            },
           },
-        },
-      });
-
-      // Subscribe folder store to SDK events
-      useFolderStore.getState().subscribeToSdk(sdkClient);
-
-      // Subscribe bin store to SDK events
-      useBinStore.getState().subscribeToSdk(sdkClient);
-    }
-
-    // Non-blocking device registry initialization (fire-and-forget)
-    // Placed after vault load so registry failures never block login
-    void (async () => {
-      try {
-        const deviceKeypair = await getOrCreateDeviceIdentity({
-          mode: 'persisted',
-          vaultPrivateKey: userKeypair.privateKey,
         });
-        const deviceInfo = detectDeviceInfo();
-        const result = await initializeOrSyncRegistry({
-          userPrivateKey: userKeypair.privateKey,
-          userPublicKey: userKeypair.publicKey,
-          deviceKeypair,
-          deviceInfo: { ...deviceInfo, ipHash: '' },
-        });
-        if (result) {
-          useDeviceRegistryStore
-            .getState()
-            .setRegistry(result.registry, result.ipnsName, deviceKeypair.deviceId);
-        }
-      } catch (error) {
-        console.error('[Auth] Device registry init failed (non-blocking):', error);
-      }
-    })();
 
-    // Non-blocking bin initialization (fire-and-forget)
-    // After old service creates/loads bin, also load into SDK for deleteToBin support
-    void (async () => {
-      try {
-        await initializeBin({
-          userPrivateKey: userKeypair.privateKey,
-          userPublicKey: userKeypair.publicKey,
-        });
-        // Now load bin into SDK (old service ensures bin IPNS record exists)
-        const { getSdkClient, hasSdkClient } = await import('../lib/sdk-provider');
-        if (hasSdkClient()) {
-          await getSdkClient().loadBin();
-        }
-      } catch (error) {
-        console.error('[Auth] Bin initialization failed (non-blocking):', error);
-      }
-    })();
+        // Subscribe folder store to SDK events
+        useFolderStore.getState().subscribeToSdk(sdkClient);
 
-    // Non-blocking: fetch retention config from API
-    void (async () => {
-      try {
-        const config = await vaultControllerGetConfig();
-        if (config.recycleBinRetentionDays != null) {
-          useBinStore.getState().setRetentionDays(config.recycleBinRetentionDays);
-        }
-      } catch (error) {
-        console.error('[Auth] Failed to fetch vault config (non-blocking):', error);
+        // Subscribe bin store to SDK events
+        useBinStore.getState().subscribeToSdk(sdkClient);
       }
-    })();
+
+      // Non-blocking device registry initialization (fire-and-forget)
+      // Placed after vault load so registry failures never block login
+      void (async () => {
+        try {
+          const deviceKeypair = await getOrCreateDeviceIdentity({
+            mode: 'persisted',
+            vaultPrivateKey: userKeypair.privateKey,
+          });
+          const deviceInfo = detectDeviceInfo();
+          const result = await initializeOrSyncRegistry({
+            userPrivateKey: userKeypair.privateKey,
+            userPublicKey: userKeypair.publicKey,
+            deviceKeypair,
+            deviceInfo: { ...deviceInfo, ipHash: '' },
+          });
+          if (result) {
+            useDeviceRegistryStore
+              .getState()
+              .setRegistry(result.registry, result.ipnsName, deviceKeypair.deviceId);
+          }
+        } catch (error) {
+          console.error('[Auth] Device registry init failed (non-blocking):', error);
+        }
+      })();
+
+      // Non-blocking bin initialization (fire-and-forget)
+      // After old service creates/loads bin, also load into SDK for deleteToBin support
+      void (async () => {
+        try {
+          await initializeBin({
+            userPrivateKey: userKeypair.privateKey,
+            userPublicKey: userKeypair.publicKey,
+          });
+          // Now load bin into SDK (old service ensures bin IPNS record exists)
+          const { getSdkClient, hasSdkClient } = await import('../lib/sdk-provider');
+          if (hasSdkClient()) {
+            await getSdkClient().loadBin();
+          }
+        } catch (error) {
+          console.error('[Auth] Bin initialization failed (non-blocking):', error);
+        }
+      })();
+
+      // Non-blocking: fetch retention config from API
+      void (async () => {
+        try {
+          const config = await vaultControllerGetConfig();
+          if (config.recycleBinRetentionDays != null) {
+            useBinStore.getState().setRetentionDays(config.recycleBinRetentionDays);
+          }
+        } catch (error) {
+          console.error('[Auth] Failed to fetch vault config (non-blocking):', error);
+        }
+      })();
+    };
+    vaultInitPromise = doInit().finally(() => {
+      vaultInitPromise = null;
+    });
+    return vaultInitPromise;
   }, [getVaultKeypair, setVaultKeypair, setVaultKeys]);
 
   /**

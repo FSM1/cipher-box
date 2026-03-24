@@ -35,3 +35,10 @@ export type EncryptedVaultKeys = {
   /** IPNS private key ECIES-wrapped with user's publicKey */
   encryptedIpnsPrivateKey: Uint8Array;
 };
+
+/**
+ * Vault key blob v2 is now a simple binary envelope: 0x02 | uint16_BE(key_len) | encrypted_key
+ *
+ * deserializeVaultBlobV2 returns the ECIES-encrypted rootFolderKey directly as Uint8Array.
+ * No separate type needed.
+ */

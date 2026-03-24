@@ -5,4 +5,4 @@
  * Vault initialization and key management moved to @cipherbox/core.
  */
 
-export { deriveVaultIpnsKeypair } from './derive-ipns';
+export { deriveVaultIpnsKeypair, deriveVaultKeyIpnsKeypair } from './derive-ipns';

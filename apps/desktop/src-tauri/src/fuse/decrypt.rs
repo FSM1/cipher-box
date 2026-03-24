@@ -1,18 +1,23 @@
 //! Shared decrypt functions for folder and file metadata.
 //! Used by CipherBoxFS::drain_refresh_completions() which is platform-agnostic.
 
-/// Decrypt folder metadata from IPFS encrypted JSON format.
+/// Decrypt folder metadata from IPFS encrypted format.
+///
+/// All folder metadata (including root) uses v1 JSON `{"iv":"...","data":"..."}`.
+/// The v2 blob format is only used for the vault key blob (separate IPNS name).
 pub fn decrypt_metadata_from_ipfs_public(
     encrypted_bytes: &[u8],
     folder_key: &[u8],
 ) -> Result<crate::crypto::folder::FolderMetadata, String> {
+    let json_portion = encrypted_bytes;
+
     #[derive(serde::Deserialize)]
     struct EncryptedFolderMetadata {
         iv: String,
         data: String,
     }
 
-    let encrypted: EncryptedFolderMetadata = serde_json::from_slice(encrypted_bytes)
+    let encrypted: EncryptedFolderMetadata = serde_json::from_slice(json_portion)
         .map_err(|e| format!("Failed to parse encrypted metadata JSON: {}", e))?;
 
     let iv_bytes =

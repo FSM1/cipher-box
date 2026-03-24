@@ -9,10 +9,6 @@
 export interface InitVaultDto {
   /** User secp256k1 public key (uncompressed, 65 bytes, hex-encoded) */
   ownerPublicKey: string;
-  /** ECIES-wrapped root folder AES-256 key (hex-encoded) */
-  encryptedRootFolderKey: string;
-  /** ECIES-wrapped Ed25519 IPNS private key (hex-encoded) */
-  encryptedRootIpnsPrivateKey: string;
   /** IPNS name (libp2p-key multihash, base58btc or base36) */
   rootIpnsName: string;
 }

@@ -16,12 +16,12 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 
 ### Vault Migration
 
-- [ ] **VAULT-01**: rootFolderKey embedded in IPFS vault blob v2 format (ECIES-wrapped in blob header)
-- [ ] **VAULT-02**: Client reads rootFolderKey from IPFS blob on login, falls back to DB vaults table
-- [ ] **VAULT-03**: Lazy migration writes vault blob v2 on next folder metadata publish
-- [ ] **VAULT-04**: encryptedRootIpnsPrivateKey column deprecated from vaults table (HKDF-derivable)
-- [ ] **VAULT-05**: Recovery tool updated to parse vault blob v2 format
-- [ ] **VAULT-06**: Desktop app (Rust) parses vault blob v2 format
+- [x] **VAULT-01**: rootFolderKey embedded in IPFS vault blob v2 format (ECIES-wrapped in blob header)
+- [x] **VAULT-02**: Client reads rootFolderKey exclusively from IPFS v2 blob on login (DB crypto columns dropped)
+- [x] **VAULT-03**: All vaults migrated to v2 — dead migration code removed, DB columns dropped
+- [x] **VAULT-04**: encryptedRootIpnsPrivateKey column dropped from vaults table (HKDF-derivable)
+- [x] **VAULT-05**: Recovery tool updated to parse vault blob v2 format
+- [x] **VAULT-06**: Desktop app (Rust) parses vault blob v2 format
 
 ### BYO-IPFS
 
@@ -101,12 +101,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | IPNS-02     | Phase 19   | Pending  |
 | IPNS-03     | Phase 19   | Pending  |
 | IPNS-04     | Phase 19   | Complete |
-| VAULT-01    | Phase 20   | Pending  |
-| VAULT-02    | Phase 20   | Pending  |
-| VAULT-03    | Phase 20   | Pending  |
-| VAULT-04    | Phase 20   | Pending  |
-| VAULT-05    | Phase 20   | Pending  |
-| VAULT-06    | Phase 20   | Pending  |
+| VAULT-01    | Phase 20   | Complete |
+| VAULT-02    | Phase 20   | Complete |
+| VAULT-03    | Phase 20   | Complete |
+| VAULT-04    | Phase 20   | Complete |
+| VAULT-05    | Phase 20   | Complete |
+| VAULT-06    | Phase 20   | Complete |
 | BYO-01      | Phase 21   | Pending  |
 | BYO-02      | Phase 21   | Pending  |
 | BYO-03      | Phase 21   | Pending  |

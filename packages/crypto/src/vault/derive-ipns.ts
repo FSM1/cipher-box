@@ -27,6 +27,7 @@ import { SECP256K1_PRIVATE_KEY_SIZE } from '../constants';
 
 const VAULT_HKDF_SALT = new TextEncoder().encode('CipherBox-v1');
 const VAULT_HKDF_INFO = new TextEncoder().encode('cipherbox-vault-ipns-v1');
+const VAULT_KEY_HKDF_INFO = new TextEncoder().encode('cipherbox-vault-key-ipns-v1');
 
 /**
  * Derive the deterministic Ed25519 IPNS keypair for the user's vault.
@@ -60,6 +61,46 @@ export async function deriveVaultIpnsKeypair(userPrivateKey: Uint8Array): Promis
   const ed25519PublicKey = await ed.getPublicKeyAsync(ed25519Seed);
 
   // 3. Derive IPNS name from Ed25519 public key (k51... format)
+  const ipnsName = await deriveIpnsName(ed25519PublicKey);
+
+  return {
+    privateKey: ed25519Seed,
+    publicKey: ed25519PublicKey,
+    ipnsName,
+  };
+}
+
+/**
+ * Derive a dedicated Ed25519 IPNS keypair for the vault key blob.
+ *
+ * This IPNS name stores the v2 blob containing the ECIES-wrapped rootFolderKey.
+ * It is separate from the root folder IPNS name (which stores standard v1 folder
+ * metadata) to avoid folder publishes overwriting the key blob.
+ *
+ * Uses "cipherbox-vault-key-ipns-v1" info for domain separation from the root
+ * folder's "cipherbox-vault-ipns-v1".
+ *
+ * @param userPrivateKey - 32-byte secp256k1 private key
+ * @returns Ed25519 keypair and IPNS name for the vault key blob
+ * @throws CryptoError if the private key is not 32 bytes
+ */
+export async function deriveVaultKeyIpnsKeypair(userPrivateKey: Uint8Array): Promise<{
+  privateKey: Uint8Array;
+  publicKey: Uint8Array;
+  ipnsName: string;
+}> {
+  if (userPrivateKey.length !== SECP256K1_PRIVATE_KEY_SIZE) {
+    throw new CryptoError('Invalid private key size for vault key derivation', 'INVALID_KEY_SIZE');
+  }
+
+  const ed25519Seed = await deriveKey({
+    inputKey: userPrivateKey,
+    salt: VAULT_HKDF_SALT,
+    info: VAULT_KEY_HKDF_INFO,
+    outputLength: 32,
+  });
+
+  const ed25519PublicKey = await ed.getPublicKeyAsync(ed25519Seed);
   const ipnsName = await deriveIpnsName(ed25519PublicKey);
 
   return {

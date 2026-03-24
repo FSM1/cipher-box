@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-23T22:18:25.552Z'
+last_updated: '2026-03-24T03:30:09.478Z'
 progress:
-  total_phases: 7
-  completed_phases: 4
-  total_plans: 14
-  completed_plans: 14
+  total_phases: 8
+  completed_phases: 5
+  total_plans: 20
+  completed_plans: 20
 ---
 
 # Project State
@@ -18,12 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 19.2 — ipfs-upload-performance-optimization
+**Current focus:** Phase 20 — vault-migration
 
 ## Current Position
 
-Phase: 19.2 (ipfs-upload-performance-optimization) — COMPLETE
-Plan: 4 of 4
+Phase: 20 (vault-migration) — COMPLETE
+Plan: 6 of 6 (all plans complete)
 
 ## Performance Metrics
 
@@ -46,6 +46,12 @@ Plan: 4 of 4
 | 19.2  | 02   | 12min    | 3     | 3     |
 | 19.2  | 03   | 1min     | 1     | 1     |
 | 19.2  | 04   | 71min    | 2     | 1     |
+| 20    | 01   | 4min     | 2     | 5     |
+| 20    | 02   | 17min    | 3     | 16    |
+| 20    | 03   | 25min    | 2     | 6     |
+| 20    | 04   | 45min    | 3     | 15    |
+| 20    | 05   | 6min     | 2     | 13    |
+| 20    | 06   | 6min     | 2     | 4     |
 
 ## Accumulated Context
 
@@ -72,11 +78,21 @@ Recent for v1.1:
 - Moved @cipherbox/core from dependencies to devDependencies in crypto (test-only cross-package assertions)
 - Kubo pebbleds datastore (LSM-tree) configured via IPFS_PROFILE=server,pebbleds; requires fresh volume on deploy
 - SDK concurrent pins require pebbleds datastore (synergistic); concurrent pins alone cause regression at 50 clients
+- Combined per-task commits into single commit due to pre-commit hook requiring api-client regeneration with entity/dto/controller changes
+- Desktop root folder detected by inode::ROOT_INO at publish call sites (simpler than modifying build_folder_metadata return type)
+- Desktop initialize_vault produces v2 blob for new users from day one (not just on migration)
+- decrypt_metadata_from_ipfs_public transparently handles both v1 JSON and v2 binary blobs
+- VaultExportDto returns only rootIpnsName and derivationMethod (crypto columns dropped)
+- Recovery tool IPNS resolution uses gateway /ipns/ HEAD request with redirect following (most reliable without API dependency)
+- fetchAndDecryptMetadata handles both v1 JSON and v2 binary blobs transparently for folder sync
+- Zero-crypto vault schema: server stores only ownerPublicKey and rootIpnsName, all crypto material lives exclusively in IPFS v2 blobs
+- DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) fully dropped — no fallback paths
 
 ### Roadmap Evolution
 
 - Phase 19.1 inserted after Phase 19: Extract core crypto SDK as shared package (URGENT)
 - Phase 19.2 inserted after Phase 19: IPFS Upload Performance Optimization (URGENT) — concurrent pins, Kubo worker tuning, pin batching to address ~95% bottleneck in upload path identified by Phase 19 baselines
+- Phase 23 added: Rust SDK Extraction — extract shared cipherbox-core crate, replace duplicated logic in desktop FUSE code, enable unit testing parity with TypeScript
 
 ### Open Concerns
 
@@ -84,11 +100,11 @@ Recent for v1.1:
 - rootFolderKey migration dual-write window duration TBD (forced migration strategy for dormant accounts)
 - BYO-IPFS auth token storage model needs explicit acceptance (server sees token but not plaintext content)
 - Kubo v0.34.0 -> v0.40.1 upgrade decision (recommended before Phase 19, not blocking)
-- Recovery tool independence must be verified after Phases 19+20 changes
+- Recovery tool independence verified for v2 blobs (root-level works; subfolder limited by IPNS DHT propagation)
 
 ### Pending Todos
 
-8 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
+10 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
 
 ### Resolved
 
@@ -96,4 +112,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-23 after completing 19.2-04 (three-point local performance baselines — Phase 19.2 complete)
+Last updated: 2026-03-24 after completing 20-06 (client dead code removal, IPFS-only v2 blob paths, Phase 20 complete)

@@ -961,11 +961,14 @@ export async function fetchAndDecryptMetadata(
   // 1. Fetch encrypted metadata blob from IPFS
   const encryptedBytes = await fetchFromIpfs(cid);
 
-  // 2. Parse as JSON to get EncryptedFolderMetadata (contains iv and data fields)
+  // 2. All folder metadata (including root) is v1 JSON {iv, data}.
+  //    v2 blob format is only for the vault key blob (separate IPNS name).
+
+  // 3. Parse as JSON to get EncryptedFolderMetadata (contains iv and data fields)
   const encryptedJson = new TextDecoder().decode(encryptedBytes);
   const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
 
-  // 3. Decrypt using folder key
+  // 4. Decrypt using folder key
   const metadata = await decryptFolderMetadata(encrypted, folderKey);
 
   return metadata;
