@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/crypto",
+    "crates/core",
     "crates/api-client",
     "apps/desktop/src-tauri",
 ]
@@ -39,6 +40,7 @@ urlencoding = "2"
 
 # Internal crates
 cipherbox-crypto = { path = "crates/crypto" }
+cipherbox-core = { path = "crates/core" }
 cipherbox-api-client = { path = "crates/api-client" }
 
 [patch.crates-io]

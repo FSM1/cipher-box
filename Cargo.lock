@@ -642,6 +642,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipherbox-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "ciborium",
+ "cipherbox-crypto",
+ "hex",
+ "log",
+ "prost",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
 name = "cipherbox-crypto"
 version = "0.1.0"
 dependencies = [
@@ -654,6 +670,7 @@ dependencies = [
  "hkdf",
  "log",
  "rand 0.8.5",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
