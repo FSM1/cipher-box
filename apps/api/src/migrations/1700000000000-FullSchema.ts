@@ -97,8 +97,6 @@ export class FullSchema1700000000000 implements MigrationInterface {
         "id"                           uuid NOT NULL DEFAULT uuid_generate_v4(),
         "owner_id"                     uuid NOT NULL,
         "owner_public_key"             bytea NOT NULL,
-        "encrypted_root_folder_key"    bytea NOT NULL,
-        "encrypted_root_ipns_private_key" bytea NOT NULL,
         "root_ipns_name"               varchar(255) NOT NULL,
         "created_at"                   TIMESTAMP NOT NULL DEFAULT now(),
         "initialized_at"               TIMESTAMP,
