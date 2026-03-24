@@ -1,7 +1,7 @@
 //! Recycle bin metadata types and encryption.
 //!
 //! Mirrors the TypeScript `RecycleBinMetadata` and `BinEntry` types from
-//! `@cipherbox/crypto` for cross-platform compatibility. Uses ECIES
+//! `@cipherbox/core` for cross-platform compatibility. Uses ECIES
 //! (same as DeviceRegistry) for encryption -- the user's secp256k1
 //! publicKey encrypts, privateKey decrypts.
 

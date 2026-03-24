@@ -183,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn optional_fields_skipped_when_none() {
+    fn optional_fields_serialize_as_null_when_none() {
         let entry = sample_device_entry();
         let json = serde_json::to_string(&entry).unwrap();
 

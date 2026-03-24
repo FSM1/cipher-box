@@ -10,7 +10,10 @@ use crate::error::CryptoError;
 ///
 /// message PublicKey { KeyType Type = 1; bytes Data = 2; }
 /// where KeyType.Ed25519 = 1
-pub fn encode_libp2p_public_key(ed25519_public_key: &[u8]) -> Vec<u8> {
+pub fn encode_libp2p_public_key(ed25519_public_key: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    if ed25519_public_key.len() != 32 {
+        return Err(CryptoError::InvalidPublicKey);
+    }
     let mut buf = Vec::new();
     // Field 1 (Type): varint, field_number=1, wire_type=0 => tag = 0x08
     buf.push(0x08);
@@ -21,7 +24,7 @@ pub fn encode_libp2p_public_key(ed25519_public_key: &[u8]) -> Vec<u8> {
     // Length of public key (32 bytes)
     buf.push(ed25519_public_key.len() as u8);
     buf.extend_from_slice(ed25519_public_key);
-    buf
+    Ok(buf)
 }
 
 /// Derive the IPNS name (CIDv1 base36) from an Ed25519 public key.
@@ -33,7 +36,7 @@ pub fn encode_libp2p_public_key(ed25519_public_key: &[u8]) -> Vec<u8> {
 /// 4. Encode as base36 (k... prefix)
 pub fn derive_ipns_name(ed25519_public_key: &[u8; 32]) -> Result<String, CryptoError> {
     // Step 1: Wrap in libp2p PublicKey protobuf
-    let libp2p_pub_key = encode_libp2p_public_key(ed25519_public_key);
+    let libp2p_pub_key = encode_libp2p_public_key(ed25519_public_key)?;
 
     // Step 2: Create identity multihash
     // Identity multihash: code=0x00, length=varint(data.len()), data
@@ -212,7 +215,7 @@ mod tests {
     #[test]
     fn encode_libp2p_public_key_format() {
         let pk = [0xAA; 32];
-        let encoded = encode_libp2p_public_key(&pk);
+        let encoded = encode_libp2p_public_key(&pk).unwrap();
         assert_eq!(encoded[0], 0x08); // field 1 tag
         assert_eq!(encoded[1], 0x01); // Ed25519 type
         assert_eq!(encoded[2], 0x12); // field 2 tag

@@ -232,7 +232,8 @@ pub fn marshal_ipns_record(record: &IpnsRecord) -> Result<Vec<u8>, IpnsError> {
     encode_proto_varint(&mut buf, 5, record.sequence);
     encode_proto_varint(&mut buf, 6, record.ttl);
 
-    let libp2p_pub_key = encode_libp2p_public_key(&record.public_key);
+    let libp2p_pub_key = encode_libp2p_public_key(&record.public_key)
+        .map_err(|_| IpnsError::InvalidPublicKey)?;
     encode_proto_bytes(&mut buf, 7, &libp2p_pub_key);
 
     encode_proto_bytes(&mut buf, 8, &record.signature_v2);
