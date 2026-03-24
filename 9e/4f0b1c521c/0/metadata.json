@@ -1,0 +1,126 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "9e4f0b1c521c",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T19:39:53.540382Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3106d421a579",
+  "token_usage": {
+    "input_tokens": 316,
+    "cache_creation_tokens": 518023,
+    "cache_read_tokens": 48698179,
+    "output_tokens": 58256,
+    "api_call_count": 281
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Complete Phase 23 (Rust SDK Extraction) gap closure, run a security review, add unit test coverage for the Rust crates, and get PR #352 merged by fixing CI failures and resolving all reviewer comments.",
+    "outcome": "Phase 23 was fully completed, 163 new Rust unit tests were added (168 total), two HIGH security findings were fixed, PR #352 was created and all 28 reviewer threads were resolved across three review rounds, though CI was still failing at session end with Windows cargo check and cross-language parity issues.",
+    "learnings": {
+      "repo": [
+        "fuser is a Unix-only vendored crate; it must be gated behind [target.'cfg(unix)'.dependencies] in both crates/fuse/Cargo.toml and apps/desktop/src-tauri/Cargo.toml to prevent compilation on Windows",
+        "apps/desktop/src-tauri/Cargo.toml depends on cipherbox-fuse without default-features = false, which causes cipherbox-fuse's default 'fuse' feature (pulling in fuser) to activate transitively even when --no-default-features is passed at workspace level",
+        "The cross-language vector parity CI job fails because @cipherbox/core needs to be built before the TypeScript tests run; a 'pnpm build' step must precede the test step",
+        "1Password SSH agent is the commit signing mechanism and is intermittently unresponsive, requiring retries before succeeding",
+        "ed25519-dalek requires the 'zeroize' feature flag to be explicitly enabled in workspace Cargo.toml for SigningKey to zero memory on drop",
+        "generate_ed25519_keypair callers in write_ops.rs were wrapping the return in Zeroizing::new() redundantly, indicating the return type was plain Vec\u003cu8\u003e before this session",
+        "The cipherbox-fuse crate's fuse/winfsp features control which platform modules compile; crate-level ops files (operations.rs, read_ops.rs, write_ops.rs, dir_ops.rs) are gated on #[cfg(feature = 'fuse')]",
+        "IpnsPublishRequest derived Debug, leaking encrypted IPNS key material; fixed with custom Debug impl that redacts sensitive fields",
+        "api-client's get_bytes method was dead code (no callers) — removed rather than fixed",
+        "fetch_and_populate_folder and resolve_file_pointers_blocking were dead code in both macOS/Linux and Windows operations.rs — 181 lines removed"
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "line": 1,
+          "end_line": 50,
+          "finding": "generate_ed25519_keypair now returns Zeroizing\u003cVec\u003cu8\u003e\u003e for the private key; callers in write_ops.rs no longer need to wrap in Zeroizing::new()"
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 433,
+          "end_line": 522,
+          "finding": "ipns_private_key returned from generate_ed25519_keypair is used in a spawned thread; Vec\u003cu8\u003e::try_into::\u003c[u8;32]\u003e() needed to be replaced with (*ipns_private_key).clone().try_into() after return type became Zeroizing\u003cVec\u003cu8\u003e\u003e"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "Same try_into pattern needed the same fix on the Windows platform path"
+        },
+        {
+          "path": "crates/crypto/src/ipns_name.rs",
+          "line": 13,
+          "end_line": 25,
+          "finding": "encode_libp2p_public_key was casting key.len() as u8 without validation, risking silent truncation; now validates that key is exactly 32 bytes and returns Result"
+        },
+        {
+          "path": "crates/api-client/src/types.rs",
+          "line": 161,
+          "end_line": 161,
+          "finding": "IpnsPublishRequest needs custom Debug impl to redact encrypted_ipns_key and public_key fields"
+        },
+        {
+          "path": "crates/fuse/src/platform/linux.rs",
+          "line": 17,
+          "end_line": 17,
+          "finding": "Temp dir cleanup was happening before unmount; reordered so cleanup always happens after successful unmount"
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 102,
+          "end_line": 103,
+          "finding": "Copy-paste bug: app_version field was being set to device_info.device_id instead of app_version; device_info fields needed to be saved before partial move into DeviceEntry struct"
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 1,
+          "end_line": 50,
+          "finding": "ed25519-dalek workspace dependency needed features = ['zeroize'] added to enable memory zeroing on drop"
+        },
+        {
+          "path": "apps/desktop/src-tauri/Cargo.toml",
+          "line": 1,
+          "end_line": 50,
+          "finding": "cipherbox-fuse dependency needs default-features = false to prevent fuse feature (and fuser) from activating transitively on Windows"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 674,
+          "end_line": 680,
+          "finding": "Cross-language parity job needed pnpm version: 10 and a pnpm build step before running tests to ensure @cipherbox/core package is built"
+        }
+      ],
+      "workflow": [
+        "When an executor agent disconnects mid-plan, check git log to identify completed commits before resuming — avoids re-executing already-completed work",
+        "cargo llvm-cov --workspace is already configured in CI on Linux, so any new tests automatically contribute to Codecov coverage without CI changes",
+        "Three crate test agents can run in parallel (crypto, core, sdk) since they have no cross-dependencies during test writing",
+        "For [patch.crates-io] entries with Unix-only crates, moving the dependency to [target.'cfg(unix)'.dependencies] prevents Cargo from resolving/compiling it on Windows",
+        "When Copilot/CodeRabbit post the same comment repeatedly across review rounds, it's appropriate to mark as 'not applicable' with clear reasoning after the first resolution",
+        "Pre-existing moved code (not modified in the PR) should be noted as 'not applicable' for review comments rather than refactoring out of scope"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent was intermittently unresponsive, causing commit signing failures requiring multiple retries",
+      "The executor subagent disconnected mid-execution with a ConnectionRefused API error, requiring manual resume and bookkeeping",
+      "Windows fuser issue required three separate debugging iterations: first fixing build.rs (insufficient), then gating with cfg(unix) target dependency (partially fixed), then also adding default-features = false to the desktop dependency",
+      "Cross-language parity CI failure root cause (missing pnpm build step) wasn't immediately obvious from CI logs",
+      "CodeRabbit re-raised the same ecies.rs min-size check comment across three consecutive review rounds despite being resolved each time",
+      "gh CLI log output for failed CI jobs was noisy and required multiple queries to extract actual compiler errors"
+    ],
+    "open_items": [
+      "CI was still failing at session end: Windows cargo check needs the default-features = false fix to propagate, and cross-language parity needs the pnpm build step — these fixes were committed but CI hadn't re-run to confirm",
+      "AES-CTR client-side integrity verification gap (HIGH finding from security review): client doesn't verify CID after fetching bytes, leaving bitflip vulnerability if relay serves tampered ciphertext",
+      "file_ipns_private_key in write_ops.rs uses ed25519_dalek directly (not generate_ed25519_keypair) and the private key bytes aren't wrapped in Zeroizing — noted as out of scope but is a related security gap",
+      "cipherbox-fuse and cipherbox-api-client have no integration tests — coverage improvements focused on unit tests only",
+      "Security review identified 4 medium and 5 low priority findings that were documented but not addressed in this session"
+    ]
+  }
+}
