@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "58f9349f25ab",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/58/f9349f25ab/0/metadata.json",
+      "transcript": "/58/f9349f25ab/0/full.jsonl",
+      "content_hash": "/58/f9349f25ab/0/content_hash.txt",
+      "prompt": "/58/f9349f25ab/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1611,
+    "cache_creation_tokens": 540577,
+    "cache_read_tokens": 68897365,
+    "output_tokens": 92656,
+    "api_call_count": 355
+  }
+}
