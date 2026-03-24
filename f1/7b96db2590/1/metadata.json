@@ -1,0 +1,103 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f17b96db2590",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T14:23:24.789874Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/lib/api/auth.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "07d580e02038",
+  "token_usage": {
+    "input_tokens": 451,
+    "cache_creation_tokens": 608283,
+    "cache_read_tokens": 67645628,
+    "output_tokens": 90032,
+    "api_call_count": 364
+  },
+  "session_metrics": {
+    "turn_count": 44
+  },
+  "summary": {
+    "intent": "Deploy v0.25.0 to staging, then fix a broken Docker API build and investigate/fix slow IPNS publishes and broken token refresh on staging.",
+    "outcome": "Fixed Docker API build (PR #308), consolidated the web app from dual orval-generated clients to a single shared api-client package (PR #309), fixed IPNS publish latency by making DHT propagation fire-and-forget, fixed token refresh by adding 401 interceptor to the shared api-client, and eventually unblocked release-please to create a v0.25.2 release after extensive troubleshooting of the release tagging pipeline.",
+    "learnings": {
+      "repo": [
+        "The API is a zero-knowledge server that never handles plaintext — it stores opaque blobs and proxies IPFS, which is why it has no workspace package dependencies.",
+        "The web app had two separate orval code generations: one in packages/api-client (axios, for SDK/desktop consumers) and one in apps/web/src/api/ (react-query, for the web app) — the react-query hooks were almost entirely unused, with raw function calls used instead.",
+        "release-please uses the 'autorelease: pending' label (not just PR title) to track untagged release PRs — manually creating tags without letting release-please do it leaves the label unflipped and causes subsequent runs to abort.",
+        "release-please scans ALL merged PRs in repo history for autorelease labels/title patterns — old single-package PRs titled 'chore: release main' collided with the new multi-package title pattern after migration.",
+        "The Tag Staging Release action requires running from the release tag commit, so hotfixes must be tagged before re-running it.",
+        "packages/crypto was incorrectly listed in release-please extra-files, causing spurious version bumps when crypto had no changes.",
+        "The someguy sidecar DHT propagation was being awaited synchronously in IpnsService.publishRecord(), causing 30s+ publish times.",
+        "deploy-staging.yml triggers on tags matching v*-staging*, not release tags — staging deployment is always a separate manual step via the Tag Staging Release action."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 52,
+          "end_line": 52,
+          "finding": "The delegated routing DHT publish was awaited synchronously; changing to fire-and-forget reduced publish time from 30s+ to near-instant since the DB record is the source of truth."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 66,
+          "finding": "The shared api-client instance needed withCredentials, a refreshAccessToken callback, and a 401 response interceptor with promise deduplication to prevent concurrent refresh races."
+        },
+        {
+          "path": "apps/web/src/lib/api/ipfs.ts",
+          "line": 1,
+          "end_line": 70,
+          "finding": "The progress-tracking download path was using raw fetch() instead of the api-client axios instance, bypassing auth interceptors; simplified to use ipfsControllerGet with onDownloadProgress."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 1,
+          "end_line": 1,
+          "finding": "The generated API client drift check was diffing all of packages/api-client/ including instance.ts and tests — should only diff openapi.json, src/generated/, and src/models/."
+        },
+        {
+          "path": "release-please-config.json",
+          "line": 1,
+          "end_line": 1,
+          "finding": "pull-request-title-pattern must be set to 'chore: release v${version}' (no ${component}) because the root package has no explicit component name, causing the default pattern to produce unparseable titles like 'chore: release main'."
+        }
+      ],
+      "workflow": [
+        "Never create release tags manually unless release-please is fully stuck — manual tags leave 'autorelease: pending' labels unflipped, causing all future release-please runs to abort with 'untagged merged release PRs outstanding'.",
+        "When migrating release-please from single-package to multi-package config, old release PRs become permanently unparseable — must rename their titles AND check/flip their autorelease labels.",
+        "bootstrap-sha only affects commit scanning, not merged PR scanning — it does not help when old release PRs are the source of the abort.",
+        "release-please treats grouped release PRs atomically: if N-1 of N package releases already exist, it will not create the missing one and instead aborts.",
+        "chore commits do not trigger release-please version bumps — use fix(scope) for CI/build fixes that need to be included in a release."
+      ]
+    },
+    "friction": [
+      "release-please troubleshooting consumed the majority of the session across 7+ PRs (#307, #310, #311, #312, #313, #316, #317) due to cascading issues from the single-to-multi-package migration.",
+      "The 'autorelease: pending' label mechanism was not documented or anticipated — took multiple failed runs to discover it was the root blocker.",
+      "Renaming 58+ old release PR titles via GitHub API was required as a workaround but ultimately didn't help since labels were the actual mechanism.",
+      "Grafana Cloud free-tier instance hibernation caused a transient 503 failure during staging deploy, requiring manual re-run.",
+      "The stale packages/crypto COPY in the API Dockerfile was a silent leftover that only manifested when the expanded package list added a transitive dependency on @cipherbox/core.",
+      "Two separate orval code generation configs (one unused for react-query hooks) created a confusing multi-client architecture that masked where token refresh logic should live."
+    ],
+    "open_items": [
+      "React Query cache is not cleared on logout or token refresh failure — CodeRabbit flagged this; noted as pre-existing gap not introduced by PR #309.",
+      "The v0.25.2 release cycle worked but required yet another manual tag creation — the title pattern fix (PR #317) needs to be validated end-to-end on the next release cycle to confirm release-please can now fully self-manage.",
+      "Token refresh fix for the web app (PR #309) should be smoke-tested on staging — the long batch delete operation that exposed the original 401 issue has not been re-tested.",
+      "The IPNS publish fire-and-forget change (PR #308) means DHT propagation errors are now only logged, not surfaced to callers — monitoring/alerting on those log lines should be considered.",
+      "packages/crypto is now removed from release-please extra-files but has no independent release-please configuration — its versioning strategy going forward is undefined."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T14:22:39.524649Z",
+    "agent_lines": 0,
+    "human_added": 53170,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 53170,
+    "agent_percentage": 0
+  }
+}

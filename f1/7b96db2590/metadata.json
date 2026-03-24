@@ -3,9 +3,10 @@
   "checkpoint_id": "f17b96db2590",
   "strategy": "manual-commit",
   "branch": "feat/phase-23-rust-sdk-extraction",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
-    ".release-please-manifest.json"
+    ".release-please-manifest.json",
+    "apps/web/src/lib/api/auth.ts"
   ],
   "sessions": [
     {
@@ -13,13 +14,19 @@
       "transcript": "/f1/7b96db2590/0/full.jsonl",
       "content_hash": "/f1/7b96db2590/0/content_hash.txt",
       "prompt": "/f1/7b96db2590/0/prompt.txt"
+    },
+    {
+      "metadata": "/f1/7b96db2590/1/metadata.json",
+      "transcript": "/f1/7b96db2590/1/full.jsonl",
+      "content_hash": "/f1/7b96db2590/1/content_hash.txt",
+      "prompt": "/f1/7b96db2590/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 8,
-    "cache_creation_tokens": 1754,
-    "cache_read_tokens": 730310,
-    "output_tokens": 647,
-    "api_call_count": 6
+    "input_tokens": 459,
+    "cache_creation_tokens": 610037,
+    "cache_read_tokens": 68375938,
+    "output_tokens": 90679,
+    "api_call_count": 370
   }
 }
