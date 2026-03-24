@@ -1274,7 +1274,7 @@
           // Show derived info
           let infoHtml = `<div class="field"><span class="field-name">Derived vaultKeyIpnsName:</span> <span class="field-value">${truncate(directVaultKeyIpnsName, 50)}</span></div>`;
           infoHtml += `<div class="field"><span class="field-name">Derived rootIpnsName:</span> <span class="field-value">${truncate(directRootFolderIpnsName, 50)}</span></div>`;
-          infoHtml += `<div class="field"><span class="field-name">Recovery mode:</span> <span class="field-value">IPFS-direct (v2 blob)</span></div>`;
+          infoHtml += `<div class="field"><span class="field-name">Recovery mode:</span> <span class="field-value">IPFS-direct (v2 vault key blob + v1 folder metadata)</span></div>`;
           document.getElementById('export-info').innerHTML = infoHtml;
 
           // Skip Step 2 (key already provided) and go directly to Step 3

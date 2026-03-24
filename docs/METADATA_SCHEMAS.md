@@ -294,9 +294,10 @@ Key-only binary envelope storing the ECIES-wrapped `rootFolderKey`. Written once
 
 **Lifecycle:**
 
-1. **Created** during vault init (new user). Never updated — the key blob is immutable after creation.
+1. **Created** during vault init (new user). The vault key **blob content and CID are immutable** — a new vault key blob is never written for the same vault.
 2. **Read** on every login to extract `rootFolderKey` via ECIES unwrap.
 3. **Not affected** by folder operations — folder publishes go to the root folder IPNS name, not the vault key IPNS name.
+4. **IPNS record republishing:** The vault key IPNS record is signed with a finite lifetime. Although the blob content never changes, the IPNS record must be periodically republished to remain discoverable via DHT/gateways. This is handled automatically by TEE republishing (every 3 hours) alongside all other IPNS records.
 
 **Source files:**
 
