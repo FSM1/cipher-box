@@ -233,3 +233,176 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cipherbox_core::registry::{DeviceAuthStatus, DeviceEntry, DevicePlatform, DeviceRegistry};
+
+    #[test]
+    fn device_info_construction_and_field_access() {
+        let info = DeviceInfo {
+            device_id: "dev-001".to_string(),
+            name: "My Laptop".to_string(),
+            platform: DevicePlatform::Macos,
+            app_version: "1.2.3".to_string(),
+            device_model: "macOS Desktop".to_string(),
+        };
+
+        assert_eq!(info.device_id, "dev-001");
+        assert_eq!(info.name, "My Laptop");
+        assert_eq!(info.platform, DevicePlatform::Macos);
+        assert_eq!(info.app_version, "1.2.3");
+        assert_eq!(info.device_model, "macOS Desktop");
+    }
+
+    #[test]
+    fn device_info_clone() {
+        let info = DeviceInfo {
+            device_id: "dev-002".to_string(),
+            name: "Work PC".to_string(),
+            platform: DevicePlatform::Windows,
+            app_version: "0.5.0".to_string(),
+            device_model: "Windows Desktop".to_string(),
+        };
+        let cloned = info.clone();
+        assert_eq!(cloned.device_id, info.device_id);
+        assert_eq!(cloned.name, info.name);
+    }
+
+    #[test]
+    fn device_platform_enum_variants() {
+        // Verify all platform variants exist and are distinct.
+        let web = DevicePlatform::Web;
+        let macos = DevicePlatform::Macos;
+        let linux = DevicePlatform::Linux;
+        let windows = DevicePlatform::Windows;
+
+        assert_eq!(web, DevicePlatform::Web);
+        assert_eq!(macos, DevicePlatform::Macos);
+        assert_eq!(linux, DevicePlatform::Linux);
+        assert_eq!(windows, DevicePlatform::Windows);
+        assert_ne!(macos, linux);
+        assert_ne!(web, windows);
+    }
+
+    #[test]
+    fn device_auth_status_variants() {
+        let pending = DeviceAuthStatus::Pending;
+        let authorized = DeviceAuthStatus::Authorized;
+        let revoked = DeviceAuthStatus::Revoked;
+
+        assert_eq!(pending, DeviceAuthStatus::Pending);
+        assert_eq!(authorized, DeviceAuthStatus::Authorized);
+        assert_eq!(revoked, DeviceAuthStatus::Revoked);
+        assert_ne!(pending, authorized);
+        assert_ne!(authorized, revoked);
+    }
+
+    #[test]
+    fn get_device_platform_returns_valid_variant() {
+        let platform = get_device_platform();
+        // Should be one of the known variants on any supported platform.
+        assert!(
+            platform == DevicePlatform::Macos
+                || platform == DevicePlatform::Windows
+                || platform == DevicePlatform::Linux
+                || platform == DevicePlatform::Web
+        );
+    }
+
+    #[test]
+    fn get_device_model_returns_non_empty_string() {
+        let model = get_device_model();
+        assert!(!model.is_empty());
+    }
+
+    #[test]
+    fn get_device_name_returns_non_empty_string() {
+        let name = get_device_name();
+        assert!(!name.is_empty());
+    }
+
+    #[test]
+    fn device_auth_status_serde_roundtrip() {
+        let statuses = vec![
+            DeviceAuthStatus::Pending,
+            DeviceAuthStatus::Authorized,
+            DeviceAuthStatus::Revoked,
+        ];
+        for status in &statuses {
+            let json = serde_json::to_string(status).unwrap();
+            let parsed: DeviceAuthStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(*status, parsed);
+        }
+    }
+
+    #[test]
+    fn device_platform_serde_roundtrip() {
+        let platforms = vec![
+            DevicePlatform::Web,
+            DevicePlatform::Macos,
+            DevicePlatform::Linux,
+            DevicePlatform::Windows,
+        ];
+        for platform in &platforms {
+            let json = serde_json::to_string(platform).unwrap();
+            let parsed: DevicePlatform = serde_json::from_str(&json).unwrap();
+            assert_eq!(*platform, parsed);
+        }
+    }
+
+    #[test]
+    fn device_platform_serde_uses_lowercase() {
+        assert_eq!(serde_json::to_string(&DevicePlatform::Macos).unwrap(), "\"macos\"");
+        assert_eq!(serde_json::to_string(&DevicePlatform::Web).unwrap(), "\"web\"");
+        assert_eq!(serde_json::to_string(&DevicePlatform::Linux).unwrap(), "\"linux\"");
+        assert_eq!(serde_json::to_string(&DevicePlatform::Windows).unwrap(), "\"windows\"");
+    }
+
+    #[test]
+    fn device_auth_status_serde_uses_lowercase() {
+        assert_eq!(serde_json::to_string(&DeviceAuthStatus::Pending).unwrap(), "\"pending\"");
+        assert_eq!(serde_json::to_string(&DeviceAuthStatus::Authorized).unwrap(), "\"authorized\"");
+        assert_eq!(serde_json::to_string(&DeviceAuthStatus::Revoked).unwrap(), "\"revoked\"");
+    }
+
+    #[test]
+    fn device_registry_serde_roundtrip() {
+        let registry = DeviceRegistry {
+            version: "v1".to_string(),
+            sequence_number: 42,
+            devices: vec![DeviceEntry {
+                device_id: "dev-123".to_string(),
+                public_key: "abcdef".to_string(),
+                name: "Test Device".to_string(),
+                platform: DevicePlatform::Linux,
+                app_version: "0.1.0".to_string(),
+                device_model: "Linux Desktop".to_string(),
+                ip_hash: String::new(),
+                status: DeviceAuthStatus::Authorized,
+                created_at: 1700000000000,
+                last_seen_at: 1700000001000,
+                revoked_at: None,
+                revoked_by: None,
+            }],
+        };
+
+        let json = serde_json::to_string(&registry).unwrap();
+        let parsed: DeviceRegistry = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.version, "v1");
+        assert_eq!(parsed.sequence_number, 42);
+        assert_eq!(parsed.devices.len(), 1);
+        assert_eq!(parsed.devices[0].device_id, "dev-123");
+        assert_eq!(parsed.devices[0].platform, DevicePlatform::Linux);
+        assert_eq!(parsed.devices[0].status, DeviceAuthStatus::Authorized);
+    }
+
+    #[test]
+    fn now_ms_returns_reasonable_timestamp() {
+        let ts = now_ms();
+        // Should be after 2020-01-01 (1577836800000 ms) and non-zero.
+        assert!(ts > 1_577_836_800_000);
+    }
+}

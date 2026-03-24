@@ -119,3 +119,85 @@ impl KeyState {
         self.api.clear_access_token().await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_state() -> KeyState {
+        KeyState::from_url("http://localhost:9999")
+    }
+
+    #[tokio::test]
+    async fn new_creates_state_with_none_fields() {
+        let state = make_state();
+
+        assert!(state.private_key.read().await.is_none());
+        assert!(state.public_key.read().await.is_none());
+        assert!(state.root_folder_key.read().await.is_none());
+        assert!(state.root_ipns_name.read().await.is_none());
+        assert!(state.root_ipns_private_key.read().await.is_none());
+        assert!(state.user_id.read().await.is_none());
+        assert!(state.tee_keys.read().await.is_none());
+        assert!(!*state.is_authenticated.read().await);
+    }
+
+    #[tokio::test]
+    async fn fields_are_writable_and_readable() {
+        let state = make_state();
+
+        *state.private_key.write().await = Some(vec![1, 2, 3]);
+        *state.public_key.write().await = Some(vec![4, 5, 6]);
+        *state.root_folder_key.write().await = Some(vec![7, 8, 9]);
+        *state.root_ipns_name.write().await = Some("k51test".to_string());
+        *state.root_ipns_private_key.write().await = Some(vec![10, 11, 12]);
+        *state.user_id.write().await = Some("user-123".to_string());
+        *state.is_authenticated.write().await = true;
+
+        assert_eq!(*state.private_key.read().await, Some(vec![1, 2, 3]));
+        assert_eq!(*state.public_key.read().await, Some(vec![4, 5, 6]));
+        assert_eq!(*state.root_folder_key.read().await, Some(vec![7, 8, 9]));
+        assert_eq!(*state.root_ipns_name.read().await, Some("k51test".to_string()));
+        assert_eq!(*state.root_ipns_private_key.read().await, Some(vec![10, 11, 12]));
+        assert_eq!(*state.user_id.read().await, Some("user-123".to_string()));
+        assert!(*state.is_authenticated.read().await);
+    }
+
+    #[tokio::test]
+    async fn clear_zeros_all_sensitive_byte_fields() {
+        let state = make_state();
+
+        // Populate sensitive fields with non-zero bytes.
+        *state.private_key.write().await = Some(vec![0xFF; 32]);
+        *state.public_key.write().await = Some(vec![0xAA; 65]);
+        *state.root_folder_key.write().await = Some(vec![0xBB; 32]);
+        *state.root_ipns_private_key.write().await = Some(vec![0xCC; 32]);
+        *state.root_ipns_name.write().await = Some("k51name".to_string());
+        *state.user_id.write().await = Some("user-abc".to_string());
+        *state.is_authenticated.write().await = true;
+
+        state.clear().await;
+
+        // All fields should be None / false after clear.
+        assert!(state.private_key.read().await.is_none());
+        assert!(state.public_key.read().await.is_none());
+        assert!(state.root_folder_key.read().await.is_none());
+        assert!(state.root_ipns_private_key.read().await.is_none());
+        assert!(state.root_ipns_name.read().await.is_none());
+        assert!(state.user_id.read().await.is_none());
+        assert!(state.tee_keys.read().await.is_none());
+        assert!(!*state.is_authenticated.read().await);
+    }
+
+    #[test]
+    fn sync_status_variants() {
+        let idle = SyncStatus::Idle;
+        let syncing = SyncStatus::Syncing;
+        let error = SyncStatus::Error("timeout".to_string());
+
+        assert_eq!(idle, SyncStatus::Idle);
+        assert_eq!(syncing, SyncStatus::Syncing);
+        assert_eq!(error, SyncStatus::Error("timeout".to_string()));
+        assert_ne!(idle, syncing);
+    }
+}

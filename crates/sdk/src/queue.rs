@@ -138,3 +138,145 @@ impl Default for WriteQueue {
         Self::new(5)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to build a QueuedWrite with minimal boilerplate.
+    fn make_write(id: &str, filename: &str) -> QueuedWrite {
+        QueuedWrite {
+            id: id.to_string(),
+            parent_ino: 1,
+            encrypted_content: vec![0xAA, 0xBB],
+            encrypted_file_key: vec![0xCC],
+            iv: vec![0xDD],
+            filename: filename.to_string(),
+            created_at: Instant::now(),
+            retries: 0,
+        }
+    }
+
+    #[test]
+    fn new_creates_empty_queue() {
+        let q = WriteQueue::new(3);
+        assert_eq!(q.len(), 0);
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn enqueue_adds_items_and_len_reflects_count() {
+        let mut q = WriteQueue::new(3);
+        q.enqueue(make_write("a", "file_a.txt"));
+        assert_eq!(q.len(), 1);
+        assert!(!q.is_empty());
+
+        q.enqueue(make_write("b", "file_b.txt"));
+        assert_eq!(q.len(), 2);
+
+        q.enqueue(make_write("c", "file_c.txt"));
+        assert_eq!(q.len(), 3);
+    }
+
+    #[test]
+    fn is_empty_returns_correct_values() {
+        let mut q = WriteQueue::new(3);
+        assert!(q.is_empty());
+
+        q.enqueue(make_write("x", "x.txt"));
+        assert!(!q.is_empty());
+    }
+
+    #[test]
+    fn default_creates_queue_with_max_retries_5() {
+        let q = WriteQueue::default();
+        assert!(q.is_empty());
+        // Verify max_retries is 5 by checking the field directly.
+        assert_eq!(q.max_retries, 5);
+    }
+
+    // ---- Async tests using a mock UploadHandler ----
+
+    /// Mock handler that always succeeds.
+    struct AlwaysOk;
+    impl UploadHandler for AlwaysOk {
+        async fn upload_and_register(&self, _write: &QueuedWrite) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// Mock handler that always fails with a message.
+    struct AlwaysFail;
+    impl UploadHandler for AlwaysFail {
+        async fn upload_and_register(&self, _write: &QueuedWrite) -> Result<(), String> {
+            Err("network down".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn process_dequeues_in_fifo_order() {
+        // Use a handler that records the order items are processed.
+        use std::sync::Mutex;
+        struct OrderTracker(Mutex<Vec<String>>);
+        impl UploadHandler for OrderTracker {
+            async fn upload_and_register(&self, write: &QueuedWrite) -> Result<(), String> {
+                self.0.lock().unwrap().push(write.id.clone());
+                Ok(())
+            }
+        }
+
+        let tracker = OrderTracker(Mutex::new(Vec::new()));
+        let mut q = WriteQueue::new(3);
+        q.enqueue(make_write("first", "1.txt"));
+        q.enqueue(make_write("second", "2.txt"));
+        q.enqueue(make_write("third", "3.txt"));
+
+        let processed = q.process(&tracker).await.unwrap();
+        assert_eq!(processed, 3);
+        assert!(q.is_empty());
+
+        let order = tracker.0.lock().unwrap();
+        assert_eq!(*order, vec!["first", "second", "third"]);
+    }
+
+    #[tokio::test]
+    async fn process_success_removes_items() {
+        let mut q = WriteQueue::new(3);
+        q.enqueue(make_write("a", "a.txt"));
+        q.enqueue(make_write("b", "b.txt"));
+
+        let processed = q.process(&AlwaysOk).await.unwrap();
+        assert_eq!(processed, 2);
+        assert_eq!(q.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn process_failure_increments_retries_and_requeues() {
+        let mut q = WriteQueue::new(3);
+        q.enqueue(make_write("a", "a.txt"));
+
+        // First process: fails, retries goes 0 -> 1, item requeued.
+        let processed = q.process(&AlwaysFail).await.unwrap();
+        assert_eq!(processed, 0);
+        assert_eq!(q.len(), 1);
+
+        // Second process: fails again, retries goes 1 -> 2.
+        let _ = q.process(&AlwaysFail).await.unwrap();
+        assert_eq!(q.len(), 1);
+
+        // Third process: fails, retries goes 2 -> 3.
+        let _ = q.process(&AlwaysFail).await.unwrap();
+        assert_eq!(q.len(), 1);
+
+        // Fourth process: retries goes 3 -> 4, exceeds max_retries=3, item dropped.
+        let _ = q.process(&AlwaysFail).await.unwrap();
+        assert_eq!(q.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn process_empty_queue_returns_zero() {
+        let mut q = WriteQueue::new(3);
+        let processed = q.process(&AlwaysOk).await.unwrap();
+        assert_eq!(processed, 0);
+    }
+}
