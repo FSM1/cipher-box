@@ -7,6 +7,7 @@ const initialState = {
   usedBytes: 0,
   limitBytes: DEFAULT_LIMIT_BYTES,
   remainingBytes: DEFAULT_LIMIT_BYTES,
+  advisory: false,
   loading: false,
   error: null as string | null,
 };
@@ -35,6 +36,7 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
         usedBytes: quota.usedBytes,
         limitBytes: quota.limitBytes,
         remainingBytes: quota.remainingBytes,
+        advisory: quota.advisory ?? false,
         loading: false,
       });
     } catch {

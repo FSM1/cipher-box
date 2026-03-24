@@ -21,9 +21,10 @@ function formatBytes(bytes: number): string {
  * Storage quota indicator component.
  * Shows storage usage with a progress bar and text.
  * Fetches current quota from the backend on mount.
+ * Displays advisory badge for BYO users.
  */
 export function StorageQuota() {
-  const { usedBytes, limitBytes, fetchQuota } = useQuotaStore();
+  const { usedBytes, limitBytes, advisory, fetchQuota } = useQuotaStore();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   // Fetch quota from backend once authenticated so the display reflects
@@ -45,9 +46,17 @@ export function StorageQuota() {
       <div className="storage-quota-bar">
         <div className="storage-quota-fill" style={{ width: `${Math.min(percentage, 100)}%` }} />
       </div>
-      <span className="storage-quota-text">
-        {formatBytes(usedBytes)} / {formatBytes(limitBytes)}
-      </span>
+      <div className="storage-quota-info">
+        <span className="storage-quota-text">
+          {formatBytes(usedBytes)} / {formatBytes(limitBytes)}
+        </span>
+        {advisory && <span className="storage-quota-advisory-badge">ADVISORY</span>}
+      </div>
+      {advisory && (
+        <p className="storage-quota-advisory-hint">
+          {'storage is managed by your node. this total is approximate.'}
+        </p>
+      )}
     </div>
   );
 }

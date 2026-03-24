@@ -4,14 +4,15 @@ import { bytesToHex } from '@cipherbox/crypto';
 import { AppShell } from '../components/layout';
 import { LinkedMethods } from '../components/auth/LinkedMethods';
 import { SecurityTab } from '../components/mfa/SecurityTab';
+import { StorageTab } from '../components/settings/StorageTab';
 import { VaultExport } from '../components/vault/VaultExport';
 import { useAuth } from '../hooks/useAuth';
 import { useAuthStore } from '../stores/auth.store';
 import { useMfaStore } from '../stores/mfa.store';
 
-type SettingsTabId = 'linked-methods' | 'security';
+type SettingsTabId = 'linked-methods' | 'security' | 'storage';
 
-const TAB_IDS: SettingsTabId[] = ['linked-methods', 'security'];
+const TAB_IDS: SettingsTabId[] = ['linked-methods', 'security', 'storage'];
 
 function handleTabKeyDown(
   e: KeyboardEvent,
@@ -35,7 +36,7 @@ function handleTabKeyDown(
  * Settings page wrapped in AppShell.
  * Protected route - redirects to login if not authenticated.
  *
- * Tabs: Linked Methods | Security
+ * Tabs: Linked Methods | Security | Storage
  * VaultExport shown below tabs (always visible).
  */
 export function SettingsPage() {
@@ -130,6 +131,19 @@ export function SettingsPage() {
             >
               SECURITY
             </button>
+            <button
+              type="button"
+              role="tab"
+              id="tab-storage"
+              aria-selected={activeTab === 'storage'}
+              aria-controls="panel-storage"
+              tabIndex={activeTab === 'storage' ? 0 : -1}
+              className={`settings-tab ${activeTab === 'storage' ? 'active' : ''}`}
+              onClick={() => setActiveTab('storage')}
+              onKeyDown={(e) => handleTabKeyDown(e, activeTab, setActiveTab)}
+            >
+              STORAGE
+            </button>
           </div>
 
           {/* Tab panels */}
@@ -149,6 +163,15 @@ export function SettingsPage() {
             hidden={activeTab !== 'security'}
           >
             {activeTab === 'security' && <SecurityTab />}
+          </div>
+
+          <div
+            role="tabpanel"
+            id="panel-storage"
+            aria-labelledby="tab-storage"
+            hidden={activeTab !== 'storage'}
+          >
+            {activeTab === 'storage' && <StorageTab />}
           </div>
         </section>
 
