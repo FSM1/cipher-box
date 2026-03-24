@@ -9,7 +9,7 @@
  */
 
 import { CipherBoxClient } from '@cipherbox/sdk';
-import { initializeVault, encryptVaultKeys } from '@cipherbox/core';
+import { initializeVault } from '@cipherbox/core';
 import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 
 const API_URL = process.env.SDK_E2E_API_URL ?? 'http://localhost:3000';
@@ -85,10 +85,9 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
   try {
     // 2. Initialize vault
     const vault = await initializeVault(privateKey);
-    const encrypted = await encryptVaultKeys(vault, publicKey);
     const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
 
-    // 3. Register vault on server
+    // 3. Register vault on server (v2: only ownerPublicKey + rootIpnsName, crypto lives in IPFS)
     const initRes = await fetch(`${apiUrl}/vault/init`, {
       method: 'POST',
       headers: fetchHeaders({
@@ -97,8 +96,6 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
       }),
       body: JSON.stringify({
         ownerPublicKey: bytesToHex(publicKey),
-        encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
-        encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
         rootIpnsName,
       }),
     });
