@@ -1,16 +1,8 @@
 //! Windows filesystem module for CipherBox Desktop.
 //!
 //! Provides WinFsp-based mount and unmount functions.
-//! The `operations` module implements the `FileSystemContext` trait.
-
-#[cfg(feature = "winfsp")]
-mod read_ops;
-#[cfg(feature = "winfsp")]
-mod write_ops;
-#[cfg(feature = "winfsp")]
-mod dir_ops;
-#[cfg(feature = "winfsp")]
-pub mod operations;
+//! WinFsp operation implementations (FileSystemContext, read/write/dir ops)
+//! live in the cipherbox-fuse crate at `cipherbox_fuse::platform::windows`.
 
 #[cfg(feature = "winfsp")]
 mod mount_impl {
@@ -89,16 +81,16 @@ mod mount_impl {
         log::info!("Pre-populating root folder from IPNS...");
         let fetch_result: Result<(Vec<u8>, String), String> = async {
             let resolve_resp =
-                crate::api::ipns::resolve_ipns(&state.api, &root_ipns_name).await?;
+                cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, &root_ipns_name).await.map_err(|e| e.to_string())?;
             let encrypted_bytes =
-                crate::api::ipfs::fetch_content(&state.api, &resolve_resp.cid).await?;
+                cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resolve_resp.cid).await.map_err(|e| e.to_string())?;
             Ok((encrypted_bytes, resolve_resp.cid))
         }
         .await;
 
         match fetch_result {
             Ok((encrypted_bytes, cid)) => {
-                match crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
+                match cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
                     Ok(metadata) => {
                         metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
 
@@ -124,22 +116,22 @@ mod mount_impl {
                                     if let Ok(fk) = root_folder_key_arr {
                                         for (fp_ino, fp_ipns) in &unresolved {
                                             let fp_result: Result<Vec<u8>, String> = async {
-                                                let resp = crate::api::ipns::resolve_ipns(
-                                                    &state.api,
+                                                let resp = cipherbox_api_client::ipns::resolve_ipns(
+                                                    &state.sdk.api,
                                                     fp_ipns,
                                                 )
-                                                .await?;
-                                                let bytes = crate::api::ipfs::fetch_content(
-                                                    &state.api,
+                                                .await.map_err(|e| e.to_string())?;
+                                                let bytes = cipherbox_api_client::ipfs::fetch_content(
+                                                    &state.sdk.api,
                                                     &resp.cid,
                                                 )
-                                                .await?;
+                                                .await.map_err(|e| e.to_string())?;
                                                 Ok(bytes)
                                             }
                                             .await;
                                             match fp_result {
                                                 Ok(enc_bytes) => {
-                                                    match crate::fuse::decrypt::decrypt_file_metadata_from_ipfs_public(
+                                                    match cipherbox_core::decrypt::decrypt_file_metadata_from_ipfs_public(
                                                         &enc_bytes, &fk,
                                                     ) {
                                                         Ok(fm) => {
@@ -204,19 +196,19 @@ mod mount_impl {
                                     );
                                     let sub_result: Result<(Vec<u8>, String), String> = async {
                                         let resp =
-                                            crate::api::ipns::resolve_ipns(&state.api, sub_ipns)
-                                                .await?;
-                                        let bytes = crate::api::ipfs::fetch_content(
-                                            &state.api,
+                                            cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, sub_ipns)
+                                                .await.map_err(|e| e.to_string())?;
+                                        let bytes = cipherbox_api_client::ipfs::fetch_content(
+                                            &state.sdk.api,
                                             &resp.cid,
                                         )
-                                        .await?;
+                                        .await.map_err(|e| e.to_string())?;
                                         Ok((bytes, resp.cid))
                                     }
                                     .await;
                                     match sub_result {
                                         Ok((enc_bytes, sub_cid)) => {
-                                            match crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
+                                            match cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
                                                 Ok(sub_metadata) => {
                                                     metadata_cache.set(
                                                         sub_ipns,
@@ -249,23 +241,23 @@ mod mount_impl {
                                                                             String,
                                                                         > = async {
                                                                             let resp =
-                                                                                crate::api::ipns::resolve_ipns(
-                                                                                    &state.api,
+                                                                                cipherbox_api_client::ipns::resolve_ipns(
+                                                                                    &state.sdk.api,
                                                                                     fp_ipns,
                                                                                 )
-                                                                                .await?;
+                                                                                .await.map_err(|e| e.to_string())?;
                                                                             let bytes =
-                                                                                crate::api::ipfs::fetch_content(
-                                                                                    &state.api,
+                                                                                cipherbox_api_client::ipfs::fetch_content(
+                                                                                    &state.sdk.api,
                                                                                     &resp.cid,
                                                                                 )
-                                                                                .await?;
+                                                                                .await.map_err(|e| e.to_string())?;
                                                                             Ok(bytes)
                                                                         }
                                                                         .await;
                                                                         match fp_result {
                                                                             Ok(enc_bytes) => {
-                                                                                match crate::fuse::decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
+                                                                                match cipherbox_core::decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
                                                                                     Ok(fm) => {
                                                                                         inodes.resolve_file_pointer(
                                                                                             *fp_ino,
@@ -329,7 +321,7 @@ mod mount_impl {
             inodes,
             metadata_cache,
             content_cache: cache::ContentCache::new(),
-            api: state.api.clone(),
+            api: state.sdk.api.clone(),
             private_key: Zeroizing::new(private_key),
             public_key: Zeroizing::new(public_key),
             root_folder_key: Zeroizing::new(root_folder_key),
@@ -354,7 +346,7 @@ mod mount_impl {
         };
 
         // Create WinFsp context with Arc<Mutex<>> for interior mutability
-        let context = super::operations::implementation::WinFspContext {
+        let context = cipherbox_fuse::platform::windows::operations::implementation::WinFspContext {
             inner: Arc::new(Mutex::new(fs)),
             rt: rt.clone(),
         };

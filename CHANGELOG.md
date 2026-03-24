@@ -2,17 +2,15 @@
 
 ## [0.27.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.26.6...cipher-box-v0.27.0) (2026-03-24)
 
-
 ### Features
 
-* vault blob v2 migration — zero-knowledge server ([#344](https://github.com/FSM1/cipher-box/issues/344)) ([6aa4114](https://github.com/FSM1/cipher-box/commit/6aa4114bd57a339d28c2e95be0d544e62aef11c2))
-
+- vault blob v2 migration — zero-knowledge server ([#344](https://github.com/FSM1/cipher-box/issues/344)) ([6aa4114](https://github.com/FSM1/cipher-box/commit/6aa4114bd57a339d28c2e95be0d544e62aef11c2))
 
 ### Bug Fixes
 
-* deduplicate session restore race conditions on page reload ([#350](https://github.com/FSM1/cipher-box/issues/350)) ([1a873de](https://github.com/FSM1/cipher-box/commit/1a873de894a8784d8f7ec0a5f433a418f619df58))
-* prevent duplicate folder_ipns row on vault init ([#351](https://github.com/FSM1/cipher-box/issues/351)) ([a955f86](https://github.com/FSM1/cipher-box/commit/a955f86f1fea94d7f3302defe1ec3647f51d60db))
-* separate vault key blob from root folder IPNS name ([#349](https://github.com/FSM1/cipher-box/issues/349)) ([f04ba16](https://github.com/FSM1/cipher-box/commit/f04ba16ea099b16d13cc3c846e979ee461bd966d))
+- deduplicate session restore race conditions on page reload ([#350](https://github.com/FSM1/cipher-box/issues/350)) ([1a873de](https://github.com/FSM1/cipher-box/commit/1a873de894a8784d8f7ec0a5f433a418f619df58))
+- prevent duplicate folder_ipns row on vault init ([#351](https://github.com/FSM1/cipher-box/issues/351)) ([a955f86](https://github.com/FSM1/cipher-box/commit/a955f86f1fea94d7f3302defe1ec3647f51d60db))
+- separate vault key blob from root folder IPNS name ([#349](https://github.com/FSM1/cipher-box/issues/349)) ([f04ba16](https://github.com/FSM1/cipher-box/commit/f04ba16ea099b16d13cc3c846e979ee461bd966d))
 
 ## [0.26.6](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.26.5...cipher-box-v0.26.6) (2026-03-24)
 

@@ -38,12 +38,7 @@
     },
     "linux": {
       "deb": {
-        "depends": [
-          "libfuse3-3",
-          "fuse3",
-          "libwebkit2gtk-4.1-0",
-          "libayatana-appindicator3-1"
-        ]
+        "depends": ["libfuse3-3", "fuse3", "libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"]
       },
       "appimage": {
         "bundleMediaFramework": false
@@ -53,9 +48,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": [
-          "cipherbox"
-        ]
+        "schemes": ["cipherbox"]
       }
     }
   }

@@ -4,5 +4,10 @@
   "packages/crypto": "0.26.1",
   "packages/api-client": "0.27.0",
   "packages/sdk-core": "0.27.0",
-  "packages/sdk": "0.27.0"
+  "packages/sdk": "0.27.0",
+  "crates/crypto": "0.1.0",
+  "crates/core": "0.1.0",
+  "crates/api-client": "0.1.0",
+  "crates/fuse": "0.1.0",
+  "crates/sdk": "0.1.0"
 }
