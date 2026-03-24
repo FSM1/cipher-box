@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cca971b11ff1",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T03:37:22.125853Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "0753f5c458e3",
+  "token_usage": {
+    "input_tokens": 78,
+    "cache_creation_tokens": 109837,
+    "cache_read_tokens": 6146317,
+    "output_tokens": 20671,
+    "api_call_count": 73
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Complete Phase 20 (Vault Migration) gap closure by planning and executing removal of dead migration code, then address CodeRabbit PR review comments on the resulting changes.",
+    "outcome": "Phase 20 fully completed with 6/6 plans executed, 9/9 verification truths passed, and 3 of 6 CodeRabbit review comments resolved with code fixes (fetch timeouts, XSS sanitization, zero-length key validation); 3 comments marked not applicable due to referencing already-removed code.",
+    "learnings": {
+      "repo": [
+        "Phase 20 is 'Vault Migration' — server now stores zero crypto material; rootFolderKey lives exclusively in IPFS v2 blobs",
+        "DB columns dropped: encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at from vaults table",
+        "New user init now publishes v2 blob to IPFS before API registration (requires live env to verify)",
+        "Recovery tool uses IPFS-direct path; export-file format now only requires encryptedRootFolderKey (encryptedRootIpnsPrivateKey is optional/absent)",
+        "API client was regenerated after DTO simplification — downstream clients see simplified types with only ownerPublicKey + rootIpnsName",
+        "Prior phase regression suite: 5 test suites, 143 tests — all pass after Phase 20 changes",
+        "GSD plan commit was handled by the planner agent (bd236c59a), not the orchestrator — orchestrator should check before attempting duplicate commit"
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 105,
+          "end_line": 105,
+          "finding": "Zero-length key_len must be rejected — added validation guard per CodeRabbit thread 6"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 816,
+          "end_line": 816,
+          "finding": "All fetch() calls in IPNS resolution and IPFS fetch functions wrapped with fetchWithTimeout() helper to prevent hangs"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1369,
+          "end_line": 1369,
+          "finding": "rootIpnsName flows into innerHTML — added format validation against ^k[0-9a-z]{20,}$ and escapeHtml helper for exportedAt/derivationInfo"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1463,
+          "end_line": 1463,
+          "finding": "encryptedRootIpnsPrivateKey decryption made optional/tolerant of absence since export-file validation no longer requires it"
+        },
+        {
+          "path": "apps/api/src/migrations/1740700000000-DropVaultCryptoColumns.ts",
+          "finding": "Supersedes AddVaultMigratedAt migration — CodeRabbit comment on the older migration was not applicable"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "line": 49,
+          "end_line": 49,
+          "finding": "Migrate endpoint fully removed by gap closure — CodeRabbit comment referencing it was not applicable"
+        }
+      ],
+      "workflow": [
+        "GSD gap closure mode skips research and reads VERIFICATION.md directly — use --gaps-only flag on execute-phase to run only gap_closure plans",
+        "Pre-wave dependency check looks for key-links in plan frontmatter; if links are only in plan body they are not checked",
+        "Planner agent commits plans autonomously — orchestrator should verify before attempting its own commit to avoid duplicate commit errors",
+        "CodeRabbit review threads on plan files (.planning/*.md) are not applicable once plans have been executed",
+        "fetchWithTimeout pattern needed for recovery.html standalone tool — no framework timeout mechanism available in plain HTML/JS"
+      ]
+    },
+    "friction": [
+      "Verifier created VERIFICATION.md in a different working directory than expected, requiring multiple bash commands to locate the file",
+      "Orchestrator attempted to commit plans that were already committed by the planner agent, requiring extra git log checks",
+      "Pre-wave dependency check only catches key-links in plan frontmatter — links in plan body are silently skipped with no warning"
+    ],
+    "open_items": [
+      "2 items need human verification in live environment: (1) new user init publishes v2 blob to IPFS before API registration, (2) recovery tool IPFS-direct path with real vault and live IPFS gateway",
+      "Next phase to plan/execute is Phase 23 (discuss-phase 23 suggested)",
+      "CodeRabbit reviewed plan files (.planning/*.md) which are not meaningful targets — consider adding .planning/ to PR review ignore patterns"
+    ]
+  }
+}
