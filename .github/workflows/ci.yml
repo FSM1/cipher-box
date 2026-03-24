@@ -36,12 +36,15 @@ jobs:
               - 'apps/desktop/src-tauri/capabilities/**'
               - 'apps/desktop/src-tauri/resources/**'
               - 'apps/desktop/src-tauri/Cargo.toml'
-              - 'apps/desktop/src-tauri/Cargo.lock'
               - 'apps/desktop/src-tauri/build.rs'
               - 'apps/desktop/src-tauri/rust-toolchain.toml'
               - 'apps/desktop/index.html'
               - 'apps/desktop/vite.config.*'
               - 'apps/desktop/tsconfig*'
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'tests/vectors/**'
               - 'packages/crypto/src/**'
               - 'packages/crypto/tsconfig*'
               - '.github/workflows/ci.yml'
@@ -548,15 +551,15 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+            target
+          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - name: Cargo check
-        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
+      - name: Cargo check (workspace)
+        run: cargo check --workspace --no-default-features --features winfsp
 
-      - name: Cargo test
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
+      - name: Cargo test (workspace)
+        run: cargo test --workspace --no-default-features --features winfsp
 
   cargo-macos:
     name: Cargo Check & Test (macOS)
@@ -591,18 +594,17 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+            target
+          key: macos-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: macos-cargo-
 
-      - name: Cargo check
-        working-directory: apps/desktop/src-tauri
-        run: cargo check --no-default-features --features fuse
+      - name: Cargo check (workspace)
+        run: cargo check --workspace --no-default-features --features fuse
         env:
           PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
 
-      - name: Cargo test
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
+      - name: Cargo test (workspace)
+        run: cargo test --workspace --no-default-features --features fuse
         env:
           PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
 
@@ -637,13 +639,12 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: linux-cargo-
 
-      - name: Cargo check
-        working-directory: apps/desktop/src-tauri
-        run: cargo check --no-default-features --features fuse
+      - name: Cargo check (workspace)
+        run: cargo check --workspace --no-default-features --features fuse
 
       - name: Install cargo-llvm-cov
         run: |
@@ -653,7 +654,7 @@ jobs:
       - name: Cargo test with coverage
         run: >-
           cargo llvm-cov
-          --manifest-path apps/desktop/src-tauri/Cargo.toml
+          --workspace
           --no-default-features --features fuse
           --lcov --output-path desktop-lcov.info
 
@@ -664,3 +665,43 @@ jobs:
           files: desktop-lcov.info
           flags: desktop
           fail_ci_if_error: false
+
+  vector-parity:
+    name: Cross-Language Vector Parity
+    needs: [changes, cargo-linux, test]
+    if: |
+      !failure() && !cancelled() &&
+      (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.src == 'true')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse3-dev pkg-config build-essential \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libssl-dev libxdo-dev
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Rust vector tests
+        run: cargo test -p cipherbox-crypto --test cross_language --no-default-features
+
+      - name: Run TypeScript vector tests
+        run: pnpm --filter @cipherbox/crypto test -- --reporter=verbose
+
+      - name: Check vector parity
+        run: bash scripts/check-vector-parity.sh
