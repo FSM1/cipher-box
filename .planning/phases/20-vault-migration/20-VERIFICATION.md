@@ -1,157 +1,154 @@
 ---
 phase: 20-vault-migration
-verified: 2026-03-24T01:48:50Z
-status: gaps_found
-score: 6/6 must-haves verified
-re_verification: false
+verified: 2026-03-24T04:05:00Z
+status: passed
+score: 9/9 must-haves verified
+re_verification: true
+  previous_status: gaps_found
+  previous_score: 6/6 truths + GAP-01 open
+  gaps_closed:
+    - 'GAP-01: Dead migration code removed -- DB crypto columns dropped, POST /vault/migrate removed, PATH B + DB fallback removed, as unknown as string casts removed, desktop non-migrated code paths removed'
+  gaps_remaining: []
+  regressions: []
 human_verification:
-  - test: 'Login with non-migrated account on web app triggers lazy migration'
-    expected: 'Console shows vault successfully migrated, subsequent login reads from IPFS v2 blob, DB crypto columns become NULL'
-    why_human: 'Requires live API + IPFS node; migration is async fire-and-forget inside login flow'
-  - test: 'Recovery tool IPFS-direct path with known private key'
-    expected: 'Entering private key, clicking Recover, tool derives IPNS name, fetches v2 blob, decrypts rootFolderKey, lists folder contents'
-    why_human: 'Standalone HTML tool; requires live IPFS gateway and a real migrated vault'
+  - test: 'New web user vault init publishes v2 blob to IPFS before API registration'
+    expected: 'New account signs up, browser DevTools Network shows IPFS add call before POST /vault/init, vault loads successfully'
+    why_human: 'Requires live IPFS node and Web3Auth + backend running; ordering of async calls cannot be verified statically without tracing a real login'
+  - test: 'Recovery tool IPFS-direct path with known private key (v2 vault)'
+    expected: 'Enter hex private key, click Recover, tool derives IPNS name, fetches v2 blob via gateway, ECIES-unwraps rootFolderKey, lists folder contents'
+    why_human: 'Requires live IPFS gateway and a real migrated vault; browser interaction required'
 ---
 
-# Phase 20: Vault Migration Verification Report
+# Phase 20: Vault Migration Re-Verification Report
 
-**Phase Goal:** Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material
-**Verified:** 2026-03-24T01:48:50Z
+**Phase Goal:** The server stores zero crypto material -- rootFolderKey lives in the IPFS vault blob, making the server a true zero-knowledge relay
+**Verified:** 2026-03-24T04:05:00Z
 **Status:** passed
-**Re-verification:** No — initial verification
+**Re-verification:** Yes -- after GAP-01 closure (plans 20-05 and 20-06)
+
+## Re-Verification Context
+
+The initial verification (2026-03-24T01:48:50Z) found GAP-01: dead migration code existed in the API, web client, and desktop client because all users had already migrated to v2. Plans 20-05 and 20-06 were executed to remove that dead code. This re-verification confirms:
+
+1. All 6 original truths still hold (v2 blob format works, server stores zero crypto, clients read from IPFS)
+2. GAP-01 is fully resolved (all dead migration code removed)
+3. The new capability from plan 20-06 is in place (new web users get v2 blob published immediately)
 
 ## Goal Achievement
 
 ### Observable Truths
 
-| #   | Truth                                                                            | Status   | Evidence                                                                                                                                                                                                                                    |
-| --- | -------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| 1   | Vault blob v2 can be serialized from encryptedRootFolderKey + encrypted metadata | VERIFIED | `blob.ts` exports `serializeVaultBlobV2`; 14 unit tests + 5 vector tests pass (165 total core tests pass)                                                                                                                                   |
-| 2   | Vault blob v2 can be deserialized back with byte-identical round-trip            | VERIFIED | `deserializeVaultBlobV2` implemented; cross-platform hex vector test matches Rust output exactly                                                                                                                                            |
-| 3   | Server stores zero crypto material for migrated users                            | VERIFIED | `POST /vault/migrate` NULLs both `encryptedRootFolderKey` and `encryptedRootIpnsPrivateKey` columns; entity uses `Buffer                                                                                                                    | null`; export returns `null` for migrated users |
-| 4   | Clients read rootFolderKey from IPFS v2 blob on login (migrated path)            | VERIFIED | `useAuth.ts` PATH A: branches on `existingVault.migratedAt`, fetches blob via `fetchFromIpfs`, detects v2, ECIES-unwraps key from header                                                                                                    |
-| 5   | Non-migrated users are lazily migrated to v2 on next login                       | VERIFIED | `useAuth.ts` PATH B: fire-and-forget async IIFE writes v2 blob to IPFS, publishes IPNS with `createAndPublishIpnsRecord` + `expectedSequenceNumber`, calls `vaultControllerMigrateVault` only after confirmed write                         |
-| 6   | Desktop Rust app reads and writes v2 blob format                                 | VERIFIED | `vault_blob.rs` serialize/deserialize/detect; 10 tests pass including exact hex vector; `fuse/mod.rs` uses `encrypt_root_metadata_to_v2_blob` for root folder publishes; `fuse/decrypt.rs` transparently strips v2 header before JSON parse |
+| #   | Truth                                                                                  | Status   | Evidence                                                                                                                                                    |
+| --- | -------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Vault blob v2 can be serialized/deserialized with byte-identical round-trip            | VERIFIED | `blob.ts` unchanged; `vault_blob.rs` unchanged; both verified in initial pass                                                                               |
+| 2   | Server stores zero crypto material -- vaults table has no crypto columns               | VERIFIED | `vault.entity.ts` has no `encryptedRootFolderKey`, `encryptedRootIpnsPrivateKey`, or `migratedAt`; all 5 production vault files show 0 dead field matches   |
+| 3   | POST /vault/migrate endpoint no longer exists                                          | VERIFIED | `vault.controller.ts` has no `@Post('migrate')` or `migrateVault`; generated API client has no `vaultControllerMigrateVault`                                |
+| 4   | Web login reads rootFolderKey exclusively from IPFS v2 blob (no DB fallback)           | VERIFIED | `useAuth.ts` has a single IPFS-only path (line 111-131); no `migratedAt` check, no PATH B, no `decryptVaultKeys`; 0 grep matches for all dead patterns      |
+| 5   | New web user vault init publishes v2 blob to IPFS before registering with API          | VERIFIED | `useAuth.ts` lines 141-172: ECIES-wrap, encrypt metadata, serialize v2 blob, addToIpfs, createAndPublishIpnsRecord, then vaultApi.initVault (in that order) |
+| 6   | Desktop Rust vault types contain only ownerPublicKey + rootIpnsName (no crypto fields) | VERIFIED | `types.rs` `InitVaultRequest`: 2 fields only; `VaultResponse`: 2 fields only; 0 matches for any dead field patterns                                         |
+| 7   | Desktop fetch_and_decrypt_vault has single IPFS-only path (no non-migrated branch)     | VERIFIED | `vault.rs` lines 126-192: always derives HKDF keypair, resolves IPNS, fetches v2 blob, unwraps rootFolderKey; no conditional on crypto DB fields            |
+| 8   | No as unknown as string type casts remain in useAuth.ts                                | VERIFIED | grep returns 0 matches                                                                                                                                      |
+| 9   | Recovery tool export-file path shows permanent v2 format message                       | VERIFIED | `recovery.html` line 1368: `'Export files no longer contain encrypted keys (vault v2 format). Use "From IPFS (v2 blob, key only)" recovery instead...'`     |
 
-**Score:** 6/6 truths verified
+**Score:** 9/9 truths verified
 
-### Required Artifacts
+### Required Artifacts (Gap-Closure Plans 05 + 06)
 
-| Artifact                                                      | Expected                                                                                 | Status   | Details                                                                                                                                                             |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------ | ----- |
-| `packages/core/src/vault/blob.ts`                             | `serializeVaultBlobV2`, `deserializeVaultBlobV2`, `detectBlobVersion`, `BLOB_V2_VERSION` | VERIFIED | All 4 exports present; pure byte manipulation, zero external deps                                                                                                   |
-| `packages/core/src/vault/types.ts`                            | `VaultBlobV2` type                                                                       | VERIFIED | Type declared with `encryptedRootFolderKey` and `encryptedMetadataJson` fields                                                                                      |
-| `packages/core/src/vault/index.ts`                            | Re-exports blob functions and type                                                       | VERIFIED | Exports all 4 functions + `VaultBlobV2` type                                                                                                                        |
-| `packages/core/src/__tests__/vault-blob.test.ts`              | Unit tests (min 50 lines)                                                                | VERIFIED | 154 lines, 14 test cases                                                                                                                                            |
-| `packages/core/src/__tests__/vault-blob-vectors.test.ts`      | Cross-platform hex vectors (min 30 lines)                                                | VERIFIED | 107 lines, 5 test cases with hardcoded hex                                                                                                                          |
-| `apps/api/src/migrations/1740600000000-AddVaultMigratedAt.ts` | DB migration for migrated_at + nullable columns                                          | VERIFIED | All 3 DDL statements present: `ADD COLUMN IF NOT EXISTS migrated_at`, `DROP NOT NULL` on both crypto columns                                                        |
-| `apps/api/src/vault/entities/vault.entity.ts`                 | Nullable crypto columns + migratedAt                                                     | VERIFIED | `encryptedRootFolderKey: Buffer                                                                                                                                     | null`, `encryptedRootIpnsPrivateKey: Buffer | null`, `migratedAt: Date | null` |
-| `apps/api/src/vault/dto/init-vault.dto.ts`                    | Optional IPNS key + migratedAt in response                                               | VERIFIED | `encryptedRootIpnsPrivateKey?: string` with `@IsOptional()`; `VaultResponseDto.migratedAt: Date                                                                     | null`                                       |
-| `apps/api/src/vault/vault.service.ts`                         | `migrateVault` method with idempotency                                                   | VERIFIED | Method checks `vault.migratedAt`, returns early if set; otherwise updates with `new Date()` and nulls both columns                                                  |
-| `apps/api/src/vault/vault.controller.ts`                      | `POST /vault/migrate` endpoint                                                           | VERIFIED | `@Post('migrate')` at line 44, before `@Get()` at line 109; delegates to `vaultService.migrateVault`                                                                |
-| `apps/desktop/src-tauri/src/crypto/vault_blob.rs`             | Rust serialize/deserialize/detect + BLOB_V2_VERSION                                      | VERIFIED | All 4 symbols present; 10 tests pass; exact hex matches TypeScript vector                                                                                           |
-| `apps/desktop/src-tauri/src/crypto/mod.rs`                    | `pub mod vault_blob`                                                                     | VERIFIED | Line 15: `pub mod vault_blob`                                                                                                                                       |
-| `apps/desktop/src-tauri/src/commands/vault.rs`                | Handles null DB keys via IPFS v2 blob                                                    | VERIFIED | Uses `vault_blob::detect_blob_version` and `vault_blob::deserialize_vault_blob_v2` for migrated user path                                                           |
-| `apps/desktop/src-tauri/src/fuse/mod.rs`                      | `encrypt_root_metadata_to_v2_blob` + root folder publish                                 | VERIFIED | Function at line 235; called at root folder publish sites; `serialize_vault_blob_v2` invoked                                                                        |
-| `apps/web/src/hooks/useAuth.ts`                               | PATH A + PATH B + migration trigger                                                      | VERIFIED | Imports `detectBlobVersion`, `deserializeVaultBlobV2`, `serializeVaultBlobV2`, `vaultControllerMigrateVault`; `existingVault.migratedAt` branch at line 111         |
-| `apps/web/public/recovery.html`                               | Inline v2 parsing + IPFS-direct UI                                                       | VERIFIED | `BLOB_V2_VERSION = 0x02` (3 occurrences), `detectBlobVersion`, `deserializeVaultBlobV2` inline; IPFS-direct recovery panel with private key input and gateway input |
+| Artifact                                                          | Expected                                                                                       | Status   | Details                                                                                                                                                              |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api/src/migrations/1740700000000-DropVaultCryptoColumns.ts` | Drops 3 dead columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) | VERIFIED | Lines 9, 11, 13: `DROP COLUMN IF EXISTS` for all 3 columns; reversible `down()` also present                                                                         |
+| `apps/api/src/vault/entities/vault.entity.ts`                     | No crypto columns, no migratedAt                                                               | VERIFIED | 52 lines; fields: id, ownerId, owner, ownerPublicKey, rootIpnsName, createdAt, initializedAt, updatedAt only                                                         |
+| `apps/api/src/vault/dto/init-vault.dto.ts`                        | InitVaultDto: ownerPublicKey + rootIpnsName only                                               | VERIFIED | Lines 9-26: exactly 2 fields; VaultResponseDto: id, ownerPublicKey, rootIpnsName, createdAt, initializedAt, teeKeys only                                             |
+| `apps/api/src/vault/dto/vault-export.dto.ts`                      | No crypto fields                                                                               | VERIFIED | Fields: format, version, exportedAt, rootIpnsName, derivationMethod only                                                                                             |
+| `apps/api/src/vault/vault.service.ts`                             | No migrateVault method, no crypto fields in initializeVault                                    | VERIFIED | 231 lines; no migrateVault, no crypto column references anywhere in file                                                                                             |
+| `apps/api/src/vault/vault.controller.ts`                          | No POST /vault/migrate endpoint                                                                | VERIFIED | 129 lines; endpoints: POST /vault/init, GET /vault/config, GET /vault/export, GET /vault, GET /vault/quota                                                           |
+| `packages/api-client/src/generated/vault/vault.ts`                | No vaultControllerMigrateVault                                                                 | VERIFIED | 90 lines; 5 functions only: initializeVault, getConfig, exportVault, getVault, getQuota                                                                              |
+| `packages/api-client/src/models/vaultResponseDto.ts`              | No crypto fields or migratedAt                                                                 | VERIFIED | Fields: id, ownerPublicKey, rootIpnsName, createdAt, initializedAt, teeKeys only                                                                                     |
+| `packages/api-client/src/models/initVaultDto.ts`                  | Only ownerPublicKey + rootIpnsName                                                             | VERIFIED | Exactly 2 fields                                                                                                                                                     |
+| `apps/web/src/hooks/useAuth.ts`                                   | IPFS-only path + new user v2 blob publish; no dead imports                                     | VERIFIED | Imports: detectBlobVersion, deserializeVaultBlobV2, serializeVaultBlobV2, encryptFolderMetadata, wrapKey, unwrapKey; no decryptVaultKeys/vaultControllerMigrateVault |
+| `apps/desktop/src-tauri/src/api/types.rs`                         | InitVaultRequest: 2 fields; VaultResponse: 2 fields                                            | VERIFIED | Lines 90-125: exactly ownerPublicKey + rootIpnsName in request; rootIpnsName + teeKeys in response                                                                   |
+| `apps/desktop/src-tauri/src/commands/vault.rs`                    | fetch_and_decrypt_vault: single IPFS-only path                                                 | VERIFIED | Lines 126-192: unconditional HKDF derivation + IPNS resolve + v2 blob parse; no conditional on vault response fields                                                 |
+| `apps/web/public/recovery.html`                                   | Updated export-file null-key message                                                           | VERIFIED | Line 1368: permanent v2 format message; legacy decryption path at 1450-1451 retained for old export file backward compat                                             |
+| `apps/api/src/vault/vault.service.spec.ts`                        | No dead migration test patterns                                                                | VERIFIED | grep for all dead patterns returns 0 matches                                                                                                                         |
 
 ### Key Link Verification
 
-| From                                           | To                                                | Via                                                                           | Status | Details                                                                                                                      |
-| ---------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `packages/core/src/vault/blob.ts`              | `packages/core/src/vault/types.ts`                | `VaultBlobV2` type import                                                     | WIRED  | Line 16: `import type { VaultBlobV2 } from './types'`                                                                        |
-| `packages/core/src/vault/index.ts`             | `packages/core/src/vault/blob.ts`                 | re-export blob functions                                                      | WIRED  | Lines 9-14: `export { serializeVaultBlobV2, deserializeVaultBlobV2, detectBlobVersion, BLOB_V2_VERSION } from './blob'`      |
-| `apps/api/src/vault/vault.controller.ts`       | `apps/api/src/vault/vault.service.ts`             | `migrateVault` method call                                                    | WIRED  | Line 64: `return this.vaultService.migrateVault(req.user.id)`                                                                |
-| `apps/api/src/vault/vault.service.ts`          | `apps/api/src/vault/entities/vault.entity.ts`     | TypeORM repository update                                                     | WIRED  | `vaultRepository.update(...)` with `migratedAt: new Date(), encryptedRootFolderKey: null, encryptedRootIpnsPrivateKey: null` |
-| `apps/desktop/src-tauri/src/fuse/mod.rs`       | `apps/desktop/src-tauri/src/crypto/vault_blob.rs` | `serialize_vault_blob_v2` in root publish                                     | WIRED  | `crate::crypto::vault_blob::serialize_vault_blob_v2` at 2 call sites                                                         |
-| `apps/desktop/src-tauri/src/commands/vault.rs` | `apps/desktop/src-tauri/src/crypto/vault_blob.rs` | `detect_blob_version` for IPFS parsing                                        | WIRED  | `crypto::vault_blob::detect_blob_version` + `crypto::vault_blob::deserialize_vault_blob_v2`                                  |
-| `apps/web/src/hooks/useAuth.ts`                | `@cipherbox/core`                                 | `detectBlobVersion`, `deserializeVaultBlobV2`, `serializeVaultBlobV2` imports | WIRED  | Lines 17-20: all three functions imported and used in PATH A and PATH B                                                      |
-| `apps/web/src/hooks/useAuth.ts`                | `/vault/migrate` API                              | `vaultControllerMigrateVault` after successful IPNS publish                   | WIRED  | Line 35 import; line 209 call inside migration IIFE, gated on `publishResult.success`                                        |
-| `apps/web/src/services/folder.service.ts`      | `@cipherbox/core`                                 | `detectBlobVersion` + `deserializeVaultBlobV2` in `fetchAndDecryptMetadata`   | WIRED  | Lines 17-18 import; lines 968-969 used in `fetchAndDecryptMetadata` for transparent v1/v2 handling                           |
+| From                                           | To                                | Via                                                              | Status | Details                                                                                              |
+| ---------------------------------------------- | --------------------------------- | ---------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------- |
+| `vault.controller.ts`                          | `vault.service.ts`                | `initializeVault` (no crypto args)                               | WIRED  | Line 41: `vaultService.initializeVault(req.user.id, dto)` -- dto has no crypto fields                |
+| `vault.service.ts` `initializeVault`           | `vaultRepository.create({...})`   | only ownerPublicKey, rootIpnsName, initializedAt                 | WIRED  | Lines 67-72: create call has exactly 4 fields, no crypto columns                                     |
+| `apps/web/src/hooks/useAuth.ts`                | IPFS v2 blob (existing user path) | fetchFromIpfs + detectBlobVersion + deserializeVaultBlobV2       | WIRED  | Lines 117-124: sequential await calls, result used to unwrapKey                                      |
+| `apps/web/src/hooks/useAuth.ts`                | IPFS v2 blob (new user path)      | addToIpfs + createAndPublishIpnsRecord before vaultApi.initVault | WIRED  | Lines 153-172: IPFS upload and IPNS publish happen before API registration                           |
+| `apps/desktop/src-tauri/src/commands/vault.rs` | `crypto::vault_blob`              | `detect_blob_version` + `deserialize_vault_blob_v2`              | WIRED  | Lines 173-177: detect, then deserialize, result passed to `ecies::unwrap_key`                        |
+| `apps/desktop/src-tauri/src/api/types.rs`      | API contract                      | InitVaultRequest with 2 fields only                              | WIRED  | Lines 37-40 in vault.rs: `InitVaultRequest { owner_public_key, root_ipns_name }` -- no crypto fields |
 
 ### Requirements Coverage
 
-| Requirement | Source Plan  | Description                                                                        | Status    | Evidence                                                                                                                                                                                          |
-| ----------- | ------------ | ---------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | --------- | --------------------------------- |
-| VAULT-01    | Plan 01      | rootFolderKey embedded in IPFS vault blob v2 format (ECIES-wrapped in blob header) | SATISFIED | `blob.ts` binary format: `0x02                                                                                                                                                                    | uint16_BE(key_len) | ECIES_key | AES_GCM_metadata`; all tests pass |
-| VAULT-02    | Plans 02, 04 | Client reads rootFolderKey from IPFS blob on login, falls back to DB vaults table  | SATISFIED | `useAuth.ts` PATH A reads from IPFS; catch block falls back to DB if `encryptedRootFolderKey` is non-null; throws only if both are unavailable                                                    |
-| VAULT-03    | Plans 02, 04 | Lazy migration writes vault blob v2 on next folder metadata publish                | SATISFIED | `useAuth.ts` PATH B: non-migrated users trigger fire-and-forget migration on login; writes v2 blob, publishes IPNS, calls `POST /vault/migrate`                                                   |
-| VAULT-04    | Plans 02, 04 | encryptedRootIpnsPrivateKey column deprecated from vaults table (HKDF-derivable)   | SATISFIED | API column is nullable; `InitVaultDto.encryptedRootIpnsPrivateKey` is optional; web client omits field on new vault init; API client type has `encryptedRootIpnsPrivateKey?: string`              |
-| VAULT-05    | Plan 04      | Recovery tool updated to parse vault blob v2 format                                | SATISFIED | `recovery.html` contains inline `BLOB_V2_VERSION`, `detectBlobVersion`, `deserializeVaultBlobV2`; IPFS-direct recovery UI with private key and gateway inputs; null key export handled gracefully |
-| VAULT-06    | Plan 03      | Desktop app (Rust) parses vault blob v2 format                                     | SATISFIED | `vault_blob.rs` byte-identical to TypeScript (cross-platform test vector); `fuse/decrypt.rs` transparently handles v2; root folder publishes produce v2 blobs                                     |
+| Requirement | Source Plan  | Description                                                                        | Status    | Evidence                                                                                                                                                                  |
+| ----------- | ------------ | ---------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VAULT-01    | Plan 01      | rootFolderKey embedded in IPFS vault blob v2 format (ECIES-wrapped in blob header) | SATISFIED | v2 blob format unchanged from initial verification; new user init in web + desktop both produce v2 blobs with ECIES-wrapped key in header                                 |
+| VAULT-02    | Plans 02, 04 | Client reads rootFolderKey from IPFS blob on login, falls back to DB vaults table  | SATISFIED | DB fallback intentionally removed (DB no longer stores crypto material); client reads exclusively from IPFS v2 blob -- this exceeds the original requirement              |
+| VAULT-03    | Plans 02, 04 | Lazy migration writes vault blob v2 on next folder metadata publish                | SATISFIED | Lazy migration intentionally removed (all users already migrated, DB columns dropped); new users get v2 blob immediately on init -- this exceeds the original requirement |
+| VAULT-04    | Plans 02, 04 | encryptedRootIpnsPrivateKey column deprecated from vaults table (HKDF-derivable)   | SATISFIED | Column fully dropped (not just nullable); API entity, DTOs, and client have zero references to this field                                                                 |
+| VAULT-05    | Plan 04      | Recovery tool updated to parse vault blob v2 format                                | SATISFIED | IPFS-direct recovery path unchanged; export-file path now shows permanent v2 format message; legacy path retained for backward compat with pre-v2 export files            |
+| VAULT-06    | Plan 03      | Desktop app (Rust) parses vault blob v2 format                                     | SATISFIED | `vault_blob.rs` and `fuse/mod.rs` unchanged from initial verification; `commands/vault.rs` now uses single IPFS-only path; `types.rs` has no crypto fields                |
 
-**Note on REQUIREMENTS.md data inconsistency:** The requirement checklist (lines 19-24) shows all 6 as `[x]` completed, but the status table (lines 103-108) shows VAULT-05 as "Pending". This is a stale status in the table row — the code implements VAULT-05 fully (confirmed above). The checklist is correct.
+**Note on VAULT-02 and VAULT-03:** The original requirements described a DB fallback and lazy migration as the mechanism. Plans 05-06 superseded this by removing DB crypto storage entirely (a stronger guarantee). Both requirements are satisfied at a higher level of assurance than originally specified.
 
 ### Anti-Patterns Found
 
-| File                                      | Line          | Pattern                                                                                                                   | Severity | Impact                                                                                                                                                                                                                                                                                                     |
-| ----------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/api/src/vault/vault.controller.ts`  | 128-133       | `getVault` re-implements 404 check that `findVault` already handles separately                                            | Info     | No functional impact; minor redundancy                                                                                                                                                                                                                                                                     |
-| `apps/desktop/src-tauri/src/api/types.rs` | 94-96         | `InitVaultRequest.encrypted_root_ipns_private_key: String` (non-optional) — desktop new vault init still sends this field | Info     | API accepts it (column nullable); functional but inconsistent with VAULT-04 goal. The web client correctly omits this field. The desktop will ECIES-wrap and send the IPNS key, which the API stores then ignores for migrated flows. No security impact since column is nullable and NULLed on migration. |
-| `apps/web/src/hooks/useAuth.ts`           | 137, 157, 160 | `as unknown as string` casts for `encryptedRootFolderKey` and `encryptedRootIpnsPrivateKey`                               | Warning  | Required because orval generates `{ [key: string]: unknown }                                                                                                                                                                                                                                               | null`for nullable string fields instead of`string | null`. Web build passes (0 TypeScript errors). Runtime behavior is correct since the actual JSON value is a string. This is a known orval quirk with nullable string types and does not affect correctness. |
+| File                            | Line | Pattern                                                                                                                 | Severity | Impact                                                                                                |
+| ------------------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `apps/web/src/hooks/useAuth.ts` | 153  | `new Blob([v2Blob as BlobPart])` -- Uint8Array passed directly (correct), `as BlobPart` cast for TypeScript strict mode | Info     | Correct usage per CLAUDE.md; cast is on the Uint8Array itself, not `.buffer`; no data corruption risk |
 
-All anti-patterns are informational. None block the phase goal.
-
-## Gaps
-
-### GAP-01: Remove dead migration code — v2 blob is canonical (no non-migrated users exist)
-
-**Status:** failed
-**Severity:** medium
-**Rationale:** The staging database was nuked during Phase 19.2 (pebbleds datastore migration), and the only user account has already been migrated to v2. There are zero non-migrated vaults in any environment. The migration code paths (PATH B lazy migration, `POST /vault/migrate` endpoint, nullable DB crypto columns, `as unknown as string` type casts, DB fallback in PATH A) are dead code that adds complexity, test burden, and security surface area for a scenario that will never occur.
-
-**What to remove:**
-
-- `useAuth.ts` PATH B (DB decrypt + lazy migration IIFE) and DB fallback in PATH A catch
-- `POST /vault/migrate` endpoint and `migrateVault()` service method
-- `encryptedRootFolderKey` and `encryptedRootIpnsPrivateKey` DB columns (drop, not just nullable)
-- `migratedAt` column (all users are migrated — column becomes meaningless)
-- Crypto field handling in `InitVaultDto`, `VaultResponseDto`, `VaultExportDto`
-- Desktop `InitVaultRequest` crypto fields and ECIES wrapping for DB storage
-- Recovery tool export-file path handling of null crypto fields
-- `decryptVaultKeys` import in useAuth.ts, `serializeVaultBlobV2` import (client no longer writes v2 blobs — only reads)
-- All migration-related tests in `vault.service.spec.ts`
-- `as unknown as string` casts (orval workaround for fields that no longer exist)
-
-**What to keep:**
-
-- v2 blob format module (`blob.ts`, `vault_blob.rs`) — canonical format
-- v2 blob reading in login flow (PATH A without fallback)
-- v2 blob writing in desktop FUSE publish and new vault init
-- `fetchAndDecryptMetadata` v2 blob detection (folder sync)
-- Recovery tool IPFS-direct path (v2 blob read)
-- Cross-platform test vectors
+No blockers. No warnings. One informational note on the TypeScript cast, which is the established codebase pattern.
 
 ### Human Verification Required
 
-#### 1. Web Login Lazy Migration End-to-End
+#### 1. New Web User Vault Init -- IPFS-First Ordering
 
-**Test:** Log in to the web app with an account that has NOT yet been migrated (check DB: `migrated_at IS NULL`). Open browser console.
-**Expected:** Console shows `[Auth] Vault successfully migrated to v2 blob format`. After a few seconds, check DB: `migrated_at` is now set, `encrypted_root_folder_key` is NULL, `encrypted_root_ipns_private_key` is NULL. Log out and log back in — console should NOT show the migration message; vault should load from IPFS v2 blob instead.
-**Why human:** Live API + IPFS node required. The migration is an async fire-and-forget IIFE inside the login flow — cannot be verified programmatically without a running environment.
+**Test:** Create a new CipherBox account in a browser. Open DevTools Network tab before clicking sign up. Complete the Web3Auth flow.
+**Expected:** Network requests show: (1) IPFS add call, (2) IPNS publish call, (3) POST /vault/init. Vault loads successfully and files page is accessible. No errors in console.
+**Why human:** Requires live IPFS node + Web3Auth + backend running. The sequential ordering of async calls (IPFS before API registration) cannot be verified by static analysis alone.
 
 #### 2. Recovery Tool IPFS-Direct Path
 
-**Test:** Open `apps/web/public/recovery.html` in a browser. Select "From IPFS (v2 blob, key only)". Enter the hex private key of a migrated vault. Click Recover.
-**Expected:** The tool derives the IPNS name from the key, resolves it via the IPFS gateway, fetches the v2 blob, parses the header, ECIES-unwraps the rootFolderKey, and lists folder contents. No CipherBox API dependency.
-**Why human:** Requires a live IPFS gateway, a real migrated vault, and browser interaction. The IPNS DHT propagation for gateway resolution is an infrastructure concern that cannot be verified statically.
+**Test:** Open `apps/web/public/recovery.html` in a browser. Select "From IPFS (v2 blob, key only)". Enter the hex private key of a vault that was initialized with v2 format. Click Recover.
+**Expected:** Tool derives IPNS name from private key, resolves it via IPFS gateway, fetches v2 blob, ECIES-unwraps rootFolderKey, and lists folder contents. No CipherBox API dependency required.
+**Why human:** Requires live IPFS gateway and a real v2 vault. IPNS DHT propagation is an infrastructure concern not verifiable statically.
+
+### GAP-01 Resolution Confirmation
+
+GAP-01 (dead migration code) identified in initial verification is fully resolved:
+
+| Item to Remove (from GAP-01)                                        | Status  | Evidence                                                                     |
+| ------------------------------------------------------------------- | ------- | ---------------------------------------------------------------------------- |
+| `encryptedRootFolderKey` + `encryptedRootIpnsPrivateKey` DB columns | REMOVED | Migration 1740700000000 drops them; entity has no such fields                |
+| `migratedAt` DB column                                              | REMOVED | Migration drops it; entity has no such field                                 |
+| `POST /vault/migrate` endpoint + `migrateVault()` method            | REMOVED | Controller has no @Post('migrate'); service has no migrateVault              |
+| PATH B (lazy migration) in `useAuth.ts`                             | REMOVED | useAuth.ts has single IPFS-only path; no migratedAt branch                   |
+| DB fallback in PATH A catch block                                   | REMOVED | catch block now only handles 404 (new user) or rethrows                      |
+| `decryptVaultKeys`, `vaultControllerMigrateVault` imports           | REMOVED | 0 grep matches in useAuth.ts for both                                        |
+| `as unknown as string` type casts                                   | REMOVED | 0 grep matches in useAuth.ts                                                 |
+| Desktop non-migrated code paths in `vault.rs`                       | REMOVED | fetch_and_decrypt_vault is single IPFS-only path                             |
+| Desktop crypto fields in `types.rs`                                 | REMOVED | InitVaultRequest and VaultResponse have no crypto fields                     |
+| Recovery tool null crypto field handling (old message)              | UPDATED | Updated message reflects permanent v2 format (not transient migration state) |
+| All migration-related tests in `vault.service.spec.ts`              | REMOVED | 0 matches for all dead test patterns                                         |
 
 ### Summary
 
-Phase 20 achieves its goal. All six requirements (VAULT-01 through VAULT-06) are implemented and verified in the actual codebase. The server now stores zero crypto material for migrated users — both `encryptedRootFolderKey` and `encryptedRootIpnsPrivateKey` are NULLed after migration. The rootFolderKey lives exclusively in the ECIES-wrapped header of the IPFS vault blob v2 format.
+Phase 20 is complete. All 6 original requirements (VAULT-01 through VAULT-06) remain satisfied. GAP-01 is fully resolved -- the server now stores zero crypto material with no dead migration infrastructure:
 
-Key technical accomplishments verified:
+- The DB `vaults` table stores only `ownerPublicKey` (for TEE key distribution) and `rootIpnsName` (for routing). No crypto material at rest.
+- The web client's login flow is 50 lines of clean IPFS-only code (was 116 lines of dual-path logic).
+- New web users get a v2 blob published to IPFS immediately on account creation, before the vault is registered with the API -- rootFolderKey is IPFS-native from day one.
+- The desktop Rust client has a single IPFS-only vault fetch path with no conditional branches.
+- The recovery tool's export-file path clearly communicates the permanent v2 format to users.
 
-- TypeScript and Rust produce byte-identical output for the same inputs (cross-platform test vectors confirmed)
-- The web login flow correctly branches on `migratedAt` for PATH A (read from IPFS) vs PATH B (read from DB + migrate)
-- Migration is non-blocking — failures are caught and retried on next login
-- The recovery tool is fully standalone with no CipherBox API dependency for v2 blobs
-- All existing folder operations continue working (non-root folders use v1 JSON format unchanged)
-
-Two items require human verification: the web login lazy migration flow and the recovery tool IPFS-direct path. These are behavioral confirmations in a live environment — the code supporting them is fully present and wired.
+Two items remain for human verification: the new-user init IPFS-first ordering and the IPFS-direct recovery path. These are behavioral confirmations requiring a live environment.
 
 ---
 
-_Verified: 2026-03-24T01:48:50Z_
+_Verified: 2026-03-24T04:05:00Z_
 _Verifier: Claude (gsd-verifier)_
+_Re-verification: Yes -- after gap closure plans 20-05 and 20-06_
