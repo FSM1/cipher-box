@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ebf384ba3cad",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "tests/load/src/scenarios/byo-upload-throughput.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/eb/f384ba3cad/0/metadata.json",
+      "transcript": "/eb/f384ba3cad/0/full.jsonl",
+      "content_hash": "/eb/f384ba3cad/0/content_hash.txt",
+      "prompt": "/eb/f384ba3cad/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 109525,
+    "cache_read_tokens": 2291290,
+    "output_tokens": 10930,
+    "api_call_count": 41
+  }
+}
