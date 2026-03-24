@@ -26,6 +26,9 @@ pub fn serialize_vault_blob_v2(
     encrypted_root_folder_key: &[u8],
     encrypted_metadata_json: &[u8],
 ) -> Result<Vec<u8>, String> {
+    if encrypted_root_folder_key.is_empty() {
+        return Err("Encrypted key must not be empty for v2 blob".into());
+    }
     if encrypted_root_folder_key.len() > u16::MAX as usize {
         return Err(format!(
             "Encrypted key too long for v2 blob ({} bytes, max {})",
@@ -58,6 +61,9 @@ pub fn deserialize_vault_blob_v2(blob: &[u8]) -> Result<(&[u8], &[u8]), String> 
         return Err("Not a v2 vault blob".into());
     }
     let key_len = ((blob[1] as usize) << 8) | (blob[2] as usize);
+    if key_len == 0 {
+        return Err("Invalid v2 blob: encrypted key length must be > 0".into());
+    }
     if blob.len() < 3 + key_len {
         return Err(format!(
             "Vault blob too short for key (expected {} bytes, have {})",
@@ -199,10 +205,13 @@ mod tests {
     }
 
     #[test]
-    fn test_zero_length_key() {
-        let blob = serialize_vault_blob_v2(&[], b"meta").unwrap();
-        let (dk, dm) = deserialize_vault_blob_v2(&blob).unwrap();
-        assert!(dk.is_empty());
-        assert_eq!(dm, b"meta");
+    fn test_zero_length_key_rejected() {
+        let result = serialize_vault_blob_v2(&[], b"meta");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must not be empty"));
+
+        // Also verify deserialize rejects key_len=0
+        let blob = vec![0x02, 0x00, 0x00, 0x42]; // version + key_len=0 + metadata
+        assert!(deserialize_vault_blob_v2(&blob).is_err());
     }
 }
