@@ -33,26 +33,9 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     let encrypted_root_folder_key = crypto::ecies::wrap_key(&root_folder_key, public_key)
         .map_err(|e| format!("Failed to wrap root folder key: {}", e))?;
 
-    // 1. Register vault with backend (no crypto fields -- IPFS-only)
-    let init_req = types::InitVaultRequest {
-        owner_public_key: hex::encode(public_key),
-        root_ipns_name: root_ipns_name.clone(),
-    };
-
-    let resp = state
-        .api
-        .authenticated_post("/vault/init", &init_req)
-        .await
-        .map_err(|e| format!("Vault init request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Vault init failed ({}): {}", status, body));
-    }
-
-    // 2. Create and publish initial empty folder metadata
-    //    Without this, FUSE init() can't resolve the root IPNS name.
+    // 1. Create and publish initial empty folder metadata to IPFS BEFORE registering
+    //    with backend. This ensures the v2 blob is durable before the vault row exists,
+    //    avoiding a bricked state if IPFS upload/publish fails.
     log::info!("Publishing initial empty root folder metadata");
 
     let empty_metadata = crypto::folder::FolderMetadata {
@@ -112,6 +95,24 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
             // Sequence 0 should never conflict on vault init -- log and continue
             log::warn!("Unexpected conflict on vault init publish (sequence 0)");
         }
+    }
+
+    // 2. Register vault with backend AFTER v2 blob is durable on IPFS
+    let init_req = types::InitVaultRequest {
+        owner_public_key: hex::encode(public_key),
+        root_ipns_name: root_ipns_name.clone(),
+    };
+
+    let resp = state
+        .api
+        .authenticated_post("/vault/init", &init_req)
+        .await
+        .map_err(|e| format!("Vault init request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Vault init failed ({}): {}", status, body));
     }
 
     log::info!("Vault initialized and root metadata published for new user");

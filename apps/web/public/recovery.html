@@ -534,6 +534,7 @@
       if (blob.length < 3) throw new Error('Blob too short for v2 header');
       if (blob[0] !== BLOB_V2_VERSION) throw new Error('Not a v2 vault blob');
       const keyLen = (blob[1] << 8) | blob[2];
+      if (keyLen === 0) throw new Error('Invalid v2 blob: encrypted key length must be > 0');
       if (blob.length < 3 + keyLen) throw new Error('Blob too short for key');
       return {
         encryptedRootFolderKey: blob.slice(3, 3 + keyLen),
