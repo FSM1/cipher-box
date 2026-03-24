@@ -1,0 +1,81 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ecdaec6b9770",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T14:05:37.284221Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "51128d9cbb2e",
+  "token_usage": {
+    "input_tokens": 69,
+    "cache_creation_tokens": 131338,
+    "cache_read_tokens": 4580942,
+    "output_tokens": 11192,
+    "api_call_count": 63
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Complete Phase 23 gap closure execution (plan 23-08: Windows WinFsp extraction to crate), then run a security review of the Phase 23 Rust SDK crates and fix the two HIGH findings discovered.",
+    "outcome": "Phase 23 gap closure was resumed and completed after a subagent API disconnect; all 8 plans are done. Security review found 0 critical / 2 high issues, both of which were fixed and committed: ed25519-dalek zeroize feature enabled and `generate_ed25519_keypair` now returns `Zeroizing\u003cVec\u003cu8\u003e\u003e`.",
+    "learnings": {
+      "repo": [
+        "Phase 23 extracts FUSE logic into 5 crates: cipherbox-fuse, cipherbox-crypto, and platform-specific variants. Windows WinFsp ops live in crates/fuse/src/platform/windows/.",
+        "All KeyState and CipherBoxFS key fields already use Zeroizing\u003cVec\u003cu8\u003e\u003e; the project has a strong baseline zeroization culture except for a gap in the ed25519 keypair generator return type.",
+        "Callers of generate_ed25519_keypair were redundantly wrapping the return value in Zeroizing::new(...clone()), indicating the function's non-Zeroizing return was a known workaround.",
+        "The macOS/Linux and Windows write_ops both use .try_into() to convert Vec\u003cu8\u003e to [u8; 32] for SigningKey construction; with Zeroizing\u003cVec\u003cu8\u003e\u003e this requires explicit .into_inner() before try_into().",
+        "Zeroizing\u003cT\u003e does not implement TryInto\u003c[u8; N]\u003e directly — callers must call .into_inner() to extract the inner Vec before conversion.",
+        "AES-CTR mode is used for IPFS content (not AES-GCM); integrity relies on IPFS CID verification which the client does not enforce post-fetch — a deferred architectural concern.",
+        "A secondary ed25519 keypair generation path exists in write_ops.rs (file IPNS keys via ed25519_dalek directly, not via generate_ed25519_keypair) that was out of scope for this fix."
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "finding": "generate_ed25519_keypair previously returned bare Vec\u003cu8\u003e for private key; changed to Zeroizing\u003cVec\u003cu8\u003e\u003e to prevent key material persisting in freed memory."
+        },
+        {
+          "path": "Cargo.toml",
+          "finding": "ed25519-dalek dependency was missing the 'zeroize' feature flag; SigningKey does not zero on drop without it."
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 472,
+          "end_line": 472,
+          "finding": "Redundant Zeroizing::new(ipns_private_key.clone()) wrapper removed after generate_ed25519_keypair return type change."
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 522,
+          "end_line": 522,
+          "finding": "try_into() on Zeroizing\u003cVec\u003cu8\u003e\u003e requires .into_inner() first; fixed to use ipns_private_key.into_inner().try_into()."
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "Same try_into() pattern as macOS counterpart; fixed with .into_inner()."
+        }
+      ],
+      "workflow": [
+        "When a GSD subagent disconnects mid-plan, the code commits may already be present; check git log before re-executing to avoid duplicate work — only bookkeeping (SUMMARY.md, STATE.md, ROADMAP.md) may remain.",
+        "The security:review command scopes by phase and spawns a dedicated explorer agent; it produces a timestamped report in .planning/security/ and surfaces top issues inline.",
+        "Verifying compile after type signature changes (cargo check per crate) before committing saves round-trips; running tests on the directly modified crate (crypto) validates correctness cheaply."
+      ]
+    },
+    "friction": [
+      "Subagent API disconnect (ConnectionRefused) mid-wave-1 required manual resume and partial re-execution of bookkeeping steps.",
+      "1Password SSH agent failed to sign commits on three consecutive attempts, requiring the user to be present and retry manually before the bookkeeping commit could land.",
+      "Zeroizing\u003cVec\u003cu8\u003e\u003e does not implement TryInto\u003c[u8; 32]\u003e transparently, requiring .into_inner() call — this was a non-obvious compilation error discovered only after the type change."
+    ],
+    "open_items": [
+      "AES-CTR integrity gap: client does not verify IPFS CID after fetching ciphertext, leaving it vulnerable to bit-flip attacks from a malicious relay. Deferred as an architectural concern beyond Phase 23 scope.",
+      "Secondary ed25519 keypair path in write_ops.rs (file IPNS keys generated via ed25519_dalek directly) does not go through generate_ed25519_keypair and was not zeroized in this fix pass.",
+      "~30 test case suggestions from the security review (AES-GCM, AES-CTR, ECIES, HKDF, Ed25519, VaultBlob categories) were generated in REVIEW-2026-03-24-phase23.md but not yet implemented as actual tests."
+    ]
+  }
+}
