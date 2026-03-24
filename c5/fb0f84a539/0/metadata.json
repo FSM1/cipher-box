@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c5fb0f84a539",
+  "session_id": "b40e1bf6-b0a9-4f65-abea-691c4d692f4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T04:11:50.555422Z",
+  "branch": "docs/phase-21-ui-spec-revision",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "b571263ae68e",
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 118791,
+    "cache_read_tokens": 5088510,
+    "output_tokens": 21245,
+    "api_call_count": 55
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Capture implementation decisions for Phase 21 (BYO-IPFS Node Support) via discuss-phase, then run plan-phase to generate research, validation strategy, and UI design contract.",
+    "outcome": "CONTEXT.md was created with key architectural decisions (client-direct pinning, three-mode model, TEE-based migration, PSA+Kubo support). Research, validation strategy, and UI-SPEC were generated, though the UI-SPEC required one revision cycle due to a Dimension 5 (Spacing) issue.",
+    "learnings": {
+      "repo": [
+        "BYO-IPFS originally planned as server-relay for v1.1, client-direct for v1.2 (PROJECT.md), but the session revised this to client-direct in v1.1 since the SDK already exists.",
+        "The TEE (Phala Cloud) is already used for IPNS republishing background jobs and can be reused for pin migration — it handles opaque encrypted blobs without seeing plaintext content.",
+        "Auth token storage for BYO-IPFS will follow the same pattern as IPNS keys: client encrypts with TEE public key, TEE decrypts in-enclave.",
+        "The existing IpfsProvider interface and local.provider.ts are the integration points for adding a RemotePinningProvider at the SDK layer.",
+        "Quota tracking is advisory (no enforcement) for BYO-IPFS — CipherBox API receives lightweight CID registration only.",
+        "ROADMAP.md SC#2 and BYO-02 need updating to reflect revised scope (three-mode pinning model + client-direct instead of server-relay dual-pin)."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipfs/providers/ipfs-provider.interface.ts",
+          "finding": "Integration point for new RemotePinningProvider — must implement this interface for SDK-layer benchmarking"
+        },
+        {
+          "path": "apps/api/src/ipfs/providers/local.provider.ts",
+          "finding": "Reference implementation pattern for the new external IPFS provider"
+        },
+        {
+          "path": "apps/web/src/routes/SettingsPage.tsx",
+          "finding": "Existing settings page that will receive a new STORAGE tab for BYO-IPFS configuration"
+        },
+        {
+          "path": "apps/api/src/vault/entities/pinned-cid.entity.ts",
+          "finding": "Entity that tracks pinned CIDs — will need fields for migration status and provider mode"
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-CONTEXT.md",
+          "finding": "Captures locked decisions: three-mode pinning, client-direct arch, TEE migration, PSA+Kubo auto-detection, STORAGE tab UI pattern"
+        }
+      ],
+      "workflow": [
+        "The discuss-phase workflow surfaces architectural assumptions early — the session caught a fundamental conflict between PROJECT.md's server-relay plan and the user's zero-knowledge requirement before any code was written.",
+        "TEE reuse for new background job types (pin migration) is a valid pattern when the job only needs opaque CIDs and encrypted credentials — no plaintext exposure.",
+        "UI-SPEC checker revision loop worked as designed: one blocking issue in Dimension 5 (Spacing) triggered an automatic researcher re-spawn without user intervention."
+      ]
+    },
+    "friction": [
+      "The UI-SPEC failed the checker on the first pass (Dimension 5 — Spacing), requiring a revision iteration before the session transcript ends.",
+      "The plan-phase UI design contract gate interrupted the planning flow and required a separate /gsd:ui-phase invocation before /gsd:plan-phase could continue.",
+      "The original PROJECT.md spec (server-relay v1.1) conflicted with the user's zero-knowledge requirement, requiring an architectural pivot mid-discussion."
+    ],
+    "open_items": [
+      "ROADMAP.md SC#2 and BYO-02 need updating to reflect three-mode pinning model and client-direct architecture instead of server-relay dual-pin.",
+      "S3-compatible storage backend — deferred to future phase.",
+      "Provider marketplace UX — deferred to future UX enhancement phase.",
+      "UI-SPEC revision was still in progress at transcript end — outcome of revision not confirmed.",
+      "plan-phase was never re-invoked after ui-phase completed — PLAN.md files not yet created.",
+      "SDK-level RemotePinningProvider benchmarking results will inform which pinning modes are viable in production — no performance data yet.",
+      "Pin migration progress UI (pause/cancel controls) needs implementation during execution phase."
+    ]
+  }
+}
