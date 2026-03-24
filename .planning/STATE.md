@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-24T01:50:37.185Z'
+last_updated: '2026-03-24T03:14:17.201Z'
 progress:
-  total_phases: 7
-  completed_phases: 5
-  total_plans: 14
-  completed_plans: 14
+  total_phases: 8
+  completed_phases: 4
+  total_plans: 20
+  completed_plans: 19
 ---
 
 # Project State
@@ -18,12 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 20 — vault-migration (COMPLETE)
+**Current focus:** Phase 20 — vault-migration
 
 ## Current Position
 
-Phase: 20 (vault-migration) — COMPLETE
-Plan: 4 of 4 (all plans executed)
+Phase: 20 (vault-migration) — EXECUTING
+Plan: 6 of 6
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Plan: 4 of 4 (all plans executed)
 | 20    | 02   | 17min    | 3     | 16    |
 | 20    | 03   | 25min    | 2     | 6     |
 | 20    | 04   | 45min    | 3     | 15    |
+| 20    | 05   | 6min     | 2     | 13    |
 
 ## Accumulated Context
 
@@ -84,6 +85,7 @@ Recent for v1.1:
 - Recovery tool IPNS resolution uses gateway /ipns/ HEAD request with redirect following (most reliable without API dependency)
 - fetchAndDecryptMetadata handles both v1 JSON and v2 binary blobs transparently for folder sync
 - Non-blocking lazy migration via fire-and-forget async IIFE with retry-on-next-login for resilience
+- Zero-crypto vault schema: server stores only ownerPublicKey and rootIpnsName, all crypto material lives exclusively in IPFS v2 blobs
 
 ### Roadmap Evolution
 
@@ -109,4 +111,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 20-04 (web client v2 blob login, lazy migration, recovery tool v2 parsing) -- Phase 20 COMPLETE
+Last updated: 2026-03-24 after completing 20-05 (drop vault crypto columns, remove migrate endpoint, zero-crypto schema)
