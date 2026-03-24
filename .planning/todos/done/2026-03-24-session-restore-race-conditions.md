@@ -49,7 +49,7 @@ This breaks E2E test 3.7 (`Page reload preserves session and reloads root folder
 
 Both layers need the **shared-Promise deduplication pattern** (same approach as `PublishCoordinator` for IPNS publishes):
 
-### Fix 1: Auth/refresh deduplication (`api-config.ts`)
+### Fix 1: Auth/refresh deduplication (`auth.ts`)
 
 ```typescript
 let refreshPromise: Promise<TokenPair> | null = null;

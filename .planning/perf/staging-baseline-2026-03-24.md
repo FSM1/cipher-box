@@ -131,4 +131,4 @@ Core Kit doesn't persist tKey shares in headless Playwright, so reload requires 
 2. Verify vault key IPNS resolve returns 200 (not 404)
 3. Compare IPNS resolve + IPFS fetch latency vs this baseline
 4. Confirm root folder IPNS resolve is deferred to folder-load
-5. Check auth/refresh race is still present (pre-existing, tracked separately)
+5. Confirm auth/refresh race resolved — single refresh call observed on reload

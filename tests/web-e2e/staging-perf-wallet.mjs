@@ -49,7 +49,7 @@ async function run() {
     }
   });
 
-  page.on('response', async (resp) => {
+  page.on('response', (resp) => {
     const req = resp.request();
     const pending = pendingRequests.get(req);
     if (pending) {
@@ -176,7 +176,7 @@ async function run() {
     }
   });
 
-  page.on('response', async (resp) => {
+  page.on('response', (resp) => {
     const req = resp.request();
     const pending = restorePending.get(req);
     if (pending) {
