@@ -488,7 +488,8 @@
     let errorCount = 0;
     let ipnsFailures = [];
     let recoveryMethod = 'export'; // 'export' or 'ipfs-direct'
-    let directRootIpnsName = null; // For IPFS-direct recovery
+    let directVaultKeyIpnsName = null; // Vault key blob IPNS (for fetching rootFolderKey)
+    let directRootFolderIpnsName = null; // Root folder IPNS (for folder metadata traversal)
 
     // =========================================================================
     // Utility Functions
@@ -543,28 +544,26 @@
     // Crypto: Derive Vault IPNS Name from Private Key (HKDF)
     // =========================================================================
     const VAULT_HKDF_SALT = new TextEncoder().encode('CipherBox-v1');
+    // Root folder IPNS (stores folder metadata {iv, data})
+    const VAULT_FOLDER_HKDF_INFO = new TextEncoder().encode('cipherbox-vault-ipns-v1');
     // Vault KEY blob IPNS (stores ECIES-wrapped rootFolderKey) — NOT the root folder IPNS
     const VAULT_KEY_HKDF_INFO = new TextEncoder().encode('cipherbox-vault-key-ipns-v1');
 
     /**
-     * Derive the vault root IPNS name from user's secp256k1 private key.
-     * Matches the derivation in @cipherbox/crypto deriveVaultIpnsKeypair.
+     * Derive an IPNS name from user's secp256k1 private key using the given HKDF info.
      *
-     * Path: secp256k1 privateKey -> HKDF-SHA256 -> 32-byte Ed25519 seed
+     * Path: secp256k1 privateKey -> HKDF-SHA256(salt, info) -> 32-byte Ed25519 seed
      *       -> Ed25519 public key -> IPNS name (k51...)
      */
-    async function deriveVaultIpnsName(userPrivateKey) {
-      // 1. HKDF-SHA256 to derive 32-byte Ed25519 seed
+    async function deriveIpnsNameFromKey(userPrivateKey, hkdfInfo) {
       const keyMaterial = await crypto.subtle.importKey(
         'raw', userPrivateKey, 'HKDF', false, ['deriveBits']
       );
       const derivedBits = await crypto.subtle.deriveBits(
-        { name: 'HKDF', hash: 'SHA-256', salt: VAULT_HKDF_SALT, info: VAULT_KEY_HKDF_INFO },
+        { name: 'HKDF', hash: 'SHA-256', salt: VAULT_HKDF_SALT, info: hkdfInfo },
         keyMaterial, 256
       );
       const ed25519Seed = new Uint8Array(derivedBits);
-
-      // 2. Derive Ed25519 public key from seed
       const ed25519PublicKey = await ed.getPublicKeyAsync(ed25519Seed);
 
       // 3. Derive IPNS name from Ed25519 public key
@@ -1263,14 +1262,18 @@
           btn.disabled = true;
           btn.textContent = '[ Deriving IPNS name... ]';
 
-          // Derive vault IPNS name from private key
-          directRootIpnsName = await deriveVaultIpnsName(privateKeyBytes);
+          // Derive both IPNS names from private key
+          // Vault key blob IPNS: where the ECIES-wrapped rootFolderKey lives
+          directVaultKeyIpnsName = await deriveIpnsNameFromKey(privateKeyBytes, VAULT_KEY_HKDF_INFO);
+          // Root folder IPNS: where folder metadata lives (used for recovery traversal)
+          directRootFolderIpnsName = await deriveIpnsNameFromKey(privateKeyBytes, VAULT_FOLDER_HKDF_INFO);
 
           btn.disabled = false;
           btn.textContent = '[ Continue ]';
 
           // Show derived info
-          let infoHtml = `<div class="field"><span class="field-name">Derived rootIpnsName:</span> <span class="field-value">${truncate(directRootIpnsName, 50)}</span></div>`;
+          let infoHtml = `<div class="field"><span class="field-name">Derived vaultKeyIpnsName:</span> <span class="field-value">${truncate(directVaultKeyIpnsName, 50)}</span></div>`;
+          infoHtml += `<div class="field"><span class="field-name">Derived rootIpnsName:</span> <span class="field-value">${truncate(directRootFolderIpnsName, 50)}</span></div>`;
           infoHtml += `<div class="field"><span class="field-name">Recovery mode:</span> <span class="field-value">IPFS-direct (v2 blob)</span></div>`;
           document.getElementById('export-info').innerHTML = infoHtml;
 
@@ -1283,17 +1286,16 @@
           btn.textContent = '[ Resolving vault... ]';
 
           try {
-            // Fetch vault blob via IPFS gateway's /ipns/ path (resolves + fetches in one request)
-            // This avoids delegated routing API complexity and CORS issues with Kubo API
+            // Fetch vault key blob via vault key IPNS name
             let blobBytes;
             try {
-              const ipnsUrl = `${ipfsGateway}/ipns/${directRootIpnsName}`;
+              const ipnsUrl = `${ipfsGateway}/ipns/${directVaultKeyIpnsName}`;
               const resp = await fetchWithTimeout(ipnsUrl, {}, 30000);
               if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
               blobBytes = new Uint8Array(await resp.arrayBuffer());
             } catch (gatewayErr) {
               // Fallback: resolve IPNS separately then fetch content
-              const cid = await resolveIpns(directRootIpnsName, ipnsGateway);
+              const cid = await resolveIpns(directVaultKeyIpnsName, ipnsGateway);
               blobBytes = await fetchFromIpfs(cid, ipfsGateway);
             }
 
@@ -1316,8 +1318,8 @@
             document.getElementById('ipns-gateway').value = ipnsGateway;
             document.getElementById('ipfs-gateway').value = ipfsGateway;
 
-            // Set exportData with rootIpnsName for the recovery flow
-            exportData = { rootIpnsName: directRootIpnsName };
+            // Set exportData with rootIpnsName for the recovery folder traversal
+            exportData = { rootIpnsName: directRootFolderIpnsName };
 
             showStep(3);
           } catch (resolveErr) {

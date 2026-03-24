@@ -44,7 +44,7 @@ Each metadata type uses a specific encryption scheme and storage location.
 | Metadata Type     | Encrypted By                 | Algorithm                            | Storage   | IPNS Addressing            |
 | ----------------- | ---------------------------- | ------------------------------------ | --------- | -------------------------- |
 | FolderMetadata    | Folder's own `folderKey`     | AES-256-GCM                          | IPFS blob | Folder's IPNS name         |
-| VaultKeyBlob (v2) | User's secp256k1 `publicKey` | ECIES (key) + AES-256-GCM (metadata) | IPFS blob | Vault key IPNS name (HKDF) |
+| VaultKeyBlob (v2) | User's secp256k1 `publicKey` | ECIES (wrapped `rootFolderKey` only) | IPFS blob | Vault key IPNS name (HKDF) |
 | FileMetadata      | Parent folder's `folderKey`  | AES-256-GCM                          | IPFS blob | File's own IPNS name       |
 | DeviceRegistry    | User's secp256k1 `publicKey` | ECIES                                | IPFS blob | Registry's IPNS name       |
 | File content      | Per-file random `fileKey`    | AES-256-GCM or AES-256-CTR           | IPFS blob | N/A (CID in FileMetadata)  |
@@ -301,7 +301,7 @@ Key-only binary envelope storing the ECIES-wrapped `rootFolderKey`. Written once
 **Source files:**
 
 - TS: `packages/core/src/vault/blob.ts` (`serializeVaultBlobV2`, `deserializeVaultBlobV2`, `detectBlobVersion`)
-- TS types: `packages/core/src/vault/types.ts` (`VaultBlobV2`)
+- Return type: `Uint8Array` (raw ECIES-encrypted `rootFolderKey`)
 - Rust: `apps/desktop/src-tauri/src/crypto/vault_blob.rs`
 
 **Detection:** `detectBlobVersion(blob)` returns `2` if `blob[0] === 0x02`, else `1` (v1 JSON). v1 blobs start with `0x7B` (`{`).
@@ -434,11 +434,11 @@ CipherBox uses two strategies for Ed25519 IPNS keypairs:
 
 Used for the root vault, vault key blob, and device registry where discoverability from the private key alone is required.
 
-| Purpose              | Salt           | HKDF Info                           | Stores                          | Source File                                   |
-| -------------------- | -------------- | ----------------------------------- | ------------------------------- | --------------------------------------------- |
-| Root folder IPNS     | `CipherBox-v1` | `cipherbox-vault-ipns-v1`           | v1 folder metadata `{iv, data}` | `packages/crypto/src/vault/derive-ipns.ts`    |
-| Vault key blob IPNS  | `CipherBox-v1` | `cipherbox-vault-key-ipns-v1`       | v2 blob (ECIES key + metadata)  | `packages/crypto/src/vault/derive-ipns.ts`    |
-| Device registry IPNS | `CipherBox-v1` | `cipherbox-device-registry-ipns-v1` | ECIES-encrypted registry        | `packages/crypto/src/registry/derive-ipns.ts` |
+| Purpose              | Salt           | HKDF Info                           | Stores                                      | Source File                                   |
+| -------------------- | -------------- | ----------------------------------- | ------------------------------------------- | --------------------------------------------- |
+| Root folder IPNS     | `CipherBox-v1` | `cipherbox-vault-ipns-v1`           | v1 folder metadata `{iv, data}`             | `packages/crypto/src/vault/derive-ipns.ts`    |
+| Vault key blob IPNS  | `CipherBox-v1` | `cipherbox-vault-key-ipns-v1`       | v2 key blob (ECIES-wrapped `rootFolderKey`) | `packages/crypto/src/vault/derive-ipns.ts`    |
+| Device registry IPNS | `CipherBox-v1` | `cipherbox-device-registry-ipns-v1` | ECIES-encrypted registry                    | `packages/crypto/src/registry/derive-ipns.ts` |
 
 **Root folder vs vault key blob:** These are two separate IPNS names derived from the same private key with different HKDF info strings. The root folder IPNS stores standard folder metadata (updated on every folder operation). The vault key blob IPNS stores the ECIES-wrapped `rootFolderKey` (written once at vault init, read on every login). This separation prevents folder publishes from overwriting the key blob.
 
