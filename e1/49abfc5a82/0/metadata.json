@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e149abfc5a82",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T14:38:08.824476Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/crypto/src/aes.rs",
+    "crates/crypto/src/aes_ctr.rs",
+    "crates/crypto/src/ecies.rs",
+    "crates/crypto/src/ed25519.rs",
+    "crates/crypto/src/hkdf.rs",
+    "crates/crypto/src/ipns_name.rs",
+    "crates/crypto/src/utils.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "77c535fd424c",
+  "checkpoint_transcript_start": 776,
+  "transcript_lines_at_start": 776,
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 25758,
+    "cache_read_tokens": 1610488,
+    "output_tokens": 4750,
+    "api_call_count": 12
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Increase Rust test coverage across the cipherbox-crypto, cipherbox-core, and cipherbox-sdk crates after Codecov flagged low coverage on PR #352.",
+    "outcome": "168 unit tests added across all three Rust crates (75 crypto, 55 core, 33 SDK + 5 pre-existing), all passing, committed and pushed to PR #352.",
+    "learnings": {
+      "repo": [
+        "CI collects Rust coverage via `cargo llvm-cov --workspace` on Linux — any added tests are automatically included in coverage reports.",
+        "cipherbox-crypto had 5 cross-language integration tests; cipherbox-core had 11 vault_blob tests; SDK had no tests before this session.",
+        "crates/core/Cargo.toml required adding `ecies` as a dev-dependency to generate secp256k1 keypairs in bin.rs tests.",
+        "Folder metadata has a version field and rejects non-v2 formats; file metadata defaults encryption mode to 'GCM' when field is missing.",
+        "DeviceRegistry, DevicePlatform, and DeviceAuthStatus use camelCase JSON fields and lowercase enum serialization via serde rename_all."
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/hkdf.rs",
+          "finding": "file_id must be at least 10 characters for derivation to succeed; exactly 10 passes, 9 fails."
+        },
+        {
+          "path": "crates/crypto/src/ipns_name.rs",
+          "finding": "IPNS name starts with 'k'; uses varint encoding and base36; validates libp2p public key protobuf format."
+        },
+        {
+          "path": "crates/core/src/vault_blob.rs",
+          "finding": "Empty input defaults to v1 blob format; supports round-trips up to 65535 bytes (max size)."
+        },
+        {
+          "path": "crates/sdk/src/queue.rs",
+          "finding": "WriteQueue processes items in FIFO order; failed items are requeued with incremented retry count and dropped after exceeding max_retries (default 5)."
+        },
+        {
+          "path": "crates/core/src/decrypt.rs",
+          "finding": "decrypt_metadata_from_ipfs_public accepts JSON with base64 data field and hex IV; returns typed errors for bad JSON, bad base64, bad IV hex, and wrong key."
+        }
+      ],
+      "workflow": [
+        "Parallel agent spawning (one per crate) significantly reduced wall-clock time for test writing — all three completed within ~5 minutes of each other.",
+        "Running `cargo llvm-cov --workspace` locally before committing confirms coverage impact without waiting for CI."
+      ]
+    },
+    "friction": [
+      "Codecov comment was the trigger — low coverage was not caught before the PR was ready to merge, requiring a follow-up session.",
+      "Core crate agent required the most tool uses (46) and time (333s) due to needing an extra dev-dependency and more complex crypto constructs."
+    ],
+    "open_items": [
+      "Transcript ends mid-session after committing only the crypto crate files — core and SDK crate test commits may not have been pushed yet.",
+      "Coverage report from CI on PR #352 not yet verified to confirm the new tests meaningfully improve the Codecov percentage.",
+      "No integration or end-to-end tests were added — only unit tests; cross-crate interaction coverage remains low."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T14:37:46.959667Z",
+    "agent_lines": 81,
+    "human_added": 587,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 668,
+    "agent_percentage": 12.125748502994012
+  }
+}

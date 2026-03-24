@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e149abfc5a82",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/crypto/src/aes.rs",
+    "crates/crypto/src/aes_ctr.rs",
+    "crates/crypto/src/ecies.rs",
+    "crates/crypto/src/ed25519.rs",
+    "crates/crypto/src/hkdf.rs",
+    "crates/crypto/src/ipns_name.rs",
+    "crates/crypto/src/utils.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e1/49abfc5a82/0/metadata.json",
+      "transcript": "/e1/49abfc5a82/0/full.jsonl",
+      "content_hash": "/e1/49abfc5a82/0/content_hash.txt",
+      "prompt": "/e1/49abfc5a82/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 25758,
+    "cache_read_tokens": 1610488,
+    "output_tokens": 4750,
+    "api_call_count": 12
+  }
+}
