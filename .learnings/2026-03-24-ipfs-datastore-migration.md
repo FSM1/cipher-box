@@ -34,15 +34,19 @@ Loss: all pinned content. Users must re-upload.
 ### 2. DAG Export/Import (preserves data)
 
 ```bash
-# On old node: export each root CID
-docker exec old-kubo ipfs dag export <cid> > /tmp/cid.car
+# Option A: stream directly old → new (no intermediate file)
+docker exec old-kubo ipfs dag export <cid> \
+  | docker exec -i new-kubo ipfs dag import
+docker exec new-kubo ipfs pin add <cid>
 
-# On new pebbleds node: import
+# Option B: file-based transfer with docker cp
+docker exec old-kubo ipfs dag export <cid> > /tmp/cid.car
+docker cp /tmp/cid.car new-kubo:/tmp/cid.car
 docker exec new-kubo ipfs dag import /tmp/cid.car
 docker exec new-kubo ipfs pin add <cid>
 ```
 
-For bulk migration, script with the CID list from the database. Consider batching exports to avoid disk space issues (5.5GB repo in our case).
+For bulk migration, script with the CID list from the database. Option A avoids disk space issues; Option B is easier to debug but requires space for the CAR files (5.5GB repo in our case).
 
 ### 3. Parallel Cutover (production-grade)
 
