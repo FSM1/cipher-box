@@ -118,7 +118,7 @@ Plans:
 
 ### Phase 21: BYO-IPFS Node Support
 
-**Goal**: Users can configure their own IPFS node for data sovereignty, with files pinned to both CipherBox and their personal node
+**Goal**: Users can configure their own IPFS node for data sovereignty, with a user-selectable pinning mode (CipherBox only, external only, or dual-pin), Settings UI, and connection testing
 **Depends on**: Phase 19 (stable IPNS resolution benefits BYO workflows)
 **Requirements**: BYO-01, BYO-02, BYO-03, BYO-04, BYO-05, BYO-06, BYO-07
 **Success Criteria** (what must be TRUE):
@@ -128,7 +128,16 @@ Plans:
 3. All IPNS publishes still route through the CipherBox API regardless of BYO configuration (no bypass of optimistic concurrency)
 4. BYO users see an advisory quota display (not enforced) with clear indication that storage is managed by their own node
 5. The connection test endpoint validates reachability and API compatibility of the user's node before saving configuration
-   **Plans**: TBD
+   **Plans**: 6 plans
+
+Plans:
+
+- [ ] 21-01-PLAN.md -- SDK pinning interface + KuboProvider, PsaProvider, connection test
+- [ ] 21-02-PLAN.md -- API CID registration endpoint + advisory quota mode
+- [ ] 21-03-PLAN.md -- DualPinProvider + SDK client pinning orchestration + vault config type
+- [ ] 21-04-PLAN.md -- Settings UI STORAGE tab with connection test and advisory badge
+- [ ] 21-05-PLAN.md -- TEE migration backend (entity, service, controller, BullMQ, TEE worker)
+- [ ] 21-06-PLAN.md -- Migration progress UI + final integration verification
 
 ### Phase 22: Performance Baselines Completion
 
@@ -155,10 +164,10 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
 | 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
 | 20. Vault Migration                       | v1.1      | 0/?            | Not started | -          |
-| 21. BYO-IPFS Node Support                 | v1.1      | 0/?            | Not started | -          |
+| 21. BYO-IPFS Node Support                 | v1.1      | 0/6            | Not started | -          |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
 
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-23_
+_Last updated: 2026-03-24_
