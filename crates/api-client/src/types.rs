@@ -137,7 +137,7 @@ pub struct IpnsResolveResponse {
 }
 
 /// IPNS publish request body matching the backend PublishIpnsDto.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IpnsPublishRequest {
     /// IPNS name (k51... CIDv1 format).
@@ -158,6 +158,19 @@ pub struct IpnsPublishRequest {
     /// does not match. Omit to perform an unconditional publish.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_sequence_number: Option<String>,
+}
+
+impl std::fmt::Debug for IpnsPublishRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IpnsPublishRequest")
+            .field("ipns_name", &self.ipns_name)
+            .field("metadata_cid", &self.metadata_cid)
+            .field("record", &"[REDACTED]")
+            .field("encrypted_ipns_private_key", &self.encrypted_ipns_private_key.as_ref().map(|_| "[REDACTED]"))
+            .field("key_epoch", &self.key_epoch)
+            .field("expected_sequence_number", &self.expected_sequence_number)
+            .finish()
+    }
 }
 
 /// Result of an IPNS publish attempt.

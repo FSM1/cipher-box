@@ -56,14 +56,18 @@ pub async fn refresh(
 /// POST /auth/logout (authenticated). Best-effort -- errors are logged
 /// but not propagated (matches web app pattern).
 pub async fn logout(client: &ApiClient) -> Result<(), ApiError> {
-    let resp = client.authenticated_post("/auth/logout", &()).await?;
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        log::warn!("Logout returned non-success ({}): {}", status, body);
+    match client.authenticated_post("/auth/logout", &()).await {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+                log::warn!("Logout returned non-success ({}): {}", status, body);
+            }
+        }
+        Err(e) => {
+            log::warn!("Logout request failed (best-effort): {}", e);
+        }
     }
-
     Ok(())
 }
 

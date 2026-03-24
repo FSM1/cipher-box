@@ -9,13 +9,6 @@ pub fn unmount_filesystem() -> Result<(), String> {
     let mount_path = mount_point();
     log::info!("Unmounting CipherBoxFS at {}", mount_path.display());
 
-    let temp_dir = std::env::temp_dir().join("cipherbox");
-    if temp_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&temp_dir) {
-            log::warn!("Failed to clean temp directory: {}", e);
-        }
-    }
-
     // Try fusermount3 first (preferred, doesn't require root)
     let status = std::process::Command::new("fusermount3")
         .arg("-u")
@@ -25,6 +18,7 @@ pub fn unmount_filesystem() -> Result<(), String> {
     match status {
         Ok(s) if s.success() => {
             log::info!("FUSE filesystem unmounted via fusermount3");
+            cleanup_temp_dir();
             return Ok(());
         }
         _ => {
@@ -41,6 +35,7 @@ pub fn unmount_filesystem() -> Result<(), String> {
     match status {
         Ok(s) if s.success() => {
             log::info!("FUSE filesystem unmounted via fusermount");
+            cleanup_temp_dir();
             return Ok(());
         }
         _ => {
@@ -56,11 +51,21 @@ pub fn unmount_filesystem() -> Result<(), String> {
 
     if status.success() {
         log::info!("FUSE filesystem unmounted via umount");
+        cleanup_temp_dir();
         Ok(())
     } else {
         Err(format!(
             "Failed to unmount {} -- close file managers and retry",
             mount_path.display()
         ))
+    }
+}
+
+fn cleanup_temp_dir() {
+    let temp_dir = std::env::temp_dir().join("cipherbox");
+    if temp_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&temp_dir) {
+            log::warn!("Failed to clean temp directory: {}", e);
+        }
     }
 }

@@ -9,14 +9,6 @@ pub fn unmount_filesystem() -> Result<(), String> {
     let mount_path = mount_point();
     log::info!("Unmounting CipherBoxFS at {}", mount_path.display());
 
-    // Clean up temp directory
-    let temp_dir = std::env::temp_dir().join("cipherbox");
-    if temp_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&temp_dir) {
-            log::warn!("Failed to clean temp directory: {}", e);
-        }
-    }
-
     let status = std::process::Command::new("umount")
         .arg(&mount_path)
         .status()
@@ -24,6 +16,7 @@ pub fn unmount_filesystem() -> Result<(), String> {
 
     if status.success() {
         log::info!("FUSE filesystem unmounted successfully");
+        cleanup_temp_dir();
         Ok(())
     } else {
         log::info!("umount failed (likely busy), trying diskutil unmount force");
@@ -36,12 +29,22 @@ pub fn unmount_filesystem() -> Result<(), String> {
 
         if status.success() {
             log::info!("FUSE filesystem force-unmounted via diskutil");
+            cleanup_temp_dir();
             Ok(())
         } else {
             Err(format!(
                 "Failed to unmount {} -- close Finder windows and retry",
                 mount_path.display()
             ))
+        }
+    }
+}
+
+fn cleanup_temp_dir() {
+    let temp_dir = std::env::temp_dir().join("cipherbox");
+    if temp_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&temp_dir) {
+            log::warn!("Failed to clean temp directory: {}", e);
         }
     }
 }

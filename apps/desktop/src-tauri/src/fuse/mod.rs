@@ -253,7 +253,7 @@ pub fn unmount_filesystem() -> Result<(), String> {
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 mod tests {
     use cipherbox_fuse::merge_folder_children;
-    use cipherbox_core::folder::{FilePointer, FolderChild, FolderEntry, FolderMetadata};
+    use cipherbox_core::folder::{FilePointer, FolderChild, FolderMetadata};
 
     fn make_file(ipns: &str, name: &str) -> FolderChild {
         FolderChild::File(FilePointer {

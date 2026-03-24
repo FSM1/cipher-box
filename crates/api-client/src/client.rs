@@ -108,13 +108,6 @@ impl ApiClient {
             .await?)
     }
 
-    /// Fetch raw bytes from an absolute URL (used for IPFS content fetching).
-    pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, ApiError> {
-        let resp = self.client.get(url).send().await?;
-        let bytes = resp.bytes().await?;
-        Ok(bytes.to_vec())
-    }
-
     /// Send an authenticated multipart POST request (used for IPFS file uploads).
     pub async fn authenticated_multipart_post(
         &self,
