@@ -269,6 +269,7 @@ describe('VaultService', () => {
         rootIpnsName: testRootIpnsName,
         createdAt: mockVaultEntity.createdAt,
         initializedAt: null,
+        migratedAt: null,
         teeKeys: null,
       });
     });

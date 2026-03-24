@@ -189,4 +189,20 @@ mod tests {
         assert_eq!(dk, &[0xFF]);
         assert_eq!(dm, &[0x42]);
     }
+
+    #[test]
+    fn test_key_too_long_for_u16() {
+        let key = vec![0xAA; 65536]; // u16::MAX + 1
+        let result = serialize_vault_blob_v2(&key, b"meta");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too long"));
+    }
+
+    #[test]
+    fn test_zero_length_key() {
+        let blob = serialize_vault_blob_v2(&[], b"meta").unwrap();
+        let (dk, dm) = deserialize_vault_blob_v2(&blob).unwrap();
+        assert!(dk.is_empty());
+        assert_eq!(dm, b"meta");
+    }
 }
