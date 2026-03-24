@@ -945,8 +945,12 @@
           if (resp.status === 404) {
             throw new Error(`Content not found on IPFS: ${truncate(cid, 20)}`);
           }
+          // Non-OK, non-404: retry or throw on last attempt
+          if (attempt >= maxRetries - 1) {
+            throw new Error(`IPFS gateway returned ${resp.status} for ${truncate(cid, 20)}`);
+          }
         } catch (e) {
-          if (e.message.includes('not found')) throw e;
+          if (e.message.includes('not found') || e.message.includes('gateway returned')) throw e;
           if (attempt < maxRetries - 1) {
             await sleep(1000 * Math.pow(2, attempt));
             continue;
