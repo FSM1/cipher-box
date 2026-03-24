@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0aefb2f99865",
+  "session_id": "dd7925a2-c290-4aa9-9b23-1e2a36c54591",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T07:36:26.871057Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "f65b1600c9a4",
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 37522,
+    "cache_read_tokens": 185101,
+    "output_tokens": 3703,
+    "api_call_count": 5
+  },
+  "summary": {
+    "intent": "Execute Phase 23 (rust-sdk-extraction) of the cipher-box project using wave-based parallel execution to extract Rust crypto primitives and SDK components into a Cargo workspace.",
+    "outcome": "Wave 1 completed successfully (23-01: Cargo workspace + cipherbox-crypto crate). Wave 2 was in progress with agents spawned in parallel for plans 23-02 and 23-03 when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "Phase 23 is on branch `feat/phase-23-rust-sdk-extraction` — branching strategy is 'phase'",
+        "Phase 23 has 7 plans grouped into 4 waves: Wave 1 (23-01), Wave 2 (23-02, 23-03), Wave 3 (23-04, 23-05), Wave 4 (23-06, 23-07)",
+        "The crypto extraction targets: AES-GCM, AES-CTR, ECIES, Ed25519, HKDF, and IPNS name derivation into `crates/crypto/`",
+        "Domain types extracted include: FolderMetadata, FileMetadata, RecycleBinMetadata, DeviceRegistry, vault blob v2, IPNS records",
+        "The `decrypt_metadata_from_ipfs_public` bridge function lives with core domain types in `crates/core/`"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD execute-phase workflow: init → clear stale auto-chain → handle branching → validate phase → discover/group plans → execute waves → verify",
+        "Spot-checks after each wave: verify SUMMARY.md exists, check git commits via grep on phase-plan pattern, verify key created files on disk, check for Self-Check: FAILED marker",
+        "Parallel wave execution spawns agents concurrently; orchestrator waits for all before proceeding to next wave"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Wave 2 agents (23-02, 23-03) were still running when transcript ends — completion unconfirmed",
+      "Wave 3 (23-04 cipherbox-fuse filesystem, 23-05 cipherbox-sdk orchestration) not yet started",
+      "Wave 4 (23-06 desktop thin shell cleanup, 23-07 CI/release-please) not yet started",
+      "Cross-language test vectors (JSON files for Rust/TypeScript parity) being created in 23-03 — needs verification",
+      "Phase verification step not yet reached"
+    ]
+  }
+}
