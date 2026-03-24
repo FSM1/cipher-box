@@ -1,0 +1,9 @@
+/gsd:ui-phase 21
+
+---
+
+ok but now these changes have for some unknown reason been made on a different branch, unnecessarily. this could all have been a part of phase 21 context and planning branch work. are you going to PR these changes on to the rest of phase 21 branch ?
+
+---
+
+ok a bit early to merge anything just yet - still gotta rerun planning with the ui context. please create a @.learnings/README.md entry regarding branching usage with gsd ui phase steps, and also make sure to update your memory and project claude.md file with references to these learnings.

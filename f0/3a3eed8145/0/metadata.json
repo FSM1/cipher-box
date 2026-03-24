@@ -1,0 +1,79 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f03a3eed8145",
+  "session_id": "b40e1bf6-b0a9-4f65-abea-691c4d692f4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T04:24:01.609425Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "b64236ed1c64",
+  "token_usage": {
+    "input_tokens": 95,
+    "cache_creation_tokens": 138801,
+    "cache_read_tokens": 8276496,
+    "output_tokens": 26888,
+    "api_call_count": 78
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Run the full GSD discuss-phase → plan-phase → ui-phase workflow for Phase 21 (BYO-IPFS Node Support), capturing implementation decisions and creating all planning artifacts (CONTEXT.md, RESEARCH.md, VALIDATION.md, UI-SPEC.md).",
+    "outcome": "All Phase 21 planning artifacts were created and consolidated onto a single branch (`docs/phase-21-context`) with a PR open (#346). Planning itself (plan-phase) was not re-run after ui-phase completed, so PLAN.md files do not yet exist.",
+    "learnings": {
+      "repo": [
+        "Phase 21 BYO-IPFS architecture shifted from server-relay dual-pin (PROJECT.md v1.1 plan) to client-direct SDK pinning with three user-selectable modes: CipherBox only, External only, Dual-pin.",
+        "Credentials for external IPFS nodes are stored in vault metadata on IPFS, encrypted with user key — zero-knowledge is preserved because the server never sees auth tokens.",
+        "TEE (Phala Cloud) is the right vehicle for pin migration background jobs: client provides CID list + encrypted source/dest configs, TEE decrypts in-enclave, migrates opaque encrypted blobs, never sees plaintext.",
+        "The existing IpfsProvider interface and RemotePin SDK layer are the integration points for BYO-IPFS; a new RemotePinningProvider implementation slots in without changing vault service logic.",
+        "ROADMAP.md success criteria SC#2 and BYO-02 need updating to reflect the revised three-mode pinning model and client-direct architecture.",
+        "PSA (IPFS Pinning Service API) and Kubo RPC both need to be supported, with auto-detection during the connection test in Settings UI.",
+        "Quota tracking becomes advisory only for external-only mode — no enforcement, just CID registration for visibility."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipfs/providers/ipfs-provider.interface.ts",
+          "finding": "Existing IpfsProvider interface is the extension point for adding a RemotePinningProvider for BYO-IPFS."
+        },
+        {
+          "path": "apps/api/src/ipfs/providers/local.provider.ts",
+          "finding": "Local provider is the reference implementation pattern for the new external provider."
+        },
+        {
+          "path": "apps/web/src/routes/SettingsPage.tsx",
+          "finding": "SettingsPage is where the new STORAGE tab (BYO-IPFS config, connection test, migration progress) will be added."
+        },
+        {
+          "path": "apps/api/src/vault/entities/pinned-cid.entity.ts",
+          "finding": "PinnedCid entity will need a new field to track which node(s) a CID is pinned to (CipherBox / external / both) for migration state tracking."
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-UI-SPEC.md",
+          "finding": "ADVISORY badge had `padding: 2px 6px` which violates the 4px grid system; fixed to `padding: 4px 8px`. The checker caught this in Dimension 5 twice before the orchestrator made the direct edit."
+        }
+      ],
+      "workflow": [
+        "GSD ui-phase should be run on the same branch as discuss-phase and plan-phase — all planning artifact steps belong on one phase branch, not separate branches per step.",
+        "When the ui-phase spawns its own researcher agent, it does not automatically inherit the current git branch; the orchestrator must explicitly ensure it stays on the correct branch or the agent commits to wherever HEAD is.",
+        "The ui-phase revision loop (max 2 sub-agent iterations) may not converge if the issue is a simple literal value; the orchestrator can directly edit UI-SPEC.md after iteration 2 rather than spawning a third revision agent.",
+        "After ui-phase completes, plan-phase must be re-run (not assumed complete) — the UI-SPEC gate in plan-phase only fires if UI-SPEC.md is missing; once it exists the gate passes and planning proceeds normally.",
+        "Branch consolidation via `git merge` + branch deletion is the right recovery when two branches diverge unnecessarily during a single workflow run — all commits should land on one branch before creating a PR."
+      ]
+    },
+    "friction": [
+      "GSD ui-phase created commits on a new branch (`docs/phase-21-ui-spec-revision`) instead of staying on the existing phase branch (`docs/phase-21-context`), requiring a manual merge and branch cleanup.",
+      "UI-SPEC checker blocked on Dimension 5 (spacing) twice — a `2px 6px` padding value — even after the researcher revision agent ran, because the agent didn't fix it precisely enough. Required a direct orchestrator edit.",
+      "plan-phase was interrupted mid-flow by the UI design contract gate, requiring the user to run `/gsd:ui-phase 21` as a separate top-level command, then plan-phase was never re-run in this session."
+    ],
+    "open_items": [
+      "Re-run `/gsd:plan-phase 21` now that UI-SPEC.md exists — PLAN.md files have not been created yet.",
+      "PR #346 is open but should not be merged until plan-phase completes and PLAN.md files are committed to the same branch.",
+      "ROADMAP.md SC#2 and BYO-02 need updating to reflect the three-mode pinning model and client-direct architecture decided in discuss-phase.",
+      "S3-compatible storage backend deferred to a future phase (noted in CONTEXT.md deferred section).",
+      "Provider marketplace UX deferred to a future phase.",
+      "Performance benchmarking of external IPFS providers at the SDK layer is a stated goal of this phase — benchmark harness design needs to appear in PLAN.md tasks."
+    ]
+  }
+}
