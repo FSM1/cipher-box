@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-23T21:50:25.587Z'
+last_updated: '2026-03-24T01:42:14.604Z'
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 14
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Project State
@@ -18,12 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 20 — vault-migration
+**Current focus:** Phase 20 — vault-migration (COMPLETE)
 
 ## Current Position
 
-Phase: 20 (vault-migration) — EXECUTING
-Plan: 4 of 4
+Phase: 20 (vault-migration) — COMPLETE
+Plan: 4 of 4 (all plans executed)
 
 ## Performance Metrics
 
@@ -45,6 +45,7 @@ Plan: 4 of 4
 | 20    | 01   | 4min     | 2     | 5     |
 | 20    | 02   | 17min    | 3     | 16    |
 | 20    | 03   | 25min    | 2     | 6     |
+| 20    | 04   | 45min    | 3     | 15    |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Recent for v1.1:
 - Desktop initialize_vault produces v2 blob for new users from day one (not just on migration)
 - decrypt_metadata_from_ipfs_public transparently handles both v1 JSON and v2 binary blobs
 - VaultExportDto crypto fields made nullable (string | null) to reflect migrated user state
+- Recovery tool IPNS resolution uses gateway /ipns/ HEAD request with redirect following (most reliable without API dependency)
+- fetchAndDecryptMetadata handles both v1 JSON and v2 binary blobs transparently for folder sync
+- Non-blocking lazy migration via fire-and-forget async IIFE with retry-on-next-login for resilience
 
 ### Roadmap Evolution
 
@@ -85,11 +89,11 @@ Recent for v1.1:
 - rootFolderKey migration dual-write window duration TBD (forced migration strategy for dormant accounts)
 - BYO-IPFS auth token storage model needs explicit acceptance (server sees token but not plaintext content)
 - Kubo v0.34.0 -> v0.40.1 upgrade decision (recommended before Phase 19, not blocking)
-- Recovery tool independence must be verified after Phases 19+20 changes
+- Recovery tool independence verified for v2 blobs (root-level works; subfolder limited by IPNS DHT propagation)
 
 ### Pending Todos
 
-8 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
+10 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
 
 ### Resolved
 
@@ -97,4 +101,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-23 after completing 20-03 (desktop Rust v2 blob module, vault fetch for migrated users, root folder v2 publish)
+Last updated: 2026-03-24 after completing 20-04 (web client v2 blob login, lazy migration, recovery tool v2 parsing) -- Phase 20 COMPLETE

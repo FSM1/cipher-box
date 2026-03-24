@@ -93,14 +93,14 @@ Plans:
 4. The desktop app (Rust) parses vault blob v2 and uses the embedded rootFolderKey for FUSE mount initialization
 5. The encryptedRootIpnsPrivateKey column is deprecated from the vaults table (HKDF derivation is the canonical path)
 
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 
-- [ ] 20-01-PLAN.md -- Vault blob v2 format module in @cipherbox/core with TDD tests and cross-platform test vectors
-- [ ] 20-02-PLAN.md -- API: DB migration, nullable columns, optional IPNS key on init, POST /vault/migrate endpoint
-- [ ] 20-03-PLAN.md -- Desktop Rust: v2 blob module, vault fetch for migrated users, root folder v2 publish
-- [ ] 20-04-PLAN.md -- Web client: v2 blob login read, lazy migration trigger, recovery tool v2 parsing
+- [x] 20-01-PLAN.md -- Vault blob v2 format module in @cipherbox/core with TDD tests and cross-platform test vectors
+- [x] 20-02-PLAN.md -- API: DB migration, nullable columns, optional IPNS key on init, POST /vault/migrate endpoint
+- [x] 20-03-PLAN.md -- Desktop Rust: v2 blob module, vault fetch for migrated users, root folder v2 publish
+- [x] 20-04-PLAN.md -- Web client: v2 blob login read, lazy migration trigger, recovery tool v2 parsing
 
 ### Phase 21: BYO-IPFS Node Support
 
@@ -139,7 +139,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 20 -> 21 -> 22
 | 18. Performance Instrumentation    | v1.1      | 2/2            | Complete    | 2026-03-07 |
 | 19. IPNS Resolution Improvement    | v1.1      | 2/2            | Complete    | 2026-03-07 |
 | 19.1 Extract Core Crypto SDK       | v1.1      | 6/6            | Complete    | 2026-03-20 |
-| 20. Vault Migration                | 3/4       | In Progress    |             | -          |
+| 20. Vault Migration                | v1.1      | 4/4            | Complete    | 2026-03-24 |
 | 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete | v1.1      | 0/?            | Not started | -          |
 
