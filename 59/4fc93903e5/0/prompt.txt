@@ -1,0 +1,25 @@
+/resolve-pr-reviews
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23471900073/job/68296323552?pr=344 sdk e2e tests are failing
+
+---
+
+/resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
+
+---
+
+https://github.com/FSM1/cipher-box/pull/344#pullrequestreview-3996079661 a critical `outside of diff range` comment here and next round of /resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
+
+---
+
+also, since we will be resetting the database once more, is there any reason for the unnecessary migrations with the vault migratedat column, if these are not actually utilized. should we not jsut update the initial migration to be the current known db structure, and get rid of all the unnecessary migrations?
