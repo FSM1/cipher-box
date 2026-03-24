@@ -99,9 +99,9 @@ pub struct UploadComplete {
 
 /// Entry in the debounced publish queue.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-struct PublishQueueEntry {
-    first_dirty: std::time::Instant,
-    pending_uploads: usize,
+pub struct PublishQueueEntry {
+    pub first_dirty: std::time::Instant,
+    pub pending_uploads: usize,
 }
 
 /// Coordinates IPNS publish operations to prevent sequence number races.
@@ -475,7 +475,7 @@ pub struct CipherBoxFS {
     pub upload_rx: std::sync::mpsc::Receiver<UploadComplete>,
     pub upload_tx: std::sync::mpsc::Sender<UploadComplete>,
     pub publish_coordinator: Arc<PublishCoordinator>,
-    pub(crate) publish_queue: HashMap<u64, PublishQueueEntry>,
+    pub publish_queue: HashMap<u64, PublishQueueEntry>,
 }
 
 #[cfg(any(feature = "fuse", feature = "winfsp"))]

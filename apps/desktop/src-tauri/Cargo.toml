@@ -5,14 +5,15 @@ edition = "2021"
 
 [features]
 default = ["fuse"]
-fuse = ["dep:fuser", "dep:unicode-normalization"]
-winfsp = ["dep:winfsp", "dep:widestring"]
+fuse = ["cipherbox-fuse/fuse", "dep:fuser", "dep:unicode-normalization"]
+winfsp = ["cipherbox-fuse/winfsp", "dep:winfsp", "dep:widestring"]
 
 [dependencies]
 # Internal crates
 cipherbox-crypto = { workspace = true }
 cipherbox-core = { workspace = true }
 cipherbox-api-client = { workspace = true }
+cipherbox-fuse = { workspace = true }
 cipherbox-sdk = { workspace = true }
 
 # Tauri

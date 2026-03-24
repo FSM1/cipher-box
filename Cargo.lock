@@ -687,6 +687,7 @@ dependencies = [
  "cipherbox-api-client",
  "cipherbox-core",
  "cipherbox-crypto",
+ "cipherbox-fuse",
  "cipherbox-sdk",
  "clap",
  "dirs 5.0.1",
