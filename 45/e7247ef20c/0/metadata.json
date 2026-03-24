@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "45e7247ef20c",
+  "session_id": "dd7925a2-c290-4aa9-9b23-1e2a36c54591",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T10:59:44.123705Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "5a360a09b187",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 99449,
+    "cache_read_tokens": 552611,
+    "output_tokens": 9041,
+    "api_call_count": 14
+  },
+  "summary": {
+    "intent": "Execute Phase 23 (rust-sdk-extraction) which extracts the CipherBox monolithic desktop app into a Cargo workspace with discrete Rust crates (crypto, core, api-client, fuse, sdk).",
+    "outcome": "Waves 1 and 2 completed successfully (plans 23-01 through 23-03). Wave 3 (23-04 fuse, 23-05 sdk) was interrupted mid-execution by a usage limit reset, leaving partial uncommitted work in both crate directories. Wave 3 was retried at session end but did not complete before the transcript ended.",
+    "learnings": {
+      "repo": [
+        "Phase 23 lives on branch `feat/phase-23-rust-sdk-extraction` — all commits go there.",
+        "The Cargo workspace root and `crates/` directory were established in plan 23-01 as the foundational dependency for all subsequent crates.",
+        "cipherbox-core extracted 162 desktop tests that continued passing after extraction, plus 12 new crate-level tests.",
+        "cipherbox-api-client has 8 source files; 9 shared JSON test vector files were added for cross-language Rust/TypeScript parity."
+      ],
+      "code": [],
+      "workflow": [
+        "GSD wave-based parallel execution: Wave 2 ran 23-02 and 23-03 in parallel successfully.",
+        "Pre-wave dependency key-link checks (gsd-tools verify key-links) returned nothing to verify for Wave 3 plans.",
+        "When agents are interrupted mid-run (usage limit), crate directories and partial files may exist on disk but uncommitted — re-spawning the same plan agents is the correct recovery path.",
+        "Spot-checks after each wave: verify SUMMARY.md exists, check git log for plan-tagged commits, check key created files on disk, and grep for Self-Check: FAILED marker."
+      ]
+    },
+    "friction": [
+      "Claude usage limit reset mid-wave while Wave 3 agents were running, leaving partial uncommitted work in both `crates/fuse/` and `crates/sdk/` directories.",
+      "Neither 23-04 nor 23-05 produced a `lib.rs` or completed their module set before the interruption — fuse was missing most modules, sdk was missing `lib.rs` and `client.rs`.",
+      "The Cargo workspace `Cargo.toml` may have been partially updated with the new crates before the interruption, requiring the retry agents to detect and handle existing partial state."
+    ],
+    "open_items": [
+      "Wave 3 retry (23-04 cipherbox-fuse, 23-05 cipherbox-sdk) — in progress at transcript end, completion unknown.",
+      "Wave 4 not yet started: 23-06 (desktop thin shell cleanup) and 23-07 (CI/release-please).",
+      "Phase verification (gsd-verifier) not yet run — depends on all 7 plans completing.",
+      "ROADMAP.md and STATE.md phase-complete update not yet done.",
+      "PROJECT.md evolution step not yet done."
+    ]
+  }
+}
