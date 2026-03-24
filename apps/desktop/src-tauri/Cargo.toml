@@ -23,16 +23,12 @@ tauri-plugin-autostart = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 
-# FUSE
-fuser = { version = "0.16", default-features = false, features = ["libfuse"], optional = true }
-
 # System
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native-sync-persistent"] }
 dirs = "5"
 env_logger = "0.11"
 clap = { version = "4", features = ["derive"] }
 dotenvy = "0.15"
-unicode-normalization = { version = "0.1.25", optional = true }
 
 # Encoding (non-crypto, domain-specific)
 multihash = "0.19"
@@ -62,6 +58,8 @@ widestring = { version = "1", optional = true }
 winreg = "0.55"
 
 [target.'cfg(unix)'.dependencies]
+fuser = { version = "0.16", default-features = false, features = ["libfuse"], optional = true }
+unicode-normalization = { version = "0.1.25", optional = true }
 libc = "0.2"
 
 [target.'cfg(windows)'.build-dependencies]
