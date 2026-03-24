@@ -258,7 +258,7 @@ check your pinning service dashboard for cors/allowed-origins settings. add http
 ### Advisory Quota Display
 
 - **Location:** Existing `StorageQuota` component in sidebar.
-- **Advisory badge:** When user's pinning mode is `external` or `dual`, display `ADVISORY` badge next to the quota text. Badge styled: `--font-size-xs`, `--color-warning`, `text-transform: uppercase`, `letter-spacing: 0.1em`, border `1px solid --color-warning`, padding `2px 6px`.
+- **Advisory badge:** When user's pinning mode is `external` or `dual`, display `ADVISORY` badge next to the quota text. Badge styled: `--font-size-xs`, `--color-warning`, `text-transform: uppercase`, `letter-spacing: 0.1em`, border `1px solid --color-warning`, padding `4px 8px`.
 - **Tooltip/hint:** Below quota bar, dim text: `storage is managed by your node. this total is approximate.`
 - **Enforced vs advisory:** No visual change to the quota bar itself -- same green fill. Only the badge and hint text differ.
 
