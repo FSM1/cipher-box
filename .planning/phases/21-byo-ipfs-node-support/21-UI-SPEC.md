@@ -39,7 +39,7 @@ Declared values (must be multiples of 4):
 | lg    | 24px  | Section padding (`.settings-content`), gap between form sections |
 | xl    | 32px  | Not used in this phase                                           |
 
-Exceptions: 6px gap in `.storage-quota` between bar and text (existing pattern, retained). 2px gap for detail rows (existing pattern from authorized devices).
+Exceptions: Phase 21 introduces no new spacing values outside the declared scale; 6px and 2px gaps are pre-existing values outside this contract's scope.
 
 **Source:** Existing token scale from `index.css` `:root` block (`--spacing-xs` through `--spacing-xl`).
 
@@ -80,6 +80,12 @@ All text uses `var(--font-family-mono)` (JetBrains Mono). All text is `text-tran
 Accent reserved for: active tab underline, connection test success indicator, `[--save]` button fill background, progress bar fill, radio dot/indicator for selected pinning mode, section heading text color.
 
 **Source:** Existing `:root` tokens from `index.css` lines 5-36.
+
+---
+
+## Visual Hierarchy
+
+**STORAGE tab focal point:** The pinning mode radio selector is the primary visual anchor of the STORAGE tab. It is the first content element below the tab bar and uses accent-colored text for the selected option, drawing the eye to the user's current storage configuration choice.
 
 ---
 
@@ -138,8 +144,8 @@ Accent reserved for: active tab underline, connection test success indicator, `[
 | Migration description    | `migrate existing pins between providers. data is transferred via tee -- your encryption keys are never exposed.`       |
 | Migration progress label | `migrating: {migrated}/{total} pins`                                                                                    |
 | Migration failed label   | `{failed} pins failed`                                                                                                  |
-| Pause button             | `[--pause]`                                                                                                             |
-| Resume button            | `[--resume]`                                                                                                            |
+| Pause button             | `[--pause migration]`                                                                                                   |
+| Resume button            | `[--resume migration]`                                                                                                  |
 | Cancel button            | `[--cancel migration]`                                                                                                  |
 | Cancel confirmation      | `cancel migration: {migrated}/{total} pins transferred. pins already migrated will remain on the new provider. cancel?` |
 | Migration complete       | `> migration complete. {total} pins transferred.`                                                                       |
@@ -262,7 +268,7 @@ check your pinning service dashboard for cors/allowed-origins settings. add http
 - **Progress bar:** Full-width bar matching existing `storage-quota-bar` pattern (6px height, `--color-border-dim` background, `--color-green-primary` fill). Width = `(migratedCids / totalCids) * 100%`.
 - **Progress text:** Below bar: `migrating: {migrated}/{total} pins` in `--font-size-xs`, `--color-text-secondary`.
 - **Failed count:** If `failedCids > 0`, show `{failed} pins failed` in `--color-error` on a new line.
-- **Pause button:** `[--pause]` -- ghost button. Changes to `[--resume]` when paused.
+- **Pause button:** `[--pause migration]` -- ghost button. Changes to `[--resume migration]` when paused.
 - **Cancel button:** `[--cancel migration]` -- ghost button with dim text. On click, shows inline confirmation (same pattern as recovery phrase regeneration confirmation).
 - **Complete state:** Progress bar at 100%, text changes to `> migration complete. {total} pins transferred.` in green.
 - **Polling:** Migration status polled every 5 seconds from API while migration is active.
