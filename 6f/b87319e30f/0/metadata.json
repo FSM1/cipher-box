@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6fb87319e30f",
+  "session_id": "dd7925a2-c290-4aa9-9b23-1e2a36c54591",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T11:05:28.372764Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/fuse/src/dir_ops.rs",
+    "crates/fuse/src/operations.rs",
+    "crates/fuse/src/platform/linux.rs",
+    "crates/fuse/src/platform/macos.rs",
+    "crates/fuse/src/read_ops.rs",
+    "crates/fuse/src/write_ops.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "5a360a09b187",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 99449,
+    "cache_read_tokens": 552611,
+    "output_tokens": 9041,
+    "api_call_count": 14
+  },
+  "summary": {
+    "intent": "Execute Phase 23 (rust-sdk-extraction) using wave-based parallel subagent execution, extracting crypto, core types, API client, FUSE filesystem, and SDK orchestration into a Cargo workspace.",
+    "outcome": "Waves 1 and 2 completed successfully (plans 23-01 through 23-03). Wave 3 (plans 23-04 and 23-05) was interrupted mid-execution by a usage limit reset; partial crate directory structures were created but not committed. Wave 3 was re-spawned on resume, with fuse crate files partially written.",
+    "learnings": {
+      "repo": [
+        "Phase 23 uses branch `feat/phase-23-rust-sdk-extraction` with a 4-wave dependency chain: crypto → core+api-client → fuse+sdk → desktop-cleanup+CI",
+        "The Cargo workspace root and `crates/` directory structure was established in wave 1 as the foundation all subsequent crates depend on",
+        "162 existing desktop tests remained passing after wave 2 extractions, and 12 new core crate tests were added",
+        "Wave 3 agents (23-04, 23-05) began creating crate directories but produced no lib.rs or committed code before the usage limit hit"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/dir_ops.rs",
+          "finding": "Created during Wave 3 retry for FUSE filesystem crate"
+        },
+        {
+          "path": "crates/fuse/src/operations.rs",
+          "finding": "Created during Wave 3 retry for FUSE filesystem crate"
+        },
+        {
+          "path": "crates/fuse/src/platform/linux.rs",
+          "finding": "Platform-specific FUSE implementation behind feature flags"
+        },
+        {
+          "path": "crates/fuse/src/platform/macos.rs",
+          "finding": "Platform-specific SMB backend implementation behind feature flags"
+        },
+        {
+          "path": "crates/fuse/src/read_ops.rs",
+          "finding": "Created during Wave 3 retry"
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "finding": "Created during Wave 3 retry"
+        }
+      ],
+      "workflow": [
+        "Usage limit interruptions leave uncommitted partial work in the working tree — spot-checking git log and file presence is necessary to distinguish 'no work done' from 'work done but not committed'",
+        "GSD resumption works by re-spawning agents for plans lacking SUMMARY.md; agents must handle pre-existing partial crate directories gracefully",
+        "Pre-wave dependency checks (verify key-links) returned nothing to verify for wave 3 plans, suggesting key-link metadata was absent from those plan files"
+      ]
+    },
+    "friction": [
+      "Usage limit reset mid-execution during Wave 3 parallel agent spawning, leaving both 23-04 and 23-05 with uncommitted partial state",
+      "After resume, no SUMMARY.md existed for either Wave 3 plan, requiring manual diagnosis of partial crate state before re-spawning",
+      "The fuse crate was missing lib.rs and most modules; the sdk crate was missing lib.rs and client.rs — indicating agents were mid-task when interrupted"
+    ],
+    "open_items": [
+      "Wave 3 plans 23-04 (cipherbox-fuse) and 23-05 (cipherbox-sdk) need full completion verification and SUMMARY.md creation after retry",
+      "Wave 4 plans 23-06 (desktop thin shell cleanup) and 23-07 (CI/release-please) have not been executed yet",
+      "Phase verification (gsd-verifier, VERIFICATION.md) has not run — phase is not marked complete in ROADMAP.md or STATE.md",
+      "Cross-language parity tests added in 23-03 should be validated against the completed fuse/sdk crates once wave 3 finishes"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T11:05:05.055772Z",
+    "agent_lines": 2436,
+    "human_added": 119,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 2560,
+    "agent_percentage": 95.15625
+  }
+}
