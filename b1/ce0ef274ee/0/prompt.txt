@@ -186,3 +186,7 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 ---
 
 im kinda sorry to do this, but given that the staging database was nuked in phase 19.2 for the datastore migration, and the only user that has currently used the system is me, what say you we just remove all the migration code and make vault v2 the canonical source of truth everywhere dealing away with a whole bunch of migration code that will never be used.
+
+---
+
+yeah I think that we can document the changed scope in the phase context and have it marked as a gap, then gsd plan-phase --gaps to create a plan to close the gap, and then execute that phase. this will provide the cleanest way to document why the migration was removed mid-phase.
