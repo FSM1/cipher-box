@@ -69,11 +69,13 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     match crate::api::ipns::publish_ipns(&state.api, &key_publish_req).await? {
         crate::api::ipns::PublishResult::Success => {}
         crate::api::ipns::PublishResult::Conflict { .. } => {
-            log::warn!("Unexpected conflict on vault key blob publish (sequence 0)");
+            log::warn!("Unexpected conflict on vault key blob publish (sequence 0); aborting vault initialization to avoid mismatched root_folder_key");
+            return Err("Vault initialization aborted due to existing vault key IPNS record".to_string());
         }
     }
 
-    // 2. Publish v1 folder metadata to root folder IPNS (standard folder format)
+    // 2. Publish folder metadata using v1 encrypted envelope format on IPFS ({iv, data});
+    //    FolderMetadata.version remains "v2" (metadata schema version).
     let empty_metadata = crypto::folder::FolderMetadata {
         version: "v2".to_string(),
         children: vec![],

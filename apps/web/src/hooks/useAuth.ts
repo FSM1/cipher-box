@@ -168,7 +168,8 @@ export function useAuth() {
         throw new Error('Failed to publish vault key blob to IPNS');
       }
 
-      // 2. Publish v1 folder metadata to root folder IPNS (standard folder format)
+      // 2. Publish folder metadata using v1 encrypted envelope format on IPFS ({iv, data});
+      //    FolderMetadata.version remains 'v2' (metadata schema version).
       const emptyMetadata: FolderMetadata = { version: 'v2', children: [] };
       const encrypted = await encryptFolderMetadata(emptyMetadata, newVault.rootFolderKey);
       const metadataBlob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });

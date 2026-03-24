@@ -96,5 +96,5 @@ export function deserializeVaultBlobV2(blob: Uint8Array): Uint8Array {
     );
   }
 
-  return blob.slice(3, 3 + keyLen);
+  return blob.subarray(3, 3 + keyLen);
 }
