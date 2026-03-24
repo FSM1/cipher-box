@@ -1,0 +1,124 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6b372c5fae8c",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T23:23:26.211981Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "7a4038870dbd",
+  "token_usage": {
+    "input_tokens": 413,
+    "cache_creation_tokens": 1187910,
+    "cache_read_tokens": 73560874,
+    "output_tokens": 77415,
+    "api_call_count": 363
+  },
+  "session_metrics": {
+    "turn_count": 26
+  },
+  "summary": {
+    "intent": "Complete Phase 23 (Rust SDK Extraction) gap closure by executing plan 23-08 (WinFsp extraction to crate), then run a security review on the phase code, fix findings, add test coverage, and get PR #352 merged.",
+    "outcome": "Phase 23 gap closure completed, security issues fixed (Ed25519 zeroization, redundant Zeroizing wrapper), 163 new Rust unit tests added across 3 crates, PR #352 created and multiple rounds of automated review comments resolved. Windows CI build remains partially broken (WinFsp super:: module resolution) and was handed off to a Windows debugging session that fixed it.",
+    "learnings": {
+      "repo": [
+        "The workspace Cargo.toml [workspace.dependencies] entry must specify default-features = false — the consumer's { workspace = true, default-features = false } alone is insufficient for Cargo to suppress defaults",
+        "[patch.crates-io] forces Cargo to resolve the patched crate across the entire workspace regardless of whether any feature activates it, causing vendored Unix-only crates (fuser) to attempt compilation on Windows",
+        "cipherbox-fuse uses feature flags: 'fuse' = macOS/Linux FUSE, 'winfsp' = Windows WinFSP; they are mutually exclusive and gate entire platform module trees",
+        "All KeyState and CipherBoxFS key fields already use Zeroizing\u003cVec\u003cu8\u003e\u003e with proper cleanup on logout/unmount — the zeroization pattern is established",
+        "generate_ed25519_keypair callers were redundantly wrapping return values in Zeroizing::new() — the double-wrapping was unnecessary after fixing the return type",
+        "The fuse crate's platform/windows/* modules use super:: to reference sibling modules within platform/windows/, not the crate-level modules gated on cfg(feature = 'fuse')",
+        "IpnsPublishRequest derives Debug, which leaked encrypted IPNS key material in logs before the custom Debug impl was added",
+        "fetch_and_populate_folder and resolve_file_pointers_blocking were dead code in both macOS/Linux and Windows operations.rs"
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "line": 1,
+          "end_line": 50,
+          "finding": "generate_ed25519_keypair previously returned bare Vec\u003cu8\u003e for private key — changed to Zeroizing\u003cVec\u003cu8\u003e\u003e to prevent key material surviving in freed memory"
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Root workspace.dependencies entry for cipherbox-fuse needed default-features = false — without this, all workspace members inherited the 'fuse' default feature even with --no-default-features CLI flag"
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 102,
+          "end_line": 103,
+          "finding": "Copy-paste bug: app_version and device_model were being set to device_info.device_id after partial move; needed to extract fields before the move into DeviceEntry"
+        },
+        {
+          "path": "crates/crypto/src/ipns_name.rs",
+          "line": 13,
+          "end_line": 25,
+          "finding": "encode_libp2p_public_key used 'as u8' cast on key length which silently truncates values \u003e 255; changed to return Result with proper length validation"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/src/lib.rs",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Vendored fuser lib.rs wrapped with #[cfg(unix)] include!(lib_impl.rs) pattern to make it a no-op on Windows while preserving all functionality on Unix"
+        },
+        {
+          "path": "crates/api-client/src/auth.rs",
+          "line": 67,
+          "end_line": 67,
+          "finding": "? operator on logout path propagated transport errors before best-effort cleanup; changed to match to handle errors gracefully"
+        },
+        {
+          "path": "crates/fuse/src/platform/linux.rs",
+          "line": 17,
+          "end_line": 40,
+          "finding": "Temp directory cleanup was happening before unmount, meaning cleanup could fail if mount was still active; moved cleanup after successful unmount on both Linux and macOS"
+        },
+        {
+          "path": "crates/fuse/src/Cargo.toml",
+          "line": 1,
+          "end_line": 30,
+          "finding": "fuser and unicode-normalization must stay in regular [dependencies] (optional) not [target.'cfg(unix)'.dependencies] — feature definitions referencing dep:fuser fail on Windows when the dep is target-gated even when the feature isn't activated"
+        }
+      ],
+      "workflow": [
+        "cargo tree -e features is the definitive tool for diagnosing Cargo feature activation issues — it showed cipherbox-desktop activating cipherbox-fuse 'default' feature despite --no-default-features",
+        "When a GSD executor agent disconnects mid-plan, spot-check via git log --oneline to see what was committed, then resume from the bookkeeping steps (SUMMARY.md, STATE.md, ROADMAP.md)",
+        "1Password SSH signing failures are transient — retry 2-3 times before escalating; they don't block lint-staged hooks",
+        "CI roundtripping for platform-specific build issues (especially Windows cross-compilation) is expensive; teleporting the session to the target platform is faster for deep debugging",
+        "cargo check --workspace --no-default-features --features X applies --features to ALL workspace members that have that feature, not just the root package",
+        "Cargo [patch.crates-io] resolves patched crates globally even when no dependency activates them — vendored Unix-only crates need explicit platform guards in their source"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent failed to sign commits repeatedly throughout the session, requiring multiple retries",
+      "API connection error disconnected the initial gsd-executor agent mid-plan, requiring manual resume and bookkeeping",
+      "Windows CI build required 8+ roundtrips through CI (each ~15-20 min) before the root cause (workspace default-features) was identified — teleporting to Windows at iteration 3-4 would have saved significant time",
+      "Cargo workspace feature resolution rules are non-obvious: workspace-level dep definition must carry default-features = false, consumer-level alone is insufficient",
+      "[patch.crates-io] cannot be made conditional (no cfg support), forcing invasive changes to vendored fuser source to make it compile as a no-op on Windows",
+      "CodeRabbit flagged the same ecies.rs min-size check 3 separate times across 3 review rounds despite being resolved and replied to each time"
+    ],
+    "open_items": [
+      "Windows WinFsp super:: module resolution issue was fixed in the Windows debugging session but the fix hasn't been reviewed — need to understand what the actual fix was",
+      "AES-CTR lacks client-side CID verification after IPFS fetch — an attacker controlling the relay could serve tampered ciphertext; marked as HIGH in security review but not addressed this session",
+      "file_ipns_private_key in write_ops.rs uses ed25519_dalek directly (not generate_ed25519_keypair) and is not Zeroizing-wrapped — secondary key generation path left as-is",
+      "build_folder_metadata extracts Zeroizing\u003cVec\u003cu8\u003e\u003e with .to_vec() losing zeroization — spawn_metadata_publish receives plain Vec\u003cu8\u003e; acceptable since it's short-lived but worth revisiting",
+      "Codecov coverage report pending — CI will run cargo llvm-cov on the 163 new tests; actual coverage delta not yet confirmed",
+      "PR #352 has CodeRabbit and Copilot reviews pending — session ended before review results came back"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T23:22:37.224001Z",
+    "agent_lines": 0,
+    "human_added": 116,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 116,
+    "agent_percentage": 0
+  }
+}

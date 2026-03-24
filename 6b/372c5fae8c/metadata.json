@@ -3,7 +3,7 @@
   "checkpoint_id": "6b372c5fae8c",
   "strategy": "manual-commit",
   "branch": "feat/phase-23-rust-sdk-extraction",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     ".planning/ROADMAP.md",
     "crates/api-client/src/ipns.rs",
@@ -15,13 +15,19 @@
       "transcript": "/6b/372c5fae8c/0/full.jsonl",
       "content_hash": "/6b/372c5fae8c/0/content_hash.txt",
       "prompt": "/6b/372c5fae8c/0/prompt.txt"
+    },
+    {
+      "metadata": "/6b/372c5fae8c/1/metadata.json",
+      "transcript": "/6b/372c5fae8c/1/full.jsonl",
+      "content_hash": "/6b/372c5fae8c/1/content_hash.txt",
+      "prompt": "/6b/372c5fae8c/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 18,
-    "cache_creation_tokens": 26178,
-    "cache_read_tokens": 411740,
-    "output_tokens": 3354,
-    "api_call_count": 14
+    "input_tokens": 431,
+    "cache_creation_tokens": 1214088,
+    "cache_read_tokens": 73972614,
+    "output_tokens": 80769,
+    "api_call_count": 377
   }
 }
