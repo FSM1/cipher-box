@@ -1,8 +1,8 @@
 {
-  ".": "0.26.5",
+  ".": "0.26.6",
   "packages/core": "0.25.0",
   "packages/crypto": "0.26.0",
   "packages/api-client": "0.26.0",
   "packages/sdk-core": "0.26.0",
-  "packages/sdk": "0.26.0"
+  "packages/sdk": "0.26.1"
 }
