@@ -47,7 +47,7 @@ urlencoding = "2"
 cipherbox-crypto = { path = "crates/crypto" }
 cipherbox-core = { path = "crates/core" }
 cipherbox-api-client = { path = "crates/api-client" }
-cipherbox-fuse = { path = "crates/fuse" }
+cipherbox-fuse = { path = "crates/fuse", default-features = false }
 cipherbox-sdk = { path = "crates/sdk" }
 
 # Shared dependencies
