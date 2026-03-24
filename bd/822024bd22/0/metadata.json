@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "bd822024bd22",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T07:44:52.114618Z",
+  "branch": "fix/session-restore-race-conditions",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "84714f5da9ca",
+  "token_usage": {
+    "input_tokens": 319,
+    "cache_creation_tokens": 253081,
+    "cache_read_tokens": 35477238,
+    "output_tokens": 82945,
+    "api_call_count": 235
+  },
+  "session_metrics": {
+    "turn_count": 26
+  },
+  "summary": {
+    "intent": "Monitor PR #349 for incoming automated reviews (CodeRabbit, Copilot) and auto-resolve them as they arrive, then capture staging performance baselines before a vault migration deploys.",
+    "outcome": "All 23 review threads across 4 Copilot rounds were resolved with real fixes committed; staging perf baselines were captured via Playwright; a session-restore race condition (root cause of CI failures) was diagnosed, fixed in two layers, and merged as PR #350.",
+    "learnings": {
+      "repo": [
+        "VaultBlobV2 type was removed — functions now return Uint8Array directly; docs referencing VaultBlobV2 were stale",
+        "Old staging code never published vault key blob to IPNS during wallet-created vault flows — IPNS resolve always returned 404 on staging",
+        "Core Kit DKG on Sapphire Devnet dominates login time (9-45s); cipher-box vault-critical path is only ~700-1400ms",
+        "The Axios 401 interceptor in packages/api-client/src/instance.ts already deduplicates refresh on 401 responses, but direct authApi.refresh() calls in the session restore effect were NOT deduplicated",
+        "E2E tests use @johanneskares/wallet-mock with installMockWallet() for wallet injection — real secp256k1 signing, not mocks",
+        "DB schema has unique constraint UQ_folder_ipns_user_ipns on the folder_ipns table",
+        "TEE republishes IPNS records every 3h, making IPNS record expiry a non-issue for vault key blobs",
+        "GSD todos live in .planning/todos/pending/ with a specific markdown format"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 102,
+          "end_line": 146,
+          "finding": "Broad try/catch around getVault() meant any IPFS 404 (missing CID) would be misclassified as a new-user state and trigger vault re-initialization"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 124,
+          "end_line": 125,
+          "finding": "After PR #349, existing vault login tries to resolve vault key IPNS name; if IPNS record not found, throws 'Vault key IPNS name not found' which cascades to Core Kit logout"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 580,
+          "end_line": 594,
+          "finding": "Session restore effect calls initializeOrLoadVault() immediately after setAccessToken() — Zustand state update may not be reflected in Axios interceptor before the vault API call fires"
+        },
+        {
+          "path": "apps/web/src/lib/api/auth.ts",
+          "line": 53,
+          "end_line": 55,
+          "finding": "authApi.refresh() had no deduplication — multiple concurrent React effect cycles on page reload triggered 6 parallel refresh calls, 2 of which returned 401"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1312,
+          "end_line": 1312,
+          "finding": "directRootIpnsName was actually the vault key IPNS name but was being used for root folder traversal — real bug causing incorrect folder resolution in recovery flow"
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 99,
+          "end_line": 99,
+          "finding": "Used slice() (copies buffer) instead of subarray() (zero-copy view) — switched to subarray()"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 72,
+          "end_line": 72,
+          "finding": "Sequence-0 conflict on vault init was warning-and-continuing; changed to abort with error to prevent partial state"
+        }
+      ],
+      "workflow": [
+        "CronCreate with recurring:true enables persistent 5-minute PR monitoring loops; jobs auto-expire after 7 days",
+        "Outside-diff-range review comments don't appear as unresolved GraphQL reviewThreads — need to check review bodies separately",
+        "Playwright network monitoring via page.on('request'/'response') is reliable across navigations; fetch interception via window.fetch override does not survive page navigations",
+        "Module-level shared Promise pattern (let p: Promise|null = null; if(p) return p; p = work().finally(()=\u003ep=null)) is the correct deduplication pattern for concurrent async calls in React hooks",
+        "markdownlint enforces specific rules (no trailing spaces, blank lines around headings, list formatting) that must be satisfied for commits to pass pre-commit hooks"
+      ]
+    },
+    "friction": [
+      "GitHub API timed out on one cron check — transient, retried on next tick",
+      "Outside-diff-range Copilot comments were not caught by the GraphQL unresolved-thread query, requiring manual intervention from the user to flag them",
+      "Playwright MCP sandbox doesn't support Node module imports (require/dynamic import of local packages) — had to write standalone .mjs scripts run via Bash instead",
+      "Web3Auth SIWE on staging uses real OTP verification, blocking interactive wallet login via Playwright MCP; required injecting a mock wallet provider before page load",
+      "Core Kit tKey shares don't persist across Playwright browser contexts, making true session-restore measurement (tab close + reopen) not directly testable",
+      "Staging DB was wiped, so no existing vault data was available for IPNS resolve latency measurement — had to create a vault during the perf run",
+      "Auth/refresh race condition caused 6 concurrent refresh calls on reload, 2 returning 401, which was surfacing as intermittent test failures before root cause was identified"
+    ],
+    "open_items": [
+      "Post-deploy re-measurement: run tests/web-e2e/staging-perf-wallet.mjs against staging after PR #349 deploys to get real vault key IPNS resolve + IPFS fetch latencies for comparison",
+      "True session restore baseline (Core Kit cached session across tab close/reopen) was not measured — mock wallet context doesn't persist tKey shares",
+      "PR #350 (session restore race condition fixes) needs review and merge; CI should confirm the duplicate vault init error is resolved",
+      "Todo .planning/todos/pending/2026-03-24-session-restore-race-conditions.md was moved to done at end of session but not verified in transcript"
+    ]
+  }
+}
