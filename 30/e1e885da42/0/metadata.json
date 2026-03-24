@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "30e1e885da42",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T03:24:23.552294Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7352b4a79b37",
+  "token_usage": {
+    "input_tokens": 23,
+    "cache_creation_tokens": 64434,
+    "cache_read_tokens": 1056325,
+    "output_tokens": 8023,
+    "api_call_count": 19
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Close the single verification gap in Phase 20 (Vault Migration) by generating gap-closure plans, then execute those plans to remove dead migration code from the API and clients.",
+    "outcome": "Two gap-closure plans were created (20-05 and 20-06), verified with full requirements coverage (6/6 REQ-IDs), and Wave 1 (API cleanup) was fully executed. Wave 2 (client cleanup) was spawned but the transcript ends before its completion is confirmed.",
+    "learnings": {
+      "repo": [
+        "Phase 20 (Vault Migration) is now canonical v2-blob-only — no non-migrated users exist, so all PATH B / DB fallback code is dead.",
+        "The vault entity previously stored `encrypted_root_folder_key`, `encrypted_root_ipns_private_key`, and `migrated_at` columns; these are now dropped — server is zero-knowledge.",
+        "The `POST /vault/migrate` endpoint and `migrateVault()` service method have been removed as of Wave 1 execution.",
+        "API client was regenerated after DTO simplification — downstream clients now see only `ownerPublicKey` and `rootIpnsName` on the vault type.",
+        "New web user vault init needs to publish a v2 blob from day one (Wave 2 task) to ensure rootFolderKey is IPFS-native.",
+        "Desktop Rust has non-migrated code paths (`InitVaultRequest` crypto fields, non-migrated branch in `fetch_and_decrypt_vault`) targeted for removal in Wave 2.",
+        "Recovery tool has null handling in export-file path that needs cleanup (Wave 2)."
+      ],
+      "code": [],
+      "workflow": [
+        "GSD gap closure mode (`--gaps-only`) skips research and reads VERIFICATION.md directly to scope planning.",
+        "Plans committed by the planner subagent are not re-committed by the orchestrator — orchestrator checks for existing commits before attempting its own.",
+        "Pre-wave dependency checks look for `key-links` in plan frontmatter; plans that embed links only in the body (not frontmatter) skip this check silently.",
+        "Spot-checks after each wave verify: SUMMARY.md exists, git commits present for that plan, and key created files exist on disk."
+      ]
+    },
+    "friction": [
+      "Orchestrator attempted a redundant commit after plans were already committed by the planner agent — required extra bash calls to detect and skip.",
+      "Pre-wave key-link dependency check produced no signal because links were in the plan body rather than frontmatter, making the check a no-op."
+    ],
+    "open_items": [
+      "Wave 2 (20-06) client cleanup execution was in progress at transcript end — completion and verification not confirmed.",
+      "Phase 20 verification and roadmap update (marking phase complete) not yet run — depends on Wave 2 completing successfully.",
+      "Recovery tool export-file null handling cleanup (part of 20-06) not yet confirmed complete."
+    ]
+  }
+}
