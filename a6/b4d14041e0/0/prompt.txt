@@ -163,3 +163,7 @@ https://github.com/FSM1/cipher-box/actions/runs/23469695046/job/68289553600?pr=3
 ---
 
 the fact that the rust code is quite untested does eek me out a bit. also feels like there is a lot of structure of the TS codebase missing - I am thinking that implementations of both the sdk-core and sdk packages in rust and subsequent reuse of these in all the FUSE code is still yet to be done.
+
+---
+
+I think a milestone is a bit too broad, but a phase with plans to be executed in different environments for each of the 3 platforms is probably doable. Think this phase can be added to the current milestone and worked on fairly independently.
