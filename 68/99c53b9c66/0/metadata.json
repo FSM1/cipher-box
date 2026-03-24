@@ -1,0 +1,138 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6899c53b9c66",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T21:20:03.571821Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Cargo.toml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "d9d2a9b054cb",
+  "token_usage": {
+    "input_tokens": 390,
+    "cache_creation_tokens": 552545,
+    "cache_read_tokens": 69292691,
+    "output_tokens": 73809,
+    "api_call_count": 348
+  },
+  "session_metrics": {
+    "turn_count": 21
+  },
+  "summary": {
+    "intent": "Complete Phase 23 gap closure (WinFsp extraction to crate), run a security review, add Rust test coverage, and get PR #352 merged-ready by fixing CI and resolving all reviewer comments.",
+    "outcome": "All 8 Phase 23 plans completed; 163 new Rust unit tests added across 3 crates; 2 HIGH security findings fixed; PR #352 created with all review threads resolved, though Windows CI failures required multiple iterations to fully resolve.",
+    "learnings": {
+      "repo": [
+        "Cargo [patch.crates-io] at workspace level resolves patched crates globally regardless of feature activation — vendored fuser compiled on Windows even when the 'fuse' feature was off",
+        "workspace.dependencies entries without 'default-features = false' propagate defaults to consumers even when the consumer specifies 'default-features = false' in their own dep block",
+        "cipherbox-fuse 'fuse' feature depends on dep:fuser; placing fuser under [target.'cfg(unix)'.dependencies] breaks the feature definition on Windows because Cargo can't resolve 'dep:fuser' at feature parse time",
+        "The desktop fuse/mod.rs had an unused FolderEntry import that slipped through",
+        "fetch_and_populate_folder and resolve_file_pointers_blocking were dead code in both platform paths (macOS/Linux and Windows operations.rs)",
+        "generate_ed25519_keypair returned bare Vec\u003cu8\u003e for the private key; callers were wrapping in Zeroizing::new() redundantly",
+        "ed25519-dalek missing 'zeroize' feature flag in workspace Cargo.toml — SigningKey was not zeroing on drop",
+        "IpnsPublishRequest derived Debug, leaking encrypted IPNS key material in debug output",
+        "ApiClient.get_bytes was dead code — defined but never called",
+        "Cross-language parity tests: @cipherbox/core imports @cipherbox/crypto types for DTS — crypto must build before core in CI"
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "line": 1,
+          "end_line": 40,
+          "finding": "generate_ed25519_keypair now returns Zeroizing\u003cVec\u003cu8\u003e\u003e for private key; callers in write_ops.rs simplified to use directly"
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 472,
+          "end_line": 500,
+          "finding": "Was wrapping generate_ed25519_keypair result in redundant Zeroizing::new(); now uses Zeroizing\u003cVec\u003cu8\u003e\u003e directly"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "ipns_private_key.try_into() on Zeroizing\u003cVec\u003cu8\u003e\u003e requires .to_vec().try_into() since Zeroizing doesn't implement TryInto\u003c[u8;32]\u003e directly"
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 102,
+          "end_line": 103,
+          "finding": "Copy-paste bug: app_version field was being set to device_info.device_id (already moved) instead of app_version — required saving app_version/device_model before partial move"
+        },
+        {
+          "path": "crates/crypto/src/ipns_name.rs",
+          "line": 13,
+          "end_line": 25,
+          "finding": "encode_libp2p_public_key had unsafe 'as u8' truncation on key length varint; changed to return Result with explicit 32-byte length validation"
+        },
+        {
+          "path": "crates/api-client/src/types.rs",
+          "line": 161,
+          "end_line": 161,
+          "finding": "IpnsPublishRequest needs custom Debug impl that redacts ipns_private_key field"
+        },
+        {
+          "path": "crates/fuse/src/platform/linux.rs",
+          "line": 17,
+          "end_line": 40,
+          "finding": "Temp dir cleanup was happening before unmount — should clean up after successful unmount in all return paths"
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Root workspace Cargo.toml dependency for cipherbox-fuse needed 'default-features = false' to prevent Windows builds from activating the 'fuse' feature through workspace dep resolution"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/src/lib.rs",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Vendored fuser must compile as empty crate on non-Unix; used #[cfg(unix)] include!(\"lib_impl.rs\") pattern to gate all content"
+        },
+        {
+          "path": "crates/api-client/src/auth.rs",
+          "line": 67,
+          "end_line": 67,
+          "finding": "Logout transport errors were propagated via ? before best-effort cleanup path — needed match to handle gracefully"
+        }
+      ],
+      "workflow": [
+        "When a GSD agent disconnects mid-execution, check git log and acceptance criteria before re-running — the code changes may already be committed and only bookkeeping (SUMMARY.md, STATE.md, ROADMAP.md) remains",
+        "1Password SSH agent signing fails intermittently; retry usually succeeds on 2nd or 3rd attempt",
+        "Cargo [patch.crates-io] cannot be made conditional on target — the only reliable way to prevent a patched crate from compiling on a non-target platform is to make the crate itself a no-op (empty lib.rs via cfg) or ensure no feature path activates it",
+        "cargo check --workspace --no-default-features does NOT override workspace.dependencies that omit default-features = false — both the workspace dep definition AND consumer must specify it",
+        "Moving optional deps to [target.'cfg(unix)'.dependencies] breaks feature definitions that reference dep: — Cargo validates dep: references at feature resolution time before target filtering",
+        "pnpm --filter parallel builds don't respect inter-package dependency order; use sequential \u0026\u0026 when packages have build-time dependencies on each other",
+        "CodeRabbit generates new review threads on each push; budget time for multiple resolve-PR-comments rounds per PR",
+        "cargo llvm-cov --workspace in CI automatically picks up any new #[cfg(test)] modules added to workspace crates"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent failed signing on first attempt repeatedly throughout the session, requiring 2-3 retries per commit",
+      "Windows cargo check required 6+ iterations to fully fix — each fix revealed a deeper layer of Cargo feature resolution behavior (dep: in features, workspace default-features, [patch] global resolution)",
+      "GSD executor agent disconnected mid-plan due to API connection error, requiring manual resume and bookkeeping",
+      "CodeRabbit opened new review threads on each push (3 separate rounds of 6-11 threads each), creating significant review overhead",
+      "Cargo [patch.crates-io] documentation doesn't clearly explain that patched crates are always resolved/compiled even when no feature activates them as optional deps",
+      "Cross-language parity CI failure had a misleading error — appeared to be a pnpm version issue but was actually a build-order dependency"
+    ],
+    "open_items": [
+      "AES-CTR client-side CID integrity verification not implemented — client doesn't verify CID after fetching bytes, leaving a bit-flip attack surface for relay-controlled responses (MEDIUM finding from security review)",
+      "file_ipns_private_key in write_ops.rs uses ed25519_dalek SigningKey directly (not via generate_ed25519_keypair) — private key bytes not in Zeroizing wrapper",
+      "Security review found ~5 remaining MEDIUM/LOW findings documented in .planning/security/REVIEW-2026-03-24-phase23.md that were not addressed in this session",
+      "Vendored fuser lib_impl.rs approach is a significant deviation from upstream fuser — future fuser updates will require the same split manually"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T21:19:09.839872Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
