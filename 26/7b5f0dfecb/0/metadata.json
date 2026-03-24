@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "267b5f0dfecb",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T14:07:59.188348Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "95f1623fb119",
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 145073,
+    "cache_read_tokens": 5766412,
+    "output_tokens": 14769,
+    "api_call_count": 74
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Complete Phase 23 gap closure execution (plan 23-08: Windows WinFsp extraction to crate), then run a security review of the Rust SDK extraction code and fix identified vulnerabilities.",
+    "outcome": "Phase 23 fully completed with all 8 plans executed and bookkeeping committed. Security review identified 2 HIGH findings; both were fixed (ed25519-dalek zeroize feature enabled, generate_ed25519_keypair return type hardened). Dead code removed from fuse crate operations files.",
+    "learnings": {
+      "repo": [
+        "Phase 23 is the 'rust-sdk-extraction' phase — moved WinFsp operations from desktop app into cipherbox-fuse crate, fixing a latent compile error where `pub mod windows` had no backing directory.",
+        "All KeyState and CipherBoxFS key fields already use Zeroizing\u003cVec\u003cu8\u003e\u003e — the project has a consistent zeroization pattern for stored keys, but the generation path had a gap.",
+        "The fuse crate has separate platform implementations for macOS/Linux (src/operations.rs, src/write_ops.rs) and Windows (src/platform/windows/), and both must be updated in parallel for any shared logic changes.",
+        "generate_ed25519_keypair callers were wrapping the plain Vec\u003cu8\u003e return in redundant Zeroizing::new() — this pattern indicated awareness of the gap that the fix closes.",
+        "ed25519-dalek SigningKey does NOT zero on drop unless the 'zeroize' feature is explicitly enabled in workspace Cargo.toml.",
+        "The fuse crate uses a spawn_metadata_publish / build_folder_metadata pattern that extracts Zeroizing\u003cVec\u003cu8\u003e\u003e to plain Vec\u003cu8\u003e for passing to metadata publishing — this is an intentional boundary."
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "finding": "generate_ed25519_keypair previously returned bare Vec\u003cu8\u003e for the private key; changed to Zeroizing\u003cVec\u003cu8\u003e\u003e to ensure memory is zeroed on drop."
+        },
+        {
+          "path": "Cargo.toml",
+          "finding": "ed25519-dalek workspace dependency was missing the 'zeroize' feature flag; without it, SigningKey does not zero private key material on drop."
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 472,
+          "end_line": 522,
+          "finding": "Callers of generate_ed25519_keypair were wrapping return value in Zeroizing::new(...clone()); simplified after return type change. Line 522: try_into() on Zeroizing\u003cVec\u003cu8\u003e\u003e requires .into_inner() first since Zeroizing doesn't implement TryInto\u003c[u8;32]\u003e."
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "Same try_into() pattern as macOS path — Zeroizing\u003cVec\u003cu8\u003e\u003e cannot be directly converted with try_into(); must call .into_inner() to extract the Vec\u003cu8\u003e first."
+        },
+        {
+          "path": "crates/fuse/src/operations.rs",
+          "line": 51,
+          "end_line": 85,
+          "finding": "fetch_and_populate_folder and resolve_file_pointers_blocking were dead code — resolve_file_pointers_blocking only called internally, fetch_and_populate_folder had no external callers. Both removed."
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/operations.rs",
+          "finding": "Parallel dead code copies of fetch_and_populate_folder and resolve_file_pointers_blocking existed in the Windows operations file; also removed."
+        }
+      ],
+      "workflow": [
+        "When a GSD subagent disconnects mid-execution, spot-checking git log for phase-plan commits and verifying acceptance criteria allows safe resumption from the bookkeeping step without re-running code changes.",
+        "After a Zeroizing\u003cVec\u003cu8\u003e\u003e return type change, callers using .try_into() to convert to [u8;32] need .into_inner() since Zeroizing doesn't implement TryInto for fixed arrays.",
+        "Dead code removal can be bundled into a security fix PR rather than deferred — the compiler warnings serve as the inventory."
+      ]
+    },
+    "friction": [
+      "1Password SSH agent failed signing 3 consecutive times mid-session, requiring user to manually unblock before the bookkeeping commit could proceed.",
+      "The GSD executor subagent disconnected with a ConnectionRefused API error after being spawned, requiring manual resumption and verification of what had already been committed.",
+      "Zeroizing\u003cVec\u003cu8\u003e\u003e doesn't implement TryInto\u003c[u8;32]\u003e, requiring an into_inner() unwrap that isn't immediately obvious — discovered by tracing the try_into() call sites after changing the return type."
+    ],
+    "open_items": [
+      "file_ipns_private_key in crates/fuse/src/write_ops.rs (~line 174) generates an Ed25519 key via ed25519_dalek directly (not through generate_ed25519_keypair) and returns a plain Vec\u003cu8\u003e — same zeroization gap exists but was noted as out of scope for this fix.",
+      "AES-CTR decryption relies on IPFS CID for integrity but the client doesn't verify the CID after fetching bytes — a HIGH finding in the security review that was not addressed in this session.",
+      "~30 generated test case suggestions in .planning/security/REVIEW-2026-03-24-phase23.md covering AES-GCM, AES-CTR, ECIES, HKDF, Ed25519, and VaultBlob are unimplemented.",
+      "build_folder_metadata / spawn_metadata_publish extracts Zeroizing\u003cVec\u003cu8\u003e\u003e to plain Vec\u003cu8\u003e for passing to metadata publishing — this boundary was noted but not evaluated for whether it should also use Zeroizing."
+    ]
+  }
+}
