@@ -81,3 +81,7 @@ I tried the defaults but seems like its not working on public infra: Failed to r
 ---
 
 ok thats better: Failed to resolve vault from IPFS: IPFS gateway returned 400 for �:�-c�h6I�/���] Z0l...
+
+---
+
+tried that and still no luck
