@@ -116,3 +116,122 @@ const MIME_EXTENSIONS: &[(&str, &str)] = &[
     ("toml", "application/toml"),
     ("wasm", "application/wasm"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_round_trip() {
+        let original = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let hex_str = bytes_to_hex(&original);
+        let decoded = hex_to_bytes(&hex_str).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn hex_to_bytes_lowercase() {
+        let result = hex_to_bytes("deadbeef").unwrap();
+        assert_eq!(result, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn hex_to_bytes_odd_length_fails() {
+        let result = hex_to_bytes("abc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn hex_to_bytes_invalid_chars_fails() {
+        let result = hex_to_bytes("zzzz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn hex_to_bytes_empty_string() {
+        let result = hex_to_bytes("").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn generate_file_key_returns_32_bytes() {
+        let key = generate_file_key();
+        assert_eq!(key.len(), AES_KEY_SIZE);
+    }
+
+    #[test]
+    fn generate_file_key_is_random() {
+        let key1 = generate_file_key();
+        let key2 = generate_file_key();
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn generate_iv_returns_12_bytes() {
+        let iv = generate_iv();
+        assert_eq!(iv.len(), AES_IV_SIZE);
+    }
+
+    #[test]
+    fn generate_iv_is_random() {
+        let iv1 = generate_iv();
+        let iv2 = generate_iv();
+        assert_ne!(iv1, iv2);
+    }
+
+    #[test]
+    fn generate_random_bytes_correct_length() {
+        for len in [0, 1, 16, 32, 64, 256] {
+            let bytes = generate_random_bytes(len);
+            assert_eq!(bytes.len(), len);
+        }
+    }
+
+    #[test]
+    fn clear_bytes_zeros_all() {
+        let mut buf = vec![0xFF; 32];
+        clear_bytes(&mut buf);
+        assert!(buf.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn clear_bytes_empty_slice() {
+        let mut buf: Vec<u8> = vec![];
+        clear_bytes(&mut buf);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn generate_uuid_v4_format() {
+        let uuid = generate_uuid_v4();
+        assert_eq!(uuid.len(), 36);
+        assert_eq!(uuid.chars().nth(8), Some('-'));
+        assert_eq!(uuid.chars().nth(13), Some('-'));
+        assert_eq!(uuid.chars().nth(14), Some('4'));
+        assert_eq!(uuid.chars().nth(18), Some('-'));
+        assert_eq!(uuid.chars().nth(23), Some('-'));
+        let variant_char = uuid.chars().nth(19).unwrap();
+        assert!(matches!(variant_char, '8' | '9' | 'a' | 'b'));
+    }
+
+    #[test]
+    fn mime_from_extension_known() {
+        assert_eq!(mime_from_extension("photo.png"), "image/png");
+        assert_eq!(mime_from_extension("doc.pdf"), "application/pdf");
+        assert_eq!(mime_from_extension("song.mp3"), "audio/mpeg");
+        assert_eq!(mime_from_extension("video.mp4"), "video/mp4");
+        assert_eq!(mime_from_extension("page.html"), "text/html");
+    }
+
+    #[test]
+    fn mime_from_extension_case_insensitive() {
+        assert_eq!(mime_from_extension("IMAGE.PNG"), "image/png");
+        assert_eq!(mime_from_extension("Doc.PDF"), "application/pdf");
+    }
+
+    #[test]
+    fn mime_from_extension_unknown() {
+        assert_eq!(mime_from_extension("file.xyz"), "application/octet-stream");
+        assert_eq!(mime_from_extension("noext"), "application/octet-stream");
+    }
+}

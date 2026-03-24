@@ -134,3 +134,110 @@ pub fn derive_bin_ipns_keypair(
 ) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), CryptoError> {
     derive_ipns_keypair(user_private_key, BIN_HKDF_INFO)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_private_key() -> [u8; 32] {
+        [0xAB; 32]
+    }
+
+    #[test]
+    fn derive_vault_returns_32_byte_keys() {
+        let (priv_key, pub_key, name) = derive_vault_ipns_keypair(&test_private_key()).unwrap();
+        assert_eq!(priv_key.len(), 32);
+        assert_eq!(pub_key.len(), 32);
+        assert!(name.starts_with('k'));
+    }
+
+    #[test]
+    fn derive_vault_key_returns_32_byte_keys() {
+        let (priv_key, pub_key, name) =
+            derive_vault_key_ipns_keypair(&test_private_key()).unwrap();
+        assert_eq!(priv_key.len(), 32);
+        assert_eq!(pub_key.len(), 32);
+        assert!(name.starts_with('k'));
+    }
+
+    #[test]
+    fn derive_registry_returns_32_byte_keys() {
+        let (priv_key, pub_key, name) =
+            derive_registry_ipns_keypair(&test_private_key()).unwrap();
+        assert_eq!(priv_key.len(), 32);
+        assert_eq!(pub_key.len(), 32);
+        assert!(name.starts_with('k'));
+    }
+
+    #[test]
+    fn derive_bin_returns_32_byte_keys() {
+        let (priv_key, pub_key, name) = derive_bin_ipns_keypair(&test_private_key()).unwrap();
+        assert_eq!(priv_key.len(), 32);
+        assert_eq!(pub_key.len(), 32);
+        assert!(name.starts_with('k'));
+    }
+
+    #[test]
+    fn derive_file_returns_32_byte_keys() {
+        let file_id = "abcdefghij";
+        let (priv_key, pub_key, name) =
+            derive_file_ipns_keypair(&test_private_key(), file_id).unwrap();
+        assert_eq!(priv_key.len(), 32);
+        assert_eq!(pub_key.len(), 32);
+        assert!(name.starts_with('k'));
+    }
+
+    #[test]
+    fn determinism_same_input_same_output() {
+        let key = test_private_key();
+        let (priv1, pub1, name1) = derive_vault_ipns_keypair(&key).unwrap();
+        let (priv2, pub2, name2) = derive_vault_ipns_keypair(&key).unwrap();
+        assert_eq!(*priv1, *priv2);
+        assert_eq!(pub1, pub2);
+        assert_eq!(name1, name2);
+    }
+
+    #[test]
+    fn different_derivations_produce_different_outputs() {
+        let key = test_private_key();
+        let (_, vault_pub, vault_name) = derive_vault_ipns_keypair(&key).unwrap();
+        let file_id = "abcdefghijklmnop";
+        let (_, file_pub, file_name) = derive_file_ipns_keypair(&key, file_id).unwrap();
+        assert_ne!(vault_pub, file_pub);
+        assert_ne!(vault_name, file_name);
+    }
+
+    #[test]
+    fn vault_vs_vault_key_produce_different_outputs() {
+        let key = test_private_key();
+        let (_, pub1, name1) = derive_vault_ipns_keypair(&key).unwrap();
+        let (_, pub2, name2) = derive_vault_key_ipns_keypair(&key).unwrap();
+        assert_ne!(pub1, pub2);
+        assert_ne!(name1, name2);
+    }
+
+    #[test]
+    fn derive_file_short_id_fails() {
+        let result = derive_file_ipns_keypair(&test_private_key(), "short");
+        assert!(matches!(result, Err(CryptoError::InvalidFileId)));
+    }
+
+    #[test]
+    fn derive_bin_short_file_id_not_applicable() {
+        // bin derivation doesn't take a file_id, so it should always succeed
+        let result = derive_bin_ipns_keypair(&test_private_key());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn derive_file_exactly_10_chars_succeeds() {
+        let result = derive_file_ipns_keypair(&test_private_key(), "1234567890");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn derive_file_9_chars_fails() {
+        let result = derive_file_ipns_keypair(&test_private_key(), "123456789");
+        assert!(matches!(result, Err(CryptoError::InvalidFileId)));
+    }
+}

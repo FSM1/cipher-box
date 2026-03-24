@@ -85,3 +85,84 @@ pub fn unseal_aes_gcm(sealed: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, CryptoEr
 
     decrypt_aes_gcm(ciphertext, key, &iv)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encrypt_decrypt_round_trip() {
+        let key = [0xABu8; 32];
+        let iv = [0x01u8; 12];
+        let plaintext = b"hello cipherbox";
+
+        let ciphertext = encrypt_aes_gcm(plaintext, &key, &iv).unwrap();
+        let decrypted = decrypt_aes_gcm(&ciphertext, &key, &iv).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn seal_unseal_round_trip() {
+        let key = [0x42u8; 32];
+        let plaintext = b"sealed round trip data";
+
+        let sealed = seal_aes_gcm(plaintext, &key).unwrap();
+        assert!(sealed.len() >= AES_IV_SIZE + AES_TAG_SIZE + plaintext.len());
+
+        let decrypted = unseal_aes_gcm(&sealed, &key).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn decrypt_with_wrong_key_fails() {
+        let key = [0xAAu8; 32];
+        let wrong_key = [0xBBu8; 32];
+        let iv = [0x01u8; 12];
+        let plaintext = b"secret";
+
+        let ciphertext = encrypt_aes_gcm(plaintext, &key, &iv).unwrap();
+        let result = decrypt_aes_gcm(&ciphertext, &wrong_key, &iv);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_corrupted_ciphertext_fails() {
+        let key = [0xAAu8; 32];
+        let iv = [0x01u8; 12];
+        let plaintext = b"secret";
+
+        let mut ciphertext = encrypt_aes_gcm(plaintext, &key, &iv).unwrap();
+        ciphertext[0] ^= 0xFF;
+
+        let result = decrypt_aes_gcm(&ciphertext, &key, &iv);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_plaintext_round_trip() {
+        let key = [0xCCu8; 32];
+        let iv = [0x02u8; 12];
+        let plaintext = b"";
+
+        let ciphertext = encrypt_aes_gcm(plaintext, &key, &iv).unwrap();
+        assert_eq!(ciphertext.len(), AES_TAG_SIZE);
+
+        let decrypted = decrypt_aes_gcm(&ciphertext, &key, &iv).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn unseal_too_short_data_fails() {
+        let key = [0xAAu8; 32];
+        let short = vec![0u8; AES_IV_SIZE + AES_TAG_SIZE - 1];
+        assert!(unseal_aes_gcm(&short, &key).is_err());
+    }
+
+    #[test]
+    fn unseal_with_wrong_key_fails() {
+        let key = [0xAAu8; 32];
+        let wrong_key = [0xBBu8; 32];
+        let sealed = seal_aes_gcm(b"data", &key).unwrap();
+        assert!(unseal_aes_gcm(&sealed, &wrong_key).is_err());
+    }
+}

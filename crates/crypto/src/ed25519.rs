@@ -88,3 +88,80 @@ pub fn get_public_key(private_key: &[u8]) -> Result<Vec<u8>, CryptoError> {
 
     Ok(verifying_key.to_bytes().to_vec())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_keypair_sizes() {
+        let (public_key, private_key) = generate_ed25519_keypair();
+        assert_eq!(public_key.len(), ED25519_PUBLIC_KEY_SIZE);
+        assert_eq!(private_key.len(), ED25519_PRIVATE_KEY_SIZE);
+    }
+
+    #[test]
+    fn sign_verify_round_trip() {
+        let (public_key, private_key) = generate_ed25519_keypair();
+        let message = b"test message for signing";
+
+        let signature = sign_ed25519(message, &private_key).unwrap();
+        assert_eq!(signature.len(), ED25519_SIGNATURE_SIZE);
+        assert!(verify_ed25519(message, &signature, &public_key));
+    }
+
+    #[test]
+    fn verify_wrong_message_returns_false() {
+        let (public_key, private_key) = generate_ed25519_keypair();
+        let signature = sign_ed25519(b"original", &private_key).unwrap();
+        assert!(!verify_ed25519(b"tampered", &signature, &public_key));
+    }
+
+    #[test]
+    fn verify_wrong_key_returns_false() {
+        let (_, private_key) = generate_ed25519_keypair();
+        let (other_public_key, _) = generate_ed25519_keypair();
+        let message = b"test";
+
+        let signature = sign_ed25519(message, &private_key).unwrap();
+        assert!(!verify_ed25519(message, &signature, &other_public_key));
+    }
+
+    #[test]
+    fn sign_with_invalid_key_size_fails() {
+        let result = sign_ed25519(b"msg", &[0u8; 16]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_with_bad_signature_size_returns_false() {
+        let (public_key, _) = generate_ed25519_keypair();
+        assert!(!verify_ed25519(b"msg", &[0u8; 32], &public_key));
+    }
+
+    #[test]
+    fn verify_with_bad_public_key_size_returns_false() {
+        assert!(!verify_ed25519(b"msg", &[0u8; 64], &[0u8; 16]));
+    }
+
+    #[test]
+    fn get_public_key_determinism() {
+        let (_, private_key) = generate_ed25519_keypair();
+        let pk1 = get_public_key(&private_key).unwrap();
+        let pk2 = get_public_key(&private_key).unwrap();
+        assert_eq!(pk1, pk2);
+    }
+
+    #[test]
+    fn get_public_key_matches_generated() {
+        let (public_key, private_key) = generate_ed25519_keypair();
+        let derived = get_public_key(&private_key).unwrap();
+        assert_eq!(derived, public_key);
+    }
+
+    #[test]
+    fn get_public_key_invalid_size_fails() {
+        let result = get_public_key(&[0u8; 16]);
+        assert!(result.is_err());
+    }
+}

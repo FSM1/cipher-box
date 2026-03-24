@@ -45,3 +45,62 @@ pub fn unwrap_key(wrapped: &[u8], private_key: &[u8]) -> Result<Vec<u8>, CryptoE
 
     ecies::decrypt(private_key, wrapped).map_err(|_| CryptoError::EciesUnwrappingFailed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn generate_secp256k1_keypair() -> (Vec<u8>, Vec<u8>) {
+        let (sk, pk) = ecies::utils::generate_keypair();
+        let sk_bytes = sk.serialize().to_vec();
+        let pk_bytes = pk.serialize().to_vec();
+        (sk_bytes, pk_bytes)
+    }
+
+    #[test]
+    fn wrap_unwrap_round_trip() {
+        let (sk, pk) = generate_secp256k1_keypair();
+        let data = b"secret key material";
+
+        let wrapped = wrap_key(data, &pk).unwrap();
+        let unwrapped = unwrap_key(&wrapped, &sk).unwrap();
+        assert_eq!(unwrapped, data);
+    }
+
+    #[test]
+    fn unwrap_with_wrong_private_key_fails() {
+        let (_sk, pk) = generate_secp256k1_keypair();
+        let (wrong_sk, _) = generate_secp256k1_keypair();
+        let data = b"secret";
+
+        let wrapped = wrap_key(data, &pk).unwrap();
+        let result = unwrap_key(&wrapped, &wrong_sk);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn wrap_with_invalid_public_key_fails() {
+        let result = wrap_key(b"data", &[0u8; 65]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn wrap_with_wrong_size_public_key_fails() {
+        let result = wrap_key(b"data", &[0x04; 33]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unwrap_truncated_ciphertext_fails() {
+        let (sk, _) = generate_secp256k1_keypair();
+        let short = vec![0u8; ECIES_MIN_CIPHERTEXT_SIZE - 1];
+        let result = unwrap_key(&short, &sk);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unwrap_with_invalid_private_key_size_fails() {
+        let result = unwrap_key(&[0u8; 100], &[0u8; 16]);
+        assert!(result.is_err());
+    }
+}

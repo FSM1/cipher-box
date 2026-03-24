@@ -119,3 +119,119 @@ pub fn decrypt_aes_ctr_range(
 
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_key() -> [u8; 32] {
+        [0xABu8; 32]
+    }
+
+    fn test_iv() -> [u8; 16] {
+        [0x01u8; 16]
+    }
+
+    #[test]
+    fn encrypt_decrypt_round_trip() {
+        let key = test_key();
+        let iv = test_iv();
+        let plaintext = b"hello aes-ctr mode";
+
+        let ciphertext = encrypt_aes_ctr(plaintext, &key, &iv).unwrap();
+        assert_eq!(ciphertext.len(), plaintext.len());
+        assert_ne!(ciphertext, plaintext);
+
+        let decrypted = decrypt_aes_ctr(&ciphertext, &key, &iv).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn range_decrypt_full_range() {
+        let key = test_key();
+        let iv = test_iv();
+        let plaintext = b"full range decryption test data!";
+
+        let ciphertext = encrypt_aes_ctr(plaintext, &key, &iv).unwrap();
+        let decrypted =
+            decrypt_aes_ctr_range(&ciphertext, &key, &iv, 0, plaintext.len() - 1).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn range_decrypt_partial_from_start() {
+        let key = test_key();
+        let iv = test_iv();
+        let plaintext = b"partial range from start";
+
+        let ciphertext = encrypt_aes_ctr(plaintext, &key, &iv).unwrap();
+        let decrypted = decrypt_aes_ctr_range(&ciphertext, &key, &iv, 0, 6).unwrap();
+        assert_eq!(decrypted, &plaintext[0..7]);
+    }
+
+    #[test]
+    fn range_decrypt_mid_block_offset() {
+        let key = test_key();
+        let iv = test_iv();
+        let plaintext = b"mid-block offset at byte seven!!";
+
+        let ciphertext = encrypt_aes_ctr(plaintext, &key, &iv).unwrap();
+        let decrypted = decrypt_aes_ctr_range(&ciphertext, &key, &iv, 7, 15).unwrap();
+        assert_eq!(decrypted, &plaintext[7..16]);
+    }
+
+    #[test]
+    fn range_decrypt_spanning_multiple_blocks() {
+        let key = test_key();
+        let iv = test_iv();
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(1024).collect();
+
+        let ciphertext = encrypt_aes_ctr(&plaintext, &key, &iv).unwrap();
+        let decrypted = decrypt_aes_ctr_range(&ciphertext, &key, &iv, 100, 599).unwrap();
+        assert_eq!(decrypted, &plaintext[100..600]);
+    }
+
+    #[test]
+    fn range_decrypt_single_byte() {
+        let key = test_key();
+        let iv = test_iv();
+        let plaintext = b"single byte test";
+
+        let ciphertext = encrypt_aes_ctr(plaintext, &key, &iv).unwrap();
+        let decrypted = decrypt_aes_ctr_range(&ciphertext, &key, &iv, 5, 5).unwrap();
+        assert_eq!(decrypted, &plaintext[5..6]);
+    }
+
+    #[test]
+    fn range_decrypt_empty_ciphertext() {
+        let key = test_key();
+        let iv = test_iv();
+        let result = decrypt_aes_ctr_range(&[], &key, &iv, 0, 0).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn range_decrypt_start_beyond_data() {
+        let key = test_key();
+        let iv = test_iv();
+        let ciphertext = vec![0u8; 16];
+        let result = decrypt_aes_ctr_range(&ciphertext, &key, &iv, 100, 200).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn range_decrypt_invalid_range() {
+        let key = test_key();
+        let iv = test_iv();
+        let result = decrypt_aes_ctr_range(&[0u8; 32], &key, &iv, 10, 5);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_plaintext_round_trip() {
+        let key = test_key();
+        let iv = test_iv();
+        let ciphertext = encrypt_aes_ctr(b"", &key, &iv).unwrap();
+        assert!(ciphertext.is_empty());
+    }
+}

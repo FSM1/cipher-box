@@ -112,3 +112,112 @@ fn encode_base36(data: &[u8]) -> String {
     result.reverse();
     String::from_utf8(result).unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_ipns_name_starts_with_k() {
+        let pk = [0xAB; 32];
+        let name = derive_ipns_name(&pk).unwrap();
+        assert!(name.starts_with('k'));
+    }
+
+    #[test]
+    fn same_key_produces_same_name() {
+        let pk = [0x42; 32];
+        let name1 = derive_ipns_name(&pk).unwrap();
+        let name2 = derive_ipns_name(&pk).unwrap();
+        assert_eq!(name1, name2);
+    }
+
+    #[test]
+    fn different_keys_produce_different_names() {
+        let pk1 = [0x01; 32];
+        let pk2 = [0x02; 32];
+        let name1 = derive_ipns_name(&pk1).unwrap();
+        let name2 = derive_ipns_name(&pk2).unwrap();
+        assert_ne!(name1, name2);
+    }
+
+    #[test]
+    fn encode_unsigned_varint_zero() {
+        let mut buf = Vec::new();
+        encode_unsigned_varint(&mut buf, 0);
+        assert_eq!(buf, vec![0x00]);
+    }
+
+    #[test]
+    fn encode_unsigned_varint_one() {
+        let mut buf = Vec::new();
+        encode_unsigned_varint(&mut buf, 1);
+        assert_eq!(buf, vec![0x01]);
+    }
+
+    #[test]
+    fn encode_unsigned_varint_127() {
+        let mut buf = Vec::new();
+        encode_unsigned_varint(&mut buf, 127);
+        assert_eq!(buf, vec![0x7F]);
+    }
+
+    #[test]
+    fn encode_unsigned_varint_128() {
+        let mut buf = Vec::new();
+        encode_unsigned_varint(&mut buf, 128);
+        assert_eq!(buf, vec![0x80, 0x01]);
+    }
+
+    #[test]
+    fn encode_unsigned_varint_255() {
+        let mut buf = Vec::new();
+        encode_unsigned_varint(&mut buf, 255);
+        assert_eq!(buf, vec![0xFF, 0x01]);
+    }
+
+    #[test]
+    fn encode_unsigned_varint_300() {
+        let mut buf = Vec::new();
+        encode_unsigned_varint(&mut buf, 300);
+        // 300 = 0b100101100 => low 7: 0101100 = 0x2C | 0x80 = 0xAC, high: 0b10 = 0x02
+        assert_eq!(buf, vec![0xAC, 0x02]);
+    }
+
+    #[test]
+    fn encode_unsigned_varint_16384() {
+        let mut buf = Vec::new();
+        encode_unsigned_varint(&mut buf, 16384);
+        // 16384 = 0x4000 => 3 varint bytes
+        assert_eq!(buf, vec![0x80, 0x80, 0x01]);
+    }
+
+    #[test]
+    fn encode_base36_empty() {
+        assert_eq!(encode_base36(&[]), "");
+    }
+
+    #[test]
+    fn encode_base36_single_byte() {
+        // 0x01 = 1 in base36 = "1"
+        assert_eq!(encode_base36(&[0x01]), "1");
+    }
+
+    #[test]
+    fn encode_base36_leading_zeros() {
+        let result = encode_base36(&[0x00, 0x00, 0x01]);
+        assert!(result.starts_with("00"));
+    }
+
+    #[test]
+    fn encode_libp2p_public_key_format() {
+        let pk = [0xAA; 32];
+        let encoded = encode_libp2p_public_key(&pk);
+        assert_eq!(encoded[0], 0x08); // field 1 tag
+        assert_eq!(encoded[1], 0x01); // Ed25519 type
+        assert_eq!(encoded[2], 0x12); // field 2 tag
+        assert_eq!(encoded[3], 32);   // length
+        assert_eq!(&encoded[4..], &pk);
+        assert_eq!(encoded.len(), 4 + 32);
+    }
+}
