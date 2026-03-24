@@ -14,6 +14,8 @@
 import {
   encryptFolderMetadata,
   decryptFolderMetadata,
+  detectBlobVersion,
+  deserializeVaultBlobV2,
   createIpnsRecord,
   marshalIpnsRecord,
   type FolderMetadata,
@@ -961,11 +963,20 @@ export async function fetchAndDecryptMetadata(
   // 1. Fetch encrypted metadata blob from IPFS
   const encryptedBytes = await fetchFromIpfs(cid);
 
-  // 2. Parse as JSON to get EncryptedFolderMetadata (contains iv and data fields)
-  const encryptedJson = new TextDecoder().decode(encryptedBytes);
+  // 2. Handle v2 blob: strip header to extract metadata portion
+  let metadataBytes: Uint8Array;
+  if (detectBlobVersion(encryptedBytes) === 2) {
+    const { encryptedMetadataJson } = deserializeVaultBlobV2(encryptedBytes);
+    metadataBytes = encryptedMetadataJson;
+  } else {
+    metadataBytes = encryptedBytes;
+  }
+
+  // 3. Parse as JSON to get EncryptedFolderMetadata (contains iv and data fields)
+  const encryptedJson = new TextDecoder().decode(metadataBytes);
   const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
 
-  // 3. Decrypt using folder key
+  // 4. Decrypt using folder key
   const metadata = await decryptFolderMetadata(encrypted, folderKey);
 
   return metadata;

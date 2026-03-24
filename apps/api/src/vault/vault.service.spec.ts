@@ -50,15 +50,11 @@ describe('VaultService', () => {
   const testUserId = '550e8400-e29b-41d4-a716-446655440000';
   const testVaultId = '660e8400-e29b-41d4-a716-446655440001';
   const testOwnerPublicKey = '04' + 'a'.repeat(128); // 65 bytes uncompressed pubkey
-  const testEncryptedRootFolderKey = 'b'.repeat(64);
-  const testEncryptedRootIpnsPrivateKey = 'c'.repeat(128);
   const testRootIpnsName = 'k51qzi5uqu5dg12345';
   const mockVaultEntity: Vault = {
     id: testVaultId,
     ownerId: testUserId,
     ownerPublicKey: Buffer.from(testOwnerPublicKey, 'hex'),
-    encryptedRootFolderKey: Buffer.from(testEncryptedRootFolderKey, 'hex'),
-    encryptedRootIpnsPrivateKey: Buffer.from(testEncryptedRootIpnsPrivateKey, 'hex'),
     rootIpnsName: testRootIpnsName,
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     initializedAt: null,
@@ -68,8 +64,6 @@ describe('VaultService', () => {
 
   const testInitVaultDto: InitVaultDto = {
     ownerPublicKey: testOwnerPublicKey,
-    encryptedRootFolderKey: testEncryptedRootFolderKey,
-    encryptedRootIpnsPrivateKey: testEncryptedRootIpnsPrivateKey,
     rootIpnsName: testRootIpnsName,
   };
 
@@ -176,8 +170,6 @@ describe('VaultService', () => {
       expect(mockVaultRepo.create).toHaveBeenCalledWith({
         ownerId: testUserId,
         ownerPublicKey: Buffer.from(testOwnerPublicKey, 'hex'),
-        encryptedRootFolderKey: Buffer.from(testEncryptedRootFolderKey, 'hex'),
-        encryptedRootIpnsPrivateKey: Buffer.from(testEncryptedRootIpnsPrivateKey, 'hex'),
         rootIpnsName: testRootIpnsName,
         initializedAt: null,
       });
@@ -206,8 +198,6 @@ describe('VaultService', () => {
 
       const createCall = mockVaultRepo.create.mock.calls[0][0];
       expect(Buffer.isBuffer(createCall.ownerPublicKey)).toBe(true);
-      expect(Buffer.isBuffer(createCall.encryptedRootFolderKey)).toBe(true);
-      expect(Buffer.isBuffer(createCall.encryptedRootIpnsPrivateKey)).toBe(true);
     });
 
     it('should throw ConflictException if vault already exists', async () => {
@@ -228,16 +218,12 @@ describe('VaultService', () => {
     it('should handle valid hex strings of various lengths', async () => {
       const shortHexDto: InitVaultDto = {
         ownerPublicKey: 'aabb',
-        encryptedRootFolderKey: 'ccdd',
-        encryptedRootIpnsPrivateKey: 'eeff',
         rootIpnsName: testRootIpnsName,
       };
 
       const shortVault = {
         ...mockVaultEntity,
         ownerPublicKey: Buffer.from('aabb', 'hex'),
-        encryptedRootFolderKey: Buffer.from('ccdd', 'hex'),
-        encryptedRootIpnsPrivateKey: Buffer.from('eeff', 'hex'),
       };
 
       mockVaultRepo.findOne.mockResolvedValue(null);
@@ -247,8 +233,6 @@ describe('VaultService', () => {
       const result = await service.initializeVault(testUserId, shortHexDto);
 
       expect(result.ownerPublicKey).toBe('aabb');
-      expect(result.encryptedRootFolderKey).toBe('ccdd');
-      expect(result.encryptedRootIpnsPrivateKey).toBe('eeff');
     });
   });
 
@@ -264,8 +248,6 @@ describe('VaultService', () => {
       expect(result).toEqual({
         id: testVaultId,
         ownerPublicKey: testOwnerPublicKey,
-        encryptedRootFolderKey: testEncryptedRootFolderKey,
-        encryptedRootIpnsPrivateKey: testEncryptedRootIpnsPrivateKey,
         rootIpnsName: testRootIpnsName,
         createdAt: mockVaultEntity.createdAt,
         initializedAt: null,
@@ -541,12 +523,6 @@ describe('VaultService', () => {
 
       // Verify hex encoding
       expect(result.ownerPublicKey).toBe(mockVaultEntity.ownerPublicKey.toString('hex'));
-      expect(result.encryptedRootFolderKey).toBe(
-        mockVaultEntity.encryptedRootFolderKey.toString('hex')
-      );
-      expect(result.encryptedRootIpnsPrivateKey).toBe(
-        mockVaultEntity.encryptedRootIpnsPrivateKey.toString('hex')
-      );
       expect(result.initializedAt).toEqual(vaultWithInitialized.initializedAt);
     });
 
@@ -630,7 +606,7 @@ describe('VaultService', () => {
   });
 
   describe('getExportData', () => {
-    it('should return export DTO with hex-encoded keys and derivation method', async () => {
+    it('should return export DTO with rootIpnsName and derivation method', async () => {
       mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
       mockUserRepo.findOne.mockResolvedValue({
         id: testUserId,
@@ -641,8 +617,6 @@ describe('VaultService', () => {
       expect(result.format).toBe('cipherbox-vault-export');
       expect(result.version).toBe('1.0');
       expect(result.rootIpnsName).toBe(testRootIpnsName);
-      expect(result.encryptedRootFolderKey).toBe(testEncryptedRootFolderKey);
-      expect(result.encryptedRootIpnsPrivateKey).toBe(testEncryptedRootIpnsPrivateKey);
       expect(result.exportedAt).toBeDefined();
       expect(result.derivationMethod).toBe('web3auth');
     });

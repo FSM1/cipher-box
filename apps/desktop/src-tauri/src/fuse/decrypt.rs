@@ -1,18 +1,34 @@
 //! Shared decrypt functions for folder and file metadata.
 //! Used by CipherBoxFS::drain_refresh_completions() which is platform-agnostic.
 
-/// Decrypt folder metadata from IPFS encrypted JSON format.
+/// Decrypt folder metadata from IPFS encrypted format.
+///
+/// Handles both v1 (JSON `{"iv":"...","data":"..."}`) and v2 blob
+/// (binary envelope with ECIES-wrapped key header). For v2 blobs,
+/// the key header is stripped and only the metadata JSON portion is decrypted.
 pub fn decrypt_metadata_from_ipfs_public(
     encrypted_bytes: &[u8],
     folder_key: &[u8],
 ) -> Result<crate::crypto::folder::FolderMetadata, String> {
+    // Detect v1 vs v2 blob format
+    let json_portion = if crate::crypto::vault_blob::detect_blob_version(encrypted_bytes) == 2 {
+        // v2 blob: strip the key header, use only the metadata JSON portion
+        let (_enc_key, metadata_json) =
+            crate::crypto::vault_blob::deserialize_vault_blob_v2(encrypted_bytes)
+                .map_err(|e| format!("Failed to parse v2 vault blob: {}", e))?;
+        metadata_json
+    } else {
+        // v1: entire payload is JSON
+        encrypted_bytes
+    };
+
     #[derive(serde::Deserialize)]
     struct EncryptedFolderMetadata {
         iv: String,
         data: String,
     }
 
-    let encrypted: EncryptedFolderMetadata = serde_json::from_slice(encrypted_bytes)
+    let encrypted: EncryptedFolderMetadata = serde_json::from_slice(json_portion)
         .map_err(|e| format!("Failed to parse encrypted metadata JSON: {}", e))?;
 
     let iv_bytes =

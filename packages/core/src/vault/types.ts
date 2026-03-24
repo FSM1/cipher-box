@@ -35,3 +35,19 @@ export type EncryptedVaultKeys = {
   /** IPNS private key ECIES-wrapped with user's publicKey */
   encryptedIpnsPrivateKey: Uint8Array;
 };
+
+/**
+ * Parsed vault blob v2 components.
+ *
+ * Binary format: 0x02 | uint16_BE(key_len) | encrypted_key | encrypted_metadata_json
+ *
+ * The encrypted key is the ECIES-wrapped rootFolderKey (typically 129 bytes
+ * for a 32-byte plaintext key). The encrypted metadata JSON is the existing
+ * AES-GCM encrypted folder metadata (variable length).
+ */
+export type VaultBlobV2 = {
+  /** ECIES-encrypted rootFolderKey (129 bytes for 32-byte key) */
+  encryptedRootFolderKey: Uint8Array;
+  /** AES-GCM encrypted folder metadata JSON bytes */
+  encryptedMetadataJson: Uint8Array;
+};

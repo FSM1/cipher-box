@@ -12,10 +12,6 @@ export interface VaultResponseDto {
   id: string;
   /** User secp256k1 public key (uncompressed, 65 bytes, hex-encoded) */
   ownerPublicKey: string;
-  /** ECIES-wrapped root folder AES-256 key (hex-encoded) */
-  encryptedRootFolderKey: string;
-  /** ECIES-wrapped Ed25519 IPNS private key (hex-encoded) */
-  encryptedRootIpnsPrivateKey: string;
   /** IPNS name for root folder */
   rootIpnsName: string;
   /** Vault creation timestamp */

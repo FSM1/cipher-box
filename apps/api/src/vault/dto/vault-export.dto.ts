@@ -3,7 +3,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 /**
  * Response DTO for vault export.
  * Contains the minimal data needed for independent recovery:
- * root IPNS name + encrypted root keys.
+ * root IPNS name + derivation hints.
  */
 export class VaultExportDto {
   @ApiProperty({
@@ -29,18 +29,6 @@ export class VaultExportDto {
     example: 'k51qzi5uqu5dg...',
   })
   rootIpnsName!: string;
-
-  @ApiProperty({
-    description: 'ECIES-wrapped root folder AES-256 key (hex-encoded)',
-    example: 'a1b2c3d4e5f6...',
-  })
-  encryptedRootFolderKey!: string;
-
-  @ApiProperty({
-    description: 'ECIES-wrapped Ed25519 IPNS private key (hex-encoded)',
-    example: 'a1b2c3d4e5f6...',
-  })
-  encryptedRootIpnsPrivateKey!: string;
 
   @ApiPropertyOptional({
     description:

@@ -67,8 +67,6 @@ export class VaultService {
     const vault = this.vaultRepository.create({
       ownerId: userId,
       ownerPublicKey: Buffer.from(dto.ownerPublicKey, 'hex'),
-      encryptedRootFolderKey: Buffer.from(dto.encryptedRootFolderKey, 'hex'),
-      encryptedRootIpnsPrivateKey: Buffer.from(dto.encryptedRootIpnsPrivateKey, 'hex'),
       rootIpnsName: dto.rootIpnsName,
       initializedAt: null,
     });
@@ -213,8 +211,6 @@ export class VaultService {
       version: '1.0',
       exportedAt: new Date().toISOString(),
       rootIpnsName: vault.rootIpnsName,
-      encryptedRootFolderKey: vault.encryptedRootFolderKey.toString('hex'),
-      encryptedRootIpnsPrivateKey: vault.encryptedRootIpnsPrivateKey.toString('hex'),
       derivationMethod: user ? 'web3auth' : null,
     };
   }
@@ -226,8 +222,6 @@ export class VaultService {
     return {
       id: vault.id,
       ownerPublicKey: vault.ownerPublicKey.toString('hex'),
-      encryptedRootFolderKey: vault.encryptedRootFolderKey.toString('hex'),
-      encryptedRootIpnsPrivateKey: vault.encryptedRootIpnsPrivateKey.toString('hex'),
       rootIpnsName: vault.rootIpnsName,
       createdAt: vault.createdAt,
       initializedAt: vault.initializedAt,

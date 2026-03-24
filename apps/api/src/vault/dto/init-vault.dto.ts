@@ -17,28 +17,6 @@ export class InitVaultDto {
   ownerPublicKey!: string;
 
   @ApiProperty({
-    description: 'ECIES-wrapped root folder AES-256 key (hex-encoded)',
-    example: 'a1b2c3d4e5f6...',
-  })
-  @IsString()
-  @IsNotEmpty()
-  @Matches(/^[0-9a-fA-F]+$/, {
-    message: 'encryptedRootFolderKey must be hex-encoded',
-  })
-  encryptedRootFolderKey!: string;
-
-  @ApiProperty({
-    description: 'ECIES-wrapped Ed25519 IPNS private key (hex-encoded)',
-    example: 'a1b2c3d4e5f6...',
-  })
-  @IsString()
-  @IsNotEmpty()
-  @Matches(/^[0-9a-fA-F]+$/, {
-    message: 'encryptedRootIpnsPrivateKey must be hex-encoded',
-  })
-  encryptedRootIpnsPrivateKey!: string;
-
-  @ApiProperty({
     description: 'IPNS name (libp2p-key multihash, base58btc or base36)',
     example: 'k51qzi5uqu5dg...',
   })
@@ -62,18 +40,6 @@ export class VaultResponseDto {
     example: '04a1b2c3d4e5f6...(130 hex characters for 65 bytes with 0x04 prefix)',
   })
   ownerPublicKey!: string;
-
-  @ApiProperty({
-    description: 'ECIES-wrapped root folder AES-256 key (hex-encoded)',
-    example: 'a1b2c3d4e5f6...',
-  })
-  encryptedRootFolderKey!: string;
-
-  @ApiProperty({
-    description: 'ECIES-wrapped Ed25519 IPNS private key (hex-encoded)',
-    example: 'a1b2c3d4e5f6...',
-  })
-  encryptedRootIpnsPrivateKey!: string;
 
   @ApiProperty({
     description: 'IPNS name for root folder',

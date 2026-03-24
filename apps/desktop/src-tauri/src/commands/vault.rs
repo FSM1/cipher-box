@@ -29,34 +29,13 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         crypto::hkdf::derive_vault_ipns_keypair(&private_key_arr)
             .map_err(|e| format!("Vault IPNS derivation failed: {:?}", e))?;
 
-    // ECIES-wrap keys with user's uncompressed secp256k1 public key
+    // ECIES-wrap rootFolderKey with user's uncompressed secp256k1 public key (for v2 blob header)
     let encrypted_root_folder_key = crypto::ecies::wrap_key(&root_folder_key, public_key)
         .map_err(|e| format!("Failed to wrap root folder key: {}", e))?;
-    let encrypted_ipns_private_key = crypto::ecies::wrap_key(&ipns_private_key, public_key)
-        .map_err(|e| format!("Failed to wrap IPNS private key: {}", e))?;
 
-    // 1. Register vault with backend
-    let init_req = types::InitVaultRequest {
-        owner_public_key: hex::encode(public_key),
-        encrypted_root_folder_key: hex::encode(&encrypted_root_folder_key),
-        encrypted_root_ipns_private_key: hex::encode(&encrypted_ipns_private_key),
-        root_ipns_name: root_ipns_name.clone(),
-    };
-
-    let resp = state
-        .api
-        .authenticated_post("/vault/init", &init_req)
-        .await
-        .map_err(|e| format!("Vault init request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Vault init failed ({}): {}", status, body));
-    }
-
-    // 2. Create and publish initial empty folder metadata
-    //    Without this, FUSE init() can't resolve the root IPNS name.
+    // 1. Create and publish initial empty folder metadata to IPFS BEFORE registering
+    //    with backend. This ensures the v2 blob is durable before the vault row exists,
+    //    avoiding a bricked state if IPFS upload/publish fails.
     log::info!("Publishing initial empty root folder metadata");
 
     let empty_metadata = crypto::folder::FolderMetadata {
@@ -64,16 +43,17 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         children: vec![],
     };
 
-    // Encrypt metadata with root folder key
+    // Encrypt metadata with root folder key and produce v2 blob
     let folder_key_arr: [u8; 32] = root_folder_key
+        .as_slice()
         .try_into()
         .map_err(|_| "Invalid root folder key length".to_string())?;
     let sealed = crypto::folder::encrypt_folder_metadata(&empty_metadata, &folder_key_arr)
         .map_err(|e| format!("Metadata encryption failed: {}", e))?;
 
     // Format as JSON { "iv": "<hex>", "data": "<base64>" }
-    let iv_hex = hex::encode(&sealed[..12]);
     use base64::Engine;
+    let iv_hex = hex::encode(&sealed[..12]);
     let data_base64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
     let json_metadata = serde_json::json!({
         "iv": iv_hex,
@@ -82,8 +62,12 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     let json_bytes = serde_json::to_vec(&json_metadata)
         .map_err(|e| format!("JSON serialization failed: {}", e))?;
 
-    // Upload encrypted metadata to IPFS
-    let initial_cid = crate::api::ipfs::upload_content(&state.api, &json_bytes).await?;
+    // Wrap rootFolderKey in v2 blob envelope -- reuse the ECIES-wrapped key from above
+    let blob_bytes =
+        crypto::vault_blob::serialize_vault_blob_v2(&encrypted_root_folder_key, &json_bytes)?;
+
+    // Upload v2 blob to IPFS
+    let initial_cid = crate::api::ipfs::upload_content(&state.api, &blob_bytes).await?;
 
     // Create and sign IPNS record (sequence 0, 24h lifetime)
     let ipns_key_arr: [u8; 32] = ipns_private_key.as_slice()
@@ -113,17 +97,32 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         }
     }
 
+    // 2. Register vault with backend AFTER v2 blob is durable on IPFS
+    let init_req = types::InitVaultRequest {
+        owner_public_key: hex::encode(public_key),
+        root_ipns_name: root_ipns_name.clone(),
+    };
+
+    let resp = state
+        .api
+        .authenticated_post("/vault/init", &init_req)
+        .await
+        .map_err(|e| format!("Vault init request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Vault init failed ({}): {}", status, body));
+    }
+
     log::info!("Vault initialized and root metadata published for new user");
     Ok(())
 }
 
-/// Fetch vault keys from backend and decrypt them using the user's private key.
+/// Fetch vault from backend and decrypt rootFolderKey from IPFS v2 blob.
 ///
-/// Decrypts:
-/// - Root folder AES-256 key (32 bytes) from ECIES-wrapped hex
-/// - Root IPNS Ed25519 private key (32 bytes) from ECIES-wrapped hex
-///
-/// The IPNS public key is derivable from the private key if ever needed.
+/// All users read rootFolderKey from the IPFS vault blob v2 header.
+/// The IPNS keypair is always HKDF-derived from the user's private key.
 /// Stores all keys in AppState (memory only).
 pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), String> {
     log::info!("Fetching and decrypting vault keys");
@@ -146,7 +145,7 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
         .await
         .map_err(|e| format!("Failed to parse vault response: {}", e))?;
 
-    // Get private key for decryption
+    // Get private key
     let private_key = state
         .private_key
         .read()
@@ -154,34 +153,36 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
         .as_ref()
         .ok_or("Private key not available for vault decryption")?
         .clone();
-
-    // Decrypt root folder key
-    let encrypted_root_folder_key = hex::decode(&vault.encrypted_root_folder_key)
-        .map_err(|_| "Invalid encryptedRootFolderKey hex")?;
-    let root_folder_key = crypto::ecies::unwrap_key(&encrypted_root_folder_key, &private_key)
-        .map_err(|e| format!("Failed to decrypt root folder key: {}", e))?;
-    *state.root_folder_key.write().await = Some(root_folder_key);
-
-    // Decrypt root IPNS private key
-    let encrypted_root_ipns_private_key = hex::decode(&vault.encrypted_root_ipns_private_key)
-        .map_err(|_| "Invalid encryptedRootIpnsPrivateKey hex")?;
-    let root_ipns_private_key =
-        crypto::ecies::unwrap_key(&encrypted_root_ipns_private_key, &private_key)
-            .map_err(|e| format!("Failed to decrypt root IPNS private key: {}", e))?;
-
-    // Verify stored IPNS key matches HKDF derivation (consistency check)
     let private_key_arr: [u8; 32] = private_key
         .as_slice()
         .try_into()
-        .map_err(|_| "Invalid private key length for HKDF check")?;
-    if let Ok((expected_ipns_key, _, _)) = crypto::hkdf::derive_vault_ipns_keypair(&private_key_arr) {
-        if root_ipns_private_key != *expected_ipns_key {
-            log::warn!("Vault IPNS key mismatch: stored key differs from HKDF derivation");
-            // Don't block - proceed with stored key for backward compatibility
-        }
-    }
+        .map_err(|_| "Invalid private key length")?;
 
-    *state.root_ipns_private_key.write().await = Some(root_ipns_private_key);
+    // Derive IPNS keypair via HKDF
+    let (ipns_priv, _ipns_pub, ipns_name) =
+        crypto::hkdf::derive_vault_ipns_keypair(&private_key_arr)
+            .map_err(|e| format!("HKDF derivation failed: {:?}", e))?;
+
+    // Resolve IPNS, fetch v2 blob, extract rootFolderKey
+    let resolved = crate::api::ipns::resolve_ipns(&state.api, &ipns_name)
+        .await
+        .map_err(|e| format!("IPNS resolve failed: {}", e))?;
+    let blob_bytes = crate::api::ipfs::fetch_content(&state.api, &resolved.cid)
+        .await
+        .map_err(|e| format!("IPFS fetch failed for vault blob: {}", e))?;
+
+    if crypto::vault_blob::detect_blob_version(&blob_bytes) != 2 {
+        return Err("Vault blob is not v2 format".into());
+    }
+    let (enc_key, _meta) = crypto::vault_blob::deserialize_vault_blob_v2(&blob_bytes)
+        .map_err(|e| format!("v2 blob parse failed: {}", e))?;
+    let root_folder_key = crypto::ecies::unwrap_key(enc_key, &private_key)
+        .map_err(|e| format!("Failed to decrypt rootFolderKey from v2 blob: {}", e))?;
+
+    *state.root_folder_key.write().await = Some(root_folder_key);
+
+    // IPNS key is always HKDF-derived
+    *state.root_ipns_private_key.write().await = Some(ipns_priv.to_vec());
 
     // Store IPNS name and TEE keys
     *state.root_ipns_name.write().await = Some(vault.root_ipns_name);
