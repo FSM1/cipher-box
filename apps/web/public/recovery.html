@@ -546,7 +546,8 @@
     // Crypto: Derive Vault IPNS Name from Private Key (HKDF)
     // =========================================================================
     const VAULT_HKDF_SALT = new TextEncoder().encode('CipherBox-v1');
-    const VAULT_HKDF_INFO = new TextEncoder().encode('cipherbox-vault-ipns-v1');
+    // Vault KEY blob IPNS (stores ECIES-wrapped rootFolderKey) — NOT the root folder IPNS
+    const VAULT_KEY_HKDF_INFO = new TextEncoder().encode('cipherbox-vault-key-ipns-v1');
 
     /**
      * Derive the vault root IPNS name from user's secp256k1 private key.
@@ -561,7 +562,7 @@
         'raw', userPrivateKey, 'HKDF', false, ['deriveBits']
       );
       const derivedBits = await crypto.subtle.deriveBits(
-        { name: 'HKDF', hash: 'SHA-256', salt: VAULT_HKDF_SALT, info: VAULT_HKDF_INFO },
+        { name: 'HKDF', hash: 'SHA-256', salt: VAULT_HKDF_SALT, info: VAULT_KEY_HKDF_INFO },
         keyMaterial, 256
       );
       const ed25519Seed = new Uint8Array(derivedBits);

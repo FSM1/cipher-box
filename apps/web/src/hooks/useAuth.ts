@@ -22,6 +22,7 @@ import type { FolderMetadata } from '@cipherbox/core';
 import {
   deriveIpnsName,
   deriveVaultIpnsKeypair,
+  deriveVaultKeyIpnsKeypair,
   bytesToHex,
   wrapKey,
   unwrapKey,
@@ -107,25 +108,28 @@ export function useAuth() {
         useAuthStore.getState().setTeeKeys(existingVault.teeKeys);
       }
 
-      // All users read rootFolderKey from IPFS v2 blob (no DB fallback)
-      const ipnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
-      const ipnsName = await deriveIpnsName(ipnsKeypair.publicKey);
+      // Read rootFolderKey from dedicated vault key IPNS (separate from root folder IPNS)
+      const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
+      const vaultKeyIpnsName = await deriveIpnsName(vaultKeyKeypair.publicKey);
 
-      const resolved = await resolveIpnsRecord(ipnsName);
-      if (!resolved) throw new Error('IPNS name not found for vault');
+      const resolved = await resolveIpnsRecord(vaultKeyIpnsName);
+      if (!resolved) throw new Error('Vault key IPNS name not found');
 
       const blobBytes = await fetchFromIpfs(resolved.cid);
 
       if (detectBlobVersion(blobBytes) !== 2) {
-        throw new Error('Vault blob is not v2 format');
+        throw new Error('Vault key blob is not v2 format');
       }
 
       const { encryptedRootFolderKey: encKey } = deserializeVaultBlobV2(blobBytes);
       const rootFolderKey = await unwrapKey(encKey, userKeypair.privateKey);
 
+      // Root folder IPNS keypair is the original vault derivation
+      const rootIpnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
+
       setVaultKeys({
         rootFolderKey,
-        rootIpnsKeypair: ipnsKeypair,
+        rootIpnsKeypair,
         rootIpnsName: existingVault.rootIpnsName,
         vaultId: existingVault.id,
       });
@@ -133,39 +137,49 @@ export function useAuth() {
       const is404 = (error as { response?: { status?: number } })?.response?.status === 404;
 
       if (is404) {
-        // New user -- initialize vault with IPFS-native v2 blob
-        console.log('[Auth] New user -- initializing vault with v2 blob');
+        // New user -- initialize vault with separate key blob + folder metadata
+        console.log('[Auth] New user -- initializing vault');
         const newVault = await initializeVault(userKeypair.privateKey);
         const rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey);
 
-        // 1. ECIES-wrap rootFolderKey for v2 blob header
-        const encryptedRootFolderKey = await wrapKey(newVault.rootFolderKey, userKeypair.publicKey);
+        // Derive vault key IPNS keypair (separate from root folder IPNS)
+        const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
+        const vaultKeyIpnsName = await deriveIpnsName(vaultKeyKeypair.publicKey);
 
-        // 2. Create empty folder metadata, encrypt with rootFolderKey
+        // 1. Publish v2 key blob to vault key IPNS (rootFolderKey storage)
+        const encryptedRootFolderKey = await wrapKey(newVault.rootFolderKey, userKeypair.publicKey);
         const emptyMetadata: FolderMetadata = { version: 'v2', children: [] };
         const encrypted = await encryptFolderMetadata(emptyMetadata, newVault.rootFolderKey);
         const metadataJsonBytes = new TextEncoder().encode(JSON.stringify(encrypted));
-
-        // 3. Serialize as v2 blob (ECIES-wrapped key + AES-GCM metadata)
         const v2Blob = serializeVaultBlobV2(encryptedRootFolderKey, metadataJsonBytes);
 
-        // 4. Upload v2 blob to IPFS
-        const uploadResult = await addToIpfs(new Blob([v2Blob as BlobPart]));
-
-        // 5. Create and publish IPNS record (sequence 0)
-        const publishResult = await createAndPublishIpnsRecord({
-          ipnsPrivateKey: newVault.rootIpnsKeypair.privateKey,
-          ipnsName: rootIpnsName,
-          metadataCid: uploadResult.cid,
+        const keyBlobUpload = await addToIpfs(new Blob([v2Blob as BlobPart]));
+        const keyPublishResult = await createAndPublishIpnsRecord({
+          ipnsPrivateKey: vaultKeyKeypair.privateKey,
+          ipnsName: vaultKeyIpnsName,
+          metadataCid: keyBlobUpload.cid,
           sequenceNumber: 0n,
           expectedSequenceNumber: undefined,
         });
-
-        if (!publishResult.success) {
-          throw new Error('Failed to publish initial IPNS record for new vault');
+        if (!keyPublishResult.success) {
+          throw new Error('Failed to publish vault key blob to IPNS');
         }
 
-        // 6. Register vault with API (no crypto fields -- IPFS-only)
+        // 2. Publish v1 folder metadata to root folder IPNS (standard folder format)
+        const metadataBlob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
+        const metadataUpload = await addToIpfs(metadataBlob);
+        const folderPublishResult = await createAndPublishIpnsRecord({
+          ipnsPrivateKey: newVault.rootIpnsKeypair.privateKey,
+          ipnsName: rootIpnsName,
+          metadataCid: metadataUpload.cid,
+          sequenceNumber: 0n,
+          expectedSequenceNumber: undefined,
+        });
+        if (!folderPublishResult.success) {
+          throw new Error('Failed to publish initial root folder metadata');
+        }
+
+        // 3. Register vault with API (no crypto fields -- IPFS-only)
         const storedVault = await vaultApi.initVault({
           ownerPublicKey: bytesToHex(userKeypair.publicKey),
           rootIpnsName,
