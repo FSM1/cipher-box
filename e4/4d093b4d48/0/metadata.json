@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e44d093b4d48",
+  "session_id": "dd7925a2-c290-4aa9-9b23-1e2a36c54591",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T07:34:43.433504Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "f65b1600c9a4",
+  "checkpoint_transcript_start": 240,
+  "transcript_lines_at_start": 240,
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 2325,
+    "cache_read_tokens": 91934,
+    "output_tokens": 1771,
+    "api_call_count": 2
+  },
+  "summary": {
+    "intent": "Refactor a Rust/Tauri desktop application into a Cargo workspace by extracting crypto primitives, domain types, and API client code into separate crates for better modularity and reuse.",
+    "outcome": "Wave 1 completed successfully (23-01: cipherbox-crypto crate with AES-GCM, AES-CTR, ECIES, Ed25519, HKDF, IPNS primitives). Wave 2 was initiated with two agents spawned in parallel to execute plans 23-02 (cipherbox-core) and 23-03 (cipherbox-api-client).",
+    "learnings": {
+      "repo": [
+        "Project uses a plan-numbered execution system (23-01, 23-02, 23-03) with wave-based parallelism for agent task orchestration.",
+        "Codebase has a 'self-check failure marker' concept used to validate agent-executed plan results.",
+        "Workspace structure: crates/ directory with subdirectories per crate (crypto/, core/, api-client/).",
+        "IPNS name derivation lives in the crypto layer, not the domain/core layer.",
+        "The desktop app previously contained inline crypto primitives that needed rewiring to the new workspace crate.",
+        "API client code was previously hand-written and contained inline hex constants rather than external test vector files."
+      ],
+      "code": [],
+      "workflow": [
+        "Wave-based execution pattern: complete foundational crates first (Wave 1), then spawn parallel agents for dependent crates (Wave 2).",
+        "Spot-checking after each wave includes verifying commits, checking for SUMMARY.md, spot-checking created files, and checking for self-check failure markers.",
+        "Agents are spawned in parallel when plans have no inter-dependencies within the same wave.",
+        "Cross-language test vectors (Rust/TypeScript parity) are extracted to JSON files rather than kept as inline hex constants."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Wave 2 agents (23-02, 23-03) were still in-flight at transcript end — outcomes unverified.",
+      "Cross-language parity testing between Rust and TypeScript test vectors is being set up but not yet validated.",
+      "Any further waves beyond Wave 2 are not yet planned or visible in the transcript."
+    ]
+  }
+}
