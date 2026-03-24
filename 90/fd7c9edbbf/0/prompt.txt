@@ -15,3 +15,7 @@ is it not realistic to utilize the openapi spec to generate a rust client, same 
 ---
 
 I think that your eval is wrong - all 3 platforms are working and exist.
+
+---
+
+the current desktop e2e tests should remain as the golden target, but basically unit and integration tests need to be added
