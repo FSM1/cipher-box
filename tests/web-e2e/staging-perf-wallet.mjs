@@ -7,16 +7,23 @@ import { custom } from 'viem';
 const STAGING_URL = 'https://app-staging.cipherbox.cc';
 const API_HOST = 'api-staging.cipherbox.cc';
 
-const account = privateKeyToAccount('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80');
+const account = privateKeyToAccount(
+  '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+);
 
 const localTransport = custom({
   async request({ method }) {
     switch (method) {
-      case 'eth_chainId': return '0x1';
-      case 'net_version': return '1';
-      case 'eth_blockNumber': return '0x0';
-      case 'eth_getBalance': return '0x0';
-      default: throw new Error(`Mock transport: unhandled ${method}`);
+      case 'eth_chainId':
+        return '0x1';
+      case 'net_version':
+        return '1';
+      case 'eth_blockNumber':
+        return '0x0';
+      case 'eth_getBalance':
+        return '0x0';
+      default:
+        throw new Error(`Mock transport: unhandled ${method}`);
     }
   },
 });
@@ -51,7 +58,14 @@ async function run() {
       const since = pending.start - t0;
       const path = new URL(pending.url).pathname;
       let size = resp.headers()['content-length'] || '?';
-      apiCalls.push({ t: since, method: pending.method, status: resp.status(), ms: elapsed, url: path, size });
+      apiCalls.push({
+        t: since,
+        method: pending.method,
+        status: resp.status(),
+        ms: elapsed,
+        url: path,
+        size,
+      });
     }
   });
 
@@ -96,7 +110,8 @@ async function run() {
   try {
     const result = await Promise.race([
       page.waitForURL('**/files', { timeout: 60_000 }).then(() => 'success'),
-      page.locator('[data-testid="device-waiting"]')
+      page
+        .locator('[data-testid="device-waiting"]')
         .waitFor({ state: 'visible', timeout: 60_000 })
         .then(() => 'requiredShare'),
     ]);
@@ -118,8 +133,12 @@ async function run() {
   console.log('');
   console.log('--- API Call Waterfall ---');
   if (apiCalls.length > 0) {
-    console.log(`${'T(ms)'.padStart(7)} | ${'Method'.padEnd(6)} | ${'Status'.padEnd(6)} | ${'Dur'.padEnd(6)} | Path`);
-    console.log(`${''.padStart(7, '-')} | ${''.padEnd(6, '-')} | ${''.padEnd(6, '-')} | ${''.padEnd(6, '-')} | ----`);
+    console.log(
+      `${'T(ms)'.padStart(7)} | ${'Method'.padEnd(6)} | ${'Status'.padEnd(6)} | ${'Dur'.padEnd(6)} | Path`
+    );
+    console.log(
+      `${''.padStart(7, '-')} | ${''.padEnd(6, '-')} | ${''.padEnd(6, '-')} | ${''.padEnd(6, '-')} | ----`
+    );
     for (const c of apiCalls) {
       console.log(
         `${String(c.t).padStart(7)} | ${c.method.padEnd(6)} | ${String(c.status).padEnd(6)} | ${(c.ms + 'ms').padEnd(6)} | ${c.url}`
@@ -165,7 +184,13 @@ async function run() {
       const elapsed = Date.now() - pending.start;
       const since = pending.start - rt0;
       const path = new URL(pending.url).pathname;
-      restoreCalls.push({ t: since, method: pending.method, status: resp.status(), ms: elapsed, url: path });
+      restoreCalls.push({
+        t: since,
+        method: pending.method,
+        status: resp.status(),
+        ms: elapsed,
+        url: path,
+      });
     }
   });
 
@@ -201,8 +226,12 @@ async function run() {
 
 function printWaterfall(calls) {
   if (calls.length > 0) {
-    console.log(`${'T(ms)'.padStart(7)} | ${'Method'.padEnd(6)} | ${'Status'.padEnd(6)} | ${'Dur'.padEnd(6)} | Path`);
-    console.log(`${''.padStart(7, '-')} | ${''.padEnd(6, '-')} | ${''.padEnd(6, '-')} | ${''.padEnd(6, '-')} | ----`);
+    console.log(
+      `${'T(ms)'.padStart(7)} | ${'Method'.padEnd(6)} | ${'Status'.padEnd(6)} | ${'Dur'.padEnd(6)} | Path`
+    );
+    console.log(
+      `${''.padStart(7, '-')} | ${''.padEnd(6, '-')} | ${''.padEnd(6, '-')} | ${''.padEnd(6, '-')} | ----`
+    );
     for (const c of calls) {
       console.log(
         `${String(c.t).padStart(7)} | ${c.method.padEnd(6)} | ${String(c.status).padEnd(6)} | ${(c.ms + 'ms').padEnd(6)} | ${c.url}`
@@ -215,17 +244,25 @@ function printWaterfall(calls) {
 
 function printSummary(calls) {
   console.log('--- Summary ---');
-  const authCalls = calls.filter(c => c.url.includes('/auth'));
-  const vaultCalls = calls.filter(c => c.url.includes('/vault'));
-  const ipnsCalls = calls.filter(c => c.url.includes('/ipns'));
-  const ipfsCalls = calls.filter(c => c.url.includes('/ipfs'));
-  console.log(`Auth calls: ${authCalls.length} (total: ${authCalls.reduce((s, c) => s + c.ms, 0)}ms)`);
-  console.log(`Vault calls: ${vaultCalls.length} (total: ${vaultCalls.reduce((s, c) => s + c.ms, 0)}ms)`);
-  console.log(`IPNS calls: ${ipnsCalls.length} (total: ${ipnsCalls.reduce((s, c) => s + c.ms, 0)}ms)`);
-  console.log(`IPFS calls: ${ipfsCalls.length} (total: ${ipfsCalls.reduce((s, c) => s + c.ms, 0)}ms)`);
+  const authCalls = calls.filter((c) => c.url.includes('/auth'));
+  const vaultCalls = calls.filter((c) => c.url.includes('/vault'));
+  const ipnsCalls = calls.filter((c) => c.url.includes('/ipns'));
+  const ipfsCalls = calls.filter((c) => c.url.includes('/ipfs'));
+  console.log(
+    `Auth calls: ${authCalls.length} (total: ${authCalls.reduce((s, c) => s + c.ms, 0)}ms)`
+  );
+  console.log(
+    `Vault calls: ${vaultCalls.length} (total: ${vaultCalls.reduce((s, c) => s + c.ms, 0)}ms)`
+  );
+  console.log(
+    `IPNS calls: ${ipnsCalls.length} (total: ${ipnsCalls.reduce((s, c) => s + c.ms, 0)}ms)`
+  );
+  console.log(
+    `IPFS calls: ${ipfsCalls.length} (total: ${ipfsCalls.reduce((s, c) => s + c.ms, 0)}ms)`
+  );
 }
 
-run().catch(e => {
+run().catch((e) => {
   console.error('Fatal:', e);
   process.exit(1);
 });
