@@ -6,10 +6,16 @@ fn main() {
     );
 
     // fuser is Unix-only. On Windows the crate is resolved by [patch.crates-io]
-    // but never actually used (WinFSP replaces it). Skip the build script entirely.
-    #[cfg(target_os = "windows")]
+    // but compiles as an empty crate (lib.rs gates all content behind #[cfg(unix)]).
+    #[cfg(not(unix))]
     return;
 
+    #[cfg(unix)]
+    unix_build();
+}
+
+#[cfg(unix)]
+fn unix_build() {
     #[cfg(all(not(feature = "libfuse"), not(target_os = "linux")))]
     unimplemented!("Building without libfuse is only supported on Linux");
 
