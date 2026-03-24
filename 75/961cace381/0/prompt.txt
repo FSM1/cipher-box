@@ -77,3 +77,7 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 ---
 
 I tried the defaults but seems like its not working on public infra: Failed to resolve vault from IPFS: Cannot read properties of undefined (reading 'length')
+
+---
+
+ok thats better: Failed to resolve vault from IPFS: IPFS gateway returned 400 for �:�-c�h6I�/���] Z0l...
