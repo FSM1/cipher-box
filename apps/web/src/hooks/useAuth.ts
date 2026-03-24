@@ -13,16 +13,15 @@ import { initSdkClient } from '../lib/sdk-provider';
 // api-config.ts handles setApiClientConfig at module load time
 import {
   initializeVault,
-  encryptVaultKeys,
-  decryptVaultKeys,
   detectBlobVersion,
   deserializeVaultBlobV2,
   serializeVaultBlobV2,
+  encryptFolderMetadata,
 } from '@cipherbox/core';
+import type { FolderMetadata } from '@cipherbox/core';
 import {
   deriveIpnsName,
   deriveVaultIpnsKeypair,
-  hexToBytes,
   bytesToHex,
   wrapKey,
   unwrapKey,
@@ -32,7 +31,7 @@ import { detectDeviceInfo } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
 import { initializeBin } from '../services/bin.service';
 import { useBinStore } from '../stores/bin.store';
-import { vaultControllerGetConfig, vaultControllerMigrateVault } from '@cipherbox/api-client';
+import { vaultControllerGetConfig } from '@cipherbox/api-client';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../services/ipns.service';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 
@@ -108,132 +107,67 @@ export function useAuth() {
         useAuthStore.getState().setTeeKeys(existingVault.teeKeys);
       }
 
-      if (existingVault.migratedAt) {
-        // PATH A: Migrated user -- read rootFolderKey from IPFS v2 blob
-        // Derive IPNS keypair once (used for both resolution and vault keys)
-        const ipnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
-        let rootFolderKey: Uint8Array;
-        try {
-          const ipnsName = await deriveIpnsName(ipnsKeypair.publicKey);
+      // All users read rootFolderKey from IPFS v2 blob (no DB fallback)
+      const ipnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
+      const ipnsName = await deriveIpnsName(ipnsKeypair.publicKey);
 
-          // Resolve IPNS to CID using the existing IPNS service (handles signature verification)
-          const resolved = await resolveIpnsRecord(ipnsName);
-          if (!resolved) throw new Error('IPNS name not found for migrated vault');
+      const resolved = await resolveIpnsRecord(ipnsName);
+      if (!resolved) throw new Error('IPNS name not found for vault');
 
-          // Fetch blob bytes from IPFS using the existing IPFS adapter
-          const blobBytes = await fetchFromIpfs(resolved.cid);
+      const blobBytes = await fetchFromIpfs(resolved.cid);
 
-          if (detectBlobVersion(blobBytes) === 2) {
-            const { encryptedRootFolderKey: encKey } = deserializeVaultBlobV2(blobBytes);
-            rootFolderKey = await unwrapKey(encKey, userKeypair.privateKey);
-          } else {
-            throw new Error('Migrated vault but IPNS blob is v1 format');
-          }
-        } catch (ipfsError) {
-          // Silent DB fallback for migrated users (per CONTEXT decision)
-          console.warn('[Auth] v2 blob read failed, falling back to DB:', ipfsError);
-          if (existingVault.encryptedRootFolderKey) {
-            rootFolderKey = await unwrapKey(
-              hexToBytes(existingVault.encryptedRootFolderKey as unknown as string),
-              userKeypair.privateKey
-            );
-          } else {
-            // DB fields are null and IPFS failed -- cannot recover
-            throw new Error('Migrated vault: IPFS read failed and no DB fallback available');
-          }
-        }
-
-        setVaultKeys({
-          rootFolderKey,
-          rootIpnsKeypair: ipnsKeypair,
-          rootIpnsName: existingVault.rootIpnsName,
-          vaultId: existingVault.id,
-        });
-      } else {
-        // PATH B: Non-migrated existing user -- decrypt from DB + trigger migration
-        const decryptedVault = await decryptVaultKeys(
-          {
-            encryptedRootFolderKey: hexToBytes(
-              existingVault.encryptedRootFolderKey as unknown as string
-            ),
-            encryptedIpnsPrivateKey: hexToBytes(
-              existingVault.encryptedRootIpnsPrivateKey as unknown as string
-            ),
-          },
-          userKeypair.privateKey
-        );
-
-        setVaultKeys({
-          rootFolderKey: decryptedVault.rootFolderKey,
-          rootIpnsKeypair: decryptedVault.rootIpnsKeypair,
-          rootIpnsName: existingVault.rootIpnsName,
-          vaultId: existingVault.id,
-        });
-
-        // Non-blocking migration trigger: write v2 blob + call /vault/migrate
-        void (async () => {
-          try {
-            // 1. ECIES-wrap rootFolderKey with user's publicKey
-            const encryptedKey = await wrapKey(decryptedVault.rootFolderKey, userKeypair.publicKey);
-
-            // 2. Resolve current IPNS to get existing blob and sequence number
-            const ipnsName = existingVault.rootIpnsName;
-            const resolved = await resolveIpnsRecord(ipnsName);
-            if (!resolved) throw new Error('IPNS name not found during migration');
-            const currentSeqNo = resolved.sequenceNumber;
-
-            // 3. Fetch current blob (v1 JSON metadata)
-            const existingMetadataJson = await fetchFromIpfs(resolved.cid);
-
-            // 4. Serialize as v2 blob
-            const v2Blob = serializeVaultBlobV2(encryptedKey, existingMetadataJson);
-
-            // 5. Upload v2 blob to IPFS
-            const uploadResult = await addToIpfs(new Blob([v2Blob as BlobPart]));
-
-            // 6. Derive HKDF keypair and publish IPNS record with seq+1
-            const ipnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
-            const publishResult = await createAndPublishIpnsRecord({
-              ipnsPrivateKey: ipnsKeypair.privateKey,
-              ipnsName,
-              metadataCid: uploadResult.cid,
-              sequenceNumber: currentSeqNo + 1n,
-              expectedSequenceNumber: currentSeqNo.toString(),
-            });
-
-            if (!publishResult.success) {
-              throw new Error('IPNS publish failed during vault migration');
-            }
-
-            // 7. Stamp migratedAt and NULL DB columns (only after confirmed write)
-            await vaultControllerMigrateVault();
-            console.log('[Auth] Vault successfully migrated to v2 blob format');
-          } catch (migrationError) {
-            // Migration failure is non-blocking. User can still use the app.
-            // Migration will be retried on next login.
-            console.warn(
-              '[Auth] Vault v2 migration failed (will retry on next login):',
-              migrationError
-            );
-          }
-        })();
+      if (detectBlobVersion(blobBytes) !== 2) {
+        throw new Error('Vault blob is not v2 format');
       }
+
+      const { encryptedRootFolderKey: encKey } = deserializeVaultBlobV2(blobBytes);
+      const rootFolderKey = await unwrapKey(encKey, userKeypair.privateKey);
+
+      setVaultKeys({
+        rootFolderKey,
+        rootIpnsKeypair: ipnsKeypair,
+        rootIpnsName: existingVault.rootIpnsName,
+        vaultId: existingVault.id,
+      });
     } catch (error) {
       const is404 = (error as { response?: { status?: number } })?.response?.status === 404;
 
       if (is404) {
-        // New user - initialize vault
-        console.log(
-          '[Auth] New user on Core Kit. If migrating from PnP, vault re-initialization may be needed.'
-        );
+        // New user -- initialize vault with IPFS-native v2 blob
+        console.log('[Auth] New user -- initializing vault with v2 blob');
         const newVault = await initializeVault(userKeypair.privateKey);
-        const encryptedVault = await encryptVaultKeys(newVault, userKeypair.publicKey);
         const rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey);
 
+        // 1. ECIES-wrap rootFolderKey for v2 blob header
+        const encryptedRootFolderKey = await wrapKey(newVault.rootFolderKey, userKeypair.publicKey);
+
+        // 2. Create empty folder metadata, encrypt with rootFolderKey
+        const emptyMetadata: FolderMetadata = { version: 'v2', children: [] };
+        const encrypted = await encryptFolderMetadata(emptyMetadata, newVault.rootFolderKey);
+        const metadataJsonBytes = new TextEncoder().encode(JSON.stringify(encrypted));
+
+        // 3. Serialize as v2 blob (ECIES-wrapped key + AES-GCM metadata)
+        const v2Blob = serializeVaultBlobV2(encryptedRootFolderKey, metadataJsonBytes);
+
+        // 4. Upload v2 blob to IPFS
+        const uploadResult = await addToIpfs(new Blob([v2Blob as BlobPart]));
+
+        // 5. Create and publish IPNS record (sequence 0)
+        const publishResult = await createAndPublishIpnsRecord({
+          ipnsPrivateKey: newVault.rootIpnsKeypair.privateKey,
+          ipnsName: rootIpnsName,
+          metadataCid: uploadResult.cid,
+          sequenceNumber: 0n,
+          expectedSequenceNumber: undefined,
+        });
+
+        if (!publishResult.success) {
+          throw new Error('Failed to publish initial IPNS record for new vault');
+        }
+
+        // 6. Register vault with API (no crypto fields -- IPFS-only)
         const storedVault = await vaultApi.initVault({
           ownerPublicKey: bytesToHex(userKeypair.publicKey),
-          encryptedRootFolderKey: bytesToHex(encryptedVault.encryptedRootFolderKey),
-          // encryptedRootIpnsPrivateKey omitted -- HKDF derivation is canonical (VAULT-04)
           rootIpnsName,
         });
 
