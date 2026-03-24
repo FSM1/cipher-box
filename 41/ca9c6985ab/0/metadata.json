@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "41ca9c6985ab",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T06:21:30.65236Z",
+  "branch": "fix/vault-key-ipns-separation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "24a3a6d6e064",
+  "token_usage": {
+    "input_tokens": 96,
+    "cache_creation_tokens": 94099,
+    "cache_read_tokens": 5123734,
+    "output_tokens": 22959,
+    "api_call_count": 76
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Monitor PR #349 for new automated reviews from CodeRabbit and Copilot, and automatically resolve them as they arrive.",
+    "outcome": "Successfully resolved 11 review comments across two rounds: 4 Copilot threads (docs + a real recovery.html IPNS bug), 2 CodeRabbit outside-diff comments (including a useAuth.ts catch scope bug), and 7 more Copilot threads (docs/label fixes + dismissals). Monitoring loop runs every 5 minutes via cron job cadb6bcb.",
+    "learnings": {
+      "repo": [
+        "VaultBlobV2 type was removed — functions that previously returned it now return Uint8Array directly.",
+        "The v2 vault blob is key-only (ECIES-wrapped rootFolderKey), not key+metadata as older docs stated.",
+        "IPNS names must be derived separately: vault key IPNS (deriveVaultKeyIpnsName) vs root folder IPNS (deriveVaultIpnsName) — conflating them is a silent bug that breaks folder traversal in recovery.",
+        "fetchFromIpfs uses Axios and throws on 404 for missing CIDs, so a broad catch around vault load + IPFS calls will misclassify an IPFS 404 as a new-user condition.",
+        "GitHub GraphQL reviewThreads query only surfaces inline threads; outside-diff review comments appear in the review body and are not returned as unresolved threads — the polling query missed them.",
+        "Copilot reviews can arrive without creating new unresolved threads if their comments fall outside the diff range."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 102,
+          "end_line": 146,
+          "finding": "Broad try/catch around getVault() + subsequent IPFS calls meant any IPFS 404 (e.g. missing CID for existing user) would incorrectly trigger vault initialization. Fixed by giving getVault() its own isolated try/catch."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1312,
+          "end_line": 1312,
+          "finding": "directRootIpnsName was derived using the vault key IPNS derivation path but then used for root folder traversal — should use a separate VAULT_ROOT_FOLDER_HKDF_INFO constant and deriveVaultIpnsName function."
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Encryption table described v2 blob as 'ECIES (key) + AES-256-GCM (metadata)' but v2 is key-only: 'ECIES (wrapped rootFolderKey only)'."
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 304,
+          "end_line": 304,
+          "finding": "Source files section referenced VaultBlobV2 type which no longer exists — should reference Uint8Array return type."
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 441,
+          "end_line": 441,
+          "finding": "IPNS table described v2 as 'v2 blob (ECIES key + metadata)' — corrected to 'v2 key blob (ECIES-wrapped rootFolderKey)'."
+        }
+      ],
+      "workflow": [
+        "The /loop skill parses an interval + prompt and creates a CronCreate job, then immediately executes the prompt once before the first scheduled tick.",
+        "GraphQL reviewThreads(first:50) only returns inline threads — outside-diff review comments require fetching the review object directly (e.g. gh api repos/.../reviews/ID/comments).",
+        "When Copilot posts outside-diff comments the polling loop reports 0 unresolved threads, causing silent misses; manual intervention was needed.",
+        "Replying to outside-diff comments requires posting a PR-level comment rather than a thread reply, since there is no thread ID to target.",
+        "Running pnpm typecheck is sufficient to validate recovery.html JS changes via the monorepo tsconfig; no separate build step needed for the HTML file."
+      ]
+    },
+    "friction": [
+      "GitHub API timed out on one polling tick, causing a false 'no new reviews' report.",
+      "The GraphQL reviewThreads polling query does not surface outside-diff comments, so 2 CodeRabbit and 7 Copilot comments were invisible to the monitor until the user manually flagged them.",
+      "Multiple Read tool calls on the same file sections were needed to navigate recovery.html due to its size, slowing triage.",
+      "Indentation inconsistency was introduced during the useAuth.ts edit and required a follow-up fix pass."
+    ],
+    "open_items": [
+      "Cron job cadb6bcb (every 5 min, auto-expires 7 days from creation) still running — does not catch outside-diff comments; consider supplementing with a review-body fetch.",
+      "The 7 Copilot comments about sequence=0 on initial IPNS publishes were dismissed rather than fixed — worth revisiting whether sequence should be explicitly set on first publish.",
+      "useAuth.ts fix was not covered by a unit test — the misclassification bug could regress silently."
+    ]
+  }
+}
