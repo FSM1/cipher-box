@@ -1,0 +1,117 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "46cbfa9581df",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T20:56:00.016188Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "cac658177cb3",
+  "token_usage": {
+    "input_tokens": 370,
+    "cache_creation_tokens": 546651,
+    "cache_read_tokens": 63545213,
+    "output_tokens": 70700,
+    "api_call_count": 330
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Complete Phase 23 (Rust SDK Extraction) gap closure execution, run a security review on the extracted Rust crates, increase test coverage, and get PR #352 merged-ready by resolving CI failures and review comments.",
+    "outcome": "All 8 plans in Phase 23 executed and verified. PR #352 created with 163 new unit tests, security findings fixed, multiple rounds of CodeRabbit/Copilot review comments resolved, and persistent CI failures on Windows cargo check and cross-language vector parity addressed through vendored fuser patching and build ordering fixes.",
+    "learnings": {
+      "repo": [
+        "The workspace uses [patch.crates-io] for a vendored fuser crate at apps/desktop/src-tauri/vendor/fuser/ — this causes Cargo to resolve and attempt to compile fuser for ALL workspace members regardless of feature activation, even on Windows where fuser is Unix-only.",
+        "cipherbox-fuse has default = [\"fuse\"] feature that pulls in fuser/unicode-normalization. When cipherbox-desktop depends on it without default-features = false, the fuse feature activates transitively.",
+        "Feature definitions referencing dep:fuser fail on Windows when fuser is placed under [target.'cfg(unix)'.dependencies] — Cargo cannot resolve dep: references in feature definitions for platform-excluded deps.",
+        "The desktop crate's winfsp feature enables cipherbox-fuse/winfsp but NOT cipherbox-fuse/fuse — correct separation for cross-platform builds.",
+        "All KeyState and CipherBoxFS key fields already use Zeroizing\u003cVec\u003cu8\u003e\u003e with proper clear() on logout/unmount — strong baseline zeroization discipline.",
+        "HKDF uses domain separation correctly across all 5 derivation contexts. API client redacts tokens/keys in Debug impls.",
+        "generate_ed25519_keypair callers were wrapping return value in redundant Zeroizing::new(ipns_private_key.clone()) — private key was not zeroized at source.",
+        "ed25519-dalek requires explicit zeroize feature flag to zero SigningKey on drop — not enabled by default.",
+        "The CI runs cargo llvm-cov --workspace on Linux for Rust coverage reporting to Codecov.",
+        "Cross-language vector parity tests: @cipherbox/core imports @cipherbox/crypto types for DTS generation — must build crypto before core in CI."
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "finding": "generate_ed25519_keypair returned bare Vec\u003cu8\u003e for private key — changed to Zeroizing\u003cVec\u003cu8\u003e\u003e"
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 472,
+          "end_line": 500,
+          "finding": "Callers wrapped generate_ed25519_keypair return in redundant Zeroizing::new() — simplified after return type change"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "ipns_private_key.try_into() for Zeroizing\u003cVec\u003cu8\u003e\u003e -\u003e [u8;32] requires .into_inner().try_into() since Zeroizing doesn't impl TryInto\u003c[u8;32]\u003e"
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 102,
+          "end_line": 103,
+          "finding": "Copy-paste bug: app_version field was being set to device_info.device_id instead of device_info.app_version — device_info partially moved above so fields needed pre-extraction"
+        },
+        {
+          "path": "crates/fuse/src/operations.rs",
+          "line": 51,
+          "finding": "fetch_and_populate_folder and resolve_file_pointers_blocking were dead code (existed in both macOS/Linux and Windows variants) — removed 181 lines"
+        },
+        {
+          "path": "crates/api-client/src/types.rs",
+          "line": 161,
+          "finding": "IpnsPublishRequest derived Debug, leaking encrypted IPNS key material — replaced with custom Debug impl that redacts sensitive fields"
+        },
+        {
+          "path": "crates/crypto/src/ipns_name.rs",
+          "line": 13,
+          "end_line": 25,
+          "finding": "Key length cast as u8 without validation — 32-byte length check added; encode_libp2p_public_key now returns Result"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/src/lib.rs",
+          "finding": "Vendored fuser lib.rs split into lib.rs (cfg-gated include!) + lib_impl.rs (unix-only content) to make the crate a no-op on Windows without removing the [patch.crates-io] entry"
+        },
+        {
+          "path": "crates/fuse/src/platform/linux.rs",
+          "line": 17,
+          "finding": "Temp directory cleanup was happening before unmount — moved after unmount (and after all early return paths)"
+        },
+        {
+          "path": "crates/api-client/src/client.rs",
+          "line": 115,
+          "finding": "get_bytes method existed but was never called — removed as dead code"
+        }
+      ],
+      "workflow": [
+        "When an agent disconnects mid-execution, check git log for completed commits before re-running — avoids duplicate work. Only bookkeeping (SUMMARY.md, STATE.md, ROADMAP.md) may be missing.",
+        "1Password SSH signing fails intermittently on first attempt but usually succeeds on retry — worth retrying 2-3 times before escalating.",
+        "CodeRabbit generates new review threads after each push — running /resolve-pr-comments multiple times in a session is normal for active PRs.",
+        "Cargo [patch.crates-io] resolves patched crates workspace-wide regardless of feature activation — vendored Unix-only crates must be made compilable on all platforms at the source level.",
+        "cargo llvm-cov --workspace covers all workspace members — adding tests to any crate automatically improves Codecov reporting without CI changes.",
+        "Parallel pnpm --filter builds can fail when packages have build-time dependencies on each other — sequential \u0026\u0026 is safer for interdependent packages."
+      ]
+    },
+    "friction": [
+      "1Password SSH agent failed consistently on first commit attempt, requiring 2-3 retries each time — affected multiple commits throughout the session.",
+      "Windows cargo check required 4 separate fix attempts: (1) build.rs early return, (2) cfg(unix) target-gated deps, (3) default-features = false on desktop dep, (4) finally splitting vendored fuser lib.rs into unix-only include — each attempt revealed a different layer of the Cargo [patch.crates-io] resolution problem.",
+      "The root cause of Windows failures (Cargo always resolves [patch.crates-io] entries regardless of feature activation) is a Cargo limitation with no clean built-in workaround — required invasive vendored code modification.",
+      "Cross-language parity CI failure required two attempts: first added pnpm version (missing), then fixed build order (core depends on crypto for DTS).",
+      "CodeRabbit re-raised the ECIES min-size check comment 3 separate times across different review rounds.",
+      "Agent API connection error (ConnectionRefused) mid-execution of plan 23-08, requiring manual resume and bookkeeping."
+    ],
+    "open_items": [
+      "AES-CTR client-side integrity verification: client doesn't verify IPFS CID after fetching bytes — an attacker controlling the relay could serve tampered ciphertext (identified in security review, not fixed in this session)",
+      "file_ipns_private_key in write_ops.rs uses ed25519_dalek directly (not generate_ed25519_keypair) and stores as plain Vec\u003cu8\u003e — separate from the folder IPNS key fix, flagged but out of scope",
+      "The vendored fuser lib_impl.rs split is a hack — the proper fix would be to make [patch.crates-io] conditional or remove the fuser patch entirely once the desktop no longer needs the custom vendored version",
+      "Security review medium findings (ed25519-dalek zeroize and generate_ed25519_keypair return type) were fixed, but 4 remaining medium/low findings documented in .planning/security/REVIEW-2026-03-24-phase23.md were not addressed in this session"
+    ]
+  }
+}
