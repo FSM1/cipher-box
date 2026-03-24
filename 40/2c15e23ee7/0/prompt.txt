@@ -155,3 +155,7 @@ no, all good.
 ---
 
 https://github.com/FSM1/cipher-box/pull/344#issuecomment-4114911496 patch coverage for a lot of the rust code is entirely missing according to codecov
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23469695046/job/68289553600?pr=344 also there's one failing api test
