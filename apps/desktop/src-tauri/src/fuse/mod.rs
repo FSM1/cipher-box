@@ -227,27 +227,6 @@ fn encrypt_metadata_to_json(
     serde_json::to_vec(&json).map_err(|e| format!("JSON serialization failed: {}", e))
 }
 
-/// Encrypt root folder metadata as vault blob v2.
-///
-/// Wraps rootFolderKey in the blob header for zero-knowledge server operation.
-/// Only used for root folder publishes -- subfolders use `encrypt_metadata_to_json`.
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
-fn encrypt_root_metadata_to_v2_blob(
-    metadata: &crate::crypto::folder::FolderMetadata,
-    folder_key: &[u8],
-    public_key: &[u8],
-) -> Result<Vec<u8>, String> {
-    // 1. Encrypt metadata to JSON bytes (existing logic)
-    let json_bytes = encrypt_metadata_to_json(metadata, folder_key)?;
-
-    // 2. ECIES-wrap rootFolderKey with user's public key
-    let encrypted_key = crate::crypto::ecies::wrap_key(folder_key, public_key)
-        .map_err(|e| format!("Failed to wrap rootFolderKey for v2 blob: {}", e))?;
-
-    // 3. Produce v2 blob envelope
-    crate::crypto::vault_blob::serialize_vault_blob_v2(&encrypted_key, &json_bytes)
-}
-
 /// Merge local children onto remote children to resolve a concurrent-edit conflict.
 ///
 /// Strategy (last-writer-wins per child, additive merge):
@@ -333,7 +312,6 @@ fn spawn_metadata_publish(
     ipns_name: String,
     old_metadata_cid: Option<String>,
     coordinator: Arc<PublishCoordinator>,
-    user_public_key: Option<Vec<u8>>,
 ) {
     std::thread::spawn(move || {
         let result = rt.block_on(async {
@@ -341,12 +319,8 @@ fn spawn_metadata_publish(
             let lock = coordinator.get_lock(&ipns_name);
             let _guard = lock.lock().await;
 
-            // Encrypt metadata (CPU) -- v2 blob for root folder, v1 JSON for subfolders
-            let json_bytes = if let Some(ref pub_key) = user_public_key {
-                encrypt_root_metadata_to_v2_blob(&metadata, &folder_key, pub_key)?
-            } else {
-                encrypt_metadata_to_json(&metadata, &folder_key)?
-            };
+            // Encrypt metadata (CPU) -- all folders use v1 JSON (including root)
+            let json_bytes = encrypt_metadata_to_json(&metadata, &folder_key)?;
 
             // Resolve current IPNS sequence number (monotonic cache fallback)
             let seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
@@ -427,12 +401,8 @@ fn spawn_metadata_publish(
                         .subsec_nanos() % 400) as u64 + 100;
                     tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
 
-                    // 6. Re-encrypt the MERGED metadata and upload (v2 blob for root, v1 JSON for subfolders)
-                    let retry_json = if let Some(ref pub_key) = user_public_key {
-                        encrypt_root_metadata_to_v2_blob(&merged_metadata, &folder_key, pub_key)?
-                    } else {
-                        encrypt_metadata_to_json(&merged_metadata, &folder_key)?
-                    };
+                    // 6. Re-encrypt the MERGED metadata and upload
+                    let retry_json = encrypt_metadata_to_json(&merged_metadata, &folder_key)?;
                     let retry_cid = crate::api::ipfs::upload_content(&api, &retry_json).await?;
 
                     // 7. Create new IPNS record with fresh sequence
@@ -902,12 +872,6 @@ impl CipherBoxFS {
         // Build metadata and publish immediately (no debounce needed)
         let (metadata, folder_key, ipns_private_key, ipns_name, old_cid) =
             self.build_folder_metadata(folder_ino)?;
-        // Root folder publishes use v2 blob format (includes ECIES-wrapped rootFolderKey)
-        let pub_key = if folder_ino == inode::ROOT_INO {
-            Some(self.public_key.to_vec())
-        } else {
-            None
-        };
         spawn_metadata_publish(
             self.api.clone(),
             self.rt.clone(),
@@ -917,7 +881,6 @@ impl CipherBoxFS {
             ipns_name,
             old_cid,
             self.publish_coordinator.clone(),
-            pub_key,
         );
         Ok(())
     }
@@ -1021,12 +984,6 @@ impl CipherBoxFS {
             self.publish_queue.remove(&folder_ino);
             match self.build_folder_metadata(folder_ino) {
                 Ok((metadata, folder_key, ipns_private_key, ipns_name, old_cid)) => {
-                    // Root folder publishes use v2 blob format
-                    let pub_key = if folder_ino == inode::ROOT_INO {
-                        Some(self.public_key.to_vec())
-                    } else {
-                        None
-                    };
                     spawn_metadata_publish(
                         self.api.clone(),
                         self.rt.clone(),
@@ -1036,7 +993,6 @@ impl CipherBoxFS {
                         ipns_name,
                         old_cid,
                         self.publish_coordinator.clone(),
-                        pub_key,
                     );
                 }
                 Err(e) => {

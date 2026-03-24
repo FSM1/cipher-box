@@ -12,4 +12,4 @@ export {
   detectBlobVersion,
   BLOB_V2_VERSION,
 } from './blob';
-export type { VaultInit, EncryptedVaultKeys, VaultBlobV2 } from './types';
+export type { VaultInit, EncryptedVaultKeys } from './types';
