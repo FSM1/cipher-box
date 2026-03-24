@@ -73,3 +73,7 @@ but are those actually exposed on the docker stack?
 <summary>Background command "Check if delegated routing API is available on gateway" completed (exit code 0)</summary>
 </task-notification>
 Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/20f4a3f5-eda6-4aef-a4d0-b4bd794aa423/tasks/buhxeu7py.output
+
+---
+
+I tried the defaults but seems like its not working on public infra: Failed to resolve vault from IPFS: Cannot read properties of undefined (reading 'length')
