@@ -167,3 +167,7 @@ the fact that the rust code is quite untested does eek me out a bit. also feels 
 ---
 
 I think a milestone is a bit too broad, but a phase with plans to be executed in different environments for each of the 3 platforms is probably doable. Think this phase can be added to the current milestone and worked on fairly independently.
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23470210019/job/68291085914?pr=344 seems like api coverage is failing the test action.
