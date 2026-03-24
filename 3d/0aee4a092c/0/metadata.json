@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3d0aee4a092c",
+  "session_id": "dd7925a2-c290-4aa9-9b23-1e2a36c54591",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T12:00:54.740478Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "5b6471271d03",
+  "token_usage": {
+    "input_tokens": 53,
+    "cache_creation_tokens": 148235,
+    "cache_read_tokens": 2908810,
+    "output_tokens": 23875,
+    "api_call_count": 43
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Execute Phase 23 (rust-sdk-extraction) which extracts CipherBox's crypto, core types, API client, FUSE filesystem, and SDK orchestration into a Cargo workspace with separate crates, then review and clean up the resulting code.",
+    "outcome": "All 7 plans executed successfully across 4 waves, producing 5 new Rust crates (cipherbox-crypto, cipherbox-core, cipherbox-api-client, cipherbox-fuse, cipherbox-sdk). Verification found 2 gaps (orphaned FUSE files + missing Windows FUSE extraction). Post-execution code review cleaned up orphaned files, a misleading allow attribute, and a double HashMap lookup.",
+    "learnings": {
+      "repo": [
+        "Cargo workspace lives at repo root with crates under `crates/`; desktop app at `apps/desktop/src-tauri/`",
+        "Desktop FUSE code was split into two layers: platform-agnostic data structures and platform-specific mount/unmount (macOS SMB, Linux FUSE, Windows WinFsp)",
+        "55 workspace tests: 12 crypto + 5 cross-language + 14 core + 24 desktop",
+        "Windows WinFsp operations were NOT extracted to `crates/fuse/src/platform/windows/` — the crate declares the module behind a feature flag but the directory is absent, creating a latent compilation bug",
+        "9 orphaned files (3,767 LOC) remained in `apps/desktop/src-tauri/src/fuse/` after extraction — never compiled but cluttering the repo",
+        "NETWORK_TIMEOUT has two intentionally different values: 10s for IPNS resolve, 3s for operations — pre-existing distinction, not a bug",
+        "`#[allow(unused_imports)]` re-exports in fuse crate are needed for Windows cross-compilation"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/read_ops.rs",
+          "line": 338,
+          "end_line": 348,
+          "finding": "Double HashMap lookup — checked existence then fetched separately; fixed to single entry lookup"
+        },
+        {
+          "path": "crates/fuse/src/operations.rs",
+          "finding": "Had misleading `#[allow(dead_code)]` on the `implementation` module, which IS actively used by read_ops/write_ops/dir_ops within the crate"
+        }
+      ],
+      "workflow": [
+        "GSD wave-based parallel execution: Wave 3 agents hit usage limit mid-execution, leaving uncommitted partial work in crate directories. Re-spawning after resume picked up cleanly because no commits had been made yet.",
+        "Spot-checking after each wave (SUMMARY.md exists, git commits present, no Self-Check FAILED marker) correctly identified the usage-limit failure before proceeding",
+        "Pre-wave dependency key-link checks returned empty for waves 3 and 4 — no cross-plan wiring gaps detected",
+        "Parallel Wave 2 agents (23-02 and 23-03) had interleaved staging but no correctness impact",
+        "Code review agents flagged many pre-existing patterns that were merely moved, not introduced — important to triage moved code separately from new code"
+      ]
+    },
+    "friction": [
+      "Wave 3 agents hit the Claude usage limit mid-execution before committing any work, requiring a manual `resume` and full wave retry",
+      "Verification found 2 gaps after all 7 plans completed — Windows FUSE extraction was planned but not fully implemented (missing platform directory)",
+      "15K line diff across 94 files made code review agent output noisy with pre-existing patterns mixed in with new code"
+    ],
+    "open_items": [
+      "Windows WinFsp operations not extracted — `crates/fuse/src/platform/windows/` directory missing despite the crate declaring `pub mod windows` behind a feature flag; latent compilation bug on Windows targets",
+      "Gap closure cycle needed: `/gsd:plan-phase 23 --gaps` to address the 2 verification gaps before phase can be marked fully complete",
+      "Release Please configuration added for 5 Rust crates (23-07) but not yet exercised through an actual release"
+    ]
+  }
+}
