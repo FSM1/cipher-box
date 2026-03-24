@@ -9,3 +9,4 @@ export type {
 export { KuboProvider } from './kubo-provider';
 export { PsaProvider } from './psa-provider';
 export { testConnection } from './connection-test';
+export { DualPinProvider, type DualPinResult } from './dual-pin-provider';

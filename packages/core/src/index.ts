@@ -65,6 +65,7 @@ export {
   BLOB_V2_VERSION,
   type VaultInit,
   type EncryptedVaultKeys,
+  type ByoIpfsConfig,
 } from './vault';
 
 // IPNS records

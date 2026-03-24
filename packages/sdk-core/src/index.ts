@@ -54,5 +54,7 @@ export {
   type ConnectionTestResult,
   KuboProvider,
   PsaProvider,
+  DualPinProvider,
   testConnection,
+  type DualPinResult,
 } from './pinning';

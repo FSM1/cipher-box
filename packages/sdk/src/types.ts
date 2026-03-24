@@ -5,10 +5,19 @@
  * These types define the contract between the SDK and its consumers.
  */
 
-import type { TeeKeys } from '@cipherbox/sdk-core';
+import type { TeeKeys, PinningMode, ExternalProviderConfig } from '@cipherbox/sdk-core';
 import type { AxiosInstance } from '@cipherbox/api-client';
 import type { FolderChild, FolderMetadata } from '@cipherbox/core';
 import type { SentShareInfo } from './share';
+
+/**
+ * Pinning configuration for BYO-IPFS support.
+ * When absent, defaults to cipherbox-only mode.
+ */
+export type PinningConfig = {
+  mode: PinningMode;
+  externalProvider?: ExternalProviderConfig;
+};
 
 /**
  * Callbacks for share-aware key re-wrapping.
@@ -71,6 +80,11 @@ export type CipherBoxClientConfig = {
    * or to inject a fully-configured instance with 401 refresh logic.
    */
   axiosInstance?: AxiosInstance;
+  /**
+   * BYO-IPFS pinning configuration.
+   * When omitted, all pins go through CipherBox infrastructure (default).
+   */
+  pinningConfig?: PinningConfig;
 };
 
 /**
