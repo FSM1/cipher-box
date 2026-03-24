@@ -31,7 +31,7 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [ ] **BYO-04**: Settings UI for configuring custom IPFS node endpoint and credentials
 - [x] **BYO-05**: Connection test endpoint validates user's IPFS node is reachable and API-compatible
 - [ ] **BYO-06**: All IPNS publishes still route through CipherBox API regardless of BYO config
-- [ ] **BYO-07**: Quota tracking becomes advisory for BYO users with clear UI indication
+- [x] **BYO-07**: Quota tracking becomes advisory for BYO users with clear UI indication
 
 ### Performance Baselines
 
@@ -113,7 +113,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BYO-04      | Phase 21   | Pending  |
 | BYO-05      | Phase 21   | Complete |
 | BYO-06      | Phase 21   | Pending  |
-| BYO-07      | Phase 21   | Pending  |
+| BYO-07      | Phase 21   | Complete |
 | PERF-01     | Phase 18   | Complete |
 | PERF-02     | Phase 18   | Complete |
 | PERF-03     | Phase 18   | Complete |

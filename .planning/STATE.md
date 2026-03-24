@@ -91,6 +91,8 @@ Recent for v1.1:
 - PinningProvider interface: KuboProvider uses Basic auth, PsaProvider uses Bearer auth, matching each protocol's native auth model
 - PsaProvider.pin() throws intentionally; pinByCid() is the correct PSA workflow (CID-reference-only protocol)
 - Connection test uses sequential probe: Kubo /api/v0/id first, then PSA /pins, with 10s timeout per probe
+- CID registration gated to BYO users only via ForbiddenException (non-BYO users cannot bypass upload relay)
+- Advisory quota: checkQuota() always true for BYO, getQuota() includes advisory boolean flag for UI display
 
 ### Roadmap Evolution
 
@@ -116,4 +118,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 21-01 (SDK pinning interface + KuboProvider, PsaProvider, connection test)
+Last updated: 2026-03-24 after completing 21-02 (register-cid endpoint, advisory quota mode, isByoUser flag)
