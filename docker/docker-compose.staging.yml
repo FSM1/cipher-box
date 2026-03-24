@@ -63,7 +63,10 @@ services:
     image: ipfs/kubo:v0.40.0
     restart: unless-stopped
     environment:
-      IPFS_PROFILE: server
+      # pebbleds: LSM-tree datastore for faster concurrent write throughput (Phase 19.2)
+      # Requires fresh IPFS repo -- delete ipfs_staging volume on first deploy:
+      #   docker compose -f docker-compose.staging.yml down -v && docker compose -f docker-compose.staging.yml up -d
+      IPFS_PROFILE: server,pebbleds
     ports:
       - '4001:4001/tcp'
       - '4001:4001/udp'

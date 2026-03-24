@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient } from '../client';
 import type { CipherBoxClientConfig } from '../types';
 import type { SdkEvent } from '../events';
+import { createTestConfig } from './helpers';
 
 // Mock sdk-core to avoid real IPFS/IPNS calls
 vi.mock('@cipherbox/sdk-core', () => ({
@@ -19,20 +20,6 @@ vi.mock('@cipherbox/sdk-core', () => ({
 }));
 
 import * as sdkCore from '@cipherbox/sdk-core';
-
-function createTestConfig(overrides?: Partial<CipherBoxClientConfig>): CipherBoxClientConfig {
-  return {
-    apiUrl: 'http://localhost:3000',
-    getAccessToken: vi.fn().mockResolvedValue('test-token'),
-    vaultKeypair: {
-      publicKey: new Uint8Array(33).fill(1),
-      privateKey: new Uint8Array(32).fill(2),
-    },
-    rootIpnsName: 'k51test',
-    rootFolderKey: new Uint8Array(32).fill(3),
-    ...overrides,
-  };
-}
 
 describe('CipherBoxClient', () => {
   let client: CipherBoxClient;

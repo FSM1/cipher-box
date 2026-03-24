@@ -4,8 +4,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient, BinNotLoadedError } from '../client';
-import type { CipherBoxClientConfig } from '../types';
 import type { SdkEvent } from '../events';
+import { createTestConfig, setupFolder } from './helpers';
 
 // Mock crypto (clearBytes used in uploadFile for key cleanup)
 vi.mock('@cipherbox/crypto', () => ({
@@ -50,45 +50,6 @@ vi.mock('../share', () => ({
 import * as sdkCore from '@cipherbox/sdk-core';
 import * as binOps from '../bin';
 import * as shareOps from '../share';
-
-function createTestConfig(overrides?: Partial<CipherBoxClientConfig>): CipherBoxClientConfig {
-  return {
-    apiUrl: 'http://localhost:3000',
-    getAccessToken: vi.fn().mockResolvedValue('test-token'),
-    vaultKeypair: {
-      publicKey: new Uint8Array(33).fill(1),
-      privateKey: new Uint8Array(32).fill(2),
-    },
-    rootIpnsName: 'k51test',
-    rootFolderKey: new Uint8Array(32).fill(3),
-    ...overrides,
-  };
-}
-
-function setupFolder(client: CipherBoxClient, ipnsName = 'folder-ipns') {
-  const child = {
-    type: 'file' as const,
-    id: 'file1',
-    name: 'test.txt',
-    fileMetaIpnsName: 'k51file',
-    ipnsPrivateKeyEncrypted: 'abc',
-    createdAt: Date.now(),
-    modifiedAt: Date.now(),
-  };
-  client.getFolderTree().set(ipnsName, {
-    ipnsName,
-    folderKey: new Uint8Array(32).fill(1),
-    ipnsKeypair: {
-      publicKey: new Uint8Array(32).fill(2),
-      privateKey: new Uint8Array(64).fill(3),
-    },
-    sequenceNumber: 1n,
-    children: [child],
-    metadata: null,
-    lastLoadedAt: Date.now(),
-  });
-  return child;
-}
 
 describe('CipherBoxClient - extended', () => {
   let client: CipherBoxClient;

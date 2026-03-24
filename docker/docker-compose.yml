@@ -24,6 +24,10 @@ services:
     restart: unless-stopped
     environment:
       - IPFS_PATH=/data/ipfs
+      # pebbleds: LSM-tree datastore for faster concurrent write throughput (Phase 19.2)
+      # Requires fresh IPFS repo -- delete ipfs_data volume before first start:
+      #   docker compose down -v --remove-orphans && docker compose up -d
+      - IPFS_PROFILE=server,pebbleds
     volumes:
       - ipfs_data:/data/ipfs
     ports:
