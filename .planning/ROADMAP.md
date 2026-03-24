@@ -167,7 +167,7 @@ Plans:
 4. CI runs workspace-level builds on macOS, Linux, and Windows with cross-language parity gate
 5. No duplicated crypto, domain, or API logic remains in the desktop app
 
-**Plans:** 4/7 plans executed
+**Plans:** 5/7 plans executed
 
 Plans:
 
@@ -193,7 +193,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 20. Vault Migration                       | 6/6       | Complete       | 2026-03-24  | -          |
 | 21. BYO-IPFS Node Support                 | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
-| 23. Rust SDK Extraction                   | 4/7       | In Progress    |             | -          |
+| 23. Rust SDK Extraction                   | 5/7       | In Progress    |             | -          |
 
 ---
 
