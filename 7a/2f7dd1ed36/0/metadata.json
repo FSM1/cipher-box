@@ -1,0 +1,72 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "7a2f7dd1ed36",
+  "session_id": "128dd0c3-782d-489f-a851-969bb791458c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T07:04:35.401725Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "b590c443764f",
+  "token_usage": {
+    "input_tokens": 47,
+    "cache_creation_tokens": 91819,
+    "cache_read_tokens": 2459737,
+    "output_tokens": 10902,
+    "api_call_count": 40
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan Phase 23 (Rust SDK Extraction) using the GSD workflow, then update the generated plans to reflect changes introduced by the recently merged Phase 20 fix code.",
+    "outcome": "Phase 23 was fully planned (7 plans, 4 waves, verification passed), merged with main, and all three plan files were patched to reflect Phase 20's Rust changes before execution.",
+    "learnings": {
+      "repo": [
+        "Phase 20 (PR #349) added a new HKDF derivation function `derive_vault_key_ipns_keypair` with info string `cipherbox-vault-key-ipns-v1` that must be re-exported from cipherbox-crypto.",
+        "PR #349 removed v2 blob detection from `decrypt_metadata_from_ipfs_public()` — folder metadata is now always v1 JSON, so `detect_blob_version` is no longer imported in decrypt.rs.",
+        "Phase 23 is organized in 4 waves: Wave 1 (Cargo workspace + cipherbox-crypto), Wave 2 (cipherbox-core + cipherbox-api-client + test vectors), Wave 3 (cipherbox-fuse + cipherbox-sdk), Wave 4 (desktop cleanup + CI + Release Please).",
+        "The UI safety gate grep for frontend indicators produces false positives on Rust SDK phases — 'form' matches 'Platform' and 'ui' can match 'unit'."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/23-rust-sdk-extraction/23-01-PLAN.md",
+          "line": 267,
+          "end_line": 270,
+          "finding": "hkdf re-exports block was missing `derive_vault_key_ipns_keypair` — added after Phase 20 merge."
+        },
+        {
+          "path": ".planning/phases/23-rust-sdk-extraction/23-01-PLAN.md",
+          "line": 358,
+          "end_line": 359,
+          "finding": "Desktop crypto/mod.rs re-exports task also lacked `derive_vault_key_ipns_keypair`."
+        },
+        {
+          "path": ".planning/phases/23-rust-sdk-extraction/23-02-PLAN.md",
+          "line": 219,
+          "end_line": 219,
+          "finding": "Instruction to rewrite `detect_blob_version` import path in decrypt.rs was stale — PR #349 removed that import entirely."
+        },
+        {
+          "path": ".planning/phases/23-rust-sdk-extraction/23-03-PLAN.md",
+          "finding": "HKDF test vectors and cross-language tests were missing coverage for `derive_vault_key_ipns_keypair`."
+        }
+      ],
+      "workflow": [
+        "GSD plan-phase produces plans before main is merged; plans should always be reviewed against recent merges before execution, especially for phases with shared crypto/core dependencies.",
+        "The `\u003cread_first\u003e` field in plan tasks provides a safety net — executors reading current source will naturally see actual function signatures, but explicit plan accuracy reduces interpretation risk.",
+        "Verification passing on 9 dimensions does not guarantee plans reflect the latest merged code; a post-merge diff review is a necessary additional step."
+      ]
+    },
+    "friction": [
+      "UI safety gate false-positived on a Rust SDK phase — 'form' in 'Platform' and 'ui' in other words triggered the frontend gate unnecessarily.",
+      "phase_req_ids was null/TBD at init time; the planner created the RSDK-01..10 IDs itself, so the requirements coverage gate had nothing to compare against from the roadmap."
+    ],
+    "open_items": [
+      "Plans 01-03 are now patched but plans 04-07 were not audited against Phase 20 changes — worth a quick scan before executing Wave 3/4.",
+      "The UI gate keyword list should be tightened to avoid false positives on non-frontend phases (e.g. require word boundaries or exclude common false-positive substrings like 'Platform').",
+      "HKDF test vectors in Plan 03 now include `derive_vault_key_ipns_keypair` but the expected output vectors (derived bytes) were not computed in this session — executor will need to generate them from the actual implementation."
+    ]
+  }
+}
