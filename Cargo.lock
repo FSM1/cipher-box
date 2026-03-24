@@ -628,6 +628,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipherbox-api-client"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "log",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "urlencoding",
+]
+
+[[package]]
 name = "cipherbox-crypto"
 version = "0.1.0"
 dependencies = [
