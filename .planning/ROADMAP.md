@@ -23,7 +23,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 19: IPNS Resolution Improvement** - Replace delegated-ipfs.dev with self-hosted Someguy sidecar for reliable IPNS routing, add latency histograms for resolve/publish operations (completed 2026-03-07)
 - [x] **Phase 19.2: IPFS Upload Performance Optimization** - Optimize Kubo pinning path (concurrent pins, worker tuning, pin batching) to reduce upload latency (INSERTED) (completed 2026-03-23)
 - [x] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material (gap closure in progress) (completed 2026-03-24)
-- [ ] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing
+- [x] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing (completed 2026-03-24)
 - [ ] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, k6 load testing, and capacity documentation
 - [ ] **Phase 23: Rust SDK Extraction** - Extract shared cipherbox-core Rust crate mirroring @cipherbox/core and @cipherbox/sdk-core, replace duplicated crypto/IPNS/metadata logic in desktop FUSE code, enable unit testing at same granularity as TypeScript
 
@@ -143,13 +143,13 @@ Plans:
 
 Plans:
 
-- [ ] 21-01-PLAN.md -- SDK pinning interface + KuboProvider, PsaProvider, connection test
-- [ ] 21-02-PLAN.md -- API CID registration endpoint + advisory quota mode
-- [ ] 21-03-PLAN.md -- DualPinProvider + SDK client pinning orchestration + vault config type
-- [ ] 21-04-PLAN.md -- Settings UI STORAGE tab with connection test and advisory badge
-- [ ] 21-05-PLAN.md -- TEE migration backend (entity, service, controller, BullMQ, TEE worker)
-- [ ] 21-06-PLAN.md -- Migration progress UI + final integration verification
-- [ ] 21-07-PLAN.md -- BYO performance benchmarking scenarios + baselines capture
+- [x] 21-01-PLAN.md -- SDK pinning interface + KuboProvider, PsaProvider, connection test
+- [x] 21-02-PLAN.md -- API CID registration endpoint + advisory quota mode
+- [x] 21-03-PLAN.md -- DualPinProvider + SDK client pinning orchestration + vault config type
+- [x] 21-04-PLAN.md -- Settings UI STORAGE tab with connection test and advisory badge
+- [x] 21-05-PLAN.md -- TEE migration backend (entity, service, controller, BullMQ, TEE worker)
+- [x] 21-06-PLAN.md -- Migration progress UI + final integration verification
+- [x] 21-07-PLAN.md -- BYO performance benchmarking scenarios + baselines capture (task 4 deferred)
 
 ### Phase 22: Performance Baselines Completion
 
@@ -176,7 +176,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
 | 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
 | 20. Vault Migration                       | 6/6       | Complete       | 2026-03-24  | -          |
-| 21. BYO-IPFS Node Support                 | 5/7       | In Progress    |             | -          |
+| 21. BYO-IPFS Node Support                 | v1.1      | 7/7            | Complete    | 2026-03-25 |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
 | 23. Rust SDK Extraction                   | v1.1      | 0/?            | Not started | -          |
 
@@ -185,7 +185,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 **Goal:** Extract shared `cipherbox-core` Rust crate mirroring `@cipherbox/core` and `@cipherbox/sdk-core` TypeScript packages. Replace duplicated crypto/IPNS/metadata logic in desktop FUSE code with crate imports. Enable unit testing at the same granularity as TypeScript. Platform-specific plans for macOS (FUSE-T SMB), Linux (kernel FUSE), Windows (WinFSP).
 **Requirements**: TBD
 **Depends on:** None (can run independently alongside other phases)
-**Plans:** 5/7 plans executed
+**Plans:** 7/7 plans complete
 
 Plans:
 
@@ -194,4 +194,4 @@ Plans:
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-24_
+_Last updated: 2026-03-25_

@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-24T19:56:14.324Z'
+last_updated: '2026-03-25T00:00:00.000Z'
 progress:
   total_phases: 8
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 27
-  completed_plans: 25
+  completed_plans: 27
 ---
 
 # Project State
@@ -18,12 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 21 — byo-ipfs-node-support
+**Current focus:** Phase 21 — byo-ipfs-node-support (COMPLETE)
 
 ## Current Position
 
-Phase: 21 (byo-ipfs-node-support) — EXECUTING
-Plan: 6 of 7
+Phase: 21 (byo-ipfs-node-support) — COMPLETE
+Plan: 7 of 7 (all plans complete)
 
 ## Performance Metrics
 
@@ -56,6 +56,8 @@ Plan: 6 of 7
 | 21    | 03   | 10min    | 3     | 13    |
 | 21    | 05   | 9min     | 2     | 13    |
 | 21    | 04   | 8min     | 3     | 9     |
+| 21    | 06   | 3min     | 2     | 4     |
+| 21    | 07   | 5min     | 3     | 5     |
 
 ## Accumulated Context
 
@@ -103,6 +105,7 @@ Recent for v1.1:
 - SSRF protection on TEE migration: validates URL structure (HTTPS-only, no private IPs) and DNS resolution (rebinding check)
 - BYO config stored as encrypted IPNS entry using rootFolderKey -- no server-side credential storage (zero-knowledge preserved)
 - Dedicated IPNS key derived via HKDF with context string byo-ipfs-config from vault keypair
+- BYO benchmark execution (21-07 Task 4) deferred -- requires external IPFS provider infrastructure; test scenarios ready to run when provider available
 
 ### Roadmap Evolution
 
@@ -128,4 +131,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 21-04 (Settings STORAGE tab: pinning mode selector, encrypted IPNS config persistence, connection test, advisory quota badge)
+Last updated: 2026-03-25 after completing 21-07 (BYO performance benchmarking scenarios -- benchmark execution deferred pending provider infrastructure)
