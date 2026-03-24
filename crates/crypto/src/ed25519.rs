@@ -5,7 +5,7 @@
 
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::CryptoError;
 
@@ -21,13 +21,14 @@ pub const ED25519_SIGNATURE_SIZE: usize = 64;
 /// Generate a new Ed25519 keypair.
 ///
 /// Returns (public_key_32bytes, private_key_32bytes).
-pub fn generate_ed25519_keypair() -> (Vec<u8>, Vec<u8>) {
+/// The private key is wrapped in `Zeroizing` to ensure it is zeroed on drop.
+pub fn generate_ed25519_keypair() -> (Vec<u8>, Zeroizing<Vec<u8>>) {
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
 
     (
         verifying_key.to_bytes().to_vec(),
-        signing_key.to_bytes().to_vec(),
+        Zeroizing::new(signing_key.to_bytes().to_vec()),
     )
 }
 

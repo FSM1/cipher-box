@@ -15,7 +15,7 @@ aes-gcm = "0.10"
 aes = "0.8"
 ctr = "0.9"
 ecies = { version = "0.2", default-features = false, features = ["pure"] }
-ed25519-dalek = { version = "2", features = ["rand_core"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 hkdf = "0.12"
 sha2 = "0.10"
 rand = "0.8"

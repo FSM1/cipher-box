@@ -469,7 +469,7 @@ pub(crate) mod implementation {
                     ipns_name: ipns_name.clone(),
                     encrypted_folder_key: encrypted_folder_key_hex,
                     folder_key: zeroize::Zeroizing::new(folder_key.to_vec()),
-                    ipns_private_key: Some(zeroize::Zeroizing::new(ipns_private_key.clone())),
+                    ipns_private_key: Some(ipns_private_key.clone()),
                     children_loaded: true,
                 },
                 attr,
@@ -519,7 +519,7 @@ pub(crate) mod implementation {
                         &api, &json_bytes,
                     ).await.map_err(|e| format!("{}", e))?;
 
-                    let ipns_key_arr: [u8; 32] = ipns_private_key.try_into()
+                    let ipns_key_arr: [u8; 32] = (*ipns_private_key).clone().try_into()
                         .map_err(|_| "Invalid IPNS key length".to_string())?;
                     let value = format!("/ipfs/{}", initial_cid);
                     let record = cipherbox_core::ipns::create_ipns_record(
