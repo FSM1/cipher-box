@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0d13d24c6aad",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T22:25:28.54757Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "034a47bce272",
+  "token_usage": {
+    "input_tokens": 404,
+    "cache_creation_tokens": 871535,
+    "cache_read_tokens": 72223809,
+    "output_tokens": 77059,
+    "api_call_count": 358
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Complete Phase 23 (Rust SDK Extraction) gap closure execution, run a security review, add test coverage for the new Rust crates, and get PR #352 merged through CI.",
+    "outcome": "All Phase 23 plans executed and verified; 163 new Rust unit tests added; multiple security findings fixed; PR #352 created and iteratively improved through several rounds of code review resolution. Windows CI cargo check remains unresolved — a debug notes file was committed to the branch for continuation on a Windows machine.",
+    "learnings": {
+      "repo": [
+        "The workspace [workspace.dependencies] entry must have `default-features = false` — consumer-side `{ workspace = true, default-features = false }` alone is insufficient; Cargo requires the workspace-level definition to carry that flag.",
+        "cipherbox-fuse uses feature flags `fuse` (Unix/FUSE) and `winfsp` (Windows/WinFSP) to gate platform-specific code; these are mutually exclusive and the CI command is `cargo check --workspace --no-default-features --features winfsp`.",
+        "The vendored fuser crate (apps/desktop/src-tauri/vendor/fuser) is always resolved by Cargo due to [patch.crates-io], even when no feature activates it — it must be able to compile as a no-op on Windows.",
+        "HKDF domain separation is correct across all 5 derivation contexts; all KeyState and CipherBoxFS key fields use Zeroizing\u003cVec\u003cu8\u003e\u003e with proper zeroization on logout and unmount.",
+        "generate_ed25519_keypair callers were wrapping the return value in redundant Zeroizing::new() — the function itself now returns Zeroizing\u003cVec\u003cu8\u003e\u003e.",
+        "IpnsPublishRequest previously derived Debug, leaking encrypted IPNS key material — replaced with a custom Debug impl that redacts sensitive fields.",
+        "The cross-language vector parity test imports @cipherbox/core which depends on @cipherbox/crypto — they must be built sequentially (crypto first) not in parallel."
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "line": 1,
+          "end_line": 50,
+          "finding": "generate_ed25519_keypair now returns Zeroizing\u003cVec\u003cu8\u003e\u003e for the private key; callers in write_ops.rs removed redundant Zeroizing::new() wrappers"
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Root workspace dep for cipherbox-fuse needed `default-features = false` — without this, the `fuse` feature was being activated on Windows despite --no-default-features"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/src/lib.rs",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Vendored fuser wrapped in cfg(unix) via include! pattern — lib_impl.rs holds all real code, lib.rs is empty on non-Unix"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "Zeroizing\u003cVec\u003cu8\u003e\u003e.try_into() doesn't work directly for [u8;32] — must use Vec::from(key).try_into() to unwrap first"
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 102,
+          "end_line": 103,
+          "finding": "Bug: app_version and device_model fields were set to device_id due to partial move — fixed by capturing values before the struct move"
+        },
+        {
+          "path": "crates/fuse/src/platform/linux.rs",
+          "line": 17,
+          "end_line": 40,
+          "finding": "Temp dir cleanup must happen AFTER unmount, not before — fixed for both Linux and macOS"
+        },
+        {
+          "path": "crates/api-client/src/ipfs.rs",
+          "line": 30,
+          "end_line": 45,
+          "finding": "DeserializationFailed variant used for reqwest errors — corrected to RequestFailed which has the #[from] reqwest::Error impl"
+        }
+      ],
+      "workflow": [
+        "When an agent disconnects mid-execution, check git log for commits and verify acceptance criteria before re-running — often only bookkeeping (SUMMARY.md, STATE.md) remains.",
+        "cargo tree -e features is the definitive tool for diagnosing unexpected Cargo feature activation; use it before iterating through CI roundtrips.",
+        "Workspace [patch.crates-io] entries are always resolved by Cargo regardless of feature activation — patched crates must compile (even as no-ops) on all target platforms.",
+        "1Password SSH agent can be flaky for commit signing; retrying 2-3 times usually resolves it.",
+        "Running security review, test coverage, and PR review resolution in parallel (separate agents for each crate) is much faster than sequential execution.",
+        "When CI is failing on a platform you can't test locally, commit a debug notes file to the branch before switching machines to preserve context."
+      ]
+    },
+    "friction": [
+      "1Password SSH signing agent repeatedly failed, requiring multiple commit retries throughout the session.",
+      "Windows cargo check required 7+ CI roundtrips to diagnose — root cause was layered (fuser build.rs → fuser lib.rs → workspace default-features → WinFSP module resolution still unresolved).",
+      "Cargo workspace feature resolution is non-obvious: consumer-side `default-features = false` is insufficient without matching workspace-level declaration.",
+      "[patch.crates-io] forces crate resolution for ALL workspace members regardless of feature activation, making platform-specific vendored crates problematic.",
+      "CodeRabbit reopened the same ecies.rs min-size comment 3 separate times across multiple review rounds.",
+      "Cross-language vector parity failure had two separate causes (pnpm version missing, then build order wrong) requiring two CI roundtrips."
+    ],
+    "open_items": [
+      "Windows cargo check is still failing — the WinFSP platform modules (read_ops.rs:19, write_ops.rs:20, dir_ops.rs:13) can't find `super::operations` despite winfsp feature being active. Needs local Windows debugging (see .planning/phases/23-rust-sdk-extraction/WINDOWS-BUILD-DEBUG.md).",
+      "AES-CTR ciphertext lacks client-side CID integrity verification — HIGH finding from security review, deferred (not fixed in this session).",
+      "file_ipns_private_key in write_ops.rs uses ed25519_dalek directly (not generate_ed25519_keypair) and doesn't use Zeroizing — noted as secondary concern, not addressed.",
+      "The fuse crate's crate-level operations.rs/read_ops.rs/write_ops.rs/dir_ops.rs are currently only gated by `#[cfg(feature = \"fuse\")]` — if the workspace fix fully resolves the Windows issue, these may still need cfg(unix) guards for robustness."
+    ]
+  }
+}
