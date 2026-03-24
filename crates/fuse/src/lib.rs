@@ -56,7 +56,7 @@ const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 /// Run an async future with a timeout on the tokio runtime.
 /// Prevents filesystem thread hangs from indefinite network I/O.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-fn block_with_timeout<F, T>(rt: &tokio::runtime::Handle, fut: F) -> Result<T, String>
+pub fn block_with_timeout<F, T>(rt: &tokio::runtime::Handle, fut: F) -> Result<T, String>
 where
     F: std::future::Future<Output = Result<T, String>>,
 {
