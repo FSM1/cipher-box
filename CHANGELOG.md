@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.26.6](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.26.5...cipher-box-v0.26.6) (2026-03-24)
+
+
+### Bug Fixes
+
+* **ci:** fix load test workflow for staging runs ([#337](https://github.com/FSM1/cipher-box/issues/337)) ([c13c060](https://github.com/FSM1/cipher-box/commit/c13c060001bc574ea346a407ef77efd1de39e3c6))
+
+
+### Performance Improvements
+
+* optimize IPFS upload with concurrent pins and pebbleds datastore ([#342](https://github.com/FSM1/cipher-box/issues/342)) ([8f8f03f](https://github.com/FSM1/cipher-box/commit/8f8f03fa64c5aba91e8dc72c5b8dc67fd0b629d5))
+
 ## [0.26.5](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.26.4...cipher-box-v0.26.5) (2026-03-23)
 
 
