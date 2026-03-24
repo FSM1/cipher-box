@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d2b9f4987bb4",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T06:09:17.876005Z",
+  "branch": "fix/vault-key-ipns-separation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "590e5c17d503",
+  "token_usage": {
+    "input_tokens": 47,
+    "cache_creation_tokens": 51448,
+    "cache_read_tokens": 1614886,
+    "output_tokens": 10814,
+    "api_call_count": 35
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Monitor PR #349 for new automated reviews from CodeRabbit and Copilot, and automatically resolve them when they arrive.",
+    "outcome": "Scheduled a 5-minute cron job to poll for unresolved threads; when 4 new Copilot comments arrived, all were triaged and fixed (3 doc corrections + 1 real bug in recovery.html), tests passed, and changes were committed.",
+    "learnings": {
+      "repo": [
+        "VaultBlobV2 type was removed — vault blob functions now return Uint8Array directly, not a typed VaultBlobV2 object.",
+        "The v2 blob format is key-only (ECIES), not key + metadata; METADATA_SCHEMAS.md had stale descriptions conflating the two.",
+        "recovery.html uses a separate HKDF derivation path for IPNS names; vault key IPNS and root folder IPNS must be derived independently using different HKDF info constants.",
+        "Project is a pnpm monorepo under /Users/michael/Code/cipher-box-phase-20 with separate packages for core, crypto, and web."
+      ],
+      "code": [
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Encryption table incorrectly described v2 blob as 'ECIES (key) + AES-256-GCM (metadata)' — v2 is key-only."
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 304,
+          "end_line": 304,
+          "finding": "Referenced VaultBlobV2 type that no longer exists in the codebase."
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 441,
+          "end_line": 441,
+          "finding": "IPNS table described v2 blob as 'ECIES key + metadata' — should be key-only."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1312,
+          "end_line": 1312,
+          "finding": "Bug: directRootIpnsName was actually the vault key IPNS name but was being used as the root folder IPNS name for folder traversal — required separate derivation with distinct HKDF info constant."
+        }
+      ],
+      "workflow": [
+        "The /loop skill wraps CronCreate to schedule recurring prompts; cron jobs auto-expire after 7 days and can be cancelled with CronDelete using the job ID.",
+        "GitHub GraphQL API reviewThreads query with isResolved filter is the reliable way to count unresolved PR threads from specific bots.",
+        "Replying to review threads uses REST (gh api repos/.../pulls/.../comments with --field in_reply_to as integer), while resolving uses GraphQL resolveReviewThread mutation.",
+        "Load/integration tests fail without a running API server — use targeted package-level tests (pnpm test --filter) to validate fixes without false failures."
+      ]
+    },
+    "friction": [
+      "GitHub API timed out on one 5-minute polling cycle, causing a missed check — no retry logic in the cron prompt.",
+      "recovery.html required multiple iterative reads (6+ passes) to locate the exact variable scope and derivation call site for the IPNS bug fix.",
+      "Grep needed multiple passes to confirm VaultBlobV2 removal across the codebase before confidently categorizing the doc comment as stale."
+    ],
+    "open_items": [
+      "Cron job cadb6bcb is still running and will continue polling PR #349 every 5 minutes — should be cancelled with CronDelete once PR is merged.",
+      "recovery.html HKDF constant and function renaming should be cross-checked against the main app's equivalent derivation logic to ensure parity.",
+      "No E2E tests were run despite recovery.html being a user-facing file — Playwright tests were skipped as the change was deemed non-E2E-relevant."
+    ]
+  }
+}
