@@ -1,0 +1,91 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ed4ac2357b62",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T06:35:33.668538Z",
+  "branch": "fix/vault-key-ipns-separation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "dbfc6c733171",
+  "token_usage": {
+    "input_tokens": 137,
+    "cache_creation_tokens": 120132,
+    "cache_read_tokens": 7939402,
+    "output_tokens": 28529,
+    "api_call_count": 99
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Automatically monitor PR #349 (cipher-box) for new bot review comments from CodeRabbit and Copilot, and resolve them as they arrive using a 5-minute cron loop.",
+    "outcome": "Three rounds of bot reviews were fully resolved (4 + 7 + 4 = 15 new threads across multiple commits), with real bugs fixed in recovery.html and useAuth.ts, plus doc clarifications in METADATA_SCHEMAS.md. The cron monitor ran successfully throughout.",
+    "learnings": {
+      "repo": [
+        "VaultBlobV2 type was removed; functions now return Uint8Array directly instead",
+        "IPNS records for vault key and root folder are separate derivations — conflating them (directRootIpnsName bug) caused recovery.html to use vault key IPNS for folder traversal",
+        "The TEE republishes IPNS records every 3 hours, so IPNS expiry concerns for the key blob are not applicable",
+        "sequence=0 on initial IPNS publishes is pre-existing intentional behavior across both vault.rs and useAuth.ts",
+        "CodeRabbit sometimes posts 'outside of diff range' comments that don't show up as reviewThreads in the GraphQL API",
+        "Copilot re-reviews on new pushes; CodeRabbit did not re-review after the final commit batch"
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1312,
+          "end_line": 1312,
+          "finding": "directRootIpnsName was being derived and then used as root folder IPNS name, but was actually the vault key IPNS name — fixed by deriving both separately"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 102,
+          "end_line": 146,
+          "finding": "Broad try/catch over getVault() + fetchFromIpfs() meant a 404 from fetchFromIpfs (missing CID) would incorrectly trigger vault re-initialization for an existing user — fixed by giving getVault() its own try/catch"
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 99,
+          "end_line": 99,
+          "finding": "slice() was used where subarray() is preferred for zero-copy Uint8Array operations"
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Encryption table incorrectly stated 'ECIES (key) + AES-256-GCM (metadata)' for v2 blob — v2 is key-only (ECIES-wrapped rootFolderKey)"
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 304,
+          "end_line": 304,
+          "finding": "Referenced VaultBlobV2 type that no longer exists; should reference Uint8Array return type"
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 441,
+          "end_line": 441,
+          "finding": "IPNS table described v2 blob as 'ECIES key + metadata' — corrected to 'ECIES-wrapped rootFolderKey only'"
+        }
+      ],
+      "workflow": [
+        "The /loop skill with CronCreate enables fully automated PR review monitoring — cron fires the GraphQL check every 5 minutes and triggers /resolve-pr-reviews automatically",
+        "GraphQL reviewThreads API only returns inline thread comments; outside-diff-range comments appear only in the review body and require separate handling",
+        "Cron jobs auto-expire after 7 days; cancel early with CronDelete using the job ID",
+        "Replying to outside-diff-range comments requires posting a general PR comment rather than a thread reply since they have no resolvable thread ID"
+      ]
+    },
+    "friction": [
+      "GitHub API timed out on one cron tick (transient network issue), causing a false 'no new reviews' report",
+      "The GraphQL reviewThreads count showed 0 for 7 Copilot comments that were actually present — required a fallback fetch to discover them, suggesting the initial query missed newly created threads",
+      "Outside-diff-range comments from CodeRabbit's review (review #3996563546) were invisible to the monitoring query and had to be handled manually after the user pointed them out",
+      "Indentation inconsistency in useAuth.ts required a follow-up edit after the initial refactor"
+    ],
+    "open_items": [
+      "sequence=0 conflict handling in vault.rs and useAuth.ts: Copilot suggested aborting on conflict rather than warn-and-continue — deferred as pre-existing behavior but flagged as worth revisiting",
+      "IPNS record expiry for vault key blob: currently relies on TEE republishing every 3h — no client-side fallback if TEE is unavailable",
+      "CodeRabbit did not re-review after the final commit push — unclear if it requires manual trigger (@coderabbitai review) to catch the last round of changes"
+    ]
+  }
+}
