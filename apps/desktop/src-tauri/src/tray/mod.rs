@@ -255,7 +255,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 
                 // Delete refresh token from Keychain
                 if let Some(ref user_id) = *state.sdk.user_id.read().await {
-                    let _ = crate::api::auth::delete_refresh_token(user_id);
+                    let _ = crate::keychain::delete_refresh_token(user_id);
                 }
 
                 // Zero all sensitive keys

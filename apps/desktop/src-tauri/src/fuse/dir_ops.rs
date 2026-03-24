@@ -65,11 +65,11 @@ pub(crate) mod implementation {
             let tx = fs.refresh_tx.clone();
             let refresh_ino = ino;
             rt.spawn(async move {
-                match crate::api::ipns::resolve_ipns(&api, &ipns_name).await {
+                match cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name).await {
                     Ok(resolve_resp) => {
-                        match crate::api::ipfs::fetch_content(&api, &resolve_resp.cid).await {
+                        match cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid).await {
                             Ok(encrypted_bytes) => {
-                                match crate::crypto::decrypt::decrypt_metadata_from_ipfs_public(
+                                match cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
                                     &encrypted_bytes, &folder_key,
                                 ) {
                                     Ok(metadata) => {

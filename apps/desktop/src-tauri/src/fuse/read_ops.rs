@@ -131,11 +131,11 @@ pub(crate) mod implementation {
             let tx = fs.refresh_tx.clone();
             let refresh_ino = parent;
             rt.spawn(async move {
-                match crate::api::ipns::resolve_ipns(&api, &ipns_name).await {
+                match cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name).await {
                     Ok(resolve_resp) => {
-                        match crate::api::ipfs::fetch_content(&api, &resolve_resp.cid).await {
+                        match cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid).await {
                             Ok(encrypted_bytes) => {
-                                match crate::crypto::decrypt::decrypt_metadata_from_ipfs_public(
+                                match cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
                                     &encrypted_bytes, &folder_key,
                                 ) {
                                     Ok(metadata) => {
@@ -526,20 +526,20 @@ pub(crate) mod implementation {
                 let prepare_result = (|| -> Result<(), String> {
                     let plaintext = handle.read_all()?;
 
-                    let mut file_key = crate::crypto::utils::generate_file_key();
-                    let iv = crate::crypto::utils::generate_iv();
+                    let mut file_key = cipherbox_crypto::utils::generate_file_key();
+                    let iv = cipherbox_crypto::utils::generate_iv();
 
-                    let ciphertext = crate::crypto::aes::encrypt_aes_gcm(
+                    let ciphertext = cipherbox_crypto::aes::encrypt_aes_gcm(
                         &plaintext, &file_key, &iv,
                     )
                     .map_err(|e| format!("File encryption failed: {}", e))?;
 
-                    let wrapped_key = crate::crypto::ecies::wrap_key(
+                    let wrapped_key = cipherbox_crypto::ecies::wrap_key(
                         &file_key, &fs.public_key,
                     )
                     .map_err(|e| format!("Key wrapping failed: {}", e))?;
 
-                    crate::crypto::utils::clear_bytes(&mut file_key);
+                    cipherbox_crypto::utils::clear_bytes(&mut file_key);
 
                     let (old_file_cid, old_encrypted_key, old_iv, old_size, old_mode,
                          existing_versions, file_ipns_private_key, file_meta_ipns_name) =
@@ -583,7 +583,7 @@ pub(crate) mod implementation {
                     let (new_versions, pruned_cids) = if should_version {
                         if let Some(ref old_c) = old_file_cid {
                             if !old_c.is_empty() {
-                                let version_entry = crate::crypto::folder::VersionEntry {
+                                let version_entry = cipherbox_core::folder::VersionEntry {
                                     cid: old_c.clone(),
                                     file_key_encrypted: old_encrypted_key.clone(),
                                     file_iv: old_iv.clone(),
@@ -661,7 +661,7 @@ pub(crate) mod implementation {
                     let upload_tx = fs.upload_tx.clone();
                     let coordinator = fs.publish_coordinator.clone();
 
-                    let file_meta = crate::crypto::folder::FileMetadata {
+                    let file_meta = cipherbox_core::folder::FileMetadata {
                         version: "v1".to_string(),
                         cid: String::new(),
                         file_key_encrypted: encrypted_file_key_hex.clone(),
@@ -676,9 +676,9 @@ pub(crate) mod implementation {
 
                     std::thread::spawn(move || {
                         let result = rt.block_on(async {
-                            let file_cid = crate::api::ipfs::upload_content(
+                            let file_cid = cipherbox_api_client::ipfs::upload_content(
                                 &api, &ciphertext,
-                            ).await?;
+                            ).await.map_err(|e| e.to_string())?;
 
                             log::info!("File uploaded: ino {} -> CID {}", ino, file_cid);
 

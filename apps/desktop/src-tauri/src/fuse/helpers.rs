@@ -56,9 +56,9 @@ pub fn is_windows_special(name: &str) -> bool {
 
 /// Detect MIME type from file extension.
 ///
-/// Delegates to the shared implementation in `crate::crypto::utils`.
+/// Delegates to the shared implementation in `cipherbox_crypto::utils`.
 pub fn mime_from_extension(filename: &str) -> String {
-    crate::crypto::utils::mime_from_extension(filename).to_string()
+    cipherbox_crypto::utils::mime_from_extension(filename).to_string()
 }
 
 /// Build a human-readable breadcrumb path for a folder inode.
@@ -92,13 +92,13 @@ pub fn build_folder_path(fs: &crate::fuse::CipherBoxFS, folder_ino: u64) -> Stri
 /// Convert VersionEntry list to VersionCidEntry list for bin entries.
 /// Filters out entries with empty CIDs and returns None if the result is empty.
 pub fn versions_to_bin_entries(
-    versions: &Option<Vec<crate::crypto::folder::VersionEntry>>,
-) -> Option<Vec<crate::crypto::bin::VersionCidEntry>> {
+    versions: &Option<Vec<cipherbox_core::folder::VersionEntry>>,
+) -> Option<Vec<cipherbox_core::bin::VersionCidEntry>> {
     versions.as_ref().and_then(|items| {
-        let mapped: Vec<crate::crypto::bin::VersionCidEntry> = items
+        let mapped: Vec<cipherbox_core::bin::VersionCidEntry> = items
             .iter()
             .filter(|v| !v.cid.is_empty())
-            .map(|v| crate::crypto::bin::VersionCidEntry {
+            .map(|v| cipherbox_core::bin::VersionCidEntry {
                 cid: v.cid.clone(),
                 size: v.size,
             })

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use zeroize::Zeroize;
 
-use crate::crypto::folder::FolderMetadata;
+use cipherbox_core::folder::FolderMetadata;
 
 /// Time-to-live for cached folder metadata (matches 30s sync polling interval).
 pub const METADATA_TTL: Duration = Duration::from_secs(30);

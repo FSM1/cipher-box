@@ -73,14 +73,14 @@ pub(crate) mod implementation {
         if is_dir {
             // Create directory
             let result = (|| -> Result<(FileAttrs, u64), String> {
-                let folder_key = crate::crypto::utils::generate_file_key();
+                let folder_key = cipherbox_crypto::utils::generate_file_key();
                 let (ipns_public_key, ipns_private_key) =
-                    crate::crypto::ed25519::generate_ed25519_keypair();
+                    cipherbox_crypto::ed25519::generate_ed25519_keypair();
                 let ipns_pub_arr: [u8; 32] = ipns_public_key.clone().try_into()
                     .map_err(|_| "Invalid IPNS public key length".to_string())?;
-                let ipns_name = crate::crypto::ipns::derive_ipns_name(&ipns_pub_arr)
+                let ipns_name = cipherbox_core::ipns::derive_ipns_name(&ipns_pub_arr)
                     .map_err(|e| format!("Failed to derive IPNS name: {}", e))?;
-                let wrapped_folder_key = crate::crypto::ecies::wrap_key(
+                let wrapped_folder_key = cipherbox_crypto::ecies::wrap_key(
                     &folder_key, &fs.public_key,
                 )
                 .map_err(|e| format!("Folder key wrapping failed: {}", e))?;
@@ -119,13 +119,13 @@ pub(crate) mod implementation {
                     parent_inode.attr.ctime = SystemTime::now();
                 }
 
-                let metadata = crate::crypto::folder::FolderMetadata {
+                let metadata = cipherbox_core::folder::FolderMetadata {
                     version: "v2".to_string(),
                     children: vec![],
                 };
                 let json_bytes = crate::fuse::encrypt_metadata_to_json(&metadata, &folder_key)?;
                 let encrypted_ipns_for_tee = if let Some(ref tee_key) = fs.tee_public_key {
-                    let wrapped = crate::crypto::ecies::wrap_key(&ipns_private_key, tee_key)
+                    let wrapped = cipherbox_crypto::ecies::wrap_key(&ipns_private_key, tee_key)
                         .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
                     Some(hex::encode(&wrapped))
                 } else {
@@ -142,20 +142,20 @@ pub(crate) mod implementation {
 
                 std::thread::spawn(move || {
                     let result = rt.block_on(async {
-                        let initial_cid = crate::api::ipfs::upload_content(&api, &json_bytes).await?;
+                        let initial_cid = cipherbox_api_client::ipfs::upload_content(&api, &json_bytes).await.map_err(|e| e.to_string())?;
                         let ipns_key_arr: [u8; 32] = ipns_private_key.try_into()
                             .map_err(|_| "Invalid IPNS key length".to_string())?;
                         let value = format!("/ipfs/{}", initial_cid);
-                        let record = crate::crypto::ipns::create_ipns_record(
+                        let record = cipherbox_core::ipns::create_ipns_record(
                             &ipns_key_arr, &value, 0, 86_400_000,
                         ).map_err(|e| format!("IPNS record creation failed: {}", e))?;
-                        let marshaled = crate::crypto::ipns::marshal_ipns_record(&record)
+                        let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
                             .map_err(|e| format!("IPNS marshal failed: {}", e))?;
 
                         use base64::Engine;
                         let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
                         // New folder initial publish: sequence 0, no conflict check needed
-                        let req = crate::api::ipns::IpnsPublishRequest {
+                        let req = cipherbox_api_client::IpnsPublishRequest {
                             ipns_name: ipns_name_clone.clone(),
                             record: record_b64,
                             metadata_cid: initial_cid,
@@ -163,11 +163,11 @@ pub(crate) mod implementation {
                             key_epoch: tee_key_epoch,
                             expected_sequence_number: None,
                         };
-                        match crate::api::ipns::publish_ipns(&api, &req).await? {
-                            crate::api::ipns::PublishResult::Success => {
+                        match cipherbox_api_client::ipns::publish_ipns(&api, &req).await.map_err(|e| e.to_string())? {
+                            cipherbox_api_client::PublishResult::Success => {
                                 coordinator.record_publish(&ipns_name_clone, 0);
                             }
-                            crate::api::ipns::PublishResult::Conflict { .. } => {
+                            cipherbox_api_client::PublishResult::Conflict { .. } => {
                                 log::warn!("Unexpected conflict on new folder IPNS publish for {}", ipns_name_clone);
                             }
                         }
@@ -178,21 +178,21 @@ pub(crate) mod implementation {
                             &parent_metadata, &parent_folder_key,
                         )?;
                         let seq = coordinator.resolve_sequence(&api, &parent_ipns_name).await?;
-                        let parent_meta_cid = crate::api::ipfs::upload_content(&api, &parent_json).await?;
+                        let parent_meta_cid = cipherbox_api_client::ipfs::upload_content(&api, &parent_json).await.map_err(|e| e.to_string())?;
                         let parent_key_arr: [u8; 32] = parent_ipns_key.try_into()
                             .map_err(|_| "Invalid parent IPNS key length".to_string())?;
                         let new_seq = seq + 1;
                         let parent_value = format!("/ipfs/{}", parent_meta_cid);
-                        let parent_record = crate::crypto::ipns::create_ipns_record(
+                        let parent_record = cipherbox_core::ipns::create_ipns_record(
                             &parent_key_arr, &parent_value, new_seq, 86_400_000,
                         ).map_err(|e| format!("Parent IPNS record failed: {}", e))?;
-                        let parent_marshaled = crate::crypto::ipns::marshal_ipns_record(&parent_record)
+                        let parent_marshaled = cipherbox_core::ipns::marshal_ipns_record(&parent_record)
                             .map_err(|e| format!("Parent IPNS marshal failed: {}", e))?;
                         let parent_record_b64 = base64::engine::general_purpose::STANDARD.encode(&parent_marshaled);
                         // Parent folder publish after mkdir includes conflict detection.
                         // On conflict, log a warning -- the debounced publish queue will retry.
                         // TODO: Add full re-fetch+merge+retry for parent mkdir publish (v2).
-                        let parent_req = crate::api::ipns::IpnsPublishRequest {
+                        let parent_req = cipherbox_api_client::IpnsPublishRequest {
                             ipns_name: parent_ipns_name.clone(),
                             record: parent_record_b64,
                             metadata_cid: parent_meta_cid,
@@ -200,15 +200,15 @@ pub(crate) mod implementation {
                             key_epoch: None,
                             expected_sequence_number: Some(seq.to_string()),
                         };
-                        match crate::api::ipns::publish_ipns(&api, &parent_req).await? {
-                            crate::api::ipns::PublishResult::Success => {
+                        match cipherbox_api_client::ipns::publish_ipns(&api, &parent_req).await.map_err(|e| e.to_string())? {
+                            cipherbox_api_client::PublishResult::Success => {
                                 coordinator.record_publish(&parent_ipns_name, new_seq);
                                 // Only unpin old CID on successful publish
                                 if let Some(old) = parent_old_cid {
-                                    let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                                    let _ = cipherbox_api_client::ipfs::unpin_content(&api, &old).await;
                                 }
                             }
-                            crate::api::ipns::PublishResult::Conflict { current_sequence_number } => {
+                            cipherbox_api_client::PublishResult::Conflict { current_sequence_number } => {
                                 log::warn!(
                                     "Conflict on parent publish after mkdir (expected seq {}, server has {}). \
                                     Debounced publish will retry.",
@@ -253,7 +253,7 @@ pub(crate) mod implementation {
             let verifying_key = signing_key.verifying_key();
             let file_ipns_private_key = signing_key.to_bytes().to_vec();
             let file_ipns_public_key_bytes: [u8; 32] = verifying_key.to_bytes();
-            let file_ipns_name = match crate::crypto::ipns::derive_ipns_name(&file_ipns_public_key_bytes) {
+            let file_ipns_name = match cipherbox_core::ipns::derive_ipns_name(&file_ipns_public_key_bytes) {
                 Ok(name) => name,
                 Err(e) => {
                     log::error!("create: IPNS name derivation failed: {}", e);
@@ -261,7 +261,7 @@ pub(crate) mod implementation {
                 }
             };
 
-            let ipns_key_encrypted_hex = match crate::crypto::ecies::wrap_key(
+            let ipns_key_encrypted_hex = match cipherbox_crypto::ecies::wrap_key(
                 &file_ipns_private_key, &fs.public_key,
             ) {
                 Ok(wrapped) => Some(hex::encode(&wrapped)),
@@ -513,7 +513,7 @@ pub(crate) mod implementation {
             };
 
             // Capture bin entry data for file or folder before removal
-            let bin_file_data: Option<(String, u64, crate::crypto::folder::FilePointer, String, Option<Vec<crate::crypto::bin::VersionCidEntry>>)> =
+            let bin_file_data: Option<(String, u64, cipherbox_core::folder::FilePointer, String, Option<Vec<cipherbox_core::bin::VersionCidEntry>>)> =
                 match fs.inodes.get(ino) {
                     Some(inode) => match &inode.kind {
                         InodeKind::File {
@@ -531,8 +531,8 @@ pub(crate) mod implementation {
 
                             match file_meta_ipns_name {
                                 Some(name) if !name.is_empty() => {
-                                    let file_pointer = crate::crypto::folder::FilePointer {
-                                        id: crate::crypto::utils::generate_uuid_v4(),
+                                    let file_pointer = cipherbox_core::folder::FilePointer {
+                                        id: cipherbox_crypto::utils::generate_uuid_v4(),
                                         name: inode.name.clone(),
                                         file_meta_ipns_name: name.clone(),
                                         ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
@@ -556,7 +556,7 @@ pub(crate) mod implementation {
                     None => None,
                 };
 
-            let bin_folder_data: Option<(String, crate::crypto::folder::FolderEntry)> =
+            let bin_folder_data: Option<(String, cipherbox_core::folder::FolderEntry)> =
                 if bin_file_data.is_none() {
                     match fs.inodes.get(ino) {
                         Some(inode) => match &inode.kind {
@@ -573,10 +573,10 @@ pub(crate) mod implementation {
 
                                 match ipns_private_key {
                                     Some(key) => {
-                                        match crate::crypto::ecies::wrap_key(key, &fs.public_key) {
+                                        match cipherbox_crypto::ecies::wrap_key(key, &fs.public_key) {
                                             Ok(wrapped) => {
-                                                let folder_entry = crate::crypto::folder::FolderEntry {
-                                                    id: crate::crypto::utils::generate_uuid_v4(),
+                                                let folder_entry = cipherbox_core::folder::FolderEntry {
+                                                    id: cipherbox_crypto::utils::generate_uuid_v4(),
                                                     name: inode.name.clone(),
                                                     ipns_name: ipns_name.clone(),
                                                     folder_key_encrypted: encrypted_folder_key.clone(),
@@ -630,15 +630,15 @@ pub(crate) mod implementation {
                 let parent_path = crate::fuse::helpers::build_folder_path(&fs, parent_ino);
 
                 let bin_entry = if let Some((name, size, fp, cid, ver_cids)) = bin_file_data {
-                    Some(crate::crypto::bin::BinEntry {
-                        id: crate::crypto::utils::generate_uuid_v4(),
-                        item_type: crate::crypto::bin::BinItemType::File,
+                    Some(cipherbox_core::bin::BinEntry {
+                        id: cipherbox_crypto::utils::generate_uuid_v4(),
+                        item_type: cipherbox_core::bin::BinItemType::File,
                         name: name.clone(),
                         original_parent_ipns_name: parent_ipns_name,
                         original_path: parent_path,
                         deleted_at: now_ms,
                         size,
-                        mime_type: crate::crypto::utils::mime_from_extension(&name).to_string(),
+                        mime_type: cipherbox_crypto::utils::mime_from_extension(&name).to_string(),
                         content_cid: if cid.is_empty() { None } else { Some(cid) },
                         content_size: Some(size),
                         version_cids: ver_cids,
@@ -646,9 +646,9 @@ pub(crate) mod implementation {
                         folder_entry: None,
                     })
                 } else if let Some((name, fe)) = bin_folder_data {
-                    Some(crate::crypto::bin::BinEntry {
-                        id: crate::crypto::utils::generate_uuid_v4(),
-                        item_type: crate::crypto::bin::BinItemType::Folder,
+                    Some(cipherbox_core::bin::BinEntry {
+                        id: cipherbox_crypto::utils::generate_uuid_v4(),
+                        item_type: cipherbox_core::bin::BinItemType::Folder,
                         name,
                         original_parent_ipns_name: parent_ipns_name,
                         original_path: parent_path,
@@ -703,15 +703,15 @@ pub(crate) mod implementation {
 
                 let prepare_result = (|| -> Result<(), String> {
                     let plaintext = handle.read_all()?;
-                    let mut file_key = crate::crypto::utils::generate_file_key();
-                    let iv = crate::crypto::utils::generate_iv();
-                    let ciphertext = crate::crypto::aes::encrypt_aes_gcm(
+                    let mut file_key = cipherbox_crypto::utils::generate_file_key();
+                    let iv = cipherbox_crypto::utils::generate_iv();
+                    let ciphertext = cipherbox_crypto::aes::encrypt_aes_gcm(
                         &plaintext, &file_key, &iv,
                     )
                     .map_err(|e| format!("File encryption failed: {}", e))?;
-                    let wrapped_key = crate::crypto::ecies::wrap_key(&file_key, &fs.public_key)
+                    let wrapped_key = cipherbox_crypto::ecies::wrap_key(&file_key, &fs.public_key)
                         .map_err(|e| format!("Key wrapping failed: {}", e))?;
-                    crate::crypto::utils::clear_bytes(&mut file_key);
+                    cipherbox_crypto::utils::clear_bytes(&mut file_key);
 
                     let (old_file_cid, _old_encrypted_key, _old_iv, old_size, old_mode,
                          existing_versions, file_ipns_private_key, file_meta_ipns_name) =
@@ -752,7 +752,7 @@ pub(crate) mod implementation {
                     let (new_versions, pruned_cids) = if should_version {
                         if let Some(ref old_c) = old_file_cid {
                             if !old_c.is_empty() {
-                                let version_entry = crate::crypto::folder::VersionEntry {
+                                let version_entry = cipherbox_core::folder::VersionEntry {
                                     cid: old_c.clone(),
                                     file_key_encrypted: _old_encrypted_key.clone(),
                                     file_iv: _old_iv.clone(),
@@ -822,7 +822,7 @@ pub(crate) mod implementation {
                     let upload_tx = fs.upload_tx.clone();
                     let coordinator = fs.publish_coordinator.clone();
 
-                    let file_meta = crate::crypto::folder::FileMetadata {
+                    let file_meta = cipherbox_core::folder::FileMetadata {
                         version: "v1".to_string(),
                         cid: String::new(),
                         file_key_encrypted: encrypted_file_key_hex,
@@ -837,7 +837,7 @@ pub(crate) mod implementation {
 
                     std::thread::spawn(move || {
                         let result = rt.block_on(async {
-                            let file_cid = crate::api::ipfs::upload_content(&api, &ciphertext).await?;
+                            let file_cid = cipherbox_api_client::ipfs::upload_content(&api, &ciphertext).await.map_err(|e| e.to_string())?;
                             log::info!("File uploaded: ino {} -> CID {}", ino, file_cid);
 
                             let _ = upload_tx.send(crate::fuse::UploadComplete {
@@ -918,7 +918,7 @@ pub(crate) mod implementation {
                             let cid_clone = cid.clone();
                             let api = fs.api.clone();
                             fs.rt.spawn(async move {
-                                let _ = crate::api::ipfs::unpin_content(&api, &cid_clone).await;
+                                let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid_clone).await;
                             });
                         }
                     }

@@ -3,7 +3,8 @@
 use tauri::{Manager, State};
 use zeroize::Zeroizing;
 
-use crate::api::{auth, types};
+use crate::keychain;
+use cipherbox_api_client;
 use crate::state::AppState;
 
 use super::util::{derive_public_key, extract_user_id_from_jwt};
@@ -48,7 +49,7 @@ pub async fn handle_auth_complete(
     let public_key_hex = hex::encode(&public_key_bytes); // 130 hex chars
 
     // 2. Login with backend (requires uncompressed publicKey, 130 hex chars)
-    let login_req = types::LoginRequest {
+    let login_req = cipherbox_api_client::LoginRequest {
         id_token: id_token.clone(),
         public_key: public_key_hex,
         login_type: "corekit".to_string(),
@@ -67,7 +68,7 @@ pub async fn handle_auth_complete(
         return Err(format!("Login failed ({}): {}", status, body));
     }
 
-    let login_resp: types::LoginResponse = resp
+    let login_resp: cipherbox_api_client::LoginResponse = resp
         .json()
         .await
         .map_err(|e| format!("Failed to parse login response: {}", e))?;
@@ -109,9 +110,9 @@ pub(crate) async fn complete_auth_setup(
 
     // 3. Store refresh token in Keychain (skip in test-login mode to avoid popups)
     if !skip_keychain {
-        auth::store_refresh_token(&user_id, &refresh_token)
+        keychain::store_refresh_token(&user_id, &refresh_token)
             .map_err(|e| format!("Keychain store failed: {}", e))?;
-        auth::store_user_id(&user_id)
+        keychain::store_user_id(&user_id)
             .map_err(|e| format!("Keychain store user ID failed: {}", e))?;
     } else {
         log::info!("Skipping Keychain storage (test-login mode)");
@@ -304,7 +305,7 @@ pub async fn handle_session_restore(
 
     // Extract user_id from the existing access token to look up the refresh token
     let user_id = extract_user_id_from_jwt(&access_token)?;
-    let refresh_token = auth::get_refresh_token(&user_id)
+    let refresh_token = keychain::get_refresh_token(&user_id)
         .map_err(|e| format!("Keychain read failed: {}", e))?
         .ok_or("No refresh token in Keychain")?;
 
@@ -334,7 +335,7 @@ pub async fn try_silent_refresh(state: State<'_, AppState>) -> Result<bool, Stri
     log::info!("Attempting silent refresh from Keychain");
 
     // Check for stored user ID
-    let user_id = match auth::get_last_user_id() {
+    let user_id = match keychain::get_last_user_id() {
         Ok(Some(id)) => id,
         Ok(None) => {
             log::info!("No stored user ID, silent refresh skipped");
@@ -347,7 +348,7 @@ pub async fn try_silent_refresh(state: State<'_, AppState>) -> Result<bool, Stri
     };
 
     // Get refresh token from Keychain
-    let refresh_token = match auth::get_refresh_token(&user_id) {
+    let refresh_token = match keychain::get_refresh_token(&user_id) {
         Ok(Some(token)) => token,
         Ok(None) => {
             log::info!("No stored refresh token for user {}", user_id);
@@ -360,7 +361,7 @@ pub async fn try_silent_refresh(state: State<'_, AppState>) -> Result<bool, Stri
     };
 
     // POST /auth/refresh with the stored refresh token
-    let refresh_req = types::RefreshRequest {
+    let refresh_req = cipherbox_api_client::RefreshRequest {
         refresh_token: refresh_token.clone(),
     };
 
@@ -375,7 +376,7 @@ pub async fn try_silent_refresh(state: State<'_, AppState>) -> Result<bool, Stri
     if resp.status().as_u16() == 401 {
         // Stale token -- delete from Keychain
         log::info!("Refresh token expired, clearing Keychain");
-        let _ = auth::delete_refresh_token(&user_id);
+        let _ = keychain::delete_refresh_token(&user_id);
         return Ok(false);
     }
 
@@ -384,14 +385,14 @@ pub async fn try_silent_refresh(state: State<'_, AppState>) -> Result<bool, Stri
         return Ok(false);
     }
 
-    let refresh_resp: types::RefreshResponse = resp
+    let refresh_resp: cipherbox_api_client::RefreshResponse = resp
         .json()
         .await
         .map_err(|e| format!("Failed to parse refresh response: {}", e))?;
 
     // Store new tokens
     state.sdk.api.set_access_token(refresh_resp.access_token).await;
-    auth::store_refresh_token(&user_id, &refresh_resp.refresh_token)
+    keychain::store_refresh_token(&user_id, &refresh_resp.refresh_token)
         .map_err(|e| format!("Keychain store failed: {}", e))?;
     *state.sdk.user_id.write().await = Some(user_id.clone());
 
@@ -425,7 +426,7 @@ pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result
 
     // Delete refresh token from Keychain
     if let Some(ref user_id) = *state.sdk.user_id.read().await {
-        let _ = auth::delete_refresh_token(user_id);
+        let _ = keychain::delete_refresh_token(user_id);
     }
 
     // Zero all sensitive keys in memory

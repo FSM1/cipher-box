@@ -206,11 +206,11 @@ pub(crate) mod implementation {
 
         crate::fuse::block_with_timeout(&rt, async {
             let encrypted_bytes =
-                crate::api::ipfs::fetch_content(&api, &cid_owned).await?;
+                cipherbox_api_client::ipfs::fetch_content(&api, &cid_owned).await.map_err(|e| e.to_string())?;
             let encrypted_file_key = hex::decode(&key_hex)
                 .map_err(|_| "Invalid file key hex".to_string())?;
             let file_key = zeroize::Zeroizing::new(
-                crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
+                cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
                     .map_err(|e| format!("File key unwrap failed: {}", e))?,
             );
             let file_key_arr: [u8; 32] = file_key
@@ -224,7 +224,7 @@ pub(crate) mod implementation {
                 let iv_arr: [u8; 16] = iv
                     .try_into()
                     .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
-                crate::crypto::aes_ctr::decrypt_aes_ctr(
+                cipherbox_crypto::aes_ctr::decrypt_aes_ctr(
                     &encrypted_bytes,
                     &file_key_arr,
                     &iv_arr,
@@ -236,7 +236,7 @@ pub(crate) mod implementation {
                 let iv_arr: [u8; 12] = iv
                     .try_into()
                     .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
-                crate::crypto::aes::decrypt_aes_gcm(
+                cipherbox_crypto::aes::decrypt_aes_gcm(
                     &encrypted_bytes,
                     &file_key_arr,
                     &iv_arr,
@@ -250,18 +250,18 @@ pub(crate) mod implementation {
 
     /// Async version of content download + decrypt for background prefetch tasks.
     pub async fn fetch_and_decrypt_content_async(
-        api: &crate::api::client::ApiClient,
+        api: &cipherbox_api_client::ApiClient,
         cid: &str,
         encrypted_file_key_hex: &str,
         iv_hex: &str,
         encryption_mode: &str,
         private_key: &[u8],
     ) -> Result<Vec<u8>, String> {
-        let encrypted_bytes = crate::api::ipfs::fetch_content(api, cid).await?;
+        let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(api, cid).await.map_err(|e| e.to_string())?;
         let encrypted_file_key = hex::decode(encrypted_file_key_hex)
             .map_err(|_| "Invalid file key hex".to_string())?;
         let file_key = zeroize::Zeroizing::new(
-            crate::crypto::ecies::unwrap_key(&encrypted_file_key, private_key)
+            cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, private_key)
                 .map_err(|e| format!("File key unwrap failed: {}", e))?,
         );
         let file_key_arr: [u8; 32] = file_key
@@ -275,7 +275,7 @@ pub(crate) mod implementation {
             let iv_arr: [u8; 16] = iv
                 .try_into()
                 .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
-            crate::crypto::aes_ctr::decrypt_aes_ctr(
+            cipherbox_crypto::aes_ctr::decrypt_aes_ctr(
                 &encrypted_bytes,
                 &file_key_arr,
                 &iv_arr,
@@ -287,7 +287,7 @@ pub(crate) mod implementation {
             let iv_arr: [u8; 12] = iv
                 .try_into()
                 .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
-            crate::crypto::aes::decrypt_aes_gcm(
+            cipherbox_crypto::aes::decrypt_aes_gcm(
                 &encrypted_bytes,
                 &file_key_arr,
                 &iv_arr,
@@ -300,8 +300,8 @@ pub(crate) mod implementation {
 
     /// Encrypt and publish per-file FileMetadata to the file's own IPNS record.
     pub async fn publish_file_metadata(
-        api: &crate::api::client::ApiClient,
-        file_meta: &crate::crypto::folder::FileMetadata,
+        api: &cipherbox_api_client::ApiClient,
+        file_meta: &cipherbox_core::folder::FileMetadata,
         folder_key: &[u8],
         file_ipns_private_key: &zeroize::Zeroizing<Vec<u8>>,
         file_ipns_name: &str,
@@ -313,7 +313,7 @@ pub(crate) mod implementation {
 
         // Encrypt FileMetadata with parent folder key
         let sealed =
-            crate::crypto::folder::encrypt_file_metadata(file_meta, &folder_key_arr)
+            cipherbox_core::folder::encrypt_file_metadata(file_meta, &folder_key_arr)
                 .map_err(|e| format!("FileMetadata encryption failed: {}", e))?;
 
         // Package as JSON envelope: { "iv": hex, "data": base64 }
@@ -327,7 +327,7 @@ pub(crate) mod implementation {
 
         // Upload encrypted file metadata to IPFS
         let file_meta_cid =
-            crate::api::ipfs::upload_content(api, &json_bytes).await?;
+            cipherbox_api_client::ipfs::upload_content(api, &json_bytes).await.map_err(|e| e.to_string())?;
 
         // Resolve current IPNS sequence number
         let seq = coordinator
@@ -341,14 +341,14 @@ pub(crate) mod implementation {
             .map_err(|_| "Invalid file IPNS private key length".to_string())?;
         let new_seq = seq + 1;
         let value = format!("/ipfs/{}", file_meta_cid);
-        let record = crate::crypto::ipns::create_ipns_record(
+        let record = cipherbox_core::ipns::create_ipns_record(
             &ipns_key_arr,
             &value,
             new_seq,
             86_400_000,
         )
         .map_err(|e| format!("File IPNS record creation failed: {}", e))?;
-        let marshaled = crate::crypto::ipns::marshal_ipns_record(&record)
+        let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
             .map_err(|e| format!("File IPNS record marshal failed: {}", e))?;
 
         let record_b64 =
@@ -357,7 +357,7 @@ pub(crate) mod implementation {
         // Per-file IPNS publishes do not use conflict detection -- file metadata
         // is owned by the file's own IPNS keypair and conflicts are inherently
         // avoided by the per-file sequence number management.
-        let req = crate::api::ipns::IpnsPublishRequest {
+        let req = cipherbox_api_client::IpnsPublishRequest {
             ipns_name: file_ipns_name.to_string(),
             record: record_b64,
             metadata_cid: file_meta_cid.clone(),
@@ -365,9 +365,9 @@ pub(crate) mod implementation {
             key_epoch: None,
             expected_sequence_number: None,
         };
-        match crate::api::ipns::publish_ipns(api, &req).await? {
-            crate::api::ipns::PublishResult::Success => {}
-            crate::api::ipns::PublishResult::Conflict { .. } => {
+        match cipherbox_api_client::ipns::publish_ipns(api, &req).await.map_err(|e| e.to_string())? {
+            cipherbox_api_client::PublishResult::Success => {}
+            cipherbox_api_client::PublishResult::Conflict { .. } => {
                 log::warn!("Unexpected conflict on per-file IPNS publish for {}", file_ipns_name);
             }
         }
@@ -393,15 +393,15 @@ pub(crate) mod implementation {
 
         let result = crate::fuse::block_with_timeout(&rt, async {
             let resolve_resp =
-                crate::api::ipns::resolve_ipns(&api, &ipns_name_owned).await?;
+                cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name_owned).await.map_err(|e| e.to_string())?;
             let encrypted_bytes =
-                crate::api::ipfs::fetch_content(&api, &resolve_resp.cid).await?;
+                cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid).await.map_err(|e| e.to_string())?;
             Ok::<(Vec<u8>, String), String>((encrypted_bytes, resolve_resp.cid))
         })?;
 
         let (encrypted_bytes, cid) = result;
         let metadata =
-            crate::crypto::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &folder_key_owned)?;
+            cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &folder_key_owned)?;
         fs.metadata_cache
             .set(&ipns_name.to_string(), metadata.clone(), cid);
         fs.inodes.populate_folder(
@@ -441,15 +441,15 @@ pub(crate) mod implementation {
         for (ino, ipns_name) in unresolved {
             let resolve_result = crate::fuse::block_with_timeout(&rt, async {
                 let resp =
-                    crate::api::ipns::resolve_ipns(&api, ipns_name).await?;
+                    cipherbox_api_client::ipns::resolve_ipns(&api, ipns_name).await.map_err(|e| e.to_string())?;
                 let encrypted_bytes =
-                    crate::api::ipfs::fetch_content(&api, &resp.cid).await?;
+                    cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid).await.map_err(|e| e.to_string())?;
                 Ok::<Vec<u8>, String>(encrypted_bytes)
             });
 
             match resolve_result {
                 Ok(encrypted_bytes) => {
-                    match crate::crypto::decrypt::decrypt_file_metadata_from_ipfs_public(
+                    match cipherbox_core::decrypt::decrypt_file_metadata_from_ipfs_public(
                         &encrypted_bytes,
                         &folder_key_arr,
                     ) {

@@ -13,8 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use zeroize::Zeroizing;
 
-use crate::crypto;
-use crate::crypto::folder::{FolderChild, FolderMetadata};
+use cipherbox_core::folder::{FolderChild, FolderMetadata};
 
 /// Normalize a filename to NFC (composed) form for consistent HashMap lookups.
 /// macOS NFS client may send names in either NFC or NFD form; FUSE-T's go-nfsv4
@@ -151,7 +150,7 @@ pub enum InodeKind {
         /// Avoids redundant ECIES wrapping on every metadata publish.
         file_ipns_key_encrypted_hex: Option<String>,
         /// Past versions of this file (newest first). None if no version history.
-        versions: Option<Vec<crate::crypto::folder::VersionEntry>>,
+        versions: Option<Vec<cipherbox_core::folder::VersionEntry>>,
     },
 }
 
@@ -351,7 +350,7 @@ impl InodeTable {
                                 folder.name
                             ))?;
                     let folder_key = Zeroizing::new(
-                        crypto::ecies::unwrap_key(&encrypted_folder_key_bytes, private_key)
+                        cipherbox_crypto::ecies::unwrap_key(&encrypted_folder_key_bytes, private_key)
                             .map_err(|e| format!(
                                 "Failed to decrypt folder key for '{}': {}",
                                 folder.name, e
@@ -366,7 +365,7 @@ impl InodeTable {
                                 folder.name
                             ))?;
                     let ipns_private_key = Zeroizing::new(
-                        crypto::ecies::unwrap_key(&encrypted_ipns_key_bytes, private_key)
+                        cipherbox_crypto::ecies::unwrap_key(&encrypted_ipns_key_bytes, private_key)
                             .map_err(|e| format!(
                                 "Failed to decrypt IPNS private key for '{}': {}",
                                 folder.name, e
@@ -450,7 +449,7 @@ impl InodeTable {
                         let file_ipns_key = if let Some(ref encrypted_hex) = file_pointer.ipns_private_key_encrypted {
                             match hex::decode(encrypted_hex) {
                                 Ok(encrypted_bytes) => {
-                                    match crypto::ecies::unwrap_key(&encrypted_bytes, private_key) {
+                                    match cipherbox_crypto::ecies::unwrap_key(&encrypted_bytes, private_key) {
                                         Ok(key) => Some(Zeroizing::new(key)),
                                         Err(e) => {
                                             log::error!(
@@ -480,7 +479,7 @@ impl InodeTable {
                             file_ipns_key
                         } else if !has_encrypted_key {
                             if let Ok(pk_arr) = <[u8; 32]>::try_from(private_key) {
-                                match crypto::hkdf::derive_file_ipns_keypair(&pk_arr, &file_pointer.id) {
+                                match cipherbox_crypto::hkdf::derive_file_ipns_keypair(&pk_arr, &file_pointer.id) {
                                     Ok((derived_key, _, _)) => {
                                         log::debug!(
                                             "File '{}': derived IPNS key via HKDF fallback (legacy file).",
@@ -513,7 +512,7 @@ impl InodeTable {
                         let cached_encrypted_hex = if file_pointer.ipns_private_key_encrypted.is_some() {
                             file_pointer.ipns_private_key_encrypted.clone()
                         } else if let Some(ref key) = file_ipns_key {
-                            match crypto::ecies::wrap_key(key, public_key) {
+                            match cipherbox_crypto::ecies::wrap_key(key, public_key) {
                                 Ok(wrapped) => {
                                     log::info!(
                                         "File '{}': wrapped HKDF-derived IPNS key for lazy migration.",
@@ -627,7 +626,7 @@ impl InodeTable {
         iv: String,
         size: u64,
         encryption_mode: String,
-        versions: Option<Vec<crate::crypto::folder::VersionEntry>>,
+        versions: Option<Vec<cipherbox_core::folder::VersionEntry>>,
     ) {
         if let Some(inode) = self.inodes.get_mut(&ino) {
             inode.kind = InodeKind::File {
@@ -896,7 +895,7 @@ mod tests {
         let metadata = FolderMetadata {
             version: "v2".to_string(),
             children: vec![
-                FolderChild::File(crate::crypto::folder::FilePointer {
+                FolderChild::File(cipherbox_core::folder::FilePointer {
                     id: "file-1".to_string(),
                     name: "hello.txt".to_string(),
                     file_meta_ipns_name: "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx".to_string(),

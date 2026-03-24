@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-24T11:07:09.945Z'
+last_updated: '2026-03-24T11:18:53.877Z'
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 27
-  completed_plans: 25
+  completed_plans: 26
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 23 (rust-sdk-extraction) — EXECUTING
-Plan: 5 of 7
+Plan: 7 of 7
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Plan: 5 of 7
 | 23    | 03   | 11min    | 2     | 23    |
 | 23    | 05   | 12min    | 2     | 24    |
 | 23    | 04   | 22min    | 2     | 17    |
+| 23    | 07   | 7min     | 2     | 5     |
 
 ## Accumulated Context
 
@@ -103,6 +104,8 @@ Recent for v1.1:
 - SyncDaemon uses Arc<dyn Fn(SyncStatus)> generic callback instead of Tauri AppHandle for testability
 - Desktop api/client.rs re-exports cipherbox_api_client::ApiClient as type alias to unify types across modules
 - Desktop AppState wraps Arc<KeyState> from SDK; all key material accessed via state.sdk.\*
+- CI parity gate uses needs.changes.outputs.src (not nonexistent packages) for trigger condition
+- Desktop-e2e binary paths updated to target/debug/ to match workspace cargo build output
 
 ### Roadmap Evolution
 
@@ -128,4 +131,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 23-05 (cipherbox-sdk crate extraction)
+Last updated: 2026-03-24 after completing 23-07 (CI and Release Please for Rust crates)
