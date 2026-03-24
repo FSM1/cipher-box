@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "12ef53ab5009",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T03:18:33.286465Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7352b4a79b37",
+  "checkpoint_transcript_start": 423,
+  "transcript_lines_at_start": 423,
+  "token_usage": {
+    "input_tokens": 3,
+    "cache_creation_tokens": 2133,
+    "cache_read_tokens": 219678,
+    "output_tokens": 1396,
+    "api_call_count": 3
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Execute a two-wave cleanup to remove dead vault migration code from both the API (backend) and client (frontend/desktop) layers.",
+    "outcome": "Wave 1 (20-05) completed successfully, removing the vault migration DB columns, endpoint, and service method. Wave 2 (20-06) was initiated via a spawned agent to clean up the client-side migration code paths.",
+    "learnings": {
+      "repo": [
+        "Vault migration involved a PATH A (IPFS v2 blob) and PATH B (DB decrypt + lazy migration) split in the web login flow",
+        "Desktop Rust code had a parallel non-migrated branch in fetch_and_decrypt_vault and crypto fields in InitVaultRequest",
+        "API client types are regenerated from the backend, so backend changes (Wave 1) must complete before client type cleanup (Wave 2) can proceed",
+        "Vault entity/DTOs were simplified down to only ownerPublicKey + rootIpnsName after removing migration fields"
+      ],
+      "code": [],
+      "workflow": [
+        "Waves were sequenced with explicit dependency checks (pre-wave dependency check) before proceeding",
+        "A spot-check pattern was used to verify artifacts (SUMMARY file, commits, migration file) before moving to the next wave",
+        "Controller spec alignment required a 1 auto-fix deviation, suggesting tests were not fully in sync with the implementation before cleanup"
+      ]
+    },
+    "friction": [
+      "Wave 2 depends on regenerated API client types from Wave 1, creating a hard sequencing constraint between waves",
+      "1 auto-fix deviation was needed for controller spec alignment in Wave 1, indicating a minor test/implementation drift"
+    ],
+    "open_items": [
+      "Wave 2 (20-06) client cleanup was spawned but not yet confirmed complete — covers web login PATH B removal, DB fallback removal, v2 blob publish on new vault init, Rust non-migrated branch removal, and recovery tool null handling cleanup"
+    ]
+  }
+}
