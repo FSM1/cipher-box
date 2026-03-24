@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-24T03:30:09.478Z'
+last_updated: '2026-03-24T07:28:49.809Z'
 progress:
   total_phases: 8
   completed_phases: 5
-  total_plans: 20
-  completed_plans: 20
+  total_plans: 27
+  completed_plans: 21
 ---
 
 # Project State
@@ -18,12 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 20 — vault-migration
+**Current focus:** Phase 23 — rust-sdk-extraction
 
 ## Current Position
 
-Phase: 20 (vault-migration) — COMPLETE
-Plan: 6 of 6 (all plans complete)
+Phase: 23 (rust-sdk-extraction) — EXECUTING
+Plan: 2 of 7
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Plan: 6 of 6 (all plans complete)
 | 20    | 04   | 45min    | 3     | 15    |
 | 20    | 05   | 6min     | 2     | 13    |
 | 20    | 06   | 6min     | 2     | 4     |
+| 23    | 01   | 13min    | 2     | 26    |
 
 ## Accumulated Context
 
@@ -87,6 +88,8 @@ Recent for v1.1:
 - fetchAndDecryptMetadata handles both v1 JSON and v2 binary blobs transparently for folder sync
 - Zero-crypto vault schema: server stores only ownerPublicKey and rootIpnsName, all crypto material lives exclusively in IPFS v2 blobs
 - DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) fully dropped — no fallback paths
+- Cargo workspace with centralized deps at repo root; cipherbox-crypto crate as foundation for all Rust SDK extraction
+- Module re-export pattern in desktop crypto/mod.rs preserves all existing crate::crypto::\* paths without touching call sites
 
 ### Roadmap Evolution
 
@@ -112,4 +115,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 20-06 (client dead code removal, IPFS-only v2 blob paths, Phase 20 complete)
+Last updated: 2026-03-24 after completing 23-01 (Cargo workspace + cipherbox-crypto crate extraction)

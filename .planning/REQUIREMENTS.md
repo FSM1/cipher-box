@@ -61,8 +61,8 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 
 ### Rust SDK Extraction (Phase 23)
 
-- [ ] **RSDK-01**: Cargo workspace at repo root with centralized `[workspace.dependencies]` and all five Rust crates as members
-- [ ] **RSDK-02**: `cipherbox-crypto` crate contains pure crypto primitives (AES-GCM/CTR, ECIES, Ed25519, HKDF, IPNS name derivation) with no domain knowledge
+- [x] **RSDK-01**: Cargo workspace at repo root with centralized `[workspace.dependencies]` and all five Rust crates as members
+- [x] **RSDK-02**: `cipherbox-crypto` crate contains pure crypto primitives (AES-GCM/CTR, ECIES, Ed25519, HKDF, IPNS name derivation) with no domain knowledge
 - [ ] **RSDK-03**: Shared JSON test vectors in `tests/vectors/` loaded by both Rust and TypeScript test suites for cross-language parity verification
 - [ ] **RSDK-04**: `cipherbox-core` crate contains domain types (FolderMetadata, FileMetadata, RecycleBinMetadata, DeviceRegistry), metadata encrypt/decrypt, vault blob v2, IPNS record creation
 - [ ] **RSDK-05**: `cipherbox-api-client` crate provides typed HTTP client for all CipherBox API endpoints used by desktop
@@ -147,8 +147,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SDK-09      | Phase 19.1 | Pending  |
 | SDK-10      | Phase 19.1 | Complete |
 | SDK-11      | Phase 19.1 | Complete |
-| RSDK-01     | Phase 23   | Pending  |
-| RSDK-02     | Phase 23   | Pending  |
+| RSDK-01     | Phase 23   | Complete |
+| RSDK-02     | Phase 23   | Complete |
 | RSDK-03     | Phase 23   | Pending  |
 | RSDK-04     | Phase 23   | Pending  |
 | RSDK-05     | Phase 23   | Pending  |
