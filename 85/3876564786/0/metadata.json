@@ -1,0 +1,145 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "853876564786",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T20:10:19.860751Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "afbf08418ddd",
+  "token_usage": {
+    "input_tokens": 344,
+    "cache_creation_tokens": 535130,
+    "cache_read_tokens": 56100761,
+    "output_tokens": 64191,
+    "api_call_count": 306
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Complete Phase 23 (Rust SDK extraction) gap closure, run a security review on the new Rust crates, increase test coverage to address Codecov feedback, and get PR #352 merged by fixing CI failures and resolving all review comments.",
+    "outcome": "All 8 plans for Phase 23 executed and verified; 163 new Rust unit tests added across 3 crates; multiple CI issues fixed (Windows cargo check, cross-language parity); 28+ PR review threads resolved across 4 rounds; PR #352 pushed with security review report included.",
+    "learnings": {
+      "repo": [
+        "Cargo `[patch.crates-io]` applies workspace-wide regardless of feature activation; vendored `fuser` (Unix FUSE) must be kept as a regular optional dep (not target-gated) or Cargo can't resolve `dep:fuser` references in feature definitions on Windows",
+        "Moving optional dependencies to `[target.'cfg(unix)'.dependencies]` breaks feature definitions that reference them via `dep:` syntax — Cargo can't resolve the dep on non-matching targets even when the feature is inactive",
+        "Desktop crate's `cipherbox-fuse` dependency needs `default-features = false` to prevent the `fuse` feature from activating through the dep chain during `--workspace --no-default-features` builds",
+        "CI `cargo check --workspace --no-default-features --features winfsp` — the `winfsp` feature flows through `cipherbox-desktop` to `cipherbox-fuse/winfsp` correctly, but defaults must be explicitly disabled at the dep declaration level too",
+        "The `@cipherbox/core` package must be built before `@cipherbox/crypto` in CI (sequential, not parallel) because crypto's test suite imports from core",
+        "pnpm setup action (`pnpm/action-setup@v4`) requires explicit `version:` field — omitting it causes the cross-language parity job to fail",
+        "Phase 23 introduced 5 new Rust crates: cipherbox-crypto, cipherbox-core, cipherbox-sdk, cipherbox-fuse, cipherbox-api-client",
+        "All `KeyState` and `CipherBoxFS` key fields use `Zeroizing\u003cVec\u003cu8\u003e\u003e`; logout calls `KeyState::clear()` and unmount calls `CipherBoxFS::handle_destroy()` for zeroization",
+        "HKDF domain separation used across 5 distinct derivation contexts; API client redacts tokens/keys in Debug impls",
+        "Ed25519 keypair generation returned bare `Vec\u003cu8\u003e` for private key — fixed to return `Zeroizing\u003cVec\u003cu8\u003e\u003e`; callers in write_ops were wrapping redundantly with `Zeroizing::new()`"
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "line": 1,
+          "end_line": 50,
+          "finding": "generate_ed25519_keypair returned bare Vec\u003cu8\u003e for private key, leaving key material in freed memory; fixed to return Zeroizing\u003cVec\u003cu8\u003e\u003e"
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 1,
+          "end_line": 20,
+          "finding": "ed25519-dalek missing 'zeroize' feature flag in workspace Cargo.toml — SigningKey doesn't zero on drop without it"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "Zeroizing\u003cVec\u003cu8\u003e\u003e doesn't implement TryInto\u003c[u8; 32]\u003e directly — must call .into_inner().try_into() to convert"
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 102,
+          "end_line": 102,
+          "finding": "Copy-paste bug: app_version field was being set to device_info.device_id instead of device_info.app_version (caught by Copilot review)"
+        },
+        {
+          "path": "crates/fuse/src/operations.rs",
+          "line": 51,
+          "end_line": 130,
+          "finding": "fetch_and_populate_folder and resolve_file_pointers_blocking were dead code — existed in both macOS/Linux and Windows platform paths but had no external callers"
+        },
+        {
+          "path": "crates/api-client/src/types.rs",
+          "line": 161,
+          "end_line": 161,
+          "finding": "IpnsPublishRequest derived Debug, leaking encrypted IPNS key material; replaced with custom Debug impl that redacts sensitive fields"
+        },
+        {
+          "path": "crates/api-client/src/client.rs",
+          "line": 115,
+          "end_line": 130,
+          "finding": "get_bytes method was dead code (never called) and lacked status code checking; removed entirely"
+        },
+        {
+          "path": "crates/crypto/src/ipns_name.rs",
+          "line": 13,
+          "end_line": 25,
+          "finding": "encode_libp2p_public_key used 'as u8' cast on key length, silently truncating if key \u003e 255 bytes; fixed to return Result with length validation"
+        },
+        {
+          "path": "crates/fuse/src/platform/linux.rs",
+          "line": 17,
+          "end_line": 60,
+          "finding": "Temp directory cleanup was happening before unmount, meaning the mount point could be removed while still mounted; fixed to cleanup after successful unmount on both Linux and macOS"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/build.rs",
+          "line": 8,
+          "end_line": 9,
+          "finding": "Vendored fuser build.rs called unimplemented!() on Windows (non-Linux without libfuse feature); fixed with early return on cfg(windows)"
+        },
+        {
+          "path": "crates/fuse/src/platform/macos.rs",
+          "line": 23,
+          "end_line": 33,
+          "finding": "Mount path was passed as .to_str().unwrap() to Command::arg — should use \u0026mount_path directly to avoid panics on non-UTF8 paths"
+        },
+        {
+          "path": "crates/api-client/src/auth.rs",
+          "line": 67,
+          "end_line": 67,
+          "finding": "? operator on logout propagated transport errors before best-effort cleanup path"
+        },
+        {
+          "path": "apps/desktop/src-tauri/Cargo.toml",
+          "line": 1,
+          "end_line": 50,
+          "finding": "cipherbox-fuse dependency lacked default-features = false, causing fuse (Unix-only) feature to activate through dep chain during Windows builds"
+        }
+      ],
+      "workflow": [
+        "GSD executor agents can disconnect mid-execution (API ConnectionRefused); spot-checking git log and file state is the reliable way to determine what was actually completed before resuming",
+        "1Password SSH agent signing is flaky — sometimes requires 2-3 retries; if it fails consistently, staged files can be committed manually by the user",
+        "Running three parallel subagents for crate-specific test writing (crypto/core/sdk) worked well — each completed independently with no conflicts",
+        "CodeRabbit generates many review comments per push; batching all fix implementations before replying/resolving saves significant API calls",
+        "Security reviews should be committed to the repo (in .planning/security/) and included in PRs, not treated as ephemeral analysis",
+        "When adding 163 tests across 3 crates in parallel agents, verifying with 'cargo test --workspace' after all agents complete catches inter-crate issues"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent signing failed repeatedly, requiring multiple retries and occasional user intervention to commit",
+      "Windows cargo check took 3+ iterations to fix: build.rs early return wasn't enough (Rust source still compiled), then target-gating broke feature dep: references, then default-features=false still insufficient due to workspace feature unification",
+      "Moving optional deps to [target.'cfg(unix)'.dependencies] broke Cargo feature definitions that use dep: syntax — this is a non-obvious Cargo limitation",
+      "Cross-language parity failed twice: first from missing pnpm version in action, then from parallel build order (core must build before crypto)",
+      "API ConnectionRefused mid-agent-execution lost all in-flight work, requiring manual spot-checking and resumption",
+      "CodeRabbit re-raised the ECIES min-size check 3+ times across multiple review rounds despite 'not applicable' explanations",
+      "gh CLI error output required multiple different grep patterns to extract actual compiler errors from CI logs"
+    ],
+    "open_items": [
+      "AES-CTR mode lacks client-side CID verification — attacker controlling the relay could serve tampered ciphertext with predictable bit-flip impact (HIGH finding from security review, not fixed in this session)",
+      "file_ipns_private_key in write_ops.rs generates Ed25519 key directly via ed25519_dalek (not through generate_ed25519_keypair) — does not benefit from the Zeroizing return type fix",
+      "Codecov coverage for cipherbox-fuse crate (write_ops, read_ops, dir_ops, operations) was not addressed — these have complex FUSE dependencies making unit testing harder",
+      "The vendored fuser build.rs early-return fix is a workaround; the proper solution would be removing the [patch.crates-io] entry entirely on Windows builds",
+      "~30 test case suggestions from the security review (attack scenarios, integration tests) were generated but not implemented"
+    ]
+  }
+}
