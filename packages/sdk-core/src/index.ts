@@ -8,7 +8,7 @@ export type {
 } from './types';
 
 // IPFS operations
-export { addToIpfs, fetchFromIpfs, unpinFromIpfs } from './ipfs';
+export { addToIpfs, fetchFromIpfs, unpinFromIpfs, registerCid } from './ipfs';
 
 // IPNS operations
 export {

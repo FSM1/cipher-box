@@ -70,6 +70,12 @@ export async function uploadFile(params: {
   ctx: SdkContext;
   onProgress?: ProgressCallback;
   teeKeys?: TeeKeys;
+  /** Override the default addToIpfs pin function. Used by BYO-IPFS to pin directly to user's node. */
+  pinFn?: (
+    ctx: SdkContext,
+    data: Uint8Array,
+    onProgress?: ProgressCallback
+  ) => Promise<{ cid: string; size: number }>;
 }): Promise<UploadResult> {
   // 1. Generate unique file key and IV
   const fileKey = generateFileKey();
@@ -82,8 +88,11 @@ export async function uploadFile(params: {
     // 3. Wrap file key with user's public key (ECIES)
     const wrappedKey = await wrapKey(fileKey, params.userPublicKey);
 
-    // 4. Upload encrypted content to IPFS
-    const { cid, size: encryptedSize } = await addToIpfs(params.ctx, ciphertext, params.onProgress);
+    // 4. Upload encrypted content to IPFS (or BYO node via pinFn override)
+    const pinResult = params.pinFn
+      ? await params.pinFn(params.ctx, ciphertext, params.onProgress)
+      : await addToIpfs(params.ctx, ciphertext, params.onProgress);
+    const { cid, size: encryptedSize } = pinResult;
 
     // 5. Create per-file IPNS metadata record
     const fileMetaResult = await createFileMetadata({
