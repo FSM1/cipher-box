@@ -700,7 +700,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build TypeScript packages
-        run: pnpm --filter @cipherbox/core --filter @cipherbox/crypto build
+        run: pnpm --filter @cipherbox/crypto build && pnpm --filter @cipherbox/core build
 
       - name: Run Rust vector tests
         run: cargo test -p cipherbox-crypto --test cross_language --no-default-features

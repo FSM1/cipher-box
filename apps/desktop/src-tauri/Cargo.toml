@@ -50,6 +50,10 @@ rand = { workspace = true }
 sha2 = { workspace = true }
 ed25519-dalek = { workspace = true }
 
+# FUSE (Unix) - optional, activated by "fuse" feature
+fuser = { version = "0.16", default-features = false, features = ["libfuse"], optional = true }
+unicode-normalization = { version = "0.1.25", optional = true }
+
 # Windows-only
 winfsp = { version = "0.12", optional = true, features = ["system"] }
 widestring = { version = "1", optional = true }
@@ -58,8 +62,6 @@ widestring = { version = "1", optional = true }
 winreg = "0.55"
 
 [target.'cfg(unix)'.dependencies]
-fuser = { version = "0.16", default-features = false, features = ["libfuse"], optional = true }
-unicode-normalization = { version = "0.1.25", optional = true }
 libc = "0.2"
 
 [target.'cfg(windows)'.build-dependencies]
