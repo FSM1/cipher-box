@@ -66,6 +66,8 @@ pub async fn register_device(
         };
 
     // 3. Build device entry
+    let update_app_version = device_info.app_version.clone();
+    let update_device_model = device_info.device_model.clone();
     let device_entry = DeviceEntry {
         device_id: device_info.device_id.clone(),
         public_key: hex::encode(public_key),
@@ -99,7 +101,8 @@ pub async fn register_device(
         .find(|d| d.device_id == device_info.device_id)
     {
         existing.last_seen_at = now_ms();
-        existing.app_version = device_info.device_id.clone(); // Preserve original pattern
+        existing.app_version = update_app_version;
+        existing.device_model = update_device_model;
     } else {
         registry.devices.push(device_entry);
     }
