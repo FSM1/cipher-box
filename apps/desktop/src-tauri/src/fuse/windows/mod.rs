@@ -1,16 +1,8 @@
 //! Windows filesystem module for CipherBox Desktop.
 //!
 //! Provides WinFsp-based mount and unmount functions.
-//! The `operations` module implements the `FileSystemContext` trait.
-
-#[cfg(feature = "winfsp")]
-mod read_ops;
-#[cfg(feature = "winfsp")]
-mod write_ops;
-#[cfg(feature = "winfsp")]
-mod dir_ops;
-#[cfg(feature = "winfsp")]
-pub mod operations;
+//! WinFsp operation implementations (FileSystemContext, read/write/dir ops)
+//! live in the cipherbox-fuse crate at `cipherbox_fuse::platform::windows`.
 
 #[cfg(feature = "winfsp")]
 mod mount_impl {
@@ -354,7 +346,7 @@ mod mount_impl {
         };
 
         // Create WinFsp context with Arc<Mutex<>> for interior mutability
-        let context = super::operations::implementation::WinFspContext {
+        let context = cipherbox_fuse::platform::windows::operations::implementation::WinFspContext {
             inner: Arc::new(Mutex::new(fs)),
             rt: rt.clone(),
         };
