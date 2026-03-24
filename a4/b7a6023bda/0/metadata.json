@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a4b7a6023bda",
+  "session_id": "73d04a0d-6c1b-4953-8636-dae034952597",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T05:04:25.908044Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/21-byo-ipfs-node-support/21-03-PLAN.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-04-PLAN.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-05-PLAN.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-06-PLAN.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7f2b329c1c3d",
+  "checkpoint_transcript_start": 182,
+  "transcript_lines_at_start": 182,
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 12386,
+    "cache_read_tokens": 140254,
+    "output_tokens": 3874,
+    "api_call_count": 3
+  },
+  "summary": {
+    "intent": "Plan and validate Phase 21 (BYO IPFS node support) implementation across 6 plans in 4 waves, then iterate on identified issues.",
+    "outcome": "Plans were checked, 5 blockers and 3 warnings identified, and a revision loop was initiated to fix violations of locked architectural decisions (no server relay, zero-knowledge constraints, fail-fast behavior).",
+    "learnings": {
+      "repo": [
+        "Phase 21 covers BYO IPFS node support with locked decisions: no server relay for external-only mode, fail with clear error when external node unreachable, zero-knowledge constraint prohibits server-side BYO config storage in vaults table",
+        "Planning structure lives in .planning/phases/21-byo-ipfs-node-support/ with per-plan files and a VALIDATION.md",
+        "A GSD planner/checker/reviser loop is in use with up to 3 revision iterations"
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-03-PLAN.md",
+          "finding": "Task 2 had two blockers: 'minimal integration' override always uploaded to CipherBox first (violates no-server-relay decision) and silent fallback to CipherBox when external node unreachable (violates fail-with-clear-error decision)"
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-04-PLAN.md",
+          "finding": "Task 1 stored BYO config server-side in vaults table, violating zero-knowledge constraint; also missing wiring from StorageTab save handler to migration API"
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-05-PLAN.md",
+          "finding": "Scope flagged as too broad; client-side ECIES encryption of provider configs for TEE migration was never specified"
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-06-PLAN.md",
+          "finding": "Missing wiring from StorageTab save handler to migration API start; ECIES encryption for TEE migration unspecified"
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-VALIDATION.md",
+          "finding": "Plan mapping errors flagged as warnings by checker"
+        }
+      ],
+      "workflow": [
+        "The planner/checker/reviser pattern catches architectural constraint violations before implementation begins",
+        "Locked decisions must be explicitly cross-referenced in plans; silent fallbacks and convenience overrides are common sources of violations",
+        "Wave-based planning can produce Nyquist-style sampling gaps — Wave 3 had one flagged"
+      ]
+    },
+    "friction": [
+      "5 blockers required a full revision loop iteration before plans could proceed",
+      "ECIES encryption requirement for TEE migration was never specified in any of Plans 04/05/06, indicating a gap in upstream requirements",
+      "VALIDATION.md had plan mapping errors, suggesting the validation scaffold was not kept in sync with plan changes"
+    ],
+    "open_items": [
+      "Client-side ECIES encryption of provider configs for TEE migration needs to be specified and added to Plans 04/05/06",
+      "StorageTab save handler → migration API wiring needs explicit implementation steps in Plans 04 and 06",
+      "Wave 3 Nyquist sampling gap warning needs resolution",
+      "Plan 05 scope breadth warning may require splitting or descoping",
+      "Revision loop has 2 iterations remaining (1/3 used); further checker runs may surface additional issues"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T05:03:54.889072Z",
+    "agent_lines": 0,
+    "human_added": 172,
+    "human_modified": 133,
+    "human_removed": 0,
+    "total_committed": 172,
+    "agent_percentage": 0
+  }
+}
