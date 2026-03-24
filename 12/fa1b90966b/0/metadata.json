@@ -1,0 +1,110 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "12fa1b90966b",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T07:38:34.755375Z",
+  "branch": "fix/session-restore-race-conditions",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-03-24-auth-refresh-token-race-condition.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8a4791630695",
+  "token_usage": {
+    "input_tokens": 284,
+    "cache_creation_tokens": 236734,
+    "cache_read_tokens": 28077209,
+    "output_tokens": 77575,
+    "api_call_count": 206
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Monitor PR #349 for incoming bot reviews (CodeRabbit, Copilot) and automatically resolve them as they arrive, then collect staging performance baselines before a vault migration lands.",
+    "outcome": "All 23 review threads across 4 rounds were resolved with real fixes committed; staging perf baselines captured; auth/refresh + vault init race condition discovered, documented, and a fix branch created.",
+    "learnings": {
+      "repo": [
+        "Copilot and CodeRabbit sometimes post 'outside of diff range' comments in a review body that don't appear as resolvable GraphQL reviewThreads — these require manual PR comment replies rather than thread resolution",
+        "The old staging code never published vault key blobs to IPNS via the wallet login flow, only via test-login, so IPNS resolve returns 404 on staging for wallet-created vaults",
+        "Web3Auth Core Kit DKG on Sapphire Devnet dominates login time (~9-45s); cipher-box's own vault-critical path is under 1.5s",
+        "VaultBlobV2 type was removed — functions now return Uint8Array directly",
+        "TEE republishes IPNS records every 3h, making IPNS record expiry a non-issue for vault key blobs",
+        "The E2E tests use @johanneskares/wallet-mock with installMockWallet() for real secp256k1 ECDSA signing in Playwright"
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1312,
+          "end_line": 1312,
+          "finding": "Bug: directRootIpnsName was derived as the vault key IPNS name but used as the root folder IPNS name for folder traversal — these must be derived separately"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 102,
+          "end_line": 146,
+          "finding": "Bug: broad try/catch around getVault() + subsequent IPFS operations meant any IPFS 404 (missing CID) incorrectly triggered vault initialization for an existing user — getVault() needs its own isolated try/catch"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 124,
+          "end_line": 125,
+          "finding": "After PR #349 merge, existing vault path resolves vault key IPNS name; if record not found throws 'Vault key IPNS name not found', caught by session restore, logs out Core Kit"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 580,
+          "end_line": 594,
+          "finding": "Session restore calls setAccessToken() then immediately initializeOrLoadVault() — Zustand state update may not propagate before Axios interceptor picks it up; also multiple React effects fire on reload causing concurrent calls"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 72,
+          "end_line": 72,
+          "finding": "Sequence-0 conflict on vault key IPNS publish now returns an error and aborts instead of warn-and-continue"
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 99,
+          "end_line": 99,
+          "finding": "slice() was used where subarray() is correct for zero-copy Uint8Array view"
+        }
+      ],
+      "workflow": [
+        "The /loop skill + CronCreate enables automated PR review monitoring — cron fires every 5 minutes, detects unresolved threads, and triggers /resolve-pr-reviews automatically",
+        "Cron jobs created via /loop auto-expire after 7 days; cancel early with CronDelete(jobId)",
+        "Playwright MCP sandbox doesn't support Node module imports (dynamic import fails) — standalone .mjs scripts run via Bash from within the package directory with proper node_modules resolution work instead",
+        "Playwright native page.on('request'/'response') events are more reliable for network monitoring than injecting fetch wrappers that don't survive navigation",
+        "gh api graphql reviewThreads with isResolved filter is the reliable way to count unresolved threads; REST reviews API misses some thread states"
+      ]
+    },
+    "friction": [
+      "GitHub API timed out on one poll cycle — transient, no action taken",
+      "7 new Copilot review comments didn't show up as unresolved GraphQL threads initially, requiring a separate fetch approach to discover them",
+      "Web3Auth OTP on staging is a real OTP, not a test bypass — can't use email login flow in Playwright for staging; had to switch to wallet mock approach",
+      "Playwright MCP browser_run_code can't import Node modules (dynamic import fails), requiring a workaround via standalone script + Bash",
+      "window.ethereum mock injected after page load is too late — Web3Auth initializes on load, so the provider must be injected via addInitScript before navigation",
+      "fetch monitoring via injected wrapper doesn't survive page navigation — native Playwright request events required",
+      "Staging DB was wiped so no existing vaults were present for IPNS resolve baseline measurements; had to create a vault via Playwright wallet login first",
+      "markdownlint failures blocked the first commit attempt on the perf baseline branch"
+    ],
+    "open_items": [
+      "Session restore race condition (two-layer): auth/refresh fires 6 concurrent calls on page reload; multiple successful refreshes each trigger initializeOrLoadVault() concurrently; both see getVault() 404 and both attempt vault init hitting UQ_folder_ipns_user_ipns duplicate key constraint — fix branch fix/session-restore-race-conditions created, todo at .planning/todos/pending/2026-03-24-session-restore-race-conditions.md",
+      "Shared-Promise deduplication guard needed for both auth/refresh and initializeOrLoadVault() — fix not yet implemented, only documented",
+      "E2E test 3.7 (Page reload preserves session) is currently failing in CI due to the vault init race condition",
+      "Staging perf baselines need re-measurement after PR #349 deploys to capture real IPNS resolve + IPFS fetch numbers for an existing vault (script at tests/web-e2e/staging-perf-wallet.mjs)",
+      "Core Kit session persistence across page reloads relies on tKey share caching in the browser — the mock wallet context doesn't persist this, so true session restore baseline couldn't be measured",
+      "Auth/refresh returns 401 for 2 of 6 concurrent calls on reload — pre-existing race visible in staging logs"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T07:37:50.350467Z",
+    "agent_lines": 0,
+    "human_added": 29,
+    "human_modified": 58,
+    "human_removed": 0,
+    "total_committed": 29,
+    "agent_percentage": 0
+  }
+}
