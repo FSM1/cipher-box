@@ -1,7 +1,7 @@
 ---
 phase: 20-vault-migration
 verified: 2026-03-24T01:48:50Z
-status: passed
+status: gaps_found
 score: 6/6 must-haves verified
 re_verification: false
 human_verification:
@@ -92,6 +92,36 @@ human_verification:
 | `apps/web/src/hooks/useAuth.ts`           | 137, 157, 160 | `as unknown as string` casts for `encryptedRootFolderKey` and `encryptedRootIpnsPrivateKey`                               | Warning  | Required because orval generates `{ [key: string]: unknown }                                                                                                                                                                                                                                               | null`for nullable string fields instead of`string | null`. Web build passes (0 TypeScript errors). Runtime behavior is correct since the actual JSON value is a string. This is a known orval quirk with nullable string types and does not affect correctness. |
 
 All anti-patterns are informational. None block the phase goal.
+
+## Gaps
+
+### GAP-01: Remove dead migration code — v2 blob is canonical (no non-migrated users exist)
+
+**Status:** failed
+**Severity:** medium
+**Rationale:** The staging database was nuked during Phase 19.2 (pebbleds datastore migration), and the only user account has already been migrated to v2. There are zero non-migrated vaults in any environment. The migration code paths (PATH B lazy migration, `POST /vault/migrate` endpoint, nullable DB crypto columns, `as unknown as string` type casts, DB fallback in PATH A) are dead code that adds complexity, test burden, and security surface area for a scenario that will never occur.
+
+**What to remove:**
+
+- `useAuth.ts` PATH B (DB decrypt + lazy migration IIFE) and DB fallback in PATH A catch
+- `POST /vault/migrate` endpoint and `migrateVault()` service method
+- `encryptedRootFolderKey` and `encryptedRootIpnsPrivateKey` DB columns (drop, not just nullable)
+- `migratedAt` column (all users are migrated — column becomes meaningless)
+- Crypto field handling in `InitVaultDto`, `VaultResponseDto`, `VaultExportDto`
+- Desktop `InitVaultRequest` crypto fields and ECIES wrapping for DB storage
+- Recovery tool export-file path handling of null crypto fields
+- `decryptVaultKeys` import in useAuth.ts, `serializeVaultBlobV2` import (client no longer writes v2 blobs — only reads)
+- All migration-related tests in `vault.service.spec.ts`
+- `as unknown as string` casts (orval workaround for fields that no longer exist)
+
+**What to keep:**
+
+- v2 blob format module (`blob.ts`, `vault_blob.rs`) — canonical format
+- v2 blob reading in login flow (PATH A without fallback)
+- v2 blob writing in desktop FUSE publish and new vault init
+- `fetchAndDecryptMetadata` v2 blob detection (folder sync)
+- Recovery tool IPFS-direct path (v2 blob read)
+- Cross-platform test vectors
 
 ### Human Verification Required
 
