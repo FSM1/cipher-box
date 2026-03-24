@@ -25,6 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material (completed 2026-03-24)
 - [ ] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing
 - [ ] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, k6 load testing, and capacity documentation
+- [ ] **Phase 23: Rust SDK Extraction** - Extract shared cipherbox-core Rust crate mirroring @cipherbox/core and @cipherbox/sdk-core, replace duplicated crypto/IPNS/metadata logic in desktop FUSE code, enable unit testing at same granularity as TypeScript
 
 ## Phase Details
 
@@ -165,6 +166,18 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 20. Vault Migration                       | v1.1      | 4/4            | Complete    | 2026-03-24 |
 | 21. BYO-IPFS Node Support                 | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
+| 23. Rust SDK Extraction                   | v1.1      | 0/?            | Not started | -          |
+
+### Phase 23: Rust SDK Extraction
+
+**Goal:** Extract shared `cipherbox-core` Rust crate mirroring `@cipherbox/core` and `@cipherbox/sdk-core` TypeScript packages. Replace duplicated crypto/IPNS/metadata logic in desktop FUSE code with crate imports. Enable unit testing at the same granularity as TypeScript. Platform-specific plans for macOS (FUSE-T SMB), Linux (kernel FUSE), Windows (WinFSP).
+**Requirements**: TBD
+**Depends on:** None (can run independently alongside other phases)
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 23 to break down)
 
 ---
 
