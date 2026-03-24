@@ -386,7 +386,7 @@
         <p>Recover directly from IPFS using only your private key. Works with vaults migrated to v2 blob format (no export file needed).</p>
 
         <label for="direct-key-text">Private key (hex)</label>
-        <textarea id="direct-key-text" rows="2" placeholder="64 hex characters (secp256k1 private key)"></textarea>
+        <textarea id="direct-key-text" rows="2" placeholder="64 hex characters (secp256k1 private key)" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off"></textarea>
 
         <label for="direct-ipfs-gateway">IPFS Gateway URL</label>
         <input type="url" id="direct-ipfs-gateway" value="https://ipfs.io">
@@ -410,7 +410,7 @@
       <div class="parsed-info" id="export-info"></div>
 
       <label for="key-text">Private key (hex or base64)</label>
-      <textarea id="key-text" rows="2" placeholder="64 hex characters or ~44 base64 characters"></textarea>
+      <textarea id="key-text" rows="2" placeholder="64 hex characters or ~44 base64 characters" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off"></textarea>
 
       <div class="or-divider">-- or upload key file --</div>
 
@@ -994,8 +994,11 @@
 
     function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+      // Timer is NOT cleared on fetch resolve — it stays active through body reads
+      // (resp.json(), resp.arrayBuffer()) so stalled bodies are also aborted.
+      // controller.abort() is a no-op if the request already completed.
+      setTimeout(() => controller.abort(), timeoutMs);
+      return fetch(url, { ...options, signal: controller.signal });
     }
 
     // =========================================================================
