@@ -1,0 +1,57 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a221d96da9ff",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T03:31:44.393034Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7352b4a79b37",
+  "token_usage": {
+    "input_tokens": 47,
+    "cache_creation_tokens": 77110,
+    "cache_read_tokens": 2985023,
+    "output_tokens": 12058,
+    "api_call_count": 43
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Close the single remaining gap from Phase 20 (vault migration) by removing dead migration code paths across API server, web client, desktop Rust, and recovery tool, then verify the gap is resolved.",
+    "outcome": "Both gap-closure plans (20-05 and 20-06) executed successfully across 2 waves, all 9 verification truths passed with GAP-01 resolved, 143 prior-phase regression tests passed, and Phase 20 marked complete.",
+    "learnings": {
+      "repo": [
+        "Phase 20 is 'vault-migration' — the v2 IPFS blob is now the canonical vault format; no non-migrated users exist, so DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) are dead.",
+        "The API server had a POST /vault/migrate endpoint and migrateVault() service method that were removed; vault entity/DTOs simplified to ownerPublicKey + rootIpnsName only.",
+        "Web login previously had a PATH B (DB decrypt + lazy migration) and a DB fallback in PATH A; both removed, leaving a single IPFS-only v2 blob read path.",
+        "New user vault init now publishes v2 blob to IPFS immediately (IPFS-native from day one) — this was added as part of gap closure.",
+        "Desktop Rust InitVaultRequest had crypto fields and a non-migrated branch in fetch_and_decrypt_vault — both removed.",
+        "Recovery tool export-file null handling was updated for the permanent v2 format.",
+        "The project uses a worktree named cipher-box-phase-20 (separate from the main cipher-box directory).",
+        "Plans were committed by the planner agent itself (bd236c59a) — orchestrator does not need a separate commit step.",
+        "Plan frontmatter key-links field was not used for cross-plan wiring in these gap plans; dependencies were in plan body only."
+      ],
+      "code": [],
+      "workflow": [
+        "Gap closure mode (--gaps-only) skips research and reads VERIFICATION.md directly to create targeted fix plans.",
+        "When the planner agent commits plans itself, the orchestrator should check git log before attempting a redundant commit.",
+        "Spot-checks (SUMMARY.md existence + git log grep) are reliable proxies for agent completion when the Task return signal is ambiguous.",
+        "The regression gate ran 143 tests across 5 prior-phase suites before verification — zero regressions despite significant API surface changes.",
+        "The orchestrator had to navigate working directory ambiguity (cipher-box vs cipher-box-phase-20) when locating verification output files."
+      ]
+    },
+    "friction": [
+      "Working directory confusion: the orchestrator ran multiple bash commands to locate the verification file because the worktree path (cipher-box-phase-20) differs from the repo name (cipher-box), requiring several redundant directory listing commands.",
+      "Plan frontmatter key-links were absent, so the pre-wave dependency check was a no-op — the dependency between 20-05 (API client regen) and 20-06 (client consuming new types) was implicit rather than machine-verifiable.",
+      "Minor auto-fix deviation in 20-05: controller spec alignment was needed post-execution, handled automatically but not anticipated in the plan."
+    ],
+    "open_items": [
+      "as unknown as string casts were removed in 20-06 — worth confirming TypeScript strict mode passes cleanly in CI.",
+      "Recovery tool export-file message was updated for v2 format but the transcript doesn't confirm end-to-end recovery flow was re-tested manually.",
+      "PROJECT.md was updated to reflect phase completion; downstream docs (README, API docs) may still reference the migrate endpoint or legacy vault format."
+    ]
+  }
+}
