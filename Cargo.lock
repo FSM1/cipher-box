@@ -650,12 +650,10 @@ dependencies = [
 name = "cipherbox-desktop"
 version = "0.1.0"
 dependencies = [
- "aes",
- "aes-gcm",
  "base64 0.22.1",
  "ciborium",
+ "cipherbox-crypto",
  "clap",
- "ctr",
  "dirs 5.0.1",
  "dotenvy",
  "ecies",
@@ -663,7 +661,6 @@ dependencies = [
  "env_logger",
  "fuser",
  "hex",
- "hkdf",
  "hostname",
  "keyring",
  "libc",

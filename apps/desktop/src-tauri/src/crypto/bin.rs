@@ -87,7 +87,7 @@ pub fn encrypt_bin_metadata(
 ) -> Result<Vec<u8>, BinError> {
     let json = serde_json::to_vec(metadata)
         .map_err(|_| BinError::SerializationFailed)?;
-    crate::crypto::ecies::wrap_key(&json, user_public_key)
+    cipherbox_crypto::ecies::wrap_key(&json, user_public_key)
         .map_err(|_| BinError::EncryptionFailed)
 }
 
@@ -96,7 +96,7 @@ pub fn decrypt_bin_metadata(
     ciphertext: &[u8],
     user_private_key: &[u8],
 ) -> Result<RecycleBinMetadata, BinError> {
-    let plaintext = crate::crypto::ecies::unwrap_key(ciphertext, user_private_key)
+    let plaintext = cipherbox_crypto::ecies::unwrap_key(ciphertext, user_private_key)
         .map_err(|_| BinError::DecryptionFailed)?;
     let metadata: RecycleBinMetadata = serde_json::from_slice(&plaintext)
         .map_err(|_| BinError::DeserializationFailed)?;

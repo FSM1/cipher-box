@@ -11,12 +11,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroize;
 
-use super::aes::{self, AesError};
+use cipherbox_crypto::aes;
+use cipherbox_crypto::error::CryptoError;
 
 #[derive(Debug, Error)]
 pub enum FolderError {
     #[error("Encryption failed")]
-    EncryptionFailed(#[from] AesError),
+    EncryptionFailed(#[from] CryptoError),
     #[error("Serialization failed")]
     SerializationFailed,
     #[error("Deserialization failed")]
