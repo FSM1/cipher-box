@@ -810,7 +810,7 @@
       // Primary: IPFS gateway /ipns/ HEAD request (extracts CID from X-Ipfs-Roots header)
       const gwBase = ipfsGatewayUrl || gatewayUrl;
       try {
-        const resp = await fetch(`${gwBase}/ipns/${ipnsName}`, { method: 'HEAD' });
+        const resp = await fetchWithTimeout(`${gwBase}/ipns/${ipnsName}`, { method: 'HEAD' });
         if (resp.ok) {
           const roots = resp.headers.get('X-Ipfs-Roots');
           if (roots) return roots.split(',')[0].trim();
@@ -823,7 +823,7 @@
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
           const url = `${gatewayUrl}/routing/v1/ipns/${ipnsName}`;
-          const resp = await fetch(url, {
+          const resp = await fetchWithTimeout(url, {
             headers: { 'Accept': 'application/json, application/vnd.ipfs.ipns-record' }
           });
 
@@ -861,7 +861,7 @@
       const apiBase = window.location.origin.replace(/:\d+$/, ':3000');
       try {
         const url = `${apiBase}/ipns/resolve?ipnsName=${ipnsName}`;
-        const resp = await fetch(url);
+        const resp = await fetchWithTimeout(url);
         if (resp.ok) {
           const json = await resp.json();
           if (json.cid) return json.cid;
@@ -875,7 +875,7 @@
       const kuboBase = gatewayUrl.replace(/\/routing\/v1.*$/, '').replace(/\/$/, '');
       try {
         const url = `${kuboBase}/api/v0/name/resolve?arg=${ipnsName}`;
-        const resp = await fetch(url, { method: 'POST' });
+        const resp = await fetchWithTimeout(url, { method: 'POST' });
         if (resp.ok) {
           const json = await resp.json();
           if (json.Path) return extractCidFromValue(json.Path);
@@ -959,7 +959,7 @@
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
           const url = `${ipfsGatewayUrl}/ipfs/${cid}`;
-          const resp = await fetch(url);
+          const resp = await fetchWithTimeout(url, {}, 30000);
           if (resp.ok) {
             return new Uint8Array(await resp.arrayBuffer());
           }
@@ -983,6 +983,18 @@
 
     function sleep(ms) {
       return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
     }
 
     // =========================================================================
@@ -1288,7 +1300,7 @@
             let blobBytes;
             try {
               const ipnsUrl = `${ipfsGateway}/ipns/${directRootIpnsName}`;
-              const resp = await fetch(ipnsUrl);
+              const resp = await fetchWithTimeout(ipnsUrl, {}, 30000);
               if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
               blobBytes = new Uint8Array(await resp.arrayBuffer());
             } catch (gatewayErr) {
@@ -1359,25 +1371,25 @@
         }
 
         // Validate required fields
-        if (!parsed.rootIpnsName) {
-          showError(1, 'Export file is missing rootIpnsName field.');
+        if (typeof parsed.rootIpnsName !== 'string' || !/^k[0-9a-z]{20,}$/i.test(parsed.rootIpnsName)) {
+          showError(1, 'Export file has an invalid or missing rootIpnsName.');
           return;
         }
 
-        if (!parsed.encryptedRootFolderKey || !parsed.encryptedRootIpnsPrivateKey) {
-          showError(1, 'Export files no longer contain encrypted keys (vault v2 format). Use "From IPFS (v2 blob, key only)" recovery instead -- it only needs your private key.');
+        if (!parsed.encryptedRootFolderKey) {
+          showError(1, 'Export does not contain encryptedRootFolderKey. Use "From IPFS (v2 blob, key only)" recovery instead -- it only needs your private key.');
           return;
         }
 
         exportData = parsed;
 
-        // Show parsed info in step 2
-        let infoHtml = `<div class="field"><span class="field-name">rootIpnsName:</span> <span class="field-value">${truncate(parsed.rootIpnsName, 50)}</span></div>`;
+        // Show parsed info in step 2 (escape all user-supplied values)
+        let infoHtml = `<div class="field"><span class="field-name">rootIpnsName:</span> <span class="field-value">${escapeHtml(truncate(parsed.rootIpnsName, 50))}</span></div>`;
         if (parsed.exportedAt) {
-          infoHtml += `<div class="field"><span class="field-name">exportedAt:</span> <span class="field-value">${parsed.exportedAt}</span></div>`;
+          infoHtml += `<div class="field"><span class="field-name">exportedAt:</span> <span class="field-value">${escapeHtml(String(parsed.exportedAt))}</span></div>`;
         }
         if (parsed.derivationInfo) {
-          infoHtml += `<div class="field"><span class="field-name">derivationInfo:</span> <span class="field-value">${JSON.stringify(parsed.derivationInfo)}</span></div>`;
+          infoHtml += `<div class="field"><span class="field-name">derivationInfo:</span> <span class="field-value">${escapeHtml(JSON.stringify(parsed.derivationInfo))}</span></div>`;
         }
         document.getElementById('export-info').innerHTML = infoHtml;
 
@@ -1448,7 +1460,9 @@
 
         try {
           rootFolderKey = await eciesDecrypt(privateKeyBytes, exportData.encryptedRootFolderKey);
-          rootIpnsPrivateKey = await eciesDecrypt(privateKeyBytes, exportData.encryptedRootIpnsPrivateKey);
+          if (exportData.encryptedRootIpnsPrivateKey) {
+            rootIpnsPrivateKey = await eciesDecrypt(privateKeyBytes, exportData.encryptedRootIpnsPrivateKey);
+          }
         } catch (e) {
           showError(2, 'Failed to decrypt keys. Make sure you are using the correct private key.');
           btn.disabled = false;

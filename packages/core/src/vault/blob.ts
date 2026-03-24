@@ -93,6 +93,10 @@ export function deserializeVaultBlobV2(blob: Uint8Array): VaultBlobV2 {
 
   const keyLen = (blob[1] << 8) | blob[2];
 
+  if (keyLen === 0) {
+    throw new Error('Invalid v2 blob: encrypted key length must be > 0');
+  }
+
   if (blob.length < 3 + keyLen) {
     throw new Error(
       `Vault blob too short for key (expected ${keyLen} bytes, have ${blob.length - 3})`
