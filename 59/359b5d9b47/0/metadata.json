@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "59359b5d9b47",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T03:30:39.830298Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/20-vault-migration/20-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7352b4a79b37",
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 73033,
+    "cache_read_tokens": 2479850,
+    "output_tokens": 11241,
+    "api_call_count": 37
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Close the single verification gap (GAP-01) from Phase 20 by removing dead vault migration code, then execute and verify the gap-closure plans.",
+    "outcome": "Two gap-closure plans (20-05 API cleanup, 20-06 client cleanup) were created, executed, and verified successfully. All 9 verification truths passed, GAP-01 resolved, Phase 20 marked complete.",
+    "learnings": {
+      "repo": [
+        "The vault v2 blob format is now canonical — no non-migrated users exist, making all PATH B (DB decrypt + lazy migration) code dead.",
+        "The vaults table previously had three crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) that were dropped as part of this cleanup.",
+        "New user vault init now publishes a v2 blob to IPFS immediately, making vaults IPFS-native from day one with no DB fallback.",
+        "The API client was regenerated after DTO simplification — downstream clients now only see ownerPublicKey + rootIpnsName.",
+        "5 prior-phase test suites (143 tests) continued to pass after the migration code removal — no regressions."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/20-vault-migration/20-VERIFICATION.md",
+          "finding": "Verification file recorded 9/9 truths verified and GAP-01 resolved after gap-closure execution."
+        }
+      ],
+      "workflow": [
+        "The planner agent committed the gap-closure plans itself (commit bd236c59a), so the orchestrator's attempt to commit was a no-op — worth detecting this earlier to avoid redundant git operations.",
+        "Pre-wave dependency check was skipped because key-links were in plan body rather than frontmatter — the check only reads frontmatter, so body-level dependencies are invisible to it.",
+        "Verification file path resolution required multiple fallback bash checks when the verifier wrote to a different working directory than expected."
+      ]
+    },
+    "friction": [
+      "Verification file location was ambiguous — the orchestrator ran ~6 bash commands to locate the VERIFICATION.md after the verifier agent completed, suggesting path resolution between agents is fragile.",
+      "The orchestrator attempted to commit plans that had already been committed by the planner agent, requiring a redundant git check."
+    ],
+    "open_items": [
+      "Desktop Rust types were simplified (InitVaultRequest crypto fields removed, non-migrated branch in fetch_and_decrypt_vault removed) — worth confirming all Rust consumers updated if additional desktop builds exist.",
+      "Recovery tool export-file message was updated for permanent v2 format — the nature of the message change should be communicated to users relying on recovery exports.",
+      "Key-links in plan bodies (rather than frontmatter) are invisible to the pre-wave dependency checker — consider whether body-level wiring should be surfaced to the checker."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T03:30:19.531974Z",
+    "agent_lines": 52,
+    "human_added": 1,
+    "human_modified": 59,
+    "human_removed": 0,
+    "total_committed": 112,
+    "agent_percentage": 46.42857142857143
+  }
+}
