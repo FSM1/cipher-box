@@ -71,3 +71,7 @@ you can create a live vault on staging (with the old v1 vault metadata) by using
 ---
 
 ok 2 more baselines to investigate: login to session for existing vault and session restore of existing vault.
+
+---
+
+ok create a gsd todo for the auth refresh race condition, but do this on a fresh branch off main. the current test scripts and baseline measurements should also be committed to this branch.
