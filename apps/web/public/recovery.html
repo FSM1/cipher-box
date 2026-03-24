@@ -1358,14 +1358,14 @@
           return;
         }
 
-        // Handle migrated vaults with null encrypted keys
+        // Validate required fields
         if (!parsed.rootIpnsName) {
           showError(1, 'Export file is missing rootIpnsName field.');
           return;
         }
 
         if (!parsed.encryptedRootFolderKey || !parsed.encryptedRootIpnsPrivateKey) {
-          showError(1, 'This export is from a migrated vault (encrypted keys are null). Use "From IPFS (v2 blob)" recovery method instead, which only needs your private key.');
+          showError(1, 'Export files no longer contain encrypted keys (vault v2 format). Use "From IPFS (v2 blob, key only)" recovery instead -- it only needs your private key.');
           return;
         }
 
