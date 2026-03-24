@@ -25,15 +25,15 @@ export function createTestConfig(
   };
 }
 
-export function setupFolder(client: CipherBoxClient, ipnsName = 'folder-ipns') {
+export function setupFolder(client: CipherBoxClient, ipnsName = 'folder-ipns', now = Date.now()) {
   const child = {
     type: 'file' as const,
     id: 'file1',
     name: 'test.txt',
     fileMetaIpnsName: 'k51file',
     ipnsPrivateKeyEncrypted: 'abc',
-    createdAt: Date.now(),
-    modifiedAt: Date.now(),
+    createdAt: now,
+    modifiedAt: now,
   };
   client.getFolderTree().set(ipnsName, {
     ipnsName,
@@ -43,9 +43,9 @@ export function setupFolder(client: CipherBoxClient, ipnsName = 'folder-ipns') {
       privateKey: new Uint8Array(64).fill(3),
     },
     sequenceNumber: 1n,
-    children: [child],
+    children: [{ ...child }],
     metadata: null,
-    lastLoadedAt: Date.now(),
+    lastLoadedAt: now,
   });
-  return child;
+  return { ...child };
 }
