@@ -35,6 +35,7 @@ describe('VaultService', () => {
   let mockFolderIpnsRepo: {
     create: jest.Mock;
     save: jest.Mock;
+    update: jest.Mock;
   };
   let mockUserRepo: {
     findOne: jest.Mock;
@@ -95,6 +96,7 @@ describe('VaultService', () => {
     mockFolderIpnsRepo = {
       create: jest.fn().mockImplementation((data) => data),
       save: jest.fn().mockResolvedValue({}),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
     mockUserRepo = {
@@ -233,6 +235,40 @@ describe('VaultService', () => {
       const result = await service.initializeVault(testUserId, shortHexDto);
 
       expect(result.ownerPublicKey).toBe('aabb');
+    });
+
+    it('should update isRoot when folder_ipns row already exists from IPNS publish', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(null);
+      mockVaultRepo.create.mockReturnValue(mockVaultEntity);
+      mockVaultRepo.save.mockResolvedValue(mockVaultEntity);
+
+      // Simulate duplicate key constraint (PG error code 23505) on folder_ipns save
+      mockFolderIpnsRepo.save.mockRejectedValueOnce(
+        Object.assign(new Error('duplicate key value violates unique constraint'), {
+          code: '23505',
+        })
+      );
+
+      const result = await service.initializeVault(testUserId, testInitVaultDto);
+
+      expect(mockFolderIpnsRepo.update).toHaveBeenCalledWith(
+        { userId: testUserId, ipnsName: testRootIpnsName },
+        { isRoot: true }
+      );
+      expect(result.id).toBe(testVaultId);
+    });
+
+    it('should rethrow non-duplicate-key errors from folder_ipns save', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(null);
+      mockVaultRepo.create.mockReturnValue(mockVaultEntity);
+      mockVaultRepo.save.mockResolvedValue(mockVaultEntity);
+
+      mockFolderIpnsRepo.save.mockRejectedValueOnce(new Error('connection refused'));
+
+      await expect(service.initializeVault(testUserId, testInitVaultDto)).rejects.toThrow(
+        'connection refused'
+      );
+      expect(mockFolderIpnsRepo.update).not.toHaveBeenCalled();
     });
   });
 

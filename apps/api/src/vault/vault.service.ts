@@ -73,18 +73,32 @@ export class VaultService {
 
     const savedVault = await this.vaultRepository.save(vault);
 
-    // Create root folder IPNS entry for publish tracking
-    // This allows IPNS publishes to work without requiring TEE fields on every publish
-    const rootFolderIpns = this.folderIpnsRepository.create({
-      userId,
-      ipnsName: dto.rootIpnsName,
-      latestCid: null, // No content yet
-      sequenceNumber: '0',
-      encryptedIpnsPrivateKey: null, // TEE key added when TEE is implemented
-      keyEpoch: null,
-      isRoot: true,
-    });
-    await this.folderIpnsRepository.save(rootFolderIpns);
+    // Ensure root folder IPNS entry exists for publish tracking.
+    // The IPNS publish endpoint may have already created this row (clients
+    // publish the root folder IPNS record before calling /vault/init).
+    // Try insert first; on duplicate key, update isRoot instead.
+    try {
+      const rootFolderIpns = this.folderIpnsRepository.create({
+        userId,
+        ipnsName: dto.rootIpnsName,
+        latestCid: null,
+        sequenceNumber: '0',
+        encryptedIpnsPrivateKey: null,
+        keyEpoch: null,
+        isRoot: true,
+      });
+      await this.folderIpnsRepository.save(rootFolderIpns);
+    } catch (error) {
+      // Row already exists (from IPNS publish endpoint) — mark as root
+      if ((error as { code?: string }).code === '23505') {
+        await this.folderIpnsRepository.update(
+          { userId, ipnsName: dto.rootIpnsName },
+          { isRoot: true }
+        );
+      } else {
+        throw error;
+      }
+    }
 
     const teeKeys = await this.teeKeyStateService.getTeeKeysDto();
     return this.toVaultResponse(savedVault, teeKeys);
