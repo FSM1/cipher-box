@@ -684,8 +684,10 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
+ "cipherbox-api-client",
  "cipherbox-core",
  "cipherbox-crypto",
+ "cipherbox-sdk",
  "clap",
  "dirs 5.0.1",
  "dotenvy",
@@ -694,7 +696,6 @@ dependencies = [
  "env_logger",
  "fuser",
  "hex",
- "hostname",
  "keyring",
  "libc",
  "log",

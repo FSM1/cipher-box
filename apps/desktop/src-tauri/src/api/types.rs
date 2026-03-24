@@ -78,14 +78,8 @@ impl fmt::Debug for RefreshResponse {
 }
 
 /// TEE public keys included in vault response.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeeKeysResponse {
-    pub current_epoch: u32,
-    pub current_public_key: String,
-    pub previous_epoch: Option<u32>,
-    pub previous_public_key: Option<String>,
-}
+/// Re-exported from `cipherbox_api_client` to share the type with SDK's `KeyState`.
+pub use cipherbox_api_client::TeeKeysResponse;
 
 /// Request body for POST /vault/init (new user vault initialization).
 #[derive(Serialize)]

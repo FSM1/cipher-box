@@ -1213,9 +1213,9 @@ pub async fn mount_filesystem(
     log::info!("Pre-populating root folder from IPNS...");
     let fetch_result: Result<(Vec<u8>, String), String> = async {
         let resolve_resp =
-            crate::api::ipns::resolve_ipns(&state.api, &root_ipns_name).await?;
+            crate::api::ipns::resolve_ipns(&state.sdk.api, &root_ipns_name).await?;
         let encrypted_bytes =
-            crate::api::ipfs::fetch_content(&state.api, &resolve_resp.cid).await?;
+            crate::api::ipfs::fetch_content(&state.sdk.api, &resolve_resp.cid).await?;
         Ok((encrypted_bytes, resolve_resp.cid))
     }.await;
     match fetch_result {
@@ -1238,8 +1238,8 @@ pub async fn mount_filesystem(
                                 if let Ok(fk) = root_folder_key_arr {
                                     for (fp_ino, fp_ipns) in &unresolved {
                                         let fp_result: Result<Vec<u8>, String> = async {
-                                            let resp = crate::api::ipns::resolve_ipns(&state.api, fp_ipns).await?;
-                                            let bytes = crate::api::ipfs::fetch_content(&state.api, &resp.cid).await?;
+                                            let resp = crate::api::ipns::resolve_ipns(&state.sdk.api, fp_ipns).await?;
+                                            let bytes = crate::api::ipfs::fetch_content(&state.sdk.api, &resp.cid).await?;
                                             Ok(bytes)
                                         }.await;
                                         match fp_result {
@@ -1284,8 +1284,8 @@ pub async fn mount_filesystem(
                     for (sub_ino, sub_ipns, sub_key) in &subfolder_infos {
                         log::info!("Pre-populating subfolder ino={} ipns={}", sub_ino, sub_ipns);
                         let sub_result: Result<(Vec<u8>, String), String> = async {
-                            let resp = crate::api::ipns::resolve_ipns(&state.api, sub_ipns).await?;
-                            let bytes = crate::api::ipfs::fetch_content(&state.api, &resp.cid).await?;
+                            let resp = crate::api::ipns::resolve_ipns(&state.sdk.api, sub_ipns).await?;
+                            let bytes = crate::api::ipfs::fetch_content(&state.sdk.api, &resp.cid).await?;
                             Ok((bytes, resp.cid))
                         }.await;
                         match sub_result {
@@ -1303,8 +1303,8 @@ pub async fn mount_filesystem(
                                                     if let Ok(sk) = sk_arr {
                                                         for (fp_ino, fp_ipns) in &sub_unresolved {
                                                             let fp_result: Result<Vec<u8>, String> = async {
-                                                                let resp = crate::api::ipns::resolve_ipns(&state.api, fp_ipns).await?;
-                                                                let bytes = crate::api::ipfs::fetch_content(&state.api, &resp.cid).await?;
+                                                                let resp = crate::api::ipns::resolve_ipns(&state.sdk.api, fp_ipns).await?;
+                                                                let bytes = crate::api::ipfs::fetch_content(&state.sdk.api, &resp.cid).await?;
                                                                 Ok(bytes)
                                                             }.await;
                                                             match fp_result {
@@ -1346,7 +1346,7 @@ pub async fn mount_filesystem(
         inodes,
         metadata_cache,
         content_cache: cache::ContentCache::new(),
-        api: state.api.clone(),
+        api: state.sdk.api.clone(),
         private_key: Zeroizing::new(private_key),
         public_key: Zeroizing::new(public_key),
         root_folder_key: Zeroizing::new(root_folder_key),

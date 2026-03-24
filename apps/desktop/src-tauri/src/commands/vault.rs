@@ -15,6 +15,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
 
     // Derive IPNS keypairs from user's private key
     let private_key = state
+        .sdk
         .private_key
         .read()
         .await
@@ -46,7 +47,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
 
     // 1. Publish v2 key blob to vault key IPNS (key only, no metadata)
     let blob_bytes = crypto::vault_blob::serialize_vault_blob_v2(&encrypted_root_folder_key)?;
-    let key_blob_cid = crate::api::ipfs::upload_content(&state.api, &blob_bytes).await?;
+    let key_blob_cid = crate::api::ipfs::upload_content(&state.sdk.api, &blob_bytes).await?;
 
     let vault_key_ipns_arr: [u8; 32] = vault_key_ipns_private.as_slice()
         .try_into()
@@ -66,7 +67,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         key_epoch: None,
         expected_sequence_number: None,
     };
-    match crate::api::ipns::publish_ipns(&state.api, &key_publish_req).await? {
+    match crate::api::ipns::publish_ipns(&state.sdk.api, &key_publish_req).await? {
         crate::api::ipns::PublishResult::Success => {}
         crate::api::ipns::PublishResult::Conflict { .. } => {
             log::warn!("Unexpected conflict on vault key blob publish (sequence 0); aborting vault initialization to avoid mismatched root_folder_key");
@@ -91,7 +92,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     let json_metadata = serde_json::json!({ "iv": iv_hex, "data": data_base64 });
     let json_bytes = serde_json::to_vec(&json_metadata)
         .map_err(|e| format!("JSON serialization failed: {}", e))?;
-    let folder_cid = crate::api::ipfs::upload_content(&state.api, &json_bytes).await?;
+    let folder_cid = crate::api::ipfs::upload_content(&state.sdk.api, &json_bytes).await?;
 
     let root_ipns_arr: [u8; 32] = root_ipns_private_key.as_slice()
         .try_into()
@@ -111,7 +112,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         key_epoch: None,
         expected_sequence_number: None,
     };
-    match crate::api::ipns::publish_ipns(&state.api, &folder_publish_req).await? {
+    match crate::api::ipns::publish_ipns(&state.sdk.api, &folder_publish_req).await? {
         crate::api::ipns::PublishResult::Success => {}
         crate::api::ipns::PublishResult::Conflict { .. } => {
             log::warn!("Unexpected conflict on root folder publish (sequence 0)");
@@ -125,6 +126,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     };
 
     let resp = state
+        .sdk
         .api
         .authenticated_post("/vault/init", &init_req)
         .await
@@ -150,6 +152,7 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
 
     // GET /vault
     let resp = state
+        .sdk
         .api
         .authenticated_get("/vault")
         .await
@@ -168,6 +171,7 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
 
     // Get private key
     let private_key = state
+        .sdk
         .private_key
         .read()
         .await
@@ -190,10 +194,10 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
             .map_err(|e| format!("Vault key HKDF derivation failed: {:?}", e))?;
 
     // Resolve vault key IPNS, fetch v2 blob, extract rootFolderKey
-    let resolved = crate::api::ipns::resolve_ipns(&state.api, &vault_key_ipns_name)
+    let resolved = crate::api::ipns::resolve_ipns(&state.sdk.api, &vault_key_ipns_name)
         .await
         .map_err(|e| format!("Vault key IPNS resolve failed: {}", e))?;
-    let blob_bytes = crate::api::ipfs::fetch_content(&state.api, &resolved.cid)
+    let blob_bytes = crate::api::ipfs::fetch_content(&state.sdk.api, &resolved.cid)
         .await
         .map_err(|e| format!("IPFS fetch failed for vault key blob: {}", e))?;
 
@@ -205,14 +209,14 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
     let root_folder_key = crypto::ecies::unwrap_key(enc_key, &private_key)
         .map_err(|e| format!("Failed to decrypt rootFolderKey from v2 blob: {}", e))?;
 
-    *state.root_folder_key.write().await = Some(root_folder_key);
+    *state.sdk.root_folder_key.write().await = Some(root_folder_key);
 
     // Root folder IPNS key is HKDF-derived
-    *state.root_ipns_private_key.write().await = Some(root_ipns_priv.to_vec());
+    *state.sdk.root_ipns_private_key.write().await = Some(root_ipns_priv.to_vec());
 
     // Store IPNS name and TEE keys
-    *state.root_ipns_name.write().await = Some(vault.root_ipns_name);
-    *state.tee_keys.write().await = vault.tee_keys;
+    *state.sdk.root_ipns_name.write().await = Some(vault.root_ipns_name);
+    *state.sdk.tee_keys.write().await = vault.tee_keys;
 
     log::info!("Vault keys decrypted and stored in memory");
     Ok(())

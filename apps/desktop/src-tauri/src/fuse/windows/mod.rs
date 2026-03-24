@@ -89,9 +89,9 @@ mod mount_impl {
         log::info!("Pre-populating root folder from IPNS...");
         let fetch_result: Result<(Vec<u8>, String), String> = async {
             let resolve_resp =
-                crate::api::ipns::resolve_ipns(&state.api, &root_ipns_name).await?;
+                crate::api::ipns::resolve_ipns(&state.sdk.api, &root_ipns_name).await?;
             let encrypted_bytes =
-                crate::api::ipfs::fetch_content(&state.api, &resolve_resp.cid).await?;
+                crate::api::ipfs::fetch_content(&state.sdk.api, &resolve_resp.cid).await?;
             Ok((encrypted_bytes, resolve_resp.cid))
         }
         .await;
@@ -125,12 +125,12 @@ mod mount_impl {
                                         for (fp_ino, fp_ipns) in &unresolved {
                                             let fp_result: Result<Vec<u8>, String> = async {
                                                 let resp = crate::api::ipns::resolve_ipns(
-                                                    &state.api,
+                                                    &state.sdk.api,
                                                     fp_ipns,
                                                 )
                                                 .await?;
                                                 let bytes = crate::api::ipfs::fetch_content(
-                                                    &state.api,
+                                                    &state.sdk.api,
                                                     &resp.cid,
                                                 )
                                                 .await?;
@@ -204,10 +204,10 @@ mod mount_impl {
                                     );
                                     let sub_result: Result<(Vec<u8>, String), String> = async {
                                         let resp =
-                                            crate::api::ipns::resolve_ipns(&state.api, sub_ipns)
+                                            crate::api::ipns::resolve_ipns(&state.sdk.api, sub_ipns)
                                                 .await?;
                                         let bytes = crate::api::ipfs::fetch_content(
-                                            &state.api,
+                                            &state.sdk.api,
                                             &resp.cid,
                                         )
                                         .await?;
@@ -250,13 +250,13 @@ mod mount_impl {
                                                                         > = async {
                                                                             let resp =
                                                                                 crate::api::ipns::resolve_ipns(
-                                                                                    &state.api,
+                                                                                    &state.sdk.api,
                                                                                     fp_ipns,
                                                                                 )
                                                                                 .await?;
                                                                             let bytes =
                                                                                 crate::api::ipfs::fetch_content(
-                                                                                    &state.api,
+                                                                                    &state.sdk.api,
                                                                                     &resp.cid,
                                                                                 )
                                                                                 .await?;
@@ -329,7 +329,7 @@ mod mount_impl {
             inodes,
             metadata_cache,
             content_cache: cache::ContentCache::new(),
-            api: state.api.clone(),
+            api: state.sdk.api.clone(),
             private_key: Zeroizing::new(private_key),
             public_key: Zeroizing::new(public_key),
             root_folder_key: Zeroizing::new(root_folder_key),

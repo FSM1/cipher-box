@@ -251,10 +251,10 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 }
 
                 // POST /auth/logout (best-effort)
-                let _ = state.api.authenticated_post("/auth/logout", &()).await;
+                let _ = state.sdk.api.authenticated_post("/auth/logout", &()).await;
 
                 // Delete refresh token from Keychain
-                if let Some(ref user_id) = *state.user_id.read().await {
+                if let Some(ref user_id) = *state.sdk.user_id.read().await {
                     let _ = crate::api::auth::delete_refresh_token(user_id);
                 }
 
