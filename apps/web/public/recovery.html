@@ -812,7 +812,7 @@
         try {
           const url = `${gatewayUrl}/routing/v1/ipns/${ipnsName}`;
           const resp = await fetch(url, {
-            headers: { 'Accept': 'application/vnd.ipfs.ipns-record' }
+            headers: { 'Accept': 'application/json, application/vnd.ipfs.ipns-record' }
           });
 
           if (resp.ok) {
@@ -835,7 +835,7 @@
             // We need to parse the CBOR/protobuf to extract the Value field
             const recordBytes = new Uint8Array(await resp.arrayBuffer());
             const cid = extractCidFromIpnsRecord(recordBytes);
-            if (cid) return cid;
+            if (cid && /^(bafy|bafk|Qm)[a-zA-Z0-9]+$/.test(cid)) return cid;
           }
         } catch (e) {
           if (attempt < maxRetries - 1) {
