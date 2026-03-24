@@ -167,7 +167,7 @@ Plans:
 4. CI runs workspace-level builds on macOS, Linux, and Windows with cross-language parity gate
 5. No duplicated crypto, domain, or API logic remains in the desktop app
 
-**Plans:** 3/7 plans executed
+**Plans:** 4/7 plans executed
 
 Plans:
 
@@ -175,7 +175,7 @@ Plans:
 - [ ] 23-02-PLAN.md -- cipherbox-core crate extraction (domain types, metadata, IPNS records)
 - [ ] 23-03-PLAN.md -- cipherbox-api-client crate + shared test vectors extraction
 - [ ] 23-04-PLAN.md -- cipherbox-fuse crate extraction (platform-agnostic + platform modules)
-- [ ] 23-05-PLAN.md -- cipherbox-sdk crate extraction (sync, queue, state, registry)
+- [x] 23-05-PLAN.md -- cipherbox-sdk crate extraction (sync, queue, state, registry)
 - [ ] 23-06-PLAN.md -- Desktop app thin shell cleanup + full workspace verification
 - [ ] 23-07-PLAN.md -- CI workspace builds + Release Please + cross-language parity gate
 
@@ -193,7 +193,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 20. Vault Migration                       | 6/6       | Complete       | 2026-03-24  | -          |
 | 21. BYO-IPFS Node Support                 | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
-| 23. Rust SDK Extraction                   | 3/7       | In Progress    |             | -          |
+| 23. Rust SDK Extraction                   | 4/7       | In Progress    |             | -          |
 
 ---
 

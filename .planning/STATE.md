@@ -8,7 +8,7 @@ progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 27
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 23 (rust-sdk-extraction) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Plan: 4 of 7
 | 23    | 01   | 13min    | 2     | 26    |
 | 23    | 02   | 10min    | 2     | 33    |
 | 23    | 03   | 11min    | 2     | 23    |
+| 23    | 05   | 12min    | 2     | 24    |
 
 ## Accumulated Context
 
@@ -98,6 +99,9 @@ Recent for v1.1:
 - Hand-structured API client crate rather than openapi-generator (modest API surface, proven code, no Java/Docker CI dependency)
 - critical-section std feature required for standalone ecies linking (Tauri provides it in desktop builds)
 - Shared test vectors in tests/vectors/ JSON files loadable by both Rust and TypeScript for CI parity gates
+- SyncDaemon uses Arc<dyn Fn(SyncStatus)> generic callback instead of Tauri AppHandle for testability
+- Desktop api/client.rs re-exports cipherbox_api_client::ApiClient as type alias to unify types across modules
+- Desktop AppState wraps Arc<KeyState> from SDK; all key material accessed via state.sdk.\*
 
 ### Roadmap Evolution
 
@@ -123,4 +127,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 23-02 (cipherbox-core crate extraction)
+Last updated: 2026-03-24 after completing 23-05 (cipherbox-sdk crate extraction)
