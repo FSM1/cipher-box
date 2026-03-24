@@ -85,3 +85,7 @@ ok thats better: Failed to resolve vault from IPFS: IPFS gateway returned 400 fo
 ---
 
 tried that and still no luck
+
+---
+
+Failed to resolve vault from IPFS: Failed to resolve IPNS name: k51qzi5uqu5djmxm72wz.... Ensure IPFS gateways are reachable or the CipherBox API is running on localhost:3000.
