@@ -78,3 +78,75 @@ Two mock `UploadHandler` implementations (`AlwaysOk`, `AlwaysFail`) plus an `Ord
 <usage><total_tokens>38736</total_tokens><tool_uses>13</tool_uses><duration_ms>136951</duration_ms></usage>
 </task-notification>
 Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/ad4c3ca16f63ece16.output
+
+---
+
+<task-notification>
+<task-id>aecf37ffe975bad8b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/aecf37ffe975bad8b.output</output-file>
+<status>completed</status>
+<summary>Agent "Write core crate unit tests" completed</summary>
+<result>6 test functions in decrypt.rs. All 55 tests pass (8+10+6+6+9+2+14 = 55). That matches perfectly.
+
+Here is a summary of what was done:
+
+**Files modified:**
+
+1. `/Users/michael/Code/cipher-box/crates/core/Cargo.toml` -- Added `ecies` as a dev-dependency for generating secp256k1 keypairs in bin.rs tests.
+
+2. `/Users/michael/Code/cipher-box/crates/core/src/folder.rs` -- Added 8 tests:
+   - `encrypt_decrypt_folder_metadata_empty_children` - Round-trip with empty children
+   - `encrypt_decrypt_folder_metadata_with_children` - Round-trip with folder + file entries
+   - `decrypt_folder_metadata_wrong_key_returns_error` - Wrong key error case
+   - `encrypt_decrypt_file_metadata_round_trip` - File metadata round-trip
+   - `version_field_preserved_in_folder_metadata` - Version field preservation
+   - `decrypt_folder_metadata_rejects_non_v2` - Rejects v1 metadata
+   - `file_metadata_default_encryption_mode` - Default "GCM" when field missing
+   - `file_metadata_with_versions_round_trip` - File metadata with VersionEntry
+
+3. `/Users/michael/Code/cipher-box/crates/core/src/ipns.rs` -- Added 10 tests:
+   - `create_ipns_record_produces_valid_fields` - Field correctness
+   - `create_ipns_record_v2_signature_verifiable` - V2 signature verification
+   - `format_validity_timestamp_epoch_zero` - Epoch 0 formatting
+   - `format_validity_timestamp_known_date` - Known date (2024-01-01)
+   - `format_validity_timestamp_with_nanos` - Nanosecond precision
+   - `civil_from_days_epoch` - Day 0 = 1970-01-01
+   - `civil_from_days_one_year` - Day 365 = 1971-01-01
+   - `civil_from_days_leap_year` - 1972-02-29 leap year
+   - `build_cbor_data_produces_valid_cbor` - CBOR validity and key presence
+   - `different_sequences_produce_different_output` - Sequence 0 vs 100
+
+4. `/Users/michael/Code/cipher-box/crates/core/src/bin.rs` -- Added 6 tests:
+   - `empty_bin_metadata_returns_v1_with_empty_entries` - Factory function
+   - `encrypt_decrypt_bin_metadata_round_trip` - ECIES round-trip
+   - `encrypt_decrypt_bin_metadata_with_entries` - Round-trip with multiple entries
+   - `decrypt_bin_metadata_wrong_key_returns_error` - Wrong key error
+   - `bin_item_type_serializes_lowercase` - Enum serialization
+   - `bin_metadata_camel_case_fields` - camelCase in JSON
+
+5. `/Users/michael/Code/cipher-box/crates/core/src/decrypt.rs` -- Added 6 tests:
+   - `decrypt_metadata_from_ipfs_public_round_trip` - Folder metadata via JSON format
+   - `decrypt_file_metadata_from_ipfs_public_round_trip` - File metadata via JSON format
+   - `invalid_json_input_returns_error` - Bad JSON
+   - `invalid_base64_in_data_field_returns_error` - Bad base64
+   - `invalid_iv_hex_returns_error` - Bad IV hex
+   - `wrong_key_returns_decryption_error` - Wrong decryption key
+
+6. `/Users/michael/Code/cipher-box/crates/core/src/registry.rs` -- Added 9 tests:
+   - `device_registry_serde_round_trip` - Full serialize/deserialize
+   - `camel_case_field_names_in_json` - camelCase field verification
+   - `device_auth_status_serializes_lowercase` - Enum serialization
+   - `platform_serializes_lowercase` - Platform enum serialization
+   - `optional_fields_skipped_when_none` - None fields as null
+   - `optional_fields_present_when_some` - Some fields present
+   - `empty_devices_registry_round_trip` - Empty devices array
+   - `platform_deserializes_from_lowercase` - Deserialization
+   - `auth_status_deserializes_from_lowercase` - Deserialization
+
+7. `/Users/michael/Code/cipher-box/crates/core/src/vault_blob.rs` -- Added 2 tests to fill gaps:
+   - `test_detect_empty_blob_defaults_to_v1` - Empty input edge case
+   - `test_large_key_round_trip` - Max size (65535 bytes) round-trip</result>
+<usage><total_tokens>74670</total_tokens><tool_uses>46</tool_uses><duration_ms>333615</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/aecf37ffe975bad8b.output
