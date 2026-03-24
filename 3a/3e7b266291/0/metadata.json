@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3a3e7b266291",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T03:21:42.946343Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7352b4a79b37",
+  "token_usage": {
+    "input_tokens": 23,
+    "cache_creation_tokens": 64434,
+    "cache_read_tokens": 1056325,
+    "output_tokens": 8023,
+    "api_call_count": 19
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Close the single verification gap in Phase 20 (vault migration) by planning and executing removal of dead migration code, then executing the resulting gap-closure plans.",
+    "outcome": "Two gap-closure plans were created (Wave 1: API cleanup, Wave 2: client cleanup), verified, and Wave 1 was fully executed. Wave 2 execution was in progress at transcript end.",
+    "learnings": {
+      "repo": [
+        "Phase 20 is 'vault-migration' — v2 blob on IPFS is now canonical; no non-migrated users remain, making DB-stored crypto columns and the migrate endpoint dead code.",
+        "Vault entity previously stored encrypted_root_folder_key, encrypted_root_ipns_private_key, and migrated_at columns — all removed as part of zero-knowledge server simplification.",
+        "API client is regenerated from the server types, so downstream clients (web, desktop) must be updated after server DTO changes.",
+        "Web login had a PATH B (DB decrypt + lazy migration fallback) that needed removal; PATH A also had a DB fallback to strip.",
+        "Desktop Rust code had an InitVaultRequest with crypto fields and a non-migrated branch in fetch_and_decrypt_vault — both dead after migration completion.",
+        "New user vault init on web was not publishing a v2 blob to IPFS at creation time — this was identified as a gap to fix alongside cleanup."
+      ],
+      "code": [],
+      "workflow": [
+        "Gap closure plans are committed by the planner agent itself — orchestrator should check for existing commits before attempting a redundant commit.",
+        "Pre-wave dependency checks based on key-links in PLAN.md frontmatter; if links are only in the plan body they are not checked automatically.",
+        "gsd-tools phase-plan-index correctly filters completed plans (has_summary: true) so re-running execute-phase safely resumes from the first incomplete plan."
+      ]
+    },
+    "friction": [
+      "Orchestrator attempted a redundant commit after plans were already committed by the planner agent (bd236c59a), requiring extra bash commands to detect the duplicate."
+    ],
+    "open_items": [
+      "Wave 2 (20-06: client dead migration code removal) was spawned but not confirmed complete in the transcript — needs spot-check and verification.",
+      "Phase-level verification (gsd-verifier creating VERIFICATION.md) and ROADMAP.md/STATE.md completion update not yet run — depends on Wave 2 finishing successfully."
+    ]
+  }
+}
