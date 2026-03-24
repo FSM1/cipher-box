@@ -191,12 +191,7 @@ export function useAuth() {
             // 5. Upload v2 blob to IPFS
             const uploadResult = await addToIpfs(new Blob([v2Blob as BlobPart]));
 
-            // 6. Publish IPNS record pointing to the new v2 blob CID.
-            //    Uses createAndPublishIpnsRecord from ipns.service.ts which handles
-            //    record creation, Ed25519 signing, marshaling, and API relay.
-            //    Pass the current sequence number + 1 and expectedSequenceNumber
-            //    for optimistic concurrency (prevents stale overwrites from
-            //    concurrent publishes on another device).
+            // 6. Derive HKDF keypair and publish IPNS record with seq+1
             const ipnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
             const publishResult = await createAndPublishIpnsRecord({
               ipnsPrivateKey: ipnsKeypair.privateKey,
@@ -210,9 +205,7 @@ export function useAuth() {
               throw new Error('IPNS publish failed during vault migration');
             }
 
-            // 7. Call POST /vault/migrate to stamp migratedAt and NULL columns
-            //    Only called AFTER confirmed v2 blob write + IPNS publish success
-            //    (per CONTEXT decision: "do NOT stamp migratedAt until the v2 blob is confirmed written")
+            // 7. Stamp migratedAt and NULL DB columns (only after confirmed write)
             await vaultControllerMigrateVault();
             console.log('[Auth] Vault successfully migrated to v2 blob format');
           } catch (migrationError) {
