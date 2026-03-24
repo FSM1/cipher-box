@@ -18,3 +18,7 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 ---
 
 /security:review all phase 20 work and resolve any critical and high issues discovered in the implementation.
+
+---
+
+/simplify all phase 20 work
