@@ -54,7 +54,7 @@ Includes: ECIES key wrapping for recipient, share key API call, share dialog UI 
 
 ## Raw Data
 
-```json
+```text
 JOURNEY_TIMING: {"journey":"login-to-vault","totalMs":23569,"phases":{"walletAuthMs":23483,"vaultLoadMs":86}}
 JOURNEY_TIMING: {"journey":"upload-to-visible","totalMs":1355,"fileSizeBytes":102400}
 JOURNEY_TIMING: {"journey":"share-to-accessible","totalMs":3039,"phases":{"shareCreateMs":2236,"recipientAccessMs":803}}
