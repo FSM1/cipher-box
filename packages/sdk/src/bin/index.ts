@@ -186,7 +186,11 @@ export async function loadBin(params: { binCtx: BinOperationContext }): Promise<
   });
 
   if (!loaded) {
-    // No bin IPNS record -- auto-repair by publishing empty bin
+    // No bin IPNS record — auto-repair by publishing empty bin.
+    // Safe: resolveIpnsRecord throws on transient errors (500, network),
+    // returns null only for definitive "not found" (API success=false or 404).
+    // IPNS sequence number ordering prevents overwriting a higher-sequence record.
+    console.warn('[CipherBox] Bin IPNS record not found — auto-repairing with empty bin');
     const binIpns = await deriveBinIpnsKeypair(params.binCtx.userPrivateKey);
     const emptyMetadata: RecycleBinMetadata = {
       version: BIN_METADATA_VERSION,

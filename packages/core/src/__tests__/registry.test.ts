@@ -103,10 +103,9 @@ describe('encryptRegistry / decryptRegistry', () => {
     const encrypted = await encryptRegistry(registry, keypair.publicKey);
     const decrypted = await decryptRegistry(encrypted, keypair.privateKey);
 
-    // v1 input migrates to v2 on decrypt (validateDeviceRegistry does v1->v2 migration)
+    // v1 input migrates to v2 on decrypt — only version changes, devices preserved exactly
     expect(decrypted.version).toBe('v2');
-    expect(decrypted.devices).toHaveLength(1);
-    expect(decrypted.devices[0].deviceId).toBe(registry.devices[0].deviceId);
+    expect(decrypted.devices).toEqual(registry.devices);
     expect(decrypted.sequenceNumber).toBe(registry.sequenceNumber);
   });
 
@@ -117,9 +116,9 @@ describe('encryptRegistry / decryptRegistry', () => {
     const encrypted = await encryptRegistry(registry, keypair.publicKey);
     const decrypted = await decryptRegistry(encrypted, keypair.privateKey);
 
-    // v1 input migrates to v2 on decrypt
+    // v1 input migrates to v2 on decrypt — only version changes, devices preserved exactly
     expect(decrypted.version).toBe('v2');
-    expect(decrypted.devices).toHaveLength(5);
+    expect(decrypted.devices).toEqual(registry.devices);
   });
 
   it('throws CryptoError when decrypting with wrong privateKey', async () => {

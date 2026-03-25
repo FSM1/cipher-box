@@ -74,9 +74,13 @@ function migrateV1ToV2(obj: Record<string, unknown>): DeviceRegistry {
   const devices = (obj.devices as Record<string, unknown>[]).map((d) => {
     validateDeviceEntryBase(d);
     const ipHash = d.ipHash as string;
+    // Only auto-heal the known legacy empty-string bug; reject other malformed values
+    if (ipHash !== '' && (ipHash.length !== 64 || !HEX_REGEX.test(ipHash))) {
+      throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
+    }
     return {
       ...(d as unknown as DeviceEntry),
-      ipHash: ipHash.length === 64 && HEX_REGEX.test(ipHash) ? ipHash : '0'.repeat(64),
+      ipHash: ipHash === '' ? '0'.repeat(64) : ipHash,
     };
   }) as DeviceEntry[];
 
