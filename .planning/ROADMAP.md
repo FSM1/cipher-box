@@ -231,7 +231,13 @@ Plans:
 3. Files created via the desktop FUSE mount are enrolled with the TEE for automatic 3-hour IPNS republishing
 4. TEE enrollment works for both CipherBox-pinned and BYO-pinned files
 
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 25-01-PLAN.md -- TEE file enrollment on per-file IPNS publish (Unix + Windows)
+- [ ] 25-02-PLAN.md -- Tauri updater plugin integration (config, updater module, tray menu)
+- [ ] 25-03-PLAN.md -- CI desktop build workflow (cross-platform build, sign, upload to GitHub Release)
 
 ### Phase 26: Observability & UX Tuning
 
@@ -263,7 +269,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete    | 2026-03-25 |
 | 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
 | 24. Bug Fixes & Test Infrastructure       | v1.1      | 0/?            | Not started | -          |
-| 25. Desktop Enhancements                  | v1.1      | 0/?            | Not started | -          |
+| 25. Desktop Enhancements                  | v1.1      | 0/3            | Planned     | -          |
 | 26. Observability & UX Tuning             | v1.1      | 0/?            | Not started | -          |
 
 ---
