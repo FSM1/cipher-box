@@ -1048,8 +1048,12 @@ export class CipherBoxClient {
         // Direct upload to user's node -- NO CipherBox involvement at all.
         // If node is unreachable, this throws. No silent fallback.
         const result = await this.externalProvider.pin(encryptedData);
-        // Register CID with API for advisory tracking only
-        await sdkCore.registerCid(ctx, result.cid, result.size);
+        // Register CID with API for advisory tracking (best-effort — failure must not block upload)
+        try {
+          await sdkCore.registerCid(ctx, result.cid, result.size);
+        } catch {
+          // Advisory tracking failure is non-fatal — pin succeeded on external node
+        }
         return { cid: result.cid, size: result.size };
       }
 
@@ -1066,8 +1070,12 @@ export class CipherBoxClient {
       }
       // PSA accepted the pin request -- unpin from CipherBox (async, best-effort)
       sdkCore.unpinFromIpfs(ctx, relayResult.cid).catch(() => {});
-      // Register CID for advisory tracking
-      await sdkCore.registerCid(ctx, relayResult.cid, relayResult.size);
+      // Register CID for advisory tracking (best-effort)
+      try {
+        await sdkCore.registerCid(ctx, relayResult.cid, relayResult.size);
+      } catch {
+        // Advisory tracking failure is non-fatal
+      }
       return { cid: relayResult.cid, size: relayResult.size };
     }
 
@@ -1082,7 +1090,7 @@ export class CipherBoxClient {
         await (this.externalProvider as sdkCore.PsaProvider).pinByCid(primaryResult.cid);
       }
     } catch {
-      secondaryWarning = `mirror to ${this.config.pinningConfig?.externalProvider?.providerName ?? 'external node'} failed -- will retry`;
+      secondaryWarning = `mirror to ${this.config.pinningConfig?.externalProvider?.providerName ?? 'external node'} failed (best-effort, no automatic retry)`;
     }
     return { cid: primaryResult.cid, size: primaryResult.size, secondaryWarning };
   }

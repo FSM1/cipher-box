@@ -57,7 +57,7 @@ export async function runByoFileWorkload(
   const { client, rootIpnsName, metrics } = pc;
 
   for (let i = 0; i < fileCount; i++) {
-    const size = minSize + Math.floor(Math.random() * (maxSize - minSize));
+    const size = minSize + Math.floor(Math.random() * (maxSize - minSize + 1));
     const data = new Uint8Array(size);
     // crypto.getRandomValues() has a 65536 byte limit per call
     for (let offset = 0; offset < size; offset += 65536) {
@@ -156,13 +156,22 @@ export async function runByoFileWorkload(
           size
         );
       }
-
-      // Cleanup: unpin from external provider
-      await metrics.measure('byo-unpin', () => pc.provider.unpin(cid));
     } catch (err) {
       console.warn(
         `[Client ${pc.id}] BYO file ${i} failed: ${(err as Error).message?.slice(0, 150)}`
       );
+    } finally {
+      // Cleanup: unpin from external provider whenever we have a CID
+      // Runs even if later steps (ipns-publish, verify) threw
+      if (cid) {
+        try {
+          await metrics.measure('byo-unpin', () => pc.provider.unpin(cid));
+        } catch (cleanupErr) {
+          console.warn(
+            `[Client ${pc.id}] Cleanup failed for file ${i}: ${(cleanupErr as Error).message?.slice(0, 150)}`
+          );
+        }
+      }
     }
   }
 }
