@@ -1095,13 +1095,12 @@
       }
 
       try {
-        // Parse private key
-        if (/^(0x)?[0-9a-fA-F]{64}$/.test(keyText)) {
+        // Parse private key (hex only — base64 not supported for v2 recovery)
+        try {
           privateKeyBytes = hexToBytes(keyText);
-        } else {
-          try { privateKeyBytes = hexToBytes(keyText); }
-          catch { try { privateKeyBytes = base64ToBytes(keyText); }
-          catch { showError(1, 'Could not parse private key. Provide 32 bytes as 64 hex characters.'); return; } }
+        } catch {
+          showError(1, 'Could not parse private key. Provide 32 bytes as 64 hex characters.');
+          return;
         }
 
         if (privateKeyBytes.length !== 32) {

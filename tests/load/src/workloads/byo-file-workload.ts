@@ -65,8 +65,8 @@ export async function runByoFileWorkload(
       crypto.getRandomValues(chunk);
     }
 
-    let cid!: string;
-    let pinSize!: number;
+    let cid: string | undefined;
+    let pinSize: number | undefined;
     try {
       if (isPsa) {
         // PSA transient relay flow
@@ -92,7 +92,7 @@ export async function runByoFileWorkload(
 
         // Step 2: Pin by CID on PSA service
         await metrics.measure('psa-pin-by-cid', async () => {
-          await (pc.provider as PsaProvider).pinByCid(cid, `load-${pc.id}-file-${i}`);
+          await (pc.provider as PsaProvider).pinByCid(cid!, `load-${pc.id}-file-${i}`);
         });
 
         // Step 3: Unpin from CipherBox relay (content now on PSA service)
@@ -144,7 +144,7 @@ export async function runByoFileWorkload(
         await metrics.measure(
           'byo-download',
           async () => {
-            const downloaded = await pc.provider.get(cid);
+            const downloaded = await pc.provider.get(cid!);
             if (downloaded.length !== data.length) {
               throw new Error(
                 `[Client ${pc.id}] Size mismatch: uploaded ${data.length}, downloaded ${downloaded.length}`
@@ -164,7 +164,7 @@ export async function runByoFileWorkload(
       // Runs even if later steps (ipns-publish, verify) threw
       if (cid) {
         try {
-          await metrics.measure('byo-unpin', () => pc.provider.unpin(cid));
+          await metrics.measure('byo-unpin', () => pc.provider.unpin(cid!));
         } catch (cleanupErr) {
           console.warn(
             `[Client ${pc.id}] Cleanup failed for file ${i}: ${(cleanupErr as Error).message?.slice(0, 150)}`
