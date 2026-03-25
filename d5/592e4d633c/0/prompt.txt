@@ -1,0 +1,13 @@
+ok can you switch to main and pull in the latest
+
+---
+
+/gsd:progress
+
+---
+
+phases 24 and 25 are currently being reviewed, there are PRs up for both of these. whats next in line?
+
+---
+
+lets discuss phase 26

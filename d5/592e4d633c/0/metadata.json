@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d5592e4d633c",
+  "session_id": "c0abe932-15e1-4254-8a98-20c8096f009c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T23:50:49.392222Z",
+  "branch": "feat/phase-26-observability-ux-tuning",
+  "checkpoints_count": 4,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "a550e4ed3fa2",
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 93922,
+    "cache_read_tokens": 2143256,
+    "output_tokens": 11029,
+    "api_call_count": 37
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Check project progress after pulling latest changes, determine what phase to work on next, and gather implementation context for Phase 26 (Observability \u0026 UX Tuning) via an interactive discussion session.",
+    "outcome": "Successfully identified Phase 26 as the next actionable phase (24 and 25 are in PR review), completed the discuss-phase workflow with all four gray areas covered, and created `.planning/phases/26-observability-ux-tuning/26-CONTEXT.md` committed to a new feature branch.",
+    "learnings": {
+      "repo": [
+        "Phases 24 and 25 were in PR review at time of session — Phase 26 is the active next phase",
+        "Phase 18 explicitly deferred Grafana alerting as 'observation only, alerts premature before baselines' — Phase 26 is the payoff for that deferral",
+        "Single Grafana dashboard strategy: all panels extend `docker/grafana/dashboards/cipherbox-staging.json` rather than creating per-phase dashboards",
+        "Alloy config scrapes both API `/metrics` (30s) and Kubo `/debug/metrics/prometheus` (30s), ships to Grafana Cloud Mimir/Loki",
+        "5 histograms already instrumented: HTTP request duration, IPFS/IPNS general, republish batch, IPNS resolve, IPNS publish",
+        "Client-side perf instrumentation (`packages/sdk-core/src/perf.ts`) is non-production only — gated on `NODE_ENV !== 'production'` or `globalThis.__CIPHERBOX_PERF__ === true`",
+        "Existing timeouts: Kubo 30s, Pinata 60s, PSA 30s, delegated routing 10s, TEE 30s, connection probe 5s",
+        "Upload service already has 3-retry exponential backoff with user-cancellation bypass",
+        "Delegated routing client has comprehensive retry: 3 attempts, respects `Retry-After` header for 429s, exponential backoff for network errors",
+        "Auth refresh uses shared promise pattern to deduplicate concurrent 401 handlers",
+        "Performance baselines live in `.planning/baselines/` — 6 files covering phases 18, 19, 19.2, 21, 22",
+        "Journey baselines (Phase 22, 2026-03-25): login-to-vault 23,569ms, upload-to-visible 1,355ms, share-to-accessible 3,039ms",
+        "1 active debug session: `vault-migration-iife-silent-failure`",
+        "13 pending todos in the planning system"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/metrics/metrics.service.ts",
+          "finding": "5 Gauges (DB-polled every 30s), 8+ Counters (event-driven), 5 Histograms (operation timing) — full Prometheus registry for the API"
+        },
+        {
+          "path": "apps/api/src/metrics/http-metrics.interceptor.ts",
+          "finding": "Records all HTTP requests per-route/method/status using process.hrtime.bigint(); excludes /metrics endpoint; normalizes UUID/CID paths to keep cardinality low"
+        },
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "finding": "Performance instrumentation gated to non-production only; uses markStart/markEnd/withPerf helpers; marks format: cipherbox:\u003coperation\u003e:\u003cid\u003e:start/end"
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "finding": "Most comprehensive retry pattern in the codebase: 3 attempts, 1s base delay, 30s max delay, Retry-After header support for 429s, primary+fallback endpoint strategy, 10s per-request timeout"
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "401 handler uses shared refresh promise to prevent duplicate concurrent refresh calls; refresh endpoint itself never retries to avoid infinite loops"
+        },
+        {
+          "path": "docker/alloy-config.river",
+          "finding": "Alloy scrapes API /metrics and Kubo /debug/metrics/prometheus every 30s; ships to Grafana Cloud Mimir and Loki"
+        }
+      ],
+      "workflow": [
+        "GSD `discuss-phase` workflow runs a codebase scout via subagent before presenting gray areas — this correctly informed which timeout values already exist",
+        "Feature branch created mid-workflow while waiting for async codebase scout to complete — good parallel work pattern",
+        "Progress check revealed phases under PR review should be skipped when determining 'next up' — the GSD progress command doesn't account for in-review status automatically"
+      ]
+    },
+    "friction": [
+      "GSD progress routing suggested Phase 24 as next up, but phases 24 and 25 were already in PR review — required manual clarification from the user to skip ahead to Phase 26",
+      "Codebase scout ran as an async subagent, requiring a task-notification round-trip before gray area discussion could begin"
+    ],
+    "open_items": [
+      "Active debug session `vault-migration-iife-silent-failure` unresolved — needs `/gsd:debug` to continue",
+      "13 pending todos need review via `/gsd:check-todos`",
+      "Phase 26 context created but planning not yet started — next step is `/gsd:plan-phase 26`",
+      "Phases 24 and 25 PRs still under review — merge and verify before Phase 26 implementation begins",
+      "Auth/refresh race condition observed in staging baseline (6 concurrent calls, 2 fail with 401) — noted in perf baseline but not yet addressed"
+    ]
+  }
+}
