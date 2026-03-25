@@ -82,7 +82,7 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 
 ### Desktop Enhancements (Phase 25)
 
-- [ ] **DESKTOP-01**: Desktop app checks for and installs updates (Tauri updater or custom mechanism)
+- [x] **DESKTOP-01**: Desktop app checks for and installs updates (Tauri updater or custom mechanism)
 - [ ] **DESKTOP-02**: Files created via FUSE mount are enrolled with TEE for automatic IPNS republishing
 
 ### Observability & UX Tuning (Phase 26)
@@ -180,7 +180,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-01     | Phase 24   | Pending  |
 | TEST-02     | Phase 24   | Pending  |
 | TEST-03     | Phase 24   | Pending  |
-| DESKTOP-01  | Phase 25   | Pending  |
+| DESKTOP-01  | Phase 25   | Complete |
 | DESKTOP-02  | Phase 25   | Pending  |
 | OBS-01      | Phase 26   | Pending  |
 | OBS-02      | Phase 26   | Pending  |
