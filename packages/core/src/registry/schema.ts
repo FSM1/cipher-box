@@ -93,7 +93,7 @@ function migrateV1ToV2(obj: Record<string, unknown>): DeviceRegistry {
 function validateV2Registry(obj: Record<string, unknown>): DeviceRegistry {
   validateRegistryShape(obj);
 
-  for (const device of obj.devices) {
+  for (const device of obj.devices as unknown[]) {
     validateDeviceEntry(device);
   }
 
