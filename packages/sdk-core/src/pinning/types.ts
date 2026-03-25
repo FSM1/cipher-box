@@ -29,14 +29,14 @@ export type PinningMode = 'cipherbox' | 'external' | 'dual';
 export type ExternalProviderConfig = {
   endpoint: string;
   authToken: string;
-  protocol: 'psa' | 'kubo';
+  protocol: 'psa' | 'kubo' | 'pinata';
   providerName?: string;
 };
 
 /** Result of a connection test */
 export type ConnectionTestResult = {
   success: boolean;
-  protocol?: 'kubo' | 'psa';
+  protocol?: 'kubo' | 'psa' | 'pinata';
   version?: string;
   latencyMs: number;
   error?: string;
