@@ -181,7 +181,7 @@ Plans:
 4. CI runs workspace-level builds on macOS, Linux, and Windows with cross-language parity gate
 5. No duplicated crypto, domain, or API logic remains in the desktop app
 
-**Plans:** 8/8 plans complete
+**Plans:** 9/11 plans executed
 
 Plans:
 
@@ -199,16 +199,16 @@ Plans:
 **Execution Order:**
 Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 
-| Phase                                     | Milestone | Plans Complete | Status              | Completed  |
-| ----------------------------------------- | --------- | -------------- | ------------------- | ---------- |
-| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete            | 2026-03-07 |
-| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete            | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete            | 2026-03-20 |
-| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete            | 2026-03-23 |
-| 20. Vault Migration                       | v1.1      | 6/6            | Complete            | 2026-03-24 |
-| 21. BYO-IPFS Node Support                 | v1.1      | 7/11           | Gap closure pending | -          |
-| 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started         | -          |
-| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete            | 2026-03-24 |
+| Phase                                     | Milestone | Plans Complete | Status      | Completed  |
+| ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
+| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
+| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | 9/11      | In Progress    |             | -          |
+| 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
 
 ---
 

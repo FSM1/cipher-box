@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-25T00:00:00.000Z'
+last_updated: '2026-03-25T00:53:16.094Z'
 progress:
   total_phases: 8
-  completed_phases: 7
-  total_plans: 35
-  completed_plans: 35
+  completed_phases: 6
+  total_plans: 39
+  completed_plans: 37
 ---
 
 # Project State
@@ -18,13 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 21 — byo-ipfs-node-support (gap closure pending)
+**Current focus:** Phase 21 — byo-ipfs-node-support
 
 ## Current Position
 
-Phase: 21 (byo-ipfs-node-support) — Gap closure pending
-Plan: 7 of 7 base plans complete; gap closure plans being created
-Phase 23 (rust-sdk-extraction) — Complete (8/8 plans, executed on main)
+Phase: 21 (byo-ipfs-node-support) — EXECUTING
+Plan: 2 of 4
 
 ## Performance Metrics
 
@@ -67,6 +66,8 @@ Phase 23 (rust-sdk-extraction) — Complete (8/8 plans, executed on main)
 | 23    | 07   | 7min     | 2     | 5     |
 | 23    | 06   | 23min    | 2     | 7     |
 | 23    | 08   | 20min    | 2     | 7     |
+| 21    | 08   | 5min     | 2     | 6     |
+| 21    | 10   | 5min     | 2     | 7     |
 
 ## Accumulated Context
 
@@ -115,6 +116,8 @@ Recent for v1.1:
 - BYO config stored as encrypted IPNS entry using rootFolderKey — no server-side credential storage (zero-knowledge preserved)
 - Dedicated IPNS key derived via HKDF with context string byo-ipfs-config from vault keypair
 - BYO benchmark execution (21-07 Task 4) deferred — requires external IPFS provider infrastructure; test scenarios ready to run when provider available
+- BYO config loaded at login via IPNS resolve with graceful fallback to cipherbox-only mode
+- Source unpin is best-effort and non-fatal after verified CID transfer to destination
 - Cargo workspace with centralized deps at repo root; cipherbox-crypto crate as foundation for all Rust SDK extraction
 - Module re-export pattern in desktop crypto/mod.rs preserves all existing crate::crypto::\* paths without touching call sites
 - cipherbox-core crate layered on cipherbox-crypto: folder, file, bin, vault_blob, ipns, registry, decrypt, error modules
@@ -130,6 +133,9 @@ Recent for v1.1:
 - Desktop api/ and crypto/ directories fully removed; all imports use workspace crates directly
 - CI parity gate uses needs.changes.outputs.src (not nonexistent packages) for trigger condition
 - Desktop-e2e binary paths updated to target/debug/ to match workspace cargo build output
+- PinataProvider uses dual base URLs: uploads.pinata.cloud (fixed) for upload, api.pinata.cloud (configurable) for management
+- pinWithMode treats Pinata like Kubo: direct upload bypasses CipherBox relay entirely
+- Connection test probe order updated: Kubo -> Pinata -> PSA; pinata.cloud URLs skip Kubo probe
 
 ### Roadmap Evolution
 
@@ -155,4 +161,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-25 after completing Phase 21 base plans (7/7) and Phase 23 (8/8 on main); Phase 21 gap closure pending
+Last updated: 2026-03-25 after completing Phase 21 plan 08 (BYO config wiring + migration source unpin); gap closure 1/4 complete
