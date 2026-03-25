@@ -153,7 +153,7 @@ Plans:
 3. k6 load test scripts simulate concurrent users performing upload, download, publish, and resolve operations with documented pass/fail thresholds
 4. Capacity thresholds are documented with scaling recommendations (max concurrent users, storage growth projections, IPNS publish throughput limits)
 
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 
@@ -200,7 +200,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
 | 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
 | 21. BYO-IPFS Node Support                 | v1.1      | 0/?            | Not started | -          |
-| 22. Performance Baselines Complete        | v1.1      | 0/3            | Planned     | -          |
+| 22. Performance Baselines Complete        | 1/3       | In Progress    |             | -          |
 | 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
 
 ---
