@@ -18,6 +18,7 @@ import { printSummary, toJsonReport } from './reporter';
 import {
   KuboProvider,
   PsaProvider,
+  PinataProvider,
   type PinningProvider,
   type PinningMode,
   type ExternalProviderConfig,
@@ -29,7 +30,7 @@ const SECRET = process.env.LOAD_TEST_SECRET ?? 'e2e-test-secret-do-not-use-in-pr
 /** BYO external provider config from environment variables */
 export const BYO_ENDPOINT = process.env.BYO_IPFS_ENDPOINT; // e.g., https://api.pinata.cloud/psa
 export const BYO_AUTH_TOKEN = process.env.BYO_IPFS_AUTH_TOKEN ?? '';
-export const BYO_PROTOCOL = (process.env.BYO_IPFS_PROTOCOL ?? 'kubo') as 'kubo' | 'psa';
+export const BYO_PROTOCOL = (process.env.BYO_IPFS_PROTOCOL ?? 'kubo') as 'kubo' | 'psa' | 'pinata';
 export const BYO_PROVIDER_NAME = process.env.BYO_IPFS_PROVIDER_NAME ?? 'external';
 
 export interface PoolClient extends TestAccount {
@@ -144,10 +145,25 @@ export async function createByoClientPool(opts: ByoPoolOptions): Promise<ByoPool
   });
 
   const byoPool: ByoPoolClient[] = basePool.map((pc) => {
-    const provider: PinningProvider =
-      opts.externalProvider.protocol === 'psa'
-        ? new PsaProvider(opts.externalProvider.endpoint, opts.externalProvider.authToken)
-        : new KuboProvider(opts.externalProvider.endpoint, opts.externalProvider.authToken);
+    let provider: PinningProvider;
+    switch (opts.externalProvider.protocol) {
+      case 'psa':
+        provider = new PsaProvider(opts.externalProvider.endpoint, opts.externalProvider.authToken);
+        break;
+      case 'pinata':
+        provider = new PinataProvider(
+          opts.externalProvider.endpoint,
+          opts.externalProvider.authToken
+        );
+        break;
+      case 'kubo':
+      default:
+        provider = new KuboProvider(
+          opts.externalProvider.endpoint,
+          opts.externalProvider.authToken
+        );
+        break;
+    }
 
     return {
       ...pc,
