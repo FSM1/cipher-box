@@ -5,13 +5,14 @@
  * Measures recovery time — how long until latencies return to baseline.
  */
 
-import { describe, it, afterAll } from 'vitest';
+import { describe, it, afterAll, expect } from 'vitest';
 import {
   createClientPool,
   destroyClientPool,
   aggregateAndReport,
   type PoolClient,
 } from '../harness/client-pool';
+import { checkThresholds, type ThresholdConfig } from '../harness/thresholds';
 import { runFolderWorkload } from '../workloads/folder-workload';
 
 const BASELINE_CLIENTS = 2;
@@ -75,5 +76,21 @@ describe('Spike Test', () => {
         );
       }
     }
+
+    // Threshold check on burst phase: generous limits for intentional overload
+    const THRESHOLDS: ThresholdConfig[] = [
+      { operation: 'uploadFile', p95MaxMs: 15_000, errorRateMax: 0.15 },
+      { operation: 'createFolder', p95MaxMs: 15_000, errorRateMax: 0.15 },
+    ];
+
+    const thresholdResult = checkThresholds(burstMetrics, THRESHOLDS);
+    if (!thresholdResult.passed) {
+      console.warn('THRESHOLD VIOLATIONS:');
+      thresholdResult.violations.forEach((v) => console.warn(`  - ${v}`));
+    }
+    expect(
+      thresholdResult.passed,
+      `Threshold violations:\n${thresholdResult.violations.join('\n')}`
+    ).toBe(true);
   });
 });

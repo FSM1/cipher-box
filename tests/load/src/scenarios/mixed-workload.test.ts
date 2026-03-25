@@ -5,13 +5,14 @@
  * with weighted probabilities. Tests the system under representative load.
  */
 
-import { describe, it, afterAll } from 'vitest';
+import { describe, it, afterAll, expect } from 'vitest';
 import {
   createClientPool,
   destroyClientPool,
   aggregateAndReport,
   type PoolClient,
 } from '../harness/client-pool';
+import { checkThresholds, type ThresholdConfig } from '../harness/thresholds';
 import { runMixedWorkload } from '../workloads/mixed-workload';
 
 const NUM_CLIENTS = parseInt(process.env.LOAD_TEST_CLIENTS ?? '5', 10);
@@ -49,6 +50,22 @@ describe('Mixed Workload', () => {
     const succeeded = results.filter((r) => r.status === 'fulfilled').length;
     console.log(`\nClients completed: ${succeeded}/${pool.length}`);
 
-    await aggregateAndReport('Mixed Workload', pool);
+    const metrics = await aggregateAndReport('Mixed Workload', pool);
+
+    // Threshold check: generous limits for mixed workload (higher error rate historically)
+    const THRESHOLDS: ThresholdConfig[] = [
+      { operation: 'uploadFile', p95MaxMs: 10_000, errorRateMax: 0.1 },
+      { operation: 'createFolder', p95MaxMs: 5_000, errorRateMax: 0.1 },
+    ];
+
+    const thresholdResult = checkThresholds(metrics, THRESHOLDS);
+    if (!thresholdResult.passed) {
+      console.warn('THRESHOLD VIOLATIONS:');
+      thresholdResult.violations.forEach((v) => console.warn(`  - ${v}`));
+    }
+    expect(
+      thresholdResult.passed,
+      `Threshold violations:\n${thresholdResult.violations.join('\n')}`
+    ).toBe(true);
   });
 });

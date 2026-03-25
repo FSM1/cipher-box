@@ -6,13 +6,14 @@
  * pool exhaustion, and other time-dependent degradation.
  */
 
-import { describe, it, afterAll } from 'vitest';
+import { describe, it, afterAll, expect } from 'vitest';
 import {
   createClientPool,
   destroyClientPool,
   aggregateAndReport,
   type PoolClient,
 } from '../harness/client-pool';
+import { checkThresholds, type ThresholdConfig } from '../harness/thresholds';
 
 const NUM_CLIENTS = parseInt(process.env.LOAD_TEST_CLIENTS ?? '5', 10);
 const DURATION_SEC = parseInt(process.env.LOAD_TEST_DURATION ?? '300', 10);
@@ -40,7 +41,23 @@ describe('Sustained Load', () => {
     const succeeded = results.filter((r) => r.status === 'fulfilled').length;
     console.log(`\nClients completed: ${succeeded}/${pool.length}`);
 
-    await aggregateAndReport('Sustained Load', pool);
+    const metrics = await aggregateAndReport('Sustained Load', pool);
+
+    // Threshold check: same as upload-throughput for sustained operations
+    const THRESHOLDS: ThresholdConfig[] = [
+      { operation: 'uploadFile', p95MaxMs: 10_000, errorRateMax: 0.05 },
+      { operation: 'createFolder', p95MaxMs: 5_000, errorRateMax: 0.05 },
+    ];
+
+    const thresholdResult = checkThresholds(metrics, THRESHOLDS);
+    if (!thresholdResult.passed) {
+      console.warn('THRESHOLD VIOLATIONS:');
+      thresholdResult.violations.forEach((v) => console.warn(`  - ${v}`));
+    }
+    expect(
+      thresholdResult.passed,
+      `Threshold violations:\n${thresholdResult.violations.join('\n')}`
+    ).toBe(true);
   });
 });
 
