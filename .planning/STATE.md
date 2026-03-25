@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-25T00:57:56.667Z'
+last_updated: '2026-03-25T01:24:48.400Z'
 progress:
   total_phases: 8
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 39
-  completed_plans: 38
+  completed_plans: 39
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 21 (byo-ipfs-node-support) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 
 ## Performance Metrics
 
@@ -69,6 +69,7 @@ Plan: 3 of 4
 | 21    | 08   | 5min     | 2     | 6     |
 | 21    | 10   | 5min     | 2     | 7     |
 | 21    | 09   | 9min     | 3     | 17    |
+| 21    | 11   | 12min    | 2     | 3     |
 
 ## Accumulated Context
 
@@ -137,6 +138,7 @@ Recent for v1.1:
 - PinataProvider uses dual base URLs: uploads.pinata.cloud (fixed) for upload, api.pinata.cloud (configurable) for management
 - pinWithMode treats Pinata like Kubo: direct upload bypasses CipherBox relay entirely
 - Connection test probe order updated: Kubo -> Pinata -> PSA; pinata.cloud URLs skip Kubo probe
+- BYO Pinata baselines: pin p50=2.0s (+47% vs local Kubo), tail latency p99 13.5% better, 98% CipherBox API load reduction per file
 
 ### Roadmap Evolution
 
@@ -162,4 +164,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-25 after completing Phase 21 plan 08 (BYO config wiring + migration source unpin); gap closure 1/4 complete
+Last updated: 2026-03-25 after completing Phase 21 plan 11 (BYO performance baselines with Pinata); gap closure 4/4 complete, Phase 21 fully complete
