@@ -1919,6 +1919,42 @@
         "tags": ["share-invites"]
       }
     },
+    "/tee/connection-test": {
+      "post": {
+        "description": "Forwards ECIES-encrypted provider config to TEE worker for server-side connection testing. Avoids browser CORS issues and keeps credentials encrypted until decrypted in-enclave.",
+        "operationId": "TeeController_connectionTest",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectionTestRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionTestResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Test connection to an external IPFS provider via TEE",
+        "tags": ["tee"]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -2016,6 +2052,10 @@
     {
       "name": "share-invites",
       "description": "Authenticated invite management endpoints"
+    },
+    {
+      "name": "tee",
+      "description": "TEE worker proxy endpoints"
     }
   ],
   "servers": [],
@@ -3278,6 +3318,47 @@
           "expiresAt",
           "createdAt"
         ]
+      },
+      "ConnectionTestRequestDto": {
+        "type": "object",
+        "properties": {
+          "encryptedConfig": {
+            "type": "string",
+            "description": "ECIES-encrypted provider config (hex-encoded)"
+          },
+          "epoch": {
+            "type": "number",
+            "description": "TEE epoch for key selection"
+          }
+        },
+        "required": ["encryptedConfig", "epoch"]
+      },
+      "ConnectionTestResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the connection test succeeded"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": ["kubo", "psa"],
+            "description": "Detected protocol"
+          },
+          "version": {
+            "type": "string",
+            "description": "Provider version string"
+          },
+          "latencyMs": {
+            "type": "number",
+            "description": "Probe latency in milliseconds"
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message on failure"
+          }
+        },
+        "required": ["success", "latencyMs"]
       }
     }
   }

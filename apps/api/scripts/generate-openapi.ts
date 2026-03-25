@@ -43,6 +43,8 @@ import { Share } from '../src/shares/entities/share.entity';
 import { ShareKey } from '../src/shares/entities/share-key.entity';
 import { ShareInvite } from '../src/shares/entities/share-invite.entity';
 import { MetricsService } from '../src/metrics/metrics.service';
+import { TeeController } from '../src/tee/tee.controller';
+import { TeeService } from '../src/tee/tee.service';
 import { User } from '../src/auth/entities/user.entity';
 import { AuthMethod } from '../src/auth/entities/auth-method.entity';
 import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
@@ -108,6 +110,7 @@ const mockConfigService = {
     SharesController,
     InvitesController,
     ShareInvitesController,
+    TeeController,
   ],
   providers: [
     AppService,
@@ -175,6 +178,10 @@ const mockConfigService = {
       provide: MetricsService,
       useValue: {},
     },
+    {
+      provide: TeeService,
+      useValue: {},
+    },
     mockRepository,
     mockAuthMethodRepository,
     mockRefreshTokenRepository,
@@ -214,6 +221,7 @@ async function generateOpenApiSpec() {
     .addTag('shares', 'User-to-user sharing endpoints')
     .addTag('invites', 'Public invite link endpoints')
     .addTag('share-invites', 'Authenticated invite management endpoints')
+    .addTag('tee', 'TEE worker proxy endpoints')
     .build();
 
   // Create document from the app
