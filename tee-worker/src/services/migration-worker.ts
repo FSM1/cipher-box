@@ -18,7 +18,7 @@ import { getKeypair } from './tee-keys.js';
 export type ProviderConfig = {
   endpoint: string;
   authTokenBytes: Uint8Array; // SECURITY: Uint8Array for proper zeroing, NOT string
-  protocol: 'psa' | 'kubo';
+  protocol: 'psa' | 'kubo' | 'cipherbox';
 };
 
 export type MigrationBatchResult = {
@@ -34,6 +34,9 @@ export type MigrationBatchResult = {
  */
 function validateEndpointUrl(endpoint: string): void {
   const url = new URL(endpoint);
+
+  // Skip SSRF validation in development/simulator mode
+  if (process.env.TEE_MODE === 'simulator') return;
 
   // Must be HTTPS
   if (url.protocol !== 'https:') {
@@ -99,11 +102,8 @@ async function validateResolvedIp(hostname: string): Promise<void> {
  * Decrypt an ECIES-encrypted provider config using TEE's current epoch key.
  * Returns raw bytes for parsing.
  */
-async function decryptEcies(
-  encryptedBase64: string,
-  teePrivateKey: Uint8Array
-): Promise<Uint8Array> {
-  const ciphertext = new Uint8Array(Buffer.from(encryptedBase64, 'base64'));
+async function decryptEcies(encryptedHex: string, teePrivateKey: Uint8Array): Promise<Uint8Array> {
+  const ciphertext = new Uint8Array(Buffer.from(encryptedHex, 'hex'));
   return new Uint8Array(decrypt(teePrivateKey, ciphertext));
 }
 
@@ -115,12 +115,12 @@ function parseProviderConfig(decryptedBytes: Uint8Array): ProviderConfig {
   const text = new TextDecoder().decode(decryptedBytes);
   const parsed = JSON.parse(text) as {
     endpoint: string;
-    authToken: string;
-    protocol: 'psa' | 'kubo';
+    authToken?: string;
+    protocol: 'psa' | 'kubo' | 'cipherbox';
   };
   return {
     endpoint: parsed.endpoint,
-    authTokenBytes: new TextEncoder().encode(parsed.authToken),
+    authTokenBytes: new TextEncoder().encode(parsed.authToken ?? ''),
     protocol: parsed.protocol,
   };
 }
@@ -154,11 +154,19 @@ export async function migrateBatch(
   const sourceConfig = parseProviderConfig(sourceConfigBytes);
   const destConfig = parseProviderConfig(destConfigBytes);
 
-  // 2b. SSRF validation on both endpoints
-  validateEndpointUrl(sourceConfig.endpoint);
-  validateEndpointUrl(destConfig.endpoint);
-  await validateResolvedIp(new URL(sourceConfig.endpoint).hostname);
-  await validateResolvedIp(new URL(destConfig.endpoint).hostname);
+  // 2b. SSRF validation on both endpoints (skipped in simulator mode)
+  if (sourceConfig.endpoint !== 'cipherbox') {
+    validateEndpointUrl(sourceConfig.endpoint);
+    if (process.env.TEE_MODE !== 'simulator') {
+      await validateResolvedIp(new URL(sourceConfig.endpoint).hostname);
+    }
+  }
+  if (destConfig.endpoint !== 'cipherbox') {
+    validateEndpointUrl(destConfig.endpoint);
+    if (process.env.TEE_MODE !== 'simulator') {
+      await validateResolvedIp(new URL(destConfig.endpoint).hostname);
+    }
+  }
 
   const succeeded: string[] = [];
   const failed: string[] = [];
@@ -206,7 +214,7 @@ async function fetchFromProvider(cid: string, config: ProviderConfig): Promise<U
     return new Uint8Array(await response.arrayBuffer());
   }
 
-  // PSA: use IPFS gateway to fetch content (PSA has no retrieval API)
+  // CipherBox or PSA: use IPFS gateway to fetch content
   const GATEWAY_URL = process.env.IPFS_GATEWAY_URL || 'https://ipfs.io';
   const response = await fetch(`${GATEWAY_URL}/ipfs/${encodeURIComponent(cid)}`, {
     signal: AbortSignal.timeout(60_000),
