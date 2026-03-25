@@ -344,18 +344,21 @@ describe('MigrationProcessor', () => {
 
       await processor.process(makeJob(testMigrationId));
 
-      expect(mockFetch).toHaveBeenCalledWith('https://tee.example.com/migrate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer secret-token',
-        },
-        body: JSON.stringify({
-          cids: ['bafkrei0', 'bafkrei1'],
-          sourceConfigEncrypted: 'encrypted-source',
-          destConfigEncrypted: 'encrypted-dest',
-        }),
-      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://tee.example.com/migrate',
+        expect.objectContaining({
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer secret-token',
+          },
+          body: JSON.stringify({
+            cids: ['bafkrei0', 'bafkrei1'],
+            sourceConfigEncrypted: 'encrypted-source',
+            destConfigEncrypted: 'encrypted-dest',
+          }),
+        })
+      );
     });
 
     it('should pause migration on TEE 401 auth failure', async () => {

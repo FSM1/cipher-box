@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { MigrationController } from './migration.controller';
 import { MigrationService } from './migration.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { BypassableThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { RequestWithUser } from '../common/types';
 import { StartMigrationDto } from './dto/start-migration.dto';
 import { MigrationStatusDto } from './dto/migration-status.dto';
@@ -35,6 +36,8 @@ describe('MigrationController', () => {
       ],
     })
       .overrideGuard(JwtAuthGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(BypassableThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

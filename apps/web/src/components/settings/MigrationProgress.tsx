@@ -11,7 +11,7 @@ import { migrationApi, type MigrationStatus } from '../../lib/api/migration';
 export function MigrationProgress() {
   const [migration, setMigration] = useState<MigrationStatus | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
 
@@ -31,20 +31,23 @@ export function MigrationProgress() {
       }
       return status;
     });
-    // Stop polling when terminal state reached or no migration exists
-    if (!status || TERMINAL_STATUSES.includes(status.status)) {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    }
+    return status;
   }, []);
 
+  // Single-flight recursive setTimeout avoids overlapping polls
   useEffect(() => {
-    fetchStatus();
-    pollRef.current = setInterval(fetchStatus, 5000);
+    let cancelled = false;
+    async function poll() {
+      const status = await fetchStatus();
+      if (cancelled) return;
+      // Stop polling on terminal state; keep polling on null (migration may start)
+      if (status && TERMINAL_STATUSES.includes(status.status)) return;
+      pollRef.current = setTimeout(poll, 5000);
+    }
+    poll();
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      cancelled = true;
+      if (pollRef.current) clearTimeout(pollRef.current);
     };
   }, [fetchStatus]);
 

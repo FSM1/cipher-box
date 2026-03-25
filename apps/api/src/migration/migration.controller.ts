@@ -9,7 +9,9 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { RequestWithUser } from '../common/types';
 import { MigrationService } from './migration.service';
 import { StartMigrationDto } from './dto/start-migration.dto';
@@ -17,12 +19,13 @@ import { MigrationStatusDto } from './dto/migration-status.dto';
 
 @ApiTags('migration')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottlerGuard)
 @Controller('migration')
 export class MigrationController {
   constructor(private readonly migrationService: MigrationService) {}
 
   @Post('start')
+  @Throttle({ default: { limit: 5, ttl: 3600000 } }) // 5 starts per hour per user
   @ApiOperation({ summary: 'Start a pin migration between providers' })
   @ApiResponse({ status: 201, description: 'Migration started' })
   @ApiResponse({ status: 409, description: 'Active migration already exists' })

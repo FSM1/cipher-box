@@ -227,9 +227,9 @@ export function useAuth() {
       ): Promise<PinningConfig | undefined> => {
         try {
           const byoKeypair = await deriveByoConfigIpnsKeypair(userPrivateKey);
-          const BYO_IPNS_NAME_KEY = 'cipherbox-byo-ipns-name';
-          const storedIpnsName = localStorage.getItem(BYO_IPNS_NAME_KEY);
-          const ipnsName = storedIpnsName || byoKeypair.ipnsName;
+          // Always use the derived IPNS name (per-user deterministic) — no localStorage
+          // caching to avoid stale cross-account leakage on shared browsers
+          const ipnsName = byoKeypair.ipnsName;
 
           const resolved = await resolveIpnsRecord(ipnsName);
           if (!resolved?.cid) return undefined;
@@ -242,11 +242,6 @@ export function useAuth() {
             config = JSON.parse(json) as ByoIpfsConfig;
           } finally {
             clearBytes(plaintext);
-          }
-
-          // Cache the IPNS name for future lookups
-          if (!storedIpnsName) {
-            localStorage.setItem(BYO_IPNS_NAME_KEY, ipnsName);
           }
 
           return {

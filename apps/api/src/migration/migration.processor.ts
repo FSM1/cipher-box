@@ -80,6 +80,7 @@ export class MigrationProcessor extends WorkerHost {
             sourceConfigEncrypted: migration.sourceConfigEncrypted,
             destConfigEncrypted: migration.destConfigEncrypted,
           }),
+          signal: AbortSignal.timeout(120_000), // 2 min per batch
         });
 
         if (!response.ok) {

@@ -127,17 +127,23 @@ async function teeRoutedTest(
   const encrypted = await wrapKey(configBytes, teePublicKey);
   const encryptedHex = bytesToHex(encrypted);
 
-  // Call TEE-routed connection test via generated api-client
-  const response = await teeControllerConnectionTest({
-    encryptedConfig: encryptedHex,
-    epoch: teeKeys.currentEpoch,
-  });
+  try {
+    // Call TEE-routed connection test via generated api-client
+    const response = await teeControllerConnectionTest({
+      encryptedConfig: encryptedHex,
+      epoch: teeKeys.currentEpoch,
+    });
 
-  return {
-    success: response.success,
-    protocol: response.protocol as ConnectionTestResult['protocol'],
-    version: response.version,
-    latencyMs: response.latencyMs,
-    error: response.error,
-  };
+    return {
+      success: response.success,
+      protocol: response.protocol as ConnectionTestResult['protocol'],
+      version: response.version,
+      latencyMs: response.latencyMs,
+      error: response.error,
+    };
+  } finally {
+    // Zero plaintext credential buffers (defense-in-depth)
+    configBytes.fill(0);
+    encrypted.fill(0);
+  }
 }
