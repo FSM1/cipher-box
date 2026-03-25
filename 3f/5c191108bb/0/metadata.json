@@ -1,0 +1,62 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3f5c191108bb",
+  "session_id": "083879b7-1fa3-49d4-841f-63a3d195d800",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T01:15:46.770269Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/22-performance-baselines-completion/22-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e383b2e7f881",
+  "token_usage": {
+    "input_tokens": 25,
+    "cache_creation_tokens": 55392,
+    "cache_read_tokens": 1059386,
+    "output_tokens": 7889,
+    "api_call_count": 22
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for Phase 22 (performance baselines completion) to generate executable PLAN.md files with integrated research and verification.",
+    "outcome": "Successfully completed the full plan-phase workflow: research completed, VALIDATION.md created, 3 plans generated in 1 wave, plan checker passed with 0 blockers (2 warnings about stale VALIDATION.md paths were fixed post-check).",
+    "learnings": {
+      "repo": [
+        "Phase 22 is named 'performance-baselines-completion' and lives at .planning/phases/22-performance-baselines-completion/",
+        "The phase already had a CONTEXT.md (22-CONTEXT.md) from a prior discuss-phase run",
+        "Phase 22 deals with IPNS operation timing in the browser — the word 'UI' appears in the phase text incidentally, not as a frontend indicator",
+        "The Nyquist validation system requires a VALIDATION.md artifact derived from a 'Validation Architecture' section in RESEARCH.md",
+        "VALIDATION.md was generated from a template at /Users/michael/Code/cipher-box/.claude/get-shit-done/templates/VALIDATION.md"
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/22-performance-baselines-completion/22-VALIDATION.md",
+          "finding": "Initially created with stale paths; plan checker flagged this as a warning, requiring a rewrite and recommit"
+        }
+      ],
+      "workflow": [
+        "The UI design contract gate (step 5.6) triggers on any regex match of UI/interface/frontend keywords — incidental keyword matches in non-UI phases require manual user override",
+        "Plan checker warnings about VALIDATION.md stale paths are an orchestrator artifact issue, not a plan quality issue — they should be fixed before considering verification truly clean",
+        "The plan-phase workflow proceeds through: init → validate → context load → research prompt → Nyquist validation creation → UI gate → planning → verification loop → requirements coverage gate"
+      ]
+    },
+    "friction": [
+      "UI safety gate false-positively triggered on Phase 22 because 'UI' appeared incidentally in the phase description (IPNS operation timing in the browser), requiring an extra user confirmation step for a non-frontend phase",
+      "VALIDATION.md was written with stale paths that the plan checker caught as warnings, requiring a second read/write/commit cycle after the checker ran"
+    ],
+    "open_items": [
+      "Plans are ready but not yet executed — next step is /gsd:execute-phase 22",
+      "The 2 checker warnings (stale VALIDATION.md paths, documentation note) were addressed but the checker was not re-run to confirm clean pass after fixes"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-25T01:15:30.186333Z",
+    "agent_lines": 0,
+    "human_added": 2,
+    "human_modified": 29,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 0
+  }
+}
