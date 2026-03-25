@@ -225,10 +225,10 @@ export function useAuth() {
       const loadByoConfig = async (
         userPrivateKey: Uint8Array
       ): Promise<PinningConfig | undefined> => {
-        try {
+        // Time-bound the entire lookup so a hung IPFS peer can't block login
+        const BYO_LOAD_TIMEOUT_MS = 10_000;
+        const inner = async (): Promise<PinningConfig | undefined> => {
           const byoKeypair = await deriveByoConfigIpnsKeypair(userPrivateKey);
-          // Always use the derived IPNS name (per-user deterministic) — no localStorage
-          // caching to avoid stale cross-account leakage on shared browsers
           const ipnsName = byoKeypair.ipnsName;
 
           const resolved = await resolveIpnsRecord(ipnsName);
@@ -244,10 +244,29 @@ export function useAuth() {
             clearBytes(plaintext);
           }
 
+          // Runtime validation: ensure the blob has a valid shape
+          const validModes = ['cipherbox', 'external', 'dual'];
+          if (!config.pinningMode || !validModes.includes(config.pinningMode)) {
+            return undefined;
+          }
+          if (config.pinningMode !== 'cipherbox' && !config.externalProvider?.endpoint) {
+            return undefined;
+          }
+
           return {
             mode: config.pinningMode,
             externalProvider: config.externalProvider ?? undefined,
           };
+        };
+
+        try {
+          const result = await Promise.race([
+            inner(),
+            new Promise<undefined>((resolve) =>
+              setTimeout(() => resolve(undefined), BYO_LOAD_TIMEOUT_MS)
+            ),
+          ]);
+          return result;
         } catch {
           // No BYO config or decryption failed -- default to cipherbox-only
           return undefined;
