@@ -18,6 +18,7 @@ import {
 import type { SdkContext, TeeKeys, ProgressCallback } from '../types';
 import { addToIpfs } from '../ipfs';
 import { createFileMetadata, type FileIpnsRecordPayload } from '../file';
+import { withPerf } from '../perf';
 
 /**
  * Result of a single file upload operation.
@@ -71,49 +72,55 @@ export async function uploadFile(params: {
   onProgress?: ProgressCallback;
   teeKeys?: TeeKeys;
 }): Promise<UploadResult> {
-  // 1. Generate unique file key and IV
-  const fileKey = generateFileKey();
-  const iv = generateIv();
+  return withPerf('upload:full', async () => {
+    // 1. Generate unique file key and IV
+    const fileKey = generateFileKey();
+    const iv = generateIv();
 
-  try {
-    // 2. Encrypt with AES-256-GCM
-    const ciphertext = await encryptAesGcm(params.data, fileKey, iv);
+    try {
+      // 2. Encrypt with AES-256-GCM
+      const ciphertext = await encryptAesGcm(params.data, fileKey, iv);
 
-    // 3. Wrap file key with user's public key (ECIES)
-    const wrappedKey = await wrapKey(fileKey, params.userPublicKey);
+      // 3. Wrap file key with user's public key (ECIES)
+      const wrappedKey = await wrapKey(fileKey, params.userPublicKey);
 
-    // 4. Upload encrypted content to IPFS
-    const { cid, size: encryptedSize } = await addToIpfs(params.ctx, ciphertext, params.onProgress);
+      // 4. Upload encrypted content to IPFS
+      const { cid, size: encryptedSize } = await addToIpfs(
+        params.ctx,
+        ciphertext,
+        params.onProgress
+      );
 
-    // 5. Create per-file IPNS metadata record
-    const fileMetaResult = await createFileMetadata({
-      fileId: params.fileId,
-      cid,
-      fileKeyEncrypted: bytesToHex(wrappedKey),
-      fileIv: bytesToHex(iv),
-      size: params.data.length,
-      mimeType: params.mimeType,
-      folderKey: params.folderKey,
-      userPublicKey: params.userPublicKey,
-      ctx: params.ctx,
-      teeKeys: params.teeKeys,
-      encryptionMode: 'GCM',
-    });
+      // 5. Create per-file IPNS metadata record
+      const fileMetaResult = await createFileMetadata({
+        fileId: params.fileId,
+        cid,
+        fileKeyEncrypted: bytesToHex(wrappedKey),
+        fileIv: bytesToHex(iv),
+        size: params.data.length,
+        mimeType: params.mimeType,
+        folderKey: params.folderKey,
+        userPublicKey: params.userPublicKey,
+        ctx: params.ctx,
+        teeKeys: params.teeKeys,
+        encryptionMode: 'GCM',
+      });
 
-    // Return a defensive copy of the file key for re-wrapping.
-    // The caller is responsible for clearing it after use.
-    const fileKeyCopy = new Uint8Array(fileKey);
+      // Return a defensive copy of the file key for re-wrapping.
+      // The caller is responsible for clearing it after use.
+      const fileKeyCopy = new Uint8Array(fileKey);
 
-    return {
-      cid,
-      encryptedSize,
-      fileMetaIpnsName: fileMetaResult.fileMetaIpnsName,
-      ipnsRecord: fileMetaResult.ipnsRecord,
-      ipnsPrivateKeyEncrypted: fileMetaResult.ipnsPrivateKeyEncrypted,
-      fileKey: fileKeyCopy,
-    };
-  } finally {
-    // 6. Clear the internal copy of the key from memory
-    clearBytes(fileKey);
-  }
+      return {
+        cid,
+        encryptedSize,
+        fileMetaIpnsName: fileMetaResult.fileMetaIpnsName,
+        ipnsRecord: fileMetaResult.ipnsRecord,
+        ipnsPrivateKeyEncrypted: fileMetaResult.ipnsPrivateKeyEncrypted,
+        fileKey: fileKeyCopy,
+      };
+    } finally {
+      // 6. Clear the internal copy of the key from memory
+      clearBytes(fileKey);
+    }
+  });
 }

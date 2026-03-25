@@ -26,6 +26,7 @@ import {
 import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../ipns';
+import { withPerf } from '../perf';
 
 /**
  * Fetch and decrypt folder metadata from IPFS.
@@ -40,13 +41,15 @@ export async function fetchAndDecryptMetadata(
   folderKey: Uint8Array,
   ctx: SdkContext
 ): Promise<FolderMetadata> {
-  const encryptedBytes = await fetchFromIpfs(ctx, cid);
+  return withPerf('folder:fetch-decrypt', async () => {
+    const encryptedBytes = await fetchFromIpfs(ctx, cid);
 
-  // All folder metadata (including root) is v1 JSON {iv, data}.
-  // v2 blob format is only for the vault key blob (separate IPNS name).
-  const encryptedJson = new TextDecoder().decode(encryptedBytes);
-  const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
-  return decryptFolderMetadata(encrypted, folderKey);
+    // All folder metadata (including root) is v1 JSON {iv, data}.
+    // v2 blob format is only for the vault key blob (separate IPNS name).
+    const encryptedJson = new TextDecoder().decode(encryptedBytes);
+    const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
+    return decryptFolderMetadata(encrypted, folderKey);
+  });
 }
 
 /**
@@ -66,16 +69,18 @@ export async function loadFolderMetadata(params: {
   sequenceNumber: bigint;
   cid: string;
 } | null> {
-  const resolved = await resolveIpnsRecord(params.ipnsName, params.ctx);
-  if (!resolved) return null;
+  return withPerf('folder:load', async () => {
+    const resolved = await resolveIpnsRecord(params.ipnsName, params.ctx);
+    if (!resolved) return null;
 
-  const metadata = await fetchAndDecryptMetadata(resolved.cid, params.folderKey, params.ctx);
+    const metadata = await fetchAndDecryptMetadata(resolved.cid, params.folderKey, params.ctx);
 
-  return {
-    metadata,
-    sequenceNumber: resolved.sequenceNumber,
-    cid: resolved.cid,
-  };
+    return {
+      metadata,
+      sequenceNumber: resolved.sequenceNumber,
+      cid: resolved.cid,
+    };
+  });
 }
 
 /**
@@ -169,56 +174,58 @@ export async function updateFolderMetadataAndPublish(params: {
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
 }): Promise<{ cid: string; newSequenceNumber: bigint }> {
-  // 1. Create v2 folder metadata
-  const metadata: FolderMetadata = {
-    version: 'v2',
-    children: params.children,
-  };
+  return withPerf('folder:update-publish', async () => {
+    // 1. Create v2 folder metadata
+    const metadata: FolderMetadata = {
+      version: 'v2',
+      children: params.children,
+    };
 
-  // 2. Encrypt metadata with folder key
-  const encrypted = await encryptFolderMetadata(metadata, params.folderKey);
+    // 2. Encrypt metadata with folder key
+    const encrypted = await encryptFolderMetadata(metadata, params.folderKey);
 
-  // 3. Upload to IPFS via backend relay
-  const jsonStr = JSON.stringify(encrypted);
-  const encryptedBytes = new TextEncoder().encode(jsonStr);
-  const { cid } = await addToIpfs(params.ctx, encryptedBytes);
+    // 3. Upload to IPFS via backend relay
+    const jsonStr = JSON.stringify(encrypted);
+    const encryptedBytes = new TextEncoder().encode(jsonStr);
+    const { cid } = await addToIpfs(params.ctx, encryptedBytes);
 
-  // 4. Publish IPNS record with conflict retry
-  //    On 409, resolve current seq from IPNS and retry once
-  let currentSeq = params.sequenceNumber;
+    // 4. Publish IPNS record with conflict retry
+    //    On 409, resolve current seq from IPNS and retry once
+    let currentSeq = params.sequenceNumber;
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const newSeq = currentSeq + 1n;
-    try {
-      await createAndPublishIpnsRecord({
-        ipnsPrivateKey: params.ipnsPrivateKey,
-        ipnsName: params.ipnsName,
-        metadataCid: cid,
-        sequenceNumber: newSeq,
-        encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
-        keyEpoch: params.keyEpoch,
-        expectedSequenceNumber: currentSeq.toString(),
-        ctx: params.ctx,
-      });
-      return { cid, newSequenceNumber: newSeq };
-    } catch (err) {
-      const is409 =
-        (err as Error & { status?: number }).status === 409 ||
-        (err as Error & { response?: { status?: number } }).response?.status === 409;
-      if (!is409 || attempt > 0) throw err;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const newSeq = currentSeq + 1n;
+      try {
+        await createAndPublishIpnsRecord({
+          ipnsPrivateKey: params.ipnsPrivateKey,
+          ipnsName: params.ipnsName,
+          metadataCid: cid,
+          sequenceNumber: newSeq,
+          encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+          keyEpoch: params.keyEpoch,
+          expectedSequenceNumber: currentSeq.toString(),
+          ctx: params.ctx,
+        });
+        return { cid, newSequenceNumber: newSeq };
+      } catch (err) {
+        const is409 =
+          (err as Error & { status?: number }).status === 409 ||
+          (err as Error & { response?: { status?: number } }).response?.status === 409;
+        if (!is409 || attempt > 0) throw err;
 
-      // Re-sync: resolve current seq from IPNS
-      const resolved = await resolveIpnsRecord(params.ipnsName, params.ctx);
-      if (resolved) {
-        currentSeq = resolved.sequenceNumber;
-      } else {
-        throw err; // Can't resolve → give up
+        // Re-sync: resolve current seq from IPNS
+        const resolved = await resolveIpnsRecord(params.ipnsName, params.ctx);
+        if (resolved) {
+          currentSeq = resolved.sequenceNumber;
+        } else {
+          throw err; // Can't resolve → give up
+        }
       }
     }
-  }
 
-  // Should not reach here, but TypeScript needs it
-  throw new Error('Publish failed after retry');
+    // Should not reach here, but TypeScript needs it
+    throw new Error('Publish failed after retry');
+  });
 }
 
 /**
