@@ -163,12 +163,15 @@ pub(crate) mod implementation {
         let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
 
         // TEE enrollment on first publish only (same pattern as folder creation in write_ops.rs)
-        let (encrypted_ipns_for_tee, tee_epoch) = match (is_first_publish, tee_public_key) {
-            (true, Some(tee_key)) => {
+        let (encrypted_ipns_for_tee, tee_epoch) = match (is_first_publish, tee_public_key, tee_key_epoch) {
+            (true, Some(tee_key), Some(epoch)) => {
                 let wrapped = cipherbox_crypto::wrap_key(
                     file_ipns_private_key.as_slice(), tee_key
                 ).map_err(|e| format!("TEE key wrapping failed: {}", e))?;
-                (Some(hex::encode(&wrapped)), tee_key_epoch)
+                (Some(hex::encode(&wrapped)), Some(epoch))
+            }
+            (true, Some(_), None) => {
+                return Err("TEE public key present but key_epoch missing".to_string());
             }
             _ => (None, None),
         };

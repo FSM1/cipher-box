@@ -81,11 +81,13 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          # Download and install WinFsp MSI (needed for winfsp crate build)
-          $winfspUrl = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
-          $winfspMsi = "$env:TEMP\winfsp.msi"
-          Invoke-WebRequest -Uri $winfspUrl -OutFile $winfspMsi
-          Start-Process msiexec.exe -ArgumentList "/i", $winfspMsi, "/qn" -Wait
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
+          $out = "winfsp.msi"
+          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
+          Invoke-WebRequest -Uri $url -OutFile $out
+          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
+          Start-Process msiexec.exe -ArgumentList "/i", $out, "/qn" -Wait
 
       - name: Create WinFsp MSI placeholder (Windows)
         if: matrix.platform == 'windows-latest'
