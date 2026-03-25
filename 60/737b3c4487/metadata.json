@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "60737b3c4487",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/__tests__/perf.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/60/737b3c4487/0/metadata.json",
+      "transcript": "/60/737b3c4487/0/full.jsonl",
+      "content_hash": "/60/737b3c4487/0/content_hash.txt",
+      "prompt": "/60/737b3c4487/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 199,
+    "cache_creation_tokens": 299544,
+    "cache_read_tokens": 15494251,
+    "output_tokens": 36609,
+    "api_call_count": 159
+  }
+}
