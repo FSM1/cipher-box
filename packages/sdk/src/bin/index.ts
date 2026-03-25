@@ -143,26 +143,26 @@ async function publishWithVerify(params: {
   maxRetries?: number;
 }): Promise<void> {
   const maxRetries = params.maxRetries ?? 3;
+  // Publish once -- the API call is idempotent but no need to repeat it
+  await sdkCore.createAndPublishIpnsRecord({
+    ipnsPrivateKey: params.ipnsPrivateKey,
+    ipnsName: params.ipnsName,
+    metadataCid: params.cid,
+    sequenceNumber: params.sequenceNumber,
+    encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+    keyEpoch: params.keyEpoch,
+    ctx: params.ctx,
+  });
+  // Verify with retries: resolve back to confirm DB cache was written
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    await sdkCore.createAndPublishIpnsRecord({
-      ipnsPrivateKey: params.ipnsPrivateKey,
-      ipnsName: params.ipnsName,
-      metadataCid: params.cid,
-      sequenceNumber: params.sequenceNumber,
-      encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
-      keyEpoch: params.keyEpoch,
-      ctx: params.ctx,
-    });
-    // Verify: resolve back to confirm DB cache was written
     const resolved = await sdkCore.resolveIpnsRecord(params.ipnsName, params.ctx);
-    if (resolved) return; // Success -- record is resolvable
-    // Exponential backoff: 500ms, 1000ms, 2000ms
+    if (resolved) return;
     if (attempt < maxRetries - 1) {
       await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
     }
   }
-  // After all retries, don't throw -- the publish went through, just verification failed
-  // The record may still propagate eventually
+  // After all retries, don't throw -- the publish went through, just verification failed.
+  // The record may still propagate eventually.
 }
 
 // ---------------------------------------------------------------------------

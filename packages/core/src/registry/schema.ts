@@ -48,13 +48,8 @@ export function validateDeviceRegistry(data: unknown): DeviceRegistry {
   throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
 }
 
-/**
- * Migrate a v1 registry to v2 format.
- *
- * Lenient on ipHash: accepts empty strings from v1 (known bug in useAuth.ts)
- * and fills them with a 64-char zero placeholder.
- */
-function migrateV1ToV2(obj: Record<string, unknown>): DeviceRegistry {
+/** Validate sequenceNumber and devices array structure (shared by v1 migration and v2 validation). */
+function validateRegistryShape(obj: Record<string, unknown>): void {
   if (
     typeof obj.sequenceNumber !== 'number' ||
     !Number.isInteger(obj.sequenceNumber) ||
@@ -65,13 +60,22 @@ function migrateV1ToV2(obj: Record<string, unknown>): DeviceRegistry {
   if (!Array.isArray(obj.devices)) {
     throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
   }
+}
+
+/**
+ * Migrate a v1 registry to v2 format.
+ *
+ * Lenient on ipHash: accepts empty strings from v1 (known bug in useAuth.ts)
+ * and fills them with a 64-char zero placeholder.
+ */
+function migrateV1ToV2(obj: Record<string, unknown>): DeviceRegistry {
+  validateRegistryShape(obj);
 
   const devices = (obj.devices as Record<string, unknown>[]).map((d) => {
     validateDeviceEntryBase(d);
     const ipHash = d.ipHash as string;
     return {
       ...(d as unknown as DeviceEntry),
-      // Accept empty ipHash from v1 (known bug) -- fill with zero placeholder
       ipHash: ipHash.length === 64 && HEX_REGEX.test(ipHash) ? ipHash : '0'.repeat(64),
     };
   }) as DeviceEntry[];
@@ -87,19 +91,10 @@ function migrateV1ToV2(obj: Record<string, unknown>): DeviceRegistry {
  * Validate a v2 registry with strict validation.
  */
 function validateV2Registry(obj: Record<string, unknown>): DeviceRegistry {
-  if (
-    typeof obj.sequenceNumber !== 'number' ||
-    !Number.isInteger(obj.sequenceNumber) ||
-    obj.sequenceNumber < 0
-  ) {
-    throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
-  }
-  if (!Array.isArray(obj.devices)) {
-    throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
-  }
+  validateRegistryShape(obj);
 
   for (const device of obj.devices) {
-    validateDeviceEntry(device); // Strict v2 validation (ipHash must be valid 64 hex)
+    validateDeviceEntry(device);
   }
 
   return obj as unknown as DeviceRegistry;

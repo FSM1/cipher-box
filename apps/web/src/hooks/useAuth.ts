@@ -32,7 +32,7 @@ import {
 import type { ByoIpfsConfig } from '@cipherbox/core';
 import type { PinningConfig } from '@cipherbox/sdk';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
-import { detectDeviceInfo } from '../lib/device/info';
+import { detectDeviceInfo, computeIpHash } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
 import { initializeBin } from '../services/bin.service';
 import { useBinStore } from '../stores/bin.store';
@@ -331,14 +331,7 @@ export function useAuth() {
             vaultPrivateKey: userKeypair.privateKey,
           });
           const deviceInfo = detectDeviceInfo();
-          // Compute ipHash for device registration (privacy-preserving placeholder)
-          const ipHashBuffer = await crypto.subtle.digest(
-            'SHA-256',
-            new TextEncoder().encode('0.0.0.0')
-          );
-          const ipHashHex = Array.from(new Uint8Array(ipHashBuffer))
-            .map((b) => b.toString(16).padStart(2, '0'))
-            .join('');
+          const ipHashHex = await computeIpHash('0.0.0.0');
           const result = await initializeOrSyncRegistry({
             userPrivateKey: userKeypair.privateKey,
             userPublicKey: userKeypair.publicKey,

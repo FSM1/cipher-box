@@ -91,12 +91,13 @@ export async function runUploadPipelineWorkload(
           }),
         opts.fileSizeBytes
       );
-      // Clear the returned file key (security hygiene)
       result.fileKey.fill(0);
     } catch (err) {
       console.warn(
         `[Client ${pc.id}] Upload ${i} failed: ${(err as Error).message?.slice(0, 150)}`
       );
+    } finally {
+      data.fill(0);
     }
   }
 }

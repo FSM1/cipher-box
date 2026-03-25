@@ -399,9 +399,9 @@ describe('bin operations', () => {
       const result = await resultPromise;
 
       expect(result.updatedBinState.sequenceNumber).toBe(2);
-      // Should have been called twice: first publish + retry after verify failure
-      expect(sdkCore.createAndPublishIpnsRecord).toHaveBeenCalledTimes(2);
-      // resolveIpnsRecord called twice for verify attempts
+      // Publish called once (no re-publish on verify failure)
+      expect(sdkCore.createAndPublishIpnsRecord).toHaveBeenCalledTimes(1);
+      // resolveIpnsRecord called twice: first verify fails, second succeeds
       expect(sdkCore.resolveIpnsRecord).toHaveBeenCalledTimes(2);
 
       vi.useRealTimers();
