@@ -26,7 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing (gap closure in progress) (completed 2026-03-25)
 - [x] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, Vitest-based load testing, and capacity documentation (completed 2026-03-25)
 - [x] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (completed 2026-03-24)
-- [ ] **Phase 24: Bug Fixes & Test Infrastructure** - Fix known bugs (bin IPNS 404, device registry format error) and strengthen test infrastructure (headless load tests, vault recovery E2E, load test auth refresh)
+- [x] **Phase 24: Bug Fixes & Test Infrastructure** - Fix known bugs (bin IPNS 404, device registry format error) and strengthen test infrastructure (headless load tests, vault recovery E2E, load test auth refresh) (completed 2026-03-25)
 - [ ] **Phase 25: Desktop Enhancements** - Desktop auto-update mechanism and TEE file enrollment for new files
 - [ ] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX
 
@@ -217,7 +217,7 @@ Plans:
 4. Vault v2 recovery tool has automated E2E test coverage
 5. Load tests handle 401 responses with automatic token refresh instead of failing
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 
@@ -268,7 +268,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete    | 2026-03-25 |
 | 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete    | 2026-03-25 |
 | 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
-| 24. Bug Fixes & Test Infrastructure       | 2/3       | In Progress    |             | -          |
+| 24. Bug Fixes & Test Infrastructure       | 3/3       | Complete       | 2026-03-25  | -          |
 | 25. Desktop Enhancements                  | v1.1      | 0/?            | Not started | -          |
 | 26. Observability & UX Tuning             | v1.1      | 0/?            | Not started | -          |
 
