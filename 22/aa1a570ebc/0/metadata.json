@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "22aa1a570ebc",
+  "session_id": "307145be-5d6b-4c58-9faa-418cafde1db6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T02:31:21.579845Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tee-worker/package-lock.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e80671e2de8e",
+  "token_usage": {
+    "input_tokens": 496,
+    "cache_creation_tokens": 470172,
+    "cache_read_tokens": 55456768,
+    "output_tokens": 77946,
+    "api_call_count": 325
+  },
+  "session_metrics": {
+    "turn_count": 62
+  },
+  "summary": {
+    "intent": "Execute Phase 21 (BYO IPFS Node Support) end-to-end: run all 7 plans across 4 waves, verify the implementation, and plan gap closure for issues found during UAT.",
+    "outcome": "All 7 plans executed and committed. Live UAT revealed 6 bugs (all fixed) and 5 gaps. Pin migration from CipherBox to external Kubo was verified working (44/44 CIDs). Four gap closure plans (21-08 through 21-11) were created for dual-pin wiring, TEE-routed connection test, PinataProvider, and benchmarks.",
+    "learnings": {
+      "repo": [
+        "TEE worker does not load .env files automatically — env vars must be passed inline or via the shell environment",
+        "TEE worker uses simulator mode locally (epoch 1, no real SGX required)",
+        "Migration processor used TEE_AUTH_SECRET but TeeService used TEE_WORKER_SECRET — inconsistent env var naming across the codebase",
+        "The web app upload flow does not invoke the SDK's DualPinProvider for secondary pins — the SDK client and web app are not fully wired together for BYO config",
+        "Auth store is memory-only (no localStorage/sessionStorage persistence) — cannot inject auth state for Playwright tests, must go through UI login flow",
+        "test-login API endpoint creates a deterministic keypair from email hash; calling it before email OTP for the same email causes a unique constraint violation on UQ_auth_methods_type_hash",
+        "Pinata deprecated their standard PSA endpoint (/psa returns 404); they now use a proprietary /v3/files API",
+        "Filebase's IPFS RPC endpoint (rpc.filebase.io) returns HTML error pages for /api/v0/id — non-standard behavior",
+        "DHCP on the QEMU VM bridge network reassigned the host from 192.168.133.114 to 192.168.133.12, breaking all service connections in apps/api/.env",
+        "Local Kubo nodes need explicit CORS configuration before browser-side connection tests work: Access-Control-Allow-Origin, Access-Control-Allow-Methods, Access-Control-Allow-Headers"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/migration/migration.processor.ts",
+          "line": 46,
+          "end_line": 46,
+          "finding": "Used TEE_AUTH_SECRET env var but should use TEE_WORKER_SECRET to match TeeService and apps/api/.env"
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "Decoded ECIES ciphertext as base64 but StorageTab encrypts and sends as hex (bytesToHex) — encoding mismatch caused 'bad point: got length 65' error"
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "SSRF protection blocked 192.168.* ranges, preventing local dev testing. Also missing 'cipherbox' as a valid protocol type in parseProviderConfig"
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/connection-test.ts",
+          "finding": "Treated 401/403/422 responses as 'endpoint not found' instead of 'authentication failed', causing misleading 'could not detect protocol' errors"
+        },
+        {
+          "path": "apps/web/src/components/settings/StorageTab.tsx",
+          "line": 227,
+          "end_line": 230,
+          "finding": "Migration trigger required savedConfig to be non-null, but first-time users switching from default 'cipherbox' mode have no savedConfig (no prior IPNS record). Fixed by treating null savedConfig as implicit 'cipherbox' mode."
+        }
+      ],
+      "workflow": [
+        "OTP for email login is logged to the running API console — find it by reading the pnpm dev output file from the background task rather than asking the user",
+        "Hot-reload (Nest watch mode) does not fully restart the process — port bindings persist, causing EADDRINUSE for new instances. Fixes to processors require a full kill + restart cycle",
+        "BullMQ jobs from Redis persist across API restarts — stale failed jobs get re-queued immediately on next startup before new env vars take effect",
+        "Playwright file uploads with large files (100MB total) can crash the browser page — upload files individually or in smaller batches",
+        "When triggering a new migration from the UI, the mode must actually change (prev !== current) — switching A→B→A→B won't trigger a second migration because savedConfig already equals B after the first save to B"
+      ]
+    },
+    "friction": [
+      "DHCP reassigned host IP mid-session (192.168.133.114 → 192.168.133.12), requiring manual .env updates and causing all service connections to fail",
+      "TEE worker not in pnpm workspace — required separate npm install and manual env var injection to start",
+      "Multiple API restart cycles due to hot-reload not fully working for processor env var changes",
+      "Playwright OTP flow was unnecessarily complicated before realizing the output file from the background pnpm dev task contains the OTP",
+      "test-login endpoint contaminated the email+OTP login path for the same user, causing a DB unique constraint violation",
+      "Pinata and Filebase both have non-standard APIs that don't work with the implemented PSA/Kubo providers, making live SaaS testing impossible",
+      "Migration UI showed stale 'failed' state from previous attempt even after a successful new migration — MigrationProgress component needs page reload to refresh",
+      "git merge conflict between docs/phase-21-context branch and main had to be resolved manually mid-session"
+    ],
+    "open_items": [
+      "21-08: Wire BYO config into SDK client lifecycle so DualPinProvider is invoked during web app uploads (secondary pin not firing)",
+      "21-08: Add source unpin step after successful migration CID verification in TEE migration worker",
+      "21-09: Move connection test from browser-side (CORS-blocked) to TEE-routed endpoint — TEE decrypts provider config in-enclave, runs probe, returns result",
+      "21-10: PinataProvider using Pinata's proprietary /v3/files API (PSA endpoint deprecated and returns 404)",
+      "21-11: BYO performance baselines capture (21-byo-baselines.md) — deferred, requires real external IPFS provider infrastructure",
+      "Reverse migration (external → cipherbox) had 1/45 CID failure — likely CID version mismatch (v0 vs v1), needs investigation",
+      "Benchmark execution for dual-write mode needs testing once dual-pin upload wiring is complete (21-08)",
+      "TEE worker SSRF protection simulator bypass should be guarded by NODE_ENV=development or SIMULATE=true rather than left permanently relaxed"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-25T02:30:34.350985Z",
+    "agent_lines": 2,
+    "human_added": 1258,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1260,
+    "agent_percentage": 0.15873015873015872
+  }
+}
