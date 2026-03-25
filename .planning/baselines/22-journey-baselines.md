@@ -5,37 +5,38 @@
 
 ## Capture Information
 
-| Field            | Value                                                      |
-| ---------------- | ---------------------------------------------------------- |
-| **Capture Date** | [PENDING - fill after test run]                            |
-| **Environment**  | Local (localhost:3000 API, localhost:5173 frontend)        |
-| **Browser**      | Chromium (Playwright managed)                              |
-| **Auth Method**  | Mock wallet (instant auth, no Web3Auth latency)            |
-| **Test File**    | `tests/web-e2e/tests/journey-timing.spec.ts`               |
-| **Note**         | Real-world login adds 5-15s (Web3Auth network round-trips) |
+| Field            | Value                                                        |
+| ---------------- | ------------------------------------------------------------ |
+| **Capture Date** | 2026-03-25                                                   |
+| **Environment**  | Staging (api-staging.cipherbox.cc, app-staging.cipherbox.cc) |
+| **Browser**      | Chromium (Playwright managed, headless)                      |
+| **Auth Method**  | Mock wallet (EIP-1193 via @johanneskares/wallet-mock)        |
+| **Test File**    | `tests/web-e2e/tests/journey-timing.spec.ts`                 |
+| **API Version**  | v0.27.0 (staging-cipher-box-v0.27.0-rc-1)                    |
+| **VPS**          | 4 vCPU, 8GB RAM (Hostinger)                                  |
 
 ## Journey 1: Login-to-Vault
 
 Measures wall-clock time from clicking the wallet login button through vault metadata loading and file list rendering.
 
-| Phase           | Duration    |
-| --------------- | ----------- |
-| **Wallet Auth** | [PENDING]ms |
-| **Vault Load**  | [PENDING]ms |
-| **Total**       | [PENDING]ms |
+| Phase           | Duration |
+| --------------- | -------- |
+| **Wallet Auth** | 23,483ms |
+| **Vault Load**  | 86ms     |
+| **Total**       | 23,569ms |
 
 Includes: Core Kit initialization wait, mock wallet connect, SIWE signature, backend JWT exchange, vault metadata IPNS resolve, file list React render.
 
-**Note:** Mock wallet eliminates real Web3Auth latency (5-15s). Actual user-facing login will be significantly slower.
+**Note:** Wallet auth dominates at 99.6% of total time. This is Web3Auth Core Kit MPC initialization + Sapphire Devnet DKG key generation for a brand-new identity. Repeat logins (existing identity) are expected to be significantly faster (5-10s).
 
 ## Journey 2: Upload-to-Visible
 
 Measures wall-clock time from file input selection through the file appearing in the file list UI.
 
-| Metric             | Value       |
-| ------------------ | ----------- |
-| **File Size**      | 100KB       |
-| **Total Duration** | [PENDING]ms |
+| Metric             | Value   |
+| ------------------ | ------- |
+| **File Size**      | 100KB   |
+| **Total Duration** | 1,355ms |
 
 Includes: AES-256-GCM encryption, IPFS ciphertext upload (pin), IPFS metadata upload (pin), IPNS file publish, folder metadata update, IPNS folder publish, React state update, file list re-render.
 
@@ -43,59 +44,35 @@ Includes: AES-256-GCM encryption, IPFS ciphertext upload (pin), IPFS metadata up
 
 Measures wall-clock time from Alice initiating a share through Bob seeing the shared item in the Shared section.
 
-| Phase                      | Duration    |
-| -------------------------- | ----------- |
-| **Share Create (Alice)**   | [PENDING]ms |
-| **Recipient Access (Bob)** | [PENDING]ms |
-| **Total**                  | [PENDING]ms |
+| Phase                      | Duration |
+| -------------------------- | -------- |
+| **Share Create (Alice)**   | 2,236ms  |
+| **Recipient Access (Bob)** | 803ms    |
+| **Total**                  | 3,039ms  |
 
 Includes: ECIES key wrapping for recipient, share key API call, share dialog UI interaction, Bob's navigation to Shared section, share list API fetch, shared item rendering.
 
-**Note:** If multi-account sharing fails (flaky in E2E due to IPNS propagation), partial results are recorded with an explanatory note.
+## Raw Data
 
-## Comparison with SDK-Level Timings
+```json
+JOURNEY_TIMING: {"journey":"login-to-vault","totalMs":23569,"phases":{"walletAuthMs":23483,"vaultLoadMs":86}}
+JOURNEY_TIMING: {"journey":"upload-to-visible","totalMs":1355,"fileSizeBytes":102400}
+JOURNEY_TIMING: {"journey":"share-to-accessible","totalMs":3039,"phases":{"shareCreateMs":2236,"recipientAccessMs":803}}
+JOURNEY_TIMING: {"summary":true,"capturedAt":"2026-03-25T02:58:23.753Z","journeys":[{"journey":"login-to-vault","totalMs":23569,"phases":{"walletAuthMs":23483,"vaultLoadMs":86}},{"journey":"upload-to-visible","totalMs":1355,"fileSizeBytes":102400},{"journey":"share-to-accessible","totalMs":3039,"phases":{"shareCreateMs":2236,"recipientAccessMs":803}}]}
+```
 
-Journey timings will be higher than SDK-level timings (from Plan 01) because they include:
+## How to Recapture
 
-- Browser rendering and paint
-- React state updates and re-renders
-- Navigation and URL changes
-- Network proxy overhead (Playwright -> browser -> API)
-- UI interaction latency (click handlers, modal transitions)
-
-The delta between journey timing and SDK timing represents the "UI tax" -- overhead from the web application layer.
-
-## How to Capture
-
-Run the journey timing tests with API + frontend running:
+Run the journey timing tests against staging:
 
 ```bash
-# Start API and frontend first (if not already running)
-pnpm --filter @cipherbox/api dev &
-pnpm --filter @cipherbox/web dev &
+cd tests/web-e2e && npx playwright test journey-timing.spec.ts --config /tmp/pw-staging.config.ts
+```
 
-# Run journey timing tests
+Or against localhost with API + frontend running:
+
+```bash
 cd tests/web-e2e && pnpm exec playwright test tests/journey-timing.spec.ts
-
-# Capture output lines starting with JOURNEY_TIMING:
-cd tests/web-e2e && pnpm exec playwright test tests/journey-timing.spec.ts 2>&1 | grep "JOURNEY_TIMING:"
 ```
 
 The test outputs structured JSON on each line prefixed with `JOURNEY_TIMING:`. The final summary line contains all journey results in a single JSON object.
-
-Example output:
-
-```json
-JOURNEY_TIMING: {"journey":"login-to-vault","totalMs":4523,"phases":{"walletAuthMs":3100,"vaultLoadMs":1423}}
-JOURNEY_TIMING: {"journey":"upload-to-visible","totalMs":2847,"fileSizeBytes":102400}
-JOURNEY_TIMING: {"journey":"share-to-accessible","totalMs":8921,"phases":{"shareCreateMs":3456,"recipientAccessMs":5465}}
-JOURNEY_TIMING: {"summary":true,"capturedAt":"2026-03-25T...","journeys":[...]}
-```
-
-## Historical Comparison
-
-Once captured, compare with SDK-level baselines from Plan 01 to quantify the UI overhead:
-
-| Journey        | SDK Timing (Plan 01) | E2E Timing (this) | UI Overhead |
-| -------------- | -------------------- | ----------------- | ----------- |
-| Upload (100KB) | [PENDING]            | [PENDING]         | [PENDING]   |
