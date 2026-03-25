@@ -122,7 +122,7 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 - **Sync latency**: ~30 seconds — IPNS polling interval
 - **Tech stack**: NestJS backend, React 18 frontend, Tauri desktop — per specifications
 - **Auth provider**: Web3Auth Core Kit MPC — deterministic key derivation requirement
-- **IPFS provider**: Kubo (self-hosted)
+- **IPFS provider**: Kubo (self-hosted), BYO-IPFS support (Kubo, PSA, Pinata)
 
 ## Key Decisions
 
@@ -142,4 +142,4 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 
 ---
 
-Last updated: 2026-03-24 after Phase 20 Vault Migration completed
+Last updated: 2026-03-25 after Phase 21 BYO-IPFS Node Support completed
