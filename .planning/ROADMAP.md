@@ -26,6 +26,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing (gap closure in progress) (completed 2026-03-25)
 - [x] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, Vitest-based load testing, and capacity documentation (completed 2026-03-25)
 - [x] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (completed 2026-03-24)
+- [ ] **Phase 24: Bug Fixes & Test Infrastructure** - Fix known bugs (bin IPNS 404, device registry format error) and strengthen test infrastructure (headless load tests, vault recovery E2E, load test auth refresh)
+- [ ] **Phase 25: Desktop Enhancements** - Desktop auto-update mechanism and TEE file enrollment for new files
+- [ ] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX
 
 ## Phase Details
 
@@ -201,21 +204,67 @@ Plans:
 - [x] 23-07-PLAN.md -- CI workspace builds + Release Please + cross-language parity gate
 - [x] 23-08-PLAN.md -- Gap closure: Move Windows WinFsp operations to crates/fuse/src/platform/windows/
 
+### Phase 24: Bug Fixes & Test Infrastructure
+
+**Goal**: Fix known bugs blocking user experience and strengthen test infrastructure with headless load tests, vault recovery E2E coverage, and load test auth refresh handling
+**Depends on**: None (independent of other new phases)
+**Requirements**: BUGFIX-01, BUGFIX-02, TEST-01, TEST-02, TEST-03
+**Success Criteria** (what must be TRUE):
+
+1. Bin IPNS name resolves correctly (no 404 errors on recycle bin operations)
+2. Device registry parses without crypto format errors
+3. Headless Node.js load tests call sdk-core functions directly without Playwright browser overhead
+4. Vault v2 recovery tool has automated E2E test coverage
+5. Load tests handle 401 responses with automatic token refresh instead of failing
+
+**Plans**: TBD
+
+### Phase 25: Desktop Enhancements
+
+**Goal**: Desktop app auto-updates to new versions and enrolls newly created files with the TEE for automatic IPNS republishing
+**Depends on**: None (independent of other new phases)
+**Requirements**: DESKTOP-01, DESKTOP-02
+**Success Criteria** (what must be TRUE):
+
+1. Desktop app checks for updates on launch and notifies the user when a new version is available
+2. Users can download and install updates from within the app (or auto-install on next restart)
+3. Files created via the desktop FUSE mount are enrolled with the TEE for automatic 3-hour IPNS republishing
+4. TEE enrollment works for both CipherBox-pinned and BYO-pinned files
+
+**Plans**: TBD
+
+### Phase 26: Observability & UX Tuning
+
+**Goal**: Alerting thresholds make performance baselines actionable and timeout tuning delivers sub-2s perceived latency for common operations
+**Depends on**: Phase 22 (baselines must exist)
+**Requirements**: OBS-01, OBS-02
+**Success Criteria** (what must be TRUE):
+
+1. Grafana alerts fire when IPNS resolve, IPFS pin, or API response times exceed p95 thresholds established in Phase 18/22
+2. DB fallback rate alert triggers when IPNS resolution falls back to database above a configured threshold
+3. Client-side timeouts and retry config are tuned based on Phase 18/22 baseline data for sub-2s UX on common operations
+4. Timeout changes are validated against the journey timing tests from Phase 22
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26
 
-| Phase                                     | Milestone | Plans Complete | Status   | Completed  |
-| ----------------------------------------- | --------- | -------------- | -------- | ---------- |
-| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete | 2026-03-07 |
-| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete | 2026-03-20 |
-| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete | 2026-03-23 |
-| 20. Vault Migration                       | v1.1      | 6/6            | Complete | 2026-03-24 |
-| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete | 2026-03-25 |
-| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete | 2026-03-25 |
-| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete | 2026-03-24 |
+| Phase                                     | Milestone | Plans Complete | Status      | Completed  |
+| ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
+| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
+| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete    | 2026-03-25 |
+| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete    | 2026-03-25 |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
+| 24. Bug Fixes & Test Infrastructure       | v1.1      | 0/?            | Not started | -          |
+| 25. Desktop Enhancements                  | v1.1      | 0/?            | Not started | -          |
+| 26. Observability & UX Tuning             | v1.1      | 0/?            | Not started | -          |
 
 ---
 
