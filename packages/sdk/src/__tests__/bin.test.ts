@@ -47,14 +47,45 @@ describe('bin operations', () => {
   });
 
   describe('loadBin', () => {
-    it('returns empty state when no IPNS record exists', async () => {
-      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue(null);
+    it('auto-repairs when no IPNS record exists (publishes empty bin with sequenceNumber 1)', async () => {
+      // First call: loadBinMetadataInternal -> resolveIpnsRecord returns null (trigger auto-repair)
+      // Second call: inside saveBinMetadata -> publishWithVerify -> resolveIpnsRecord returns valid (verify success)
+      vi.mocked(sdkCore.resolveIpnsRecord)
+        .mockResolvedValueOnce(null) // initial load attempt
+        .mockResolvedValueOnce({ cid: 'bafyempty', sequenceNumber: 1n, signatureVerified: true }); // verify after publish
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafyempty' });
+      vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
+        success: true,
+        sequenceNumber: 1n,
+      });
 
       const result = await loadBin({ binCtx });
 
       expect(result.entries).toEqual([]);
-      expect(result.sequenceNumber).toBe(0);
+      expect(result.sequenceNumber).toBe(1);
       expect(result.ipnsName).toBe('k51bin');
+      // Auto-repair should have published
+      expect(sdkCore.createAndPublishIpnsRecord).toHaveBeenCalled();
+      expect(sdkCore.addToIpfs).toHaveBeenCalled();
+    });
+
+    it('auto-repair calls saveBinMetadata which uses publishWithVerify', async () => {
+      // resolveIpnsRecord: null on initial load, then valid on verify call
+      vi.mocked(sdkCore.resolveIpnsRecord)
+        .mockResolvedValueOnce(null) // initial load attempt
+        .mockResolvedValueOnce({ cid: 'bafyempty', sequenceNumber: 1n, signatureVerified: true }); // verify after publish
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafyempty' });
+      vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
+        success: true,
+        sequenceNumber: 1n,
+      });
+
+      await loadBin({ binCtx });
+
+      // createAndPublishIpnsRecord called once (publish)
+      expect(sdkCore.createAndPublishIpnsRecord).toHaveBeenCalledTimes(1);
+      // resolveIpnsRecord called at least twice: initial load + verify after publish
+      expect(sdkCore.resolveIpnsRecord).toHaveBeenCalledTimes(2);
     });
 
     it('returns existing bin state when IPNS record found', async () => {
@@ -126,6 +157,12 @@ describe('bin operations', () => {
         success: true,
         sequenceNumber: 1n,
       });
+      // publishWithVerify will call resolveIpnsRecord to verify
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafybin',
+        sequenceNumber: 1n,
+        signatureVerified: true,
+      });
 
       const binState: BinState = { entries: [], sequenceNumber: 0, ipnsName: 'k51bin' };
 
@@ -182,6 +219,12 @@ describe('bin operations', () => {
       vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
         success: true,
         sequenceNumber: 2n,
+      });
+      // publishWithVerify will call resolveIpnsRecord to verify
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafybin',
+        sequenceNumber: 2n,
+        signatureVerified: true,
       });
 
       const fileChild = {
@@ -247,6 +290,12 @@ describe('bin operations', () => {
         success: true,
         sequenceNumber: 2n,
       });
+      // publishWithVerify will call resolveIpnsRecord to verify
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafybin',
+        sequenceNumber: 2n,
+        signatureVerified: true,
+      });
 
       const binState: BinState = {
         entries: [
@@ -281,6 +330,12 @@ describe('bin operations', () => {
         success: true,
         sequenceNumber: 3n,
       });
+      // publishWithVerify will call resolveIpnsRecord to verify
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafybin',
+        sequenceNumber: 3n,
+        signatureVerified: true,
+      });
 
       const binState: BinState = {
         entries: [
@@ -314,6 +369,42 @@ describe('bin operations', () => {
 
       expect(result.updatedBinState.entries).toHaveLength(0);
       expect(result.updatedBinState.sequenceNumber).toBe(3);
+    });
+
+    it('publishWithVerify retries when verify fails', async () => {
+      vi.useFakeTimers();
+
+      vi.mocked(sdkCore.unpinFromIpfs).mockResolvedValue(undefined);
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin' });
+      vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
+        success: true,
+        sequenceNumber: 2n,
+      });
+      // Verify fails first time, succeeds second time
+      vi.mocked(sdkCore.resolveIpnsRecord)
+        .mockResolvedValueOnce(null) // first verify fails
+        .mockResolvedValueOnce({ cid: 'bafybin', sequenceNumber: 2n, signatureVerified: true }); // second verify succeeds
+
+      const binState: BinState = {
+        entries: [],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      };
+
+      const resultPromise = emptyBin({ binState, binCtx });
+
+      // Advance timers to handle backoff delay
+      await vi.advanceTimersByTimeAsync(2000);
+
+      const result = await resultPromise;
+
+      expect(result.updatedBinState.sequenceNumber).toBe(2);
+      // Should have been called twice: first publish + retry after verify failure
+      expect(sdkCore.createAndPublishIpnsRecord).toHaveBeenCalledTimes(2);
+      // resolveIpnsRecord called twice for verify attempts
+      expect(sdkCore.resolveIpnsRecord).toHaveBeenCalledTimes(2);
+
+      vi.useRealTimers();
     });
   });
 });

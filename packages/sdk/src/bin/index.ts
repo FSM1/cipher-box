@@ -112,16 +112,57 @@ async function saveBinMetadata(params: {
     }
   }
 
-  // Publish IPNS record
-  await sdkCore.createAndPublishIpnsRecord({
-    ipnsPrivateKey: binIpns.privateKey,
+  // Publish IPNS record with verification
+  await publishWithVerify({
     ipnsName: binIpns.ipnsName,
-    metadataCid: cid,
+    ipnsPrivateKey: binIpns.privateKey,
+    cid,
     sequenceNumber: BigInt(params.metadata.sequenceNumber),
     encryptedIpnsPrivateKey: encryptedIpnsKey,
     keyEpoch,
     ctx: params.binCtx.ctx,
   });
+}
+
+/**
+ * Publish an IPNS record and verify it is resolvable.
+ *
+ * Wraps createAndPublishIpnsRecord with a resolve-back verification loop.
+ * On verify failure, retries with exponential backoff (500ms, 1000ms, 2000ms).
+ * After all retries exhausted, does NOT throw -- the publish went through,
+ * verification just couldn't confirm propagation.
+ */
+async function publishWithVerify(params: {
+  ipnsName: string;
+  ipnsPrivateKey: Uint8Array;
+  cid: string;
+  sequenceNumber: bigint;
+  encryptedIpnsPrivateKey?: string;
+  keyEpoch?: number;
+  ctx: SdkContext;
+  maxRetries?: number;
+}): Promise<void> {
+  const maxRetries = params.maxRetries ?? 3;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    await sdkCore.createAndPublishIpnsRecord({
+      ipnsPrivateKey: params.ipnsPrivateKey,
+      ipnsName: params.ipnsName,
+      metadataCid: params.cid,
+      sequenceNumber: params.sequenceNumber,
+      encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+      keyEpoch: params.keyEpoch,
+      ctx: params.ctx,
+    });
+    // Verify: resolve back to confirm DB cache was written
+    const resolved = await sdkCore.resolveIpnsRecord(params.ipnsName, params.ctx);
+    if (resolved) return; // Success -- record is resolvable
+    // Exponential backoff: 500ms, 1000ms, 2000ms
+    if (attempt < maxRetries - 1) {
+      await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
+    }
+  }
+  // After all retries, don't throw -- the publish went through, just verification failed
+  // The record may still propagate eventually
 }
 
 // ---------------------------------------------------------------------------
@@ -145,12 +186,18 @@ export async function loadBin(params: { binCtx: BinOperationContext }): Promise<
   });
 
   if (!loaded) {
-    // No bin IPNS record exists yet — return empty state.
-    // The first addToBin call will create the IPNS record.
+    // No bin IPNS record -- auto-repair by publishing empty bin
     const binIpns = await deriveBinIpnsKeypair(params.binCtx.userPrivateKey);
+    const emptyMetadata: RecycleBinMetadata = {
+      version: BIN_METADATA_VERSION,
+      sequenceNumber: 1,
+      entries: [],
+    };
+    // Publish empty bin to establish the IPNS record (with retry/verify)
+    await saveBinMetadata({ metadata: emptyMetadata, binCtx: params.binCtx });
     return {
       entries: [],
-      sequenceNumber: 0,
+      sequenceNumber: 1,
       ipnsName: binIpns.ipnsName,
     };
   }
