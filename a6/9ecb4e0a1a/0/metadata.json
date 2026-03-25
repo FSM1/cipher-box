@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a69ecb4e0a1a",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T02:59:41.588374Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "9d798ebd82d8",
+  "token_usage": {
+    "input_tokens": 144,
+    "cache_creation_tokens": 115808,
+    "cache_read_tokens": 9163060,
+    "output_tokens": 25588,
+    "api_call_count": 111
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Execute phase 22 (performance baselines completion) for the cipher-box project, then code review and clean up the implementation, and finally populate the journey timing baselines by running Playwright tests against staging.",
+    "outcome": "Phase 22 executed successfully (3/3 plans, 9/9 verification checks passed), code was cleaned up via simplify review, PR #355 was created, and journey timing baselines were populated after discovering and fixing a staging DB schema mismatch that blocked wallet login.",
+    "learnings": {
+      "repo": [
+        "Phase 22 planning commits were accidentally made directly to main instead of a feature branch; the convention is feat/phase-{N}-{slug}",
+        "Phases 21, 22, and 23 were being worked out of order — the GSD tooling's 'next phase' detection can mislead if phases are completed non-sequentially",
+        "The staging database was never reset after Phase 20 removed encrypted_root_folder_key and encrypted_root_ipns_private_key from the vault entity, causing a NOT NULL constraint violation for new wallet logins",
+        "Staging DB is named cipherbox_staging (not cipherbox), runs on the staging server via Docker Compose in /home/ubuntu/cipher-box-staging/",
+        "The mock wallet in E2E tests uses page.addInitScript to inject an EIP-1193 compliant wallet — it auto-announces via EIP-6963 and cannot be injected via Playwright MCP browser_evaluate",
+        "Web3Auth Core Kit init dominates login-to-vault time (~23.5s); actual vault load after auth is only 86ms",
+        "Journey timing baselines live at .planning/baselines/22-journey-baselines.md"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 21,
+          "end_line": 21,
+          "finding": "performance.clearMeasures() must be called after creating a measure to prevent unbounded accumulation in long-lived sessions"
+        },
+        {
+          "path": "tests/load/src/harness/thresholds.ts",
+          "finding": "expectThresholdsPassed() helper extracted to replace 5 identical 8-line assertion blocks across all load test scenarios"
+        },
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "finding": "account should be scoped as const inside the test that uses it, not as a describe-level let; PrivateKeyAccount import becomes unused when type is inferred"
+        },
+        {
+          "path": "packages/sdk-core/src/ipfs/index.ts",
+          "finding": "unpinFromIpfs was the only IPFS function not wrapped with withPerf — added for consistency with addToIpfs and fetchFromIpfs"
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/perf.test.ts",
+          "line": 26,
+          "end_line": 36,
+          "finding": "Test verified measures via getEntriesByType which broke when clearMeasures was added — updated to verify via measure return value instead"
+        }
+      ],
+      "workflow": [
+        "The GSD phase complete tool reports the numerically next phase as 'next_phase' regardless of whether it's already done — always verify actual roadmap status",
+        "Playwright journey timing tests require the full test runner (not MCP) because wallet injection depends on page.addInitScript",
+        "Creating a temp playwright config with absolute testDir path is needed when overriding baseURL to target staging without spinning up local web servers",
+        "SSH to staging should use the 1Password SSH key rather than trying to find credentials elsewhere",
+        "The classifyHandoffIfNeeded error is a known Claude Code runtime bug that fires after tool calls finish — spot-check SUMMARY.md and git commits to determine actual success"
+      ]
+    },
+    "friction": [
+      "Phase 22 planning commits landed directly on main instead of the feature branch — required manual branch surgery before execution",
+      "GSD init suggested creating a new branch matching the convention but the feature branch already existed from the earlier fix, requiring a manual override",
+      "Staging DB schema was stale from Phase 20 (columns removed in code but never dropped in DB), causing 500 errors on new wallet logins and blocking baseline population",
+      "Playwright config's testDir is resolved relative to the config file location — broke when writing a temp config to /tmp",
+      "The 'next phase' suggestion at the end of phase 22 execution incorrectly pointed to phase 23 (already complete) then phase 21 (actively in progress)",
+      "Stale background task notifications from executor agents surfaced after phase execution completed, requiring the user to dismiss them"
+    ],
+    "open_items": [
+      "Journey timing baselines are populated with real staging data but login-to-vault time (23.5s) is dominated by Web3Auth Core Kit init — worth investigating if this can be reduced",
+      "Phases 21 and 23 are still in progress; phase 21 is actively being worked and may need the same branch/PR treatment as phase 22",
+      "The upload-to-visible baseline only covers a 100KB file — larger file sizes should be benchmarked",
+      "share-to-accessible journey only has a single timing run — multiple runs should be averaged to establish a reliable baseline",
+      "Staging DB was reset (all test data lost) — any previously seeded test fixtures or accounts will need to be recreated"
+    ]
+  }
+}
