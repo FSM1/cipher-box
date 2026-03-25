@@ -1,0 +1,91 @@
+/**
+ * Recovery Tool E2E Test
+ *
+ * Seeds a vault with a file via SDK, then uses recovery.html to verify
+ * the IPFS-direct v2 blob recovery path works end-to-end.
+ *
+ * Requires: API + IPFS running locally (same as other web-e2e tests).
+ */
+import { test, expect } from '@playwright/test';
+import {
+  createTestAccount,
+  deleteTestAccount,
+  type TestAccount,
+} from '../../sdk-e2e/src/fixtures/test-harness';
+import { bytesToHex } from '@cipherbox/crypto';
+
+const API_URL = process.env.SDK_E2E_API_URL ?? 'http://localhost:3000';
+const WEB_URL = process.env.WEB_URL ?? 'http://localhost:5173';
+
+test.describe('Vault Recovery Tool', () => {
+  let account: TestAccount;
+  const testFileName = `recovery-test-${Date.now()}.txt`;
+  const testFileContent = new TextEncoder().encode('CipherBox recovery test file content');
+
+  test.beforeAll(async () => {
+    // Seed: create test account and upload a file
+    account = await createTestAccount({
+      apiUrl: API_URL,
+      label: `recovery-e2e-${Date.now()}`,
+      emailPrefix: 'recovery',
+    });
+
+    // Upload a test file to the root folder
+    await account.client.uploadFile(
+      account.rootIpnsName,
+      testFileContent,
+      testFileName,
+      'text/plain'
+    );
+
+    // Brief wait for IPNS propagation to DB cache
+    await new Promise((r) => setTimeout(r, 2000));
+  });
+
+  test.afterAll(async () => {
+    if (account) {
+      account.client.destroy();
+      account.privateKey.fill(0);
+      account.rootFolderKey.fill(0);
+      account.rootIpnsKeypair.privateKey.fill(0);
+      await deleteTestAccount(account, API_URL);
+    }
+  });
+
+  test('recovers vault files via IPFS-direct v2 blob path', async ({ page }) => {
+    // Navigate to recovery tool
+    await page.goto(`${WEB_URL}/recovery.html`);
+
+    // Enter private key
+    const privateKeyHex = bytesToHex(account.privateKey);
+    await page.locator('[data-testid="recovery-key-input"]').fill(privateKeyHex);
+
+    // Set gateway URLs to localhost (Kubo + API)
+    // The IPFS gateway should point to local Kubo for content retrieval
+    await page.locator('[data-testid="recovery-ipfs-gateway"]').clear();
+    await page.locator('[data-testid="recovery-ipfs-gateway"]').fill('http://localhost:8080');
+
+    // The IPNS gateway should point to local Kubo gateway for IPNS resolution
+    await page.locator('[data-testid="recovery-ipns-gateway"]').clear();
+    await page.locator('[data-testid="recovery-ipns-gateway"]').fill('http://localhost:8080');
+
+    // Click start recovery
+    await page.locator('[data-testid="recovery-start-btn"]').click();
+
+    // Wait for recovery to complete (progress log should show file name)
+    // Recovery involves: IPNS resolution + IPFS fetch + v2 blob decrypt + folder traversal
+    // This can take up to 60 seconds depending on IPNS propagation
+    const progressLog = page.locator('[data-testid="recovery-progress-log"]');
+
+    // Wait for the progress log to contain the file name or a success indicator
+    // The recovery tool logs each discovered file
+    await expect(progressLog).toContainText(testFileName, {
+      timeout: 60_000,
+    });
+
+    // Verify the download button becomes visible (recovery succeeded)
+    await expect(page.locator('[data-testid="recovery-download-btn"]')).toBeVisible({
+      timeout: 10_000,
+    });
+  });
+});
