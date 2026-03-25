@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "844a0baa6497",
+  "session_id": "307145be-5d6b-4c58-9faa-418cafde1db6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T00:37:29.298666Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 7,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "ca49ba05bc27",
+  "token_usage": {
+    "input_tokens": 476,
+    "cache_creation_tokens": 438613,
+    "cache_read_tokens": 50611313,
+    "output_tokens": 71455,
+    "api_call_count": 309
+  },
+  "session_metrics": {
+    "turn_count": 60
+  },
+  "summary": {
+    "intent": "Execute Phase 21 (BYO IPFS Node Support) end-to-end using GSD wave-based parallel execution, then plan gap closure for issues found during verification.",
+    "outcome": "All 7 plans executed across 4 waves with 6 bugs found and fixed during live UAT; core migration pipeline verified working (44/44 CIDs migrated cipherbox→external, 44/45 external→cipherbox); phase ended in gaps_found due to missing benchmark baselines and dual-pin upload wiring, triggering a gap closure planning round.",
+    "learnings": {
+      "repo": [
+        "The TEE worker does not auto-load .env files — env vars must be passed inline or via shell export when starting with tsx/npm run dev",
+        "BullMQ migration jobs persist in Redis and are picked up by new API instances on restart, causing stale failed jobs to re-run on hot-reload",
+        "The web app upload flow (POST /ipfs/add via API relay) is separate from the SDK client pinning providers — DualPinProvider exists in the SDK but is not invoked by the web upload pipeline",
+        "Auth store is memory-only (no localStorage/sessionStorage persistence) — Playwright sessions require fresh login after page reload",
+        "The test-login endpoint creates an auth method entry; subsequent email OTP login for the same user hits a UQ_auth_methods_type_hash unique constraint",
+        "pnpm dev hot-reload (Nest watch mode) recompiles files but new API instances fail to bind if the old process still holds the port, silently appearing to reload while the fix never takes effect",
+        "DHCP reassignment on the QEMU VM bridge network can change the host IP (192.168.133.114 → 192.168.133.12), requiring .env updates for all DB/Redis/IPFS service references"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/migration/migration.processor.ts",
+          "line": 46,
+          "end_line": 46,
+          "finding": "Used TEE_AUTH_SECRET env var but TeeService uses TEE_WORKER_SECRET — caused all migration jobs to fail with 'TEE_WORKER_URL or TEE_AUTH_SECRET not configured'"
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "ECIES decryption used Buffer.from(encryptedBase64, 'base64') but StorageTab encodes configs as hex strings via bytesToHex — caused 'bad point: got length 65' secp256k1 error"
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "SSRF validation blocks 192.168.* private ranges, breaking local dev testing against self-hosted Kubo nodes; needs simulator-mode bypass"
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "parseProviderConfig only handled 'psa' | 'kubo' protocols — when migrating FROM cipherbox, the source config has protocol: 'cipherbox' which was unhandled"
+        },
+        {
+          "path": "apps/web/src/components/settings/StorageTab.tsx",
+          "line": 227,
+          "end_line": 232,
+          "finding": "Migration trigger required savedConfig to be non-null, but first-time users switching from default 'cipherbox' mode have no IPNS record yet — fix treats null savedConfig as implicit cipherbox mode"
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/connection-test.ts",
+          "finding": "Non-200 responses from Kubo/PSA probes were treated as 'endpoint not found' — 401/403/422 responses should be recognized as auth failures (endpoint detected, credentials wrong)"
+        }
+      ],
+      "workflow": [
+        "OTP logs are in the pnpm dev task output file, not the user's terminal — read the background task output file directly rather than asking the user",
+        "When multiple hot-reloads fail due to EADDRINUSE, kill processes on the port explicitly before restarting — hot-reload silently fails without fixing the port conflict",
+        "For cross-node IPFS migration testing, using the same underlying Kubo node for both source and destination makes migration instant (blobs already present) — a second node on a separate network is required for meaningful testing",
+        "Pinata deprecated their standard PSA endpoint (/psa returns 404); Filebase's IPFS RPC uses non-standard auth — major SaaS pinning providers are not compatible with standard KuboProvider/PsaProvider implementations",
+        "Browser-side connection testing of SaaS IPFS providers fails due to CORS — cloud services don't allow arbitrary browser origins"
+      ]
+    },
+    "friction": [
+      "DHCP reassignment broke all infrastructure connections mid-session (Redis, PostgreSQL, IPFS all pointing to stale IP 192.168.133.114)",
+      "pnpm dev hot-reload created false confidence that fixes were applied — multiple restarts appeared to succeed but old process held the port",
+      "TEE worker env var loading required inline env vars on every restart; no .env support meant the worker was misconfigured for most of the session",
+      "Stale BullMQ migration jobs from failed runs persisted across API restarts and confused migration status display",
+      "Finding the OTP in background task output required multiple attempts and incorrect approaches before the right file path was identified",
+      "Playwright session state lost on page reload due to memory-only auth store — required re-login multiple times during UAT",
+      "The dual checkpoint scenario (21-06 UI verify + 21-07 benchmarks pending simultaneously) created awkward sequencing during Wave 4",
+      "Pinata and Filebase both failed as test targets due to deprecated/non-standard APIs, requiring a self-hosted Kubo setup that needed CORS configuration and a second node for meaningful testing"
+    ],
+    "open_items": [
+      "Benchmark baselines (21-byo-baselines.md) deferred — needs real external IPFS provider infrastructure to run load test scenarios",
+      "Dual-pin upload wiring incomplete — DualPinProvider exists in SDK but web app upload flow does not invoke secondary pin; files only go to CipherBox, not mirrored to external node",
+      "Source unpin after migration not implemented — migration is copy-only, source pins remain pinned after successful migration to destination",
+      "Pinata native API support — proprietary /v3/files API not covered by existing KuboProvider/PsaProvider; most users will want to use Pinata",
+      "TEE-routed connection test — current browser-side connection test fails for SaaS providers due to CORS; should be routed through TEE worker (same decrypt→use→zero pattern as migration) to keep architecture zero-knowledge",
+      "SaaS provider connection test proxy — even without full TEE routing, a server-side unauthenticated endpoint probe would improve UX for cloud provider setup",
+      "CID version mismatch during reverse migration — 1/45 CIDs failed in external→cipherbox migration, likely v0 vs v1 CID format incompatibility",
+      "MigrationProgress component shows stale failed migration state after successful new migration — needs cache invalidation or polling reset on new migration start"
+    ]
+  }
+}
