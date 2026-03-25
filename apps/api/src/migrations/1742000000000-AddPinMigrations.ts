@@ -13,9 +13,9 @@ export class AddPinMigrations1742000000000 implements MigrationInterface {
         source_config_encrypted TEXT NOT NULL,
         dest_config_encrypted TEXT NOT NULL,
         failed_cid_list TEXT,
-        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-        completed_at TIMESTAMP WITH TIME ZONE
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMP
       )
     `);
     await queryRunner.query(

@@ -17,7 +17,7 @@ describe('MigrationService', () => {
     update: jest.Mock;
   };
   let mockPinnedCidRepo: {
-    find: jest.Mock;
+    count: jest.Mock;
   };
   let mockQueue: {
     add: jest.Mock;
@@ -57,7 +57,7 @@ describe('MigrationService', () => {
     };
 
     mockPinnedCidRepo = {
-      find: jest.fn(),
+      count: jest.fn(),
     };
 
     mockQueue = {
@@ -102,7 +102,7 @@ describe('MigrationService', () => {
         sizeBytes: '1024',
         pinnedAt: new Date(),
       }));
-      mockPinnedCidRepo.find.mockResolvedValue(pinnedCids);
+      mockPinnedCidRepo.count.mockResolvedValue(pinnedCids.length);
 
       mockMigrationRepo.create.mockReturnValue(mockMigrationEntity);
       mockMigrationRepo.save.mockResolvedValue(mockMigrationEntity);
@@ -135,7 +135,7 @@ describe('MigrationService', () => {
         sizeBytes: '2048',
         pinnedAt: new Date(),
       }));
-      mockPinnedCidRepo.find.mockResolvedValue(pinnedCids);
+      mockPinnedCidRepo.count.mockResolvedValue(pinnedCids.length);
 
       mockMigrationRepo.create.mockReturnValue({ ...mockMigrationEntity, totalCids: 3 });
       mockMigrationRepo.save.mockResolvedValue({ ...mockMigrationEntity, totalCids: 3 });
@@ -143,7 +143,7 @@ describe('MigrationService', () => {
 
       await service.startMigration(testUserId, testDto);
 
-      expect(mockPinnedCidRepo.find).toHaveBeenCalledWith({
+      expect(mockPinnedCidRepo.count).toHaveBeenCalledWith({
         where: { userId: testUserId },
       });
       expect(mockMigrationRepo.create).toHaveBeenCalledWith(
@@ -153,7 +153,7 @@ describe('MigrationService', () => {
 
     it('should add BullMQ job with migration ID', async () => {
       mockMigrationRepo.findOne.mockResolvedValue(null);
-      mockPinnedCidRepo.find.mockResolvedValue([]);
+      mockPinnedCidRepo.count.mockResolvedValue(0);
       mockMigrationRepo.create.mockReturnValue({ ...mockMigrationEntity, totalCids: 0 });
       mockMigrationRepo.save.mockResolvedValue(mockMigrationEntity);
       mockQueue.add.mockResolvedValue({ id: 'job-1' });
