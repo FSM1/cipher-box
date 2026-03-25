@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-25T01:39:57.697Z'
+last_updated: '2026-03-25T01:44:05.439Z'
 progress:
   total_phases: 8
   completed_phases: 6
   total_plans: 31
-  completed_plans: 29
+  completed_plans: 30
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 22 (performance-baselines-completion) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3 (COMPLETE)
 
 ## Performance Metrics
 
@@ -61,6 +61,7 @@ Plan: 2 of 3
 | 23    | 06   | 23min    | 2     | 7     |
 | 23    | 08   | 20min    | 2     | 7     |
 | 22    | 02   | 4min     | 2     | 2     |
+| 22    | 01   | 8min     | 2     | 7     |
 
 ## Accumulated Context
 
@@ -111,6 +112,7 @@ Recent for v1.1:
 - Desktop api/ and crypto/ directories fully removed; all imports use workspace crates directly
 - CI parity gate uses needs.changes.outputs.src (not nonexistent packages) for trigger condition
 - Desktop-e2e binary paths updated to target/debug/ to match workspace cargo build output
+- perf.ts PERF_ENABLED evaluated once at module load (zero overhead in production); **CIPHERBOX_PERF** global for opt-in production debugging
 
 ### Roadmap Evolution
 
@@ -136,4 +138,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 23-08 (Windows WinFsp extraction gap closure)
+Last updated: 2026-03-25 after completing 22-01 (SDK performance instrumentation)

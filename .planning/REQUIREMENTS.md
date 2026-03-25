@@ -39,7 +39,7 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [x] **PERF-02**: API endpoint p50/p95/p99 baselines defined per critical route
 - [x] **PERF-03**: Kubo Prometheus endpoint scraped for node health metrics (peers, bandwidth, datastore)
 - [x] **PERF-04**: TEE republish batch duration histogram added
-- [ ] **PERF-05**: Client-side timing instrumentation for encrypt/decrypt, upload/download, IPNS operations
+- [x] **PERF-05**: Client-side timing instrumentation for encrypt/decrypt, upload/download, IPNS operations
 - [x] **PERF-06**: End-to-end user journey timing captured (login-to-vault, upload-to-visible, share-to-accessible)
 - [ ] **PERF-07**: k6 load testing scripts simulating concurrent users (upload, download, publish, resolve)
 - [ ] **PERF-08**: Capacity thresholds documented with scaling recommendations
@@ -131,7 +131,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PERF-02     | Phase 18   | Complete |
 | PERF-03     | Phase 18   | Complete |
 | PERF-04     | Phase 18   | Complete |
-| PERF-05     | Phase 22   | Pending  |
+| PERF-05     | Phase 22   | Complete |
 | PERF-06     | Phase 22   | Complete |
 | PERF-07     | Phase 22   | Pending  |
 | PERF-08     | Phase 22   | Pending  |
