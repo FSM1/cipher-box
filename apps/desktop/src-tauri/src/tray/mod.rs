@@ -97,6 +97,10 @@ fn build_menu(
         .build(app)
         .map_err(|e| format!("Failed to build logout item: {}", e))?;
 
+    let check_updates_item = MenuItemBuilder::with_id("check_updates", "Check for Updates...")
+        .build(app)
+        .map_err(|e| format!("Failed to build check updates item: {}", e))?;
+
     let quit_item = MenuItemBuilder::with_id("quit", "Quit CipherBox")
         .build(app)
         .map_err(|e| format!("Failed to build quit item: {}", e))?;
@@ -104,6 +108,8 @@ fn build_menu(
     let sep1 = PredefinedMenuItem::separator(app)
         .map_err(|e| format!("Failed to build separator: {}", e))?;
     let sep2 = PredefinedMenuItem::separator(app)
+        .map_err(|e| format!("Failed to build separator: {}", e))?;
+    let sep3 = PredefinedMenuItem::separator(app)
         .map_err(|e| format!("Failed to build separator: {}", e))?;
 
     MenuBuilder::new(app)
@@ -114,6 +120,8 @@ fn build_menu(
         .item(&login_item)
         .item(&logout_item)
         .item(&sep2)
+        .item(&check_updates_item)
+        .item(&sep3)
         .item(&quit_item)
         .build()
         .map_err(|e| format!("Failed to build menu: {}", e))
@@ -268,6 +276,9 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 
                 log::info!("Logout complete (via tray menu)");
             });
+        }
+        "check_updates" => {
+            crate::updater::manual_check(app);
         }
         "quit" => {
             // Unmount filesystem if mounted, then exit
