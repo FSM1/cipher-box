@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "76b95ac159b3",
+  "session_id": "2daa52f9-57df-479d-8a51-252dc4af6770",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T00:50:35.140166Z",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/22-performance-baselines-completion/22-CONTEXT.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d96860229a86",
+  "token_usage": {
+    "input_tokens": 23,
+    "cache_creation_tokens": 83008,
+    "cache_read_tokens": 1522287,
+    "output_tokens": 8058,
+    "api_call_count": 20
+  },
+  "summary": {
+    "intent": "Run the discuss-phase workflow for Phase 22 (Performance Baselines Completion) to capture implementation decisions about client-side timing, E2E journey timing, load testing approach, and capacity documentation.",
+    "outcome": "CONTEXT.md created at `.planning/phases/22-performance-baselines-completion/22-CONTEXT.md` with decisions across all four gray areas: SDK-level Performance API timing (dev/debug only), Playwright E2E for journey timing, enhancing the existing vitest/SDK harness with CI pass/fail thresholds, and a full capacity model in `docs/CAPACITY.md`.",
+    "learnings": {
+      "repo": [
+        "Server-side Prometheus histograms are already in place from Phase 18 (IPFS/IPNS duration, Kubo health, TEE batch timing) with exponential bucket strategy",
+        "A full SDK-based load test harness exists at `tests/load/` with vitest, MetricsCollector, client-pool, and 5 scenarios (upload-throughput, mixed-workload, sustained-load, spike-test, ipns-publish-storm)",
+        "Four baseline documents already exist in `.planning/baselines/` from Phases 18, 19, and 19.2",
+        "No client-side timing instrumentation exists yet — zero `performance.mark/measure` calls in web app or SDK packages",
+        "CI load test workflow exists at `.github/workflows/load-test.yml` but lacks pass/fail thresholds"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/metrics/metrics.service.ts",
+          "finding": "MetricsService exposes 5 Prometheus histograms and HttpMetricsInterceptor with a /metrics endpoint"
+        },
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "MetricsCollector utility for aggregating load test results"
+        },
+        {
+          "path": "tests/load/src/scenarios/mixed-workload.test.ts",
+          "finding": "Example of SDK-based load test scenario using vitest harness"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "Client pool abstraction for concurrent load test connections"
+        },
+        {
+          "path": ".planning/baselines/19.2-post-optimization-baselines.md",
+          "finding": "Extensive baselines documented: upload throughput, three-point comparison, staging CI results, Prometheus histograms"
+        }
+      ],
+      "workflow": [
+        "Phase 18 context explicitly called out that the synthetic baseline script should be reusable in Phase 22 for 'after' comparison — prior CONTEXT.md files carry forward actionable notes for future phases",
+        "The discuss-phase workflow skips gray areas already decided in prior phases, surfacing only genuinely open decisions"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Client-side SDK timing via Performance API still needs to be implemented (dev/debug only)",
+      "Playwright E2E journey timing tests need to be written and results added to baselines doc",
+      "Existing vitest/SDK load test harness needs CI pass/fail thresholds added",
+      "`docs/CAPACITY.md` needs to be created with full capacity model, projections, formulas, and growth curves"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-25T00:50:17.347793Z",
+    "agent_lines": 0,
+    "human_added": 143,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 143,
+    "agent_percentage": 0
+  }
+}
