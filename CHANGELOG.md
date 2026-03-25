@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.29.0...cipher-box-v0.29.1) (2026-03-25)
+
+
+### Bug Fixes
+
+* **ci:** exclude test files from TEE worker Docker build ([#358](https://github.com/FSM1/cipher-box/issues/358)) ([3535716](https://github.com/FSM1/cipher-box/commit/353571678609049fb39a254c1829217c564a134e))
+
 ## [0.29.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.28.0...cipher-box-v0.29.0) (2026-03-25)
 
 
