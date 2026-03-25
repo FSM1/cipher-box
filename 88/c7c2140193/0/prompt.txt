@@ -1,0 +1,1 @@
+TEE worker build is failing in CI after the recent changes to it. https://github.com/FSM1/cipher-box/actions/runs/23565010470/job/68615818803

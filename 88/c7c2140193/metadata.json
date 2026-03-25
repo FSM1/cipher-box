@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "88c7c2140193",
+  "strategy": "manual-commit",
+  "branch": "fix/ci-tee-worker-build",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tee-worker/tsconfig.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/88/c7c2140193/0/metadata.json",
+      "transcript": "/88/c7c2140193/0/full.jsonl",
+      "content_hash": "/88/c7c2140193/0/content_hash.txt",
+      "prompt": "/88/c7c2140193/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 35957,
+    "cache_read_tokens": 381348,
+    "output_tokens": 2176,
+    "api_call_count": 10
+  }
+}
