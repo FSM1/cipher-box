@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ba944ef18fb0",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T01:36:43.906981Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "a59d33362dc1",
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 35635,
+    "cache_read_tokens": 431424,
+    "output_tokens": 3510,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute phase 22 (performance-baselines-completion) which includes SDK performance instrumentation, E2E journey timing tests, and load test thresholds/capacity modeling.",
+    "outcome": "The 5 phase 22 planning commits were moved from main to feat/phase-22-performance-baselines-completion, and execution of all 3 plans (22-01, 22-02, 22-03) was initiated in parallel via Wave 1 subagents. The transcript ends with agents spawned but not yet completed.",
+    "learnings": {
+      "repo": [
+        "Phase 22 is named 'performance-baselines-completion' — slug derived from directory name",
+        "Phase 22 has 3 plans in a single wave (all parallelizable): SDK perf instrumentation, E2E journey timing, load test thresholds",
+        "GSD branching strategy for this phase is 'phase', producing branch name 'phase-22-performance-baselines-completion'",
+        "Planning commits (research + plan files) were accidentally committed directly to main before execution began"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD commits during planning/research phase go directly to main by default — use feat/phase-{N}-{slug} branches to keep planning artifacts off main",
+        "When planning commits land on main before being pushed, they can be rescued via: create feature branch at current HEAD, then git reset --hard origin/main",
+        "The execute-phase workflow checks branching_strategy from init JSON and derives branch_name automatically — if the branch already exists, checkout to it rather than creating a new one",
+        "All 3 phase 22 plans were wave-1 (no cross-plan dependencies), enabling full parallel execution"
+      ]
+    },
+    "friction": [
+      "Phase 22 planning/research commits were accidentally made directly to main instead of a feature branch — required manual recovery before execution could start cleanly"
+    ],
+    "open_items": [
+      "Wave 1 execution (plans 22-01, 22-02, 22-03) was still in-flight when transcript ends — verification step not yet reached",
+      "Commits on feat/phase-22-performance-baselines-completion have not been pushed to origin yet"
+    ]
+  }
+}
