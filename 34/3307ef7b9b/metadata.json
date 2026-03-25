@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "343307ef7b9b",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/34/3307ef7b9b/0/metadata.json",
+      "transcript": "/34/3307ef7b9b/0/full.jsonl",
+      "content_hash": "/34/3307ef7b9b/0/content_hash.txt",
+      "prompt": "/34/3307ef7b9b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 2449,
+    "cache_read_tokens": 540860,
+    "output_tokens": 770,
+    "api_call_count": 6
+  }
+}
