@@ -33,6 +33,11 @@ import type {
 // Re-export model type under original alias for backward compatibility
 export type AuthMethod = AuthMethodResponseDto;
 
+// Shared in-flight refresh promise — prevents concurrent callers from
+// each issuing their own POST /auth/refresh (which rotates the token,
+// causing later concurrent calls to fail with 401).
+let refreshPromise: Promise<TokenResponseDto> | null = null;
+
 export const authApi = {
   /**
    * Authenticate user with Web3Auth ID token.
@@ -49,10 +54,20 @@ export const authApi = {
    * Refresh access token using HTTP-only refresh token cookie.
    * The refresh token is automatically sent via withCredentials: true.
    * New refresh token is set in HTTP-only cookie by the backend.
+   *
+   * Deduplicated: concurrent callers share a single in-flight request.
+   * On page reload, multiple React effects and Axios interceptors can
+   * call refresh simultaneously. Without deduplication, the first response
+   * rotates the refresh token, causing later concurrent calls to fail with 401.
    */
-  refresh: (): Promise<TokenResponseDto> =>
-    // DesktopRefreshDto.refreshToken is optional -- web uses HTTP-only cookie
-    authControllerRefresh({}),
+  refresh: (): Promise<TokenResponseDto> => {
+    if (!refreshPromise) {
+      refreshPromise = authControllerRefresh({}).finally(() => {
+        refreshPromise = null;
+      });
+    }
+    return refreshPromise;
+  },
 
   /**
    * Logout and invalidate refresh token.

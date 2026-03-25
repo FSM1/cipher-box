@@ -54,11 +54,15 @@ export {
   type RecycleBinMetadata,
 } from './bin';
 
-// Vault init
+// Vault init + key blob v2 format
 export {
   initializeVault,
   encryptVaultKeys,
   decryptVaultKeys,
+  serializeVaultBlobV2,
+  deserializeVaultBlobV2,
+  detectBlobVersion,
+  BLOB_V2_VERSION,
   type VaultInit,
   type EncryptedVaultKeys,
 } from './vault';

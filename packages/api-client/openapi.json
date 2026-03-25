@@ -2366,28 +2366,13 @@
             "description": "User secp256k1 public key (uncompressed, 65 bytes, hex-encoded)",
             "example": "04a1b2c3d4e5f6...(130 hex characters for 65 bytes with 0x04 prefix)"
           },
-          "encryptedRootFolderKey": {
-            "type": "string",
-            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded)",
-            "example": "a1b2c3d4e5f6..."
-          },
-          "encryptedRootIpnsPrivateKey": {
-            "type": "string",
-            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
-            "example": "a1b2c3d4e5f6..."
-          },
           "rootIpnsName": {
             "type": "string",
             "description": "IPNS name (libp2p-key multihash, base58btc or base36)",
             "example": "k51qzi5uqu5dg..."
           }
         },
-        "required": [
-          "ownerPublicKey",
-          "encryptedRootFolderKey",
-          "encryptedRootIpnsPrivateKey",
-          "rootIpnsName"
-        ]
+        "required": ["ownerPublicKey", "rootIpnsName"]
       },
       "TeeKeysDto": {
         "type": "object",
@@ -2430,16 +2415,6 @@
             "description": "User secp256k1 public key (uncompressed, 65 bytes, hex-encoded)",
             "example": "04a1b2c3d4e5f6...(130 hex characters for 65 bytes with 0x04 prefix)"
           },
-          "encryptedRootFolderKey": {
-            "type": "string",
-            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded)",
-            "example": "a1b2c3d4e5f6..."
-          },
-          "encryptedRootIpnsPrivateKey": {
-            "type": "string",
-            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
-            "example": "a1b2c3d4e5f6..."
-          },
           "rootIpnsName": {
             "type": "string",
             "description": "IPNS name for root folder",
@@ -2468,15 +2443,7 @@
             ]
           }
         },
-        "required": [
-          "id",
-          "ownerPublicKey",
-          "encryptedRootFolderKey",
-          "encryptedRootIpnsPrivateKey",
-          "rootIpnsName",
-          "createdAt",
-          "initializedAt"
-        ]
+        "required": ["id", "ownerPublicKey", "rootIpnsName", "createdAt", "initializedAt"]
       },
       "VaultConfigResponseDto": {
         "type": "object",
@@ -2512,16 +2479,6 @@
             "description": "IPNS name for the root folder (libp2p-key multihash)",
             "example": "k51qzi5uqu5dg..."
           },
-          "encryptedRootFolderKey": {
-            "type": "string",
-            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded)",
-            "example": "a1b2c3d4e5f6..."
-          },
-          "encryptedRootIpnsPrivateKey": {
-            "type": "string",
-            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
-            "example": "a1b2c3d4e5f6..."
-          },
           "derivationMethod": {
             "type": "string",
             "description": "Key derivation method used. Always \"web3auth\" for Core Kit users. Null if user record not found.",
@@ -2529,14 +2486,7 @@
             "nullable": true
           }
         },
-        "required": [
-          "format",
-          "version",
-          "exportedAt",
-          "rootIpnsName",
-          "encryptedRootFolderKey",
-          "encryptedRootIpnsPrivateKey"
-        ]
+        "required": ["format", "version", "exportedAt", "rootIpnsName"]
       },
       "QuotaResponseDto": {
         "type": "object",

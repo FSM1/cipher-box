@@ -41,6 +41,9 @@ export async function fetchAndDecryptMetadata(
   ctx: SdkContext
 ): Promise<FolderMetadata> {
   const encryptedBytes = await fetchFromIpfs(ctx, cid);
+
+  // All folder metadata (including root) is v1 JSON {iv, data}.
+  // v2 blob format is only for the vault key blob (separate IPNS name).
   const encryptedJson = new TextDecoder().decode(encryptedBytes);
   const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
   return decryptFolderMetadata(encrypted, folderKey);

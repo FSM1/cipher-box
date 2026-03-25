@@ -5,6 +5,17 @@ fn main() {
         "cargo:rustc-check-cfg=cfg(fuser_mount_impl, values(\"pure-rust\", \"libfuse2\", \"libfuse3\"))"
     );
 
+    // fuser is Unix-only. On Windows the crate is resolved by [patch.crates-io]
+    // but compiles as an empty crate (lib.rs gates all content behind #[cfg(unix)]).
+    #[cfg(not(unix))]
+    return;
+
+    #[cfg(unix)]
+    unix_build();
+}
+
+#[cfg(unix)]
+fn unix_build() {
     #[cfg(all(not(feature = "libfuse"), not(target_os = "linux")))]
     unimplemented!("Building without libfuse is only supported on Linux");
 

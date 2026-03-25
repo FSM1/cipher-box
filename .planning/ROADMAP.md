@@ -22,9 +22,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 18: Performance Instrumentation** - Server-side Prometheus histograms and Kubo metrics scraping to establish baselines before any architectural changes (completed 2026-03-07)
 - [x] **Phase 19: IPNS Resolution Improvement** - Replace delegated-ipfs.dev with self-hosted Someguy sidecar for reliable IPNS routing, add latency histograms for resolve/publish operations (completed 2026-03-07)
 - [x] **Phase 19.2: IPFS Upload Performance Optimization** - Optimize Kubo pinning path (concurrent pins, worker tuning, pin batching) to reduce upload latency (INSERTED) (completed 2026-03-23)
-- [ ] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material
+- [x] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material (gap closure in progress) (completed 2026-03-24)
 - [ ] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing
 - [ ] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, k6 load testing, and capacity documentation
+- [x] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (completed 2026-03-24)
 
 ## Phase Details
 
@@ -110,11 +111,21 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
 1. New users get vault blob v2 format on first login, with rootFolderKey ECIES-wrapped in the blob header and readable without any database round-trip
-2. Existing users are lazily migrated to vault blob v2 on their next folder metadata publish, with the DB copy retained as a permanent fallback
+2. All vaults use v2 format — DB crypto columns (encryptedRootFolderKey, encryptedRootIpnsPrivateKey, migratedAt) dropped entirely
 3. The standalone recovery tool parses vault blob v2 and extracts rootFolderKey without needing the CipherBox API or database
 4. The desktop app (Rust) parses vault blob v2 and uses the embedded rootFolderKey for FUSE mount initialization
-5. The encryptedRootIpnsPrivateKey column is deprecated from the vaults table (HKDF derivation is the canonical path)
-   **Plans**: TBD
+5. The encryptedRootIpnsPrivateKey column is dropped from the vaults table (HKDF derivation is the canonical path)
+
+**Plans:** 6/6 plans complete
+
+Plans:
+
+- [x] 20-01-PLAN.md -- Vault blob v2 format module in @cipherbox/core with TDD tests and cross-platform test vectors
+- [x] 20-02-PLAN.md -- API: DB migration, nullable columns, optional IPNS key on init, POST /vault/migrate endpoint
+- [x] 20-03-PLAN.md -- Desktop Rust: v2 blob module, vault fetch for migrated users, root folder v2 publish
+- [x] 20-04-PLAN.md -- Web client: v2 blob login read, lazy migration trigger, recovery tool v2 parsing
+- [ ] 20-05-PLAN.md -- Gap closure: API cleanup -- drop crypto columns, remove migrate endpoint, simplify DTOs
+- [ ] 20-06-PLAN.md -- Gap closure: Client cleanup -- remove dead migration paths, add v2 blob publish on new user init
 
 ### Phase 21: BYO-IPFS Node Support
 
@@ -153,6 +164,32 @@ Plans:
 4. Capacity thresholds are documented with scaling recommendations (max concurrent users, storage growth projections, IPNS publish throughput limits)
    **Plans**: TBD
 
+### Phase 23: Rust SDK Extraction
+
+**Goal:** Extract five Rust crates (`cipherbox-crypto`, `cipherbox-core`, `cipherbox-api-client`, `cipherbox-fuse`, `cipherbox-sdk`) mirroring the TypeScript SDK package hierarchy. Replace duplicated crypto/IPNS/metadata logic in desktop FUSE code with crate imports. Enable unit testing at the same granularity as TypeScript. Desktop app becomes a thin Tauri shell.
+**Requirements**: RSDK-01, RSDK-02, RSDK-03, RSDK-04, RSDK-05, RSDK-06, RSDK-07, RSDK-08, RSDK-09, RSDK-10
+**Depends on:** None (can run independently alongside other phases)
+**Success Criteria** (what must be TRUE):
+
+1. Five Rust crates compile independently under a Cargo workspace with centralized dependency versions
+2. Desktop app is a thin Tauri shell (~1,500 LOC) with all logic delegated to workspace crates
+3. Cross-language test vectors in `tests/vectors/` produce identical output in both Rust and TypeScript
+4. CI runs workspace-level builds on macOS, Linux, and Windows with cross-language parity gate
+5. No duplicated crypto, domain, or API logic remains in the desktop app
+
+**Plans:** 8/8 plans complete
+
+Plans:
+
+- [x] 23-01-PLAN.md -- Cargo workspace scaffold + cipherbox-crypto crate extraction
+- [x] 23-02-PLAN.md -- cipherbox-core crate extraction (domain types, metadata, IPNS records)
+- [x] 23-03-PLAN.md -- cipherbox-api-client crate + shared test vectors extraction
+- [x] 23-04-PLAN.md -- cipherbox-fuse crate extraction (platform-agnostic + platform modules)
+- [x] 23-05-PLAN.md -- cipherbox-sdk crate extraction (sync, queue, state, registry)
+- [x] 23-06-PLAN.md -- Desktop app thin shell cleanup + full workspace verification
+- [x] 23-07-PLAN.md -- CI workspace builds + Release Please + cross-language parity gate
+- [x] 23-08-PLAN.md -- Gap closure: Move Windows WinFsp operations to crates/fuse/src/platform/windows/
+
 ## Progress
 
 **Execution Order:**
@@ -164,9 +201,10 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete    | 2026-03-07 |
 | 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
 | 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
-| 20. Vault Migration                       | v1.1      | 0/?            | Not started | -          |
-| 21. BYO-IPFS Node Support                 | v1.1      | 0/6            | Not started | -          |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
 
 ---
 

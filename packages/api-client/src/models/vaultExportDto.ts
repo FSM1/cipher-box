@@ -15,10 +15,6 @@ export interface VaultExportDto {
   exportedAt: string;
   /** IPNS name for the root folder (libp2p-key multihash) */
   rootIpnsName: string;
-  /** ECIES-wrapped root folder AES-256 key (hex-encoded) */
-  encryptedRootFolderKey: string;
-  /** ECIES-wrapped Ed25519 IPNS private key (hex-encoded) */
-  encryptedRootIpnsPrivateKey: string;
   /**
    * Key derivation method used. Always "web3auth" for Core Kit users. Null if user record not found.
    * @nullable

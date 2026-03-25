@@ -8,7 +8,7 @@
 
 import { describe, it, expect, afterAll } from 'vitest';
 import { bytesToHex, deriveIpnsName } from '@cipherbox/crypto';
-import { initializeVault, encryptVaultKeys } from '@cipherbox/core';
+import { initializeVault } from '@cipherbox/core';
 import {
   createTestContext,
   deleteTestAccount,
@@ -40,7 +40,6 @@ describe('Vault Lifecycle', () => {
 
   it('should reject duplicate vault init (409)', async () => {
     const vault = await initializeVault(ctx.privateKey);
-    const encrypted = await encryptVaultKeys(vault, ctx.publicKey);
     const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
 
     const res = await testFetch(`${API_URL}/vault/init`, {
@@ -51,8 +50,6 @@ describe('Vault Lifecycle', () => {
       },
       body: JSON.stringify({
         ownerPublicKey: bytesToHex(ctx.publicKey),
-        encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
-        encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
         rootIpnsName,
       }),
     });
@@ -69,8 +66,6 @@ describe('Vault Lifecycle', () => {
     const data = await res.json();
     expect(data.rootIpnsName).toBe(ctx.rootIpnsName);
     expect(data.ownerPublicKey).toBe(bytesToHex(ctx.publicKey));
-    expect(data.encryptedRootFolderKey).toBeTruthy();
-    expect(data.encryptedRootIpnsPrivateKey).toBeTruthy();
   });
 
   it('should GET /vault/export and return export data', async () => {
@@ -81,7 +76,6 @@ describe('Vault Lifecycle', () => {
 
     const data = await res.json();
     expect(data.rootIpnsName).toBe(ctx.rootIpnsName);
-    expect(data.encryptedRootFolderKey).toBeTruthy();
   });
 
   it('should GET /vault/config and return config', async () => {

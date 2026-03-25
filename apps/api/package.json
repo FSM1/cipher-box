@@ -1,6 +1,6 @@
 {
   "name": "@cipherbox/api",
-  "version": "0.26.6",
+  "version": "0.28.0",
   "private": true,
   "scripts": {
     "dev": "nest start --watch",

@@ -1,0 +1,423 @@
+//! IPNS record creation and marshaling.
+//!
+//! Produces IPNS records compatible with the TypeScript `ipns` npm package output.
+//! - CBOR-encoded data field with V2 signature
+//! - Protobuf-encoded IpnsEntry for marshaling
+//!
+//! IPNS name derivation has been extracted to the `cipherbox-crypto` crate
+//! (see `cipherbox_crypto::ipns_name::derive_ipns_name`).
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use ciborium::Value as CborValue;
+use thiserror::Error;
+
+use cipherbox_crypto::ed25519::{get_public_key, sign_ed25519};
+use cipherbox_crypto::ipns_name::encode_libp2p_public_key;
+
+// Re-export derive_ipns_name for backward compatibility (tests and other code
+// that reference `crate::crypto::ipns::derive_ipns_name`).
+pub use cipherbox_crypto::ipns_name::derive_ipns_name;
+
+/// IPNS signature prefix per IPFS spec: "ipns-signature:".
+const IPNS_SIGNATURE_PREFIX: &[u8] = b"ipns-signature:";
+
+/// Default IPNS record TTL: 300 seconds (5 minutes) in nanoseconds.
+/// This matches the ipns npm package default.
+const DEFAULT_TTL_NS: u64 = 300_000_000_000;
+
+#[derive(Debug, Error)]
+pub enum IpnsError {
+    #[error("IPNS record creation failed")]
+    CreationFailed,
+    #[error("IPNS record marshaling failed")]
+    MarshalingFailed,
+    #[error("Invalid private key")]
+    InvalidPrivateKey,
+    #[error("Invalid public key")]
+    InvalidPublicKey,
+    #[error("CBOR encoding failed")]
+    CborEncodingFailed,
+    #[error("Signing failed")]
+    SigningFailed,
+}
+
+/// IPNS record structure matching the TypeScript IPNSRecord type.
+#[derive(Debug, Clone)]
+pub struct IpnsRecord {
+    /// IPFS path value (e.g., "/ipfs/bafy...").
+    pub value: String,
+    /// RFC3339 validity timestamp with nanosecond precision.
+    pub validity: String,
+    /// Validity type (0 = EOL).
+    pub validity_type: u32,
+    /// Monotonically increasing sequence number.
+    pub sequence: u64,
+    /// TTL in nanoseconds.
+    pub ttl: u64,
+    /// 64-byte Ed25519 V1 signature.
+    pub signature_v1: Vec<u8>,
+    /// 64-byte Ed25519 V2 signature.
+    pub signature_v2: Vec<u8>,
+    /// CBOR-encoded record data.
+    pub data: Vec<u8>,
+    /// 32-byte Ed25519 public key.
+    pub public_key: Vec<u8>,
+}
+
+/// Build the CBOR-encoded data field for an IPNS record.
+///
+/// The field order matches the ipns npm package: TTL, Value, Sequence, Validity, ValidityType.
+/// Keys are strings, values match the types used by the ipns package.
+fn build_cbor_data(
+    value: &str,
+    validity: &str,
+    sequence: u64,
+    ttl: u64,
+) -> Result<Vec<u8>, IpnsError> {
+    let cbor_map = CborValue::Map(vec![
+        (
+            CborValue::Text("TTL".to_string()),
+            CborValue::Integer(ttl.into()),
+        ),
+        (
+            CborValue::Text("Value".to_string()),
+            CborValue::Bytes(value.as_bytes().to_vec()),
+        ),
+        (
+            CborValue::Text("Sequence".to_string()),
+            CborValue::Integer(sequence.into()),
+        ),
+        (
+            CborValue::Text("Validity".to_string()),
+            CborValue::Bytes(validity.as_bytes().to_vec()),
+        ),
+        (
+            CborValue::Text("ValidityType".to_string()),
+            CborValue::Integer(0.into()),
+        ),
+    ]);
+
+    let mut buf = Vec::new();
+    ciborium::into_writer(&cbor_map, &mut buf).map_err(|_| IpnsError::CborEncodingFailed)?;
+    Ok(buf)
+}
+
+/// Format a timestamp as RFC3339 with nanosecond precision matching the ipns npm package.
+///
+/// The ipns package uses format: "2026-02-08T23:31:12.138000000Z"
+fn format_validity_timestamp(validity_time: SystemTime) -> String {
+    let duration = validity_time
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO);
+    let secs = duration.as_secs();
+    let nanos = duration.subsec_nanos();
+
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    let (year, month, day) = civil_from_days(days as i64);
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}Z",
+        year, month, day, hours, minutes, seconds, nanos
+    )
+}
+
+/// Convert days since Unix epoch to (year, month, day).
+/// Algorithm from Howard Hinnant's civil_from_days.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m as u32, d as u32)
+}
+
+/// Compute the V1 signature.
+///
+/// Per IPNS spec, V1 signature is over: value_bytes + validity_bytes + varint(validityType)
+fn compute_v1_signature(
+    ed25519_private_key: &[u8; 32],
+    value: &str,
+    validity: &str,
+) -> Result<Vec<u8>, IpnsError> {
+    let mut data_to_sign = Vec::new();
+    data_to_sign.extend_from_slice(value.as_bytes());
+    data_to_sign.extend_from_slice(validity.as_bytes());
+    data_to_sign.push(0x00);
+
+    sign_ed25519(&data_to_sign, ed25519_private_key).map_err(|_| IpnsError::SigningFailed)
+}
+
+/// Compute the V2 signature.
+///
+/// Per IPNS spec, V2 signature is over: "ipns-signature:" + cbor_data
+fn compute_v2_signature(
+    ed25519_private_key: &[u8; 32],
+    cbor_data: &[u8],
+) -> Result<Vec<u8>, IpnsError> {
+    let mut data_to_sign = Vec::with_capacity(IPNS_SIGNATURE_PREFIX.len() + cbor_data.len());
+    data_to_sign.extend_from_slice(IPNS_SIGNATURE_PREFIX);
+    data_to_sign.extend_from_slice(cbor_data);
+
+    sign_ed25519(&data_to_sign, ed25519_private_key).map_err(|_| IpnsError::SigningFailed)
+}
+
+/// Create an IPNS record signed with the given Ed25519 private key.
+///
+/// Matches the TypeScript `createIpnsRecord` with `v1Compatible: true`.
+pub fn create_ipns_record(
+    ed25519_private_key: &[u8; 32],
+    value: &str,
+    sequence_number: u64,
+    lifetime_ms: u64,
+) -> Result<IpnsRecord, IpnsError> {
+    let public_key = get_public_key(ed25519_private_key).map_err(|_| IpnsError::InvalidPrivateKey)?;
+
+    let now = SystemTime::now();
+    let lifetime_duration = Duration::from_millis(lifetime_ms);
+    let validity_time = now + lifetime_duration;
+    let validity = format_validity_timestamp(validity_time);
+
+    let ttl = DEFAULT_TTL_NS;
+
+    let cbor_data = build_cbor_data(value, &validity, sequence_number, ttl)?;
+
+    let signature_v2 = compute_v2_signature(ed25519_private_key, &cbor_data)?;
+
+    let signature_v1 = compute_v1_signature(ed25519_private_key, value, &validity)?;
+
+    Ok(IpnsRecord {
+        value: value.to_string(),
+        validity,
+        validity_type: 0,
+        sequence: sequence_number,
+        ttl,
+        signature_v1,
+        signature_v2,
+        data: cbor_data,
+        public_key,
+    })
+}
+
+/// Marshal an IPNS record to protobuf bytes.
+///
+/// IpnsEntry protobuf fields:
+/// - field 1 (bytes): Value
+/// - field 2 (bytes): signatureV1
+/// - field 3 (enum): ValidityType (0 = EOL)
+/// - field 4 (bytes): Validity (RFC3339 as bytes)
+/// - field 5 (uint64): Sequence
+/// - field 6 (uint64): TTL (nanoseconds)
+/// - field 7 (bytes): pubKey (libp2p protobuf-wrapped Ed25519 public key)
+/// - field 8 (bytes): signatureV2
+/// - field 9 (bytes): data (CBOR)
+pub fn marshal_ipns_record(record: &IpnsRecord) -> Result<Vec<u8>, IpnsError> {
+    let mut buf = Vec::new();
+
+    encode_proto_bytes(&mut buf, 1, record.value.as_bytes());
+    encode_proto_bytes(&mut buf, 2, &record.signature_v1);
+    encode_proto_varint(&mut buf, 3, record.validity_type as u64);
+    encode_proto_bytes(&mut buf, 4, record.validity.as_bytes());
+    encode_proto_varint(&mut buf, 5, record.sequence);
+    encode_proto_varint(&mut buf, 6, record.ttl);
+
+    let libp2p_pub_key = encode_libp2p_public_key(&record.public_key)
+        .map_err(|_| IpnsError::InvalidPublicKey)?;
+    encode_proto_bytes(&mut buf, 7, &libp2p_pub_key);
+
+    encode_proto_bytes(&mut buf, 8, &record.signature_v2);
+    encode_proto_bytes(&mut buf, 9, &record.data);
+
+    Ok(buf)
+}
+
+/// Encode a protobuf length-delimited (bytes) field.
+fn encode_proto_bytes(buf: &mut Vec<u8>, field_number: u32, data: &[u8]) {
+    encode_varint(buf, ((field_number as u64) << 3) | 2);
+    encode_varint(buf, data.len() as u64);
+    buf.extend_from_slice(data);
+}
+
+/// Encode a protobuf varint field.
+fn encode_proto_varint(buf: &mut Vec<u8>, field_number: u32, value: u64) {
+    encode_varint(buf, ((field_number as u64) << 3) | 0);
+    encode_varint(buf, value);
+}
+
+/// Encode a varint (protobuf LEB128).
+fn encode_varint(buf: &mut Vec<u8>, mut value: u64) {
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value == 0 {
+            buf.push(byte);
+            break;
+        } else {
+            buf.push(byte | 0x80);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cipherbox_crypto::ed25519::{generate_ed25519_keypair, verify_ed25519};
+
+    #[test]
+    fn create_ipns_record_produces_valid_fields() {
+        let (_pub_key, priv_key) = generate_ed25519_keypair();
+        let priv_key_arr: [u8; 32] = priv_key[..32].try_into().unwrap();
+
+        let record = create_ipns_record(
+            &priv_key_arr,
+            "/ipfs/bafytest123",
+            42,
+            3600000, // 1 hour
+        )
+        .unwrap();
+
+        assert_eq!(record.value, "/ipfs/bafytest123");
+        assert_eq!(record.sequence, 42);
+        assert_eq!(record.validity_type, 0);
+        assert_eq!(record.ttl, 300_000_000_000);
+        assert_eq!(record.signature_v1.len(), 64);
+        assert_eq!(record.signature_v2.len(), 64);
+        assert_eq!(record.public_key.len(), 32);
+        assert!(!record.data.is_empty());
+        // Validity should be RFC3339 with nanosecond precision ending in Z
+        assert!(record.validity.ends_with('Z'));
+        assert!(record.validity.contains('T'));
+    }
+
+    #[test]
+    fn create_ipns_record_v2_signature_verifiable() {
+        let (pub_key, priv_key) = generate_ed25519_keypair();
+        let priv_key_arr: [u8; 32] = priv_key[..32].try_into().unwrap();
+
+        let record = create_ipns_record(&priv_key_arr, "/ipfs/bafytest", 0, 60000).unwrap();
+
+        // V2 signature is over "ipns-signature:" + cbor_data
+        let mut signed_data = Vec::new();
+        signed_data.extend_from_slice(b"ipns-signature:");
+        signed_data.extend_from_slice(&record.data);
+
+        assert!(verify_ed25519(&signed_data, &record.signature_v2, &pub_key));
+    }
+
+    #[test]
+    fn format_validity_timestamp_epoch_zero() {
+        let ts = format_validity_timestamp(UNIX_EPOCH);
+        assert_eq!(ts, "1970-01-01T00:00:00.000000000Z");
+    }
+
+    #[test]
+    fn format_validity_timestamp_known_date() {
+        // 2024-01-01T00:00:00Z = 1704067200 seconds since epoch
+        let ts = format_validity_timestamp(UNIX_EPOCH + Duration::from_secs(1704067200));
+        assert_eq!(ts, "2024-01-01T00:00:00.000000000Z");
+    }
+
+    #[test]
+    fn format_validity_timestamp_with_nanos() {
+        let ts = format_validity_timestamp(
+            UNIX_EPOCH + Duration::from_secs(1704067200) + Duration::from_nanos(138000000),
+        );
+        assert_eq!(ts, "2024-01-01T00:00:00.138000000Z");
+    }
+
+    #[test]
+    fn civil_from_days_epoch() {
+        // Day 0 = 1970-01-01
+        let (y, m, d) = civil_from_days(0);
+        assert_eq!((y, m, d), (1970, 1, 1));
+    }
+
+    #[test]
+    fn civil_from_days_one_year() {
+        // Day 365 = 1971-01-01 (1970 is not a leap year)
+        let (y, m, d) = civil_from_days(365);
+        assert_eq!((y, m, d), (1971, 1, 1));
+    }
+
+    #[test]
+    fn civil_from_days_leap_year() {
+        // 1972 is a leap year. Days from epoch to 1972-02-29:
+        // 1970: 365 days, 1971: 365 days = 730 days to 1972-01-01
+        // Jan 31 + Feb 28 = 59 days to 1972-02-29 => day 730 + 59 = 789
+        let (y, m, d) = civil_from_days(789);
+        assert_eq!((y, m, d), (1972, 2, 29));
+    }
+
+    #[test]
+    fn civil_from_days_known_date_2024() {
+        // 2024-01-01: 1704067200 / 86400 = 19723 days from epoch
+        let (y, m, d) = civil_from_days(19723);
+        assert_eq!((y, m, d), (2024, 1, 1));
+    }
+
+    #[test]
+    fn build_cbor_data_produces_valid_cbor() {
+        let data = build_cbor_data("/ipfs/bafytest", "2024-01-01T00:00:00.000000000Z", 5, 300_000_000_000).unwrap();
+        // Should be valid CBOR -- attempt to parse it back
+        let value: ciborium::Value = ciborium::from_reader(&data[..]).unwrap();
+        match value {
+            CborValue::Map(entries) => {
+                assert_eq!(entries.len(), 5);
+                // Check keys present
+                let keys: Vec<String> = entries
+                    .iter()
+                    .filter_map(|(k, _)| {
+                        if let CborValue::Text(s) = k {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert!(keys.contains(&"TTL".to_string()));
+                assert!(keys.contains(&"Value".to_string()));
+                assert!(keys.contains(&"Sequence".to_string()));
+                assert!(keys.contains(&"Validity".to_string()));
+                assert!(keys.contains(&"ValidityType".to_string()));
+            }
+            _ => panic!("Expected CBOR map"),
+        }
+    }
+
+    #[test]
+    fn different_sequences_produce_different_output() {
+        let (_pub_key, priv_key) = generate_ed25519_keypair();
+        let priv_key_arr: [u8; 32] = priv_key[..32].try_into().unwrap();
+
+        let record0 = create_ipns_record(&priv_key_arr, "/ipfs/bafytest", 0, 60000).unwrap();
+        let record100 = create_ipns_record(&priv_key_arr, "/ipfs/bafytest", 100, 60000).unwrap();
+
+        assert_ne!(record0.data, record100.data);
+        assert_ne!(record0.signature_v2, record100.signature_v2);
+        assert_eq!(record0.sequence, 0);
+        assert_eq!(record100.sequence, 100);
+    }
+
+    #[test]
+    fn marshal_ipns_record_produces_bytes() {
+        let (_pub_key, priv_key) = generate_ed25519_keypair();
+        let priv_key_arr: [u8; 32] = priv_key[..32].try_into().unwrap();
+
+        let record = create_ipns_record(&priv_key_arr, "/ipfs/bafytest", 1, 60000).unwrap();
+        let marshaled = marshal_ipns_record(&record).unwrap();
+        assert!(!marshaled.is_empty());
+        // Protobuf: first byte should be field 1, wire type 2 (length-delimited) = 0x0A
+        assert_eq!(marshaled[0], 0x0A);
+    }
+}

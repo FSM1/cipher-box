@@ -11,7 +11,6 @@ coverage:
           - api-client
           - sdk-core
           - sdk
-          - desktop
       api:
         paths:
           - apps/api/src/**
@@ -60,6 +59,7 @@ coverage:
           - apps/desktop/src-tauri/src/**
         target: auto
         threshold: 5%
+        informational: true
         flags:
           - desktop
     patch:

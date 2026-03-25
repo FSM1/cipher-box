@@ -31,20 +31,6 @@ export class Vault {
   ownerPublicKey!: Buffer;
 
   /**
-   * ECIES-wrapped root folder AES-256 key
-   * Encrypted with ownerPublicKey, only decryptable by user's private key
-   */
-  @Column({ type: 'bytea', name: 'encrypted_root_folder_key' })
-  encryptedRootFolderKey!: Buffer;
-
-  /**
-   * ECIES-wrapped Ed25519 IPNS private key
-   * Used for signing root folder IPNS records
-   */
-  @Column({ type: 'bytea', name: 'encrypted_root_ipns_private_key' })
-  encryptedRootIpnsPrivateKey!: Buffer;
-
-  /**
    * IPNS name (libp2p-key multihash of public key)
    * Used to identify the root folder's IPNS record
    */
