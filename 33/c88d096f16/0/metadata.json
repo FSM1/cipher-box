@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "33c88d096f16",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T01:35:55.368669Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "a59d33362dc1",
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 35635,
+    "cache_read_tokens": 431424,
+    "output_tokens": 3510,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute Phase 22 (performance baselines completion) by running 3 plans in parallel via the GSD workflow, after first correcting the issue of planning commits being on main instead of a feature branch.",
+    "outcome": "Phase 22 planning commits were moved from main to `feat/phase-22-performance-baselines-completion`, and the GSD execute-phase workflow was initiated, spawning 3 parallel subagents for plans 22-01, 22-02, and 22-03.",
+    "learnings": {
+      "repo": [
+        "Phase 22 slug is 'performance-baselines-completion', with plans covering SDK perf instrumentation, E2E journey timing, and load test thresholds",
+        "GSD branching strategy for this phase is 'phase', producing branch name `feat/phase-22-performance-baselines-completion`",
+        "All 5 phase 22 research/planning commits were accidentally made directly to main before being pushed, so they were recoverable via reset"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD execute-phase uses wave-based parallel execution — all 3 phase 22 plans were in wave 1, enabling full parallelism",
+        "When GSD branching strategy would create a branch that already exists, it's safe to reuse the existing feature branch rather than creating a new one",
+        "Phase 22 plans include SDK perf marks/measures (22-01), Playwright E2E timing baselines (22-02), and load test threshold automation with capacity model (22-03)"
+      ]
+    },
+    "friction": [
+      "Phase 22 research and planning commits were made directly to main instead of the feature branch — required a branch/reset operation before execution could proceed cleanly"
+    ],
+    "open_items": [
+      "3 parallel subagents (22-01, 22-02, 22-03) were spawned but the transcript ends before their completion — wave 1 results, verification, and roadmap update are still pending"
+    ]
+  }
+}
