@@ -54,6 +54,7 @@ export {
   type ConnectionTestResult,
   KuboProvider,
   PsaProvider,
+  PinataProvider,
   DualPinProvider,
   testConnection,
   type DualPinResult,

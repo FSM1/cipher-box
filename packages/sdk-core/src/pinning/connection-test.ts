@@ -7,8 +7,9 @@ const PROBE_TIMEOUT_MS = 10_000;
  * Test connection to an IPFS endpoint and auto-detect the protocol.
  *
  * Sequential probe strategy:
- * 1. Try Kubo RPC: POST /api/v0/id
- * 2. Try PSA: GET /pins?limit=1
+ * 1. Try Kubo RPC: POST /api/v0/id (skipped if endpoint contains pinata.cloud)
+ * 2. Try Pinata: GET /data/testAuthentication
+ * 3. Try PSA: GET /pins?limit=1
  *
  * Detects CORS errors and provides protocol-specific remediation instructions.
  */
@@ -17,16 +18,27 @@ export async function testConnection(
   authToken?: string
 ): Promise<ConnectionTestResult> {
   const normalizedEndpoint = endpoint.replace(/\/+$/, '');
+  const isPinataUrl = normalizedEndpoint.toLowerCase().includes('pinata.cloud');
 
-  // --- Probe 1: Kubo RPC ---
-  const kuboResult = await probeKubo(normalizedEndpoint, authToken);
-  if (kuboResult) return kuboResult;
+  if (isPinataUrl) {
+    // Pinata URL detected -- try Pinata probe first (skip Kubo)
+    const pinataResult = await probePinata(normalizedEndpoint, authToken);
+    if (pinataResult) return pinataResult;
+  } else {
+    // --- Probe 1: Kubo RPC ---
+    const kuboResult = await probeKubo(normalizedEndpoint, authToken);
+    if (kuboResult) return kuboResult;
 
-  // --- Probe 2: PSA ---
+    // --- Probe 2: Pinata ---
+    const pinataResult = await probePinata(normalizedEndpoint, authToken);
+    if (pinataResult) return pinataResult;
+  }
+
+  // --- Probe 3: PSA ---
   const psaResult = await probePsa(normalizedEndpoint, authToken);
   if (psaResult) return psaResult;
 
-  // Neither protocol detected
+  // No protocol detected
   return {
     success: false,
     latencyMs: 0,
@@ -100,6 +112,65 @@ async function probeKubo(
     }
 
     // Other errors (e.g., DNS failure, network down) -- try PSA
+    return null;
+  }
+}
+
+/** Probe Pinata API via GET /data/testAuthentication */
+async function probePinata(
+  endpoint: string,
+  authToken?: string
+): Promise<ConnectionTestResult | null> {
+  const url = `${endpoint}/data/testAuthentication`;
+  const headers: Record<string, string> = {};
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`;
+  }
+
+  const start = performance.now();
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+
+    const latencyMs = Math.round(performance.now() - start);
+
+    if (response.ok) {
+      return {
+        success: true,
+        protocol: 'pinata',
+        version: 'Pinata API v3',
+        latencyMs,
+      };
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return {
+        success: false,
+        protocol: 'pinata',
+        latencyMs,
+        error: 'authentication failed. check your pinata jwt token.',
+      };
+    }
+
+    return null;
+  } catch (err) {
+    const latencyMs = Math.round(performance.now() - start);
+
+    if (isCorsError(err)) {
+      return {
+        success: false,
+        latencyMs,
+        corsError: true,
+        corsInstructions:
+          'pinata api should support browser requests. check if your jwt token has the correct permissions.',
+        error: 'CORS error when connecting to pinata.',
+      };
+    }
+
     return null;
   }
 }

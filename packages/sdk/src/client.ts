@@ -80,10 +80,13 @@ export class CipherBoxClient {
     // Initialize BYO pinning provider if configured
     if (config.pinningConfig?.mode !== 'cipherbox' && config.pinningConfig?.externalProvider) {
       const ext = config.pinningConfig.externalProvider;
-      this.externalProvider =
-        ext.protocol === 'kubo'
-          ? new sdkCore.KuboProvider(ext.endpoint, ext.authToken)
-          : new sdkCore.PsaProvider(ext.endpoint, ext.authToken);
+      if (ext.protocol === 'kubo') {
+        this.externalProvider = new sdkCore.KuboProvider(ext.endpoint, ext.authToken);
+      } else if (ext.protocol === 'pinata') {
+        this.externalProvider = new sdkCore.PinataProvider(ext.endpoint, ext.authToken);
+      } else {
+        this.externalProvider = new sdkCore.PsaProvider(ext.endpoint, ext.authToken);
+      }
     }
   }
 
@@ -1041,9 +1044,9 @@ export class CipherBoxClient {
     if (mode === 'external') {
       const ext = this.config.pinningConfig!.externalProvider!;
 
-      if (ext.protocol === 'kubo') {
-        // Direct upload to user's Kubo node -- NO CipherBox involvement at all.
-        // If Kubo is unreachable, this throws. No silent fallback.
+      if (ext.protocol === 'kubo' || ext.protocol === 'pinata') {
+        // Direct upload to user's node -- NO CipherBox involvement at all.
+        // If node is unreachable, this throws. No silent fallback.
         const result = await this.externalProvider.pin(encryptedData);
         // Register CID with API for advisory tracking only
         await sdkCore.registerCid(ctx, result.cid, result.size);
@@ -1073,7 +1076,7 @@ export class CipherBoxClient {
     let secondaryWarning: string | undefined;
     try {
       const ext = this.config.pinningConfig!.externalProvider!;
-      if (ext.protocol === 'kubo') {
+      if (ext.protocol === 'kubo' || ext.protocol === 'pinata') {
         await this.externalProvider.pin(encryptedData);
       } else {
         await (this.externalProvider as sdkCore.PsaProvider).pinByCid(primaryResult.cid);
