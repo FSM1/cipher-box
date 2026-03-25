@@ -336,5 +336,15 @@ describe('IpfsController', () => {
       expect(vaultService.isUserByo).toHaveBeenCalledWith('user-123');
       expect(vaultService.isUserByo).toHaveBeenCalledTimes(1);
     });
+
+    it('should throw ForbiddenException for non-BYO users', async () => {
+      vaultService.isUserByo.mockResolvedValue(false);
+
+      await expect(
+        controller.registerCid(mockReq, { cid: mockCid, sizeBytes: mockSizeBytes })
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(vaultService.recordPin).not.toHaveBeenCalled();
+    });
   });
 });
