@@ -22,10 +22,13 @@ import {
   type PinningProvider,
   type PinningMode,
   type ExternalProviderConfig,
+  type SdkContext,
 } from '@cipherbox/sdk-core';
+import { createAxiosInstance, type ApiClientConfig } from '@cipherbox/api-client';
 
 const API_URL = process.env.LOAD_TEST_API_URL ?? 'http://localhost:3000';
 const SECRET = process.env.LOAD_TEST_SECRET ?? 'e2e-test-secret-do-not-use-in-production';
+const THROTTLE_BYPASS = process.env.THROTTLE_BYPASS_SECRET ?? '';
 
 /** BYO external provider config from environment variables */
 export const BYO_ENDPOINT = process.env.BYO_IPFS_ENDPOINT; // e.g., https://api.pinata.cloud/psa
@@ -179,6 +182,69 @@ export async function createByoClientPool(opts: ByoPoolOptions): Promise<ByoPool
   );
 
   return byoPool;
+}
+
+/**
+ * Re-authenticate a test account via /auth/test-login.
+ * Returns the new access token.
+ */
+async function reAuthenticate(email: string): Promise<string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (THROTTLE_BYPASS) {
+    headers['X-Throttle-Bypass'] = THROTTLE_BYPASS;
+  }
+
+  const res = await fetch(`${API_URL}/auth/test-login`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ email, secret: SECRET }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Re-auth failed (${res.status}): ${await res.text()}`);
+  }
+
+  const { accessToken } = (await res.json()) as { accessToken: string };
+  return accessToken;
+}
+
+/**
+ * Create an SdkContext for headless sdk-core calls from a PoolClient.
+ *
+ * Constructs a fresh axiosInstance with 401 interceptor so that
+ * headless workloads get automatic token refresh.
+ */
+export function createSdkContext(pc: PoolClient): SdkContext {
+  // Mutable token holder -- updated by 401 interceptor
+  let currentToken = pc.accessToken;
+
+  // Shared refresh promise to coalesce concurrent 401 re-auths
+  let refreshPromise: Promise<string> | null = null;
+
+  const config: ApiClientConfig = {
+    baseUrl: API_URL,
+    getAccessToken: async () => currentToken,
+    refreshAccessToken: async () => {
+      if (!refreshPromise) {
+        refreshPromise = reAuthenticate(pc.email).finally(() => {
+          refreshPromise = null;
+        });
+      }
+      const newToken = await refreshPromise;
+      currentToken = newToken;
+      pc.accessToken = newToken;
+      return newToken;
+    },
+    defaultHeaders: THROTTLE_BYPASS ? { 'X-Throttle-Bypass': THROTTLE_BYPASS } : undefined,
+  };
+
+  const axiosInstance = createAxiosInstance(config);
+
+  return {
+    apiUrl: API_URL,
+    getAccessToken: async () => currentToken,
+    axiosInstance,
+  };
 }
 
 /**
