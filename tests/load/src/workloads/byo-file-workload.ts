@@ -65,10 +65,9 @@ export async function runByoFileWorkload(
       crypto.getRandomValues(chunk);
     }
 
+    let cid!: string;
+    let pinSize!: number;
     try {
-      let cid: string;
-      let pinSize: number;
-
       if (isPsa) {
         // PSA transient relay flow
         // Step 1: Upload to CipherBox to make content available on IPFS network
