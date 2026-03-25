@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "10893e699dc6",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "tee-worker/src/services/migration-worker.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/10/893e699dc6/0/metadata.json",
+      "transcript": "/10/893e699dc6/0/full.jsonl",
+      "content_hash": "/10/893e699dc6/0/content_hash.txt",
+      "prompt": "/10/893e699dc6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 496,
+    "cache_creation_tokens": 470172,
+    "cache_read_tokens": 55456768,
+    "output_tokens": 77946,
+    "api_call_count": 325
+  }
+}
