@@ -8,7 +8,13 @@
  * - Deterministic IPNS keypair derivation
  */
 
-export type { DeviceAuthStatus, DevicePlatform, DeviceEntry, DeviceRegistry } from './types';
+export type {
+  DeviceAuthStatus,
+  DevicePlatform,
+  DeviceEntry,
+  DeviceRegistry,
+  DeviceRegistryVersion,
+} from './types';
 
 export { validateDeviceRegistry } from './schema';
 export { encryptRegistry, decryptRegistry } from './encrypt';

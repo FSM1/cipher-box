@@ -17,7 +17,7 @@
 9. [VersionEntry](#9-versionentry)
 10. [VaultKeyBlob (v2)](#10-vaultkeyblob-v2)
 11. [EncryptedVaultKeys (Removed)](#11-encryptedvaultkeys-removed)
-12. [DeviceRegistry (v1)](#12-deviceregistry-v1)
+12. [DeviceRegistry (v1/v2)](#12-deviceregistry-v1v2)
 13. [DeviceEntry](#13-deviceentry)
 14. [Cross-Implementation Parity](#14-cross-implementation-parity)
 15. [IPNS Key Derivation Summary](#15-ipns-key-derivation-summary)
@@ -328,17 +328,17 @@ Key-only binary envelope storing the ECIES-wrapped `rootFolderKey`. Written once
 
 ---
 
-## 12. DeviceRegistry (v1)
+## 12. DeviceRegistry (v1/v2)
 
 The encrypted device registry tracking all authenticated devices for a user.
 
-**Current version:** `v1`
+**Current version:** `v1` | `v2`
 
-| Field            | Type            | Required | Description                                               |
-| ---------------- | --------------- | -------- | --------------------------------------------------------- |
-| `version`        | `'v1'`          | Yes      | Schema version (literal string `"v1"`)                    |
-| `sequenceNumber` | number          | Yes      | Monotonically increasing counter for IPNS ordering        |
-| `devices`        | `DeviceEntry[]` | Yes      | Array of all device entries (including revoked for audit) |
+| Field            | Type             | Required | Description                                                   |
+| ---------------- | ---------------- | -------- | ------------------------------------------------------------- |
+| `version`        | `'v1'` \| `'v2'` | Yes      | Schema version (`'v1'` accepted for read, migrated to `'v2'`) |
+| `sequenceNumber` | number           | Yes      | Monotonically increasing counter for IPNS ordering            |
+| `devices`        | `DeviceEntry[]`  | Yes      | Array of all device entries (including revoked for audit)     |
 
 **Encryption:** ECIES with the user's secp256k1 `publicKey`. The entire registry is encrypted as a single blob (not AES-GCM like folder/file metadata).
 
@@ -350,16 +350,23 @@ The encrypted device registry tracking all authenticated devices for a user.
 
 - `sequenceNumber` must be a non-negative integer
 - `devices` must be an array (may be empty)
+- v1 registries: ipHash may be empty (migrated to zero placeholder on read)
+- v2 registries: ipHash must be valid 64-char hex (strict validation)
 - Generic error messages (`'Invalid registry format'`) to avoid leaking schema details to attackers
 
 **Source files:**
 
-- TS types: `packages/crypto/src/registry/types.ts:54-61`
-- TS validator: `packages/crypto/src/registry/schema.ts:26-58`
+- TS types: `packages/core/src/registry/types.ts`
+- TS validator: `packages/core/src/registry/schema.ts`
 
 **No Rust equivalent.** The desktop app uses the webview's TypeScript crypto for device registry operations.
 
-**Version history:** Added in Phase 12.2 (Encrypted Device Registry).
+### Version History
+
+| Version | Changes                                                                                                                         | Phase      |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| v1      | Initial schema                                                                                                                  | Phase 12.4 |
+| v2      | ipHash validation relaxed for migration (accept empty string from v1, fill zero placeholder). Lenient v1 read, strict v2 write. | Phase 24   |
 
 ---
 
