@@ -16,6 +16,7 @@ import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../../services/ip
 import { ConnectionTest } from './ConnectionTest';
 import { MigrationProgress } from './MigrationProgress';
 import { migrationApi } from '../../lib/api/migration';
+import { reconfigurePinning } from '../../lib/sdk-provider';
 
 /** Local storage key for the BYO config IPNS name (not sensitive -- public identifier) */
 const BYO_IPNS_NAME_KEY = 'cipherbox-byo-ipns-name';
@@ -222,6 +223,14 @@ export function StorageTab() {
         endpoint,
         authToken,
       });
+
+      // 9b. Reconfigure SDK client with new pinning config so uploads
+      // immediately use the updated mode without requiring re-login
+      reconfigurePinning(
+        mode !== 'cipherbox' && config.externalProvider
+          ? { mode, externalProvider: config.externalProvider }
+          : undefined
+      );
 
       // 10. Trigger migration if provider changed and user has existing pins
       // Treat null savedConfig as implicit "cipherbox" mode (first-time user)
