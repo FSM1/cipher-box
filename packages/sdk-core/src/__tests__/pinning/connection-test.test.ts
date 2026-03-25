@@ -32,14 +32,12 @@ describe('testConnection', () => {
     );
   });
 
-  it('detects PSA when /api/v0/id fails and /pins returns 200', async () => {
-    // First call: Kubo probe returns non-200
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 404,
-    });
-
-    // Second call: PSA probe returns 200
+  it('detects PSA when Kubo and Pinata fail and /pins returns 200', async () => {
+    // Kubo probe returns non-200
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+    // Pinata probe returns non-200 (not pinata endpoint)
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+    // PSA probe returns 200
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ count: 0, results: [] }),
@@ -54,16 +52,11 @@ describe('testConnection', () => {
 
   it('reports auth failure when PSA returns 401', async () => {
     // Kubo probe fails
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 404,
-    });
-
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+    // Pinata probe fails
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
     // PSA probe returns 401
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-    });
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 401 });
 
     const result = await testConnection(endpoint, 'bad-token');
 
@@ -84,10 +77,11 @@ describe('testConnection', () => {
     expect(result.error).toContain('CORS');
   });
 
-  it('reports CORS error with PSA instructions when both probes fail with TypeError', async () => {
-    // Kubo probe: non-CORS error (e.g., DNS failure returns null from probeKubo)
+  it('reports CORS error with PSA instructions when all probes fail with TypeError', async () => {
+    // Kubo probe: non-CORS error
     mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
-
+    // Pinata probe: non-CORS error
+    mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
     // PSA probe: CORS TypeError
     mockFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
 
@@ -98,18 +92,13 @@ describe('testConnection', () => {
     expect(result.corsInstructions).toContain('pinning service dashboard');
   });
 
-  it('reports generic failure when both probes return non-200 non-TypeError', async () => {
+  it('reports generic failure when all probes return non-200 non-TypeError', async () => {
     // Kubo probe returns 500
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-    });
-
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    // Pinata probe returns 500
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
     // PSA probe returns 500
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-    });
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
 
     const result = await testConnection(endpoint);
 
