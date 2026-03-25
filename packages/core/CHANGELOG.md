@@ -2,10 +2,9 @@
 
 ## [0.27.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/core-v0.26.0...@cipherbox/core-v0.27.0) (2026-03-25)
 
-
 ### Features
 
-* extract Rust SDK as five workspace crates ([#352](https://github.com/FSM1/cipher-box/issues/352)) ([34bce7b](https://github.com/FSM1/cipher-box/commit/34bce7bfd40170f0fb080f68f50a0e8cb37704cf))
+- extract Rust SDK as five workspace crates ([#352](https://github.com/FSM1/cipher-box/issues/352)) ([34bce7b](https://github.com/FSM1/cipher-box/commit/34bce7bfd40170f0fb080f68f50a0e8cb37704cf))
 
 ## [0.26.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/core-v0.25.0...@cipherbox/core-v0.26.0) (2026-03-24)
 

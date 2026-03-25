@@ -15,6 +15,7 @@ import {
 } from '@cipherbox/api-client';
 import type { PublishIpnsEntryDtoRecordType } from '@cipherbox/api-client';
 import type { SdkContext } from '../types';
+import { withPerf } from '../perf';
 
 /**
  * Create an IPNS record locally and publish via backend.
@@ -40,45 +41,47 @@ export async function createAndPublishIpnsRecord(params: {
   expectedSequenceNumber?: string;
   ctx?: SdkContext;
 }): Promise<{ success: boolean; sequenceNumber: bigint }> {
-  // 1. Create IPNS record pointing to /ipfs/{metadataCid}
-  // 24 hour lifetime (will be republished by TEE every 3 hours)
-  const record = await createIpnsRecord(
-    params.ipnsPrivateKey,
-    `/ipfs/${params.metadataCid}`,
-    params.sequenceNumber,
-    24 * 60 * 60 * 1000 // 24 hours in ms
-  );
+  return withPerf('ipns:publish', async () => {
+    // 1. Create IPNS record pointing to /ipfs/{metadataCid}
+    // 24 hour lifetime (will be republished by TEE every 3 hours)
+    const record = await createIpnsRecord(
+      params.ipnsPrivateKey,
+      `/ipfs/${params.metadataCid}`,
+      params.sequenceNumber,
+      24 * 60 * 60 * 1000 // 24 hours in ms
+    );
 
-  // 2. Marshal to bytes for transport
-  const recordBytes = marshalIpnsRecord(record);
+    // 2. Marshal to bytes for transport
+    const recordBytes = marshalIpnsRecord(record);
 
-  // 3. Base64 encode for API transmission (loop-based to avoid call stack overflow on large records)
-  let binary = '';
-  for (let i = 0; i < recordBytes.length; i++) {
-    binary += String.fromCharCode(recordBytes[i]);
-  }
-  const recordBase64 = btoa(binary);
+    // 3. Base64 encode for API transmission (loop-based to avoid call stack overflow on large records)
+    let binary = '';
+    for (let i = 0; i < recordBytes.length; i++) {
+      binary += String.fromCharCode(recordBytes[i]);
+    }
+    const recordBase64 = btoa(binary);
 
-  // 4. Call backend API to relay to IPFS network
-  const apiOptions = params.ctx?.axiosInstance
-    ? { _axiosInstance: params.ctx.axiosInstance }
-    : undefined;
-  const response = await ipnsControllerPublishRecord(
-    {
-      ipnsName: params.ipnsName,
-      record: recordBase64,
-      metadataCid: params.metadataCid,
-      encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
-      keyEpoch: params.keyEpoch,
-      expectedSequenceNumber: params.expectedSequenceNumber,
-    },
-    apiOptions
-  );
+    // 4. Call backend API to relay to IPFS network
+    const apiOptions = params.ctx?.axiosInstance
+      ? { _axiosInstance: params.ctx.axiosInstance }
+      : undefined;
+    const response = await ipnsControllerPublishRecord(
+      {
+        ipnsName: params.ipnsName,
+        record: recordBase64,
+        metadataCid: params.metadataCid,
+        encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+        keyEpoch: params.keyEpoch,
+        expectedSequenceNumber: params.expectedSequenceNumber,
+      },
+      apiOptions
+    );
 
-  return {
-    success: response.success,
-    sequenceNumber: BigInt(response.sequenceNumber),
-  };
+    return {
+      success: response.success,
+      sequenceNumber: BigInt(response.sequenceNumber),
+    };
+  });
 }
 
 /**
@@ -104,26 +107,28 @@ export async function batchPublishIpnsRecords(
   }>,
   ctx?: SdkContext
 ): Promise<{ totalSucceeded: number; totalFailed: number }> {
-  const apiOptions = ctx?.axiosInstance ? { _axiosInstance: ctx.axiosInstance } : undefined;
-  const response = await ipnsControllerPublishBatch(
-    {
-      records: records.map((r) => ({
-        ipnsName: r.ipnsName,
-        record: r.recordBase64,
-        metadataCid: r.metadataCid,
-        encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
-        keyEpoch: r.keyEpoch,
-        recordType: r.recordType as PublishIpnsEntryDtoRecordType | undefined,
-        expectedSequenceNumber: r.expectedSequenceNumber,
-      })),
-    },
-    apiOptions
-  );
+  return withPerf('ipns:batch-publish', async () => {
+    const apiOptions = ctx?.axiosInstance ? { _axiosInstance: ctx.axiosInstance } : undefined;
+    const response = await ipnsControllerPublishBatch(
+      {
+        records: records.map((r) => ({
+          ipnsName: r.ipnsName,
+          record: r.recordBase64,
+          metadataCid: r.metadataCid,
+          encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
+          keyEpoch: r.keyEpoch,
+          recordType: r.recordType as PublishIpnsEntryDtoRecordType | undefined,
+          expectedSequenceNumber: r.expectedSequenceNumber,
+        })),
+      },
+      apiOptions
+    );
 
-  return {
-    totalSucceeded: response.totalSucceeded,
-    totalFailed: response.totalFailed,
-  };
+    return {
+      totalSucceeded: response.totalSucceeded,
+      totalFailed: response.totalFailed,
+    };
+  });
 }
 
 /**
@@ -163,37 +168,47 @@ export async function resolveIpnsRecord(
   ipnsName: string,
   ctx?: SdkContext
 ): Promise<{ cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null> {
-  try {
-    const apiOptions = ctx?.axiosInstance ? { _axiosInstance: ctx.axiosInstance } : undefined;
-    const response = await ipnsControllerResolveRecord({ ipnsName }, apiOptions);
+  return withPerf('ipns:resolve', async () => {
+    try {
+      const apiOptions = ctx?.axiosInstance ? { _axiosInstance: ctx.axiosInstance } : undefined;
+      const response = await ipnsControllerResolveRecord({ ipnsName }, apiOptions);
 
-    if (!response.success) {
-      return null;
-    }
-
-    // Verify IPNS signature if all signature fields are present
-    let signatureVerified = false;
-    if (response.signatureV2 && response.data && response.pubKey) {
-      const valid = await verifyIpnsSignature(response.signatureV2, response.data, response.pubKey);
-      if (!valid) {
-        throw new Error('IPNS signature verification failed - record may be tampered');
+      if (!response.success) {
+        return null;
       }
-      signatureVerified = true;
-    } else {
-      console.warn('IPNS resolve returned without signature data, skipping verification');
-    }
 
-    return {
-      cid: response.cid,
-      sequenceNumber: BigInt(response.sequenceNumber),
-      signatureVerified,
-    };
-  } catch (error) {
-    // 404 means IPNS name not found - return null
-    // Other errors should propagate (including signature verification failures)
-    if (error instanceof Error && (error as Error & { status?: number }).status === 404) {
-      return null;
+      // Verify IPNS signature if all signature fields are present
+      let signatureVerified = false;
+      if (response.signatureV2 && response.data && response.pubKey) {
+        const valid = await verifyIpnsSignature(
+          response.signatureV2,
+          response.data,
+          response.pubKey
+        );
+        if (!valid) {
+          throw new Error('IPNS signature verification failed - record may be tampered');
+        }
+        signatureVerified = true;
+      } else {
+        console.warn('IPNS resolve returned without signature data, skipping verification');
+      }
+
+      return {
+        cid: response.cid,
+        sequenceNumber: BigInt(response.sequenceNumber),
+        signatureVerified,
+      };
+    } catch (error) {
+      // 404 means IPNS name not found - return null
+      // Other errors should propagate (including signature verification failures)
+      if (error instanceof Error) {
+        const anyError = error as Error & { status?: number; response?: { status?: number } };
+        const status = anyError.status ?? anyError.response?.status;
+        if (status === 404) {
+          return null;
+        }
+      }
+      throw error;
     }
-    throw error;
-  }
+  });
 }

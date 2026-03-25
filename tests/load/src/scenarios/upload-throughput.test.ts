@@ -12,6 +12,7 @@ import {
   aggregateAndReport,
   type PoolClient,
 } from '../harness/client-pool';
+import { expectThresholdsPassed, type ThresholdConfig } from '../harness/thresholds';
 import { runFileWorkload } from '../workloads/file-workload';
 
 const NUM_CLIENTS = parseInt(process.env.LOAD_TEST_CLIENTS ?? '10', 10);
@@ -46,6 +47,13 @@ describe('Upload Throughput', () => {
     const failed = results.filter((r) => r.status === 'rejected').length;
     console.log(`\nClients completed: ${succeeded} succeeded, ${failed} failed`);
 
-    await aggregateAndReport('Upload Throughput', pool);
+    const metrics = await aggregateAndReport('Upload Throughput', pool);
+
+    // Threshold check: 2-3x observed baselines from Phase 19.2
+    const THRESHOLDS: ThresholdConfig[] = [
+      { operation: 'uploadFile', p95MaxMs: 10_000, errorRateMax: 0.05 },
+    ];
+
+    expectThresholdsPassed(metrics, THRESHOLDS);
   });
 });

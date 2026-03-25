@@ -9,6 +9,7 @@
 import { decryptAesGcm, decryptAesCtr, unwrapKey, hexToBytes, clearBytes } from '@cipherbox/crypto';
 import type { SdkContext, DownloadProgressCallback } from '../types';
 import { fetchFromIpfs } from '../ipfs';
+import { withPerf } from '../perf';
 
 /**
  * Download and decrypt a file from IPFS.
@@ -34,25 +35,27 @@ export async function downloadAndDecrypt(params: {
   ctx: SdkContext;
   onProgress?: DownloadProgressCallback;
 }): Promise<Uint8Array> {
-  // 1. Fetch encrypted file from IPFS
-  const ciphertext = await fetchFromIpfs(params.ctx, params.cid, params.onProgress);
+  return withPerf('download:full', async () => {
+    // 1. Fetch encrypted file from IPFS
+    const ciphertext = await fetchFromIpfs(params.ctx, params.cid, params.onProgress);
 
-  // 2. Convert hex strings to bytes
-  const iv = hexToBytes(params.fileIv);
-  const wrappedKey = hexToBytes(params.fileKeyEncrypted);
+    // 2. Convert hex strings to bytes
+    const iv = hexToBytes(params.fileIv);
+    const wrappedKey = hexToBytes(params.fileKeyEncrypted);
 
-  // 3. Unwrap file key using user's private key
-  const fileKey = await unwrapKey(wrappedKey, params.userPrivateKey);
+    // 3. Unwrap file key using user's private key
+    const fileKey = await unwrapKey(wrappedKey, params.userPrivateKey);
 
-  try {
-    // 4. Decrypt file content (CTR for streaming media, GCM for everything else)
-    const plaintext =
-      params.encryptionMode === 'CTR'
-        ? await decryptAesCtr(ciphertext, fileKey, iv)
-        : await decryptAesGcm(ciphertext, fileKey, iv);
-    return plaintext;
-  } finally {
-    // 5. Clear file key from memory
-    clearBytes(fileKey);
-  }
+    try {
+      // 4. Decrypt file content (CTR for streaming media, GCM for everything else)
+      const plaintext =
+        params.encryptionMode === 'CTR'
+          ? await decryptAesCtr(ciphertext, fileKey, iv)
+          : await decryptAesGcm(ciphertext, fileKey, iv);
+      return plaintext;
+    } finally {
+      // 5. Clear file key from memory
+      clearBytes(fileKey);
+    }
+  });
 }

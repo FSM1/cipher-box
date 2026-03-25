@@ -12,6 +12,7 @@ import {
   aggregateAndReport,
   type PoolClient,
 } from '../harness/client-pool';
+import { expectThresholdsPassed, type ThresholdConfig } from '../harness/thresholds';
 import { runFolderWorkload } from '../workloads/folder-workload';
 
 const BASELINE_CLIENTS = 2;
@@ -75,5 +76,13 @@ describe('Spike Test', () => {
         );
       }
     }
+
+    // Threshold check on burst phase: generous limits for intentional overload
+    const THRESHOLDS: ThresholdConfig[] = [
+      { operation: 'uploadFile', p95MaxMs: 15_000, errorRateMax: 0.15 },
+      { operation: 'createFolder', p95MaxMs: 15_000, errorRateMax: 0.15 },
+    ];
+
+    expectThresholdsPassed(burstMetrics, THRESHOLDS);
   });
 });

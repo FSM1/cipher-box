@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-25T01:34:07.674Z'
+last_updated: '2026-03-25T01:50:49.360Z'
 progress:
   total_phases: 8
-  completed_phases: 7
-  total_plans: 39
-  completed_plans: 39
+  completed_phases: 8
+  total_plans: 42
+  completed_plans: 42
 ---
 
 # Project State
@@ -18,12 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 21 — byo-ipfs-node-support
+**Current focus:** Phase 22 — performance-baselines-completion (complete)
 
 ## Current Position
 
-Phase: 21 (byo-ipfs-node-support) — EXECUTING
-Plan: 4 of 4
+Phase: 22 (performance-baselines-completion) — COMPLETE
+Plan: 3 of 3 (COMPLETE)
 
 ## Performance Metrics
 
@@ -70,6 +70,9 @@ Plan: 4 of 4
 | 21    | 10   | 5min     | 2     | 7     |
 | 21    | 09   | 9min     | 3     | 17    |
 | 21    | 11   | 12min    | 2     | 3     |
+| 22    | 02   | 4min     | 2     | 2     |
+| 22    | 01   | 8min     | 2     | 7     |
+| 22    | 03   | 8min     | 2     | 8     |
 
 ## Accumulated Context
 
@@ -139,6 +142,8 @@ Recent for v1.1:
 - pinWithMode treats Pinata like Kubo: direct upload bypasses CipherBox relay entirely
 - Connection test probe order updated: Kubo -> Pinata -> PSA; pinata.cloud URLs skip Kubo probe
 - BYO Pinata baselines: pin p50=2.0s (+47% vs local Kubo), tail latency p99 13.5% better, 98% CipherBox API load reduction per file
+- perf.ts PERF_ENABLED evaluated once at module load (zero overhead in production); **CIPHERBOX_PERF** global for opt-in production debugging
+- Load test thresholds set at 2-3x observed baselines; spike test most generous (15s/15%); vitest expect() for CI failure on breach
 
 ### Roadmap Evolution
 
@@ -164,4 +169,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-25 after completing Phase 21 plan 11 (BYO performance baselines with Pinata); gap closure 4/4 complete, Phase 21 fully complete
+Last updated: 2026-03-25 after completing Phase 22 (performance baselines completion)
