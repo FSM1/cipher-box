@@ -43,10 +43,10 @@ export class MigrationProcessor extends WorkerHost {
     });
 
     const TEE_URL = this.configService.get<string>('TEE_WORKER_URL');
-    const TEE_SECRET = this.configService.get<string>('TEE_AUTH_SECRET');
+    const TEE_SECRET = this.configService.get<string>('TEE_WORKER_SECRET');
 
     if (!TEE_URL || !TEE_SECRET) {
-      this.logger.error('TEE_WORKER_URL or TEE_AUTH_SECRET not configured');
+      this.logger.error('TEE_WORKER_URL or TEE_WORKER_SECRET not configured');
       await this.migrationRepo.update(migrationId, { status: 'failed' });
       return;
     }
