@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4c58196e9d12",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T01:39:06.112395Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "a59d33362dc1",
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 35635,
+    "cache_read_tokens": 431424,
+    "output_tokens": 3510,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute phase 22 (performance-baselines-completion) plans using GSD wave-based parallel execution, after first fixing an issue where phase 22 planning commits were accidentally made directly to main instead of a feature branch.",
+    "outcome": "Phase 22 planning commits were moved to feat/phase-22-performance-baselines-completion, main was reset to match origin/main, and phase 22 execution was initiated with 3 parallel subagents spawned for plans 22-01, 22-02, and 22-03.",
+    "learnings": {
+      "repo": [
+        "Phase 22 is 'performance-baselines-completion' — covers SDK perf instrumentation, E2E journey timing, and load test thresholds",
+        "Phase 22 plans are all in wave 1 (no inter-plan dependencies), enabling full parallelization",
+        "GSD branching strategy for this project uses 'phase' strategy with branch naming pattern feat/phase-{N}-{slug}",
+        "Planning commits (research, plans) were going to main directly — project convention expects them on a feature branch"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD execute-phase init JSON includes executor_model, verifier_model, branching_strategy, branch_name, and plan inventory",
+        "When feature branch already exists from a prior git operation, GSD's branching step can be skipped by checking current branch first",
+        "The auto-chain flag (_auto_chain_active) must be cleared at execute-phase init when not invoked with --auto to prevent stale state from prior interrupted runs",
+        "Moving commits to a feature branch: create branch at current HEAD (captures commits), then hard-reset main to origin/main"
+      ]
+    },
+    "friction": [
+      "Phase 22 planning commits were accidentally made directly to main instead of a feature branch, requiring a branch restructure before execution could begin",
+      "GSD init computed a branch name (phase-22-performance-baselines-completion) without the 'feat/' prefix, but the manually created branch used 'feat/' prefix — required manual reconciliation"
+    ],
+    "open_items": [
+      "3 subagents (22-01, 22-02, 22-03) were spawned but transcript ends before completion — wave 1 execution, spot-checks, verification, and roadmap update are pending",
+      "Commits are on feat/phase-22-performance-baselines-completion but have not been pushed to origin — PR creation is deferred"
+    ]
+  }
+}
