@@ -142,4 +142,4 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 
 ---
 
-Last updated: 2026-03-24 after Phase 20 Vault Migration completed
+Last updated: 2026-03-25 after Phase 22 Performance Baselines Completion completed
