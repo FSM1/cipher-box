@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "50c2e9405893",
+  "session_id": "ff87d486-a76c-43ec-b42e-ed864560c25c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T23:04:24.737346Z",
+  "branch": "feat/phase-25-desktop-enhancements",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "b88812e64b01",
+  "checkpoint_transcript_start": 480,
+  "transcript_lines_at_start": 480,
+  "token_usage": {
+    "input_tokens": 3,
+    "cache_creation_tokens": 1386,
+    "cache_read_tokens": 226339,
+    "output_tokens": 1038,
+    "api_call_count": 3
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Create and commit the 25-03 SUMMARY file for the desktop enhancements phase, following the existing summary format from 25-01.",
+    "outcome": "The 25-03 SUMMARY.md was written, committed, and ROADMAP.md was updated to reflect 25-03 progress.",
+    "learnings": {
+      "repo": [
+        "Summary files for phases follow a naming convention: {phase-number}-SUMMARY.md under .planning/phases/{phase-folder}/",
+        "The 25-01 SUMMARY was used as a template/reference for creating the 25-03 SUMMARY"
+      ],
+      "code": [],
+      "workflow": [
+        "ROADMAP.md is updated after each phase summary is created to track plan progress",
+        "Each phase summary is committed immediately after creation"
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  }
+}
