@@ -162,27 +162,23 @@ pub(crate) mod implementation {
 
         let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
 
-        // TEE enrollment on first publish only (same pattern as folder creation in write_ops.rs:499)
-        let encrypted_ipns_for_tee = if is_first_publish {
-            if let Some(tee_key) = tee_public_key {
+        // TEE enrollment on first publish only (same pattern as folder creation in write_ops.rs)
+        let (encrypted_ipns_for_tee, tee_epoch) = match (is_first_publish, tee_public_key) {
+            (true, Some(tee_key)) => {
                 let wrapped = cipherbox_crypto::wrap_key(
                     file_ipns_private_key.as_slice(), tee_key
                 ).map_err(|e| format!("TEE key wrapping failed: {}", e))?;
-                Some(hex::encode(&wrapped))
-            } else {
-                None
+                (Some(hex::encode(&wrapped)), tee_key_epoch)
             }
-        } else {
-            None
+            _ => (None, None),
         };
-        let has_tee_enrollment = encrypted_ipns_for_tee.is_some();
 
         let req = cipherbox_api_client::IpnsPublishRequest {
             ipns_name: file_ipns_name.to_string(),
             record: record_b64,
             metadata_cid: file_meta_cid.clone(),
             encrypted_ipns_private_key: encrypted_ipns_for_tee,
-            key_epoch: if has_tee_enrollment { tee_key_epoch } else { None },
+            key_epoch: tee_epoch,
             expected_sequence_number: None,
         };
         match cipherbox_api_client::ipns::publish_ipns(api, &req).await.map_err(|e| format!("{}", e))? {
