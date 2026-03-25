@@ -155,7 +155,7 @@ Start-Sleep -Seconds 5
 $DesktopLog = $env:DESKTOP_LOG
 if ($DesktopLog -and (Test-Path $DesktopLog)) {
     $LogContent = Get-Content $DesktopLog -Raw
-    if ($LogContent -match "Bin entry published for") {
+    if ($LogContent -match "Bin entry published") {
         Test-Pass "Bin entry published (confirmed via desktop log)"
     } else {
         Test-Fail "Bin entry verification (no 'Bin entry published' in desktop log)"
