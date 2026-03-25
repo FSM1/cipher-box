@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "9c7a162c616c",
+  "session_id": "cd67d434-4a3e-40a1-bbd7-272357f3bb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T00:55:45.292682Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/components/settings/ConnectionTest.tsx",
+    "packages/api-client/src/index.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "6448ebe7b34e",
+  "token_usage": {
+    "input_tokens": 15,
+    "cache_creation_tokens": 66282,
+    "cache_read_tokens": 398241,
+    "output_tokens": 5669,
+    "api_call_count": 8
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute Phase 21 gap closure plans (--gaps-only) for byo-ipfs-node-support using wave-based parallel execution across 4 plans in 2 waves.",
+    "outcome": "Wave 1 partially confirmed: 21-08 (BYO config wiring) and 21-10 (PinataProvider) completed successfully with commits; 21-09 (TEE-routed connection test) was still running when the transcript ended. Wave 2 (21-11) not yet started.",
+    "learnings": {
+      "repo": [
+        "Pinata deprecated their PSA endpoint — a dedicated PinataProvider using Pinata v3 API is required instead of the PSA-compatible path",
+        "SDK client was being created at login without pinningConfig, meaning dual-pin/external BYO modes never activated — config must be loaded from IPNS at login",
+        "Connection test ran client-side causing CORS blocks against SaaS providers — must be routed through TEE for server-side probing",
+        "PinningConfig type was not exported from @cipherbox/sdk package index — required an auto-fix deviation in plan 21-08",
+        "Phase 21 active work lives on branch docs/phase-21-context in the cipher-box-phase-20 worktree",
+        "Plans 21-01 through 21-07 were already complete (had SUMMARY.md files) and were skipped by --gaps-only filter"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "Added loadByoConfig helper and pinningConfig injection at login time"
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "finding": "Added _lastConfig tracking and reconfigurePinning export for runtime reconfiguration"
+        },
+        {
+          "path": "apps/web/src/components/settings/StorageTab.tsx",
+          "finding": "Now calls reconfigurePinning on settings save so BYO config takes effect without re-login"
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "Added unpinFromProvider + best-effort source unpin after verified migration transfer"
+        },
+        {
+          "path": "packages/sdk/src/index.ts",
+          "finding": "PinningConfig type added to exports — was previously missing, causing type errors downstream"
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/pinata-provider.ts",
+          "finding": "New PinataProvider class with 5 methods: pin, unpin, status, get, pinByCid using Pinata v3 API"
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/pinning/pinata-provider.test.ts",
+          "finding": "13 unit tests for PinataProvider, all passing"
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/connection-test.ts",
+          "finding": "Added probePinata function and URL heuristic for auto-detecting Pinata endpoints"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "PinataProvider instantiation added with direct-upload routing in pinWithMode"
+        },
+        {
+          "path": "apps/web/src/components/settings/ConnectionTest.tsx",
+          "finding": "Modified as part of 21-09 TEE routing work (exact changes not confirmed — agent still running)"
+        },
+        {
+          "path": "packages/api-client/src/index.ts",
+          "finding": "Modified as part of 21-09 TEE routing work (exact changes not confirmed — agent still running)"
+        }
+      ],
+      "workflow": [
+        "GSD --gaps-only flag filters plan execution to only plans with gap_closure: true in frontmatter — plans without this flag are skipped even if incomplete",
+        "Parallel wave execution via subagents: each agent gets a fresh 200k context window and reports back via task notifications asynchronously",
+        "Agent deviations (Rule 3 auto-fixes) are logged in SUMMARY.md and surfaced in completion reports — PinningConfig export was caught and fixed without blocking"
+      ]
+    },
+    "friction": [
+      "21-09 (TEE-routed connection test) was still running when transcript ended — Wave 1 completion not fully confirmed before transcript cut off",
+      "PinningConfig type missing from SDK exports required an unplanned auto-fix deviation in 21-08"
+    ],
+    "open_items": [
+      "21-09 completion and spot-check not confirmed in transcript — need to verify SUMMARY.md exists and commits are present",
+      "Wave 2 (21-11: BYO performance baselines) not yet started — has a checkpoint requiring an external provider to be available",
+      "Phase 21 verification (gsd-verifier) not yet run — full gap closure cycle incomplete"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-25T00:55:12.091307Z",
+    "agent_lines": 0,
+    "human_added": 21,
+    "human_modified": 41,
+    "human_removed": 0,
+    "total_committed": 21,
+    "agent_percentage": 0
+  }
+}
