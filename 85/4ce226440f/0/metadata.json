@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "854ce226440f",
+  "session_id": "cd67d434-4a3e-40a1-bbd7-272357f3bb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T03:14:13.96043Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "e6af1c9e6132",
+  "checkpoint_transcript_start": 1686,
+  "transcript_lines_at_start": 1686,
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 22875,
+    "cache_read_tokens": 5905799,
+    "output_tokens": 6235,
+    "api_call_count": 24
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Fix failing CI checks on PR #346 for cipher-box, specifically a branch coverage threshold failure and unresolved PR review threads.",
+    "outcome": "Identified three untested Phase 21 files causing branch coverage to drop to 72.68% (below 80% threshold) and delegated test writing to an agent; simultaneously triaged 8 PR review threads and committed fixes for valid ones, deferring the push until tests were ready to combine both commits.",
+    "learnings": {
+      "repo": [
+        "TypeORM defaults to TIMESTAMP (not TIMESTAMP WITH TIME ZONE) — migrations must use TIMESTAMP to avoid drift against the schema baseline.",
+        "Phase 21 introduced migration.controller.ts, migration.processor.ts, and tee.controller.ts with 0% branch coverage, which broke the global 80% branch threshold.",
+        "@nestjs/throttler v6 uses TTL in milliseconds — Copilot review suggestions about TTL units were incorrect and should be ignored.",
+        "The startMigration method was optimized to use .count() instead of .find(), requiring mock updates in migration.service.spec.ts."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/migration/migration.controller.ts",
+          "finding": "No spec file existed — 0% branch coverage contributed to CI threshold failure."
+        },
+        {
+          "path": "apps/api/src/migration/migration.processor.ts",
+          "finding": "No spec file existed — 0% branch coverage contributed to CI threshold failure."
+        },
+        {
+          "path": "apps/api/src/tee/tee.controller.ts",
+          "finding": "No spec file existed — 0% branch coverage contributed to CI threshold failure."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "registerCid was made best-effort (non-blocking) as part of review fixes."
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "finding": "Required edits as part of PR review resolution."
+        },
+        {
+          "path": ".planning/phases/23-rust-sdk-extraction/23-06-PLAN.md",
+          "finding": "Plan file updated as part of PR review resolution — acceptance criteria referenced in review threads."
+        }
+      ],
+      "workflow": [
+        "Parallelizing agent-based test writing with manual PR review triage is an effective strategy for multi-concern CI failures.",
+        "Combining related commits before pushing (tests + review fixes) reduces CI noise and keeps PR history cleaner.",
+        "When Copilot suggests fixes, verify against the actual library version before applying — v6 breaking changes can make AI suggestions incorrect."
+      ]
+    },
+    "friction": [
+      "CI failure required multiple gh CLI calls to drill down to the actual coverage numbers — not immediately surfaced in the job summary.",
+      "Copilot review threads 5 and 6 contained incorrect suggestions about @nestjs/throttler TTL units, requiring manual verification against the installed version."
+    ],
+    "open_items": [
+      "Tests for migration.controller.ts, migration.processor.ts, and tee.controller.ts were delegated to an agent — outcome not confirmed in transcript, push deferred.",
+      "Overall branch coverage gap from ~73% to 80% may require more than the three new spec files depending on branch density in existing untested code.",
+      "Phase 23 Rust SDK extraction plan (.planning/phases/23-rust-sdk-extraction/23-06-PLAN.md) is in progress — acceptance criteria being actively revised."
+    ]
+  }
+}
