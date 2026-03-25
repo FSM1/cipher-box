@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0e59b530fb6d",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "apps/web/src/components/settings/StorageTab.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0e/59b530fb6d/0/metadata.json",
+      "transcript": "/0e/59b530fb6d/0/full.jsonl",
+      "content_hash": "/0e/59b530fb6d/0/content_hash.txt",
+      "prompt": "/0e/59b530fb6d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 496,
+    "cache_creation_tokens": 470172,
+    "cache_read_tokens": 55456768,
+    "output_tokens": 77946,
+    "api_call_count": 325
+  }
+}
