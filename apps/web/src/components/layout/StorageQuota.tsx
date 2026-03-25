@@ -1,21 +1,7 @@
 import { useEffect } from 'react';
 import { useAuthStore } from '../../stores/auth.store';
 import { useQuotaStore } from '../../stores/quota.store';
-
-/**
- * Format bytes to human-readable string.
- */
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return '0 B';
-
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const k = 1024;
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  const value = bytes / Math.pow(k, i);
-
-  // Use 1 decimal place for larger units
-  return `${value.toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
-}
+import { formatBytes } from '../../utils/format';
 
 /**
  * Storage quota indicator component.

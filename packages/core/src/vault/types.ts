@@ -57,7 +57,7 @@ export type ByoIpfsConfig = {
   externalProvider: {
     endpoint: string;
     authToken: string;
-    protocol: 'psa' | 'kubo';
+    protocol: 'psa' | 'kubo' | 'pinata';
     providerName?: string;
   } | null;
 };

@@ -13,11 +13,26 @@ export function MigrationProgress() {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
+
   const fetchStatus = useCallback(async () => {
     const status = await migrationApi.getStatus();
-    setMigration(status);
-    // Stop polling when terminal state reached
-    if (status && ['completed', 'failed', 'cancelled'].includes(status.status)) {
+    // Only update state if values actually changed to avoid no-op re-renders
+    setMigration((prev) => {
+      if (!status && !prev) return prev;
+      if (
+        prev &&
+        status &&
+        prev.status === status.status &&
+        prev.migratedCids === status.migratedCids &&
+        prev.failedCids === status.failedCids
+      ) {
+        return prev;
+      }
+      return status;
+    });
+    // Stop polling when terminal state reached or no migration exists
+    if (!status || TERMINAL_STATUSES.includes(status.status)) {
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
@@ -25,7 +40,6 @@ export function MigrationProgress() {
     }
   }, []);
 
-  // Poll every 5 seconds when migration is active
   useEffect(() => {
     fetchStatus();
     pollRef.current = setInterval(fetchStatus, 5000);

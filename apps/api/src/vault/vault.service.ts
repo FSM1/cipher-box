@@ -189,8 +189,15 @@ export class VaultService {
     const isByo = await this.isUserByo(userId);
     if (isByo) return true; // Advisory only -- always allow
 
-    const quota = await this.getQuota(userId);
-    return quota.usedBytes + additionalBytes <= QUOTA_LIMIT_BYTES;
+    // Query usage directly to avoid redundant isUserByo call in getQuota
+    const result = await this.pinnedCidRepository
+      .createQueryBuilder('pin')
+      .select('COALESCE(SUM(pin.size_bytes), 0)', 'total')
+      .where('pin.user_id = :userId', { userId })
+      .getRawOne<{ total: string }>();
+
+    const usedBytes = parseInt(result?.total ?? '0', 10);
+    return usedBytes + additionalBytes <= QUOTA_LIMIT_BYTES;
   }
 
   /**

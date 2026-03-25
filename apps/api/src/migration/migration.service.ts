@@ -47,8 +47,7 @@ export class MigrationService {
     }
 
     // Count pinned CIDs for this user
-    const pinnedCids = await this.pinnedCidRepo.find({ where: { userId } });
-    const totalCids = pinnedCids.length;
+    const totalCids = await this.pinnedCidRepo.count({ where: { userId } });
 
     // Create migration entity
     const migration = this.migrationRepo.create({

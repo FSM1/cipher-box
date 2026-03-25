@@ -156,7 +156,6 @@ export function StorageTab() {
     setSaveError(null);
 
     try {
-      // 1. Construct ByoIpfsConfig
       const config: ByoIpfsConfig = {
         pinningMode: mode,
         externalProvider:
@@ -170,17 +169,13 @@ export function StorageTab() {
             : null,
       };
 
-      // 2. Encrypt with user's public key (ECIES)
       const encrypted = await encryptByoConfig(config, vaultKeypair.publicKey);
 
-      // 3. Upload encrypted blob to IPFS (pass typed array directly per CLAUDE.md)
       const blob = new Blob([encrypted as BlobPart]);
       const { cid } = await addToIpfs(blob);
 
-      // 4. Derive dedicated IPNS keypair for BYO config
       const byoKeypair = await deriveByoConfigIpnsKeypair(vaultKeypair.privateKey);
 
-      // 5. Get current sequence number (try resolving existing)
       let sequenceNumber = BigInt(0);
       const storedIpnsName = localStorage.getItem(BYO_IPNS_NAME_KEY);
       if (storedIpnsName) {
@@ -194,7 +189,6 @@ export function StorageTab() {
         }
       }
 
-      // 6. Wrap IPNS private key with TEE public key for republishing
       let encryptedIpnsPrivateKey: string | undefined;
       let keyEpoch: number | undefined;
       if (teeKeys?.currentPublicKey) {
@@ -204,7 +198,6 @@ export function StorageTab() {
         keyEpoch = teeKeys.currentEpoch;
       }
 
-      // 7. Publish encrypted blob via IPNS
       await createAndPublishIpnsRecord({
         ipnsPrivateKey: byoKeypair.privateKey,
         ipnsName: byoKeypair.ipnsName,
@@ -214,25 +207,21 @@ export function StorageTab() {
         keyEpoch,
       });
 
-      // 8. Store IPNS name in localStorage (public identifier, not sensitive)
       localStorage.setItem(BYO_IPNS_NAME_KEY, byoKeypair.ipnsName);
 
-      // 9. Update saved config state
       setSavedConfig({
         mode,
         endpoint,
         authToken,
       });
 
-      // 9b. Reconfigure SDK client with new pinning config so uploads
-      // immediately use the updated mode without requiring re-login
+      // Reconfigure SDK client so uploads immediately use the updated mode
       reconfigurePinning(
         mode !== 'cipherbox' && config.externalProvider
           ? { mode, externalProvider: config.externalProvider }
           : undefined
       );
 
-      // 10. Trigger migration if provider changed and user has existing pins
       // Treat null savedConfig as implicit "cipherbox" mode (first-time user)
       const previousMode = savedConfig?.mode ?? 'cipherbox';
       const previousEndpoint = savedConfig?.endpoint ?? '';
@@ -268,7 +257,6 @@ export function StorageTab() {
         await migrationApi.start(sourceConfigEncrypted, destConfigEncrypted);
       }
 
-      // 11. Refetch quota to update advisory status
       useQuotaStore.getState().fetchQuota();
     } catch (err) {
       setSaveError(

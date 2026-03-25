@@ -150,10 +150,10 @@ Plans:
 - [x] 21-05-PLAN.md -- TEE migration backend (entity, service, controller, BullMQ, TEE worker)
 - [x] 21-06-PLAN.md -- Migration progress UI + final integration verification
 - [x] 21-07-PLAN.md -- BYO performance benchmarking scenarios + baselines capture (task 4 deferred)
-- [ ] 21-08-PLAN.md -- Gap closure: Wire BYO config into SDK client lifecycle + source unpin after migration
-- [ ] 21-09-PLAN.md -- Gap closure: TEE-routed connection test endpoint (eliminates browser CORS issues)
-- [ ] 21-10-PLAN.md -- Gap closure: PinataProvider for Pinata native API (PSA endpoint deprecated)
-- [ ] 21-11-PLAN.md -- Gap closure: BYO performance baselines capture (deferred from 21-07)
+- [x] 21-08-PLAN.md -- Gap closure: Wire BYO config into SDK client lifecycle + source unpin after migration
+- [x] 21-09-PLAN.md -- Gap closure: TEE-routed connection test endpoint (eliminates browser CORS issues)
+- [x] 21-10-PLAN.md -- Gap closure: PinataProvider for Pinata native API (PSA endpoint deprecated)
+- [x] 21-11-PLAN.md -- Gap closure: BYO performance baselines capture (deferred from 21-07)
 
 ### Phase 22: Performance Baselines Completion
 
@@ -206,7 +206,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
 | 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
 | 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
-| 21. BYO-IPFS Node Support                 | 11/11     | Complete       | 2026-03-25  | -          |
+| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete    | 2026-03-25 |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
 | 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
 
