@@ -75,7 +75,7 @@ All text uses `var(--font-family-mono)` (JetBrains Mono). All text is `text-tran
 | Text Dim        | `#4a5a4e`             | Hints, inactive tab text, discard button text (`--color-text-dim`)                                                             |
 | Border          | `#00D084`             | Section border, active input border (`--color-border`)                                                                         |
 | Border Dim      | `#003322`             | Input default border, inactive borders (`--color-border-dim`)                                                                  |
-| Green Glow      | `#00D08466`           | Focus/hover box-shadow on inputs and buttons (`--glow-green`)                                                                  |
+| Green Glow      | `#00D08466`           | Focus/hover box-shadow color on inputs and buttons (`--color-green-glow`; `--glow-green` = `0 0 10px var(--color-green-glow)`) |
 
 Accent reserved for: active tab underline, connection test success indicator, `[--save]` button fill background, progress bar fill, radio dot/indicator for selected pinning mode, section heading text color.
 

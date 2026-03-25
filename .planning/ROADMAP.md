@@ -135,7 +135,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
 1. A user can enter their IPFS node endpoint and credentials in Settings, test the connection, and see a success/failure result
-2. After configuring a BYO node, every file upload is pinned to both the CipherBox node (always) and the user's node (best-effort mirror)
+2. After configuring a BYO node, uploads respect the user-selected pinning mode: cipherbox-only (default), external-only (direct to user's node), or dual-pin (both CipherBox and user's node)
 3. All IPNS publishes still route through the CipherBox API regardless of BYO configuration (no bypass of optimistic concurrency)
 4. BYO users see an advisory quota display (not enforced) with clear indication that storage is managed by their own node
 5. The connection test endpoint validates reachability and API compatibility of the user's node before saving configuration

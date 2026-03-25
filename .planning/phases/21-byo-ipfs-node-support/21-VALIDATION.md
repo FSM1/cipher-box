@@ -18,7 +18,7 @@ created: 2026-03-24
 | Property               | Value                                                                             |
 | ---------------------- | --------------------------------------------------------------------------------- |
 | **Framework**          | jest 29.x (API), vitest (SDK/web)                                                 |
-| **Config file**        | apps/api/jest.config.ts, packages/sdk-core/vitest.config.ts                       |
+| **Config file**        | apps/api/jest.config.js, packages/sdk-core/vitest.config.ts                       |
 | **Quick run command**  | `pnpm --filter api test -- --testPathPattern=migration`                           |
 | **Full suite command** | `pnpm --filter api test && pnpm --filter sdk-core test && pnpm --filter web test` |
 | **Estimated runtime**  | ~45 seconds                                                                       |
@@ -36,18 +36,18 @@ created: 2026-03-24
 
 ## Per-Task Verification Map
 
-| Task ID  | Plan | Wave | Requirement | Test Type   | Automated Command                                                                      | File Exists | Status  |
-| -------- | ---- | ---- | ----------- | ----------- | -------------------------------------------------------------------------------------- | ----------- | ------- |
-| 21-01-01 | 01   | 1    | BYO-01      | unit        | `pnpm --filter sdk-core test -- --run src/__tests__/pinning/kubo-provider.test.ts`     | W0 (Plan01) | pending |
-| 21-01-02 | 01   | 1    | BYO-05      | unit        | `pnpm --filter sdk-core test -- --run src/__tests__/pinning/connection-test.test.ts`   | W0 (Plan01) | pending |
-| 21-02-01 | 02   | 1    | BYO-07      | unit        | `pnpm --filter api test -- --testPathPattern="(ipfs.controller\|vault.service)"`       | W0 (Plan02) | pending |
-| 21-03-01 | 03   | 2    | BYO-02      | unit        | `pnpm --filter sdk-core test -- --run src/__tests__/pinning/dual-pin-provider.test.ts` | W0 (Plan03) | pending |
-| 21-03-02 | 03   | 2    | BYO-06      | unit        | `pnpm --filter sdk test -- --run src/__tests__/client-pinning.test.ts`                 | W0 (Plan03) | pending |
-| 21-04-01 | 04   | 3    | BYO-04      | manual      | Playwright MCP / human verification                                                    | N/A         | pending |
-| 21-05-01 | 05   | 3    | BYO-03      | unit        | `pnpm --filter api test -- --testPathPattern="migration.service"`                      | W0 (Plan05) | pending |
-| 21-05-02 | 05   | 3    | BYO-03      | compilation | `cd tee-worker && npx tsc --noEmit`                                                    | N/A         | pending |
-| 21-06-01 | 06   | 4    | BYO-04      | compilation | `pnpm --filter web exec tsc --noEmit`                                                  | N/A         | pending |
-| 21-06-02 | 06   | 4    | BYO-04      | manual      | End-to-end human verification                                                          | N/A         | pending |
+| Task ID  | Plan | Wave | Requirement | Test Type   | Automated Command                                                                | File Exists | Status  |
+| -------- | ---- | ---- | ----------- | ----------- | -------------------------------------------------------------------------------- | ----------- | ------- |
+| 21-01-01 | 01   | 1    | BYO-01      | unit        | `pnpm --filter sdk-core test -- src/__tests__/pinning/kubo-provider.test.ts`     | W0 (Plan01) | pending |
+| 21-01-02 | 01   | 1    | BYO-05      | unit        | `pnpm --filter sdk-core test -- src/__tests__/pinning/connection-test.test.ts`   | W0 (Plan01) | pending |
+| 21-02-01 | 02   | 1    | BYO-07      | unit        | `pnpm --filter api test -- --testPathPattern="(ipfs.controller\|vault.service)"` | W0 (Plan02) | pending |
+| 21-03-01 | 03   | 2    | BYO-02      | unit        | `pnpm --filter sdk-core test -- src/__tests__/pinning/dual-pin-provider.test.ts` | W0 (Plan03) | pending |
+| 21-03-02 | 03   | 2    | BYO-06      | unit        | `pnpm --filter sdk test -- src/__tests__/client-pinning.test.ts`                 | W0 (Plan03) | pending |
+| 21-04-01 | 04   | 3    | BYO-04      | manual      | Playwright MCP / human verification                                              | N/A         | pending |
+| 21-05-01 | 05   | 3    | BYO-03      | unit        | `pnpm --filter api test -- --testPathPattern="migration.service"`                | W0 (Plan05) | pending |
+| 21-05-02 | 05   | 3    | BYO-03      | compilation | `cd tee-worker && npx tsc --noEmit`                                              | N/A         | pending |
+| 21-06-01 | 06   | 4    | BYO-04      | compilation | `pnpm --filter web exec tsc --noEmit`                                            | N/A         | pending |
+| 21-06-02 | 06   | 4    | BYO-04      | manual      | End-to-end human verification                                                    | N/A         | pending |
 
 _Status: pending / green / red / flaky_
 
