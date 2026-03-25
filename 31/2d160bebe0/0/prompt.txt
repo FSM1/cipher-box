@@ -1,0 +1,11 @@
+do you still have all the context from the discuss phase?
+
+---
+
+no, keep all the context - anything that was committed is now probably gone from repo, so I need you to switch to the right branch and commit anything that is missing, then probably makes sense to restart the research.
+
+---
+
+can we resolve the 2 warnings? for the windows issue, I think that unmounting, restarting and mounting again is not that drastic a change. 
+
+for the rust test commands, please ensure that the correct command is used in the plans (if only check is available and not test, then the validation.md needs to be updated and nyquist_compliant flag should be set to true.
