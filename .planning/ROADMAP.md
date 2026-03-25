@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 19.2: IPFS Upload Performance Optimization** - Optimize Kubo pinning path (concurrent pins, worker tuning, pin batching) to reduce upload latency (INSERTED) (completed 2026-03-23)
 - [x] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material (gap closure in progress) (completed 2026-03-24)
 - [ ] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing
-- [x] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, k6 load testing, and capacity documentation (completed 2026-03-25)
+- [x] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, Vitest-based load testing, and capacity documentation (completed 2026-03-25)
 - [x] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (completed 2026-03-24)
 
 ## Phase Details
@@ -157,7 +157,7 @@ Plans:
 
 Plans:
 
-- [x] 22-01-PLAN.md -- SDK Performance API instrumentation (perf.ts module + instrument 10 sdk-core functions)
+- [x] 22-01-PLAN.md -- SDK Performance API instrumentation (perf.ts module + instrument 11 sdk-core functions)
 - [x] 22-02-PLAN.md -- Playwright journey timing tests (login-to-vault, upload-to-visible, share-to-accessible)
 - [x] 22-03-PLAN.md -- Load test thresholds + capacity model document (thresholds.ts, update scenarios, docs/CAPACITY.md)
 

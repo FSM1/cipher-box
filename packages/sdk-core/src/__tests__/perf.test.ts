@@ -1,12 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+declare global {
+  var __CIPHERBOX_PERF__: unknown | undefined;
+}
+
 describe('Performance instrumentation', () => {
   let originalNodeEnv: string | undefined;
   let originalPerfFlag: unknown;
 
   beforeEach(() => {
     originalNodeEnv = process.env.NODE_ENV;
-    originalPerfFlag = (globalThis as any).__CIPHERBOX_PERF__;
+    originalPerfFlag = globalThis.__CIPHERBOX_PERF__;
     // Clear performance entries between tests
     performance.clearMarks();
     performance.clearMeasures();
@@ -15,9 +19,9 @@ describe('Performance instrumentation', () => {
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
     if (originalPerfFlag === undefined) {
-      delete (globalThis as any).__CIPHERBOX_PERF__;
+      delete globalThis.__CIPHERBOX_PERF__;
     } else {
-      (globalThis as any).__CIPHERBOX_PERF__ = originalPerfFlag;
+      globalThis.__CIPHERBOX_PERF__ = originalPerfFlag;
     }
     vi.resetModules();
   });
@@ -70,7 +74,7 @@ describe('Performance instrumentation', () => {
   describe('withPerf (disabled in production)', () => {
     it('does NOT create marks/measures when NODE_ENV=production and __CIPHERBOX_PERF__ is not set', async () => {
       process.env.NODE_ENV = 'production';
-      delete (globalThis as any).__CIPHERBOX_PERF__;
+      delete globalThis.__CIPHERBOX_PERF__;
       const { withPerf } = await import('../perf');
 
       performance.clearMarks();
@@ -88,7 +92,7 @@ describe('Performance instrumentation', () => {
   describe('markStart / markEnd (disabled)', () => {
     it('markStart returns empty string when disabled, markEnd is a no-op when startMark is empty', async () => {
       process.env.NODE_ENV = 'production';
-      delete (globalThis as any).__CIPHERBOX_PERF__;
+      delete globalThis.__CIPHERBOX_PERF__;
       const { markStart, markEnd } = await import('../perf');
 
       const start = markStart('noop:test');
