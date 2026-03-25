@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ff0896386d86",
+  "session_id": "cd67d434-4a3e-40a1-bbd7-272357f3bb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T01:34:28.353707Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/21-byo-ipfs-node-support/21-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "172391e1bb8a",
+  "checkpoint_transcript_start": 372,
+  "transcript_lines_at_start": 372,
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 5353,
+    "cache_read_tokens": 435128,
+    "output_tokens": 2073,
+    "api_call_count": 5
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Complete Phase 21 (byo-ipfs-node-support) by implementing BYO IPFS node support with performance baselines, then verify and formally close the phase.",
+    "outcome": "All 4 gap closure plans (21-08 through 21-11) completed successfully. Phase 21 verified with 5/5 automated checks passing and approved by user, with phase marked complete in ROADMAP and STATE.",
+    "learnings": {
+      "repo": [
+        "BYO pinning reduces CipherBox API load by 98% per file compared to standard flow",
+        "BYO pin p50 latency is 2.0s — +47% median latency vs local Kubo but with better tail latency",
+        "PinningConfig type was not exported from @cipherbox/sdk and required a fix",
+        "PinataProvider uses native v3 API and required registration in the load test client-pool",
+        "TEE-routed connection tests use ECIES-encrypted credentials with server-side probing to avoid CORS",
+        "Phase verification reports are stored at .planning/phases/\u003cphase-name\u003e/\u003cphase-id\u003e-VERIFICATION.md"
+      ],
+      "code": [],
+      "workflow": [
+        "Phase completion requires both automated verification (5/5 must-haves) and explicit human approval for items requiring live sessions",
+        "Auto-fixed deviations during implementation were tracked and counted per plan",
+        "Phase state is tracked in both ROADMAP and STATE files, committed together at phase close"
+      ]
+    },
+    "friction": [
+      "PinningConfig type missing from @cipherbox/sdk export required an unplanned fix during 21-08",
+      "PinataProvider was missing from the load test client-pool, causing 403 errors in the BYO workload during 21-11 benchmarking — required auto-fix before baselines could be captured"
+    ],
+    "open_items": [
+      "5 human-only verification items could not be automated: Settings STORAGE tab rendering, TEE-routed credential encryption visible in DevTools, advisory quota badge in authenticated BYO session, migration progress polling/controls with an active job, and BYO config activation at login with a BYO-configured account"
+    ]
+  }
+}
