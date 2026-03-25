@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-25T01:44:05.439Z'
+last_updated: '2026-03-25T01:45:28.763Z'
 progress:
   total_phases: 8
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 31
-  completed_plans: 30
+  completed_plans: 31
 ---
 
 # Project State
@@ -62,6 +62,7 @@ Plan: 3 of 3 (COMPLETE)
 | 23    | 08   | 20min    | 2     | 7     |
 | 22    | 02   | 4min     | 2     | 2     |
 | 22    | 01   | 8min     | 2     | 7     |
+| 22    | 03   | 8min     | 2     | 8     |
 
 ## Accumulated Context
 
@@ -113,6 +114,7 @@ Recent for v1.1:
 - CI parity gate uses needs.changes.outputs.src (not nonexistent packages) for trigger condition
 - Desktop-e2e binary paths updated to target/debug/ to match workspace cargo build output
 - perf.ts PERF_ENABLED evaluated once at module load (zero overhead in production); **CIPHERBOX_PERF** global for opt-in production debugging
+- Load test thresholds set at 2-3x observed baselines; spike test most generous (15s/15%); vitest expect() for CI failure on breach
 
 ### Roadmap Evolution
 
@@ -138,4 +140,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-25 after completing 22-01 (SDK performance instrumentation)
+Last updated: 2026-03-25 after completing 22-03 (thresholds and capacity model)
