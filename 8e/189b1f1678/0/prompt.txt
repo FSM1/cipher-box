@@ -1,0 +1,349 @@
+approved
+
+---
+
+can you merge the latest main?
+
+---
+
+/simplify
+
+---
+
+<task-notification>
+<task-id>a9ab3e96fa17ed3db</task-id>
+<tool-use-id>toolu_0166yrThxperNmimZu8bir2B</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a9ab3e96fa17ed3db.output</output-file>
+<status>completed</status>
+<summary>Agent "Code reuse review of phase 21" completed</summary>
+<result>I now have all the information I need. Here is my comprehensive report.
+
+---
+
+## Code Reuse Findings for Phase 21 (BYO-IPFS Node Support)
+
+### 1. DUPLICATE: `formatBytes` in StorageQuota.tsx vs existing utility
+
+**File:** `apps/web/src/components/layout/StorageQuota.tsx:8-18`
+**Existing:** `apps/web/src/utils/format.ts:16-28` -- `formatBytes()` already exported
+
+StorageQuota.tsx defines a local `formatBytes` function that duplicates the existing `formatBytes` from `apps/web/src/utils/format.ts`. The existing version is used throughout the file browser components (FileListItem, DetailsDialog, BinListItem). The local version should be replaced with `import { formatBytes } from '../../utils/format'`.
+
+---
+
+### 2. DUPLICATE: probeKubo/probePsa logic in TEE connection-test route vs sdk-core connection-test
+
+**File (TEE):** `tee-worker/src/routes/connection-test.ts:109-190` (`probeKubo`, `probePsa`, `isTimeoutError`)
+**File (SDK):** `packages/sdk-core/src/pinning/connection-test.ts:50-190` (`probeKubo`, `probePsa`, `isTimeoutError`, `isCorsError`)
+
+Both files implement nearly identical sequential probe logic: try Kubo (`POST /api/v0/id`), then try PSA (`GET /pins?limit=1`), with the same auth header conventions, the same 401/403/422 auth failure detection, and the same timeout handling. The TEE version omits CORS detection (correct -- server-side), but the core probe logic is duplicated. Consider extracting the shared probe logic into a protocol-agnostic package (e.g., a shared `probe-ipfs` utility), or at minimum sharing the type definitions and constants.
+
+---
+
+### 3. DUPLICATE: ECIES decryption pattern in connection-test.ts and migration-worker.ts vs key-manager.ts
+
+**File (connection-test):** `tee-worker/src/routes/connection-test.ts:48-55` -- inline `getKeypair()` + `decrypt()` + `.fill(0)`
+**File (migration-worker):** `tee-worker/src/services/migration-worker.ts:35-37` -- `decryptEcies()` doing the same
+**Existing:** `tee-worker/src/services/key-manager.ts:23-33` -- `decryptIpnsKey()` already wraps `getKeypair()` + `decrypt()` + `.fill(0)`
+
+The existing `key-manager.ts` provides `decryptIpnsKey(encryptedData, epoch)` which handles: get keypair for epoch, ECIES decrypt, zero private key in `finally`. Both new routes reinvent this pattern. The key-manager function is currently named for IPNS keys but the logic is generic ECIES decryption -- it could be renamed/generalized (e.g., `decryptWithEpochKey`) and reused. The migration-worker also manually calls `teePrivateKey.fill(0)` which the key-manager handles in its `finally` block.
+
+---
+
+### 4. DUPLICATE: Private IP check logic between `validateEndpointUrl` and `validateResolvedIp`
+
+**File:** `tee-worker/src/services/ssrf-validation.ts:29-51` and `tee-worker/src/services/ssrf-validation.ts:61-78`
+
+Both `validateEndpointUrl` (hostname check) and `validateResolvedIp` (resolved IP check) contain the same private IP range detection logic: `10.*`, `192.168.*`, `127.*`, `::1`, `169.254.*`, `fd*`, `fe80*`, `172.16-31.*`. This block is copy-pasted verbatim. Extract a shared `isPrivateAddress(ip: string): boolean` helper and call it from both functions.
+
+---
+
+### 5. DUPLICATE: BYO config load/decrypt logic in useAuth.ts vs StorageTab.tsx
+
+**File (useAuth):** `apps/web/src/hooks/useAuth.ts:229-259` -- `loadByoConfig()` inline function
+**File (StorageTab):** `apps/web/src/components/settings/StorageTab.tsx:47-68` -- `decryptByoConfig()` + load effect at lines 100-148
+
+Both files implement the same sequence: `deriveByoConfigIpnsKeypair` -> `localStorage.getItem('cipherbox-byo-ipns-name')` -> `resolveIpnsRecord` -> `fetchFromIpfs` -> ECIES `unwrapKey` -> `JSON.parse` -> `clearBytes`. The decrypt+parse is split across `decryptByoConfig()` (StorageTab) and inline code (useAuth). Extract a shared `loadByoConfigFromIpns(userPrivateKey)` utility into `apps/web/src/lib/` or `apps/web/src/services/`.
+
+---
+
+### 6. DUPLICATE: Magic string `'cipherbox-byo-ipns-name'` used in two files without shared constant
+
+**File (useAuth):** `apps/web/src/hooks/useAuth.ts:230,248` -- bare string `'cipherbox-byo-ipns-name'`
+**File (StorageTab):** `apps/web/src/components/settings/StorageTab.tsx:22` -- defines `BYO_IPNS_NAME_KEY`
+
+StorageTab properly defines the constant, but useAuth uses the bare magic string. Both should import from a shared location.
+
+---
+
+### 7. DUPLICATE: Trailing-slash normalization `endpoint.replace(/\/+$/, '')` in 5 files
+
+**Files:**
+- `packages/sdk-core/src/pinning/kubo-provider.ts:18`
+- `packages/sdk-core/src/pinning/psa-provider.ts:37`
+- `packages/sdk-core/src/pinning/pinata-provider.ts:30,32`
+- `packages/sdk-core/src/pinning/connection-test.ts:20`
+- `tee-worker/src/routes/connection-test.ts:68`
+
+The same `endpoint.replace(/\/+$/, '')` normalization appears in every provider constructor and both connection-test files. Consider extracting a `normalizeEndpoint(url: string): string` utility in `packages/sdk-core/src/pinning/` and reusing it.
+
+---
+
+### 8. DUPLICATE: `MAX_FILE_SIZE` constant defined in two places
+
+**File (controller):** `apps/api/src/ipfs/ipfs.controller.ts:43` -- `const MAX_FILE_SIZE = 100 * 1024 * 1024`
+**File (DTO):** `apps/api/src/ipfs/dto/register-cid.dto.ts:5` -- `const MAX_FILE_SIZE = 100 * 1024 * 1024`
+
+The same constant is defined independently in both files. If the upload limit changes, only one might get updated. Consider extracting to a shared constants file (e.g., `apps/api/src/common/constants.ts`).
+
+---
+
+### 9. POTENTIAL REUSE: MigrationProcessor does raw fetch to TEE worker instead of using TeeService
+
+**File:** `apps/api/src/migration/migration.processor.ts:72-83` -- raw `fetch()` with manual `Authorization: Bearer ${TEE_SECRET}` header construction
+**Existing:** `apps/api/src/tee/tee.service.ts` -- provides `fetchWithTimeout()`, `authHeaders()`, and wraps all TEE worker communication
+
+The MigrationProcessor manually reads `TEE_WORKER_URL` and `TEE_WORKER_SECRET` from ConfigService and constructs raw fetch calls with `Authorization: Bearer ${TEE_SECRET}`. Meanwhile, `TeeService` already encapsulates TEE worker communication with proper timeouts, auth headers, and error handling. The processor should inject and use `TeeService` (adding a `migrate(...)` method to it) rather than hand-rolling TEE communication.
+
+---
+
+### 10. TYPE MISMATCH: `ByoIpfsConfig.protocol` lacks `'pinata'` vs `ExternalProviderConfig.protocol`
+
+**File (core):** `packages/core/src/vault/types.ts:60` -- `protocol: 'psa' | 'kubo'`
+**File (sdk-core):** `packages/sdk-core/src/pinning/types.ts:32` -- `protocol: 'psa' | 'kubo' | 'pinata'`
+
+The `ByoIpfsConfig` type in `@cipherbox/core` defines protocol as `'psa' | 'kubo'` while `ExternalProviderConfig` in `@cipherbox/sdk-core` has `'psa' | 'kubo' | 'pinata'`. Since `PinataProvider` is now a first-class provider, the `ByoIpfsConfig` type should include `'pinata'` or reference the sdk-core type. Currently, Pinata configs stored via StorageTab would need to encode as either 'psa' or 'kubo', losing fidelity.
+
+---
+
+### 11. DUPLICATE: `MigrationStatus` type defined independently on frontend and backend
+
+**File (API):** `apps/api/src/migration/migration.entity.ts:10-17` -- `MigrationStatus` type union
+**File (frontend):** `apps/web/src/lib/api/migration.ts:10-18` -- `MigrationStatus` type with same fields
+**File (DTO):** `apps/api/src/migration/dto/migration-status.dto.ts:3-24` -- `MigrationStatusDto` class
+
+The frontend manually defines `MigrationStatus` type because (as noted in the code comment) migration endpoints are "not yet in the generated orval client." Once `pnpm api:generate` is run, the generated types should replace the hand-written frontend type. Flag for cleanup.
+
+---
+
+### 12. NOTE: `deriveByoConfigIpnsKeypair` follows the established pattern correctly
+
+`packages/crypto/src/vault/derive-ipns.ts:127-151` -- The new `deriveByoConfigIpnsKeypair` follows the exact same pattern as `deriveVaultIpnsKeypair` and `deriveVaultKeyIpnsKeypair` (validate key size, deriveKey with HKDF, getPublicKeyAsync, deriveIpnsName). The three functions are structurally identical, differing only in the HKDF info parameter. While this could be refactored into a single generic `deriveIpnsKeypair(key, info)` helper to reduce the boilerplate, the existing convention in this file is to have separate named functions per purpose, so this is a pre-existing pattern rather than a new issue.</result>
+<usage><total_tokens>150630</total_tokens><tool_uses>57</tool_uses><duration_ms>227569</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a9ab3e96fa17ed3db.output
+
+---
+
+<task-notification>
+<task-id>a333e7f2a98848855</task-id>
+<tool-use-id>toolu_01NpUqYggGegazLebxDESwgE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a333e7f2a98848855.output</output-file>
+<status>completed</status>
+<summary>Agent "Code quality review of phase 21" completed</summary>
+<result>I have all the information needed. Here is my report.
+
+---
+
+## Code Quality Findings
+
+### 1. Copy-paste with slight variation: probeKubo/probePsa duplicated between browser and TEE
+
+**`packages/sdk-core/src/pinning/connection-test.ts`** (lines 49-140) and **`tee-worker/src/routes/connection-test.ts`** (lines 109-205) contain near-identical `probeKubo()` and `probePsa()` functions. The only differences are: (a) the browser version has CORS detection logic, (b) the TEE version uses a slightly different return type. The core probing logic (URL construction, auth header format, status code interpretation, error messages) is copy-pasted verbatim. The browser version also has a `probePinata()` function that the TEE version lacks, meaning the TEE-routed connection test cannot detect Pinata endpoints.
+
+These should share a protocol-agnostic probe library (e.g., in `sdk-core`) with platform-specific wrappers for CORS handling.
+
+### 2. Copy-paste with slight variation: BYO config load logic duplicated
+
+**`apps/web/src/hooks/useAuth.ts`** (lines ~225-259, the `loadByoConfig` inner function) and **`apps/web/src/components/settings/StorageTab.tsx`** (lines ~63-112, the `loadConfig` inner function within `useEffect`) both perform the same sequence: `deriveByoConfigIpnsKeypair` -> check localStorage for IPNS name -> `resolveIpnsRecord` -> `fetchFromIpfs` -> `unwrapKey`/`decryptByoConfig` -> parse JSON -> cache IPNS name. This should be extracted into a single shared function (e.g., `loadByoConfigFromIpns(privateKey)`).
+
+### 3. Stringly-typed: `MigrationStatus` type union duplicated in three places
+
+The migration status string union `'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'` is independently defined in:
+- **`apps/api/src/migration/migration.entity.ts:10`** (`MigrationStatus` type)
+- **`apps/web/src/lib/api/migration.ts:12`** (`MigrationStatus.status` field)
+- **`apps/api/src/migration/dto/migration-status.dto.ts:8`** (typed as bare `string`)
+
+The DTO types the `status` field as `string` rather than using the `MigrationStatus` union. The web client redefines the union independently. The entity-level type should be the single source, and the DTO and web client should reference or mirror it.
+
+### 4. Stringly-typed: `ByoIpfsConfig.protocol` diverges from `ExternalProviderConfig.protocol`
+
+**`packages/core/src/vault/types.ts:60`** defines `ByoIpfsConfig.externalProvider.protocol` as `'psa' | 'kubo'` (2 variants), while **`packages/sdk-core/src/pinning/types.ts:32`** defines `ExternalProviderConfig.protocol` as `'psa' | 'kubo' | 'pinata'` (3 variants). This means a Pinata configuration saved via `ExternalProviderConfig` cannot be round-tripped through `ByoIpfsConfig` without data loss. The `ByoIpfsConfig` type is missing `'pinata'` in its protocol union.
+
+### 5. Stringly-typed: magic string `'cipherbox-byo-ipns-name'` for localStorage key
+
+The localStorage key `'cipherbox-byo-ipns-name'` is a literal string used in:
+- **`apps/web/src/hooks/useAuth.ts:234`**
+- **`apps/web/src/components/settings/StorageTab.tsx:22`** (as `BYO_IPNS_NAME_KEY` constant)
+
+The `useAuth.ts` usage references the raw string `'cipherbox-byo-ipns-name'` instead of importing the constant defined in `StorageTab.tsx`. The constant should live in a shared location and be used in both places.
+
+### 6. Redundant DB query: `checkQuota` calls `isUserByo` then `getQuota` which also calls `isUserByo`
+
+**`apps/api/src/vault/vault.service.ts:188-193`**: `checkQuota()` first calls `this.isUserByo(userId)` (one DB query), then if not BYO, calls `this.getQuota(userId)` which internally also calls `this.isUserByo(userId)` (another DB query for the same value). For non-BYO users, this results in two identical `SELECT isByoUser FROM vaults WHERE ownerId = ?` queries per upload. `checkQuota` should either pass the BYO flag to `getQuota` or query it once and branch locally.
+
+### 7. Parameter sprawl: `pinFn` callback injected into `uploadFile`
+
+**`packages/sdk-core/src/upload/index.ts:73-77`**: A new `pinFn` optional parameter is added to `uploadFile()`, which already has 8 parameters in an options object. The `pinFn` is only set by `CipherBoxClient.uploadFile()` to indirect through `pinWithMode()`. Rather than threading a function parameter through the generic upload path, the SDK client should compose the pin operation before calling `uploadFile` (i.e., pin first, then pass the resulting CID), or `uploadFile` should accept a `PinningProvider` abstraction rather than an arbitrary callback.
+
+### 8. Leaky abstraction: `PsaProvider` cast in `CipherBoxClient.pinWithMode`
+
+**`packages/sdk/src/client.ts:1060`** and **`packages/sdk/src/client.ts:1082`**: The code casts `this.externalProvider as sdkCore.PsaProvider` to call `pinByCid()`, which is not on the `PinningProvider` interface. This breaks the abstraction boundary -- `pinWithMode` must know the concrete type of the provider to use protocol-specific methods. `pinByCid` should either be on the `PinningProvider` interface (as an optional method) or the PSA flow should be handled by the `PsaProvider` internally (e.g., `pin()` could accept a CID-acquisition callback).
+
+### 9. Copy-paste with slight variation: SSRF IP validation duplicated
+
+**`tee-worker/src/services/ssrf-validation.ts`** lines 29-43 (`validateEndpointUrl` hostname checks) and lines 61-77 (`validateResolvedIp` IP checks) contain nearly identical private-range check logic (10.x, 192.168.x, 169.254.x, 172.16-31.x, fd/fe80, ::1, localhost). The IP range check should be extracted into a single `isPrivateAddress(addr: string): boolean` function called by both.
+
+### 10. Unnecessary comments: numbered step comments in `StorageTab.handleSave`
+
+**`apps/web/src/components/settings/StorageTab.tsx`** lines ~119-233: The `handleSave` callback has 11 numbered step comments (`// 1. Construct ByoIpfsConfig`, `// 2. Encrypt with user's public key`, ..., `// 11. Refetch quota`). These narrate what the immediately following code does, which the code itself makes clear. Step `// 9b.` even breaks the numbering scheme. The comments should be removed; the function is long but each operation's intent is obvious from names like `encryptByoConfig`, `addToIpfs`, `deriveByoConfigIpnsKeypair`.
+
+### 11. Unnecessary comment: orphaned JSDoc fragment in `ipfs/index.ts`
+
+**`packages/sdk-core/src/ipfs/index.ts:68-73`**: The existing JSDoc for `fetchFromIpfs` is left dangling above the new `registerCid` function's JSDoc, creating two consecutive doc comments where the first one (`/** Fetch encrypted data from IPFS via backend relay...`) is orphaned -- it no longer sits above `fetchFromIpfs`. The old comment should be moved back down to above `fetchFromIpfs`.
+
+### 12. Unnecessary comment: `kuboCorsInstructions` dead parameter comment
+
+**`packages/sdk-core/src/pinning/connection-test.ts:356`**: `void endpoint; // endpoint available for future per-node instructions` -- this is speculative future-use commenting. The parameter should just be removed or the comment should be deleted. Keeping dead parameters with "maybe someday" comments adds noise.
+
+### 13. Unnecessary comment in diff context: `useDropUpload.ts`
+
+**`apps/web/src/hooks/useDropUpload.ts`** (diff lines ~2494-2499): Three lines of comment explain WHY duplicate files always upload to CipherBox relay. This is actually a valid non-obvious WHY comment about a subtle constraint, so it passes the review criteria. (No action needed -- noting I reviewed it.)
+
+### 14. Redundant state: `_lastConfig` in `sdk-provider.ts`
+
+**`apps/web/src/lib/sdk-provider.ts:11`**: A new `_lastConfig` module-level variable stores a copy of the config passed to `initSdkClient`. This exists solely to support `reconfigurePinning()`, which destroys and recreates the client. The config is already held by the `CipherBoxClient` instance internally (as `this.config`). If the client exposed its config (or just the parts needed), the separate cache would be unnecessary. As-is, the two can drift if someone modifies one but not the other.
+
+### 15. Stringly-typed: terminal status check in `MigrationProgress` uses array includes
+
+**`apps/web/src/components/settings/MigrationProgress.tsx:20`**: `['completed', 'failed', 'cancelled'].includes(status.status)` uses raw strings to check terminal states. Given that `MigrationStatus` already has a typed union, a `const TERMINAL_STATUSES` set would be clearer and enable reuse if other components need the same check.
+
+### 16. Copy-paste with slight variation: `deriveByoConfigIpnsKeypair` identical to siblings
+
+**`packages/crypto/src/vault/derive-ipns.ts:127-151`**: `deriveByoConfigIpnsKeypair` is character-for-character identical to `deriveVaultIpnsKeypair` (lines 43-72) and `deriveVaultKeyIpnsKeypair` (lines 88-112), differing only in the HKDF info constant and the error message string. All three functions follow the pattern: validate key size -> deriveKey(HKDF) -> getPublicKeyAsync -> deriveIpnsName -> return {privateKey, publicKey, ipnsName}. This should be refactored into a single private helper `deriveIpnsKeypairFromInfo(userPrivateKey, info, errorContext)` called by the three public functions.</result>
+<usage><total_tokens>155599</total_tokens><tool_uses>47</tool_uses><duration_ms>237515</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a333e7f2a98848855.output
+
+---
+
+<task-notification>
+<task-id>a58542b324b503022</task-id>
+<tool-use-id>toolu_01GVdUQQYrrV1HhudnkW9oip</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a58542b324b503022.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency review of phase 21" completed</summary>
+<result>I have now read all the production code thoroughly. Let me compile the efficiency findings.
+
+---
+
+Here are the efficiency findings for the Phase 21 (BYO-IPFS Node Support) diff:
+
+## 1. Redundant DB query: `checkQuota` calls `isUserByo` then `getQuota` which calls `isUserByo` again
+
+**`apps/api/src/vault/vault.service.ts:188-193`** -- `checkQuota()` first calls `this.isUserByo(userId)` (one DB query on the `vaults` table), and if the user is NOT BYO, it then calls `this.getQuota(userId)` which internally calls `this.isUserByo(userId)` *again* (line 163). This is 2 DB round-trips to the `vaults` table for every non-BYO upload's quota check. Since `checkQuota` sits on the upload hot path (`ipfs.controller.ts:103`), this doubles the vault lookups for every file upload by non-BYO users. Fix: pass the already-known `isByo` value into `getQuota`, or inline the BYO check in `checkQuota` so it only queries the DB once.
+
+## 2. `startMigration` fetches all PinnedCid rows just to count them
+
+**`apps/api/src/migration/migration.service.ts:50-51`** -- `await this.pinnedCidRepo.find({ where: { userId } })` loads every PinnedCid entity for the user into memory just to get `pinnedCids.length`. For users with many pins, this is a large, unnecessary data transfer. Fix: use `this.pinnedCidRepo.count({ where: { userId } })` instead.
+
+## 3. Migration processor re-decrypts ECIES configs every batch via the TEE `/migrate` endpoint
+
+**`apps/api/src/migration/migration.processor.ts:72-83`** -- Inside the batch loop, every iteration sends `migration.sourceConfigEncrypted` and `migration.destConfigEncrypted` to the TEE `/migrate` endpoint, which decrypts them from scratch on each call (`tee-worker/src/services/migration-worker.ts:78-85`). For a user with 1000 CIDs and BATCH_SIZE=10, this is 100 redundant ECIES decryptions of identical configs. Fix: add session caching in the TEE worker (e.g., a short-lived token or nonce keyed to the migration), or pass all CIDs in one request with pagination handled TEE-side.
+
+## 4. `authTokenString()` re-decodes Uint8Array on every call inside the migration CID loop
+
+**`tee-worker/src/services/migration-worker.ts:59-61`** -- `authTokenString(config)` does `new TextDecoder().decode(config.authTokenBytes)` and is called separately in `fetchFromProvider` (line 200), `pinToProvider` (line 225), and `unpinFromProvider` (line 150) for *each CID* in the batch. For N CIDs, that is up to 3N TextDecoder allocations for the same bytes. Fix: decode once at the top of `migrateBatch` and use a local variable.
+
+## 5. MigrationProgress polls unconditionally even when no migration exists
+
+**`apps/web/src/components/settings/MigrationProgress.tsx:29-35`** -- The 5-second `setInterval` starts on mount and keeps polling `GET /migration/status` even when the initial fetch returns `null` (no migration exists). The early return at line 37 prevents rendering, but the interval keeps firing network requests every 5 seconds. Fix: after the initial fetch, only start the interval if a non-terminal migration exists; and stop polling when `status` is null.
+
+## 6. MigrationProgress: unconditional `setMigration(status)` on every poll fires re-renders
+
+**`apps/web/src/components/settings/MigrationProgress.tsx:17-18`** -- `setMigration(status)` is called on every poll response even if the status object is identical (same migratedCids, same status string). Since the API returns a new object reference each time, React will re-render the component every 5 seconds even when nothing changed. Fix: compare key fields (migratedCids, failedCids, status) before calling `setMigration`.
+
+## 7. Duplicate BYO config load during login and StorageTab mount
+
+**`apps/web/src/hooks/useAuth.ts:225-259`** (login) and **`apps/web/src/components/settings/StorageTab.tsx:99-130`** (StorageTab mount) -- Both perform the identical operation: derive BYO keypair, resolve IPNS name, fetch encrypted blob from IPFS, decrypt. When the user logs in and then navigates to Settings, the config is loaded twice (IPNS resolve + IPFS fetch + ECIES decrypt). Fix: cache the loaded BYO config in a store (e.g., quota store or a dedicated BYO store) after the login load, and have StorageTab read from the store.
+
+## 8. `DualPinProvider.pin()` runs secondary pin sequentially after primary completes
+
+**`packages/sdk-core/src/pinning/dual-pin-provider.ts:21-39`** -- The secondary pin waits for the primary pin to fully complete before starting. Since they are independent operations (the secondary doesn't depend on the primary's CID since both pin the same data), the secondary could start concurrently. This would reduce total upload latency in dual mode by overlapping the two network round-trips. Fix: use `Promise.allSettled([primary.pin(), secondary.pin()])` and check which succeeded.
+
+## 9. `pinWithMode` in dual mode uploads data to CipherBox, then *re-uploads* the same data to external node
+
+**`packages/sdk/src/client.ts:1068-1081`** -- In dual mode, `addToIpfs(ctx, encryptedData, onProgress)` uploads the full encrypted blob to CipherBox, then `this.externalProvider.pin(encryptedData)` uploads the same blob again to the external node. Both uploads transfer the full payload. For Kubo external providers, the external node could instead `ipfs pin add <CID>` after the CipherBox upload finishes (since the content is on the IPFS network already), similar to the PSA flow. This would avoid a full second upload of potentially 100MB of data.
+
+## 10. `StorageTab.handleSave` derives BYO IPNS keypair twice
+
+**`apps/web/src/components/settings/StorageTab.tsx:181`** -- `deriveByoConfigIpnsKeypair(vaultKeypair.privateKey)` is called in `handleSave()`, but it was already called during mount's `loadConfig()` (line 109). The keypair derivation involves HKDF + Ed25519 key generation. Fix: cache the keypair from the initial load in a ref and reuse it during save.
+
+## 11. TEE connection test and migration routes re-validate SSRF for the same endpoint on every call
+
+**`tee-worker/src/routes/connection-test.ts:170-173`** and **`tee-worker/src/services/migration-worker.ts:88-98`** -- `validateResolvedIp` does a fresh DNS lookup on every request. For the migration route, this means a DNS lookup for both source and dest endpoints on every `/migrate` call (100 calls for 1000 CIDs at BATCH_SIZE=10). Fix: cache DNS resolution results for a short TTL (e.g., 60 seconds) keyed by hostname.
+
+## 12. `failedCidList` uses unbounded comma-separated string in the database
+
+**`apps/api/src/migration/migration.entity.ts:47`** and **`apps/api/src/migration/migration.service.ts:126-129`** -- Failed CIDs are appended to a TEXT column as a comma-separated string. For a migration with many failures, this string grows without bound. Every `updateProgress` call does `split(',')` on the existing list, pushes new items, then re-joins, meaning the entire string is parsed and re-serialized per batch. The entity is then `.save()`'d, writing the entire growing string back. Fix: use a JSON array column, or a separate `failed_cid` junction table, or at minimum limit the list size.
+
+## 13. Connection test runs sequential probe chain (Kubo, then Pinata, then PSA) when one would suffice
+
+**`packages/sdk-core/src/pinning/connection-test.ts:106-137`** -- The three probes run sequentially. Each has a 10-second timeout. In the worst case (all three time out), the user waits 30 seconds. The probes are independent and could run concurrently with `Promise.any()` (first success wins) or at least use a shorter timeout for the initial probes. This is not on a hot path (user-initiated action) but still affects perceived responsiveness.
+
+## 14. Pinata `unpin()` and PSA `unpin()` issue sequential DELETE requests for each matching file/pin
+
+**`packages/sdk-core/src/pinning/pinata-provider.ts:159-168`** and **`packages/sdk-core/src/pinning/psa-provider.ts:120-137`** -- After listing files/pins by CID, the code loops over results and issues `DELETE` calls one at a time. These could be parallelized with `Promise.all()` since they are independent.</result>
+<usage><total_tokens>143936</total_tokens><tool_uses>40</tool_uses><duration_ms>406023</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a58542b324b503022.output
+
+---
+
+/security:review
+
+---
+
+there is still a conflict in roadmap.md from main
+
+---
+
+please try again
+
+---
+
+what are all the unstaged changes on that branch?
+
+---
+
+and why are they uncommitted?
+
+---
+
+<task-notification>
+<task-id>bc7qn6359</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bc7qn6359.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit simplify changes" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bc7qn6359.output
+
+---
+
+<task-notification>
+<task-id>b4pjab1ov</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/b4pjab1ov.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit security fixes" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/b4pjab1ov.output
+
+---
+
+/resolve-pr-reviews
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23522182827/job/68467638926?pr=346 and https://github.com/FSM1/cipher-box/actions/runs/23522182827/job/68467638942?pr=346 are both failing on the ci

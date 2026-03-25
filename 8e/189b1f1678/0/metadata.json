@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8e189b1f1678",
+  "session_id": "cd67d434-4a3e-40a1-bbd7-272357f3bb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T02:54:54.599344Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "962b5f088a7f",
+  "token_usage": {
+    "input_tokens": 1041,
+    "cache_creation_tokens": 232256,
+    "cache_read_tokens": 28724043,
+    "output_tokens": 58194,
+    "api_call_count": 179
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Execute Phase 21 BYO-IPFS gap closure plans (21-08 through 21-11), then run a simplify code review pass, a security review, and resolve open PR review comments and CI failures.",
+    "outcome": "All 4 gap closure plans executed and verified (SDK config wiring, TEE-routed connection test, PinataProvider, performance baselines). Simplify and security fixes committed. All 5 PR review threads resolved. Two CI failures fixed (migration drift + broken test mock from find→count change).",
+    "learnings": {
+      "repo": [
+        "ByoIpfsConfig.protocol in packages/core was missing 'pinata', breaking Pinata config round-trips through the vault type system",
+        "BYO_IPNS_NAME_KEY constant is defined in StorageTab.tsx but useAuth.ts used the raw string 'cipherbox-byo-ipns-name' — the constant lives in StorageTab, not a shared file",
+        "formatBytes utility already exists in apps/web/src/utils/format.ts and is used by FileListItem, DetailsDialog, BinListItem — was duplicated in StorageQuota.tsx",
+        "Migration drift check CI job catches TIMESTAMP vs TIMESTAMP WITH TIME ZONE mismatches — AddPinMigrations used WITH TIME ZONE but TypeORM @CreateDateColumn defaults to plain TIMESTAMP",
+        "MigrationProcessor communicates with TEE worker via raw fetch instead of using TeeService (pre-existing architectural gap)",
+        "probeKubo/probePsa logic is duplicated between packages/sdk-core and tee-worker — TEE version cannot probe Pinata endpoints",
+        "deriveByoConfigIpnsKeypair follows an established convention of separate named functions per purpose rather than a shared generic helper"
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/vault/types.ts",
+          "line": 60,
+          "end_line": 60,
+          "finding": "protocol union was 'psa' | 'kubo', missing 'pinata' — sdk-core's ExternalProviderConfig already had all 3"
+        },
+        {
+          "path": "tee-worker/src/services/ssrf-validation.ts",
+          "line": 29,
+          "end_line": 78,
+          "finding": "Private IP check duplicated verbatim in validateEndpointUrl and validateResolvedIp — extracted to isPrivateAddress() helper"
+        },
+        {
+          "path": "tee-worker/src/services/ssrf-validation.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "SSRF blocklist missing 0.0.0.0, ::  (unspecified IPv6), fc00::/7 (unique-local), 100.64.0.0/10 (CGN RFC 6598), and IPv4-mapped IPv6 (::ffff:127.x.x.x)"
+        },
+        {
+          "path": "tee-worker/src/services/ssrf-validation.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "DNS rebinding TOCTOU: DNS resolved once for validation, then fetch uses hostname again allowing attacker-controlled DNS to serve different IP. Fixed via ssrfSafeFetch() wrapper with redirect: 'error'"
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "line": 188,
+          "end_line": 193,
+          "finding": "checkQuota called isUserByo (1 DB query), then for non-BYO users called getQuota which internally called isUserByo again — 2 identical vault table lookups per upload"
+        },
+        {
+          "path": "apps/api/src/migration/migration.service.ts",
+          "line": 50,
+          "end_line": 51,
+          "finding": "startMigration used .find({where: {userId}}) to get total count — loads all PinnedCid rows into memory. Changed to .count()"
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "line": 59,
+          "end_line": 61,
+          "finding": "authTokenString() decoded Uint8Array inside per-CID functions — up to 3N TextDecoder allocations per batch. Fixed by decoding once at batch start"
+        },
+        {
+          "path": "apps/web/src/components/settings/MigrationProgress.tsx",
+          "line": 29,
+          "end_line": 35,
+          "finding": "5s polling interval started unconditionally on mount even when no migration exists. Also called setMigration on every poll even with identical values, causing unnecessary re-renders"
+        },
+        {
+          "path": "apps/api/src/migration/migration.service.spec.ts",
+          "line": 1,
+          "end_line": 200,
+          "finding": "Test mock for pinnedCidRepo only had find() method — broke when service changed to count(). Mock needed count: jest.fn() and test assertions updated from array to number"
+        }
+      ],
+      "workflow": [
+        "When the /simplify and /security:review commands make file edits, commit immediately — leaving them unstaged blocks git pull --rebase",
+        "GSD execute-phase --gaps-only filters to plans with gap_closure: true in frontmatter and skips plans with existing SUMMARY.md",
+        "Checkpoint plans with autonomous: false and human-action type cannot be auto-approved — require user to set up external provider credentials before the agent can run",
+        "The classifyHandoffIfNeeded Claude Code runtime bug fires in the completion handler after all tool calls finish — spot-check SUMMARY.md and commits to determine real success/failure",
+        "After GitHub web UI merges (e.g. merging main via web), the remote branch diverges from local — reconcile with git merge origin/\u003cbranch\u003e then resolve any conflicts",
+        "Security review should check SSRF implementations for: missing IP ranges (0.0.0.0, CGN, IPv4-mapped IPv6), redirect-based bypass (redirect: 'error'), and DNS TOCTOU patterns"
+      ]
+    },
+    "friction": [
+      "Pinata JWT had a leading 'b' typo when pasted — required re-paste before authentication worked",
+      "GitHub connectivity intermittently failed (port 443 timeout) blocking git fetch and pull multiple times, requiring retries",
+      "Branch diverged after a GitHub web UI merge, requiring manual reconciliation and ROADMAP.md conflict resolution",
+      "Uncommitted simplify/security edits blocked git pull --rebase — should have been committed before the pull attempt",
+      "CI migration drift failure only discovered after push — AddPinMigrations used TIMESTAMP WITH TIME ZONE inconsistently with other migrations and TypeORM defaults",
+      "CI API test failure from find→count refactor not caught locally until running full test suite — individual test file runs passed"
+    ],
+    "open_items": [
+      "probe logic (probeKubo/probePsa) duplicated between packages/sdk-core and tee-worker — TEE version also cannot probe Pinata endpoints; needs shared protocol-agnostic library",
+      "DualPinProvider.pin() runs primary then secondary sequentially — could use Promise.allSettled() to overlap the two uploads",
+      "BYO config load/decrypt logic duplicated between useAuth.ts and StorageTab.tsx — extract to shared loadByoConfigFromIpns() utility, cache result in store",
+      "MigrationProcessor uses raw fetch instead of TeeService for TEE communication — should be refactored into a separate PR",
+      "No rate limiting on 5 migration endpoints (MEDIUM security finding from review)",
+      "auth token string persistence — authTokenString() creates JS strings that survive until GC; MEDIUM security finding",
+      "MigrationStatus type union defined independently in migration.entity.ts, migration.service.spec.ts, and apps/web — will be resolved when orval api:generate is run",
+      "deriveByoConfigIpnsKeypair is near-identical to deriveVaultIpnsKeypair and deriveVaultKeyIpnsKeypair — could be unified into a private helper (pre-existing pattern, not newly introduced)",
+      "8 todo integration test cases in tee-worker/src/__tests__/ssrf-validation.test.ts need implementation",
+      "failedCidList uses unbounded comma-separated TEXT column — should use JSON array or separate table",
+      "Connection test runs Kubo→Pinata→PSA probes sequentially (max 30s timeout) — could run concurrently with Promise.any()"
+    ]
+  }
+}
