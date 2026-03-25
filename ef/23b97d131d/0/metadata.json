@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ef23b97d131d",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T16:03:25.871083Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "9ce36e7506b2",
+  "token_usage": {
+    "input_tokens": 267,
+    "cache_creation_tokens": 352160,
+    "cache_read_tokens": 27397304,
+    "output_tokens": 49690,
+    "api_call_count": 218
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute Phase 22 (performance baselines completion), clean up the resulting code, populate journey timing baselines against staging, and get PR #355 reviewed and ready to merge.",
+    "outcome": "Phase 22 fully executed and verified (3/3 plans, 9/9 must-haves), PR #355 created and all 16 review comments resolved across 4 rounds, staging DB reset to fix a vault init bug, journey baselines populated from live staging runs, main merged with conflicts resolved, and BYO-IPFS path instrumented for separate performance visibility.",
+    "learnings": {
+      "repo": [
+        "Phase 22 planning commits were accidentally made directly to main instead of the feature branch; the fix was to create the feature branch at the current HEAD then reset main to origin/main.",
+        "Staging DB was never reset after Phase 20 (vault migration) removed encrypted_root_folder_key and encrypted_root_ipns_private_key columns — causing a NOT NULL constraint violation on new wallet logins.",
+        "The mock wallet uses EIP-6963 auto-announcement and is injected via Playwright's addInitScript; it cannot be used through the Playwright MCP browser (which lacks addInitScript).",
+        "Web3Auth Core Kit MPC init dominates login-to-vault timing at ~23.5s; actual vault load after auth is only ~86ms.",
+        "GitHub Actions started requiring manual approval for the lint-pr-title workflow despite it using only shell steps — cause not fully identified, possibly a platform settings change.",
+        "Phase 21 added a pinFn BYO-IPFS override to upload/index.ts; Phase 22 added withPerf instrumentation — both needed to be preserved during merge conflict resolution.",
+        "Performance instrumentation (withPerf) did not cover the BYO pinFn path, creating a blind spot for clients using their own IPFS nodes."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 21,
+          "end_line": 23,
+          "finding": "performance.clearMeasures() must be called after getEntriesByName to prevent unbounded PerformanceMeasure accumulation in long-running sessions."
+        },
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 5,
+          "end_line": 7,
+          "finding": "PERF_ENABLED env check needs typeof guard to avoid being true in browser prod where process is polyfilled."
+        },
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 23,
+          "end_line": 25,
+          "finding": "Parallel withPerf calls with the same operation name would collide on mark names — added per-invocation counter suffix to make marks unique."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 205,
+          "end_line": 207,
+          "finding": "Axios errors expose HTTP status on error.response.status, not error.status — 404 check was wrong."
+        },
+        {
+          "path": "tests/load/src/harness/thresholds.ts",
+          "line": 41,
+          "end_line": 66,
+          "finding": "expectThresholdsPassed() helper extracted to replace 5 identical 8-line assertion blocks across all load test scenarios; uses throw not vitest expect."
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "finding": "BYO pinFn path now wrapped with withPerf('ipfs:upload:byo') to give separate performance visibility vs CipherBox-pinned uploads ('ipfs:upload')."
+        }
+      ],
+      "workflow": [
+        "The GSD execute-phase workflow correctly skips plans with existing SUMMARY.md files, enabling safe re-runs after partial failures.",
+        "CodeRabbit and GitHub Copilot both post automated review threads; multiple rounds of /resolve-pr-comments are needed as reviewers re-comment after each push.",
+        "Playwright journey timing tests can target staging by creating a temp config with absolute testDir path and no webServer entries, overriding baseURL.",
+        "Staging API logs accessible via SSH show specific DB constraint errors, enabling root-cause diagnosis without frontend debugging.",
+        "git diff origin/main..HEAD scoped to non-planning files is the right way to get the code diff for simplify review without planning doc noise."
+      ]
+    },
+    "friction": [
+      "Phase 22 planning commits were accidentally pushed to main instead of the feature branch, requiring a branch shuffle before execution could start.",
+      "Staging DB was never reset after Phase 20 schema changes, causing a NOT NULL vault init crash that blocked all journey timing runs against staging.",
+      "Playwright temp config required absolute testDir path — relative paths silently failed with no useful error.",
+      "GitHub Actions lint-pr-title workflow suddenly required manual approval with no clear cause, requiring user to manually unblock each CI run.",
+      "Usage limits interrupted the session mid-PR-review, requiring a continuation after reset.",
+      "CodeRabbit reopened a CAPACITY.md table comment across two review rounds despite it being marked not applicable the first time.",
+      "Background task notifications from executor subagents surfaced in the main conversation as stale task-ids, requiring dismissal."
+    ],
+    "open_items": [
+      "Journey timing baselines have PENDING markers for share-to-accessible recipient timings — need a second account run to populate.",
+      "Two human verification items remain: (1) run journey tests against live services to confirm baselines hold, (2) verify Performance API marks appear in browser DevTools.",
+      "GitHub Actions approval requirement for lint-pr-title not fully diagnosed — worth checking Settings \u003e Actions \u003e General fork PR approval settings.",
+      "Phase 21 and 23 are still in progress/partially complete — phase ordering was non-sequential (22 before 21).",
+      "perf.ts PERF_ENABLED browser dev path still returns false unless __CIPHERBOX_PERF__ is explicitly set — adding it to the web app entrypoint was deferred as out of scope."
+    ]
+  }
+}
