@@ -1,0 +1,1 @@
+surely you can handle these steps yourself - you can create GH secrets, do all the things, etc.
