@@ -50,10 +50,9 @@ describe('Performance instrumentation', () => {
 
       await withPerf('cleanup:test', async () => 'done');
 
-      const startMarks = performance.getEntriesByName('cipherbox:cleanup:test:start');
-      const endMarks = performance.getEntriesByName('cipherbox:cleanup:test:end');
-      expect(startMarks).toHaveLength(0);
-      expect(endMarks).toHaveLength(0);
+      const allMarks = performance.getEntriesByType('mark');
+      const cbMarks = allMarks.filter((m) => m.name.includes('cipherbox:cleanup:test'));
+      expect(cbMarks).toHaveLength(0);
     });
 
     it('propagates errors from the wrapped function without swallowing them', async () => {

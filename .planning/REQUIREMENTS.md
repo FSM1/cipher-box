@@ -41,7 +41,7 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [x] **PERF-04**: TEE republish batch duration histogram added
 - [x] **PERF-05**: Client-side timing instrumentation for encrypt/decrypt, upload/download, IPNS operations
 - [x] **PERF-06**: End-to-end user journey timing captured (login-to-vault, upload-to-visible, share-to-accessible)
-- [x] **PERF-07**: k6 load testing scripts simulating concurrent users (upload, download, publish, resolve)
+- [x] **PERF-07**: Vitest-based SDK load harness simulating concurrent users (upload, download, publish, resolve)
 - [x] **PERF-08**: Capacity thresholds documented with scaling recommendations
 - [x] **PERF-09**: Upload operations optimized via concurrent SDK pin orchestration (Promise.allSettled) and Kubo pebbleds datastore, with before/after baselines documented
 
