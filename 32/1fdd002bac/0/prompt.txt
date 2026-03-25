@@ -166,3 +166,7 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 <summary>Background command "Push to remote" completed (exit code 0)</summary>
 </task-notification>
 Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bk2uancha.output
+
+---
+
+/resolve-pr-reviews
