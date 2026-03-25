@@ -136,32 +136,6 @@
       border-color: #22c55e;
     }
 
-    input[type="file"] {
-      display: block;
-      margin-bottom: 1rem;
-      color: #888;
-      font-size: 0.8rem;
-    }
-
-    input[type="file"]::file-selector-button {
-      background: #1a1a1a;
-      border: 1px solid #333;
-      color: #d4d4d4;
-      padding: 0.35rem 0.75rem;
-      border-radius: 3px;
-      cursor: pointer;
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 0.8rem;
-      margin-right: 0.75rem;
-    }
-
-    .or-divider {
-      text-align: center;
-      color: #555;
-      font-size: 0.75rem;
-      margin: 0.5rem 0;
-    }
-
     button.primary {
       background: #22c55e;
       color: #0a0a0a;
@@ -209,7 +183,10 @@
       font-size: 0.78rem;
       margin-bottom: 1rem;
       color: #aaa;
+      display: none;
     }
+
+    .parsed-info.visible { display: block; }
 
     .parsed-info .field {
       margin-bottom: 0.25rem;
@@ -287,44 +264,6 @@
       text-align: center;
     }
 
-    /* Recovery method selector */
-    .recovery-method {
-      display: flex;
-      gap: 1rem;
-      margin-bottom: 1.5rem;
-    }
-
-    .recovery-method label {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-      cursor: pointer;
-      color: #d4d4d4;
-      font-size: 0.85rem;
-    }
-
-    .recovery-method input[type="radio"] {
-      accent-color: #22c55e;
-    }
-
-    .method-panel {
-      display: none;
-    }
-
-    .method-panel.visible {
-      display: block;
-    }
-
-    .migrated-notice {
-      background: #1a1a2e;
-      border: 1px solid #333;
-      border-left: 3px solid #f59e0b;
-      padding: 0.75rem 1rem;
-      margin-bottom: 1rem;
-      font-size: 0.8rem;
-      color: #f59e0b;
-    }
-
     @media (max-width: 600px) {
       .container { padding: 1rem 0.75rem; }
       header h1 { font-size: 1.2rem; }
@@ -337,120 +276,50 @@
     <header>
       <h1>&gt; cipherbox vault recovery</h1>
       <p class="subtitle">
-        This tool recovers your CipherBox vault using your export file or private key.
-        It connects to IPFS gateways to retrieve your encrypted data. Your private key never leaves your browser.
+        This tool recovers your CipherBox vault using your private key.
+        It connects to IPFS gateways to retrieve your encrypted vault data.
+        Your private key never leaves your browser.
       </p>
     </header>
 
     <div class="steps-indicator">
-      <span class="step-dot active" id="dot-1"><span class="num">1</span> Load</span>
+      <span class="step-dot active" id="dot-1"><span class="num">1</span> Setup</span>
       <span class="sep" style="color:#333">-</span>
-      <span class="step-dot pending" id="dot-2"><span class="num">2</span> Key</span>
-      <span class="sep" style="color:#333">-</span>
-      <span class="step-dot pending" id="dot-3"><span class="num">3</span> Gateway</span>
-      <span class="sep" style="color:#333">-</span>
-      <span class="step-dot pending" id="dot-4"><span class="num">4</span> Recover</span>
+      <span class="step-dot pending" id="dot-2"><span class="num">2</span> Recover</span>
     </div>
 
-    <!-- Step 1: Choose Recovery Method -->
+    <!-- Step 1: Setup (Private Key + Gateways) -->
     <div class="step visible" id="step-1">
-      <h2>Step 1: Choose Recovery Method</h2>
-      <p>Select how you want to recover your vault data.</p>
+      <h2>Step 1: Setup</h2>
+      <p>Enter your secp256k1 private key and configure IPFS gateways for vault recovery.</p>
 
-      <div class="recovery-method">
-        <label>
-          <input type="radio" name="recovery-method" value="export" checked>
-          From Export File
-        </label>
-        <label>
-          <input type="radio" name="recovery-method" value="ipfs-direct">
-          From IPFS (v2 blob, key only)
-        </label>
-      </div>
+      <label for="direct-key-text">Private key (hex)</label>
+      <textarea id="direct-key-text" rows="2" placeholder="64 hex characters (secp256k1 private key)" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" data-testid="recovery-key-input"></textarea>
 
-      <!-- Export file panel -->
-      <div class="method-panel visible" id="panel-export">
-        <p>Select your CipherBox vault export JSON file or paste its contents below.</p>
+      <label for="direct-ipfs-gateway">IPFS Gateway URL</label>
+      <input type="url" id="direct-ipfs-gateway" value="https://ipfs.io" data-testid="recovery-ipfs-gateway">
+      <div class="gateway-hint">Used for both IPNS resolution and content retrieval.</div>
 
-        <label for="export-file">Upload export file (.json)</label>
-        <input type="file" id="export-file" accept=".json">
+      <label for="direct-ipns-gateway">IPNS Resolution Gateway</label>
+      <input type="url" id="direct-ipns-gateway" value="https://delegated-ipfs.dev" data-testid="recovery-ipns-gateway">
+      <div class="gateway-hint">Delegated routing API for IPNS name resolution.</div>
 
-        <div class="or-divider">-- or paste JSON --</div>
-
-        <label for="export-text">Paste export JSON</label>
-        <textarea id="export-text" rows="6" placeholder='{"format":"cipherbox-vault-export","version":"1.0",...}'></textarea>
-      </div>
-
-      <!-- IPFS-direct panel -->
-      <div class="method-panel" id="panel-ipfs-direct">
-        <p>Recover directly from IPFS using only your private key. Works with vaults migrated to v2 blob format (no export file needed).</p>
-
-        <label for="direct-key-text">Private key (hex)</label>
-        <textarea id="direct-key-text" rows="2" placeholder="64 hex characters (secp256k1 private key)" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off"></textarea>
-
-        <label for="direct-ipfs-gateway">IPFS Gateway URL</label>
-        <input type="url" id="direct-ipfs-gateway" value="https://ipfs.io">
-        <div class="gateway-hint">Used for both IPNS resolution and content retrieval.</div>
-
-        <label for="direct-ipns-gateway">IPNS Resolution Gateway</label>
-        <input type="url" id="direct-ipns-gateway" value="https://delegated-ipfs.dev">
-        <div class="gateway-hint">Delegated routing API for IPNS name resolution.</div>
-      </div>
+      <div class="parsed-info" id="derived-info"></div>
 
       <div class="error" id="error-1"></div>
 
-      <button class="primary" id="btn-load">[ Continue ]</button>
+      <button class="primary" id="btn-start" data-testid="recovery-start-btn">[ Start Recovery ]</button>
     </div>
 
-    <!-- Step 2: Provide Private Key -->
+    <!-- Step 2: Recovery Progress -->
     <div class="step" id="step-2">
-      <h2>Step 2: Provide Private Key</h2>
-      <p>Enter your secp256k1 private key to decrypt the vault root keys.</p>
+      <h2>Step 2: Recovery Progress</h2>
 
-      <div class="parsed-info" id="export-info"></div>
-
-      <label for="key-text">Private key (hex or base64)</label>
-      <textarea id="key-text" rows="2" placeholder="64 hex characters or ~44 base64 characters" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off"></textarea>
-
-      <div class="or-divider">-- or upload key file --</div>
-
-      <label for="key-file">Upload key file</label>
-      <input type="file" id="key-file">
+      <div class="progress-log" id="progress-log" data-testid="recovery-progress-log"></div>
 
       <div class="error" id="error-2"></div>
 
-      <button class="primary" id="btn-decrypt">[ Decrypt Keys ]</button>
-    </div>
-
-    <!-- Step 3: Configure Gateway -->
-    <div class="step" id="step-3">
-      <h2>Step 3: Configure Gateways</h2>
-      <p>Configure IPFS gateways for IPNS resolution and content retrieval. Defaults should work for most users.</p>
-
-      <div class="success-info">Root keys decrypted successfully.</div>
-
-      <label for="ipns-gateway">IPNS Resolution Gateway</label>
-      <input type="url" id="ipns-gateway" value="https://delegated-ipfs.dev">
-      <div class="gateway-hint">Alternatives: https://ipfs.io (uses /api/v0/name/resolve fallback)</div>
-
-      <label for="ipfs-gateway">IPFS Content Gateway</label>
-      <input type="url" id="ipfs-gateway" value="https://ipfs.io">
-      <div class="gateway-hint">Alternatives: https://dweb.link, https://cloudflare-ipfs.com</div>
-
-      <div class="error" id="error-3"></div>
-
-      <button class="primary" id="btn-recover">[ Start Recovery ]</button>
-    </div>
-
-    <!-- Step 4: Recovery Progress -->
-    <div class="step" id="step-4">
-      <h2>Step 4: Recovery Progress</h2>
-
-      <div class="progress-log" id="progress-log"></div>
-
-      <div class="error" id="error-4"></div>
-
-      <button class="download-btn" id="btn-download">[ Download Recovered Files ]</button>
+      <button class="download-btn" id="btn-download" data-testid="recovery-download-btn">[ Download Recovered Files ]</button>
 
       <p class="post-recovery-note" id="post-note">
         Your private key was used in-memory only and is not stored or transmitted.
@@ -479,15 +348,12 @@
     // =========================================================================
     // State
     // =========================================================================
-    let exportData = null;
     let rootFolderKey = null;
-    let rootIpnsPrivateKey = null;
     let privateKeyBytes = null;
     let recoveredFiles = [];
     let fileCount = 0;
     let errorCount = 0;
     let ipnsFailures = [];
-    let recoveryMethod = 'export'; // 'export' or 'ipfs-direct'
     let directVaultKeyIpnsName = null; // Vault key blob IPNS (for fetching rootFolderKey)
     let directRootFolderIpnsName = null; // Root folder IPNS (for folder metadata traversal)
 
@@ -1063,7 +929,7 @@
             continue;
           }
 
-          // ── FilePointer: resolve per-file IPNS to get file metadata ──
+          // -- FilePointer: resolve per-file IPNS to get file metadata --
           try {
             const filePath = path ? `${path}/${child.name}` : child.name;
             log(`Resolving file IPNS: ${child.name}...`, 'info');
@@ -1194,7 +1060,7 @@
     // Step Navigation
     // =========================================================================
     function showStep(n) {
-      for (let i = 1; i <= 4; i++) {
+      for (let i = 1; i <= 2; i++) {
         document.getElementById(`step-${i}`).classList.toggle('visible', i === n);
         const dot = document.getElementById(`dot-${i}`);
         dot.classList.remove('active', 'complete', 'pending');
@@ -1217,333 +1083,145 @@
     }
 
     // =========================================================================
-    // Recovery Method Toggle
+    // Step 1: Start Recovery (Key + Gateways -> Resolve -> Recover)
     // =========================================================================
-    document.querySelectorAll('input[name="recovery-method"]').forEach(radio => {
-      radio.addEventListener('change', (e) => {
-        recoveryMethod = e.target.value;
-        document.getElementById('panel-export').classList.toggle('visible', recoveryMethod === 'export');
-        document.getElementById('panel-ipfs-direct').classList.toggle('visible', recoveryMethod === 'ipfs-direct');
-        clearError(1);
-      });
-    });
-
-    // =========================================================================
-    // Step 1: Load Export or Start IPFS-Direct
-    // =========================================================================
-    document.getElementById('btn-load').addEventListener('click', async () => {
+    document.getElementById('btn-start').addEventListener('click', async () => {
       clearError(1);
 
-      if (recoveryMethod === 'ipfs-direct') {
-        // ── IPFS-direct recovery path ──
-        const keyText = document.getElementById('direct-key-text').value.trim();
-        if (!keyText) {
-          showError(1, 'Please provide your private key.');
-          return;
-        }
-
-        try {
-          // Parse private key
-          if (/^(0x)?[0-9a-fA-F]{64}$/.test(keyText)) {
-            privateKeyBytes = hexToBytes(keyText);
-          } else {
-            try { privateKeyBytes = hexToBytes(keyText); }
-            catch { try { privateKeyBytes = base64ToBytes(keyText); }
-            catch { showError(1, 'Could not parse private key. Provide 32 bytes as 64 hex characters.'); return; } }
-          }
-
-          if (privateKeyBytes.length !== 32) {
-            showError(1, `Private key must be 32 bytes (got ${privateKeyBytes.length} bytes).`);
-            privateKeyBytes = null;
-            return;
-          }
-
-          const btn = document.getElementById('btn-load');
-          btn.disabled = true;
-          btn.textContent = '[ Deriving IPNS name... ]';
-
-          // Derive both IPNS names from private key
-          // Vault key blob IPNS: where the ECIES-wrapped rootFolderKey lives
-          directVaultKeyIpnsName = await deriveIpnsNameFromKey(privateKeyBytes, VAULT_KEY_HKDF_INFO);
-          // Root folder IPNS: where folder metadata lives (used for recovery traversal)
-          directRootFolderIpnsName = await deriveIpnsNameFromKey(privateKeyBytes, VAULT_FOLDER_HKDF_INFO);
-
-          btn.disabled = false;
-          btn.textContent = '[ Continue ]';
-
-          // Show derived info
-          let infoHtml = `<div class="field"><span class="field-name">Derived vaultKeyIpnsName:</span> <span class="field-value">${truncate(directVaultKeyIpnsName, 50)}</span></div>`;
-          infoHtml += `<div class="field"><span class="field-name">Derived rootIpnsName:</span> <span class="field-value">${truncate(directRootFolderIpnsName, 50)}</span></div>`;
-          infoHtml += `<div class="field"><span class="field-name">Recovery mode:</span> <span class="field-value">IPFS-direct (v2 vault key blob + v1 folder metadata)</span></div>`;
-          document.getElementById('export-info').innerHTML = infoHtml;
-
-          // Skip Step 2 (key already provided) and go directly to Step 3
-          // But first we need to try reading the rootFolderKey from IPFS
-          const ipnsGateway = document.getElementById('direct-ipns-gateway').value.trim().replace(/\/+$/, '');
-          const ipfsGateway = document.getElementById('direct-ipfs-gateway').value.trim().replace(/\/+$/, '');
-
-          btn.disabled = true;
-          btn.textContent = '[ Resolving vault... ]';
-
-          try {
-            // Fetch vault key blob via vault key IPNS name
-            let blobBytes;
-            try {
-              const ipnsUrl = `${ipfsGateway}/ipns/${directVaultKeyIpnsName}`;
-              const resp = await fetchWithTimeout(ipnsUrl, {}, 30000);
-              if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
-              blobBytes = new Uint8Array(await resp.arrayBuffer());
-            } catch (gatewayErr) {
-              // Fallback: resolve IPNS separately then fetch content
-              const cid = await resolveIpns(directVaultKeyIpnsName, ipnsGateway);
-              blobBytes = await fetchFromIpfs(cid, ipfsGateway);
-            }
-
-            // 3. Detect version
-            if (detectBlobVersion(blobBytes) !== 2) {
-              showError(1, 'The vault blob at this IPNS name is v1 format. Use "From Export File" recovery method instead.');
-              btn.disabled = false;
-              btn.textContent = '[ Continue ]';
-              return;
-            }
-
-            // 4. Extract and decrypt rootFolderKey from v2 key blob
-            const encryptedRootFolderKey = deserializeVaultBlobV2(blobBytes);
-            rootFolderKey = await eciesDecrypt(privateKeyBytes, encryptedRootFolderKey);
-
-            btn.disabled = false;
-            btn.textContent = '[ Continue ]';
-
-            // Pre-populate gateway config and skip to Step 3
-            document.getElementById('ipns-gateway').value = ipnsGateway;
-            document.getElementById('ipfs-gateway').value = ipfsGateway;
-
-            // Set exportData with rootIpnsName for the recovery folder traversal
-            exportData = { rootIpnsName: directRootFolderIpnsName };
-
-            showStep(3);
-          } catch (resolveErr) {
-            btn.disabled = false;
-            btn.textContent = '[ Continue ]';
-            showError(1, 'Failed to resolve vault from IPFS: ' + resolveErr.message);
-          }
-        } catch (e) {
-          showError(1, 'Error: ' + e.message);
-        }
-        return;
-      }
-
-      // ── Export file recovery path (original) ──
-      let jsonText = '';
-      const fileInput = document.getElementById('export-file');
-      const textInput = document.getElementById('export-text');
-
-      if (fileInput.files.length > 0) {
-        jsonText = await fileInput.files[0].text();
-      } else if (textInput.value.trim()) {
-        jsonText = textInput.value.trim();
-      } else {
-        showError(1, 'Please select a file or paste the export JSON.');
+      const keyText = document.getElementById('direct-key-text').value.trim();
+      if (!keyText) {
+        showError(1, 'Please provide your private key.');
         return;
       }
 
       try {
-        const parsed = JSON.parse(jsonText);
-
-        if (parsed.format !== 'cipherbox-vault-export') {
-          showError(1, 'Invalid export file: missing or incorrect "format" field. Expected "cipherbox-vault-export".');
-          return;
-        }
-
-        if (parsed.version !== '1.0') {
-          showError(1, `Unsupported export version: "${parsed.version}". This tool supports version "1.0".`);
-          return;
-        }
-
-        // Validate required fields
-        if (typeof parsed.rootIpnsName !== 'string' || !/^k[0-9a-z]{20,}$/i.test(parsed.rootIpnsName)) {
-          showError(1, 'Export file has an invalid or missing rootIpnsName.');
-          return;
-        }
-
-        if (!parsed.encryptedRootFolderKey) {
-          showError(1, 'Export does not contain encryptedRootFolderKey. Use "From IPFS (v2 blob, key only)" recovery instead -- it only needs your private key.');
-          return;
-        }
-
-        exportData = parsed;
-
-        // Show parsed info in step 2 (escape all user-supplied values)
-        let infoHtml = `<div class="field"><span class="field-name">rootIpnsName:</span> <span class="field-value">${escapeHtml(truncate(parsed.rootIpnsName, 50))}</span></div>`;
-        if (parsed.exportedAt) {
-          infoHtml += `<div class="field"><span class="field-name">exportedAt:</span> <span class="field-value">${escapeHtml(String(parsed.exportedAt))}</span></div>`;
-        }
-        if (parsed.derivationInfo) {
-          infoHtml += `<div class="field"><span class="field-name">derivationInfo:</span> <span class="field-value">${escapeHtml(JSON.stringify(parsed.derivationInfo))}</span></div>`;
-        }
-        document.getElementById('export-info').innerHTML = infoHtml;
-
-        showStep(2);
-      } catch (e) {
-        showError(1, 'Failed to parse JSON: ' + e.message);
-      }
-    });
-
-    // Also load file on file input change
-    document.getElementById('export-file').addEventListener('change', (e) => {
-      if (e.target.files.length > 0) {
-        document.getElementById('export-text').value = '';
-      }
-    });
-
-    // =========================================================================
-    // Step 2: Decrypt Keys
-    // =========================================================================
-    document.getElementById('btn-decrypt').addEventListener('click', async () => {
-      clearError(2);
-
-      let keyText = '';
-      const keyFile = document.getElementById('key-file');
-      const keyInput = document.getElementById('key-text');
-
-      if (keyFile.files.length > 0) {
-        keyText = (await keyFile.files[0].text()).trim();
-      } else if (keyInput.value.trim()) {
-        keyText = keyInput.value.trim();
-      } else {
-        showError(2, 'Please provide your private key.');
-        return;
-      }
-
-      try {
-        // Auto-detect format: hex (64 chars) or base64 (~44 chars)
+        // Parse private key
         if (/^(0x)?[0-9a-fA-F]{64}$/.test(keyText)) {
           privateKeyBytes = hexToBytes(keyText);
-        } else if (/^[A-Za-z0-9+/=]{40,50}$/.test(keyText)) {
-          privateKeyBytes = base64ToBytes(keyText);
-        } else if (/^[0-9a-fA-F]{64}$/.test(keyText.replace(/^0x/, ''))) {
-          privateKeyBytes = hexToBytes(keyText);
         } else {
-          // Try hex first, then base64
-          try {
-            privateKeyBytes = hexToBytes(keyText);
-          } catch {
-            try {
-              privateKeyBytes = base64ToBytes(keyText);
-            } catch {
-              showError(2, 'Could not parse private key. Provide 32 bytes as 64 hex characters or base64.');
-              return;
-            }
-          }
+          try { privateKeyBytes = hexToBytes(keyText); }
+          catch { try { privateKeyBytes = base64ToBytes(keyText); }
+          catch { showError(1, 'Could not parse private key. Provide 32 bytes as 64 hex characters.'); return; } }
         }
 
         if (privateKeyBytes.length !== 32) {
-          showError(2, `Private key must be 32 bytes (got ${privateKeyBytes.length} bytes). Check your input format.`);
+          showError(1, `Private key must be 32 bytes (got ${privateKeyBytes.length} bytes).`);
           privateKeyBytes = null;
           return;
         }
 
-        // Try ECIES-decrypting root folder key
-        const btn = document.getElementById('btn-decrypt');
+        const btn = document.getElementById('btn-start');
         btn.disabled = true;
-        btn.textContent = '[ Decrypting... ]';
+        btn.textContent = '[ Deriving IPNS name... ]';
 
+        // Derive both IPNS names from private key
+        // Vault key blob IPNS: where the ECIES-wrapped rootFolderKey lives
+        directVaultKeyIpnsName = await deriveIpnsNameFromKey(privateKeyBytes, VAULT_KEY_HKDF_INFO);
+        // Root folder IPNS: where folder metadata lives (used for recovery traversal)
+        directRootFolderIpnsName = await deriveIpnsNameFromKey(privateKeyBytes, VAULT_FOLDER_HKDF_INFO);
+
+        // Show derived info
+        const infoEl = document.getElementById('derived-info');
+        let infoHtml = `<div class="field"><span class="field-name">Derived vaultKeyIpnsName:</span> <span class="field-value">${truncate(directVaultKeyIpnsName, 50)}</span></div>`;
+        infoHtml += `<div class="field"><span class="field-name">Derived rootIpnsName:</span> <span class="field-value">${truncate(directRootFolderIpnsName, 50)}</span></div>`;
+        infoHtml += `<div class="field"><span class="field-name">Recovery mode:</span> <span class="field-value">IPFS-direct (v2 vault key blob)</span></div>`;
+        infoEl.innerHTML = infoHtml;
+        infoEl.classList.add('visible');
+
+        // Read gateways
+        const ipnsGateway = document.getElementById('direct-ipns-gateway').value.trim().replace(/\/+$/, '');
+        const ipfsGateway = document.getElementById('direct-ipfs-gateway').value.trim().replace(/\/+$/, '');
+
+        btn.textContent = '[ Resolving vault... ]';
+
+        // Fetch vault key blob via vault key IPNS name
+        let blobBytes;
         try {
-          rootFolderKey = await eciesDecrypt(privateKeyBytes, exportData.encryptedRootFolderKey);
-          if (exportData.encryptedRootIpnsPrivateKey) {
-            rootIpnsPrivateKey = await eciesDecrypt(privateKeyBytes, exportData.encryptedRootIpnsPrivateKey);
-          }
-        } catch (e) {
-          showError(2, 'Failed to decrypt keys. Make sure you are using the correct private key.');
+          const ipnsUrl = `${ipfsGateway}/ipns/${directVaultKeyIpnsName}`;
+          const resp = await fetchWithTimeout(ipnsUrl, {}, 30000);
+          if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
+          blobBytes = new Uint8Array(await resp.arrayBuffer());
+        } catch (gatewayErr) {
+          // Fallback: resolve IPNS separately then fetch content
+          const cid = await resolveIpns(directVaultKeyIpnsName, ipnsGateway);
+          blobBytes = await fetchFromIpfs(cid, ipfsGateway);
+        }
+
+        // Detect version
+        if (detectBlobVersion(blobBytes) !== 2) {
+          showError(1, 'The vault blob at this IPNS name is not v2 format. Recovery cannot proceed.');
           btn.disabled = false;
-          btn.textContent = '[ Decrypt Keys ]';
-          privateKeyBytes = null;
+          btn.textContent = '[ Start Recovery ]';
           return;
         }
+
+        // Extract and decrypt rootFolderKey from v2 key blob
+        const encryptedRootFolderKey = deserializeVaultBlobV2(blobBytes);
+        rootFolderKey = await eciesDecrypt(privateKeyBytes, encryptedRootFolderKey);
 
         btn.disabled = false;
-        btn.textContent = '[ Decrypt Keys ]';
+        btn.textContent = '[ Start Recovery ]';
 
-        showStep(3);
-      } catch (e) {
-        showError(2, 'Error: ' + e.message);
-      }
-    });
+        // Proceed to Step 2 (Recovery Progress)
+        showStep(2);
 
-    document.getElementById('key-file').addEventListener('change', (e) => {
-      if (e.target.files.length > 0) {
-        document.getElementById('key-text').value = '';
-      }
-    });
+        // Reset state
+        recoveredFiles = [];
+        fileCount = 0;
+        errorCount = 0;
+        ipnsFailures = [];
+        logEl.innerHTML = '';
 
-    // =========================================================================
-    // Step 3: Start Recovery
-    // =========================================================================
-    document.getElementById('btn-recover').addEventListener('click', async () => {
-      clearError(3);
+        const gatewayConfig = { ipnsGateway, ipfsGateway };
 
-      const ipnsGateway = document.getElementById('ipns-gateway').value.trim().replace(/\/+$/, '');
-      const ipfsGateway = document.getElementById('ipfs-gateway').value.trim().replace(/\/+$/, '');
-
-      if (!ipnsGateway || !ipfsGateway) {
-        showError(3, 'Both gateway URLs are required.');
-        return;
-      }
-
-      const gatewayConfig = { ipnsGateway, ipfsGateway };
-
-      // Move to step 4
-      showStep(4);
-
-      // Reset state
-      recoveredFiles = [];
-      fileCount = 0;
-      errorCount = 0;
-      ipnsFailures = [];
-      logEl.innerHTML = '';
-
-      log('CipherBox Vault Recovery starting...', 'info');
-      log(`IPNS gateway: ${ipnsGateway}`, 'info');
-      log(`IPFS gateway: ${ipfsGateway}`, 'info');
-      log('', 'info');
-
-      try {
-        await recoverFolder(exportData.rootIpnsName, rootFolderKey, '', gatewayConfig);
-
+        log('CipherBox Vault Recovery starting...', 'info');
+        log(`IPNS gateway: ${ipnsGateway}`, 'info');
+        log(`IPFS gateway: ${ipfsGateway}`, 'info');
         log('', 'info');
-        if (fileCount === 0 && errorCount === 0) {
-          log('Recovery complete. Vault is empty (no files found).', 'warn');
-        } else if (errorCount === 0) {
-          log(`Recovery complete. ${fileCount} file(s) recovered successfully.`, 'success');
-        } else {
-          log(`Recovery complete. ${fileCount} file(s) recovered, ${errorCount} error(s).`, 'warn');
-        }
 
-        // Report IPNS resolution failures with details for manual recovery
-        if (ipnsFailures.length > 0) {
+        try {
+          await recoverFolder(directRootFolderIpnsName, rootFolderKey, '', gatewayConfig);
+
           log('', 'info');
-          log(`${ipnsFailures.length} file(s) had expired IPNS records:`, 'warn');
-          for (const f of ipnsFailures) {
-            log(`  - ${f.name} (IPNS: ${truncate(f.ipnsName, 40)})`, 'warn');
+          if (fileCount === 0 && errorCount === 0) {
+            log('Recovery complete. Vault is empty (no files found).', 'warn');
+          } else if (errorCount === 0) {
+            log(`Recovery complete. ${fileCount} file(s) recovered successfully.`, 'success');
+          } else {
+            log(`Recovery complete. ${fileCount} file(s) recovered, ${errorCount} error(s).`, 'warn');
           }
-          log('These files are still on IPFS but their CIDs cannot be discovered via IPNS.', 'warn');
-          log('If you have the CIDs from another source, you can retrieve them manually.', 'info');
-        }
 
-        if (fileCount > 0) {
-          document.getElementById('btn-download').classList.add('visible');
-        }
+          // Report IPNS resolution failures with details for manual recovery
+          if (ipnsFailures.length > 0) {
+            log('', 'info');
+            log(`${ipnsFailures.length} file(s) had expired IPNS records:`, 'warn');
+            for (const f of ipnsFailures) {
+              log(`  - ${f.name} (IPNS: ${truncate(f.ipnsName, 40)})`, 'warn');
+            }
+            log('These files are still on IPFS but their CIDs cannot be discovered via IPNS.', 'warn');
+            log('If you have the CIDs from another source, you can retrieve them manually.', 'info');
+          }
 
-        document.getElementById('post-note').classList.add('visible');
+          if (fileCount > 0) {
+            document.getElementById('btn-download').classList.add('visible');
+          }
+
+          document.getElementById('post-note').classList.add('visible');
+        } catch (e) {
+          log(`FATAL ERROR: ${e.message}`, 'error');
+          showError(2, 'Recovery failed: ' + e.message);
+          document.getElementById('post-note').classList.add('visible');
+        }
       } catch (e) {
-        log(`FATAL ERROR: ${e.message}`, 'error');
-        showError(4, 'Recovery failed: ' + e.message);
-        document.getElementById('post-note').classList.add('visible');
+        showError(1, 'Error: ' + e.message);
+        const btn = document.getElementById('btn-start');
+        btn.disabled = false;
+        btn.textContent = '[ Start Recovery ]';
       }
     });
 
     // =========================================================================
-    // Step 4: Download Zip
+    // Step 2: Download Zip
     // =========================================================================
     document.getElementById('btn-download').addEventListener('click', () => {
       if (recoveredFiles.length === 0) return;
