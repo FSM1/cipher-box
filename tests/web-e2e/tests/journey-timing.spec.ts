@@ -1,5 +1,4 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
-import type { PrivateKeyAccount } from 'viem/accounts';
 import { createTestAccount, setupMockWallet } from '../utils/wallet-login-helpers';
 import {
   createWalletTestAccount,
@@ -34,7 +33,6 @@ interface JourneyResult {
   phases?: Record<string, number>;
   fileSizeBytes?: number;
   note?: string;
-  partial?: Record<string, number>;
 }
 
 const journeyResults: JourneyResult[] = [];
@@ -44,8 +42,6 @@ test.describe.serial('Journey Timing', () => {
   let browser: Browser;
   let context: BrowserContext;
   let page: Page;
-  let account: PrivateKeyAccount;
-
   // Page objects for Alice (primary account)
   let fileList: FileListPage;
   let uploadZone: UploadZonePage;
@@ -93,7 +89,7 @@ test.describe.serial('Journey Timing', () => {
     test.setTimeout(120_000);
 
     // Setup: create account and context BEFORE timing starts
-    account = createTestAccount();
+    const account = createTestAccount();
     context = await browser.newContext();
     page = await context.newPage();
     await setupMockWallet(page, account);

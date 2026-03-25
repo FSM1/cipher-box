@@ -55,17 +55,19 @@ export async function addToIpfs(
  * Unpin file from IPFS via backend relay.
  */
 export async function unpinFromIpfs(ctx: SdkContext, cid: string): Promise<void> {
-  if (ctx.axiosInstance) {
-    await ctx.axiosInstance.post('/ipfs/unpin', { cid });
-    return;
-  }
+  return withPerf('ipfs:unpin', async () => {
+    if (ctx.axiosInstance) {
+      await ctx.axiosInstance.post('/ipfs/unpin', { cid });
+      return;
+    }
 
-  const token = await ctx.getAccessToken();
-  await axios.post(
-    `${ctx.apiUrl}/ipfs/unpin`,
-    { cid },
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
+    const token = await ctx.getAccessToken();
+    await axios.post(
+      `${ctx.apiUrl}/ipfs/unpin`,
+      { cid },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+  });
 }
 
 /**

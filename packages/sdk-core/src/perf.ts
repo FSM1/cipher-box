@@ -15,9 +15,11 @@ export function markEnd(operation: string, startMark: string): PerformanceMeasur
   if (!PERF_ENABLED || !startMark) return null;
   const endMark = `cipherbox:${operation}:end`;
   performance.mark(endMark);
-  const measure = performance.measure(`cipherbox:${operation}`, startMark, endMark);
+  const measureName = `cipherbox:${operation}`;
+  const measure = performance.measure(measureName, startMark, endMark);
   performance.clearMarks(startMark);
   performance.clearMarks(endMark);
+  performance.clearMeasures(measureName);
   return measure;
 }
 

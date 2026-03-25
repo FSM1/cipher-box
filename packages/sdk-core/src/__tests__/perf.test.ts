@@ -23,16 +23,16 @@ describe('Performance instrumentation', () => {
   });
 
   describe('withPerf (enabled)', () => {
-    it('creates a performance.measure entry with name starting with "cipherbox:" when enabled', async () => {
+    it('calls performance.measure with name starting with "cipherbox:" when enabled', async () => {
       process.env.NODE_ENV = 'test';
-      const { withPerf } = await import('../perf');
+      const { markStart, markEnd } = await import('../perf');
 
-      await withPerf('upload:full', async () => 'result');
+      const start = markStart('upload:full');
+      const measure = markEnd('upload:full', start);
 
-      const measures = performance.getEntriesByType('measure');
-      const cbMeasures = measures.filter((m) => m.name.startsWith('cipherbox:'));
-      expect(cbMeasures.length).toBeGreaterThanOrEqual(1);
-      expect(cbMeasures[0].name).toBe('cipherbox:upload:full');
+      expect(measure).not.toBeNull();
+      expect(measure!.name).toBe('cipherbox:upload:full');
+      expect(measure!.duration).toBeGreaterThanOrEqual(0);
     });
 
     it('returns the wrapped function return value unchanged', async () => {

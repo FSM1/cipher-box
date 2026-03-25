@@ -5,14 +5,14 @@
  * throughput including IPNS publish per file.
  */
 
-import { describe, it, afterAll, expect } from 'vitest';
+import { describe, it, afterAll } from 'vitest';
 import {
   createClientPool,
   destroyClientPool,
   aggregateAndReport,
   type PoolClient,
 } from '../harness/client-pool';
-import { checkThresholds, type ThresholdConfig } from '../harness/thresholds';
+import { expectThresholdsPassed, type ThresholdConfig } from '../harness/thresholds';
 import { runFileWorkload } from '../workloads/file-workload';
 
 const NUM_CLIENTS = parseInt(process.env.LOAD_TEST_CLIENTS ?? '10', 10);
@@ -54,14 +54,6 @@ describe('Upload Throughput', () => {
       { operation: 'uploadFile', p95MaxMs: 10_000, errorRateMax: 0.05 },
     ];
 
-    const thresholdResult = checkThresholds(metrics, THRESHOLDS);
-    if (!thresholdResult.passed) {
-      console.warn('THRESHOLD VIOLATIONS:');
-      thresholdResult.violations.forEach((v) => console.warn(`  - ${v}`));
-    }
-    expect(
-      thresholdResult.passed,
-      `Threshold violations:\n${thresholdResult.violations.join('\n')}`
-    ).toBe(true);
+    expectThresholdsPassed(metrics, THRESHOLDS);
   });
 });
