@@ -18,6 +18,7 @@ import { TeeModule } from './tee/tee.module';
 import { RepublishModule } from './republish/republish.module';
 import { DeviceApprovalModule } from './device-approval/device-approval.module';
 import { SharesModule } from './shares/shares.module';
+import { MigrationModule } from './migration/migration.module';
 import { User } from './auth/entities/user.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { AuthMethod } from './auth/entities/auth-method.entity';
@@ -28,6 +29,7 @@ import { TeeKeyRotationLog } from './tee/tee-key-rotation-log.entity';
 import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
 import { DeviceApproval } from './device-approval/device-approval.entity';
 import { Share, ShareKey, ShareInvite } from './shares/entities';
+import { PinMigration } from './migration/migration.entity';
 
 @Module({
   imports: [
@@ -85,6 +87,7 @@ import { Share, ShareKey, ShareInvite } from './shares/entities';
           Share,
           ShareKey,
           ShareInvite,
+          PinMigration,
         ],
         synchronize: false,
         migrations: [join(__dirname, 'migrations', '*.js')],
@@ -107,6 +110,7 @@ import { Share, ShareKey, ShareInvite } from './shares/entities';
     RepublishModule,
     DeviceApprovalModule,
     SharesModule,
+    MigrationModule,
   ],
   controllers: [AppController],
   providers: [

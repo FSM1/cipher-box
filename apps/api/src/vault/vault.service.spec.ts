@@ -57,6 +57,7 @@ describe('VaultService', () => {
     ownerId: testUserId,
     ownerPublicKey: Buffer.from(testOwnerPublicKey, 'hex'),
     rootIpnsName: testRootIpnsName,
+    isByoUser: false,
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     initializedAt: null,
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
@@ -341,6 +342,7 @@ describe('VaultService', () => {
         usedBytes,
         limitBytes: QUOTA_LIMIT_BYTES,
         remainingBytes: QUOTA_LIMIT_BYTES - usedBytes,
+        advisory: false,
       });
     });
 
@@ -353,6 +355,7 @@ describe('VaultService', () => {
         usedBytes: 0,
         limitBytes: QUOTA_LIMIT_BYTES,
         remainingBytes: QUOTA_LIMIT_BYTES,
+        advisory: false,
       });
     });
 
@@ -365,6 +368,7 @@ describe('VaultService', () => {
         usedBytes: QUOTA_LIMIT_BYTES,
         limitBytes: QUOTA_LIMIT_BYTES,
         remainingBytes: 0,
+        advisory: false,
       });
     });
 
@@ -377,6 +381,7 @@ describe('VaultService', () => {
         usedBytes: 0,
         limitBytes: QUOTA_LIMIT_BYTES,
         remainingBytes: QUOTA_LIMIT_BYTES,
+        advisory: false,
       });
     });
 
@@ -389,6 +394,7 @@ describe('VaultService', () => {
         usedBytes: 0,
         limitBytes: QUOTA_LIMIT_BYTES,
         remainingBytes: QUOTA_LIMIT_BYTES,
+        advisory: false,
       });
     });
 
@@ -694,6 +700,106 @@ describe('VaultService', () => {
 
       expect(result.exportedAt >= before).toBe(true);
       expect(result.exportedAt <= after).toBe(true);
+    });
+  });
+
+  describe('isUserByo', () => {
+    it('should return false when vault isByoUser is false', async () => {
+      mockVaultRepo.findOne.mockResolvedValue({ isByoUser: false });
+
+      const result = await service.isUserByo(testUserId);
+
+      expect(result).toBe(false);
+      expect(mockVaultRepo.findOne).toHaveBeenCalledWith({
+        where: { ownerId: testUserId },
+        select: ['isByoUser'],
+      });
+    });
+
+    it('should return true when vault isByoUser is true', async () => {
+      mockVaultRepo.findOne.mockResolvedValue({ isByoUser: true });
+
+      const result = await service.isUserByo(testUserId);
+
+      expect(result).toBe(true);
+    });
+
+    it('should return false when vault not found', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.isUserByo(testUserId);
+
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('setByoStatus', () => {
+    it('should update isByoUser to true', async () => {
+      mockVaultRepo.update.mockResolvedValue({ affected: 1 } as never);
+
+      await service.setByoStatus(testUserId, true);
+
+      expect(mockVaultRepo.update).toHaveBeenCalledWith(
+        { ownerId: testUserId },
+        { isByoUser: true }
+      );
+    });
+
+    it('should update isByoUser to false', async () => {
+      mockVaultRepo.update.mockResolvedValue({ affected: 1 } as never);
+
+      await service.setByoStatus(testUserId, false);
+
+      expect(mockVaultRepo.update).toHaveBeenCalledWith(
+        { ownerId: testUserId },
+        { isByoUser: false }
+      );
+    });
+  });
+
+  describe('checkQuota (BYO)', () => {
+    it('should return true regardless of usage when user is BYO', async () => {
+      // User is BYO -- over quota but should still pass
+      mockVaultRepo.findOne.mockResolvedValue({ isByoUser: true });
+      mockQueryBuilder.getRawOne.mockResolvedValue({
+        total: (QUOTA_LIMIT_BYTES + 1000).toString(),
+      });
+
+      const result = await service.checkQuota(testUserId, 100 * 1024 * 1024);
+
+      expect(result).toBe(true);
+    });
+
+    it('should enforce quota limit for non-BYO users', async () => {
+      // User is NOT BYO -- over quota should fail
+      mockVaultRepo.findOne.mockResolvedValue({ isByoUser: false });
+      mockQueryBuilder.getRawOne.mockResolvedValue({
+        total: (450 * 1024 * 1024).toString(),
+      });
+
+      const result = await service.checkQuota(testUserId, 100 * 1024 * 1024);
+
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('getQuota (advisory flag)', () => {
+    it('should return advisory: true for BYO users', async () => {
+      mockVaultRepo.findOne.mockResolvedValue({ isByoUser: true });
+      mockQueryBuilder.getRawOne.mockResolvedValue({ total: '1024' });
+
+      const result = await service.getQuota(testUserId);
+
+      expect(result.advisory).toBe(true);
+    });
+
+    it('should return advisory: false for non-BYO users', async () => {
+      mockVaultRepo.findOne.mockResolvedValue({ isByoUser: false });
+      mockQueryBuilder.getRawOne.mockResolvedValue({ total: '1024' });
+
+      const result = await service.getQuota(testUserId);
+
+      expect(result.advisory).toBe(false);
     });
   });
 });

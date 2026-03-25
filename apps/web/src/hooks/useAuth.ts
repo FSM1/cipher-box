@@ -23,10 +23,14 @@ import {
   deriveIpnsName,
   deriveVaultIpnsKeypair,
   deriveVaultKeyIpnsKeypair,
+  deriveByoConfigIpnsKeypair,
   bytesToHex,
   wrapKey,
   unwrapKey,
+  clearBytes,
 } from '@cipherbox/crypto';
+import type { ByoIpfsConfig } from '@cipherbox/core';
+import type { PinningConfig } from '@cipherbox/sdk';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
@@ -216,6 +220,59 @@ export function useAuth() {
         });
       }
 
+      // Load BYO pinning config from encrypted IPNS entry (if configured).
+      // Gracefully degrades to cipherbox-only mode on any failure.
+      const loadByoConfig = async (
+        userPrivateKey: Uint8Array
+      ): Promise<PinningConfig | undefined> => {
+        // Time-bound the entire lookup so a hung IPFS peer can't block login
+        const BYO_LOAD_TIMEOUT_MS = 10_000;
+        const inner = async (): Promise<PinningConfig | undefined> => {
+          const byoKeypair = await deriveByoConfigIpnsKeypair(userPrivateKey);
+          const ipnsName = byoKeypair.ipnsName;
+
+          const resolved = await resolveIpnsRecord(ipnsName);
+          if (!resolved?.cid) return undefined;
+
+          const encrypted = await fetchFromIpfs(resolved.cid);
+          const plaintext = await unwrapKey(encrypted, userPrivateKey);
+          let config: ByoIpfsConfig;
+          try {
+            const json = new TextDecoder().decode(plaintext);
+            config = JSON.parse(json) as ByoIpfsConfig;
+          } finally {
+            clearBytes(plaintext);
+          }
+
+          // Runtime validation: ensure the blob has a valid shape
+          const validModes = ['cipherbox', 'external', 'dual'];
+          if (!config.pinningMode || !validModes.includes(config.pinningMode)) {
+            return undefined;
+          }
+          if (config.pinningMode !== 'cipherbox' && !config.externalProvider?.endpoint) {
+            return undefined;
+          }
+
+          return {
+            mode: config.pinningMode,
+            externalProvider: config.externalProvider ?? undefined,
+          };
+        };
+
+        try {
+          const result = await Promise.race([
+            inner(),
+            new Promise<undefined>((resolve) =>
+              setTimeout(() => resolve(undefined), BYO_LOAD_TIMEOUT_MS)
+            ),
+          ]);
+          return result;
+        } catch {
+          // No BYO config or decryption failed -- default to cipherbox-only
+          return undefined;
+        }
+      };
+
       // Initialize SDK client with decrypted vault keys
       const vaultState = useVaultStore.getState();
       const authState = useAuthStore.getState();
@@ -225,6 +282,9 @@ export function useAuth() {
           const state = useAuthStore.getState();
           return state.accessToken || '';
         };
+
+        // Load BYO config before initializing SDK client
+        const pinningConfig = await loadByoConfig(userKeypair.privateKey);
 
         // @cipherbox/api-client is configured in lib/api-config.ts at module load time.
 
@@ -238,6 +298,7 @@ export function useAuth() {
           rootIpnsName: vaultState.rootIpnsName,
           rootFolderKey: vaultState.rootFolderKey,
           teeKeys: authState.teeKeys ?? undefined,
+          pinningConfig,
           shareCallbacks: {
             getCoveringShares: async (folderIpnsName: string) => {
               const { findCoveringShares } = await import('../services/share.service');

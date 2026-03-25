@@ -25,13 +25,13 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 
 ### BYO-IPFS
 
-- [ ] **BYO-01**: RemotePinningProvider implements standard IPFS Pinning Service API (pin/unpin/status)
-- [ ] **BYO-02**: DualPinProvider pins to both CipherBox node and user's configured node
-- [ ] **BYO-03**: Per-user IPFS config stored server-side (endpoint URL, encrypted auth token, provider type)
-- [ ] **BYO-04**: Settings UI for configuring custom IPFS node endpoint and credentials
-- [ ] **BYO-05**: Connection test endpoint validates user's IPFS node is reachable and API-compatible
-- [ ] **BYO-06**: All IPNS publishes still route through CipherBox API regardless of BYO config
-- [ ] **BYO-07**: Quota tracking becomes advisory for BYO users with clear UI indication
+- [x] **BYO-01**: RemotePinningProvider implements standard IPFS Pinning Service API (pin/unpin/status)
+- [x] **BYO-02**: DualPinProvider pins to both CipherBox node and user's configured node
+- [x] **BYO-03**: Per-user IPFS config stored server-side (endpoint URL, encrypted auth token, provider type)
+- [x] **BYO-04**: Settings UI for configuring custom IPFS node endpoint and credentials
+- [x] **BYO-05**: Connection test endpoint validates user's IPFS node is reachable and API-compatible
+- [x] **BYO-06**: All IPNS publishes still route through CipherBox API regardless of BYO config
+- [x] **BYO-07**: Quota tracking becomes advisory for BYO users with clear UI indication
 
 ### Performance Baselines
 
@@ -120,13 +120,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VAULT-04    | Phase 20   | Complete |
 | VAULT-05    | Phase 20   | Complete |
 | VAULT-06    | Phase 20   | Complete |
-| BYO-01      | Phase 21   | Pending  |
-| BYO-02      | Phase 21   | Pending  |
-| BYO-03      | Phase 21   | Pending  |
-| BYO-04      | Phase 21   | Pending  |
-| BYO-05      | Phase 21   | Pending  |
-| BYO-06      | Phase 21   | Pending  |
-| BYO-07      | Phase 21   | Pending  |
+| BYO-01      | Phase 21   | Complete |
+| BYO-02      | Phase 21   | Complete |
+| BYO-03      | Phase 21   | Complete |
+| BYO-04      | Phase 21   | Complete |
+| BYO-05      | Phase 21   | Complete |
+| BYO-06      | Phase 21   | Complete |
+| BYO-07      | Phase 21   | Complete |
 | PERF-01     | Phase 18   | Complete |
 | PERF-02     | Phase 18   | Complete |
 | PERF-03     | Phase 18   | Complete |

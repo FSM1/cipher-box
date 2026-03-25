@@ -13,4 +13,6 @@ export interface QuotaResponseDto {
   limitBytes: number;
   /** Remaining storage in bytes */
   remainingBytes: number;
+  /** Whether quota is advisory-only (BYO users manage their own storage) */
+  advisory: boolean;
 }

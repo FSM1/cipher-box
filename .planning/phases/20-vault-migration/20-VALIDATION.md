@@ -15,13 +15,13 @@ created: 2026-03-23
 
 ## Test Infrastructure
 
-| Property               | Value                                               |
-| ---------------------- | --------------------------------------------------- |
-| **Framework**          | vitest (packages/core, packages/sdk) + jest (apps/api) |
-| **Config file**        | `packages/core/vitest.config.ts`, `apps/api/jest.config.ts` |
-| **Quick run command**  | `pnpm --filter @cipherbox/core test -- --run`       |
+| Property               | Value                                                                                        |
+| ---------------------- | -------------------------------------------------------------------------------------------- |
+| **Framework**          | vitest (packages/core, packages/sdk) + jest (apps/api)                                       |
+| **Config file**        | `packages/core/vitest.config.ts`, `apps/api/jest.config.ts`                                  |
+| **Quick run command**  | `pnpm --filter @cipherbox/core test -- --run`                                                |
 | **Full suite command** | `pnpm --filter @cipherbox/core test -- --run && pnpm --filter api test -- --passWithNoTests` |
-| **Estimated runtime**  | ~30 seconds                                         |
+| **Estimated runtime**  | ~30 seconds                                                                                  |
 
 ---
 
@@ -36,15 +36,15 @@ created: 2026-03-23
 
 ## Per-Task Verification Map
 
-| Task ID   | Plan | Wave | Requirement | Test Type   | Automated Command | File Exists | Status     |
-| --------- | ---- | ---- | ----------- | ----------- | ----------------- | ----------- | ---------- |
-| 20-01-01  | 01   | 1    | VAULT-01    | unit        | `pnpm --filter @cipherbox/core test -- --run` | ❌ W0 | ⬜ pending |
-| 20-01-02  | 01   | 1    | VAULT-01    | unit        | `pnpm --filter @cipherbox/core test -- --run` | ❌ W0 | ⬜ pending |
-| 20-02-01  | 02   | 1    | VAULT-02    | unit+integ  | `pnpm --filter api test -- --passWithNoTests` | ❌ W0 | ⬜ pending |
-| 20-02-02  | 02   | 1    | VAULT-04    | unit        | `pnpm --filter api test -- --passWithNoTests` | ❌ W0 | ⬜ pending |
-| 20-03-01  | 03   | 2    | VAULT-02,03 | integration | `pnpm --filter @cipherbox/core test -- --run` | ❌ W0 | ⬜ pending |
-| 20-04-01  | 04   | 2    | VAULT-06    | unit        | `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` | ❌ W0 | ⬜ pending |
-| 20-05-01  | 05   | 3    | VAULT-05    | manual      | N/A | N/A | ⬜ pending |
+| Task ID  | Plan | Wave | Requirement | Test Type   | Automated Command                                              | File Exists | Status     |
+| -------- | ---- | ---- | ----------- | ----------- | -------------------------------------------------------------- | ----------- | ---------- |
+| 20-01-01 | 01   | 1    | VAULT-01    | unit        | `pnpm --filter @cipherbox/core test -- --run`                  | ❌ W0       | ⬜ pending |
+| 20-01-02 | 01   | 1    | VAULT-01    | unit        | `pnpm --filter @cipherbox/core test -- --run`                  | ❌ W0       | ⬜ pending |
+| 20-02-01 | 02   | 1    | VAULT-02    | unit+integ  | `pnpm --filter api test -- --passWithNoTests`                  | ❌ W0       | ⬜ pending |
+| 20-02-02 | 02   | 1    | VAULT-04    | unit        | `pnpm --filter api test -- --passWithNoTests`                  | ❌ W0       | ⬜ pending |
+| 20-03-01 | 03   | 2    | VAULT-02,03 | integration | `pnpm --filter @cipherbox/core test -- --run`                  | ❌ W0       | ⬜ pending |
+| 20-04-01 | 04   | 2    | VAULT-06    | unit        | `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` | ❌ W0       | ⬜ pending |
+| 20-05-01 | 05   | 3    | VAULT-05    | manual      | N/A                                                            | N/A         | ⬜ pending |
 
 _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
@@ -66,7 +66,7 @@ _Existing `packages/core/src/__tests__/vault.test.ts` covers current initializeV
 | Behavior                        | Requirement | Why Manual           | Test Instructions                                                      |
 | ------------------------------- | ----------- | -------------------- | ---------------------------------------------------------------------- |
 | Recovery tool parses v2 blob    | VAULT-05    | Standalone HTML file | Open recovery.html, paste vault export, verify rootFolderKey extracted |
-| Desktop FUSE mount with v2 blob | VAULT-06    | Requires desktop app | Login on desktop, verify mount works with v2 blob source              |
+| Desktop FUSE mount with v2 blob | VAULT-06    | Requires desktop app | Login on desktop, verify mount works with v2 blob source               |
 
 _Recovery tool and desktop are manual verification. Core blob parsing is unit-tested._
 

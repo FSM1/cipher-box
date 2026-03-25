@@ -26,6 +26,7 @@ export * from './generated/ipns/ipns';
 export * from './generated/root/root';
 export * from './generated/share-invites/share-invites';
 export * from './generated/shares/shares';
+export * from './generated/tee/tee';
 export * from './generated/vault/vault';
 
 // Generated model types

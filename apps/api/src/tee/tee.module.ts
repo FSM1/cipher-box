@@ -5,9 +5,11 @@ import { TeeKeyState } from './tee-key-state.entity';
 import { TeeKeyRotationLog } from './tee-key-rotation-log.entity';
 import { TeeKeyStateService } from './tee-key-state.service';
 import { TeeService } from './tee.service';
+import { TeeController } from './tee.controller';
 
 @Module({
   imports: [TypeOrmModule.forFeature([TeeKeyState, TeeKeyRotationLog]), ConfigModule],
+  controllers: [TeeController],
   providers: [TeeService, TeeKeyStateService],
   exports: [TeeService, TeeKeyStateService],
 })

@@ -48,20 +48,20 @@ The core work is: (1) define a binary vault blob v2 format that prepends the ECI
 - **IPFS-only retry-then-error mode** -- transition from silent DB fallback to hard IPFS-only after Kubo performance proves out. Configuration change, not code change.
 - **Full login-to-vault E2E timing** -- Phase 22 scope (PERF-06)
 - **Forced migration for dormant accounts** -- not needed; they migrate on next login whenever that is
-</user_constraints>
+  </user_constraints>
 
 <phase_requirements>
 
 ## Phase Requirements
 
-| ID       | Description                                                                         | Research Support                                                                                                  |
-| -------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| VAULT-01 | rootFolderKey embedded in IPFS vault blob v2 format (ECIES-wrapped in blob header)  | Blob v2 binary format spec below; ECIES ciphertext is 129 bytes (97 overhead + 32 key); version byte detection    |
-| VAULT-02 | Client reads rootFolderKey from IPFS blob on login, falls back to DB vaults table   | Login flow redesign documented; per-user migration flag (`migratedAt`) gates read path; silent DB fallback         |
-| VAULT-03 | Lazy migration writes vault blob v2 on next folder metadata publish                 | Migration trigger on login (not on publish as stated -- CONTEXT overrides); web + desktop both write v2            |
-| VAULT-04 | encryptedRootIpnsPrivateKey column deprecated from vaults table (HKDF-derivable)    | HKDF derivation already in both TS and Rust; init-vault DTO made optional; NULL both columns atomically           |
-| VAULT-05 | Recovery tool updated to parse vault blob v2 format                                 | recovery.html inline JS needs v2-aware blob parsing; independent of CipherBox API -- reads from IPFS directly     |
-| VAULT-06 | Desktop app (Rust) parses vault blob v2 format                                      | Rust v2 deserialize in `commands/vault.rs`; `encrypt_metadata_to_json` updated to v2 in `fuse/mod.rs`            |
+| ID       | Description                                                                        | Research Support                                                                                               |
+| -------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| VAULT-01 | rootFolderKey embedded in IPFS vault blob v2 format (ECIES-wrapped in blob header) | Blob v2 binary format spec below; ECIES ciphertext is 129 bytes (97 overhead + 32 key); version byte detection |
+| VAULT-02 | Client reads rootFolderKey from IPFS blob on login, falls back to DB vaults table  | Login flow redesign documented; per-user migration flag (`migratedAt`) gates read path; silent DB fallback     |
+| VAULT-03 | Lazy migration writes vault blob v2 on next folder metadata publish                | Migration trigger on login (not on publish as stated -- CONTEXT overrides); web + desktop both write v2        |
+| VAULT-04 | encryptedRootIpnsPrivateKey column deprecated from vaults table (HKDF-derivable)   | HKDF derivation already in both TS and Rust; init-vault DTO made optional; NULL both columns atomically        |
+| VAULT-05 | Recovery tool updated to parse vault blob v2 format                                | recovery.html inline JS needs v2-aware blob parsing; independent of CipherBox API -- reads from IPFS directly  |
+| VAULT-06 | Desktop app (Rust) parses vault blob v2 format                                     | Rust v2 deserialize in `commands/vault.rs`; `encrypt_metadata_to_json` updated to v2 in `fuse/mod.rs`          |
 
 </phase_requirements>
 
@@ -69,22 +69,22 @@ The core work is: (1) define a binary vault blob v2 format that prepends the ECI
 
 ### Core
 
-| Library               | Version | Purpose                          | Why Standard                                                  |
-| --------------------- | ------- | -------------------------------- | ------------------------------------------------------------- |
-| @cipherbox/core       | current | Vault blob v2 serialize/parse    | Already owns vault init, encrypt/decrypt vault keys           |
-| @cipherbox/crypto     | current | ECIES wrapKey/unwrapKey, HKDF    | All crypto primitives live here                               |
-| eciesjs               | 0.4.16  | ECIES encryption under the hood  | Already used; 129-byte ciphertext for 32-byte rootFolderKey   |
-| TypeORM               | current | DB migration for migratedAt col  | Already used for all migrations                               |
-| serde + serde_json    | current | Rust v2 blob handling            | Already used for all Rust serialization                       |
-| ecies (Rust crate)    | current | Rust ECIES wrap/unwrap           | Already used in desktop `crypto::ecies`                       |
+| Library            | Version | Purpose                         | Why Standard                                                |
+| ------------------ | ------- | ------------------------------- | ----------------------------------------------------------- |
+| @cipherbox/core    | current | Vault blob v2 serialize/parse   | Already owns vault init, encrypt/decrypt vault keys         |
+| @cipherbox/crypto  | current | ECIES wrapKey/unwrapKey, HKDF   | All crypto primitives live here                             |
+| eciesjs            | 0.4.16  | ECIES encryption under the hood | Already used; 129-byte ciphertext for 32-byte rootFolderKey |
+| TypeORM            | current | DB migration for migratedAt col | Already used for all migrations                             |
+| serde + serde_json | current | Rust v2 blob handling           | Already used for all Rust serialization                     |
+| ecies (Rust crate) | current | Rust ECIES wrap/unwrap          | Already used in desktop `crypto::ecies`                     |
 
 ### Supporting
 
-| Library       | Version | Purpose                                    | When to Use                            |
-| ------------- | ------- | ------------------------------------------ | -------------------------------------- |
-| vitest        | current | Unit tests for @cipherbox/core v2 module   | Test blob v2 serialize/deserialize     |
-| jest          | current | API integration tests for migration        | Test vault service migration flow      |
-| @noble/ed25519| current | Ed25519 key derivation in vault init       | Already used in decryptVaultKeys       |
+| Library        | Version | Purpose                                  | When to Use                        |
+| -------------- | ------- | ---------------------------------------- | ---------------------------------- |
+| vitest         | current | Unit tests for @cipherbox/core v2 module | Test blob v2 serialize/deserialize |
+| jest           | current | API integration tests for migration      | Test vault service migration flow  |
+| @noble/ed25519 | current | Ed25519 key derivation in vault init     | Already used in decryptVaultKeys   |
 
 ### Alternatives Considered
 
@@ -142,6 +142,7 @@ Vault Blob v1 (current, no version byte):
 ```
 
 **Detection heuristic:**
+
 - If `blob[0] === 0x02`: parse as v2 (version byte present)
 - Otherwise: parse as v1 (first byte will be `0x7B` = `{` for JSON)
 - `0x7B` (123) is never a valid version byte we'll use, so detection is unambiguous
@@ -319,12 +320,12 @@ The recovery tool should support both paths. For migrated users whose export was
 
 ## Don't Hand-Roll
 
-| Problem                        | Don't Build              | Use Instead                                | Why                                               |
-| ------------------------------ | ------------------------ | ------------------------------------------ | ------------------------------------------------- |
-| ECIES encryption               | Custom ECIES             | eciesjs (TS) / ecies crate (Rust)          | Proven, matches existing ECIES ciphertext format  |
-| HKDF IPNS key derivation       | Manual key derivation    | @cipherbox/crypto deriveVaultIpnsKeypair   | Already implemented and tested in both platforms  |
-| Binary format parsing          | Manual bit shifting      | DataView (TS) / byte slicing (Rust)        | Standard approaches, well-tested                  |
-| DB migration                   | Manual SQL               | TypeORM migration with IF NOT EXISTS       | Follows project pattern from prior migrations     |
+| Problem                  | Don't Build           | Use Instead                              | Why                                              |
+| ------------------------ | --------------------- | ---------------------------------------- | ------------------------------------------------ |
+| ECIES encryption         | Custom ECIES          | eciesjs (TS) / ecies crate (Rust)        | Proven, matches existing ECIES ciphertext format |
+| HKDF IPNS key derivation | Manual key derivation | @cipherbox/crypto deriveVaultIpnsKeypair | Already implemented and tested in both platforms |
+| Binary format parsing    | Manual bit shifting   | DataView (TS) / byte slicing (Rust)      | Standard approaches, well-tested                 |
+| DB migration             | Manual SQL            | TypeORM migration with IF NOT EXISTS     | Follows project pattern from prior migrations    |
 
 **Key insight:** The blob v2 format is intentionally simple (3-byte header + two concatenated payloads) to minimize parsing complexity across three implementations (TypeScript, Rust, recovery HTML). No protobuf, no CBOR, no msgpack -- raw bytes with a version discriminator.
 
@@ -337,6 +338,7 @@ The recovery tool should support both paths. For migrated users whose export was
 **Why it happens:** The migration write and normal folder publishes use the same IPNS record. Optimistic concurrency (sequence number check) prevents stale overwrites, but the conflict resolution doesn't know about v2 format.
 
 **How to avoid:**
+
 1. Migration v2 write should use the same `createAndPublishIpnsRecord` with expected sequence number, so it participates in conflict detection.
 2. On 409 Conflict during migration: resolve the current IPNS, check if the existing blob is already v2 (another device migrated), and if v1, retry the migration with the merged metadata.
 3. Do NOT stamp migratedAt until the v2 blob is confirmed written (IPNS publish succeeds).
@@ -350,6 +352,7 @@ The recovery tool should support both paths. For migrated users whose export was
 **Why it happens:** The export endpoint (`GET /vault/export`) reads from the DB. After migration NULLs the columns, the export returns null for encryptedRootFolderKey.
 
 **How to avoid:**
+
 1. Update the export endpoint: for migrated users, resolve IPNS, fetch blob v2, and extract encryptedRootFolderKey from the IPFS blob to include in the export JSON.
 2. Alternatively: the recovery tool should have an IPFS-direct mode where the user provides only their privateKey and the tool derives rootIpnsName via HKDF, resolves IPNS, and reads the v2 blob. No export file needed.
 3. Both approaches should be implemented for maximum recovery resilience.
@@ -363,6 +366,7 @@ The recovery tool should support both paths. For migrated users whose export was
 **Why it happens:** Single-byte version detection has a 1/256 chance of false positive on random data.
 
 **How to avoid:**
+
 1. After detecting v2, validate the key length field is reasonable (e.g., between 81 and 1024 bytes -- ECIES minimum is 81 bytes for empty plaintext).
 2. If the ECIES decrypt of the extracted key fails, fall through to v1 parsing as a second attempt.
 3. The v1 path will also fail on truly corrupted data, but at least we tried both interpretations.
@@ -376,6 +380,7 @@ The recovery tool should support both paths. For migrated users whose export was
 **Why it happens:** The API currently always returns `encryptedRootIpnsPrivateKey` in the vault response. Old clients depend on it.
 
 **How to avoid:**
+
 1. For non-migrated users (migratedAt is null), the API continues returning both columns as-is.
 2. For migrated users (migratedAt is set), the API returns null/empty for both crypto columns. Old clients that read these will fail gracefully (HKDF derivation has been in the codebase since before Phase 20).
 3. Both web and desktop already have HKDF derivation code. The desktop app's `fetch_and_decrypt_vault` already verifies the stored IPNS key matches HKDF derivation (vault.rs line 172-181). After migration, it simply uses HKDF directly.
@@ -390,6 +395,7 @@ The recovery tool should support both paths. For migrated users whose export was
 **Why it happens:** Developers focus on the TypeScript implementation and forget the Rust side, or don't update the recovery tool.
 
 **How to avoid:**
+
 1. Follow the full Evolution Checklist (Section 4) from METADATA_EVOLUTION_PROTOCOL.md.
 2. Both TypeScript and Rust implementations must produce byte-identical v2 blobs for the same input.
 3. Create hardcoded test vectors: a known privateKey + rootFolderKey + folder metadata produces a specific v2 blob. Both TS and Rust tests verify against the same expected output.
@@ -512,14 +518,15 @@ migratedAt!: Date | null;
 
 ## State of the Art
 
-| Old Approach                                      | Current Approach                                   | When Changed | Impact                                     |
-| ------------------------------------------------- | -------------------------------------------------- | ------------ | ------------------------------------------ |
-| rootFolderKey in DB only                           | rootFolderKey in IPFS blob v2 + DB fallback        | Phase 20     | Server becomes zero-knowledge relay        |
-| encryptedRootIpnsPrivateKey stored and returned    | HKDF derivation canonical, column deprecated       | Phase 20     | One less secret in DB                      |
-| Recovery requires export file with DB-sourced keys | Recovery reads directly from IPFS blob v2           | Phase 20     | True server-independent recovery           |
-| All clients send encryptedRootIpnsPrivateKey       | New vaults skip it, API accepts but ignores         | Phase 20     | Cleaner vault init, less data transmitted  |
+| Old Approach                                       | Current Approach                             | When Changed | Impact                                    |
+| -------------------------------------------------- | -------------------------------------------- | ------------ | ----------------------------------------- |
+| rootFolderKey in DB only                           | rootFolderKey in IPFS blob v2 + DB fallback  | Phase 20     | Server becomes zero-knowledge relay       |
+| encryptedRootIpnsPrivateKey stored and returned    | HKDF derivation canonical, column deprecated | Phase 20     | One less secret in DB                     |
+| Recovery requires export file with DB-sourced keys | Recovery reads directly from IPFS blob v2    | Phase 20     | True server-independent recovery          |
+| All clients send encryptedRootIpnsPrivateKey       | New vaults skip it, API accepts but ignores  | Phase 20     | Cleaner vault init, less data transmitted |
 
 **Deprecated/outdated:**
+
 - `encryptedRootIpnsPrivateKey` column: HKDF-derivable since project inception. Kept as nullable DB column but no longer populated for new users or post-migration users.
 - `VaultResponseDto.encryptedRootIpnsPrivateKey`: Becomes optional/nullable in API response.
 
@@ -544,28 +551,28 @@ migratedAt!: Date | null;
 
 ### Test Framework
 
-| Property           | Value                                                                            |
-| ------------------ | -------------------------------------------------------------------------------- |
-| Framework          | Vitest (core/crypto packages), Jest (API), cargo test (Rust)                     |
-| Config file        | `packages/core/vitest.config.ts`, `apps/api/jest config`, `Cargo.toml`           |
-| Quick run command  | `pnpm --filter @cipherbox/core test -- --run`                                    |
-| Full suite command | `pnpm test && cd apps/desktop/src-tauri && cargo test --features fuse`           |
+| Property           | Value                                                                  |
+| ------------------ | ---------------------------------------------------------------------- |
+| Framework          | Vitest (core/crypto packages), Jest (API), cargo test (Rust)           |
+| Config file        | `packages/core/vitest.config.ts`, `apps/api/jest config`, `Cargo.toml` |
+| Quick run command  | `pnpm --filter @cipherbox/core test -- --run`                          |
+| Full suite command | `pnpm test && cd apps/desktop/src-tauri && cargo test --features fuse` |
 
 ### Phase Requirements -> Test Map
 
-| Req ID   | Behavior                                           | Test Type   | Automated Command                                                        | File Exists?   |
-| -------- | -------------------------------------------------- | ----------- | ------------------------------------------------------------------------ | -------------- |
-| VAULT-01 | Blob v2 serialize/deserialize round-trip            | unit        | `pnpm --filter @cipherbox/core test -- --run blob`                       | Wave 0         |
-| VAULT-01 | Version detection (v1 vs v2)                        | unit        | `pnpm --filter @cipherbox/core test -- --run blob`                       | Wave 0         |
-| VAULT-01 | ECIES key extraction from v2 header                 | unit        | `pnpm --filter @cipherbox/core test -- --run blob`                       | Wave 0         |
-| VAULT-02 | Login reads from v2 blob for migrated user          | integration | `pnpm --filter api test -- vault`                                        | Wave 0         |
-| VAULT-02 | Login falls back to DB on IPFS failure              | integration | `pnpm --filter api test -- vault`                                        | Wave 0         |
-| VAULT-03 | Migration stamps migratedAt and NULLs columns       | integration | `pnpm --filter api test -- vault`                                        | Wave 0         |
-| VAULT-04 | Init-vault accepts without encryptedRootIpnsKey     | unit        | `pnpm --filter api test -- vault`                                        | Wave 0         |
-| VAULT-04 | HKDF derivation matches stored key                  | unit        | `pnpm --filter @cipherbox/core test -- --run vault`                      | Existing       |
-| VAULT-05 | Recovery tool parses v2 blob                        | manual-only | Manual: open recovery.html, load v2 test export                          | N/A            |
-| VAULT-06 | Rust v2 blob round-trip matches TypeScript           | unit        | `cd apps/desktop/src-tauri && cargo test vault_blob`                     | Wave 0         |
-| VAULT-06 | Rust v2 deserialize of TS-generated blob            | unit        | `cd apps/desktop/src-tauri && cargo test vault_blob`                     | Wave 0         |
+| Req ID   | Behavior                                        | Test Type   | Automated Command                                    | File Exists? |
+| -------- | ----------------------------------------------- | ----------- | ---------------------------------------------------- | ------------ |
+| VAULT-01 | Blob v2 serialize/deserialize round-trip        | unit        | `pnpm --filter @cipherbox/core test -- --run blob`   | Wave 0       |
+| VAULT-01 | Version detection (v1 vs v2)                    | unit        | `pnpm --filter @cipherbox/core test -- --run blob`   | Wave 0       |
+| VAULT-01 | ECIES key extraction from v2 header             | unit        | `pnpm --filter @cipherbox/core test -- --run blob`   | Wave 0       |
+| VAULT-02 | Login reads from v2 blob for migrated user      | integration | `pnpm --filter api test -- vault`                    | Wave 0       |
+| VAULT-02 | Login falls back to DB on IPFS failure          | integration | `pnpm --filter api test -- vault`                    | Wave 0       |
+| VAULT-03 | Migration stamps migratedAt and NULLs columns   | integration | `pnpm --filter api test -- vault`                    | Wave 0       |
+| VAULT-04 | Init-vault accepts without encryptedRootIpnsKey | unit        | `pnpm --filter api test -- vault`                    | Wave 0       |
+| VAULT-04 | HKDF derivation matches stored key              | unit        | `pnpm --filter @cipherbox/core test -- --run vault`  | Existing     |
+| VAULT-05 | Recovery tool parses v2 blob                    | manual-only | Manual: open recovery.html, load v2 test export      | N/A          |
+| VAULT-06 | Rust v2 blob round-trip matches TypeScript      | unit        | `cd apps/desktop/src-tauri && cargo test vault_blob` | Wave 0       |
+| VAULT-06 | Rust v2 deserialize of TS-generated blob        | unit        | `cd apps/desktop/src-tauri && cargo test vault_blob` | Wave 0       |
 
 ### Sampling Rate
 

@@ -8,7 +8,7 @@ export type {
 } from './types';
 
 // IPFS operations
-export { addToIpfs, fetchFromIpfs, unpinFromIpfs } from './ipfs';
+export { addToIpfs, fetchFromIpfs, unpinFromIpfs, registerCid } from './ipfs';
 
 // IPNS operations
 export {
@@ -43,3 +43,19 @@ export { uploadFile, type UploadResult } from './upload';
 
 // Download operations
 export { downloadAndDecrypt } from './download';
+
+// Pinning providers (BYO-IPFS)
+export {
+  type PinningProvider,
+  type PinResult,
+  type PinStatus,
+  type PinningMode,
+  type ExternalProviderConfig,
+  type ConnectionTestResult,
+  KuboProvider,
+  PsaProvider,
+  PinataProvider,
+  DualPinProvider,
+  testConnection,
+  type DualPinResult,
+} from './pinning';

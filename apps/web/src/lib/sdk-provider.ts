@@ -8,10 +8,12 @@
  * Hooks call client methods, and stores subscribe to client events.
  */
 import { CipherBoxClient, type CipherBoxClientConfig } from '@cipherbox/sdk';
+import type { PinningConfig } from '@cipherbox/sdk';
 import { apiAxios } from './api-config';
 import type { FolderNode } from '../stores/folder.store';
 
 let _client: CipherBoxClient | null = null;
+let _lastConfig: CipherBoxClientConfig | null = null;
 
 /**
  * Initialize the SDK client. Called after vault is loaded (login complete).
@@ -26,6 +28,7 @@ export function initSdkClient(config: CipherBoxClientConfig): CipherBoxClient {
   }
   // Inject the shared axios instance so CipherBoxClient uses the same
   // instance as orval-generated functions (single instance, no dual path).
+  _lastConfig = { ...config };
   _client = new CipherBoxClient({ ...config, axiosInstance: apiAxios });
   return _client;
 }
@@ -57,6 +60,22 @@ export function destroySdkClient(): void {
     _client.destroy();
     _client = null;
   }
+  _lastConfig = null;
+}
+
+/**
+ * Reconfigure the SDK client's pinning config at runtime.
+ * Called from StorageTab after saving new BYO settings.
+ *
+ * Destroys the current client and recreates it with updated pinningConfig
+ * while preserving all other configuration. This is acceptable since config
+ * changes are infrequent (only on Settings save).
+ */
+export function reconfigurePinning(pinningConfig?: PinningConfig): void {
+  if (!_client || !_lastConfig) return;
+  _client.destroy();
+  _lastConfig = { ..._lastConfig, pinningConfig };
+  _client = new CipherBoxClient({ ..._lastConfig, axiosInstance: apiAxios });
 }
 
 /**

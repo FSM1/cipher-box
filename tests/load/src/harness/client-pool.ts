@@ -15,9 +15,23 @@ import {
 } from '../../../sdk-e2e/src/fixtures/test-harness';
 import { MetricsCollector, type OperationMetrics } from './metrics';
 import { printSummary, toJsonReport } from './reporter';
+import {
+  KuboProvider,
+  PsaProvider,
+  PinataProvider,
+  type PinningProvider,
+  type PinningMode,
+  type ExternalProviderConfig,
+} from '@cipherbox/sdk-core';
 
 const API_URL = process.env.LOAD_TEST_API_URL ?? 'http://localhost:3000';
 const SECRET = process.env.LOAD_TEST_SECRET ?? 'e2e-test-secret-do-not-use-in-production';
+
+/** BYO external provider config from environment variables */
+export const BYO_ENDPOINT = process.env.BYO_IPFS_ENDPOINT; // e.g., https://api.pinata.cloud/psa
+export const BYO_AUTH_TOKEN = process.env.BYO_IPFS_AUTH_TOKEN ?? '';
+export const BYO_PROTOCOL = (process.env.BYO_IPFS_PROTOCOL ?? 'kubo') as 'kubo' | 'psa' | 'pinata';
+export const BYO_PROVIDER_NAME = process.env.BYO_IPFS_PROVIDER_NAME ?? 'external';
 
 export interface PoolClient extends TestAccount {
   id: number;
@@ -27,6 +41,21 @@ export interface PoolClient extends TestAccount {
 export interface ClientPoolOptions {
   clientCount: number;
   label: string;
+}
+
+/** Options for creating a pool of BYO-mode clients */
+export interface ByoPoolOptions extends ClientPoolOptions {
+  /** External provider config -- all BYO clients share this provider */
+  externalProvider: ExternalProviderConfig;
+  /** Pinning mode for BYO clients */
+  pinningMode: 'external' | 'dual';
+}
+
+/** A pool client augmented with BYO provider and mode */
+export interface ByoPoolClient extends PoolClient {
+  provider: PinningProvider;
+  pinningMode: PinningMode;
+  externalProvider: ExternalProviderConfig;
 }
 
 /**
@@ -90,6 +119,66 @@ export async function destroyClientPool(pool: PoolClient[]): Promise<void> {
     pc.rootIpnsKeypair.privateKey.fill(0);
     await deleteTestAccount(pc, API_URL);
   }
+}
+
+/**
+ * Create a pool of N BYO-mode authenticated CipherBoxClient instances.
+ *
+ * Each client has its own test account plus a PinningProvider instance
+ * (KuboProvider or PsaProvider) for external pinning.
+ *
+ * Returns an empty array (with warning) if BYO_IPFS_ENDPOINT is not set,
+ * allowing scenarios to skip gracefully.
+ */
+export async function createByoClientPool(opts: ByoPoolOptions): Promise<ByoPoolClient[]> {
+  if (!BYO_ENDPOINT) {
+    console.warn(
+      'BYO_IPFS_ENDPOINT not set -- skipping BYO pool creation. ' +
+        'Set BYO_IPFS_ENDPOINT, BYO_IPFS_AUTH_TOKEN, and optionally BYO_IPFS_PROTOCOL to run BYO scenarios.'
+    );
+    return [];
+  }
+
+  const basePool = await createClientPool({
+    clientCount: opts.clientCount,
+    label: opts.label,
+  });
+
+  const byoPool: ByoPoolClient[] = basePool.map((pc) => {
+    let provider: PinningProvider;
+    switch (opts.externalProvider.protocol) {
+      case 'psa':
+        provider = new PsaProvider(opts.externalProvider.endpoint, opts.externalProvider.authToken);
+        break;
+      case 'pinata':
+        provider = new PinataProvider(
+          opts.externalProvider.endpoint,
+          opts.externalProvider.authToken
+        );
+        break;
+      case 'kubo':
+      default:
+        provider = new KuboProvider(
+          opts.externalProvider.endpoint,
+          opts.externalProvider.authToken
+        );
+        break;
+    }
+
+    return {
+      ...pc,
+      provider,
+      pinningMode: opts.pinningMode,
+      externalProvider: opts.externalProvider,
+    };
+  });
+
+  console.log(
+    `BYO pool: ${byoPool.length} clients with ${opts.externalProvider.protocol} provider ` +
+      `(mode: ${opts.pinningMode}, endpoint: ${opts.externalProvider.endpoint})`
+  );
+
+  return byoPool;
 }
 
 /**

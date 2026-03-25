@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TeeKeyStateService } from './tee-key-state.service';
+import type { ConnectionTestResponseDto } from './dto/connection-test.dto';
 
 /**
  * A single entry in a batch republish request to the TEE worker.
@@ -174,6 +175,33 @@ export class TeeService {
           'This is expected in development without a TEE simulator.'
       );
     }
+  }
+
+  /**
+   * Forward a connection test to the TEE worker.
+   * The TEE worker decrypts ECIES-encrypted provider config in-enclave,
+   * probes the endpoint server-side, and returns the result.
+   */
+  async connectionTest(encryptedConfig: string, epoch: number): Promise<ConnectionTestResponseDto> {
+    const response = await this.fetchWithTimeout(`${this.teeWorkerUrl}/connection-test`, {
+      method: 'POST',
+      headers: {
+        ...this.authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ encryptedConfig, epoch }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        success: false,
+        latencyMs: 0,
+        error: `TEE worker error: ${response.status} - ${errorText}`,
+      };
+    }
+
+    return (await response.json()) as ConnectionTestResponseDto;
   }
 
   /**

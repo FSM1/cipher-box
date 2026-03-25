@@ -14,6 +14,7 @@ import {
   StreamableFile,
   Request,
   PayloadTooLargeException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -25,9 +26,16 @@ import {
   ApiResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IPFS_PROVIDER, IpfsProvider } from './providers';
-import { UploadResponseDto, UnpinDto, UnpinResponseDto } from './dto';
+import {
+  UploadResponseDto,
+  UnpinDto,
+  UnpinResponseDto,
+  RegisterCidDto,
+  RegisterCidResponseDto,
+} from './dto';
 import { VaultService } from '../vault/vault.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { RequestWithUser } from '../common/types';
@@ -137,6 +145,32 @@ export class IpfsController {
     await this.ipfsProvider.unpinFile(dto.cid);
     this.metricsService.fileUnpins.inc();
     return { success: true };
+  }
+
+  @Post('register-cid')
+  @Throttle({ default: { limit: 100, ttl: 3600000 } }) // 100 per hour per user
+  @ApiOperation({
+    summary: 'Register externally-pinned CID for advisory quota tracking',
+    description:
+      'BYO users report CIDs pinned to their own nodes. Advisory only -- no enforcement.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'CID registered for tracking',
+    type: RegisterCidResponseDto,
+  })
+  async registerCid(
+    @Request() req: RequestWithUser,
+    @Body() dto: RegisterCidDto
+  ): Promise<RegisterCidResponseDto> {
+    // Security: only BYO users may register external CIDs
+    const isByo = await this.vaultService.isUserByo(req.user.id);
+    if (!isByo) {
+      throw new ForbiddenException('CID registration is only available for BYO users');
+    }
+
+    await this.vaultService.recordPin(req.user.id, dto.cid, dto.sizeBytes);
+    return { recorded: true };
   }
 
   @Get(':cid')
