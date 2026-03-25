@@ -12,8 +12,8 @@
  */
 
 import { decrypt } from 'eciesjs';
-import { lookup } from 'node:dns/promises';
 import { getKeypair } from './tee-keys.js';
+import { validateEndpointUrl, validateResolvedIp } from './ssrf-validation.js';
 
 export type ProviderConfig = {
   endpoint: string;
@@ -26,77 +26,7 @@ export type MigrationBatchResult = {
   failed: string[];
 };
 
-// --- SSRF Protection (from security review CRITICAL finding) ---
-
-/**
- * Validate endpoint URL to prevent SSRF attacks.
- * TEE worker fetches from user-provided URLs -- must block internal/metadata endpoints.
- */
-function validateEndpointUrl(endpoint: string): void {
-  const url = new URL(endpoint);
-
-  // Skip SSRF validation in development/simulator mode
-  if (process.env.TEE_MODE === 'simulator') return;
-
-  // Must be HTTPS
-  if (url.protocol !== 'https:') {
-    throw new Error('Migration endpoint must use HTTPS');
-  }
-
-  // Block private/internal IP ranges and metadata endpoints
-  const hostname = url.hostname;
-  if (
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname === '::1' ||
-    hostname.startsWith('10.') ||
-    hostname.startsWith('192.168.') ||
-    hostname === '169.254.169.254' ||
-    hostname.endsWith('.internal') ||
-    hostname.endsWith('.local') ||
-    hostname.startsWith('169.254.') ||
-    hostname.startsWith('fd') ||
-    hostname.startsWith('fe80')
-  ) {
-    throw new Error('Migration endpoint cannot target private/internal addresses');
-  }
-
-  // Block 172.16.0.0/12 range
-  if (hostname.startsWith('172.')) {
-    const second = parseInt(hostname.split('.')[1], 10);
-    if (second >= 16 && second <= 31) {
-      throw new Error('Migration endpoint cannot target private/internal addresses');
-    }
-  }
-}
-
-/**
- * DNS rebinding protection: resolve hostname and verify IP is not private.
- * Prevents attacker.com -> 169.254.169.254 attacks.
- */
-async function validateResolvedIp(hostname: string): Promise<void> {
-  const result = await lookup(hostname);
-  const ip = result.address;
-  if (
-    ip.startsWith('10.') ||
-    ip.startsWith('192.168.') ||
-    ip.startsWith('127.') ||
-    ip === '::1' ||
-    ip.startsWith('169.254.') ||
-    ip.startsWith('fd') ||
-    ip.startsWith('fe80')
-  ) {
-    throw new Error('Migration endpoint DNS resolves to private address');
-  }
-  if (ip.startsWith('172.')) {
-    const second = parseInt(ip.split('.')[1], 10);
-    if (second >= 16 && second <= 31) {
-      throw new Error('Migration endpoint DNS resolves to private address');
-    }
-  }
-}
-
-// --- End SSRF Protection ---
+// SSRF validation imported from shared ssrf-validation module
 
 /**
  * Decrypt an ECIES-encrypted provider config using TEE's current epoch key.

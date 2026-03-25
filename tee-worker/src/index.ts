@@ -6,10 +6,11 @@
  * signs IPNS records, and returns signed records.
  *
  * Routes:
- *   GET  /health      - Public health check
- *   GET  /public-key  - TEE public key per epoch (auth required)
- *   POST /republish   - Batch IPNS signing (auth required)
- *   POST /migrate     - Batch CID migration between providers (auth required)
+ *   GET  /health           - Public health check
+ *   GET  /public-key       - TEE public key per epoch (auth required)
+ *   POST /republish        - Batch IPNS signing (auth required)
+ *   POST /migrate          - Batch CID migration between providers (auth required)
+ *   POST /connection-test  - Server-side IPFS endpoint connection test (auth required)
  */
 
 import express from 'express';
@@ -18,6 +19,7 @@ import healthRouter from './routes/health.js';
 import publicKeyRouter from './routes/public-key.js';
 import republishRouter from './routes/republish.js';
 import migrateRouter from './routes/migrate.js';
+import connectionTestRouter from './routes/connection-test.js';
 
 const app = express();
 const port = parseInt(process.env.PORT || '3001', 10);
@@ -33,6 +35,7 @@ app.use(healthRouter);
 app.use(authMiddleware, publicKeyRouter);
 app.use(authMiddleware, republishRouter);
 app.use(authMiddleware, migrateRouter);
+app.use(authMiddleware, connectionTestRouter);
 
 app.listen(port, () => {
   console.log(`TEE Worker started on port ${port} (mode: ${mode})`);
