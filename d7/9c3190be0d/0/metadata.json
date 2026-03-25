@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d79c3190be0d",
+  "session_id": "307145be-5d6b-4c58-9faa-418cafde1db6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T14:47:48.470044Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/migration/migration.processor.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e80671e2de8e",
+  "token_usage": {
+    "input_tokens": 496,
+    "cache_creation_tokens": 470172,
+    "cache_read_tokens": 55456768,
+    "output_tokens": 77946,
+    "api_call_count": 325
+  },
+  "session_metrics": {
+    "turn_count": 62
+  },
+  "summary": {
+    "intent": "Execute all 7 plans of Phase 21 (BYO IPFS Node Support) via wave-based parallel execution, verify end-to-end functionality through UAT, then create gap closure plans for issues found during testing.",
+    "outcome": "All 7 plans executed and committed. Six bugs found and fixed during Playwright UAT. Full cipherbox→external Kubo migration verified (44/44 CIDs, ~14s for 100MB). Four gap closure plans (21-08 through 21-11) created for remaining issues. Branch merged with main.",
+    "learnings": {
+      "repo": [
+        "TEE worker is not in the pnpm workspace — requires separate npm install and inline env var injection (no .env auto-loading via tsx watch)",
+        "Auth store is memory-only with no localStorage persistence — test-login API creates a duplicate auth_methods row that conflicts with subsequent email OTP login for the same identity",
+        "Migration processor used env var TEE_AUTH_SECRET while the rest of the codebase (TeeService) uses TEE_WORKER_SECRET — inconsistency caused silent processor failures",
+        "StorageTab encrypted provider configs with bytesToHex but TEE worker's decryptEcies decoded them as base64 — ECIES ciphertext corruption in-enclave",
+        "SSRF protection in migration-worker blocks 192.168.* by default, which also blocks local dev Kubo nodes; simulator bypass flag needed",
+        "DualPinProvider exists in sdk-core but the web app's upload flow (useDropUpload) does not invoke the secondary pin — dual-write is config-only, not functional",
+        "Pinata deprecated their standard PSA endpoint (/psa returns 404); Filebase IPFS RPC uses non-standard auth — only self-hosted Kubo works reliably with current providers",
+        "Browser-side connection test is blocked by CORS for all SaaS pinning services; architectural fix is to route through TEE worker (already handles ECIES decrypt → use credentials pattern)",
+        "Migration trigger condition requires savedConfig !== null, but first-time users switching from default cipherbox mode have no IPNS record yet — first switch never triggers migration",
+        "DHCP can reassign the QEMU bridge host IP; all .env service addresses may need updating after Docker stack recreates"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/migration/migration.processor.ts",
+          "line": 46,
+          "end_line": 46,
+          "finding": "Checked TEE_AUTH_SECRET env var instead of TEE_WORKER_SECRET used everywhere else — processor silently failed all migration jobs"
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "decryptEcies used Buffer.from(encryptedBase64, 'base64') but StorageTab sends hex strings via bytesToHex — encoding mismatch caused 'bad point: got length 65' secp256k1 error"
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "parseProviderConfig type only accepted 'psa' | 'kubo' — 'cipherbox' source protocol (default mode users) caused type error and unhandled fetch path"
+        },
+        {
+          "path": "apps/web/src/components/settings/StorageTab.tsx",
+          "line": 227,
+          "end_line": 232,
+          "finding": "Migration trigger: const providerChanged = savedConfig \u0026\u0026 ... — null check on savedConfig prevents migration for first-time users switching from default cipherbox mode; fix treats null as implicit cipherbox"
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/connection-test.ts",
+          "finding": "HTTP 401/403/422 responses from probed endpoint fell through as 'protocol not detected' instead of 'authentication failed' — both Kubo and PSA probes needed explicit status code handling"
+        }
+      ],
+      "workflow": [
+        "Background task output files at /private/tmp/claude-501/.../tasks/*.output contain API console logs including OTP codes — faster than asking the user",
+        "API hot-reload via Nest watch does not guarantee the fix takes effect if port 3000 is still held by a prior process — EADDRINUSE silently prevents the reloaded instance from binding",
+        "BullMQ jobs are persisted in Redis and picked up by new processor instances on startup — stale failed jobs from a prior broken processor can be immediately retried by a new instance before the fix is applied",
+        "Playwright MCP browser_fill_form with large file uploads (100MB) can crash the page — upload files one at a time or in small batches",
+        "GSD checkpoint continuation agents require explicit completed_tasks_table, resume_task_number, and user_response fields — spawning without them produces incomplete SUMMARY commits"
+      ]
+    },
+    "friction": [
+      "Docker host DHCP reassignment changed IP from 192.168.133.114 to 192.168.133.12 — required updating 5 entries in apps/api/.env mid-session",
+      "Redis port in .env was 6380 but service was on 6379 — required explicit nc port testing to diagnose",
+      "TEE worker not in pnpm workspace required separate npm install; no .env loading meant inline env vars were needed every time the worker was restarted",
+      "Multiple API hot-reload failures (EADDRINUSE) made it impossible to test processor fixes without a full kill-and-restart cycle",
+      "test-login API call created a duplicate auth_methods row that broke subsequent email OTP login for the same user — required switching to a different email mid-session",
+      "Playwright session lost auth state on page crash from large upload, requiring full re-login",
+      "Migration UI displayed stale 'failed' state after processor was fixed and new migration completed — component polls /migration/status which returned the old completed (failed) job",
+      "Pinata deprecated PSA and Filebase uses non-standard auth — both major SaaS providers non-functional with current implementation; only self-hosted Kubo worked for UAT",
+      "CORS blocked all SaaS provider connection tests in the browser — significant testing blocker that revealed the architectural gap late in execution"
+    ],
+    "open_items": [
+      "21-08: Wire DualPinProvider into web app upload flow (useDropUpload/sdk-provider) — dual-write config saves but secondary pin is never invoked during upload",
+      "21-08: Add source unpin step after successful migration — current implementation is copy-only with no cleanup",
+      "21-09: Replace browser-side connection test with TEE-routed endpoint — POST /tee/connection-test with ECIES-wrapped config, TEE decrypts and probes, returns result to UI",
+      "21-10: PinataProvider using Pinata's proprietary /v3/files API (PSA endpoint deprecated) — required for SaaS BYO users",
+      "21-11: Run BYO performance benchmarks against real external IPFS provider and capture .planning/baselines/21-byo-baselines.md — deferred, needs provider infrastructure",
+      "1 CID failed in reverse migration (external→cipherbox) — likely CIDv0/CIDv1 version mismatch between nodes; needs investigation",
+      "Migration retrigger UX: after a failed migration is 'completed' in DB, UI has no way to retrigger without switching modes twice — needs explicit retry button or status-aware trigger logic",
+      "SSRF bypass is currently hardcoded for simulator mode — production TEE needs an allowlist mechanism for private network endpoints that are legitimately user-owned Kubo nodes"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-25T14:46:33.248047Z",
+    "agent_lines": 0,
+    "human_added": 1282,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1282,
+    "agent_percentage": 0
+  }
+}
