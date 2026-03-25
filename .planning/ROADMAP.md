@@ -25,7 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material (gap closure in progress) (completed 2026-03-24)
 - [ ] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing (gap closure in progress)
 - [ ] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, k6 load testing, and capacity documentation
-- [ ] **Phase 23: Rust SDK Extraction** - Extract shared cipherbox-core Rust crate mirroring @cipherbox/core and @cipherbox/sdk-core, replace duplicated crypto/IPNS/metadata logic in desktop FUSE code, enable unit testing at same granularity as TypeScript
+- [x] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (completed 2026-03-24)
 
 ## Phase Details
 
@@ -168,6 +168,32 @@ Plans:
 4. Capacity thresholds are documented with scaling recommendations (max concurrent users, storage growth projections, IPNS publish throughput limits)
    **Plans**: TBD
 
+### Phase 23: Rust SDK Extraction
+
+**Goal:** Extract five Rust crates (`cipherbox-crypto`, `cipherbox-core`, `cipherbox-api-client`, `cipherbox-fuse`, `cipherbox-sdk`) mirroring the TypeScript SDK package hierarchy. Replace duplicated crypto/IPNS/metadata logic in desktop FUSE code with crate imports. Enable unit testing at the same granularity as TypeScript. Desktop app becomes a thin Tauri shell.
+**Requirements**: RSDK-01, RSDK-02, RSDK-03, RSDK-04, RSDK-05, RSDK-06, RSDK-07, RSDK-08, RSDK-09, RSDK-10
+**Depends on:** None (can run independently alongside other phases)
+**Success Criteria** (what must be TRUE):
+
+1. Five Rust crates compile independently under a Cargo workspace with centralized dependency versions
+2. Desktop app is a thin Tauri shell (~1,500 LOC) with all logic delegated to workspace crates
+3. Cross-language test vectors in `tests/vectors/` produce identical output in both Rust and TypeScript
+4. CI runs workspace-level builds on macOS, Linux, and Windows with cross-language parity gate
+5. No duplicated crypto, domain, or API logic remains in the desktop app
+
+**Plans:** 8/8 plans complete
+
+Plans:
+
+- [x] 23-01-PLAN.md -- Cargo workspace scaffold + cipherbox-crypto crate extraction
+- [x] 23-02-PLAN.md -- cipherbox-core crate extraction (domain types, metadata, IPNS records)
+- [x] 23-03-PLAN.md -- cipherbox-api-client crate + shared test vectors extraction
+- [x] 23-04-PLAN.md -- cipherbox-fuse crate extraction (platform-agnostic + platform modules)
+- [x] 23-05-PLAN.md -- cipherbox-sdk crate extraction (sync, queue, state, registry)
+- [x] 23-06-PLAN.md -- Desktop app thin shell cleanup + full workspace verification
+- [x] 23-07-PLAN.md -- CI workspace builds + Release Please + cross-language parity gate
+- [x] 23-08-PLAN.md -- Gap closure: Move Windows WinFsp operations to crates/fuse/src/platform/windows/
+
 ## Progress
 
 **Execution Order:**
@@ -179,21 +205,10 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete            | 2026-03-07 |
 | 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete            | 2026-03-20 |
 | 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete            | 2026-03-23 |
-| 20. Vault Migration                       | 6/6       | Complete       | 2026-03-24          | -          |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete            | 2026-03-24 |
 | 21. BYO-IPFS Node Support                 | v1.1      | 7/11           | Gap closure pending | -          |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started         | -          |
-| 23. Rust SDK Extraction                   | v1.1      | 0/?            | Not started         | -          |
-
-### Phase 23: Rust SDK Extraction
-
-**Goal:** Extract shared `cipherbox-core` Rust crate mirroring `@cipherbox/core` and `@cipherbox/sdk-core` TypeScript packages. Replace duplicated crypto/IPNS/metadata logic in desktop FUSE code with crate imports. Enable unit testing at the same granularity as TypeScript. Platform-specific plans for macOS (FUSE-T SMB), Linux (kernel FUSE), Windows (WinFSP).
-**Requirements**: TBD
-**Depends on:** None (can run independently alongside other phases)
-**Plans:** 7/7 plans complete
-
-Plans:
-
-- [ ] TBD (run /gsd:plan-phase 23 to break down)
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete            | 2026-03-24 |
 
 ---
 

@@ -1,10 +1,9 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod api;
 mod commands;
-mod crypto;
 mod fuse;
+mod keychain;
 mod registry;
 mod state;
 mod sync;
@@ -150,7 +149,7 @@ fn main() {
                     .center()
                     .resizable(false)
                     .visible(false)
-                    .on_page_load(|webview, payload| {
+                    .on_page_load(|_webview, payload| {
                         log::info!(
                             "Webview page load: url={}, event={:?}",
                             payload.url(),

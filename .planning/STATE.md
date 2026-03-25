@@ -6,9 +6,9 @@ status: unknown
 last_updated: '2026-03-25T00:00:00.000Z'
 progress:
   total_phases: 8
-  completed_phases: 6
-  total_plans: 27
-  completed_plans: 27
+  completed_phases: 7
+  total_plans: 35
+  completed_plans: 35
 ---
 
 # Project State
@@ -18,12 +18,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 21 — byo-ipfs-node-support (COMPLETE)
+**Current focus:** Phase 21 — byo-ipfs-node-support (gap closure pending)
 
 ## Current Position
 
-Phase: 21 (byo-ipfs-node-support) — COMPLETE
-Plan: 7 of 7 (all plans complete)
+Phase: 21 (byo-ipfs-node-support) — Gap closure pending
+Plan: 7 of 7 base plans complete; gap closure plans being created
+Phase 23 (rust-sdk-extraction) — Complete (8/8 plans, executed on main)
 
 ## Performance Metrics
 
@@ -58,6 +59,14 @@ Plan: 7 of 7 (all plans complete)
 | 21    | 04   | 8min     | 3     | 9     |
 | 21    | 06   | 3min     | 2     | 4     |
 | 21    | 07   | 5min     | 3     | 5     |
+| 23    | 01   | 13min    | 2     | 26    |
+| 23    | 02   | 10min    | 2     | 33    |
+| 23    | 03   | 11min    | 2     | 23    |
+| 23    | 05   | 12min    | 2     | 24    |
+| 23    | 04   | 22min    | 2     | 17    |
+| 23    | 07   | 7min     | 2     | 5     |
+| 23    | 06   | 23min    | 2     | 7     |
+| 23    | 08   | 20min    | 2     | 7     |
 
 ## Accumulated Context
 
@@ -92,7 +101,7 @@ Recent for v1.1:
 - Recovery tool IPNS resolution uses gateway /ipns/ HEAD request with redirect following (most reliable without API dependency)
 - fetchAndDecryptMetadata handles both v1 JSON and v2 binary blobs transparently for folder sync
 - Zero-crypto vault schema: server stores only ownerPublicKey and rootIpnsName, all crypto material lives exclusively in IPFS v2 blobs
-- DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) fully dropped -- no fallback paths
+- DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) fully dropped — no fallback paths
 - PinningProvider interface: KuboProvider uses Basic auth, PsaProvider uses Bearer auth, matching each protocol's native auth model
 - PsaProvider.pin() throws intentionally; pinByCid() is the correct PSA workflow (CID-reference-only protocol)
 - Connection test uses sequential probe: Kubo /api/v0/id first, then PSA /pins, with 10s timeout per probe
@@ -103,9 +112,24 @@ Recent for v1.1:
 - PsaProvider.pinByCid() accessed via cast in client.ts (PSA-specific, not on PinningProvider interface)
 - Migration uses existing BullMQ pattern with pin-migration queue name; TEE decrypts ECIES-encrypted provider configs in-enclave with epoch key
 - SSRF protection on TEE migration: validates URL structure (HTTPS-only, no private IPs) and DNS resolution (rebinding check)
-- BYO config stored as encrypted IPNS entry using rootFolderKey -- no server-side credential storage (zero-knowledge preserved)
+- BYO config stored as encrypted IPNS entry using rootFolderKey — no server-side credential storage (zero-knowledge preserved)
 - Dedicated IPNS key derived via HKDF with context string byo-ipfs-config from vault keypair
-- BYO benchmark execution (21-07 Task 4) deferred -- requires external IPFS provider infrastructure; test scenarios ready to run when provider available
+- BYO benchmark execution (21-07 Task 4) deferred — requires external IPFS provider infrastructure; test scenarios ready to run when provider available
+- Cargo workspace with centralized deps at repo root; cipherbox-crypto crate as foundation for all Rust SDK extraction
+- Module re-export pattern in desktop crypto/mod.rs preserves all existing crate::crypto::\* paths without touching call sites
+- cipherbox-core crate layered on cipherbox-crypto: folder, file, bin, vault_blob, ipns, registry, decrypt, error modules
+- File module re-exports FileMetadata types from folder.rs (shared AES encryption context with parent folder key)
+- decrypt module moved from fuse to crypto re-export (domain logic, not FUSE-specific)
+- Hand-structured API client crate rather than openapi-generator (modest API surface, proven code, no Java/Docker CI dependency)
+- critical-section std feature required for standalone ecies linking (Tauri provides it in desktop builds)
+- Shared test vectors in tests/vectors/ JSON files loadable by both Rust and TypeScript for CI parity gates
+- SyncDaemon uses Arc<dyn Fn(SyncStatus)> generic callback instead of Tauri AppHandle for testability
+- Desktop api/client.rs re-exports cipherbox_api_client::ApiClient as type alias to unify types across modules
+- Desktop AppState wraps Arc<KeyState> from SDK; all key material accessed via state.sdk.\*
+- Keychain operations kept as desktop-specific keychain.rs module (not in api-client crate)
+- Desktop api/ and crypto/ directories fully removed; all imports use workspace crates directly
+- CI parity gate uses needs.changes.outputs.src (not nonexistent packages) for trigger condition
+- Desktop-e2e binary paths updated to target/debug/ to match workspace cargo build output
 
 ### Roadmap Evolution
 
@@ -131,4 +155,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-25 after completing 21-07 (BYO performance benchmarking scenarios -- benchmark execution deferred pending provider infrastructure)
+Last updated: 2026-03-25 after completing Phase 21 base plans (7/7) and Phase 23 (8/8 on main); Phase 21 gap closure pending

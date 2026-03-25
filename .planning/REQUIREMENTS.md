@@ -59,6 +59,19 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [x] **SDK-10**: All transitional re-exports removed from @cipherbox/crypto; domain type imports enforced at compile time
 - [x] **SDK-11**: Release Please configured for independent per-package versioning
 
+### Rust SDK Extraction (Phase 23)
+
+- [x] **RSDK-01**: Cargo workspace at repo root with centralized `[workspace.dependencies]` and all five Rust crates as members
+- [x] **RSDK-02**: `cipherbox-crypto` crate contains pure crypto primitives (AES-GCM/CTR, ECIES, Ed25519, HKDF, IPNS name derivation) with no domain knowledge
+- [x] **RSDK-03**: Shared JSON test vectors in `tests/vectors/` loaded by both Rust and TypeScript test suites for cross-language parity verification
+- [x] **RSDK-04**: `cipherbox-core` crate contains domain types (FolderMetadata, FileMetadata, RecycleBinMetadata, DeviceRegistry), metadata encrypt/decrypt, vault blob v2, IPNS record creation
+- [x] **RSDK-05**: `cipherbox-api-client` crate provides typed HTTP client for all CipherBox API endpoints used by desktop
+- [x] **RSDK-06**: `cipherbox-fuse` crate contains platform-agnostic FUSE abstractions (InodeTable, caches, file handles) and platform-specific modules behind feature flags (fuse for macOS/Linux, winfsp for Windows)
+- [x] **RSDK-07**: `cipherbox-sdk` crate contains stateful orchestration (SyncDaemon, WriteQueue, KeyState, device registry ops) with no Tauri dependency
+- [x] **RSDK-08**: Desktop app is a thin Tauri shell (commands/, tray/, main.rs) with all logic delegated to workspace crates
+- [x] **RSDK-09**: CI workflows use workspace-level cargo commands, cache root Cargo.lock, and include cross-language vector parity gate
+- [x] **RSDK-10**: Release Please configured for independent versioning of all five Rust crates
+
 ## v1.2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -134,14 +147,24 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SDK-09      | Phase 19.1 | Pending  |
 | SDK-10      | Phase 19.1 | Complete |
 | SDK-11      | Phase 19.1 | Complete |
+| RSDK-01     | Phase 23   | Complete |
+| RSDK-02     | Phase 23   | Complete |
+| RSDK-03     | Phase 23   | Complete |
+| RSDK-04     | Phase 23   | Complete |
+| RSDK-05     | Phase 23   | Complete |
+| RSDK-06     | Phase 23   | Complete |
+| RSDK-07     | Phase 23   | Complete |
+| RSDK-08     | Phase 23   | Complete |
+| RSDK-09     | Phase 23   | Complete |
+| RSDK-10     | Phase 23   | Complete |
 
 **Coverage:**
 
-- v1.1 requirements: 37 total
-- Mapped to phases: 37
+- v1.1 requirements: 47 total
+- Mapped to phases: 47
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-07_
-_Last updated: 2026-03-23 after Phase 19.2 gap closure (PERF-09 registration)_
+_Last updated: 2026-03-24 after Phase 23 planning (RSDK-01 through RSDK-10 registered)_

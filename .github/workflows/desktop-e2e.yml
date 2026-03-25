@@ -33,12 +33,15 @@ jobs:
               - 'apps/desktop/src-tauri/capabilities/**'
               - 'apps/desktop/src-tauri/resources/**'
               - 'apps/desktop/src-tauri/Cargo.toml'
-              - 'apps/desktop/src-tauri/Cargo.lock'
               - 'apps/desktop/src-tauri/build.rs'
               - 'apps/desktop/src-tauri/rust-toolchain.toml'
               - 'apps/desktop/index.html'
               - 'apps/desktop/vite.config.*'
               - 'apps/desktop/tsconfig*'
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'tests/vectors/**'
               - 'packages/crypto/src/**'
               - 'packages/crypto/tsconfig*'
               - '.github/workflows/desktop-e2e.yml'
@@ -172,8 +175,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: ${{ matrix.platform }}-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+            target
+          key: ${{ matrix.platform }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ matrix.platform }}-cargo-
 
       - name: Create WinFsp MSI placeholder for resource glob (Windows)
@@ -182,13 +185,13 @@ jobs:
         run: New-Item -ItemType File -Force -Path "apps/desktop/src-tauri/resources/winfsp-placeholder.msi"
 
       - name: Build debug binary
-        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features ${{ matrix.fuse-feature }}
+        run: cargo build -p cipherbox-desktop --no-default-features --features ${{ matrix.fuse-feature }}
         env:
           PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
 
       - name: Fix rpath for FUSE-T (macOS)
         if: runner.os == 'macOS'
-        run: install_name_tool -add_rpath /usr/local/lib apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }} || true
+        run: install_name_tool -add_rpath /usr/local/lib target/debug/${{ matrix.binary-name }} || true
 
       # --- Install backend services ---
 
@@ -447,7 +450,7 @@ jobs:
           export VITE_API_URL=http://localhost:3000
           export VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
           export RUST_LOG=info
-          BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
+          BINARY=target/debug/${{ matrix.binary-name }}
           chmod +x "$BINARY"
           DEV_KEY=$(openssl rand -hex 32)
           "$BINARY" --dev-key $DEV_KEY > /tmp/cipherbox-desktop.log 2>&1 &
@@ -476,7 +479,7 @@ jobs:
         run: |
           Xvfb :99 -screen 0 1024x768x24 &
           sleep 1
-          BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
+          BINARY=target/debug/${{ matrix.binary-name }}
           chmod +x "$BINARY"
           DEV_KEY=$(openssl rand -hex 32)
           "$BINARY" --dev-key $DEV_KEY > /tmp/cipherbox-desktop.log 2>&1 &
@@ -514,7 +517,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          BINARY="apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}"
+          BINARY="target/debug/${{ matrix.binary-name }}"
           DEV_KEY=$(openssl rand -hex 32)
           LOGFILE="$RUNNER_TEMP/cipherbox-desktop.log"
           export DESKTOP_LOG="$LOGFILE"
