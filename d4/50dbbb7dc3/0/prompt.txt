@@ -1,0 +1,816 @@
+/gsd:execute-phase 21
+
+---
+
+<task-notification>
+<task-id>ae27a95e52685a0d4</task-id>
+<tool-use-id>toolu_01TwoTTSHkpnaLGYpwQyTj4g</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ae27a95e52685a0d4.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-01" completed</summary>
+<result>No untracked files. Plan execution is complete.
+
+## PLAN COMPLETE
+
+**Plan:** 21-01
+**Tasks:** 2/2
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-01-SUMMARY.md`
+
+**Commits:**
+
+- `0113ef24a`: feat(21-01): add PinningProvider interface with KuboProvider, PsaProvider, and connection test
+- `f831f66c3`: test(21-01): add unit tests for KuboProvider, PsaProvider, and connection test
+- `9a2bb03af`: docs(21-01): complete SDK pinning interface plan
+
+**Duration:** 5 min
+
+**Key files created:**
+
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/types.ts` -- PinningProvider interface, PinningMode, ExternalProviderConfig, ConnectionTestResult types
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/kubo-provider.ts` -- KuboProvider for Kubo RPC /api/v0/* endpoints
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/psa-provider.ts` -- PsaProvider for PSA /pins endpoints with pinByCid
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/connection-test.ts` -- testConnection with protocol auto-detection and CORS validation
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/index.ts` -- barrel export
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/__tests__/pinning/kubo-provider.test.ts` -- 12 unit tests
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/__tests__/pinning/psa-provider.test.ts` -- 11 unit tests
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/__tests__/pinning/connection-test.test.ts` -- 9 unit tests</result>
+<usage><total_tokens>95406</total_tokens><tool_uses>89</tool_uses><duration_ms>614497</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ae27a95e52685a0d4.output
+
+---
+
+<task-notification>
+<task-id>ab6a7447ea25e83c2</task-id>
+<tool-use-id>toolu_01DV6HGrj3fg72g1JXQjxjXH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ab6a7447ea25e83c2.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-02" completed</summary>
+<result>All done. Let me provide the completion format.
+
+## PLAN COMPLETE
+
+**Plan:** 21-02
+**Tasks:** 2/2
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-02-SUMMARY.md`
+
+**Commits:**
+
+- `4ed75b6d0`: feat(21-02): add register-cid endpoint and advisory quota mode for BYO users
+- `3d328749d`: test(21-02): add unit tests for CID registration and advisory quota mode
+- `ea0912006`: docs(21-02): complete CID registration and advisory quota plan
+
+**Duration:** 6 min
+
+**Key files created/modified:**
+
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/ipfs/dto/register-cid.dto.ts` -- RegisterCidDto with CID format validation
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/ipfs/ipfs.controller.ts` -- POST /ipfs/register-cid endpoint
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/vault/vault.service.ts` -- isUserByo(), setByoStatus(), advisory quota
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/vault/dto/quota.dto.ts` -- advisory boolean field
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/vault/entities/vault.entity.ts` -- isByoUser column
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/migrations/1740600000000-AddByoUserFlag.ts` -- IF NOT EXISTS migration</result>
+<usage><total_tokens>110666</total_tokens><tool_uses>113</tool_uses><duration_ms>650133</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ab6a7447ea25e83c2.output
+
+---
+
+<task-notification>
+<task-id>affb795f6be6040d8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/affb795f6be6040d8.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-03" completed</summary>
+<result>## PLAN COMPLETE
+
+**Plan:** 21-03
+**Tasks:** 3/3
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-03-SUMMARY.md`
+
+**Commits:**
+
+- `084edd6ed`: feat(21-03): add DualPinProvider, ByoIpfsConfig type, and PinningConfig
+- `fdddc2fb2`: feat(21-03): wire pinning mode into CipherBoxClient upload flow
+- `095cc1eec`: test(21-03): add unit tests for DualPinProvider and client pinning orchestration
+- `2135b50da`: docs(21-03): complete SDK pinning integration plan
+
+**Duration:** 10min
+
+**Key files:**
+
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/dual-pin-provider.ts` - DualPinProvider class
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/ipfs/index.ts` - registerCid function
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/upload/index.ts` - pinFn injection in uploadFile
+- `/Users/michael/Code/cipher-box-phase-20/packages/core/src/vault/types.ts` - ByoIpfsConfig type
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk/src/types.ts` - PinningConfig type
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk/src/client.ts` - pinWithMode method, provider init
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk/src/events.ts` - pin:secondaryFailed event</result>
+<usage><total_tokens>132103</total_tokens><tool_uses>133</tool_uses><duration_ms>850671</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/affb795f6be6040d8.output
+
+---
+
+<task-notification>
+<task-id>ad44867e92aa1b309</task-id>
+<tool-use-id>toolu_01CbXuTwpQzp6ENxw9w8yreQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ad44867e92aa1b309.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-04" completed</summary>
+<result>Clean working tree. Now let me return the checkpoint message.
+
+## CHECKPOINT REACHED
+
+**Type:** human-verify
+**Plan:** 21-04
+**Progress:** 2/3 tasks complete
+
+### Completed Tasks
+
+| Task | Name | Commit | Files |
+| ---- | ---- | ------ | ----- |
+| 1 | Create StorageTab and ConnectionTest components | 9eb4c6967 | `apps/web/src/components/settings/StorageTab.tsx`, `apps/web/src/components/settings/ConnectionTest.tsx`, `packages/crypto/src/vault/derive-ipns.ts` (added `deriveByoConfigIpnsKeypair`) |
+| 2 | Wire STORAGE tab into SettingsPage, add advisory badge, add CSS | 3b01f23af | `apps/web/src/routes/SettingsPage.tsx`, `apps/web/src/components/layout/StorageQuota.tsx`, `apps/web/src/stores/quota.store.ts`, `apps/web/src/App.css` |
+
+### Current Task
+
+**Task 3:** Verify STORAGE tab visual and functional correctness
+**Status:** awaiting verification
+**Blocked by:** Human visual/functional verification needed
+
+### Checkpoint Details
+
+**What was built:**
+- Settings page now has three tabs: **LINKED METHODS | SECURITY | STORAGE**
+- STORAGE tab contains:
+  - Pinning mode radio selector with three options (cipherbox only, external only, dual-pin)
+  - Provider configuration fields (endpoint URL, auth token) that appear when external/dual selected
+  - Connection test button with protocol auto-detection, CORS error display with remediation instructions
+  - Save/discard buttons with dirty tracking; save disabled until connection test passes
+  - Save handler encrypts BYO config via ECIES and publishes to dedicated IPNS entry (zero-knowledge)
+  - Migration trigger ECIES-wraps configs with TEE public key on provider change
+- StorageQuota component shows ADVISORY badge for BYO users
+- All CSS follows terminal aesthetic with existing design tokens
+
+**Deviation from plan (Rule 3 -- blocking issue):**
+Added `deriveByoConfigIpnsKeypair` to `@cipherbox/crypto` (`packages/crypto/src/vault/derive-ipns.ts`) because the plan's inline HKDF derivation required `@noble/ed25519` which is not a direct dependency of the web app. Used the same pattern as existing `deriveVaultKeyIpnsKeypair`.
+
+### Verification Steps
+
+1. Start dev server: `pnpm --filter web dev` (and API if not running: `pnpm --filter api dev`)
+2. Navigate to http://localhost:5173/settings
+3. Verify three tabs visible: **LINKED METHODS | SECURITY | STORAGE**
+4. Click STORAGE tab -- verify pinning mode radio selector with three options
+5. Select "external only" -- verify endpoint URL and auth token fields appear
+6. Enter a fake endpoint URL -- verify `[--test connection]` button is visible
+7. Click `[--test connection]` -- verify it shows failure result (expected with fake URL)
+8. Verify save button is disabled when connection test has not passed
+9. Click `[--discard]` -- verify fields reset
+10. Select "cipherbox only" -- verify provider config fields hide
+11. Check sidebar quota display -- if user is non-BYO, no badge. If BYO, ADVISORY badge appears.
+12. Verify keyboard navigation: ArrowLeft/Right cycles through all 3 tabs
+13. Verify focus-visible outlines on all interactive elements
+
+### Awaiting
+
+Type "approved" to continue to SUMMARY creation and state updates, or describe any issues that need fixing.</result>
+<usage><total_tokens>129562</total_tokens><tool_uses>122</tool_uses><duration_ms>639892</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ad44867e92aa1b309.output
+
+---
+
+<task-notification>
+<task-id>ad57f6a239f6790d0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ad57f6a239f6790d0.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-05" completed</summary>
+<result>The 21-04 commits are interleaved (from a prior parallel execution), but our 21-05 commits are all present and properly ordered.
+
+## PLAN COMPLETE
+
+**Plan:** 21-05
+**Tasks:** 2/2
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-05-SUMMARY.md`
+
+**Commits:**
+
+- `fe1b6f4cb`: feat(21-05): add pin migration entity, service, controller, BullMQ processor, and unit tests
+- `32bbae396`: feat(21-05): add TEE worker migration endpoint and migration worker service
+- `704ca5b16`: docs(21-05): complete pin migration backend plan
+
+**Duration:** 9 min
+
+**Key files created:**
+
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/migration/migration.entity.ts` - PinMigration entity with status, progress, encrypted configs
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/migration/migration.service.ts` - Migration lifecycle management
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/migration/migration.service.spec.ts` - 17 unit tests
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/migration/migration.controller.ts` - REST endpoints
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/migration/migration.processor.ts` - BullMQ processor
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/migration/migration.module.ts` - NestJS module
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/migrations/1742000000000-AddPinMigrations.ts` - DB migration
+- `/Users/michael/Code/cipher-box-phase-20/tee-worker/src/routes/migrate.ts` - TEE migration route
+- `/Users/michael/Code/cipher-box-phase-20/tee-worker/src/services/migration-worker.ts` - TEE migration worker with SSRF protection</result>
+<usage><total_tokens>129084</total_tokens><tool_uses>121</tool_uses><duration_ms>766346</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ad57f6a239f6790d0.output
+
+---
+
+<task-notification>
+<task-id>b9gig0tf0</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/b9gig0tf0.output</output-file>
+<status>killed</status>
+<summary>Background command "pnpm dev" was stopped</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/b9gig0tf0.output
+
+---
+
+why is the api failing to start up?
+
+---
+
+can you check if redis is not exposed on port 6379
+
+---
+
+ok test it out now - I jsut restarted the whole docker stack
+
+---
+
+ok i just recreated the entire docker stack cleanly
+
+---
+
+<task-notification>
+<task-id>b4t8dfwe1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/b4t8dfwe1.output</output-file>
+<status>killed</status>
+<summary>Background command "Test connectivity to Redis (6380, 6379) and PostgreSQL (5432)" was stopped</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/b4t8dfwe1.output
+
+---
+
+<task-notification>
+<task-id>brit0fom0</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/brit0fom0.output</output-file>
+<status>killed</status>
+<summary>Background command "pnpm dev" was stopped</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/brit0fom0.output
+
+---
+
+this is literally impossible since this qemu vm that your session is running inside is running inside the host 192.168.133.114
+
+---
+
+<task-notification>
+<task-id>bsf39li3b</task-id>
+<tool-use-id>toolu_01ApovDFLzGtbTqKdopczvtD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bsf39li3b.output</output-file>
+<status>completed</status>
+<summary>Background command "Test connectivity to Redis, PostgreSQL, and IPFS" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bsf39li3b.output
+
+---
+
+ahhh ok mystery solved - dhcp assigned the host 192.168.133.12
+
+---
+
+can you pull out the otp from api console?
+
+---
+
+approved
+
+---
+
+<task-notification>
+<task-id>a451b783056f89d9f</task-id>
+<tool-use-id>toolu_01TRU2JDVx84vtxTYphuEtBZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a451b783056f89d9f.output</output-file>
+<status>completed</status>
+<summary>Agent "Continue plan 21-04 after approval" completed</summary>
+<result>## PLAN COMPLETE
+
+**Plan:** 21-04
+**Tasks:** 3/3
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-04-SUMMARY.md`
+
+**Commits:**
+
+- `9eb4c69`: feat(21-04): create StorageTab and ConnectionTest components
+- `3b01f23`: feat(21-04): wire STORAGE tab into SettingsPage, add advisory badge and CSS
+- `2c1a5e3`: docs(21-04): complete settings STORAGE tab plan
+
+**Duration:** 8 min
+
+**Key files:**
+- `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-04-SUMMARY.md`
+- `/Users/michael/Code/cipher-box-phase-20/.planning/STATE.md`
+- `/Users/michael/Code/cipher-box-phase-20/.planning/ROADMAP.md`
+- `/Users/michael/Code/cipher-box-phase-20/.planning/REQUIREMENTS.md`</result>
+<usage><total_tokens>50920</total_tokens><tool_uses>37</tool_uses><duration_ms>177500</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a451b783056f89d9f.output
+
+---
+
+<task-notification>
+<task-id>a81f5c706e54d11d5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a81f5c706e54d11d5.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-06" completed</summary>
+<result>That untracked file is from a previous plan (load test workload), not from my task. It's out of scope.
+
+Now I need to stop at the checkpoint. Here is the structured checkpoint message:
+
+## CHECKPOINT REACHED
+
+**Type:** human-verify
+**Plan:** 21-06
+**Progress:** 1/2 tasks complete
+
+### Completed Tasks
+
+| Task | Name | Commit | Files |
+| ---- | ---- | ------ | ----- |
+| 1 | Migration API client, MigrationProgress component, and StorageTab integration | 596c3272e | `apps/web/src/lib/api/migration.ts` (new), `apps/web/src/components/settings/MigrationProgress.tsx` (new), `apps/web/src/components/settings/StorageTab.tsx` (modified), `apps/web/src/App.css` (modified) |
+
+### Current Task
+
+**Task 2:** Verify complete BYO-IPFS feature end-to-end
+**Status:** awaiting verification
+**Blocked by:** Human verification of complete BYO-IPFS feature
+
+### Checkpoint Details
+
+**What was built across Plans 01-06:**
+- SDK pinning abstractions (PinningProvider, KuboProvider, PsaProvider, testConnection)
+- API CID registration endpoint, advisory quota, isByoUser vault flag
+- DualPinProvider, ByoIpfsConfig, PinningConfig, mode-aware upload
+- Settings UI STORAGE tab with 3 pinning modes, connection test, encrypted IPNS config persistence, advisory quota badge
+- Pin migration backend (entity, service, controller, BullMQ processor, TEE worker endpoint)
+- Migration progress UI with polling, progress bar, pause/resume/cancel controls (this plan)
+
+**Steps to verify:**
+
+1. Start dev servers: `pnpm --filter api dev` and `pnpm --filter web dev`
+2. Navigate to http://localhost:5173/settings -> STORAGE tab
+3. Verify three pinning modes render with correct descriptions
+4. Select "external only" -> enter an endpoint URL
+5. Click `[--test connection]` -> verify failure result displays
+6. Verify `[--save]` is disabled when connection test hasn't passed
+7. Select "cipherbox only" -> verify provider config hides
+8. Verify `[--discard]` resets all changes
+9. Check sidebar quota -- verify it shows usage (no ADVISORY badge for default users)
+10. Verify STORAGE tab keyboard navigation (Tab, ArrowKeys on radio group)
+11. Run `pnpm test` to verify all unit tests pass across packages
+12. Run `pnpm --filter api exec tsc --noEmit && pnpm --filter web exec tsc --noEmit && pnpm --filter @cipherbox/sdk-core exec tsc --noEmit && pnpm --filter @cipherbox/sdk exec tsc --noEmit` -- all pass
+13. If a running Kubo node is available: test actual connection by entering its URL in the STORAGE tab and running connection test
+
+### Awaiting
+
+Type "approved" to continue (SUMMARY.md creation and state updates), or describe any issues found during verification.</result>
+<usage><total_tokens>68844</total_tokens><tool_uses>48</tool_uses><duration_ms>216522</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a81f5c706e54d11d5.output
+
+---
+
+<task-notification>
+<task-id>a728d2a1106717318</task-id>
+<tool-use-id>toolu_012rNnBHaYwjXj3QTb2vcoBa</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a728d2a1106717318.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-07" completed</summary>
+<result>All 4 new files exist (3 scenarios + 1 workload). The checkpoint task (Task 4) requires manual execution of benchmarks against a real external IPFS provider, capturing results in `.planning/baselines/21-byo-baselines.md`.
+
+## CHECKPOINT REACHED
+
+**Type:** human-verify
+**Plan:** 21-07
+**Progress:** 3/4 tasks complete
+
+### Completed Tasks
+
+| Task | Name | Commit | Files |
+| ---- | ---- | ------ | ----- |
+| 1 | BYO file workload and client-pool extension | 95e53910b | tests/load/src/harness/client-pool.ts, tests/load/src/workloads/byo-file-workload.ts |
+| 2 | BYO upload throughput and capacity ceiling scenarios | cf17cd0d1 | tests/load/src/scenarios/byo-upload-throughput.test.ts, tests/load/src/scenarios/byo-capacity-ceiling.test.ts |
+| 3 | Mixed CipherBox+BYO workload scenario | 49864ded2 | tests/load/src/scenarios/byo-mixed-workload.test.ts |
+
+### Current Task
+
+**Task 4:** Run benchmarks against real external provider and capture baselines
+**Status:** awaiting human action
+**Blocked by:** Requires real external IPFS provider credentials and running infrastructure
+
+### Checkpoint Details
+
+All automated tasks (1-3) are complete and TypeScript-verified. Task 4 requires manual benchmark execution against a real IPFS provider (Pinata, Filebase, or self-hosted Kubo) and capturing the results.
+
+**Pre-requisites:**
+- Phase 21 Plans 01-03 implemented (SDK providers, API register-cid, client orchestration)
+- External IPFS provider account configured
+- API and infrastructure running (local or staging)
+
+**Benchmark execution sequence:**
+
+1. **BYO upload throughput** (baseline):
+   ```bash
+   BYO_IPFS_ENDPOINT="https://api.pinata.cloud/psa" \
+   BYO_IPFS_AUTH_TOKEN="<pinata-jwt>" \
+   BYO_IPFS_PROTOCOL="psa" \
+   BYO_IPFS_PROVIDER_NAME="pinata" \
+   LOAD_TEST_CLIENTS=10 \
+   pnpm --filter @cipherbox/load-tests test -- --testPathPattern=byo-upload-throughput
+   ```
+
+2. **BYO capacity ceiling** (stepped):
+   ```bash
+   pnpm --filter @cipherbox/load-tests test -- --testPathPattern=byo-capacity-ceiling
+   ```
+
+3. **Mixed workload** (ratio sweeps):
+   ```bash
+   # 50 CB + 200 BYO
+   LOAD_TEST_CB_CLIENTS=50 LOAD_TEST_BYO_CLIENTS=200 \
+   pnpm --filter @cipherbox/load-tests test -- --testPathPattern=byo-mixed-workload
+
+   # 100 CB + 500 BYO
+   LOAD_TEST_CB_CLIENTS=100 LOAD_TEST_BYO_CLIENTS=500 \
+   pnpm --filter @cipherbox/load-tests test -- --testPathPattern=byo-mixed-workload
+
+   # CB-only comparison baseline
+   LOAD_TEST_CB_CLIENTS=200 LOAD_TEST_BYO_CLIENTS=0 \
+   pnpm --filter @cipherbox/load-tests test -- --testPathPattern=byo-mixed-workload
+   ```
+
+4. **Capture baselines** in `.planning/baselines/21-byo-baselines.md` with:
+   - Environment info (provider, protocol, staging/local)
+   - Per-operation p50/p95/p99 breakdown
+   - Capacity ceiling table (concurrency vs throughput vs errors)
+   - Mixed workload per-segment metrics
+   - Comparison to 19.2 baselines
+
+### Awaiting
+
+Run the benchmark commands above against a real external IPFS provider, then create `.planning/baselines/21-byo-baselines.md` with the results. After baselines are captured, resume to complete SUMMARY.md and state updates.
+
+**Key files created/modified:**
+- `/Users/michael/Code/cipher-box-phase-20/tests/load/src/harness/client-pool.ts` (extended with BYO pool)
+- `/Users/michael/Code/cipher-box-phase-20/tests/load/src/workloads/byo-file-workload.ts` (new)
+- `/Users/michael/Code/cipher-box-phase-20/tests/load/src/scenarios/byo-upload-throughput.test.ts` (new)
+- `/Users/michael/Code/cipher-box-phase-20/tests/load/src/scenarios/byo-capacity-ceiling.test.ts` (new)
+- `/Users/michael/Code/cipher-box-phase-20/tests/load/src/scenarios/byo-mixed-workload.test.ts` (new)</result>
+<usage><total_tokens>81533</total_tokens><tool_uses>72</tool_uses><duration_ms>391309</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a728d2a1106717318.output
+
+---
+
+<task-notification>
+<task-id>bth2135u3</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bth2135u3.output</output-file>
+<status>killed</status>
+<summary>Background command "pnpm dev" was stopped</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bth2135u3.output
+
+---
+
+ok not too sure how to display the migration ui - the settings screen is confirmed working, but not sure where the migration ui fits in.
+
+---
+
+ok I have a pinata gateway with an access token configured - will this work as the custom ipfs node?
+
+---
+
+how do I configure auth on pinata for the psa endpoint?
+
+---
+
+getting a `> failed: could not detect ipfs protocol at this endpoint.` message
+
+---
+
+404 not found on all api.pinata.cloud/psa requests.
+
+---
+
+ok can you run me through setting things up on filebase?
+
+---
+
+here's the failing curl request: curl 'https://rpc.filebase.io/api/v0/id' \
+  -X 'POST' \
+  -H 'accept: */*' \
+  -H 'accept-language: en-ZA,en;q=0.9,en-GB;q=0.8,en-US;q=0.7,ru;q=0.6' \
+  -H 'authorization: Basic REDACTED' \
+  -H 'content-length: 0' \
+  -H 'origin: http://localhost:5173' \
+  -H 'priority: u=1, i' \
+  -H 'sec-ch-ua: "Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'sec-ch-ua-platform: "macOS"' \
+  -H 'sec-fetch-dest: empty' \
+  -H 'sec-fetch-mode: cors' \
+  -H 'sec-fetch-site: cross-site' \
+  -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36'
+
+---
+
+request fails with 422 unprocessable content
+
+---
+
+that looks like what the console gives me
+
+---
+
+curl 'https://rpc.filebase.io/api/v0/id' \
+  -X 'POST' \
+  -H 'accept: */*' \
+  -H 'accept-language: en-ZA,en;q=0.9,en-GB;q=0.8,en-US;q=0.7,ru;q=0.6' \
+  -H 'authorization: Basic REDACTED' \
+  -H 'content-length: 0' \
+  -H 'origin: http://localhost:5173' \
+  -H 'priority: u=1, i' \
+  -H 'sec-ch-ua: "Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'sec-ch-ua-platform: "macOS"' \
+  -H 'sec-fetch-dest: empty' \
+  -H 'sec-fetch-mode: cors' \
+  -H 'sec-fetch-site: cross-site' \
+  -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36'
+
+---
+
+Configure CORS on your Kubo node:
+
+ipfs config --json API.HTTPHeaders.Access-Control-Allow-Origin '["https://app.cipherbox.cc", "http://localhost:5173"]'
+ipfs config --json API.HTTPHeaders.Access-Control-Allow-Methods '["POST"]'
+ipfs config --json API.HTTPHeaders.Access-Control-Allow-Headers '["Authorization", "Content-Type"]'
+
+Then restart your Kubo node.
+
+---
+
+ok that worked. let me try and migrate
+
+---
+
+something flashed on my screen but it was too quick to notice - possibly because its the same blobs being pinned on the same underlying server.
+
+let me try and spin up a separate kubo ipfs node, on a separate network, so that these nodes have to communicate via the rest of the network.
+
+---
+
+ok the 2nd kubo node should be accessible on `192.168.133.12:5002` can you check whether this is indeed the case?
+
+---
+
+<task-notification>
+<task-id>bn7jp0w6r</task-id>
+<tool-use-id>toolu_01Kog42NgiT1XW8ZJowTWBQ4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bn7jp0w6r.output</output-file>
+<status>failed</status>
+<summary>Background command "Test 2nd Kubo node RPC endpoint" failed with exit code 56</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bn7jp0w6r.output
+
+---
+
+api was already bound to 0.0.0.0 and cars was already updated.
+
+---
+
+ok it was a network configuration issue. please test access on port 5002
+
+---
+
+hmmm, I still did not see any migration screen.
+
+---
+
+Ok, can you check the api logs to see if the migration request was made by the ui?
+
+---
+
+I did not, I had some data on the cipherbox only (default) already. I then switched to the byo-kubo node we just spun up expecting the migration to take at least a second - there is approximately ~100MB of content
+
+---
+
+<task-notification>
+<task-id>bubbcvhu6</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bubbcvhu6.output</output-file>
+<status>killed</status>
+<summary>Background command "pnpm dev" was stopped</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bubbcvhu6.output
+
+---
+
+can you get me the otp?
+
+---
+
+please get me the latest otp
+
+---
+
+ok switched from cipherbox to external, no idea if it is actually working.
+
+---
+
+well we do have the TEE-worker that can be spun up locally and pointed at.
+
+---
+
+yeah please check on the tee worker, update its configs, and spin up a local instance, then point the api at this tee worker.
+
+---
+
+<task-notification>
+<task-id>biv7bh0ni</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/biv7bh0ni.output</output-file>
+<status>completed</status>
+<summary>Background command "Start TEE worker and verify health" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/biv7bh0ni.output
+
+---
+
+<task-notification>
+<task-id>b736upoea</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/b736upoea.output</output-file>
+<status>killed</status>
+<summary>Background command "pnpm dev" was stopped</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/b736upoea.output
+
+---
+
+<task-notification>
+<task-id>a0433ce2eceecbd19</task-id>
+<tool-use-id>toolu_011pLc1SxcVYaocrARk992TY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a0433ce2eceecbd19.output</output-file>
+<status>completed</status>
+<summary>Agent "Explore E2E test auth patterns" completed</summary>
+<result>I now have a comprehensive picture of the entire E2E authentication system. Here is the complete report.
+
+---
+
+## E2E Authentication in CipherBox: Complete Overview
+
+### Directory Structure
+
+```
+tests/web-e2e/
+├── fixtures/files/        - Static test fixtures (test-image.png)
+├── page-objects/
+│   ├── base.page.ts       - BasePage with goto(), waitForPageLoad(), getByTestId()
+│   ├── login.page.ts      - LoginPage (email/OTP + wallet flows)
+│   ├── file-browser/      - File browser POs
+│   ├── dialogs/           - Dialog POs
+│   └── pages/             - bin.page.ts, invite.page.ts
+├── tests/
+│   ├── full-workflow.spec.ts
+│   ├── mfa-flows.spec.ts
+│   ├── recycle-bin.spec.ts
+│   ├── search-workflow.spec.ts
+│   ├── wallet-login.spec.ts
+│   ├── conflict-detection.spec.ts
+│   ├── invite-link-workflow.spec.ts
+│   └── sharing-workflow.spec.ts
+└── utils/
+    ├── wallet-login-helpers.ts   - Core auth helper
+    ├── multi-account-wallet.ts   - Multi-account setup
+    ├── mfa-helpers.ts            - MFA/device approval helpers
+    ├── api-helpers.ts            - Stub (not yet implemented)
+    ├── test-files.ts             - File fixture utilities
+    └── conflict-helpers.ts
+```
+
+---
+
+### How Auth Works: Two Distinct Mechanisms
+
+#### 1. Wallet Login (Primary — used by almost all specs)
+
+All functional specs (`full-workflow`, `mfa-flows`, `recycle-bin`, `search-workflow`, `sharing-workflow`, etc.) use the **mock wallet** path:
+
+**Key files:**
+- `/Users/michael/Code/cipher-box-phase-20/tests/web-e2e/utils/wallet-login-helpers.ts`
+- `/Users/michael/Code/cipher-box-phase-20/tests/web-e2e/utils/multi-account-wallet.ts`
+
+The pattern in every `beforeAll`:
+```ts
+account = createTestAccount();           // generates random secp256k1 key
+await setupMockWallet(page, account);    // installs EIP-6963 mock wallet via @johanneskares/wallet-mock
+const result = await loginViaWallet(page, { timeout: 60_000 });
+```
+
+`loginViaWallet()` drives the real UI:
+1. Navigates to `/`
+2. Waits for `[data-testid="wallet-login-button"]` to become enabled (Core Kit init)
+3. Clicks the wallet button to reveal `.wallet-connector-list`
+4. Clicks `.wallet-connector-option` with text `"Mock Wallet"`
+5. `Promise.race`s between `waitForURL('**/files')` and `[data-testid="device-waiting"]`
+6. On success, waits for `.file-list[role="grid"]` or `[data-testid="empty-state"]` to confirm vault initialization
+
+Each test run generates a **random private key** → unique Ethereum address → unique backend `userId` → fresh DKG identity on Web3Auth Sapphire Devnet. This avoids any state leakage between runs.
+
+The mock wallet uses a **local-only viem transport** (no network calls) that handles `eth_chainId`, `net_version`, `eth_blockNumber`, `eth_getBalance` — preventing CI hangs from real RPC timeouts.
+
+`wallet-login.spec.ts` also tests with the deterministic **Hardhat account #0** key (`0xac0974bec...`) for UI-level wallet tests (TC09–TC12) that don't need a fresh identity.
+
+#### 2. Email + OTP Login (Supported in UI, not used directly by current specs)
+
+`/Users/michael/Code/cipher-box-phase-20/tests/web-e2e/page-objects/login.page.ts` exposes:
+```ts
+loginPage.enterEmail(email)    // fills [data-testid="email-input"], clicks [data-testid="send-otp-button"]
+loginPage.enterOtp(otp)        // fills [data-testid="otp-input"], clicks [data-testid="verify-button"]
+loginPage.loginWithEmail(email, otp)  // combines both, waits for **/files
+```
+
+The credentials (from memory and `.env.example`) are:
+- Email: `test_account_4718@example.com`
+- OTP: `851527`
+
+These are set via `.env` vars `WEB3AUTH_TEST_EMAIL` / `WEB3AUTH_TEST_OTP`, loaded by `playwright.config.ts` via `dotenv`. However, **no existing spec file actually calls `loginWithEmail()`** — it's a page object method ready for use but currently unused.
+
+#### 3. Test-Login Bypass Endpoint (Used by SDK E2E, not web E2E)
+
+`/Users/michael/Code/cipher-box-phase-20/apps/api/src/auth/services/test-auth.service.ts` provides `POST /auth/test-login` that bypasses Core Kit entirely:
+- Guarded by `TEST_LOGIN_SECRET` env var; blocked in `NODE_ENV=production`
+- Takes an email + secret, generates a **deterministic secp256k1 keypair** from the email (SHA-256 of `cipherbox-test-keypair:{email}`)
+- Issues `accessToken` + `refreshToken` and returns `publicKeyHex` + `privateKeyHex`
+
+This is used exclusively by the SDK E2E tests (`tests/sdk-e2e/src/fixtures/test-harness.ts`) and the SDK integration tests — **not** by the web E2E Playwright tests. The `api-helpers.ts` stub in web-e2e has a `getAuthToken()` placeholder that throws "not yet implemented".
+
+---
+
+### Key Selectors for Auth
+
+| UI Element | Selector |
+|---|---|
+| Email input | `[data-testid="email-input"]` |
+| Send OTP button | `[data-testid="send-otp-button"]` |
+| OTP input | `[data-testid="otp-input"]` |
+| Verify button | `[data-testid="verify-button"]` |
+| Wallet login button | `[data-testid="wallet-login-button"]` |
+| Connector list | `.wallet-connector-list` |
+| Individual connector | `.wallet-connector-option` (has text `"Mock Wallet"`) |
+| Cancel connector | `.wallet-connector-cancel` |
+| Device waiting screen | `[data-testid="device-waiting"]` |
+| Post-login confirmation | `.file-list[role="grid"]` or `[data-testid="empty-state"]` |
+
+---
+
+### No Global Setup / No Stored Auth State
+
+The `playwright.config.ts` has no `globalSetup` and no `storageState` — each test suite logs in fresh via the UI in its own `beforeAll`. Tests run serially (`fullyParallel: false, workers: 1`) with `retries: 0`.</result>
+<usage><total_tokens>51824</total_tokens><tool_uses>48</tool_uses><duration_ms>149998</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a0433ce2eceecbd19.output
+
+---
+
+ok can you make sure  api, web ui and tee worker are all running
+
+---
+
+what is wrong with using the otp from api console?
+
+---
+
+its a shell that you started - you can more easily read the output than i can
+
+---
+
+<task-notification>
+<task-id>bsbuxixle</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bsbuxixle.output</output-file>
+<status>completed</status>
+<summary>Background command "Restart pnpm dev and check TEE init" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/bsbuxixle.output
+
+---
+
+ok but I have still not seen an actual working migration from the cipherbox storage to an external node, and back, nor have you tested the dual-write capbility.
