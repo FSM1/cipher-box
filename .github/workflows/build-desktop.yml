@@ -1,0 +1,113 @@
+name: Build Desktop
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+            rust_target: 'aarch64-apple-darwin'
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+            rust_target: 'x86_64-apple-darwin'
+          - platform: ubuntu-22.04
+            args: ''
+            rust_target: ''
+          - platform: windows-latest
+            args: '--no-default-features --features winfsp'
+            rust_target: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse3-dev \
+            fuse3
+
+      - name: Install FUSE-T (macOS)
+        if: contains(matrix.platform, 'macos')
+        run: |
+          brew install --cask fuse-t
+          sudo mkdir -p /usr/local/lib/pkgconfig
+          FUSE_T_PC="/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc"
+          if [ ! -f "$FUSE_T_PC" ]; then
+            FUSE_T_PC=$(find /Library /usr/local /opt/homebrew -name "fuse-t.pc" 2>/dev/null | head -1)
+          fi
+          if [ -z "$FUSE_T_PC" ] || [ ! -f "$FUSE_T_PC" ]; then
+            echo "::error::fuse-t.pc not found after FUSE-T installation"
+            exit 1
+          fi
+          sudo cp "$FUSE_T_PC" /usr/local/lib/pkgconfig/fuse.pc
+          sudo sed -i '' 's/^Version:.*/Version: 2.9.9/' /usr/local/lib/pkgconfig/fuse.pc
+
+      - name: Install WinFsp (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          # Download and install WinFsp MSI (needed for winfsp crate build)
+          $winfspUrl = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
+          $winfspMsi = "$env:TEMP\winfsp.msi"
+          Invoke-WebRequest -Uri $winfspUrl -OutFile $winfspMsi
+          Start-Process msiexec.exe -ArgumentList "/i", $winfspMsi, "/qn" -Wait
+
+      - name: Create WinFsp MSI placeholder (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: New-Item -ItemType File -Force -Path "apps/desktop/src-tauri/resources/winfsp-placeholder.msi"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: pnpm vite build
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
+        with:
+          projectPath: apps/desktop
+          releaseId: ${{ github.event.release.id }}
+          updaterJsonPreferNsis: true
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }}
