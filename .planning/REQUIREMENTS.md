@@ -77,7 +77,7 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [ ] **BUGFIX-01**: Bin IPNS name resolves correctly (no 404 errors on recycle bin operations)
 - [ ] **BUGFIX-02**: Device registry parses without crypto format errors
 - [x] **TEST-01**: Headless Node.js load tests call sdk-core functions directly without Playwright browser overhead
-- [ ] **TEST-02**: Vault v2 recovery tool has automated E2E test coverage
+- [x] **TEST-02**: Vault v2 recovery tool has automated E2E test coverage
 - [x] **TEST-03**: Load tests handle 401 responses with automatic token refresh
 
 ### Desktop Enhancements (Phase 25)
@@ -178,7 +178,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUGFIX-01   | Phase 24   | Pending  |
 | BUGFIX-02   | Phase 24   | Pending  |
 | TEST-01     | Phase 24   | Complete |
-| TEST-02     | Phase 24   | Pending  |
+| TEST-02     | Phase 24   | Complete |
 | TEST-03     | Phase 24   | Complete |
 | DESKTOP-01  | Phase 25   | Pending  |
 | DESKTOP-02  | Phase 25   | Pending  |

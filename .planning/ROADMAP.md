@@ -217,7 +217,7 @@ Plans:
 4. Vault v2 recovery tool has automated E2E test coverage
 5. Load tests handle 401 responses with automatic token refresh instead of failing
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 
@@ -268,7 +268,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete    | 2026-03-25 |
 | 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete    | 2026-03-25 |
 | 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
-| 24. Bug Fixes & Test Infrastructure       | 1/3       | In Progress    |             | -          |
+| 24. Bug Fixes & Test Infrastructure       | 2/3       | In Progress    |             | -          |
 | 25. Desktop Enhancements                  | v1.1      | 0/?            | Not started | -          |
 | 26. Observability & UX Tuning             | v1.1      | 0/?            | Not started | -          |
 
