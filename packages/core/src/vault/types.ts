@@ -42,3 +42,22 @@ export type EncryptedVaultKeys = {
  * deserializeVaultBlobV2 returns the ECIES-encrypted rootFolderKey directly as Uint8Array.
  * No separate type needed.
  */
+
+/**
+ * BYO-IPFS configuration stored in vault metadata on IPFS.
+ * Encrypted with user's key, decrypted client-side only.
+ * Server never sees this data (zero-knowledge preserved).
+ *
+ * Default when absent: { pinningMode: 'cipherbox', externalProvider: null }
+ */
+export type ByoIpfsConfig = {
+  /** User-selected pinning mode */
+  pinningMode: 'cipherbox' | 'external' | 'dual';
+  /** External provider config (null when mode is 'cipherbox') */
+  externalProvider: {
+    endpoint: string;
+    authToken: string;
+    protocol: 'psa' | 'kubo' | 'pinata';
+    providerName?: string;
+  } | null;
+};

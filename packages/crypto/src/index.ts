@@ -39,7 +39,11 @@
 export const CRYPTO_VERSION = '0.2.0';
 
 // Vault IPNS key derivation (only derive-ipns remains in crypto)
-export { deriveVaultIpnsKeypair, deriveVaultKeyIpnsKeypair } from './vault';
+export {
+  deriveVaultIpnsKeypair,
+  deriveVaultKeyIpnsKeypair,
+  deriveByoConfigIpnsKeypair,
+} from './vault';
 
 // Key hierarchy and derivation
 export { deriveKey, deriveContextKey, generateFolderKey, type DeriveKeyParams } from './keys';

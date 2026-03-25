@@ -37,6 +37,13 @@ export class Vault {
   @Column({ type: 'varchar', length: 255, name: 'root_ipns_name' })
   rootIpnsName!: string;
 
+  /**
+   * Whether this user manages their own IPFS node (BYO mode).
+   * When true, quota tracking is advisory only (not enforced).
+   */
+  @Column({ type: 'boolean', name: 'is_byo_user', default: false })
+  isByoUser!: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

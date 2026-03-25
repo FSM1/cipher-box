@@ -137,6 +137,9 @@ export function useDropUpload() {
 
       // Handle duplicate files: encrypt + upload to IPFS, then surface as pending replacements
       // (These don't get registered in the folder — the user decides via the Replace dialog)
+      // Duplicate files always upload to CipherBox relay (not BYO node) because
+      // they're staged for the replacement dialog. Once the user confirms, the
+      // replacement flow uses SDK's uploadFile() which respects pinning mode.
       if (duplicateFiles.length > 0) {
         const replacements: PendingReplacement[] = [];
 

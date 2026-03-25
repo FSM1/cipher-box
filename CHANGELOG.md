@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.28.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.27.0...cipher-box-v0.28.0) (2026-03-25)
+
+### Features
+
+- extract Rust SDK as five workspace crates ([#352](https://github.com/FSM1/cipher-box/issues/352)) ([34bce7b](https://github.com/FSM1/cipher-box/commit/34bce7bfd40170f0fb080f68f50a0e8cb37704cf))
+
+### Bug Fixes
+
+- **test:** match actual bin publish log message in Windows E2E ([#354](https://github.com/FSM1/cipher-box/issues/354)) ([6881294](https://github.com/FSM1/cipher-box/commit/6881294c6a71b2e0a04f4d23ac4a773f33a29891))
+
 ## [0.27.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.26.6...cipher-box-v0.27.0) (2026-03-24)
 
 ### Features

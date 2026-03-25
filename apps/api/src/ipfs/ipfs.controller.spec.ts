@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { PayloadTooLargeException } from '@nestjs/common';
+import { ForbiddenException, PayloadTooLargeException } from '@nestjs/common';
 import { Request as ExpressRequest } from 'express';
 import { IpfsController } from './ipfs.controller';
 import { IPFS_PROVIDER, IpfsProvider } from './providers';
@@ -14,7 +14,7 @@ interface RequestWithUser extends ExpressRequest {
 describe('IpfsController', () => {
   let controller: IpfsController;
   let ipfsProvider: jest.Mocked<IpfsProvider>;
-  let vaultService: jest.Mocked<Pick<VaultService, 'checkQuota' | 'recordPin'>>;
+  let vaultService: jest.Mocked<Pick<VaultService, 'checkQuota' | 'recordPin' | 'isUserByo'>>;
   let mockEndTimer: jest.Mock;
   let mockStartTimer: jest.Mock;
 
@@ -28,6 +28,7 @@ describe('IpfsController', () => {
     const mockVaultService = {
       checkQuota: jest.fn(),
       recordPin: jest.fn(),
+      isUserByo: jest.fn(),
     };
 
     mockEndTimer = jest.fn();
@@ -287,6 +288,63 @@ describe('IpfsController', () => {
 
       expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'cat', source: '' });
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'error' });
+    });
+  });
+
+  describe('registerCid', () => {
+    const mockCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
+    const mockSizeBytes = 1024;
+    const mockReq: RequestWithUser = { user: { id: 'user-123' } } as RequestWithUser;
+
+    it('should call vaultService.recordPin with correct userId, cid, sizeBytes', async () => {
+      vaultService.isUserByo.mockResolvedValue(true);
+      vaultService.recordPin.mockResolvedValue(undefined);
+
+      await controller.registerCid(mockReq, { cid: mockCid, sizeBytes: mockSizeBytes });
+
+      expect(vaultService.recordPin).toHaveBeenCalledWith('user-123', mockCid, mockSizeBytes);
+    });
+
+    it('should return { recorded: true }', async () => {
+      vaultService.isUserByo.mockResolvedValue(true);
+      vaultService.recordPin.mockResolvedValue(undefined);
+
+      const result = await controller.registerCid(mockReq, {
+        cid: mockCid,
+        sizeBytes: mockSizeBytes,
+      });
+
+      expect(result).toEqual({ recorded: true });
+    });
+
+    it('should reject non-BYO users with ForbiddenException', async () => {
+      vaultService.isUserByo.mockResolvedValue(false);
+
+      await expect(
+        controller.registerCid(mockReq, { cid: mockCid, sizeBytes: mockSizeBytes })
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(vaultService.recordPin).not.toHaveBeenCalled();
+    });
+
+    it('should check BYO status before recording pin', async () => {
+      vaultService.isUserByo.mockResolvedValue(true);
+      vaultService.recordPin.mockResolvedValue(undefined);
+
+      await controller.registerCid(mockReq, { cid: mockCid, sizeBytes: mockSizeBytes });
+
+      expect(vaultService.isUserByo).toHaveBeenCalledWith('user-123');
+      expect(vaultService.isUserByo).toHaveBeenCalledTimes(1);
+    });
+
+    it('should throw ForbiddenException for non-BYO users', async () => {
+      vaultService.isUserByo.mockResolvedValue(false);
+
+      await expect(
+        controller.registerCid(mockReq, { cid: mockCid, sizeBytes: mockSizeBytes })
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(vaultService.recordPin).not.toHaveBeenCalled();
     });
   });
 });

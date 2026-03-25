@@ -76,6 +76,23 @@ export async function unpinFromIpfs(ctx: SdkContext, cid: string): Promise<void>
  * Auth token is obtained from ctx (axiosInstance interceptor isn't used
  * here because fetch provides ReadableStream for progress tracking).
  */
+/**
+ * Register an externally-pinned CID with the CipherBox API for advisory quota tracking.
+ * Used by BYO users who pin to their own node and need to report CID + size.
+ */
+export async function registerCid(ctx: SdkContext, cid: string, sizeBytes: number): Promise<void> {
+  if (ctx.axiosInstance) {
+    await ctx.axiosInstance.post('/ipfs/register-cid', { cid, sizeBytes });
+    return;
+  }
+  const token = await ctx.getAccessToken();
+  await axios.post(
+    `${ctx.apiUrl}/ipfs/register-cid`,
+    { cid, sizeBytes },
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+}
+
 export async function fetchFromIpfs(
   ctx: SdkContext,
   cid: string,

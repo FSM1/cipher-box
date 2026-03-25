@@ -14,6 +14,7 @@
  */
 
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
+import type { PinningProvider } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
 import { createAxiosInstance } from '@cipherbox/api-client';
 import { clearBytes } from '@cipherbox/crypto';
@@ -42,6 +43,8 @@ export class CipherBoxClient {
   private folderTree: FolderTree;
   private keyCache: KeyCache;
   private binState: BinState | null = null;
+  /** BYO-IPFS external pinning provider (null when mode is 'cipherbox') */
+  private externalProvider: PinningProvider | null = null;
   /** Internal copies of key material — zeroed on destroy() without affecting caller buffers */
   private internalVaultKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
   private internalRootFolderKey: Uint8Array;
@@ -73,6 +76,18 @@ export class CipherBoxClient {
     this.emitter = new SdkEventEmitter();
     this.folderTree = new FolderTree();
     this.keyCache = new KeyCache();
+
+    // Initialize BYO pinning provider if configured
+    if (config.pinningConfig?.mode !== 'cipherbox' && config.pinningConfig?.externalProvider) {
+      const ext = config.pinningConfig.externalProvider;
+      if (ext.protocol === 'kubo') {
+        this.externalProvider = new sdkCore.KuboProvider(ext.endpoint, ext.authToken);
+      } else if (ext.protocol === 'pinata') {
+        this.externalProvider = new sdkCore.PinataProvider(ext.endpoint, ext.authToken);
+      } else {
+        this.externalProvider = new sdkCore.PsaProvider(ext.endpoint, ext.authToken);
+      }
+    }
   }
 
   // ---- Event subscription ----
@@ -586,6 +601,22 @@ export class CipherBoxClient {
 
       const fileId = crypto.randomUUID();
 
+      // Build BYO-IPFS pinFn override when mode is not 'cipherbox'
+      const mode = this.config.pinningConfig?.mode ?? 'cipherbox';
+      let secondaryWarning: string | undefined;
+      const pinFn =
+        mode === 'cipherbox' || !this.externalProvider
+          ? undefined
+          : async (
+              ctx: SdkContext,
+              encData: Uint8Array,
+              prog?: ProgressCallback
+            ): Promise<{ cid: string; size: number }> => {
+              const result = await this.pinWithMode(encData, ctx, prog);
+              secondaryWarning = result.secondaryWarning;
+              return { cid: result.cid, size: result.size };
+            };
+
       // 1. Encrypt and upload file, create file metadata
       const uploadResult = await sdkCore.uploadFile({
         data,
@@ -596,6 +627,7 @@ export class CipherBoxClient {
         ctx: this.ctx,
         onProgress,
         teeKeys: this.config.teeKeys,
+        pinFn,
       });
 
       try {
@@ -684,6 +716,17 @@ export class CipherBoxClient {
           children: updatedChildren,
           sequenceNumber: newSequenceNumber,
         });
+
+        // 5b. Emit secondary pin warning for dual mode (non-blocking)
+        if (secondaryWarning) {
+          this.emitter.emit({
+            type: 'pin:secondaryFailed',
+            cid: uploadResult.cid,
+            providerName:
+              this.config.pinningConfig?.externalProvider?.providerName ?? 'external node',
+            error: secondaryWarning,
+          });
+        }
 
         // 6. Re-wrap file key for share recipients (best-effort)
         try {
@@ -969,6 +1012,87 @@ export class CipherBoxClient {
         addShareKeysFn,
       });
     });
+  }
+
+  // ---- BYO-IPFS pinning ----
+
+  /**
+   * Pin encrypted data according to the configured pinning mode.
+   * Returns { cid, size } regardless of mode.
+   *
+   * Mode behavior:
+   * - cipherbox: standard addToIpfs (default, unchanged)
+   * - external+Kubo: KuboProvider.pin() directly, NO CipherBox relay.
+   *   If Kubo unreachable, throws (no silent fallback).
+   * - external+PSA: CipherBox relay for CID acquisition (PSA is CID-reference-only),
+   *   then PSA pinByCid, then unpin from CipherBox.
+   * - dual: CipherBox primary (must succeed), external secondary (best-effort).
+   */
+  private async pinWithMode(
+    encryptedData: Uint8Array,
+    ctx: SdkContext,
+    onProgress?: ProgressCallback
+  ): Promise<{ cid: string; size: number; secondaryWarning?: string }> {
+    const mode = this.config.pinningConfig?.mode ?? 'cipherbox';
+
+    if (mode === 'cipherbox' || !this.externalProvider) {
+      // Default: upload via CipherBox API relay
+      const result = await sdkCore.addToIpfs(ctx, encryptedData, onProgress);
+      return { cid: result.cid, size: result.size };
+    }
+
+    if (mode === 'external') {
+      const ext = this.config.pinningConfig!.externalProvider!;
+
+      if (ext.protocol === 'kubo' || ext.protocol === 'pinata') {
+        // Direct upload to user's node -- NO CipherBox involvement at all.
+        // If node is unreachable, this throws. No silent fallback.
+        const result = await this.externalProvider.pin(encryptedData);
+        // Register CID with API for advisory tracking (best-effort — failure must not block upload)
+        try {
+          await sdkCore.registerCid(ctx, result.cid, result.size);
+        } catch {
+          // Advisory tracking failure is non-fatal — pin succeeded on external node
+        }
+        return { cid: result.cid, size: result.size };
+      }
+
+      // PSA: upload to CipherBox relay first (PSA can't accept raw data),
+      // then tell PSA to pin the CID, then unpin from CipherBox.
+      const relayResult = await sdkCore.addToIpfs(ctx, encryptedData, onProgress);
+      try {
+        await (this.externalProvider as sdkCore.PsaProvider).pinByCid(relayResult.cid);
+      } catch (err) {
+        // PSA pin failed, but data is still on CipherBox node
+        throw new Error(
+          `External PSA pin failed: ${err instanceof Error ? err.message : String(err)}. Data remains on CipherBox node.`
+        );
+      }
+      // PSA accepted the pin request -- unpin from CipherBox (async, best-effort)
+      sdkCore.unpinFromIpfs(ctx, relayResult.cid).catch(() => {});
+      // Register CID for advisory tracking (best-effort)
+      try {
+        await sdkCore.registerCid(ctx, relayResult.cid, relayResult.size);
+      } catch {
+        // Advisory tracking failure is non-fatal
+      }
+      return { cid: relayResult.cid, size: relayResult.size };
+    }
+
+    // Dual mode: primary to CipherBox, secondary to external (best-effort)
+    const primaryResult = await sdkCore.addToIpfs(ctx, encryptedData, onProgress);
+    let secondaryWarning: string | undefined;
+    try {
+      const ext = this.config.pinningConfig!.externalProvider!;
+      if (ext.protocol === 'kubo' || ext.protocol === 'pinata') {
+        await this.externalProvider.pin(encryptedData);
+      } else {
+        await (this.externalProvider as sdkCore.PsaProvider).pinByCid(primaryResult.cid);
+      }
+    } catch {
+      secondaryWarning = `mirror to ${this.config.pinningConfig?.externalProvider?.providerName ?? 'external node'} failed (best-effort, no automatic retry)`;
+    }
+    return { cid: primaryResult.cid, size: primaryResult.size, secondaryWarning };
   }
 
   // ---- Private helpers ----

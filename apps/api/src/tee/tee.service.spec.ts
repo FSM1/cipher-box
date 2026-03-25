@@ -499,4 +499,47 @@ describe('TeeService', () => {
       expect(configService.get).toHaveBeenCalledWith('TEE_WORKER_SECRET', '');
     });
   });
+
+  describe('connectionTest', () => {
+    it('should forward encrypted config to TEE worker and return success result', async () => {
+      const mockResult = { success: true, protocol: 'kubo', version: 'kubo/0.29', latencyMs: 42 };
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockResult),
+      });
+
+      const result = await service.connectionTest('encrypted-hex', 1);
+
+      expect(result).toEqual(mockResult);
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${TEE_WORKER_URL}/connection-test`,
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ encryptedConfig: 'encrypted-hex', epoch: 1 }),
+        })
+      );
+    });
+
+    it('should return error response when TEE worker returns non-ok status', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve('Internal Server Error'),
+      });
+
+      const result = await service.connectionTest('encrypted-hex', 1);
+
+      expect(result).toEqual({
+        success: false,
+        latencyMs: 0,
+        error: 'TEE worker error: 500 - Internal Server Error',
+      });
+    });
+
+    it('should propagate fetch errors', async () => {
+      fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(service.connectionTest('encrypted-hex', 1)).rejects.toThrow('ECONNREFUSED');
+    });
+  });
 });
