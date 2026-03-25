@@ -814,3 +814,68 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 ---
 
 ok but I have still not seen an actual working migration from the cipherbox storage to an external node, and back, nor have you tested the dual-write capbility.
+
+---
+
+<task-notification>
+<task-id>a707fae0c56e1e5a5</task-id>
+<tool-use-id>toolu_01KoGejxjGDNzJjqAP2Zprj4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a707fae0c56e1e5a5.output</output-file>
+<status>completed</status>
+<summary>Agent "Continue plan 21-07 after skip" completed</summary>
+<result>The 21-06-SUMMARY.md is staged but from a previous plan's execution, and the other two files are pre-existing changes not related to this plan. Everything is clean for plan 21-07.
+
+## PLAN COMPLETE
+
+**Plan:** 21-07
+**Tasks:** 3/4 (1 deferred by user decision)
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-07-SUMMARY.md`
+
+**Commits:**
+
+- `95e53910b`: feat(21-07): add BYO file workload and client-pool extension
+- `cf17cd0d1`: feat(21-07): add BYO upload throughput and capacity ceiling scenarios
+- `49864ded2`: feat(21-07): add mixed CipherBox+BYO workload scenario
+- `76b166f5f`: docs(21-07): complete BYO performance benchmarking plan
+
+**Duration:** ~5 min (tasks 1-3 executed; task 4 skipped)
+
+**Phase 21 Status:** COMPLETE (7/7 plans). All BYO-IPFS Node Support code is committed. Benchmark execution against a real external IPFS provider (Task 4) is deferred and can be run independently when provider infrastructure is available. The test scenarios, workload module, and client-pool extension are all in place and skip gracefully when `BYO_IPFS_ENDPOINT` is not configured.</result>
+<usage><total_tokens>66783</total_tokens><tool_uses>53</tool_uses><duration_ms>263838</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a707fae0c56e1e5a5.output
+
+---
+
+<task-notification>
+<task-id>ac2695f1ef272b99a</task-id>
+<tool-use-id>toolu_0197t71Y5U9Spav3U5a78XN9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ac2695f1ef272b99a.output</output-file>
+<status>completed</status>
+<summary>Agent "Continue plan 21-06 after approval" completed</summary>
+<result>## PLAN COMPLETE
+
+**Plan:** 21-06
+**Tasks:** 2/2
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-06-SUMMARY.md`
+
+**Commits:**
+
+- `596c3272e`: feat(21-06): add migration progress UI and wire migration API
+- `b5394fe51`: fix(21-06): handle auth failures in connection test and null savedConfig in migration trigger
+- `96c455162`: docs(21-06): complete migration progress UI plan
+
+**Duration:** 3 min
+
+**Deviations documented:**
+1. [Rule 1 - Bug] Connection test now recognizes 401/403/422 as auth failures (not generic network errors)
+2. [Rule 1 - Bug] Null savedConfig treated as implicit cipherbox mode for first-time users in migration trigger
+
+**Key files:**
+- `/Users/michael/Code/cipher-box-phase-20/apps/web/src/components/settings/MigrationProgress.tsx` (created)
+- `/Users/michael/Code/cipher-box-phase-20/apps/web/src/lib/api/migration.ts` (created)
+- `/Users/michael/Code/cipher-box-phase-20/apps/web/src/components/settings/StorageTab.tsx` (modified)
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/connection-test.ts` (modified)</result>
+<usage><total_tokens>65611</total_tokens><tool_uses>51</tool_uses><duration_ms>276655</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ac2695f1ef272b99a.output
