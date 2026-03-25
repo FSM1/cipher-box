@@ -13,7 +13,7 @@
 
 import { decrypt } from 'eciesjs';
 import { getKeypair } from './tee-keys.js';
-import { validateEndpointUrl, validateResolvedIp } from './ssrf-validation.js';
+import { validateEndpointUrl, validateResolvedIp, ssrfSafeFetch } from './ssrf-validation.js';
 
 export type ProviderConfig = {
   endpoint: string;
@@ -101,14 +101,18 @@ export async function migrateBatch(
   const succeeded: string[] = [];
   const failed: string[] = [];
 
+  // Decode auth tokens once for the entire batch instead of per-CID
+  const sourceToken = authTokenString(sourceConfig);
+  const destToken = authTokenString(destConfig);
+
   try {
     for (const cid of cids) {
       try {
         // 3. Fetch encrypted blob from source
-        const data = await fetchFromProvider(cid, sourceConfig);
+        const data = await fetchFromProvider(cid, sourceConfig, sourceToken);
 
         // 4. Pin to destination
-        const destCid = await pinToProvider(data, cid, destConfig);
+        const destCid = await pinToProvider(data, cid, destConfig, destToken);
 
         // 5. Verify CID match (content integrity)
         if (destCid !== cid) {
@@ -121,7 +125,7 @@ export async function migrateBatch(
         // Failure here is non-fatal -- the CID is already on the destination
         try {
           if (sourceConfig.protocol !== 'cipherbox') {
-            await unpinFromProvider(cid, sourceConfig);
+            await unpinFromProvider(cid, sourceConfig, sourceToken);
           }
         } catch {
           // Source unpin failure is non-fatal; CID is safely on destination
@@ -146,13 +150,15 @@ export async function migrateBatch(
  * Supports Kubo (POST /pin/rm) and PSA (list by CID + DELETE) protocols.
  * Best-effort: failures are non-fatal since the CID is already on the destination.
  */
-async function unpinFromProvider(cid: string, config: ProviderConfig): Promise<void> {
-  const token = authTokenString(config);
-
+async function unpinFromProvider(
+  cid: string,
+  config: ProviderConfig,
+  token: string
+): Promise<void> {
   if (config.protocol === 'kubo') {
     const headers: Record<string, string> = {};
     if (token) headers['Authorization'] = `Basic ${token}`;
-    const response = await fetch(
+    const response = await ssrfSafeFetch(
       `${config.endpoint}/api/v0/pin/rm?arg=${encodeURIComponent(cid)}`,
       {
         method: 'POST',
@@ -171,7 +177,7 @@ async function unpinFromProvider(cid: string, config: ProviderConfig): Promise<v
 
   if (config.protocol === 'psa') {
     // PSA requires finding the requestid first, then deleting
-    const listResponse = await fetch(
+    const listResponse = await ssrfSafeFetch(
       `${config.endpoint}/pins?cid=${encodeURIComponent(cid)}&status=pinned,pinning,queued`,
       {
         method: 'GET',
@@ -182,7 +188,7 @@ async function unpinFromProvider(cid: string, config: ProviderConfig): Promise<v
     if (!listResponse.ok) return; // Best-effort: if list fails, skip unpin
     const listResult = (await listResponse.json()) as { results: Array<{ requestid: string }> };
     for (const pin of listResult.results) {
-      await fetch(`${config.endpoint}/pins/${encodeURIComponent(pin.requestid)}`, {
+      await ssrfSafeFetch(`${config.endpoint}/pins/${encodeURIComponent(pin.requestid)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(30_000),
@@ -195,22 +201,28 @@ async function unpinFromProvider(cid: string, config: ProviderConfig): Promise<v
   // CipherBox unpins are handled by the API-side MigrationProcessor.
 }
 
-async function fetchFromProvider(cid: string, config: ProviderConfig): Promise<Uint8Array> {
+async function fetchFromProvider(
+  cid: string,
+  config: ProviderConfig,
+  token: string
+): Promise<Uint8Array> {
   if (config.protocol === 'kubo') {
-    const token = authTokenString(config);
     const headers: Record<string, string> = token ? { Authorization: `Basic ${token}` } : {};
-    const response = await fetch(`${config.endpoint}/api/v0/cat?arg=${encodeURIComponent(cid)}`, {
-      method: 'POST',
-      headers,
-      signal: AbortSignal.timeout(60_000),
-    });
+    const response = await ssrfSafeFetch(
+      `${config.endpoint}/api/v0/cat?arg=${encodeURIComponent(cid)}`,
+      {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(60_000),
+      }
+    );
     if (!response.ok) throw new Error(`Fetch from Kubo failed: ${response.status}`);
     return new Uint8Array(await response.arrayBuffer());
   }
 
   // CipherBox or PSA: use IPFS gateway to fetch content
   const GATEWAY_URL = process.env.IPFS_GATEWAY_URL || 'https://ipfs.io';
-  const response = await fetch(`${GATEWAY_URL}/ipfs/${encodeURIComponent(cid)}`, {
+  const response = await ssrfSafeFetch(`${GATEWAY_URL}/ipfs/${encodeURIComponent(cid)}`, {
     signal: AbortSignal.timeout(60_000),
   });
   if (!response.ok) throw new Error(`Fetch from gateway failed: ${response.status}`);
@@ -220,10 +232,9 @@ async function fetchFromProvider(cid: string, config: ProviderConfig): Promise<U
 async function pinToProvider(
   data: Uint8Array,
   expectedCid: string,
-  config: ProviderConfig
+  config: ProviderConfig,
+  token: string
 ): Promise<string> {
-  const token = authTokenString(config);
-
   if (config.protocol === 'kubo') {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const blob = new Blob([data as any]);
@@ -232,7 +243,7 @@ async function pinToProvider(
     const headers: Record<string, string> = {};
     if (token) headers['Authorization'] = `Basic ${token}`;
 
-    const response = await fetch(`${config.endpoint}/api/v0/add?pin=true&cid-version=1`, {
+    const response = await ssrfSafeFetch(`${config.endpoint}/api/v0/add?pin=true&cid-version=1`, {
       method: 'POST',
       body: formData,
       headers,
@@ -244,7 +255,7 @@ async function pinToProvider(
   }
 
   // PSA: pin by CID reference (data must already exist on IPFS network)
-  const response = await fetch(`${config.endpoint}/pins`, {
+  const response = await ssrfSafeFetch(`${config.endpoint}/pins`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,

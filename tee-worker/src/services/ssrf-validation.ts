@@ -10,44 +10,66 @@
 import { lookup } from 'node:dns/promises';
 
 /**
+ * Check if an address (hostname or resolved IP) is in a private/internal range.
+ *
+ * Covers: RFC 1918, loopback, link-local, CGN (RFC 6598), unique-local IPv6,
+ * IPv4-mapped IPv6, metadata endpoints, and .internal/.local suffixes.
+ */
+function isPrivateAddress(addr: string): boolean {
+  // Strip IPv6 brackets from URL.hostname (e.g. [::1] → ::1)
+  const stripped = addr.startsWith('[') && addr.endsWith(']') ? addr.slice(1, -1) : addr;
+  // Strip IPv4-mapped IPv6 prefix (::ffff:127.0.0.1 → 127.0.0.1)
+  const normalized = stripped.startsWith('::ffff:') ? stripped.slice(7) : stripped;
+
+  return (
+    normalized === 'localhost' ||
+    normalized === '0.0.0.0' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::1' ||
+    normalized === '::' ||
+    normalized.startsWith('10.') ||
+    normalized.startsWith('192.168.') ||
+    normalized.startsWith('127.') ||
+    normalized.startsWith('169.254.') ||
+    normalized.startsWith('fd') ||
+    normalized.startsWith('fc') ||
+    normalized.startsWith('fe80') ||
+    normalized.endsWith('.internal') ||
+    normalized.endsWith('.local') ||
+    is172Private(normalized) ||
+    isCgnRange(normalized)
+  );
+}
+
+/** RFC 1918: 172.16.0.0/12 */
+function is172Private(addr: string): boolean {
+  if (!addr.startsWith('172.')) return false;
+  const second = parseInt(addr.split('.')[1], 10);
+  return second >= 16 && second <= 31;
+}
+
+/** RFC 6598: Carrier-Grade NAT 100.64.0.0/10 */
+function isCgnRange(addr: string): boolean {
+  if (!addr.startsWith('100.')) return false;
+  const second = parseInt(addr.split('.')[1], 10);
+  return second >= 64 && second <= 127;
+}
+
+/**
  * Validate endpoint URL to prevent SSRF attacks.
  * TEE worker fetches from user-provided URLs -- must block internal/metadata endpoints.
  */
 export function validateEndpointUrl(endpoint: string): void {
   const url = new URL(endpoint);
 
-  // Skip SSRF validation in development/simulator mode
   if (process.env.TEE_MODE === 'simulator') return;
 
-  // Must be HTTPS
   if (url.protocol !== 'https:') {
     throw new Error('Endpoint must use HTTPS');
   }
 
-  // Block private/internal IP ranges and metadata endpoints
-  const hostname = url.hostname;
-  if (
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname === '::1' ||
-    hostname.startsWith('10.') ||
-    hostname.startsWith('192.168.') ||
-    hostname === '169.254.169.254' ||
-    hostname.endsWith('.internal') ||
-    hostname.endsWith('.local') ||
-    hostname.startsWith('169.254.') ||
-    hostname.startsWith('fd') ||
-    hostname.startsWith('fe80')
-  ) {
+  if (isPrivateAddress(url.hostname)) {
     throw new Error('Endpoint cannot target private/internal addresses');
-  }
-
-  // Block 172.16.0.0/12 range
-  if (hostname.startsWith('172.')) {
-    const second = parseInt(hostname.split('.')[1], 10);
-    if (second >= 16 && second <= 31) {
-      throw new Error('Endpoint cannot target private/internal addresses');
-    }
   }
 }
 
@@ -57,22 +79,16 @@ export function validateEndpointUrl(endpoint: string): void {
  */
 export async function validateResolvedIp(hostname: string): Promise<void> {
   const result = await lookup(hostname);
-  const ip = result.address;
-  if (
-    ip.startsWith('10.') ||
-    ip.startsWith('192.168.') ||
-    ip.startsWith('127.') ||
-    ip === '::1' ||
-    ip.startsWith('169.254.') ||
-    ip.startsWith('fd') ||
-    ip.startsWith('fe80')
-  ) {
+  if (isPrivateAddress(result.address)) {
     throw new Error('Endpoint DNS resolves to private address');
   }
-  if (ip.startsWith('172.')) {
-    const second = parseInt(ip.split('.')[1], 10);
-    if (second >= 16 && second <= 31) {
-      throw new Error('Endpoint DNS resolves to private address');
-    }
-  }
+}
+
+/**
+ * Shared fetch wrapper that disables redirects to prevent SSRF via redirect.
+ * An attacker's server could 302 to http://169.254.169.254/... after passing
+ * the initial URL validation.
+ */
+export async function ssrfSafeFetch(url: string, init?: RequestInit): Promise<Response> {
+  return fetch(url, { ...init, redirect: 'error' });
 }

@@ -18,7 +18,11 @@
 import { Router, type Request, type Response } from 'express';
 import { decrypt } from 'eciesjs';
 import { getKeypair } from '../services/tee-keys.js';
-import { validateEndpointUrl, validateResolvedIp } from '../services/ssrf-validation.js';
+import {
+  validateEndpointUrl,
+  validateResolvedIp,
+  ssrfSafeFetch,
+} from '../services/ssrf-validation.js';
 
 /** Timeout for each connection probe (10 seconds) */
 const PROBE_TIMEOUT_MS = 10_000;
@@ -126,7 +130,7 @@ async function probeKubo(
   const start = performance.now();
 
   try {
-    const response = await fetch(url, {
+    const response = await ssrfSafeFetch(url, {
       method: 'POST',
       headers,
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
@@ -186,7 +190,7 @@ async function probePsa(
   const start = performance.now();
 
   try {
-    const response = await fetch(url, {
+    const response = await ssrfSafeFetch(url, {
       method: 'GET',
       headers,
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),

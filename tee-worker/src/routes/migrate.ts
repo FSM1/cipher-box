@@ -36,6 +36,15 @@ router.post('/migrate', async (req: Request, res: Response) => {
     return;
   }
 
+  // Limit batch size to prevent resource exhaustion
+  const MAX_BATCH_SIZE = 50;
+  if (cids.length > MAX_BATCH_SIZE) {
+    res.status(400).json({
+      error: `Batch size ${cids.length} exceeds maximum of ${MAX_BATCH_SIZE}`,
+    });
+    return;
+  }
+
   try {
     const result = await migrateBatch(cids, sourceConfigEncrypted, destConfigEncrypted, TEE_EPOCH);
 
