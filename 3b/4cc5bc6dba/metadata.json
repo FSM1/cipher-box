@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3b4cc5bc6dba",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/3b/4cc5bc6dba/0/metadata.json",
+      "transcript": "/3b/4cc5bc6dba/0/full.jsonl",
+      "content_hash": "/3b/4cc5bc6dba/0/content_hash.txt",
+      "prompt": "/3b/4cc5bc6dba/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 1376,
+    "cache_read_tokens": 1109362,
+    "output_tokens": 668,
+    "api_call_count": 5
+  }
+}
