@@ -18,7 +18,7 @@ export async function addToIpfs(
   onProgress?: ProgressCallback,
   cancelToken?: CancelToken
 ): Promise<IpfsAddResult> {
-  return withPerf('ipfs:upload', async () => {
+  return withPerf('ipfs:upload:cipherbox', async () => {
     const blob = new Blob([encryptedData as BlobPart]);
     const formData = new FormData();
     formData.append('file', blob);
