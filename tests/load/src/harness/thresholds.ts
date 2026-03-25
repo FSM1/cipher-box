@@ -58,7 +58,7 @@ export function checkThresholds(
 
 /**
  * Assert all thresholds pass, logging violations on failure.
- * Combines checkThresholds + console.warn + expect in one call.
+ * Throws with a descriptive message if any threshold is violated.
  */
 export function expectThresholdsPassed(
   metrics: OperationMetrics[],
@@ -68,10 +68,6 @@ export function expectThresholdsPassed(
   if (!result.passed) {
     console.warn('THRESHOLD VIOLATIONS:');
     result.violations.forEach((v) => console.warn(`  - ${v}`));
-  }
-  // Dynamic import of expect would add complexity; callers use vitest's expect
-  // so we throw with a descriptive message instead
-  if (!result.passed) {
     throw new Error(`Threshold violations:\n${result.violations.join('\n')}`);
   }
 }
