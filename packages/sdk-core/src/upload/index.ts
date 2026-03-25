@@ -92,7 +92,9 @@ export async function uploadFile(params: {
 
       // 4. Upload encrypted content to IPFS (or BYO node via pinFn override)
       const pinResult = params.pinFn
-        ? await params.pinFn(params.ctx, ciphertext, params.onProgress)
+        ? await withPerf('ipfs:upload:byo', () =>
+            params.pinFn!(params.ctx, ciphertext, params.onProgress)
+          )
         : await addToIpfs(params.ctx, ciphertext, params.onProgress);
       const { cid, size: encryptedSize } = pinResult;
 
