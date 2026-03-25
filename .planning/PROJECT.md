@@ -142,4 +142,4 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 
 ---
 
-Last updated: 2026-03-26 after Phase 24 Bug Fixes & Test Infrastructure completed
+Last updated: 2026-03-26 after Phase 25 Desktop Enhancements completed

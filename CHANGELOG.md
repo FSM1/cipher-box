@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.29.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.29.0...cipher-box-v0.29.1) (2026-03-25)
+
+### Bug Fixes
+
+- **ci:** exclude test files from TEE worker Docker build ([#358](https://github.com/FSM1/cipher-box/issues/358)) ([3535716](https://github.com/FSM1/cipher-box/commit/353571678609049fb39a254c1829217c564a134e))
+
+## [0.29.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.28.0...cipher-box-v0.29.0) (2026-03-25)
+
+### Features
+
+- Phase 21 BYO-IPFS Node ([#346](https://github.com/FSM1/cipher-box/issues/346)) ([d2ef0c5](https://github.com/FSM1/cipher-box/commit/d2ef0c53bc9b614a47a63d019acc7b792b855ea0))
+- phase 22 — performance baselines completion ([#355](https://github.com/FSM1/cipher-box/issues/355)) ([25bc1b3](https://github.com/FSM1/cipher-box/commit/25bc1b35fb69cb28c350a155b5b7b42104f4f5d0))
+
 ## [0.28.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.27.0...cipher-box-v0.28.0) (2026-03-25)
 
 ### Features

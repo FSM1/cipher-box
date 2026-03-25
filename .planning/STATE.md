@@ -18,11 +18,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 24 — bug-fixes-test-infrastructure
+**Current focus:** Phase 26 — observability-ux-tuning
 
 ## Current Position
 
-Phase: 24 (bug-fixes-test-infrastructure) — EXECUTING
+Phase: 25 (desktop-enhancements) — COMPLETE
 Plan: 3 of 3
 
 ## Performance Metrics
@@ -76,6 +76,7 @@ Plan: 3 of 3
 | 24    | 02   | 4min     | 2     | 5     |
 | 24    | 03   | 7min     | 2     | 4     |
 | 24    | 01   | 10min    | 2     | 10    |
+| 25    | 01   | 5min     | 2     | 4     |
 
 ## Accumulated Context
 
