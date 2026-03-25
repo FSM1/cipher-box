@@ -657,6 +657,8 @@ pub(crate) mod implementation {
                     let rt = fs.rt.clone();
                     let upload_tx = fs.upload_tx.clone();
                     let coordinator = fs.publish_coordinator.clone();
+                    let tee_public_key = fs.tee_public_key.clone();
+                    let tee_key_epoch = fs.tee_key_epoch;
 
                     let file_meta = cipherbox_core::folder::FileMetadata {
                         version: "v1".to_string(),
@@ -696,6 +698,9 @@ pub(crate) mod implementation {
 
                                 if let Err(e) = publish_file_metadata(
                                     &api, &file_meta_with_cid, folder_key, ipns_key, ipns_name, &coordinator,
+                                    tee_public_key.as_deref(),
+                                    tee_key_epoch,
+                                    is_new_file,
                                 ).await {
                                     log::warn!("Per-file IPNS publish failed for ino {}: {}", ino, e);
                                 }
