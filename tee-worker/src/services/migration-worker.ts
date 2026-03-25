@@ -116,6 +116,16 @@ export async function migrateBatch(
         }
 
         succeeded.push(cid);
+
+        // Best-effort source unpin after verified transfer
+        // Failure here is non-fatal -- the CID is already on the destination
+        try {
+          if (sourceConfig.protocol !== 'cipherbox') {
+            await unpinFromProvider(cid, sourceConfig);
+          }
+        } catch {
+          // Source unpin failure is non-fatal; CID is safely on destination
+        }
       } catch {
         failed.push(cid);
       }
@@ -129,6 +139,60 @@ export async function migrateBatch(
   }
 
   return { succeeded, failed };
+}
+
+/**
+ * Unpin a CID from a provider after verified migration transfer.
+ * Supports Kubo (POST /pin/rm) and PSA (list by CID + DELETE) protocols.
+ * Best-effort: failures are non-fatal since the CID is already on the destination.
+ */
+async function unpinFromProvider(cid: string, config: ProviderConfig): Promise<void> {
+  const token = authTokenString(config);
+
+  if (config.protocol === 'kubo') {
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Basic ${token}`;
+    const response = await fetch(
+      `${config.endpoint}/api/v0/pin/rm?arg=${encodeURIComponent(cid)}`,
+      {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(30_000),
+      }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      // "not pinned" means already unpinned -- treat as success (idempotent)
+      if (errorText.toLowerCase().includes('not pinned')) return;
+      throw new Error(`Unpin from Kubo failed: ${response.status}`);
+    }
+    return;
+  }
+
+  if (config.protocol === 'psa') {
+    // PSA requires finding the requestid first, then deleting
+    const listResponse = await fetch(
+      `${config.endpoint}/pins?cid=${encodeURIComponent(cid)}&status=pinned,pinning,queued`,
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(30_000),
+      }
+    );
+    if (!listResponse.ok) return; // Best-effort: if list fails, skip unpin
+    const listResult = (await listResponse.json()) as { results: Array<{ requestid: string }> };
+    for (const pin of listResult.results) {
+      await fetch(`${config.endpoint}/pins/${encodeURIComponent(pin.requestid)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(30_000),
+      });
+    }
+    return;
+  }
+
+  // 'cipherbox' protocol: unpin via CipherBox API -- not handled in TEE worker.
+  // CipherBox unpins are handled by the API-side MigrationProcessor.
 }
 
 async function fetchFromProvider(cid: string, config: ProviderConfig): Promise<Uint8Array> {
