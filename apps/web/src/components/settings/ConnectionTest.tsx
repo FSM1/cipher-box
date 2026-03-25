@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { testConnection, type ConnectionTestResult } from '@cipherbox/sdk-core';
+import { wrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
+import { teeControllerConnectionTest } from '@cipherbox/api-client';
+import { useAuthStore } from '../../stores/auth.store';
 
 type ConnectionTestProps = {
   endpoint: string;
@@ -10,9 +13,11 @@ type ConnectionTestProps = {
 /**
  * Connection test UI for BYO-IPFS node endpoint.
  *
- * Probes the endpoint for Kubo RPC or PSA protocol, displays inline results
- * with protocol auto-detection, and surfaces CORS errors with remediation
- * instructions.
+ * Routes the connection test through the TEE worker to avoid browser CORS
+ * issues. Provider credentials are ECIES-encrypted before leaving the browser
+ * and decrypted only inside the TEE enclave for server-side probing.
+ *
+ * Falls back to browser-side testConnection() when TEE keys are unavailable.
  */
 export function ConnectionTest({ endpoint, authToken, onTestResult }: ConnectionTestProps) {
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
@@ -31,14 +36,25 @@ export function ConnectionTest({ endpoint, authToken, onTestResult }: Connection
     onTestResult?.(null);
 
     try {
-      const result = await testConnection(endpoint, authToken || undefined);
-      setTestResult(result);
-      onTestResult?.(result);
+      // Try TEE-routed test first (avoids CORS, keeps credentials encrypted)
+      const teeKeys = useAuthStore.getState().teeKeys;
+
+      if (teeKeys?.currentPublicKey) {
+        const result = await teeRoutedTest(endpoint, authToken, teeKeys);
+        setTestResult(result);
+        onTestResult?.(result);
+      } else {
+        // Fallback: browser-side test when TEE keys not available
+        console.warn('TEE keys not available, falling back to browser-side connection test');
+        const result = await testConnection(endpoint, authToken || undefined);
+        setTestResult(result);
+        onTestResult?.(result);
+      }
     } catch {
       const errorResult: ConnectionTestResult = {
         success: false,
         latencyMs: 0,
-        error: 'could not detect ipfs protocol at this endpoint.',
+        error: 'connection test failed. please try again.',
       };
       setTestResult(errorResult);
       onTestResult?.(errorResult);
@@ -77,39 +93,12 @@ export function ConnectionTest({ endpoint, authToken, onTestResult }: Connection
             </div>
           ) : (
             <div className="connection-test-error">
-              {testResult.corsError ? (
-                <>
-                  {testResult.protocol === 'kubo' ||
-                  testResult.corsInstructions?.includes('ipfs config') ? (
-                    <>
-                      {'> failed: cors error. configure cors on your kubo node:'}
-                      <pre
-                        className="connection-test-cors-instructions"
-                        aria-label="CORS configuration commands"
-                      >
-                        {testResult.corsInstructions}
-                      </pre>
-                    </>
-                  ) : (
-                    <>
-                      {
-                        '> failed: cors error. the pinning service does not allow browser requests. check provider cors settings.'
-                      }
-                      {testResult.corsInstructions && (
-                        <pre
-                          className="connection-test-cors-instructions"
-                          aria-label="CORS configuration commands"
-                        >
-                          {testResult.corsInstructions}
-                        </pre>
-                      )}
-                    </>
-                  )}
-                </>
-              ) : testResult.error?.includes('authentication') ? (
+              {testResult.error?.includes('authentication') ? (
                 <>{`> failed: authentication failed. check your auth token.`}</>
               ) : (
-                <>{`> failed: ${testResult.error || 'could not detect ipfs protocol at this endpoint.'}`}</>
+                <>
+                  {`> failed: ${testResult.error || 'could not detect ipfs protocol at this endpoint.'}`}
+                </>
               )}
             </div>
           )}
@@ -117,4 +106,38 @@ export function ConnectionTest({ endpoint, authToken, onTestResult }: Connection
       )}
     </div>
   );
+}
+
+/**
+ * Run connection test via TEE worker (server-side, no CORS issues).
+ *
+ * 1. ECIES-encrypt { endpoint, authToken } with TEE public key
+ * 2. POST encrypted config to /tee/connection-test
+ * 3. TEE decrypts in-enclave, probes endpoint, returns result
+ */
+async function teeRoutedTest(
+  endpoint: string,
+  authToken: string,
+  teeKeys: { currentPublicKey: string; currentEpoch: number }
+): Promise<ConnectionTestResult> {
+  // Build config JSON and ECIES-encrypt with TEE public key
+  const configJson = JSON.stringify({ endpoint, authToken: authToken || undefined });
+  const configBytes = new TextEncoder().encode(configJson);
+  const teePublicKey = hexToBytes(teeKeys.currentPublicKey);
+  const encrypted = await wrapKey(configBytes, teePublicKey);
+  const encryptedHex = bytesToHex(encrypted);
+
+  // Call TEE-routed connection test via generated api-client
+  const response = await teeControllerConnectionTest({
+    encryptedConfig: encryptedHex,
+    epoch: teeKeys.currentEpoch,
+  });
+
+  return {
+    success: response.success,
+    protocol: response.protocol as ConnectionTestResult['protocol'],
+    version: response.version,
+    latencyMs: response.latencyMs,
+    error: response.error,
+  };
 }
