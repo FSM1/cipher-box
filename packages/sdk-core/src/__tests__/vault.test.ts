@@ -1,0 +1,148 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { publishVaultKeyBlob, loadVaultKeyBlob } from '../vault';
+import type { SdkContext } from '../types';
+
+// Mock dependencies
+vi.mock('../ipfs', () => ({
+  addToIpfs: vi.fn(),
+  fetchFromIpfs: vi.fn(),
+}));
+
+vi.mock('../ipns', () => ({
+  createAndPublishIpnsRecord: vi.fn(),
+  resolveIpnsRecord: vi.fn(),
+}));
+
+vi.mock('@cipherbox/crypto', async () => {
+  const actual = await vi.importActual<typeof import('@cipherbox/crypto')>('@cipherbox/crypto');
+  return {
+    ...actual,
+    deriveVaultKeyIpnsKeypair: vi.fn().mockResolvedValue({
+      ipnsName: 'k51vaultkey',
+      publicKey: new Uint8Array(32).fill(1),
+      privateKey: new Uint8Array(32).fill(2),
+    }),
+    wrapKey: vi.fn().mockResolvedValue(new Uint8Array([0xec, 0x01, 0x02, 0x03])),
+    unwrapKey: vi.fn().mockResolvedValue(new Uint8Array(32).fill(0xaa)),
+  };
+});
+
+vi.mock('@cipherbox/core', async () => {
+  const actual = await vi.importActual<typeof import('@cipherbox/core')>('@cipherbox/core');
+  return {
+    ...actual,
+    serializeVaultBlobV2: vi.fn().mockReturnValue(new Uint8Array([0x02, 0x01, 0x02, 0x03])),
+    deserializeVaultBlobV2: vi.fn().mockReturnValue(new Uint8Array([0xec, 0x01, 0x02, 0x03])),
+    detectBlobVersion: vi.fn().mockReturnValue(2),
+  };
+});
+
+import { addToIpfs, fetchFromIpfs } from '../ipfs';
+import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../ipns';
+
+const mockCtx: SdkContext = {
+  apiUrl: 'http://localhost:3000',
+  getAccessToken: async () => 'test-token',
+};
+
+describe('vault key blob operations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('publishVaultKeyBlob', () => {
+    it('publishes vault key blob and returns IPNS name', async () => {
+      vi.mocked(addToIpfs).mockResolvedValue({ cid: 'bafyvaultblob' });
+      vi.mocked(createAndPublishIpnsRecord).mockResolvedValue({
+        success: true,
+        sequenceNumber: 0n,
+      });
+
+      const result = await publishVaultKeyBlob({
+        userPrivateKey: new Uint8Array(32).fill(0x01),
+        userPublicKey: new Uint8Array(33).fill(0x02),
+        rootFolderKey: new Uint8Array(32).fill(0x03),
+        ctx: mockCtx,
+      });
+
+      expect(result.ipnsName).toBe('k51vaultkey');
+      expect(addToIpfs).toHaveBeenCalledOnce();
+      expect(createAndPublishIpnsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ipnsName: 'k51vaultkey',
+          metadataCid: 'bafyvaultblob',
+          sequenceNumber: 0n,
+        })
+      );
+    });
+
+    it('throws when IPNS publish fails', async () => {
+      vi.mocked(addToIpfs).mockResolvedValue({ cid: 'bafyvaultblob' });
+      vi.mocked(createAndPublishIpnsRecord).mockResolvedValue({
+        success: false,
+        sequenceNumber: 0n,
+      });
+
+      await expect(
+        publishVaultKeyBlob({
+          userPrivateKey: new Uint8Array(32).fill(0x01),
+          userPublicKey: new Uint8Array(33).fill(0x02),
+          rootFolderKey: new Uint8Array(32).fill(0x03),
+          ctx: mockCtx,
+        })
+      ).rejects.toThrow('Failed to publish vault key blob to IPNS');
+    });
+  });
+
+  describe('loadVaultKeyBlob', () => {
+    it('resolves IPNS, fetches blob, and returns decrypted rootFolderKey', async () => {
+      vi.mocked(resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafyvaultblob',
+        sequenceNumber: 0n,
+        signatureVerified: true,
+      });
+      vi.mocked(fetchFromIpfs).mockResolvedValue(new Uint8Array([0x02, 0x01, 0x02, 0x03]));
+
+      const result = await loadVaultKeyBlob({
+        userPrivateKey: new Uint8Array(32).fill(0x01),
+        ctx: mockCtx,
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.ipnsName).toBe('k51vaultkey');
+      expect(result!.rootFolderKey).toEqual(new Uint8Array(32).fill(0xaa));
+      expect(resolveIpnsRecord).toHaveBeenCalledWith('k51vaultkey', mockCtx);
+      expect(fetchFromIpfs).toHaveBeenCalledWith(mockCtx, 'bafyvaultblob');
+    });
+
+    it('returns null when IPNS record does not exist', async () => {
+      vi.mocked(resolveIpnsRecord).mockResolvedValue(null);
+
+      const result = await loadVaultKeyBlob({
+        userPrivateKey: new Uint8Array(32).fill(0x01),
+        ctx: mockCtx,
+      });
+
+      expect(result).toBeNull();
+      expect(fetchFromIpfs).not.toHaveBeenCalled();
+    });
+
+    it('throws when blob is not v2 format', async () => {
+      vi.mocked(resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafyvaultblob',
+        sequenceNumber: 0n,
+        signatureVerified: true,
+      });
+      vi.mocked(fetchFromIpfs).mockResolvedValue(new Uint8Array([0x01, 0x01, 0x02, 0x03]));
+      const { detectBlobVersion } = await import('@cipherbox/core');
+      vi.mocked(detectBlobVersion).mockReturnValue(1);
+
+      await expect(
+        loadVaultKeyBlob({
+          userPrivateKey: new Uint8Array(32).fill(0x01),
+          ctx: mockCtx,
+        })
+      ).rejects.toThrow('Vault key blob is not v2 format');
+    });
+  });
+});
