@@ -1,0 +1,80 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d8ea4f7cd668",
+  "session_id": "7b31620d-c2e8-46d6-a947-69565d923f68",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T01:40:21.359831Z",
+  "branch": "feat/phase-26-observability-ux-tuning",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "8c4e5974bbfd",
+  "token_usage": {
+    "input_tokens": 5655,
+    "cache_creation_tokens": 196800,
+    "cache_read_tokens": 13703202,
+    "output_tokens": 35725,
+    "api_call_count": 128
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Execute Phase 26 (Observability \u0026 UX Tuning) of the cipher-box project, which involved creating Grafana alert rules and tuning client timeout/retry constants. Also fix a Grafana free tier series cardinality limit being hit.",
+    "outcome": "Phase 26 executed successfully with 2/2 plans complete and 14/14 must-haves verified. Additionally diagnosed and fixed Grafana series cardinality exhaustion via Alloy metric filtering and HTTP route label normalization. PR #366 created; a CI test failure from the timeout value change was caught and fixed.",
+    "learnings": {
+      "repo": [
+        "The GSD workflow system requires plans to exist before execute-phase can run — plan-phase must be run first if the phase directory is empty.",
+        "Phase 26 lives at `.planning/phases/26-observability-ux-tuning/` on branch `feat/phase-26-observability-ux-tuning`.",
+        "The project uses Grafana Alloy (River config at `docker/alloy-config.river`) to scrape and remote-write metrics. Kubo and Someguy are scraped alongside the CipherBox API.",
+        "The dashboard only uses 6 Kubo/Someguy metrics: `go_goroutines`, `go_memstats_alloc_bytes`, `libp2p_swarm_connections_opened_total`, `libp2p_swarm_connections_closed_total`, `libp2p_network_in_bytes_total`, `libp2p_network_out_bytes_total`.",
+        "Alert rules (Phase 26-01) only reference `cipherbox_*` metrics — no external metric dependency in alerting.",
+        "NestJS route templates already parameterize known routes (`:id`, `:cid`); the gap was unmatched bot/scanner paths creating unbounded cardinality.",
+        "The `delegated-routing.client.spec.ts` had hardcoded timeout values (1000ms, 2000ms) that needed updating when `baseDelayMs` was changed from 1000→500ms."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/metrics/http-metrics.interceptor.ts",
+          "finding": "Unmatched routes (bot scanners, 404s) were creating unique label values per path, exploding HTTP histogram cardinality. Fixed by collapsing unmatched routes to `/:unmatched`. The `normalizeRoute` method was removed entirely — matched routes use NestJS parameterized templates."
+        },
+        {
+          "path": "docker/alloy-config.river",
+          "finding": "Added a `prometheus.relabel` stage to filter Kubo and Someguy scrapes to only the 6 metrics actually used in dashboards. Previously all metrics from these high-cardinality Go/libp2p services were forwarded."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.spec.ts",
+          "finding": "Three assertions hardcoded old baseDelayMs values: expected 1000ms (now 500ms) and 2000ms (now 1000ms for second backoff). These broke CI and needed updating after the timeout tuning in Phase 26-02."
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/kubo-provider.ts",
+          "finding": "Timeout comments referenced ephemeral benchmark data ('~44x client-side pin p99 of 227ms'). Cleaned up to describe intent only."
+        },
+        {
+          "path": "docker/grafana/scripts/provision-alerts.sh",
+          "finding": "Two separate `sed` calls combined into one with `-e` flags; delimiter changed from `/` to `|` to avoid breakage if UIDs contain `/`. Also scoped `--dry-run` flag parsing to `${@:4}` to avoid collision with positional params."
+        }
+      ],
+      "workflow": [
+        "When `git diff main..HEAD` shows 'removals' of features that were never added on the branch, it means main moved ahead after branching — the diff shows the inverse of what main gained, not what the branch removed.",
+        "Merging main into a long-lived feature branch can cause planning doc conflicts (ROADMAP.md, STATE.md) that require manual resolution to preserve both the new phase's progress and prior phases' completion marks.",
+        "The GSD tools run against the current working directory — if invoked from the wrong repo/worktree, init will return incorrect state (missing plans, wrong phase data).",
+        "Grafana Cloud Free tier has a 10,000 active series limit. Kubo (libp2p/DHT metrics) alone can exceed this; filtering at the Alloy relay layer before remote_write is the right mitigation point.",
+        "CI test failures from changed constant values (timeouts, delays) are easily missed during code review if tests use hardcoded expected values rather than referencing the same constants."
+      ]
+    },
+    "friction": [
+      "execute-phase was invoked before plan-phase had been run, producing a confusing 'no plans found' error on a phase that had research and context committed.",
+      "GSD init tools ran against the wrong working directory initially, causing incorrect phase state to be reported (missing plans that actually existed).",
+      "Merging main required manual conflict resolution of multiple planning docs (ROADMAP.md) to restore Phase 24 and 25 completion marks that were clobbered by the merge strategy.",
+      "CI caught a test regression (hardcoded timeout values in `delegated-routing.client.spec.ts`) that should have been caught locally before push.",
+      "Investigation of PR #365 review comment was interrupted mid-execution when the target branch was in a different git worktree."
+    ],
+    "open_items": [
+      "PR #365 (`fix/recovery-e2e-kubo-ipns`) has an outstanding nitpick review comment that was not applied — interrupted before the fix was made.",
+      "Grafana alert JSON (~877 lines across 5 files) has significant structural duplication that could be reduced to a config table + template — deferred as a larger restructuring.",
+      "The 5s delegated routing timeout may be aggressive under load against `delegated-ipfs.dev` (external DHT-backed service) — flagged to monitor post-deploy.",
+      "The `ipHash: ''` empty string failing strict 64-char hex validation was flagged as a bug in pre-existing code (not Phase 26) — not addressed.",
+      "Unrelated changes on the branch (desktop updater removal, device registry v2→v1 downgrade, bin auto-repair removal, load test/recovery E2E deletions) from `carry forward: uncommitted session files` commits were identified but not investigated or resolved."
+    ]
+  }
+}
