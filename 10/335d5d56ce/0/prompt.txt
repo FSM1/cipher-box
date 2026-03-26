@@ -90,3 +90,7 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 ---
 
 the download seems to have worked, but attempting to update the file in the shared folder threw an `> Parent folder not found or vault not initialized` when trying to save the update.
+
+---
+
+now a new error: > Cannot update: file IPNS key not accessible
