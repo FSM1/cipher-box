@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "7c27de6793d1",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T04:46:14.40446Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "344381bf1ee7",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 36449,
+    "cache_read_tokens": 353792,
+    "output_tokens": 4923,
+    "api_call_count": 9
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) using wave-based parallel execution across 3 plans: API backend, UI permission toggle, and SharedFileBrowser write actions.",
+    "outcome": "Waves 1 and 2 completed successfully with commits verified. Wave 3 (SharedFileBrowser write actions) was spawned but the transcript ends mid-execution — final outcome unknown.",
+    "learnings": {
+      "repo": [
+        "Phase 27 lives on branch feat/phase-27-writable-shares",
+        "Share entity was extended with a permission enum (read/write) and encryptedIpnsKey column",
+        "IPNS publish authorization was broadened to allow write-share recipients to publish",
+        "ShareDialog handles IPNS key wrapping for write shares at the UI layer",
+        "Plan 27-03 (SharedFileBrowser write actions) is marked autonomous: false — requires a user checkpoint"
+      ],
+      "code": [],
+      "workflow": [
+        "Key-link verification between waves found no cross-plan dependencies to check in this phase — both wave 2 and 3 pre-checks passed trivially",
+        "Wave-based execution with spot-checks (SUMMARY.md exists, git commits present, no Self-Check: FAILED) is the primary reliability gate",
+        "Checkpoint plans (autonomous: false) pause execution for human verification before continuing"
+      ]
+    },
+    "friction": [
+      "Transcript ends mid-execution during Wave 3 agent spawn — no result, SUMMARY.md verification, or commit check is recorded for plan 27-03"
+    ],
+    "open_items": [
+      "Wave 3 (27-03: SharedFileBrowser Write Actions) execution result is unknown — needs verification that SUMMARY.md was created and commits landed",
+      "Plan 27-03 checkpoint handling (user verification step) was not reached in the transcript — needs completion",
+      "Phase verification (gsd-verifier) and ROADMAP/STATE.md update were not reached — phase is not marked complete"
+    ]
+  }
+}
