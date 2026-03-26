@@ -1,6 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { BadRequestException, ConflictException, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  NotFoundException,
+} from '@nestjs/common';
 import { IpnsService } from './ipns.service';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { PublishIpnsDto, BatchPublishIpnsDto } from './dto';
@@ -32,6 +39,9 @@ describe('IpnsService', () => {
     ipfsIpnsDuration: { startTimer: jest.Mock };
     ipnsResolveDuration: { observe: jest.Mock };
     ipnsPublishDuration: { observe: jest.Mock };
+  };
+  let mockSharesService: {
+    findActiveWriteShare: jest.Mock;
   };
 
   // Test data
@@ -100,9 +110,9 @@ describe('IpnsService', () => {
         },
         {
           provide: SharesService,
-          useValue: {
+          useValue: (mockSharesService = {
             findActiveWriteShare: jest.fn().mockResolvedValue(null),
-          },
+          }),
         },
       ],
     }).compile();
@@ -1177,6 +1187,129 @@ describe('IpnsService', () => {
       expect(result.totalFailed).toBe(0);
       expect(result.results).toHaveLength(2);
       expect(result.results.every((r) => r.success)).toBe(true);
+    });
+  });
+
+  // =========================================================================
+  // Write-share authorization (patch coverage)
+  // =========================================================================
+
+  describe('publishRecord - write-share authorization', () => {
+    it('should allow write-share recipient to publish to shared IPNS name', async () => {
+      const recipientId = '660e8400-e29b-41d4-a716-446655440001';
+      // No owner record for this userId
+      mockFolderIpnsRepo.findOne
+        .mockResolvedValueOnce(null) // getFolderIpns(recipientId, ipnsName) = null
+        .mockResolvedValueOnce({ ...mockFolderEntity }); // findOne({ ipnsName }) = owner's record
+
+      mockSharesService.findActiveWriteShare.mockResolvedValue({
+        id: 'share-1',
+        sharerId: testUserId,
+        recipientId,
+      });
+
+      mockFolderIpnsRepo.save.mockResolvedValue({
+        ...mockFolderEntity,
+        sequenceNumber: '6',
+      });
+
+      mockParseIpnsRecord.mockReturnValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequenceNumber: 6n,
+      });
+
+      const dto: PublishIpnsDto = {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      };
+
+      const result = await service.publishRecord(recipientId, dto);
+
+      expect(result.sequenceNumber).toBe('6');
+      expect(mockSharesService.findActiveWriteShare).toHaveBeenCalledWith(
+        recipientId,
+        testIpnsName
+      );
+    });
+
+    it('should throw NotFoundException when write-share exists but IPNS record missing', async () => {
+      const recipientId = '660e8400-e29b-41d4-a716-446655440001';
+      mockFolderIpnsRepo.findOne
+        .mockResolvedValueOnce(null) // getFolderIpns = null
+        .mockResolvedValueOnce(null); // findOne({ ipnsName }) = null
+
+      mockSharesService.findActiveWriteShare.mockResolvedValue({
+        id: 'share-1',
+      });
+
+      const dto: PublishIpnsDto = {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      };
+
+      await expect(service.publishRecord(recipientId, dto)).rejects.toThrow(NotFoundException);
+    });
+
+    it('should not update TEE enrollment when caller is write-share recipient', async () => {
+      const recipientId = '660e8400-e29b-41d4-a716-446655440001';
+      mockFolderIpnsRepo.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ ...mockFolderEntity });
+
+      mockSharesService.findActiveWriteShare.mockResolvedValue({
+        id: 'share-1',
+        sharerId: testUserId,
+        recipientId,
+      });
+
+      const savedEntity = { ...mockFolderEntity, sequenceNumber: '6' };
+      mockFolderIpnsRepo.save.mockResolvedValue(savedEntity);
+
+      mockParseIpnsRecord.mockReturnValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequenceNumber: 6n,
+      });
+
+      const dto: PublishIpnsDto = {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+        encryptedIpnsPrivateKey: 'bb'.repeat(64),
+        keyEpoch: 2,
+      };
+
+      await service.publishRecord(recipientId, dto);
+
+      // TEE enrollment fields should NOT be updated (existing.userId !== userId)
+      const saved = mockFolderIpnsRepo.save.mock.calls[0][0];
+      expect(saved.encryptedIpnsPrivateKey).toEqual(
+        Buffer.from(testEncryptedIpnsPrivateKey, 'hex')
+      );
+      expect(saved.keyEpoch).toBe(testKeyEpoch);
+    });
+
+    it('should reject create when IPNS name already owned by another user', async () => {
+      mockFolderIpnsRepo.findOne
+        .mockResolvedValueOnce(null) // getFolderIpns = null (not owner)
+        .mockResolvedValueOnce({ ...mockFolderEntity }); // existingOther check finds a row
+
+      // No write share — falls through to create path
+      mockSharesService.findActiveWriteShare.mockResolvedValue(null);
+
+      mockParseIpnsRecord.mockReturnValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequenceNumber: 1n,
+      });
+
+      const dto: PublishIpnsDto = {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      };
+
+      await expect(service.publishRecord('other-user-id', dto)).rejects.toThrow(ForbiddenException);
     });
   });
 });
