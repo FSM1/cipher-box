@@ -18,19 +18,21 @@
 #   3. Copy the UID from the URL bar (e.g., /datasources/edit/<uid>)
 #
 # Usage:
-#   ./provision-alerts.sh <grafana-url> <datasource-uid> [--dry-run]
+#   ./provision-alerts.sh <grafana-url> <api-key> <datasource-uid> [--dry-run]
 #
-# Environment variables (preferred over positional args):
+# Environment variables (preferred — avoids secrets on command line):
 #   GRAFANA_URL          Grafana Cloud instance URL
-#   GRAFANA_API_KEY      Service account token (avoids token on command line)
+#   GRAFANA_API_KEY      Service account token
 #   GRAFANA_DS_UID       Mimir/Prometheus datasource UID
 #
-# Examples:
-#   export GRAFANA_API_KEY=glsa_xxxx
-#   ./provision-alerts.sh https://myorg.grafana.net abc123
-#   ./provision-alerts.sh https://myorg.grafana.net abc123 --dry-run
+# Positional args override env vars when both are set.
 #
-#   # All from env:
+# Examples:
+#   # Positional args:
+#   ./provision-alerts.sh https://myorg.grafana.net glsa_xxxx abc123
+#   ./provision-alerts.sh https://myorg.grafana.net glsa_xxxx abc123 --dry-run
+#
+#   # All from env (recommended):
 #   export GRAFANA_URL=https://myorg.grafana.net GRAFANA_API_KEY=glsa_xxxx GRAFANA_DS_UID=abc123
 #   ./provision-alerts.sh
 #
@@ -109,7 +111,7 @@ FOLDER_UID=""
 if [[ "$DRY_RUN" == false ]]; then
   echo "Discovering or creating 'CipherBox Alerts' folder..."
 
-  FOLDERS_RESPONSE=$(curl -s -w "\n%{http_code}" \
+  FOLDERS_RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
     -H "Authorization: Bearer $API_KEY" \
     "$GRAFANA_URL/api/folders")
 
@@ -127,7 +129,7 @@ if [[ "$DRY_RUN" == false ]]; then
   if [[ -z "$FOLDER_UID" ]]; then
     echo "Folder 'CipherBox Alerts' not found. Creating..."
 
-    CREATE_RESPONSE=$(curl -s -w "\n%{http_code}" \
+    CREATE_RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
       -X POST "$GRAFANA_URL/api/folders" \
       -H "Authorization: Bearer $API_KEY" \
       -H "Content-Type: application/json" \
@@ -162,7 +164,7 @@ TOTAL_RULES=0
 # Fetch existing alert rules once for upsert lookups
 EXISTING_RULES=""
 if [[ "$DRY_RUN" == false ]]; then
-  EXISTING_RULES=$(curl -s \
+  EXISTING_RULES=$(curl -s --connect-timeout 10 --max-time 30 \
     -H "Authorization: Bearer $API_KEY" \
     "$GRAFANA_URL/api/v1/provisioning/alert-rules" 2>/dev/null || echo "[]")
 fi
@@ -224,7 +226,7 @@ for rule_file in "${JSON_FILES[@]}"; do
     else
       echo "$( [[ -n "$existing_uid" ]] && echo "Updating" || echo "Creating" ): $rule_title"
 
-      RESPONSE=$(curl -s -w "\n%{http_code}" \
+      RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
         -X "$METHOD" "$URL" \
         -H "Authorization: Bearer $API_KEY" \
         -H "Content-Type: application/json" \

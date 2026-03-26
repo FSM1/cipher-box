@@ -23,7 +23,7 @@
         "relativeTimeRange": { "from": 600, "to": 0 },
         "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
         "model": {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=\"pin\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=\"pin\", result=\"success\"}[5m])) by (le))",
           "intervalMs": 15000,
           "maxDataPoints": 43200,
           "refId": "A"
@@ -74,7 +74,7 @@
         "relativeTimeRange": { "from": 600, "to": 0 },
         "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
         "model": {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=\"pin\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=\"pin\", result=\"success\"}[5m])) by (le))",
           "intervalMs": 15000,
           "maxDataPoints": 43200,
           "refId": "A"
