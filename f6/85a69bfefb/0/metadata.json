@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f685a69bfefb",
+  "session_id": "7b31620d-c2e8-46d6-a947-69565d923f68",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T02:25:05.145144Z",
+  "branch": "feat/phase-26-observability-ux-tuning",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "da636ea2c712",
+  "token_usage": {
+    "input_tokens": 5688,
+    "cache_creation_tokens": 232277,
+    "cache_read_tokens": 18973435,
+    "output_tokens": 45738,
+    "api_call_count": 159
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Execute Phase 26 (Observability \u0026 UX Tuning) — deploy Grafana alert rules and tune client timeout/retry constants — then clean up, merge main, and get the PR through review.",
+    "outcome": "Phase 26 fully executed and verified (14/14 must-haves), PR #366 created and all review threads resolved, plus a bonus fix for Grafana free-tier cardinality limits via Alloy metric filtering and HTTP route label capping.",
+    "learnings": {
+      "repo": [
+        "The GSD tools (gsd-tools.cjs) resolve paths relative to the working directory — running them from the wrong directory (cipher-box vs cipher-box-ci-debug) causes phase/plan lookup failures.",
+        "Phase 26 branch was cut from main at 6dcbad04; main gained PRs #360, #361, #363 after branching, causing 'unrelated removals' in git diff that were actually just main advancing.",
+        "Grafana Cloud Free tier caps at 10,000 active metric series; Kubo/Someguy scrapes alone can exceed this due to libp2p/DHT/bitswap per-peer cardinality.",
+        "The dashboard and alert rules only reference 6 external (Kubo/Someguy) metrics: go_goroutines, go_memstats_alloc_bytes, libp2p_swarm_connections_opened/closed_total, libp2p_network_in/out_bytes_total.",
+        "Merging main into the Phase 26 branch required manual ROADMAP.md, STATE.md, and REQUIREMENTS.md conflict resolution — the branch versions predated Phase 24/25 completion markers that main had."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/metrics/http-metrics.interceptor.ts",
+          "finding": "Unmatched routes (bot scanners hitting /wp-admin, /.env etc.) each created a unique Prometheus label value causing unbounded histogram cardinality; collapsed to /:unmatched."
+        },
+        {
+          "path": "docker/alloy-config.river",
+          "finding": "Kubo and Someguy scrape targets were forwarding all metrics to remote_write; added prometheus.relabel filter to only keep the 6 metrics actually used in dashboards/alerts."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.spec.ts",
+          "finding": "Tests hardcoded baseDelayMs=1000 and second backoff=2000; after Phase 26 tuned baseDelayMs to 500, all 3 assertions needed updating to 500/1000/500."
+        },
+        {
+          "path": "docker/grafana/scripts/provision-alerts.sh",
+          "finding": "Original script always POSTed alert rules (non-idempotent) and took API key as positional arg; improved to prefer GRAFANA_API_KEY env var and upsert via PUT for existing rules."
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/kubo-provider.ts",
+          "finding": "Timeout comments referenced ephemeral benchmark measurements (e.g., '~44x client-side pin p99 of 227ms') — these were removed in favor of intent-based comments."
+        }
+      ],
+      "workflow": [
+        "When git diff shows large unrelated changes, first check if main advanced after the branch was cut before assuming accidental commits — git merge-base helps diagnose this quickly.",
+        "GSD phase execution: if a phase directory exists but has no plans, /gsd:execute-phase fails immediately; must run /gsd:plan-phase first.",
+        "Merging main into a feature branch with GSD planning docs requires careful conflict resolution — always keep the more recent state (branch usually has newer phase progress than main).",
+        "CodeRabbit review on planning docs caught 7 merge-resolution inconsistencies (unchecked phase checkboxes, TBD plan counts, stale STATUS) that would otherwise silently drift.",
+        "PR review comments on shell scripts flagged idempotency (always-POST vs upsert) and secret hygiene (positional API key arg vs env var) as standard issues to address."
+      ]
+    },
+    "friction": [
+      "gsd-tools init ran against the wrong working directory (cipher-box instead of cipher-box-ci-debug), causing spurious 'no plans found' error on first execute-phase attempt.",
+      "Merging main required manual edit of ROADMAP.md, STATE.md, and REQUIREMENTS.md to restore Phase 24/25 completion markers — the merge tool had no way to know which planning doc version was more current.",
+      "CI failed post-push because delegated-routing.client.spec.ts still asserted the old baseDelayMs=1000 value — the test was testing the constant, not the behavior, so it wasn't caught by the simplify review.",
+      "Resolving PR #365's nitpick comment was blocked because that branch is checked out in a separate worktree, requiring context switch."
+    ],
+    "open_items": [
+      "5s delegated routing timeout may be aggressive under load on delegated-ipfs.dev (external DHT-backed service) — worth monitoring post-deploy.",
+      "Grafana alert rules are ~877 lines of structurally identical JSON differing only in thresholds/names; a config table + template approach would significantly reduce duplication but was deferred as a larger restructuring.",
+      "PR #365 review nitpick (recovery.spec.ts) was started but interrupted — still needs to be applied in the cipher-box worktree.",
+      "v1.1 milestone is complete per ROADMAP — /gsd:audit-milestone and /gsd:complete-milestone were suggested but not run."
+    ]
+  }
+}
