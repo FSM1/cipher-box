@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "971b81c5902e",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T14:00:27.076999Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7ccfa932ab16",
+  "token_usage": {
+    "input_tokens": 345,
+    "cache_creation_tokens": 547495,
+    "cache_read_tokens": 42639372,
+    "output_tokens": 87215,
+    "api_call_count": 290
+  },
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) — implementing write-enabled folder sharing with permission toggles, IPNS key wrapping, and recipient write actions across 3 wave-based plans.",
+    "outcome": "All 3 plans executed and verified. Multiple UAT-discovered bugs were fixed during checkpoint verification, E2E tests written and passing (18/18), with the full writable share flow working end-to-end for both owner and recipient.",
+    "learnings": {
+      "repo": [
+        "Shared uploads previously set fileMetaIpnsName to empty string (''), making uploaded files unreadable after upload — this was a silent PoC limitation in useSharedNavigation.ts",
+        "The owner file update flow (useFileOperations.ts handleUpdateFile) did not re-wrap the new file key for share recipients — a pre-existing gap that only surfaced with writable shares",
+        "IPNS private keys must be dual-wrapped: owner's key in the FilePointer (ipnsPrivateKeyEncrypted) and recipient's key in share_keys with keyType 'file-ipns' — single wrapping breaks cross-party edits",
+        "TextEditorDialog save path used the owner's folder store (useFolder hook) — shared files need a separate onSaveSharedFile callback prop wired through SharedFileBrowser",
+        "Permission downgrade (shares.service.ts) clears encryptedIpnsKey but does NOT touch share_keys — file content keys remain accessible after downgrade",
+        "The cipher-box-ci-debug repo had no .env files — they must be copied from the cipher-box repo; web app falls back to window.location.origin+'/api' without VITE_API_URL, causing silent API mismatch",
+        "NestJS @ApiProperty enum decorators must be explicitly updated alongside DTO class validators for OpenAPI spec regeneration to pick up new enum values",
+        "SharedFileBrowser mkdir uses an inline input (.shared-inline-input-field), not a modal dialog — unlike the owner's CreateFolderDialog",
+        "SharedFileBrowser rename uses .shared-inline-rename-field for inline editing"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "finding": "Old upload path set fileMetaIpnsName: '' — fixed by inlining full IPNS keypair generation with dual-key wrapping"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 71,
+          "finding": "Error 'File metadata IPNS name not available (legacy v1 file?)' thrown when fileMetaIpnsName is empty — needs guard for shared file context"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 98,
+          "finding": "Save handler used owner path (updateFile from useFolder) — needs onSaveSharedFile callback prop for shared context"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "addShareKeys authorization needed relaxation to allow write-share recipients to add keys to their own share"
+        },
+        {
+          "path": "apps/api/src/shares/dto/share-key.dto.ts",
+          "finding": "keyType enum was 'file' | 'folder' — extended to 'file' | 'folder' | 'file-ipns' to store recipient-wrapped IPNS keys"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "finding": "handleUpdateFile did not call reWrapForRecipients after file content update — recipients lost access after owner edits"
+        },
+        {
+          "path": "tests/web-e2e/tests/load-test.spec.ts",
+          "finding": "Pre-existing TypeScript error unrelated to phase 27 — fixed as collateral cleanup"
+        }
+      ],
+      "workflow": [
+        "Background task notifications (task-notification) require explicit output file reads to retrieve results — killed tasks may still have useful output",
+        "Detached processes (nohup/disown) survive background task cleanup better than background tasks started via the Task tool",
+        "OpenAPI client regeneration requires the API server to be running with updated code — NestJS watch mode doesn't always hot-reload DTO decorator changes cleanly",
+        "IPNS propagation delays in E2E tests require page reloads and longer timeouts (30s+) for cross-user file visibility assertions",
+        "SDK packages must be built before web dev server starts — missing build causes immediate startup failure with unresolvable module errors",
+        "Playwright test failures produce screenshots in test-results/ that are readable via the Read tool for diagnosing selector mismatches"
+      ]
+    },
+    "friction": [
+      "Dev servers launched as background tasks were repeatedly killed by conversation context shifts — had to switch to detached processes (nohup) to stabilize",
+      "PostgreSQL host IP changed mid-session (192.168.133.114 → 192.168.133.12), requiring .env recreation and API restart",
+      "cipher-box-ci-debug had no .env files — required manual copy from cipher-box; web app silently used wrong API URL until VITE_API_URL was set",
+      "NestJS watch mode did not pick up @ApiProperty enum changes — required full API restart for OpenAPI spec to update",
+      "Git lock file conflict during commit required manual removal",
+      "E2E test selectors required 5 iteration cycles to get all 18 tests passing — actual CSS classes differed from expected (.share-recipient-permission vs .recipient-perm-write, .shared-inline-input-field for mkdir, .shared-inline-rename-field for rename)",
+      "OTP retrieval from API logs was requested 5 separate times during the session — no persistent auth mechanism for testing"
+    ],
+    "open_items": [
+      "Silent revocation (403 handling, [RW]→[RO] transition, IPNS key zeroing) and 30-second polling were not fully verified during UAT — listed in VERIFICATION.md as human_needed items",
+      "Files uploaded before the dual-key wrapping fix have unfixable empty fileMetaIpnsName — no migration path for legacy shared uploads",
+      "Owner file updates now re-wrap for all recipients on every save — could be expensive at scale; no batching or dirty-check optimization",
+      "The addShareKeys API allows write-share recipients to add keys to their own share — the security boundary of this relaxation should be audited",
+      "E2E tests depend on IPNS propagation timing (30s polling interval) — tests may be flaky in CI environments with slower IPFS nodes",
+      "phase 27 verification has 6 human_needed items that weren't explicitly signed off — approved by user as 'working well' but not formally documented in VERIFICATION.md"
+    ]
+  }
+}
