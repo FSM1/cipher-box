@@ -114,3 +114,7 @@ ok great, that seems to be working well
 ---
 
 ok what is the latest otp?
+
+---
+
+ok once the sahre was downgraded to read only, I am now unable to decrypt the text file from the `shared user` side.
