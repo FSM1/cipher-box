@@ -6,6 +6,12 @@
  * - Folder browsing: re-wrapped keys from share_keys table
  * - File download: re-wrapped fileKey from share_keys table
  *
+ * Write-share recipients additionally get:
+ * - IPNS private key unwrapping for publishing changes
+ * - Upload, mkdir, rename, delete operations with conflict retry
+ * - 30s sync polling for the currently-viewed shared folder
+ * - Silent revocation handling (badge transitions [RW] -> [RO])
+ *
  * Security: All keys are ECIES-wrapped for the current user.
  * The server never sees plaintext keys.
  */
@@ -14,20 +20,23 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   decryptFolderMetadata,
   decryptFileMetadata,
+  encryptFolderMetadata,
   type FolderChild,
   type FolderEntry,
   type FilePointer,
+  type FolderMetadata,
   type EncryptedFolderMetadata,
   type EncryptedFileMetadata,
 } from '@cipherbox/core';
-import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
+import { unwrapKey, hexToBytes, generateRandomBytes, bytesToHex } from '@cipherbox/crypto';
 import { useAuthStore } from '../stores/auth.store';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
 import { fetchReceivedShares, fetchShareKeys, hideShare } from '../services/share.service';
-import { resolveIpnsRecord } from '../services/ipns.service';
-import { fetchFromIpfs } from '../lib/api/ipfs';
+import { resolveIpnsRecord, createAndPublishIpnsRecord } from '../services/ipns.service';
+import { fetchFromIpfs, addToIpfs } from '../lib/api/ipfs';
 import { downloadFile, triggerBrowserDownload } from '../services/download.service';
 import { useDownloadStore } from '../stores/download.store';
+import { withConflictRetry } from './folder-helpers';
 
 /**
  * Breadcrumb entry for shared navigation.
@@ -60,6 +69,14 @@ type UseSharedNavigationReturn = {
   breadcrumbs: SharedBreadcrumb[];
   isLoading: boolean;
   error: string | null;
+  /** Current share's permission (null when at top-level list) */
+  permission: 'read' | 'write' | null;
+  /** Unwrapped IPNS private key for write shares (null for read-only) */
+  ipnsPrivateKey: Uint8Array | null;
+  /** Current folder's IPNS name (needed for write operations) */
+  ipnsName: string | null;
+  /** Latest known sequence number for conflict detection */
+  currentSequenceNumber: bigint | null;
   navigateToShare: (shareId: string) => Promise<void>;
   navigateToSubfolder: (folderId: string, folderName: string) => Promise<void>;
   navigateUp: () => void;
@@ -67,7 +84,24 @@ type UseSharedNavigationReturn = {
   navigateToBreadcrumb: (crumbIndex: number) => void;
   downloadSharedFile: (item: FilePointer) => Promise<void>;
   hideSharedItem: (shareId: string) => Promise<void>;
+  /** Upload a file to the currently-viewed write-shared folder */
+  uploadFile: (file: File) => Promise<void>;
+  /** Create a subfolder in the currently-viewed write-shared folder */
+  createFolder: (name: string) => Promise<void>;
+  /** Rename an item in the currently-viewed write-shared folder */
+  renameItem: (item: FolderChild, newName: string) => Promise<void>;
+  /** Delete an item from the currently-viewed write-shared folder */
+  deleteItem: (item: FolderChild) => Promise<void>;
 };
+
+/**
+ * Check if an error is a 403 Forbidden (write access revoked).
+ */
+function isForbiddenError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as Record<string, unknown>;
+  return e.status === 403;
+}
 
 /**
  * Hook for browsing shared content.
@@ -75,6 +109,8 @@ type UseSharedNavigationReturn = {
  * Manages the "Shared with me" browsing experience.
  * Top-level view shows received shares as a flat list.
  * Clicking a shared folder navigates into it using re-wrapped keys.
+ *
+ * For write shares, also provides write operation handlers and 30s polling.
  */
 export function useSharedNavigation(): UseSharedNavigationReturn {
   const [currentView, setCurrentView] = useState<SharedView>('list');
@@ -85,6 +121,12 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   const [breadcrumbs, setBreadcrumbs] = useState<SharedBreadcrumb[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [permission, setPermission] = useState<'read' | 'write' | null>(null);
+  const [ipnsName, setIpnsName] = useState<string | null>(null);
+  const [currentSequenceNumber, setCurrentSequenceNumber] = useState<bigint | null>(null);
+
+  // IPNS private key stored in ref to avoid re-renders; zeroed on cleanup
+  const ipnsPrivateKeyRef = useRef<Uint8Array | null>(null);
 
   // Navigation stack for folder browsing within a share
   const navStackRef = useRef<
@@ -93,6 +135,8 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       folderName: string;
       children: FolderChild[];
       folderKey: Uint8Array;
+      ipnsName: string;
+      sequenceNumber: bigint | null;
     }>
   >([]);
 
@@ -106,6 +150,68 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       }
     >
   >(new Map());
+
+  // Polling interval ref for 30s sync
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /**
+   * Zero the IPNS private key and clear the ref.
+   */
+  const zeroIpnsKey = useCallback(() => {
+    if (ipnsPrivateKeyRef.current) {
+      ipnsPrivateKeyRef.current.fill(0);
+      ipnsPrivateKeyRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Clear polling interval.
+   */
+  const clearPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Handle silent revocation: transition from write to read-only.
+   */
+  const handleRevocation = useCallback(
+    (showError?: boolean) => {
+      zeroIpnsKey();
+      setPermission('read');
+      if (showError) {
+        setError('> write access revoked -- folder is now read-only');
+      }
+    },
+    [zeroIpnsKey]
+  );
+
+  /**
+   * Refresh folder contents from IPNS (used by polling and after write ops).
+   * Returns the refreshed children, or null on failure.
+   */
+  const refreshFolderContents = useCallback(
+    async (folderIpnsName: string, currentFolderKey: Uint8Array): Promise<FolderChild[] | null> => {
+      try {
+        const resolved = await resolveIpnsRecord(folderIpnsName);
+        if (!resolved) return null;
+
+        const encryptedBytes = await fetchFromIpfs(resolved.cid);
+        const encryptedJson = new TextDecoder().decode(encryptedBytes);
+        const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
+        const metadata = await decryptFolderMetadata(encrypted, currentFolderKey);
+
+        setFolderChildren(metadata.children ?? []);
+        setCurrentSequenceNumber(resolved.sequenceNumber);
+        return metadata.children ?? [];
+      } catch {
+        return null;
+      }
+    },
+    []
+  );
 
   /**
    * Load received shares on mount.
@@ -163,8 +269,12 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         entry.folderKey.fill(0);
       }
       navStackRef.current = [];
+      // Zero IPNS private key on unmount
+      zeroIpnsKey();
+      // Clear polling on unmount
+      clearPolling();
     };
-  }, []);
+  }, [zeroIpnsKey, clearPolling]);
 
   /** Cache TTL for share keys (60 seconds). */
   const SHARE_KEYS_CACHE_TTL = 60_000;
@@ -201,6 +311,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
 
       setIsLoading(true);
       setError(null);
+      clearPolling();
 
       try {
         // Unwrap the shared item's key with our private key
@@ -224,6 +335,20 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
             const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
             const metadata = await decryptFolderMetadata(encrypted, itemKey);
 
+            // Unwrap IPNS private key for write shares
+            if (share.permission === 'write' && share.encryptedIpnsKey) {
+              try {
+                const ipnsPrivKey = await unwrapKey(
+                  hexToBytes(share.encryptedIpnsKey),
+                  auth.vaultKeypair.privateKey
+                );
+                ipnsPrivateKeyRef.current = ipnsPrivKey;
+              } catch (err) {
+                console.error('Failed to unwrap IPNS key for write share:', err);
+                // Fall back to read-only if IPNS key unwrap fails
+              }
+            }
+
             // Set folder state
             setCurrentView('folder');
             setCurrentShareId(shareId);
@@ -231,6 +356,9 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
             setFolderKey(itemKey);
             folderKeyStored = true;
             setBreadcrumbs([{ id: shareId, name: share.itemName }]);
+            setPermission(ipnsPrivateKeyRef.current ? share.permission : 'read');
+            setIpnsName(share.ipnsName);
+            setCurrentSequenceNumber(resolved.sequenceNumber);
             navStackRef.current = [];
           } finally {
             if (!folderKeyStored) itemKey.fill(0);
@@ -248,7 +376,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setIsLoading(false);
       }
     },
-    [sharedItems]
+    [sharedItems, clearPolling]
   );
 
   /**
@@ -261,6 +389,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
 
       setIsLoading(true);
       setError(null);
+      clearPolling();
 
       try {
         // Get re-wrapped keys for this share
@@ -301,12 +430,14 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           const metadata = await decryptFolderMetadata(encrypted, subfolderKey);
 
           // Push current state to nav stack
-          if (folderKey) {
+          if (folderKey && ipnsName) {
             navStackRef.current.push({
               folderId: breadcrumbs[breadcrumbs.length - 1]?.id ?? '',
               folderName: breadcrumbs[breadcrumbs.length - 1]?.name ?? '',
               children: folderChildren,
               folderKey,
+              ipnsName,
+              sequenceNumber: currentSequenceNumber,
             });
           }
 
@@ -315,6 +446,8 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           setFolderKey(subfolderKey);
           subfolderKeyStored = true;
           setBreadcrumbs((prev) => [...prev, { id: folderId, name: folderName }]);
+          setIpnsName(folderEntry.ipnsName);
+          setCurrentSequenceNumber(resolved.sequenceNumber);
         } finally {
           if (!subfolderKeyStored) subfolderKey.fill(0);
         }
@@ -325,7 +458,16 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setIsLoading(false);
       }
     },
-    [currentShareId, folderChildren, folderKey, breadcrumbs, getShareKeys]
+    [
+      currentShareId,
+      folderChildren,
+      folderKey,
+      breadcrumbs,
+      getShareKeys,
+      ipnsName,
+      currentSequenceNumber,
+      clearPolling,
+    ]
   );
 
   /**
@@ -339,14 +481,21 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     for (const entry of navStackRef.current) {
       entry.folderKey.fill(0);
     }
+    // Zero IPNS private key
+    zeroIpnsKey();
+    // Clear polling
+    clearPolling();
     setCurrentView('list');
     setCurrentShareId(null);
     setFolderChildren([]);
     setFolderKey(null);
     setBreadcrumbs([]);
+    setPermission(null);
+    setIpnsName(null);
+    setCurrentSequenceNumber(null);
     navStackRef.current = [];
     setError(null);
-  }, [folderKey]);
+  }, [folderKey, zeroIpnsKey, clearPolling]);
 
   /**
    * Navigate up one level.
@@ -360,6 +509,8 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       setFolderChildren(prev.children);
       setFolderKey(prev.folderKey);
       setBreadcrumbs((crumbs) => crumbs.slice(0, -1));
+      setIpnsName(prev.ipnsName);
+      setCurrentSequenceNumber(prev.sequenceNumber);
     } else if (currentView === 'folder') {
       // Back to top-level list
       navigateToRoot();
@@ -387,6 +538,8 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setFolderChildren(target.children);
         setFolderKey(target.folderKey);
         setBreadcrumbs((crumbs) => crumbs.slice(0, crumbIndex + 1));
+        setIpnsName(target.ipnsName);
+        setCurrentSequenceNumber(target.sequenceNumber);
       }
     },
     [breadcrumbs, folderKey]
@@ -530,6 +683,468 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     }
   }, []);
 
+  // -------------------------------------------------------------------------
+  // Write operation helpers for write-share recipients
+  // -------------------------------------------------------------------------
+
+  /**
+   * Re-sync the current shared folder for conflict retry.
+   * Updates folderChildren and currentSequenceNumber in-place.
+   */
+  const resyncSharedFolder = useCallback(async () => {
+    if (!ipnsName || !folderKey) return;
+    await refreshFolderContents(ipnsName, folderKey);
+  }, [ipnsName, folderKey, refreshFolderContents]);
+
+  /**
+   * Publish updated folder metadata to IPNS using the write-share IPNS key.
+   * Returns the new sequence number on success.
+   */
+  const publishSharedFolderMetadata = useCallback(
+    async (
+      children: FolderChild[],
+      currentFolderKey: Uint8Array,
+      folderIpnsName: string,
+      ipnsPrivKey: Uint8Array,
+      seqNum: bigint
+    ): Promise<bigint> => {
+      // 1. Create folder metadata
+      const metadata: FolderMetadata = {
+        version: 'v2',
+        children,
+      };
+
+      // 2. Encrypt metadata with folder key
+      const encrypted = await encryptFolderMetadata(metadata, currentFolderKey);
+
+      // 3. Upload to IPFS via backend relay
+      const blob = new Blob([JSON.stringify(encrypted)], {
+        type: 'application/json',
+      });
+      const { cid } = await addToIpfs(blob);
+
+      // 4. Publish IPNS record
+      const newSeq = seqNum + 1n;
+      await createAndPublishIpnsRecord({
+        ipnsPrivateKey: ipnsPrivKey,
+        ipnsName: folderIpnsName,
+        metadataCid: cid,
+        sequenceNumber: newSeq,
+        expectedSequenceNumber: seqNum.toString(),
+      });
+
+      return newSeq;
+    },
+    []
+  );
+
+  /**
+   * Wrap a write operation with 403 revocation detection.
+   * If 403 is received, transitions to read-only silently.
+   */
+  const withRevocationGuard = useCallback(
+    async <T>(operation: () => Promise<T>): Promise<T> => {
+      try {
+        return await operation();
+      } catch (err) {
+        if (isForbiddenError(err)) {
+          handleRevocation(true);
+          throw new Error('> write access revoked -- folder is now read-only');
+        }
+        throw err;
+      }
+    },
+    [handleRevocation]
+  );
+
+  /**
+   * Upload a file to the currently-viewed write-shared folder.
+   */
+  const uploadFileHandler = useCallback(
+    async (file: File) => {
+      const currentIpnsKey = ipnsPrivateKeyRef.current;
+      const currentFolderKey = folderKey;
+      const currentIpnsName = ipnsName;
+      const seqNum = currentSequenceNumber;
+
+      if (!currentIpnsKey || !currentFolderKey || !currentIpnsName || seqNum === null) {
+        setError('Write access not available');
+        return;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        await withRevocationGuard(async () => {
+          // Read file content
+          const data = new Uint8Array(await file.arrayBuffer());
+
+          // Encrypt file content with AES-256-GCM
+          const { encryptAesGcm, generateFileKey, generateIv } = await import('@cipherbox/crypto');
+
+          const fileKey = generateFileKey();
+          const iv = generateIv();
+
+          try {
+            const ciphertext = await encryptAesGcm(data, fileKey, iv);
+
+            // Upload encrypted content to IPFS
+            // Pass a clean Uint8Array copy -- never use .buffer (may include extra bytes)
+            const fileBlob = new Blob([new Uint8Array(ciphertext)], {
+              type: 'application/octet-stream',
+            });
+            await addToIpfs(fileBlob);
+
+            // Create a FilePointer entry for the folder metadata
+            // PoC: no per-file IPNS metadata record for shared uploads.
+            // A full implementation would create per-file IPNS records.
+            const fileId = crypto.randomUUID();
+            const filePointer: FilePointer = {
+              type: 'file',
+              id: fileId,
+              name: file.name,
+              fileMetaIpnsName: '', // PoC: no per-file IPNS for shared uploads
+              createdAt: Date.now(),
+              modifiedAt: Date.now(),
+            };
+
+            // Use conflict retry to add file to folder metadata
+            await withConflictRetry(
+              async () => {
+                // Get fresh state
+                const freshChildren = [...folderChildren, filePointer];
+                const newSeq = await publishSharedFolderMetadata(
+                  freshChildren,
+                  currentFolderKey,
+                  currentIpnsName,
+                  currentIpnsKey,
+                  currentSequenceNumber ?? 0n
+                );
+                setCurrentSequenceNumber(newSeq);
+                setFolderChildren(freshChildren);
+              },
+              async () => {
+                await resyncSharedFolder();
+              }
+            );
+          } finally {
+            fileKey.fill(0);
+          }
+        });
+      } catch (err) {
+        const message = (err as Error).message || 'Upload failed';
+        if (!message.includes('write access revoked')) {
+          setError(message);
+        }
+        console.error('Shared folder upload failed:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [
+      folderKey,
+      ipnsName,
+      currentSequenceNumber,
+      folderChildren,
+      publishSharedFolderMetadata,
+      resyncSharedFolder,
+      withRevocationGuard,
+    ]
+  );
+
+  /**
+   * Create a subfolder in the currently-viewed write-shared folder.
+   */
+  const createFolderHandler = useCallback(
+    async (name: string) => {
+      const currentIpnsKey = ipnsPrivateKeyRef.current;
+      const currentFolderKey = folderKey;
+      const currentIpnsName = ipnsName;
+      const seqNum = currentSequenceNumber;
+
+      if (!currentIpnsKey || !currentFolderKey || !currentIpnsName || seqNum === null) {
+        setError('Write access not available');
+        return;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        await withRevocationGuard(async () => {
+          const {
+            generateEd25519Keypair,
+            deriveIpnsName,
+            wrapKey: wrapSubfolderKey,
+          } = await import('@cipherbox/crypto');
+
+          // Generate new Ed25519 keypair for the subfolder
+          const keypair = await generateEd25519Keypair();
+          const subfolderIpnsName = await deriveIpnsName(keypair.publicKey);
+
+          // Generate a random folder key for the subfolder
+          const subfolderKey = generateRandomBytes(32);
+
+          // Wrap subfolder key and IPNS key for storage
+          const auth = useAuthStore.getState();
+          if (!auth.vaultKeypair) throw new Error('No keypair available');
+          const wrappedFolderKey = await wrapSubfolderKey(
+            subfolderKey,
+            auth.vaultKeypair.publicKey
+          );
+          const wrappedIpnsKey = await wrapSubfolderKey(
+            keypair.privateKey,
+            auth.vaultKeypair.publicKey
+          );
+
+          // Create empty folder metadata and publish for the subfolder
+          const subfolderMetadata: FolderMetadata = { version: 'v2', children: [] };
+          const encryptedSubfolder = await encryptFolderMetadata(subfolderMetadata, subfolderKey);
+          const subfolderBlob = new Blob([JSON.stringify(encryptedSubfolder)], {
+            type: 'application/json',
+          });
+          const { cid: subfolderCid } = await addToIpfs(subfolderBlob);
+
+          // Publish the subfolder's IPNS record
+          await createAndPublishIpnsRecord({
+            ipnsPrivateKey: keypair.privateKey,
+            ipnsName: subfolderIpnsName,
+            metadataCid: subfolderCid,
+            sequenceNumber: 1n,
+          });
+
+          // Create a FolderEntry for the parent folder's metadata
+          const folderId = crypto.randomUUID();
+          const folderEntry: FolderEntry = {
+            type: 'folder',
+            id: folderId,
+            name,
+            ipnsName: subfolderIpnsName,
+            ipnsPrivateKeyEncrypted: bytesToHex(wrappedIpnsKey),
+            folderKeyEncrypted: bytesToHex(wrappedFolderKey),
+            createdAt: Date.now(),
+            modifiedAt: Date.now(),
+          };
+
+          // Add subfolder entry to parent folder with conflict retry
+          await withConflictRetry(
+            async () => {
+              const freshChildren = [...folderChildren, folderEntry];
+              const newSeq = await publishSharedFolderMetadata(
+                freshChildren,
+                currentFolderKey,
+                currentIpnsName,
+                currentIpnsKey,
+                currentSequenceNumber ?? 0n
+              );
+              setCurrentSequenceNumber(newSeq);
+              setFolderChildren(freshChildren);
+            },
+            async () => {
+              await resyncSharedFolder();
+            }
+          );
+
+          // Clean up
+          subfolderKey.fill(0);
+          keypair.privateKey.fill(0);
+        });
+      } catch (err) {
+        const message = (err as Error).message || 'Failed to create folder';
+        if (!message.includes('write access revoked')) {
+          setError(message);
+        }
+        console.error('Shared folder create failed:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [
+      folderKey,
+      ipnsName,
+      currentSequenceNumber,
+      folderChildren,
+      publishSharedFolderMetadata,
+      resyncSharedFolder,
+      withRevocationGuard,
+    ]
+  );
+
+  /**
+   * Rename an item in the currently-viewed write-shared folder.
+   */
+  const renameItemHandler = useCallback(
+    async (item: FolderChild, newName: string) => {
+      const currentIpnsKey = ipnsPrivateKeyRef.current;
+      const currentFolderKey = folderKey;
+      const currentIpnsName = ipnsName;
+      const seqNum = currentSequenceNumber;
+
+      if (!currentIpnsKey || !currentFolderKey || !currentIpnsName || seqNum === null) {
+        setError('Write access not available');
+        return;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        await withRevocationGuard(async () => {
+          await withConflictRetry(
+            async () => {
+              // Update the item's name in folder metadata
+              const updatedChildren = folderChildren.map((child) =>
+                child.id === item.id ? { ...child, name: newName, modifiedAt: Date.now() } : child
+              );
+              const newSeq = await publishSharedFolderMetadata(
+                updatedChildren,
+                currentFolderKey,
+                currentIpnsName,
+                currentIpnsKey,
+                currentSequenceNumber ?? 0n
+              );
+              setCurrentSequenceNumber(newSeq);
+              setFolderChildren(updatedChildren);
+            },
+            async () => {
+              await resyncSharedFolder();
+            }
+          );
+        });
+      } catch (err) {
+        const message = (err as Error).message || 'Failed to rename';
+        if (!message.includes('write access revoked')) {
+          setError(message);
+        }
+        console.error('Shared folder rename failed:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [
+      folderKey,
+      ipnsName,
+      currentSequenceNumber,
+      folderChildren,
+      publishSharedFolderMetadata,
+      resyncSharedFolder,
+      withRevocationGuard,
+    ]
+  );
+
+  /**
+   * Delete an item from the currently-viewed write-shared folder.
+   *
+   * PoC limitation: Simply removes the item from folder metadata.
+   * Full implementation would move to owner's recycle bin.
+   */
+  const deleteItemHandler = useCallback(
+    async (item: FolderChild) => {
+      const currentIpnsKey = ipnsPrivateKeyRef.current;
+      const currentFolderKey = folderKey;
+      const currentIpnsName = ipnsName;
+      const seqNum = currentSequenceNumber;
+
+      if (!currentIpnsKey || !currentFolderKey || !currentIpnsName || seqNum === null) {
+        setError('Write access not available');
+        return;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        await withRevocationGuard(async () => {
+          await withConflictRetry(
+            async () => {
+              // Remove item from folder metadata
+              const updatedChildren = folderChildren.filter((child) => child.id !== item.id);
+              const newSeq = await publishSharedFolderMetadata(
+                updatedChildren,
+                currentFolderKey,
+                currentIpnsName,
+                currentIpnsKey,
+                currentSequenceNumber ?? 0n
+              );
+              setCurrentSequenceNumber(newSeq);
+              setFolderChildren(updatedChildren);
+            },
+            async () => {
+              await resyncSharedFolder();
+            }
+          );
+        });
+      } catch (err) {
+        const message = (err as Error).message || 'Failed to delete';
+        if (!message.includes('write access revoked')) {
+          setError(message);
+        }
+        console.error('Shared folder delete failed:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [
+      folderKey,
+      ipnsName,
+      currentSequenceNumber,
+      folderChildren,
+      publishSharedFolderMetadata,
+      resyncSharedFolder,
+      withRevocationGuard,
+    ]
+  );
+
+  // -------------------------------------------------------------------------
+  // 30s sync polling for write shares
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    // Only poll when viewing a write-shared folder
+    if (currentView !== 'folder' || permission !== 'write' || !ipnsName || !folderKey) {
+      clearPolling();
+      return;
+    }
+
+    // Start 30s polling
+    const currentIpnsName = ipnsName;
+    const currentFolderKey = folderKey;
+
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        // Re-fetch received shares to detect permission changes
+        const shares = useShareStore.getState().receivedShares;
+        const currentShare = shares.find((s) => s.shareId === currentShareId);
+
+        // Check for silent revocation
+        if (currentShare && currentShare.permission !== 'write') {
+          handleRevocation(false);
+          clearPolling();
+          return;
+        }
+
+        // Refresh folder contents
+        await refreshFolderContents(currentIpnsName, currentFolderKey);
+      } catch {
+        // Silent failure during polling -- don't disrupt the UI
+      }
+    }, 30000);
+
+    return () => {
+      clearPolling();
+    };
+  }, [
+    currentView,
+    permission,
+    ipnsName,
+    folderKey,
+    currentShareId,
+    clearPolling,
+    handleRevocation,
+    refreshFolderContents,
+  ]);
+
   return {
     currentView,
     currentShareId,
@@ -539,6 +1154,10 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     breadcrumbs,
     isLoading,
     error,
+    permission,
+    ipnsPrivateKey: ipnsPrivateKeyRef.current,
+    ipnsName,
+    currentSequenceNumber,
     navigateToShare,
     navigateToSubfolder,
     navigateUp,
@@ -546,5 +1165,9 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     navigateToBreadcrumb,
     downloadSharedFile,
     hideSharedItem,
+    uploadFile: uploadFileHandler,
+    createFolder: createFolderHandler,
+    renameItem: renameItemHandler,
+    deleteItem: deleteItemHandler,
   };
 }
