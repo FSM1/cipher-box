@@ -270,3 +270,7 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 ---
 
 ok quick question: does it make sense to be using the mock ipns router over someguy in the CI environment?
+
+---
+
+/resolve-pr-reviews
