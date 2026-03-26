@@ -1,0 +1,130 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c086fd460e0b",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T14:42:55.620707Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/phases/27-writable-shares-poc/27-VERIFICATION.md",
+    "tee-worker/package-lock.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b19eae1e3f93",
+  "token_usage": {
+    "input_tokens": 506,
+    "cache_creation_tokens": 633911,
+    "cache_read_tokens": 87503777,
+    "output_tokens": 121542,
+    "api_call_count": 435
+  },
+  "session_metrics": {
+    "turn_count": 32
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) end-to-end: implement API backend, owner UI, and recipient UI for write-enabled sharing, then conduct UAT and security review.",
+    "outcome": "All 3 plans executed and verified; 12 security issues discovered and fixed with TDD (8 backend unit tests + 4 E2E tests); 21 E2E tests passing; all code pushed to feat/phase-27-writable-shares.",
+    "learnings": {
+      "repo": [
+        "The cipher-box-ci-debug checkout does not have .env files committed — they must be copied from ../cipher-box/ manually each session",
+        "VITE_API_URL must be set explicitly in apps/web/.env; without it, the web app defaults to window.location.origin + '/api' (port 5173) instead of the API port 3000",
+        "SDK build order dependency chain: core → sdk-core → sdk → web; missing builds cause @cipherbox/sdk resolution failures in Vite",
+        "The auth controller defined its own local RequestWithUser interface extending NestJS @nestjs/common Request (Fetch API) instead of using common/types.ts which extends Express Request — causing type incompatibility in tests",
+        "NestJS watch mode does not always pick up DTO enum changes for OpenAPI spec generation; API must be fully restarted and api-docs-json re-checked to confirm OpenAPI spec reflects changes",
+        "Background tasks spawned via Bash run_in_background are killed when the conversation context shifts — use detached process patterns (nohup / disown) for dev servers",
+        "addShareKeys API endpoint constrained keyType to 'file' | 'folder' only; needed 'file-ipns' added to both DTO @IsIn validator and @ApiProperty enum",
+        "Shared uploads in useSharedNavigation previously set fileMetaIpnsName to empty string (PoC shortcut), making uploaded files unreadable",
+        "TextEditorDialog save path used owner's useFolder hook — completely wrong for shared files; required onSaveSharedFile callback prop wired through SharedFileBrowser",
+        "Owner file updates (handleUpdateFile in useFileOperations) did not re-wrap new file keys for share recipients — pre-existing gap that manifested during writable shares UAT",
+        "PostgreSQL host IP was hardcoded in .env (192.168.133.114) and changed to 192.168.133.12 during the session"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Original PoC set fileMetaIpnsName: '' on shared uploads, skipping per-file IPNS record creation entirely"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 921,
+          "end_line": 921,
+          "finding": "withConflictRetry closures captured stale React state for currentSequenceNumber and folderChildren — fixed by adding refs alongside state and using refs inside closures"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 71,
+          "end_line": 71,
+          "finding": "Checked item.fileMetaIpnsName which is empty for shared-uploaded files, producing misleading 'legacy v1 file' error"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 98,
+          "end_line": 101,
+          "finding": "Shared file download path threw if no share_key found — was silently falling back to owner-wrapped fileKeyEncrypted which recipients cannot unwrap"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "updatePermission did not check share.revokedAt — could change permissions on revoked shares; also did not clean up file-ipns share_keys on downgrade"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "addShareKeys had no guard preventing write-share recipients from adding 'folder' keyType — recipients should only add 'file' or 'file-ipns' keys"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "finding": "handleUpdateFile did not call reWrapForRecipients after updating file content — share_keys held stale file keys after owner edits"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "Subfolder creation wrapped folder key with recipient's public key instead of owner's — owner permanently lost access to recipient-created subfolders"
+        },
+        {
+          "path": "apps/api/src/auth/auth.controller.ts",
+          "finding": "Defined local RequestWithUser extending NestJS Request (Fetch API) instead of importing from common/types.ts which extends Express Request"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "30s polling interval read from in-memory sharedItems store instead of re-fetching from API — permission changes would not be detected until manual refresh"
+        }
+      ],
+      "workflow": [
+        "TDD red-green cycle: stash backend agent's partial fixes, write failing tests first, verify they fail, then pop stash and confirm green",
+        "When a subagent reports classifyHandoffIfNeeded failure, spot-check SUMMARY.md existence and git commits rather than treating as real failure",
+        "Detach dev server processes from background tasks to prevent them being killed on conversation context shifts",
+        "Security review should happen immediately after feature implementation, not after PR — 12 issues found that would have merged",
+        "E2E test selector mismatches are common when writing tests without running them; always run locally before committing",
+        "OTP codes can be retrieved from API console logs when needed for manual testing during UAT checkpoints"
+      ]
+    },
+    "friction": [
+      "Background Bash tasks were killed multiple times when conversation context shifted, requiring repeated dev server restarts",
+      "PostgreSQL host IP changed mid-session requiring .env recreation; no .env files in the ci-debug checkout",
+      "NestJS watch mode did not reflect DTO enum changes in OpenAPI spec — required full server restart and manual verification of /api-docs-json",
+      "API client regeneration was required multiple times after DTO changes, and the generated enum didn't update until the API was fully restarted with the correct spec",
+      "Git lock file conflict during commit required manual removal",
+      "Pre-existing RequestWithUser type incompatibility in auth and device-approval controller specs caused TypeScript noise throughout the session",
+      "E2E tests required 5 iteration cycles to get all selectors correct (share-recipient-permission → recipient-perm-write, mkdir dialog → shared-inline-input-field, rename → shared-inline-rename-field)",
+      "Transient Web3Auth Core Kit init timeout caused one full E2E run to fail, requiring retry",
+      "VERIFICATION.md and tee-worker/package-lock.json were left uncommitted after phase completion and had to be caught manually"
+    ],
+    "open_items": [
+      "E2E tests for writable shares cover happy paths but silent revocation (403 handling, [RW]→[RO] transition, key zeroing) and 30s polling detection are not yet covered by automated tests",
+      "The 'file-ipns' keyType is cast as 'any' in the TypeORM delete call — the entity enum should be updated to include it as a proper enum value",
+      "Subfolder keys for recipient-created subfolders now add a share_key for the immediate recipient, but nested sub-subfolders may still have the same C-02 pattern",
+      "The pre-existing TypeScript error in load-test.spec.ts was fixed but there may be other pre-existing spec file errors (device-approval controller spec) still present",
+      "Rate limiting (L-03) and TEE enrollment guard (H-01) and MinLength(64) (M-01) were already implemented — security review items that appeared as findings were actually already fixed, suggesting the security review prompt needs better diff-awareness",
+      "The writable shares feature is a PoC — production hardening (key rotation on permission downgrade, IPNS key revocation, multi-writer conflict resolution beyond sequence numbers) is deferred"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T14:41:58.47774Z",
+    "agent_lines": 128,
+    "human_added": 0,
+    "human_modified": 48,
+    "human_removed": 0,
+    "total_committed": 176,
+    "agent_percentage": 72.72727272727273
+  }
+}
