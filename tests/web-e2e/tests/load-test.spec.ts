@@ -171,7 +171,7 @@ async function deleteAccount(client: LoadClient): Promise<void> {
   const apiBase = await client.page.evaluate(() => {
     // Vite injects env vars at build time — read from the same source as apiClient
     return (
-      (window as Record<string, string>).__VITE_API_URL ||
+      (window as unknown as Record<string, string>).__VITE_API_URL ||
       document.querySelector('meta[name="api-url"]')?.getAttribute('content') ||
       'https://api-staging.cipherbox.cc'
     );
