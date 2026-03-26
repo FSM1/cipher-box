@@ -86,3 +86,7 @@ this seems like a pretty large gap to me - file ipns entries should be created w
 <summary>Background command "Commit per-file IPNS fix with regenerated API client" completed (exit code 0)</summary>
 </task-notification>
 Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box-ci-debug/c0abe932-15e1-4254-8a98-20c8096f009c/tasks/bff0oxtu3.output
+
+---
+
+the download seems to have worked, but attempting to update the file in the shared folder threw an `> Parent folder not found or vault not initialized` when trying to save the update.
