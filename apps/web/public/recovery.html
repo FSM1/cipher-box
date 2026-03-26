@@ -690,12 +690,14 @@
               if (json.value) {
                 return extractCidFromValue(json.value);
               }
+              // JSON didn't contain expected fields — skip binary parse
+              // (body already consumed by resp.json())
+            } else {
+              // For vnd.ipfs.ipns-record, parse protobuf to extract Value field
+              const recordBytes = new Uint8Array(await resp.arrayBuffer());
+              const cid = extractCidFromIpnsRecord(recordBytes);
+              if (cid && /^(bafy|bafk|Qm)[a-zA-Z0-9]+$/.test(cid)) return cid;
             }
-
-            // For vnd.ipfs.ipns-record, parse protobuf to extract Value field
-            const recordBytes = new Uint8Array(await resp.arrayBuffer());
-            const cid = extractCidFromIpnsRecord(recordBytes);
-            if (cid && /^(bafy|bafk|Qm)[a-zA-Z0-9]+$/.test(cid)) return cid;
           }
         } catch (e) {
           if (attempt < maxRetries - 1) {
@@ -764,9 +766,9 @@
     }
 
     function extractCidFromIpnsRecord(recordBytes) {
-      // IPNS records are protobuf-encoded.
-      // The Value field is field number 2 (wire type 2 = length-delimited).
-      // We need to find field 2 in the protobuf.
+      // IPNS records are protobuf-encoded (IpnsEntry).
+      // The Value field is field number 1 (wire type 2 = length-delimited).
+      // It contains the IPFS path, e.g. "/ipfs/bafy...".
       try {
         let offset = 0;
         while (offset < recordBytes.length) {
