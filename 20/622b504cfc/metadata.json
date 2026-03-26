@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "20622b504cfc",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/api/src/shares/dto/create-share.dto.ts",
+    "apps/api/src/shares/dto/share-key.dto.ts",
+    "apps/api/src/shares/dto/share-response.dto.ts",
+    "apps/web/src/components/file-browser/ShareDialog.tsx",
+    "tee-worker/package-lock.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/20/622b504cfc/0/metadata.json",
+      "transcript": "/20/622b504cfc/0/full.jsonl",
+      "content_hash": "/20/622b504cfc/0/content_hash.txt",
+      "prompt": "/20/622b504cfc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 37,
+    "cache_creation_tokens": 18259,
+    "cache_read_tokens": 16033191,
+    "output_tokens": 9885,
+    "api_call_count": 36
+  }
+}
