@@ -22,6 +22,8 @@ type TextEditorDialogProps = {
   readOnly?: boolean;
   /** Share ID when viewing from a shared folder — uses re-wrapped file keys */
   shareId?: string | null;
+  /** Save handler for shared files — updates file IPNS metadata via shared path */
+  onSaveSharedFile?: (item: FilePointer, newContent: Uint8Array) => Promise<void>;
 };
 
 /**
@@ -38,6 +40,7 @@ export function TextEditorDialog({
   folderKey,
   readOnly,
   shareId,
+  onSaveSharedFile,
 }: TextEditorDialogProps) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -150,37 +153,38 @@ export function TextEditorDialog({
     setError(null);
 
     try {
-      const auth = useAuthStore.getState();
-      if (!auth.vaultKeypair) {
-        throw new Error('No keypair available - please log in again');
+      if (shareId && onSaveSharedFile) {
+        // Shared file path: delegate to shared navigation handler
+        const encoded = new TextEncoder().encode(content);
+        await onSaveSharedFile(item, encoded);
+      } else {
+        // Owner path: encrypt and update folder metadata
+        const auth = useAuthStore.getState();
+        if (!auth.vaultKeypair) {
+          throw new Error('No keypair available - please log in again');
+        }
+
+        const encoded = new TextEncoder().encode(content);
+        const file = new File([encoded], item.name);
+        const encrypted = await encryptFile(file, auth.vaultKeypair.publicKey);
+        const blob = new Blob([encrypted.ciphertext as BlobPart]);
+        const { cid } = await addToIpfs(blob);
+
+        await updateFile(parentFolderId, {
+          fileId: item.id,
+          newCid: cid,
+          newFileKeyEncrypted: encrypted.wrappedKey,
+          newFileIv: encrypted.iv,
+          newSize: encrypted.originalSize,
+        });
       }
-
-      // 1. Encode content
-      const encoded = new TextEncoder().encode(content);
-      const file = new File([encoded], item.name);
-
-      // 2. Encrypt with new key/IV
-      const encrypted = await encryptFile(file, auth.vaultKeypair.publicKey);
-
-      // 3. Upload to IPFS
-      const blob = new Blob([encrypted.ciphertext as BlobPart]);
-      const { cid } = await addToIpfs(blob);
-
-      // 4. Update folder metadata
-      await updateFile(parentFolderId, {
-        fileId: item.id,
-        newCid: cid,
-        newFileKeyEncrypted: encrypted.wrappedKey,
-        newFileIv: encrypted.iv,
-        newSize: encrypted.originalSize,
-      });
 
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save file');
       setSaving(false);
     }
-  }, [item, content, isDirty, parentFolderId, updateFile, onClose]);
+  }, [item, content, isDirty, parentFolderId, updateFile, onClose, shareId, onSaveSharedFile]);
 
   // Handle Ctrl/Cmd+S to save (edit mode only)
   useEffect(() => {

@@ -102,6 +102,8 @@ type UseSharedNavigationReturn = {
   renameItem: (item: FolderChild, newName: string) => Promise<void>;
   /** Delete an item from the currently-viewed write-shared folder */
   deleteItem: (item: FolderChild) => Promise<void>;
+  /** Update a file's content in the currently-viewed write-shared folder */
+  updateSharedFile: (item: FilePointer, newContent: Uint8Array) => Promise<void>;
 };
 
 /**
@@ -1089,6 +1091,116 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   );
 
   /**
+   * Update a file's content in the currently-viewed write-shared folder.
+   * Creates new encrypted content, updates the file's IPNS metadata record,
+   * and refreshes the recipient's share_key.
+   */
+  const updateSharedFileHandler = useCallback(
+    async (item: FilePointer, newContent: Uint8Array): Promise<void> => {
+      const currentFolderKey = folderKey;
+
+      if (!currentFolderKey) {
+        throw new Error('Folder key not available');
+      }
+
+      const auth = useAuthStore.getState();
+      if (!auth.vaultKeypair) {
+        throw new Error('No keypair available');
+      }
+
+      // Get the owner's public key from the share record
+      const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
+      if (!shareItem) {
+        throw new Error('Share not found');
+      }
+      const ownerPubKeyHex = shareItem.share.sharerPublicKey.startsWith('0x')
+        ? shareItem.share.sharerPublicKey.slice(2)
+        : shareItem.share.sharerPublicKey;
+      const ownerPublicKey = hexToBytes(ownerPubKeyHex);
+
+      // 1. Encrypt new content with AES-256-GCM
+      const { encryptAesGcm, generateFileKey, generateIv } = await import('@cipherbox/crypto');
+      const fileKey = generateFileKey();
+      const iv = generateIv();
+
+      try {
+        const ciphertext = await encryptAesGcm(newContent, fileKey, iv);
+
+        // 2. Upload encrypted content to IPFS
+        const fileBlob = new Blob([new Uint8Array(ciphertext)], {
+          type: 'application/octet-stream',
+        });
+        const { cid: contentCid } = await addToIpfs(fileBlob);
+
+        // 3. Wrap file key with owner's public key
+        const ownerWrappedKey = await wrapKey(fileKey, ownerPublicKey);
+        const fileKeyEncrypted = bytesToHex(ownerWrappedKey);
+
+        // 4. Get the file's IPNS private key (wrapped with owner's key in FilePointer)
+        // For files uploaded by the recipient, ipnsPrivateKeyEncrypted is wrapped
+        // with the owner's public key, so we need the owner to unwrap it.
+        // Fallback: use the recipient's unwrap path if available via share_keys.
+        const { getFileIpnsPrivateKey } = await import('../services/file-metadata.service');
+        const { updateFileMetadata } = await import('../services/file-metadata.service');
+
+        // Try to get the IPNS private key — it may be wrapped with the owner's key
+        // For shared files, try unwrapping with current user's key first
+        let ipnsPrivKey: Uint8Array;
+        try {
+          const result = await getFileIpnsPrivateKey(
+            item,
+            auth.vaultKeypair.privateKey,
+            auth.vaultKeypair.publicKey
+          );
+          ipnsPrivKey = result.privateKey;
+        } catch {
+          throw new Error('Cannot update: file IPNS key not accessible');
+        }
+
+        try {
+          // 5. Resolve current file metadata and update
+          const { resolveFileMetadata } = await import('../services/file-metadata.service');
+          const { metadata: currentMeta } = await resolveFileMetadata(
+            item.fileMetaIpnsName,
+            currentFolderKey
+          );
+
+          const { ipnsRecord } = await updateFileMetadata({
+            fileIpnsPrivateKey: ipnsPrivKey,
+            fileMetaIpnsName: item.fileMetaIpnsName,
+            folderKey: currentFolderKey,
+            currentMetadata: currentMeta,
+            updates: {
+              cid: contentCid,
+              fileKeyEncrypted,
+              fileIv: bytesToHex(iv),
+              size: newContent.length,
+              encryptionMode: 'GCM',
+            },
+            createVersion: false,
+          });
+
+          // 6. Publish updated file IPNS record
+          await batchPublishIpnsRecords([{ ...ipnsRecord, recordType: 'file' as const }]);
+
+          // 7. Update share_key for recipient so they can re-read the file
+          const recipientWrappedKey = await wrapKey(fileKey, auth.vaultKeypair!.publicKey);
+          await addShareKeys(currentShareId!, [
+            { keyType: 'file', itemId: item.id, encryptedKey: bytesToHex(recipientWrappedKey) },
+          ]).catch((err) => {
+            console.warn('[share] Failed to update share_key after file edit:', err);
+          });
+        } finally {
+          ipnsPrivKey.fill(0);
+        }
+      } finally {
+        fileKey.fill(0);
+      }
+    },
+    [folderKey, currentShareId, sharedItems]
+  );
+
+  /**
    * Delete an item from the currently-viewed write-shared folder.
    *
    * PoC limitation: Simply removes the item from folder metadata.
@@ -1224,5 +1336,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     createFolder: createFolderHandler,
     renameItem: renameItemHandler,
     deleteItem: deleteItemHandler,
+    updateSharedFile: updateSharedFileHandler,
   };
 }

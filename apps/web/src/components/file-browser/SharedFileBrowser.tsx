@@ -87,6 +87,7 @@ export function SharedFileBrowser() {
     createFolder,
     renameItem,
     deleteItem,
+    updateSharedFile,
   } = useSharedNavigation();
 
   const contextMenu = useContextMenu();
@@ -701,6 +702,7 @@ export function SharedFileBrowser() {
         folderKey={folderKey}
         readOnly={!isWritable}
         shareId={currentShareId}
+        onSaveSharedFile={isWritable ? updateSharedFile : undefined}
       />
 
       {/* Image preview dialog */}
