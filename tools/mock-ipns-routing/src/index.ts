@@ -22,6 +22,16 @@ const fastify = Fastify({
   },
 });
 
+// CORS headers for browser-based recovery tool testing
+fastify.addHook('onRequest', async (request, reply) => {
+  reply.header('Access-Control-Allow-Origin', '*');
+  reply.header('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS');
+  reply.header('Access-Control-Allow-Headers', 'Content-Type, Accept');
+  if (request.method === 'OPTIONS') {
+    return reply.status(204).send();
+  }
+});
+
 // In-memory storage for IPNS records
 // Key: IPNS name (k51... or bafzaa...), Value: raw record bytes
 const ipnsRecords = new Map<string, Buffer>();
