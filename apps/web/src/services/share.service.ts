@@ -170,7 +170,7 @@ export async function fetchShareKeys(
   const response = await sharesControllerGetShareKeys(shareId);
 
   return response.map((k) => ({
-    keyType: k.keyType as 'file' | 'folder',
+    keyType: k.keyType as 'file' | 'folder' | 'file-ipns',
     itemId: k.itemId,
     encryptedKey: k.encryptedKey,
   }));
