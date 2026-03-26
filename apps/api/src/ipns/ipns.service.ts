@@ -188,8 +188,10 @@ export class IpnsService {
     if (!existing) {
       const writeShare = await this.sharesService.findActiveWriteShare(userId, ipnsName);
       if (writeShare) {
-        // Look up the actual FolderIpns record by ipnsName (owned by the sharer)
-        existing = await this.folderIpnsRepository.findOne({ where: { ipnsName } });
+        // Look up the sharer's FolderIpns record using their userId from the share
+        existing = await this.folderIpnsRepository.findOne({
+          where: { userId: writeShare.sharerId, ipnsName },
+        });
         if (!existing) {
           throw new NotFoundException('IPNS name not found');
         }

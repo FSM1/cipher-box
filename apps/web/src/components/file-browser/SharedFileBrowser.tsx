@@ -9,6 +9,7 @@
  * - Drag-and-drop upload zone for write shares
  */
 
+import type React from 'react';
 import { useState, useCallback, useRef, type MouseEvent, type DragEvent } from 'react';
 import type { FolderChild } from '@cipherbox/core';
 import { useSharedNavigation, type SharedListItem } from '../../hooks/useSharedNavigation';
