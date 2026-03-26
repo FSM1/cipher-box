@@ -1,0 +1,92 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ed69f317e75b",
+  "session_id": "2c89ddf4-4e09-4a48-8d9f-d3abc435dfff",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T03:39:01.460423Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "4fdf6f6c0e41",
+  "token_usage": {
+    "input_tokens": 80,
+    "cache_creation_tokens": 152591,
+    "cache_read_tokens": 4596951,
+    "output_tokens": 18390,
+    "api_call_count": 61
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Add Phase 27 (Writable Shares PoC) to the CipherBox roadmap, capture implementation decisions via discuss-phase, clarify the IPNS key derivation architecture, and kick off research/planning for the phase.",
+    "outcome": "Phase 27 was added to the roadmap on a dedicated branch, CONTEXT.md was written with locked decisions across IPNS key delivery, write scope, share dialog UI, and conflict handling, and plan-phase research was initiated.",
+    "learnings": {
+      "repo": [
+        "CipherBox's server-relayed IPNS architecture sidesteps the general 'unsolved multi-writer IPNS' problem — all publishes go through the API which acts as the coordination point, making existing 409/sequence conflict detection sufficient for multi-writer PoC.",
+        "IPNS key strategy is deliberately split: vault-level keys are HKDF-derived (for self-sovereign recovery without parent metadata), while folder and file IPNS keys are randomly generated (to enable independent sharing without exposing the user's secp256k1 private key).",
+        "File IPNS keys were migrated from HKDF-derived to random in a pre-Phase 14 task specifically to unblock future write-sharing — the design decision was already made with Phase 27 in mind.",
+        "Phase 14 established the sharing foundation: secp256k1 pubkey paste, no accept/decline flow, shares + share_keys tables, lazy key rotation on revoke, terminal-style UI badges ([RO], ~/shared).",
+        "Writable share recipients will need the folder IPNS private key ECIES-wrapped alongside folderKey; a new encryptedIpnsKey column is needed on the Share entity.",
+        "Deletes by write-share recipients should go to the owner's recycle bin, not disappear — maintaining owner control."
+      ],
+      "code": [
+        {
+          "path": "packages/crypto/src/vault/derive-ipns.ts",
+          "finding": "Vault-level IPNS keys (vault, vault-key-blob, byo-ipfs-config, device-registry) are HKDF-derived from the user's secp256k1 private key for self-sovereign discovery."
+        },
+        {
+          "path": "packages/core/src/file/derive-ipns.ts",
+          "line": 102,
+          "finding": "generateFileIpnsKeypair() uses CSPRNG (random), not HKDF — post-migration to enable file-level sharing without exposing user private key."
+        },
+        {
+          "path": "sdk-core/src/folder/index.ts",
+          "line": 106,
+          "finding": "Subfolder IPNS keys generated via generateEd25519Keypair() — random, independently shareable."
+        },
+        {
+          "path": "ipns.service.ts",
+          "line": 181,
+          "end_line": 192,
+          "finding": "expectedSequenceNumber checked server-side before every IPNS publish — conflict detection works regardless of which user (owner or share recipient) sends the publish."
+        },
+        {
+          "path": "ipns.service.ts",
+          "line": 344,
+          "end_line": 355,
+          "finding": "Sequence comparison: highest sequence number wins across network vs DB cache."
+        },
+        {
+          "path": "sdk-core/src/folder/index.ts",
+          "line": 196,
+          "end_line": 224,
+          "finding": "409 Conflict detection with automatic single-retry + re-sync already in place."
+        },
+        {
+          "path": "folder-helpers.ts",
+          "line": 39,
+          "end_line": 63,
+          "finding": "UI conflict banner with jitter-delayed retry — same flow will apply to write-share recipients."
+        }
+      ],
+      "workflow": [
+        "gsd-tools CLI can generate excessively long slugs from verbose phase descriptions — manual directory rename and ROADMAP.md edits were needed to use a cleaner slug.",
+        "The depends-on field in ROADMAP.md requires manual verification after add-phase; auto-calculated value (previous phase number) is often wrong when a new phase logically depends on a non-adjacent phase."
+      ]
+    },
+    "friction": [
+      "gsd-tools generated an absurdly long directory slug from the verbose phase description, requiring manual rename and ROADMAP.md fixups.",
+      "The auto-calculated depends-on was set to Phase 26 but should have been Phase 14 — required manual correction in ROADMAP.md and the summary table."
+    ],
+    "open_items": [
+      "Metadata-embedded sharing (hide social graph from server) — deferred to a future phase.",
+      "Attribution / audit trail for write-share actions — deferred to a future phase.",
+      "Transitive re-sharing — explicitly out of scope for Phase 27 PoC.",
+      "TEE enrollment for subfolders created by write-share recipients (HKDF child IPNS key derivation) — noted but complexity deferred.",
+      "Phase 27 research agent was spawned but transcript ends before completion — planning not yet done.",
+      "Multi-writer IPNS on the network layer (DHT last-writer-wins without coordination) remains an open problem for future decentralization work, though CipherBox's server-relayed architecture avoids it for now."
+    ]
+  }
+}
