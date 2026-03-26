@@ -40,6 +40,7 @@ export {
   validateDeviceRegistry,
   type DeviceEntry,
   type DeviceRegistry,
+  type DeviceRegistryVersion,
   type DeviceAuthStatus,
   type DevicePlatform,
 } from './registry';

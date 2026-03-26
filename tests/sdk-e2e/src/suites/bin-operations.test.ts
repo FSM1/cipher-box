@@ -29,7 +29,8 @@ describe('Bin Operations', () => {
 
     expect(binState).toBeTruthy();
     expect(binState.entries).toEqual([]);
-    expect(binState.sequenceNumber).toBe(0);
+    // Auto-repair publishes an empty bin on first load, so sequenceNumber starts at 1
+    expect(binState.sequenceNumber).toBe(1);
   });
 
   it('should deleteToBin a file', async () => {

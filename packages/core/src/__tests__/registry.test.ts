@@ -96,25 +96,29 @@ describe('deriveRegistryIpnsKeypair', () => {
 });
 
 describe('encryptRegistry / decryptRegistry', () => {
-  it('round-trips a DeviceRegistry with 1 device entry', async () => {
+  it('round-trips a DeviceRegistry with 1 device entry (v1 input migrates to v2)', async () => {
     const keypair = generateTestKeypair();
     const registry = createTestRegistry(1);
 
     const encrypted = await encryptRegistry(registry, keypair.publicKey);
     const decrypted = await decryptRegistry(encrypted, keypair.privateKey);
 
-    expect(decrypted).toEqual(registry);
+    // v1 input migrates to v2 on decrypt — only version changes, devices preserved exactly
+    expect(decrypted.version).toBe('v2');
+    expect(decrypted.devices).toEqual(registry.devices);
+    expect(decrypted.sequenceNumber).toBe(registry.sequenceNumber);
   });
 
-  it('round-trips a DeviceRegistry with multiple devices', async () => {
+  it('round-trips a DeviceRegistry with multiple devices (v1 input migrates to v2)', async () => {
     const keypair = generateTestKeypair();
     const registry = createTestRegistry(5);
 
     const encrypted = await encryptRegistry(registry, keypair.publicKey);
     const decrypted = await decryptRegistry(encrypted, keypair.privateKey);
 
-    expect(decrypted).toEqual(registry);
-    expect(decrypted.devices).toHaveLength(5);
+    // v1 input migrates to v2 on decrypt — only version changes, devices preserved exactly
+    expect(decrypted.version).toBe('v2');
+    expect(decrypted.devices).toEqual(registry.devices);
   });
 
   it('throws CryptoError when decrypting with wrong privateKey', async () => {
@@ -171,11 +175,14 @@ describe('encryptRegistry / decryptRegistry', () => {
 });
 
 describe('validateDeviceRegistry', () => {
-  it('accepts a valid registry', () => {
+  it('accepts a valid v1 registry and migrates to v2', () => {
     const registry = createTestRegistry(2);
     const result = validateDeviceRegistry(registry);
 
-    expect(result).toEqual(registry);
+    // v1 registries are migrated to v2
+    expect(result.version).toBe('v2');
+    expect(result.devices).toHaveLength(2);
+    expect(result.sequenceNumber).toBe(registry.sequenceNumber);
   });
 
   it('throws on missing version field', () => {
@@ -185,10 +192,55 @@ describe('validateDeviceRegistry', () => {
     expect(() => validateDeviceRegistry(invalid)).toThrow('Invalid registry format');
   });
 
-  it('throws on wrong version value', () => {
-    const invalid = { ...createTestRegistry(1), version: 'v2' };
-
+  it('throws on truly invalid version value', () => {
+    const invalid = { ...createTestRegistry(1), version: 'v3' };
     expect(() => validateDeviceRegistry(invalid)).toThrow('Invalid registry format');
+
+    const invalid2 = { ...createTestRegistry(1), version: 'v99' };
+    expect(() => validateDeviceRegistry(invalid2)).toThrow('Invalid registry format');
+  });
+
+  it('accepts v2 registry with valid data', () => {
+    const registry = createTestRegistry(1);
+    const v2Registry = { ...registry, version: 'v2' };
+    const result = validateDeviceRegistry(v2Registry);
+
+    expect(result.version).toBe('v2');
+    expect(result.devices).toHaveLength(1);
+  });
+
+  it('migrates v1 registry with empty ipHash to v2 with zero placeholder', () => {
+    const registry = createTestRegistry(1);
+    registry.devices[0].ipHash = '';
+    const result = validateDeviceRegistry(registry);
+
+    expect(result.version).toBe('v2');
+    expect(result.devices[0].ipHash).toBe('0'.repeat(64));
+  });
+
+  it('migrates v1 registry preserving valid ipHash values', () => {
+    const registry = createTestRegistry(1);
+    const originalIpHash = registry.devices[0].ipHash;
+    const result = validateDeviceRegistry(registry);
+
+    expect(result.version).toBe('v2');
+    expect(result.devices[0].ipHash).toBe(originalIpHash);
+  });
+
+  it('v2 strict validation rejects empty ipHash', () => {
+    const registry = createTestRegistry(1);
+    const v2Registry = { ...registry, version: 'v2' };
+    v2Registry.devices[0].ipHash = '';
+
+    expect(() => validateDeviceRegistry(v2Registry)).toThrow('Invalid registry format');
+  });
+
+  it('v2 strict validation rejects non-hex ipHash', () => {
+    const registry = createTestRegistry(1);
+    const v2Registry = { ...registry, version: 'v2' };
+    v2Registry.devices[0].ipHash = 'z'.repeat(64);
+
+    expect(() => validateDeviceRegistry(v2Registry)).toThrow('Invalid registry format');
   });
 
   it('throws on invalid status value', () => {
@@ -252,12 +304,13 @@ describe('validateDeviceRegistry', () => {
     registry.devices[0].revokedBy = 'some-device-id';
 
     const result = validateDeviceRegistry(registry);
+    expect(result.version).toBe('v2');
     expect(result.devices[0].status).toBe('revoked');
     expect(result.devices[0].revokedAt).toBeTypeOf('number');
     expect(result.devices[0].revokedBy).toBeTypeOf('string');
   });
 
-  it('accepts an empty devices array', () => {
+  it('accepts an empty devices array (v1 migrates to v2)', () => {
     const registry: DeviceRegistry = {
       version: 'v1',
       sequenceNumber: 0,
@@ -265,6 +318,7 @@ describe('validateDeviceRegistry', () => {
     };
 
     const result = validateDeviceRegistry(registry);
+    expect(result.version).toBe('v2');
     expect(result.devices).toHaveLength(0);
   });
 });

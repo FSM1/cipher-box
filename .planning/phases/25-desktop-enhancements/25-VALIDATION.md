@@ -15,13 +15,13 @@ created: 2026-03-25
 
 ## Test Infrastructure
 
-| Property               | Value                                                          |
-| ---------------------- | -------------------------------------------------------------- |
-| **Framework**          | cargo check (compile verification) + grep (config verification)|
-| **Config file**        | `Cargo.toml` (workspace)                                       |
-| **Quick run command**  | `cargo check -p cipherbox-fuse --features fuse`                |
-| **Full suite command** | `cargo check --workspace`                                      |
-| **Estimated runtime**  | ~20 seconds                                                    |
+| Property               | Value                                                           |
+| ---------------------- | --------------------------------------------------------------- |
+| **Framework**          | cargo check (compile verification) + grep (config verification) |
+| **Config file**        | `Cargo.toml` (workspace)                                        |
+| **Quick run command**  | `cargo check -p cipherbox-fuse --features fuse`                 |
+| **Full suite command** | `cargo check --workspace`                                       |
+| **Estimated runtime**  | ~20 seconds                                                     |
 
 ---
 
@@ -36,14 +36,14 @@ created: 2026-03-25
 
 ## Per-Task Verification Map
 
-| Task ID   | Plan | Wave | Requirement | Test Type   | Automated Command                                                       | File Exists | Status     |
-| --------- | ---- | ---- | ----------- | ----------- | ----------------------------------------------------------------------- | ----------- | ---------- |
-| 25-01-01  | 01   | 1    | DESKTOP-02  | compile     | `cargo check -p cipherbox-fuse --features fuse`                        | ✅          | ⬜ pending |
-| 25-01-02  | 01   | 1    | DESKTOP-02  | compile     | `cargo check -p cipherbox-fuse --features winfsp`                      | ✅          | ⬜ pending |
-| 25-02-01  | 02   | 1    | DESKTOP-01  | config+grep | `grep "tauri-plugin-updater" apps/desktop/src-tauri/Cargo.toml`        | ✅          | ⬜ pending |
-| 25-02-02  | 02   | 1    | DESKTOP-01  | compile     | `cargo check -p cipherbox-desktop --no-default-features --features fuse`| ✅          | ⬜ pending |
-| 25-03-01  | 03   | 1    | DESKTOP-01  | grep        | `grep "tauri-apps/tauri-action" .github/workflows/build-desktop.yml`   | ✅          | ⬜ pending |
-| 25-03-02  | 03   | 1    | DESKTOP-01  | grep        | `grep "TAURI_SIGNING_PRIVATE_KEY" .github/workflows/build-desktop.yml` | ✅          | ⬜ pending |
+| Task ID  | Plan | Wave | Requirement | Test Type   | Automated Command                                                        | File Exists | Status     |
+| -------- | ---- | ---- | ----------- | ----------- | ------------------------------------------------------------------------ | ----------- | ---------- |
+| 25-01-01 | 01   | 1    | DESKTOP-02  | compile     | `cargo check -p cipherbox-fuse --features fuse`                          | ✅          | ⬜ pending |
+| 25-01-02 | 01   | 1    | DESKTOP-02  | compile     | `cargo check -p cipherbox-fuse --features winfsp`                        | ✅          | ⬜ pending |
+| 25-02-01 | 02   | 1    | DESKTOP-01  | config+grep | `grep "tauri-plugin-updater" apps/desktop/src-tauri/Cargo.toml`          | ✅          | ⬜ pending |
+| 25-02-02 | 02   | 1    | DESKTOP-01  | compile     | `cargo check -p cipherbox-desktop --no-default-features --features fuse` | ✅          | ⬜ pending |
+| 25-03-01 | 03   | 1    | DESKTOP-01  | grep        | `grep "tauri-apps/tauri-action" .github/workflows/build-desktop.yml`     | ✅          | ⬜ pending |
+| 25-03-02 | 03   | 1    | DESKTOP-01  | grep        | `grep "TAURI_SIGNING_PRIVATE_KEY" .github/workflows/build-desktop.yml`   | ✅          | ⬜ pending |
 
 _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
@@ -57,11 +57,11 @@ _Existing infrastructure covers all phase requirements. `cargo check` and `grep`
 
 ## Manual-Only Verifications
 
-| Behavior                      | Requirement | Why Manual              | Test Instructions                                                    |
-| ----------------------------- | ----------- | ----------------------- | -------------------------------------------------------------------- |
-| Tray notification appears     | DESKTOP-01  | OS-level notification   | Launch app with outdated version, verify tray notification shows     |
-| Update installs on restart    | DESKTOP-01  | Requires real binary    | Download update, quit app, relaunch, verify new version              |
-| TEE republishes file IPNS     | DESKTOP-02  | Requires TEE enclave    | Create file via FUSE, wait 3h, verify IPNS record refreshed         |
+| Behavior                   | Requirement | Why Manual            | Test Instructions                                                |
+| -------------------------- | ----------- | --------------------- | ---------------------------------------------------------------- |
+| Tray notification appears  | DESKTOP-01  | OS-level notification | Launch app with outdated version, verify tray notification shows |
+| Update installs on restart | DESKTOP-01  | Requires real binary  | Download update, quit app, relaunch, verify new version          |
+| TEE republishes file IPNS  | DESKTOP-02  | Requires TEE enclave  | Create file via FUSE, wait 3h, verify IPNS record refreshed      |
 
 ---
 

@@ -43,7 +43,9 @@ Created `.github/workflows/build-desktop.yml` — a cross-platform CI workflow t
 ## key-files
 
 ### created
+
 - `.github/workflows/build-desktop.yml`
 
 ### modified
+
 - `apps/desktop/src-tauri/tauri.conf.json` (replaced placeholder pubkey with real Ed25519 public key)

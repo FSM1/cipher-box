@@ -58,9 +58,9 @@ The TEE file enrollment is a surgical change: the existing `publish_file_metadat
 
 ## Phase Requirements
 
-| ID         | Description                                                                  | Research Support                                                                                                                                                     |
-| ---------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| DESKTOP-01 | Desktop app checks for and installs updates (Tauri updater or custom)        | `tauri-plugin-updater` v2.10.0 provides check/download/install API; `latest.json` manifest hosted on GitHub Releases; Ed25519 signing via `TAURI_SIGNING_PRIVATE_KEY` |
+| ID         | Description                                                                        | Research Support                                                                                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DESKTOP-01 | Desktop app checks for and installs updates (Tauri updater or custom)              | `tauri-plugin-updater` v2.10.0 provides check/download/install API; `latest.json` manifest hosted on GitHub Releases; Ed25519 signing via `TAURI_SIGNING_PRIVATE_KEY`      |
 | DESKTOP-02 | Files created via FUSE mount are enrolled with TEE for automatic IPNS republishing | `publish_file_metadata` in `operations.rs:125` needs TEE key wrapping; pattern exists in `write_ops.rs:499-506` for folders and web app `file-metadata.service.ts:166-176` |
 
 </phase_requirements>
@@ -69,28 +69,29 @@ The TEE file enrollment is a surgical change: the existing `publish_file_metadat
 
 ### Core
 
-| Library                  | Version | Purpose                          | Why Standard                                                |
-| ------------------------ | ------- | -------------------------------- | ----------------------------------------------------------- |
-| tauri-plugin-updater     | 2.10.0  | Rust crate for auto-update       | Official Tauri v2 plugin, Ed25519 signing, manifest support |
-| @tauri-apps/plugin-updater | 2.10.0 | JS bindings (optional, for UI)  | Matches Rust crate version                                  |
-| tauri-apps/tauri-action  | v1      | GitHub Action for building/signing | Official CI action, generates `latest.json` + `.sig` files |
+| Library                    | Version | Purpose                            | Why Standard                                                |
+| -------------------------- | ------- | ---------------------------------- | ----------------------------------------------------------- |
+| tauri-plugin-updater       | 2.10.0  | Rust crate for auto-update         | Official Tauri v2 plugin, Ed25519 signing, manifest support |
+| @tauri-apps/plugin-updater | 2.10.0  | JS bindings (optional, for UI)     | Matches Rust crate version                                  |
+| tauri-apps/tauri-action    | v1      | GitHub Action for building/signing | Official CI action, generates `latest.json` + `.sig` files  |
 
 ### Supporting
 
-| Library                    | Version | Purpose                         | When to Use                          |
-| -------------------------- | ------- | ------------------------------- | ------------------------------------ |
-| tauri-plugin-process       | 2.x     | `app.restart()` after update    | Already available via tauri core     |
-| cipherbox-crypto           | workspace | `wrap_key` for TEE enrollment | Already used in folder creation flow |
+| Library              | Version   | Purpose                       | When to Use                          |
+| -------------------- | --------- | ----------------------------- | ------------------------------------ |
+| tauri-plugin-process | 2.x       | `app.restart()` after update  | Already available via tauri core     |
+| cipherbox-crypto     | workspace | `wrap_key` for TEE enrollment | Already used in folder creation flow |
 
 ### Alternatives Considered
 
-| Instead of               | Could Use              | Tradeoff                                                    |
-| ------------------------ | ---------------------- | ----------------------------------------------------------- |
-| tauri-plugin-updater     | Sparkle (macOS) + custom | Cross-platform complexity, macOS only for Sparkle         |
-| GitHub Releases hosting  | CrabNebula Cloud       | Additional service dependency, cost                         |
-| Ed25519 (Minisign)       | GPG/platform signing   | Deferred: Apple notarization + Authenticode are separate    |
+| Instead of              | Could Use                | Tradeoff                                                 |
+| ----------------------- | ------------------------ | -------------------------------------------------------- |
+| tauri-plugin-updater    | Sparkle (macOS) + custom | Cross-platform complexity, macOS only for Sparkle        |
+| GitHub Releases hosting | CrabNebula Cloud         | Additional service dependency, cost                      |
+| Ed25519 (Minisign)      | GPG/platform signing     | Deferred: Apple notarization + Authenticode are separate |
 
 **Installation:**
+
 ```bash
 # Rust crate (in apps/desktop/src-tauri/Cargo.toml)
 cargo add tauri-plugin-updater
@@ -134,6 +135,7 @@ crates/fuse/src/
 **When to use:** App startup.
 
 **Configuration (`tauri.conf.json`):**
+
 ```json
 {
   "bundle": {
@@ -142,21 +144,21 @@ crates/fuse/src/
   "plugins": {
     "updater": {
       "pubkey": "<MINISIGN_ED25519_PUBLIC_KEY>",
-      "endpoints": [
-        "https://github.com/<owner>/<repo>/releases/latest/download/latest.json"
-      ]
+      "endpoints": ["https://github.com/<owner>/<repo>/releases/latest/download/latest.json"]
     }
   }
 }
 ```
 
 **Rust plugin registration (`main.rs`):**
+
 ```rust
 // In tauri::Builder::default() chain:
 .plugin(tauri_plugin_updater::Builder::new().build())
 ```
 
 **On-launch check (`updater.rs`):**
+
 ```rust
 use tauri_plugin_updater::UpdaterExt;
 
@@ -188,6 +190,7 @@ pub async fn check_for_update(app: &tauri::AppHandle) {
 ```
 
 **Capability permissions (`default.json`):**
+
 ```json
 "updater:default"
 ```
@@ -199,6 +202,7 @@ pub async fn check_for_update(app: &tauri::AppHandle) {
 **When to use:** When `publish_file_metadata` is called for a newly created file.
 
 **Existing folder enrollment pattern (`write_ops.rs:499-506`):**
+
 ```rust
 let encrypted_ipns_for_tee = if let Some(ref tee_key) = fs.tee_public_key {
     let wrapped = cipherbox_crypto::wrap_key(&ipns_private_key, tee_key)
@@ -212,6 +216,7 @@ let tee_key_epoch = fs.tee_key_epoch;
 
 **Required change in `publish_file_metadata` (`operations.rs:125`):**
 Add `tee_public_key: Option<&[u8]>` and `tee_key_epoch: Option<u32>` parameters, then:
+
 ```rust
 let encrypted_ipns_for_tee = if let Some(tee_key) = tee_public_key {
     let wrapped = cipherbox_crypto::wrap_key(file_ipns_private_key.as_slice(), tee_key)
@@ -238,6 +243,7 @@ let req = cipherbox_api_client::IpnsPublishRequest {
 **Workflow trigger approach:** The existing `release-please.yml` creates releases. A new `build-desktop.yml` workflow triggers on `release` events or is called by release-please with a `releaseId` to attach artifacts to the existing release.
 
 **tauri-action configuration:**
+
 ```yaml
 - uses: tauri-apps/tauri-action@v1
   env:
@@ -256,6 +262,7 @@ let req = cipherbox_api_client::IpnsPublishRequest {
 **When to use:** On quit when an update is pending.
 
 **Existing quit handler (`tray/mod.rs:272-279`):**
+
 ```rust
 "quit" => {
     #[cfg(any(feature = "fuse", feature = "winfsp"))]
@@ -267,6 +274,7 @@ let req = cipherbox_api_client::IpnsPublishRequest {
 ```
 
 The updater plugin handles restart automatically via `app.restart()`. The quit flow should:
+
 1. Drain pending uploads (wait for upload_tx queue to empty)
 2. Unmount FUSE
 3. Call `app.restart()` which triggers the pending update install
@@ -280,13 +288,13 @@ The updater plugin handles restart automatically via `app.restart()`. The quit f
 
 ## Don't Hand-Roll
 
-| Problem                | Don't Build                    | Use Instead                    | Why                                                   |
-| ---------------------- | ------------------------------ | ------------------------------ | ----------------------------------------------------- |
-| Update verification    | Custom signature checking      | tauri-plugin-updater Ed25519   | Minisign is proven, handles edge cases                |
-| Update manifest        | Custom JSON format             | Tauri's `latest.json` format   | Standardized, tauri-action generates it automatically |
-| Update hosting         | Custom CDN/S3 upload           | GitHub Releases + tauri-action | Already have Release Please, zero additional infra    |
-| Key wrapping           | Custom ECIES implementation    | `cipherbox_crypto::wrap_key`   | Already used everywhere, tested                       |
-| Bundle signing in CI   | Manual openssl/minisign steps  | `TAURI_SIGNING_PRIVATE_KEY` env | tauri-action reads it automatically                  |
+| Problem              | Don't Build                   | Use Instead                     | Why                                                   |
+| -------------------- | ----------------------------- | ------------------------------- | ----------------------------------------------------- |
+| Update verification  | Custom signature checking     | tauri-plugin-updater Ed25519    | Minisign is proven, handles edge cases                |
+| Update manifest      | Custom JSON format            | Tauri's `latest.json` format    | Standardized, tauri-action generates it automatically |
+| Update hosting       | Custom CDN/S3 upload          | GitHub Releases + tauri-action  | Already have Release Please, zero additional infra    |
+| Key wrapping         | Custom ECIES implementation   | `cipherbox_crypto::wrap_key`    | Already used everywhere, tested                       |
+| Bundle signing in CI | Manual openssl/minisign steps | `TAURI_SIGNING_PRIVATE_KEY` env | tauri-action reads it automatically                   |
 
 **Key insight:** Both features are integration work, not novel implementations. The updater uses a mature plugin with a well-defined protocol. The TEE enrollment reuses an existing pattern verbatim.
 
@@ -513,13 +521,13 @@ npx @tauri-apps/cli signer generate -w ~/.tauri/cipherbox.key
 
 ## State of the Art
 
-| Old Approach               | Current Approach                      | When Changed     | Impact                                   |
-| -------------------------- | ------------------------------------- | ---------------- | ---------------------------------------- |
-| Tauri v1 built-in updater  | tauri-plugin-updater v2 (separate)    | Tauri v2 (2024)  | Plugin system, more flexible             |
-| `includeUpdaterJson`       | `uploadUpdaterJson` in tauri-action   | tauri-action v1  | Renamed parameter                        |
-| tauri-action@v0            | tauri-action@v1                       | 2025             | Stable release, better defaults          |
-| Manual `.sig` generation   | Automatic via `TAURI_SIGNING_PRIVATE_KEY` | Tauri v2     | Build-time signing, no manual steps      |
-| Custom update servers      | GitHub Releases `/latest/download/`   | Long-standing    | Zero infrastructure for open-source apps |
+| Old Approach              | Current Approach                          | When Changed    | Impact                                   |
+| ------------------------- | ----------------------------------------- | --------------- | ---------------------------------------- |
+| Tauri v1 built-in updater | tauri-plugin-updater v2 (separate)        | Tauri v2 (2024) | Plugin system, more flexible             |
+| `includeUpdaterJson`      | `uploadUpdaterJson` in tauri-action       | tauri-action v1 | Renamed parameter                        |
+| tauri-action@v0           | tauri-action@v1                           | 2025            | Stable release, better defaults          |
+| Manual `.sig` generation  | Automatic via `TAURI_SIGNING_PRIVATE_KEY` | Tauri v2        | Build-time signing, no manual steps      |
+| Custom update servers     | GitHub Releases `/latest/download/`       | Long-standing   | Zero infrastructure for open-source apps |
 
 **Deprecated/outdated:**
 
@@ -548,22 +556,22 @@ npx @tauri-apps/cli signer generate -w ~/.tauri/cipherbox.key
 
 ### Test Framework
 
-| Property           | Value                                                            |
-| ------------------ | ---------------------------------------------------------------- |
-| Framework          | Shell scripts (bash + PowerShell) for desktop E2E                |
+| Property           | Value                                                           |
+| ------------------ | --------------------------------------------------------------- |
+| Framework          | Shell scripts (bash + PowerShell) for desktop E2E               |
 | Config file        | `tests/desktop-e2e/scripts/run-all.sh`                          |
 | Quick run command  | `bash tests/desktop-e2e/scripts/run-all.sh`                     |
 | Full suite command | `bash tests/desktop-e2e/scripts/run-all.sh` (same -- all tests) |
 
 ### Phase Requirements -> Test Map
 
-| Req ID     | Behavior                            | Test Type  | Automated Command                                           | File Exists? |
-| ---------- | ----------------------------------- | ---------- | ----------------------------------------------------------- | ------------ |
-| DESKTOP-01 | Update check on launch              | manual     | Manual: requires real GitHub Release with `latest.json`     | N/A          |
-| DESKTOP-01 | "Check for Updates" tray menu item  | manual     | Manual: verify menu item appears and triggers check         | N/A          |
-| DESKTOP-01 | CI builds desktop bundles           | CI         | `gh workflow run build-desktop.yml` (verifiable via CI run) | Wave 0       |
-| DESKTOP-02 | TEE enrollment on file create       | unit       | `cargo test -p cipherbox-fuse tee_enrollment`               | Wave 0       |
-| DESKTOP-02 | IPNS publish includes TEE fields    | e2e/manual | Verify API request body in desktop binary log               | N/A          |
+| Req ID     | Behavior                           | Test Type  | Automated Command                                           | File Exists? |
+| ---------- | ---------------------------------- | ---------- | ----------------------------------------------------------- | ------------ |
+| DESKTOP-01 | Update check on launch             | manual     | Manual: requires real GitHub Release with `latest.json`     | N/A          |
+| DESKTOP-01 | "Check for Updates" tray menu item | manual     | Manual: verify menu item appears and triggers check         | N/A          |
+| DESKTOP-01 | CI builds desktop bundles          | CI         | `gh workflow run build-desktop.yml` (verifiable via CI run) | Wave 0       |
+| DESKTOP-02 | TEE enrollment on file create      | unit       | `cargo test -p cipherbox-fuse tee_enrollment`               | Wave 0       |
+| DESKTOP-02 | IPNS publish includes TEE fields   | e2e/manual | Verify API request body in desktop binary log               | N/A          |
 
 ### Sampling Rate
 

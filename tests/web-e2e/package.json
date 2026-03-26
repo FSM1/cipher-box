@@ -12,6 +12,7 @@
   "devDependencies": {
     "@cipherbox/core": "workspace:*",
     "@cipherbox/crypto": "workspace:*",
+    "@cipherbox/sdk": "workspace:*",
     "@faker-js/faker": "^9.0.0",
     "@johanneskares/wallet-mock": "^1.4.1",
     "@noble/ed25519": "^2.2.3",

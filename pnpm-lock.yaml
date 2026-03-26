@@ -588,6 +588,9 @@ importers:
       '@cipherbox/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
+      '@cipherbox/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@faker-js/faker':
         specifier: ^9.0.0
         version: 9.9.0

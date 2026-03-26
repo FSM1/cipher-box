@@ -39,12 +39,7 @@
     },
     "linux": {
       "deb": {
-        "depends": [
-          "libfuse3-3",
-          "fuse3",
-          "libwebkit2gtk-4.1-0",
-          "libayatana-appindicator3-1"
-        ]
+        "depends": ["libfuse3-3", "fuse3", "libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"]
       },
       "appimage": {
         "bundleMediaFramework": false
@@ -54,15 +49,11 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFBQUQzQTY5RTUwN0EyRgpSV1F2ZWxDZXB0T3FDbC8xK3FLdTJ0UkVHbUhDNFNjWVNWQUdFcENGazNUazY5SkpVNFgrRGNZTgo=",
-      "endpoints": [
-        "https://github.com/FSM1/cipher-box/releases/latest/download/latest.json"
-      ]
+      "endpoints": ["https://github.com/FSM1/cipher-box/releases/latest/download/latest.json"]
     },
     "deep-link": {
       "desktop": {
-        "schemes": [
-          "cipherbox"
-        ]
+        "schemes": ["cipherbox"]
       }
     }
   }
