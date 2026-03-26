@@ -4,6 +4,7 @@ import {
   HttpStatus,
   BadRequestException,
   ConflictException,
+  NotFoundException,
   Logger,
   Inject,
   forwardRef,
@@ -22,6 +23,7 @@ import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { parseIpnsRecord } from './ipns-record-parser';
+import { SharesService } from '../shares/shares.service';
 
 @Injectable()
 export class IpnsService {
@@ -33,7 +35,8 @@ export class IpnsService {
     private readonly delegatedRouting: DelegatedRoutingClient,
     @Inject(forwardRef(() => RepublishService))
     private readonly republishService: RepublishService,
-    private readonly metricsService: MetricsService
+    private readonly metricsService: MetricsService,
+    private readonly sharesService: SharesService
   ) {}
 
   /**
@@ -176,7 +179,22 @@ export class IpnsService {
     recordType: 'folder' | 'file' = 'folder',
     expectedSequenceNumber?: string
   ): Promise<FolderIpns> {
-    const existing = await this.getFolderIpns(userId, ipnsName);
+    let existing = await this.getFolderIpns(userId, ipnsName);
+
+    // If not the owner, check for active write share authorization.
+    // When no owner record is found AND a write share exists, look up
+    // the owner's FolderIpns by ipnsName. When no write share exists,
+    // fall through to the create-new-entry path (owner's first publish).
+    if (!existing) {
+      const writeShare = await this.sharesService.findActiveWriteShare(userId, ipnsName);
+      if (writeShare) {
+        // Look up the actual FolderIpns record by ipnsName (owned by the sharer)
+        existing = await this.folderIpnsRepository.findOne({ where: { ipnsName } });
+        if (!existing) {
+          throw new NotFoundException('IPNS name not found');
+        }
+      }
+    }
 
     // Conflict detection: when expectedSequenceNumber is provided, verify it matches
     if (existing && expectedSequenceNumber !== undefined) {
@@ -207,11 +225,13 @@ export class IpnsService {
 
       const saved = await this.folderIpnsRepository.save(existing);
 
-      // Auto-enroll for TEE republishing when encrypted key is provided
+      // Auto-enroll for TEE republishing when encrypted key is provided.
+      // Use existing.userId (the FolderIpns owner) for enrollment, not the
+      // authenticated user — a write-share recipient publishes to the owner's record.
       if (encryptedIpnsPrivateKey && keyEpoch !== undefined) {
         this.republishService
           .enrollFolder(
-            userId,
+            existing.userId,
             ipnsName,
             Buffer.from(encryptedIpnsPrivateKey, 'hex'),
             keyEpoch,
