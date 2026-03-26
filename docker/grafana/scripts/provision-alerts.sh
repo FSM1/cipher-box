@@ -18,42 +18,56 @@
 #   3. Copy the UID from the URL bar (e.g., /datasources/edit/<uid>)
 #
 # Usage:
-#   ./provision-alerts.sh <grafana-url> <api-key> <datasource-uid>
-#   ./provision-alerts.sh <grafana-url> <api-key> <datasource-uid> --dry-run
+#   ./provision-alerts.sh <grafana-url> <datasource-uid> [--dry-run]
+#
+# Environment variables (preferred over positional args):
+#   GRAFANA_URL          Grafana Cloud instance URL
+#   GRAFANA_API_KEY      Service account token (avoids token on command line)
+#   GRAFANA_DS_UID       Mimir/Prometheus datasource UID
 #
 # Examples:
-#   ./provision-alerts.sh https://myorg.grafana.net glsa_xxxx abc123
-#   ./provision-alerts.sh https://myorg.grafana.net glsa_xxxx abc123 --dry-run
+#   export GRAFANA_API_KEY=glsa_xxxx
+#   ./provision-alerts.sh https://myorg.grafana.net abc123
+#   ./provision-alerts.sh https://myorg.grafana.net abc123 --dry-run
+#
+#   # All from env:
+#   export GRAFANA_URL=https://myorg.grafana.net GRAFANA_API_KEY=glsa_xxxx GRAFANA_DS_UID=abc123
+#   ./provision-alerts.sh
 #
 
 set -euo pipefail
 
-# --- Argument validation ---
+# --- Argument parsing (env vars take precedence, positional args as fallback) ---
 
-GRAFANA_URL="${1:-}"
-API_KEY="${2:-}"
-DATASOURCE_UID="${3:-}"
 DRY_RUN=false
+for arg in "$@"; do
+  if [[ "$arg" == "--dry-run" ]]; then
+    DRY_RUN=true
+  fi
+done
+
+# Strip --dry-run from positional args for URL/key/UID parsing
+POSITIONAL=()
+for arg in "$@"; do
+  [[ "$arg" != "--dry-run" ]] && POSITIONAL+=("$arg")
+done
+
+GRAFANA_URL="${GRAFANA_URL:-${POSITIONAL[0]:-}}"
+API_KEY="${GRAFANA_API_KEY:-${POSITIONAL[1]:-}}"
+DATASOURCE_UID="${GRAFANA_DS_UID:-${POSITIONAL[2]:-}}"
 
 if [[ -z "$GRAFANA_URL" || -z "$API_KEY" || -z "$DATASOURCE_UID" ]]; then
-  echo "Usage: $0 <grafana-url> <api-key> <datasource-uid> [--dry-run]"
+  echo "Usage: $0 [grafana-url] [api-key] [datasource-uid] [--dry-run]"
   echo ""
-  echo "Arguments:"
-  echo "  grafana-url     Grafana Cloud instance URL (e.g., https://myorg.grafana.net)"
-  echo "  api-key         Grafana Cloud API key (service account token)"
-  echo "  datasource-uid  Mimir/Prometheus datasource UID"
+  echo "Arguments (or set via environment variables):"
+  echo "  grafana-url     GRAFANA_URL      Grafana Cloud instance URL"
+  echo "  api-key         GRAFANA_API_KEY  Service account token"
+  echo "  datasource-uid  GRAFANA_DS_UID   Mimir/Prometheus datasource UID"
   echo ""
   echo "Options:"
   echo "  --dry-run       Print processed JSON without POSTing to API"
   exit 1
 fi
-
-# Check for --dry-run flag (only after the 3 positional args)
-for arg in "${@:4}"; do
-  if [[ "$arg" == "--dry-run" ]]; then
-    DRY_RUN=true
-  fi
-done
 
 # Strip trailing slash from URL
 GRAFANA_URL="${GRAFANA_URL%/}"
@@ -142,7 +156,16 @@ fi
 
 SUCCESS_COUNT=0
 FAIL_COUNT=0
+UPDATE_COUNT=0
 TOTAL_RULES=0
+
+# Fetch existing alert rules once for upsert lookups
+EXISTING_RULES=""
+if [[ "$DRY_RUN" == false ]]; then
+  EXISTING_RULES=$(curl -s \
+    -H "Authorization: Bearer $API_KEY" \
+    "$GRAFANA_URL/api/v1/provisioning/alert-rules" 2>/dev/null || echo "[]")
+fi
 
 echo ""
 echo "Processing alert rule files..."
@@ -174,16 +197,35 @@ for rule_file in "${JSON_FILES[@]}"; do
     fi
 
     rule_title=$(echo "$rule" | jq -r '.title')
+    rule_group=$(echo "$rule" | jq -r '.ruleGroup')
     TOTAL_RULES=$((TOTAL_RULES + 1))
 
+    # Check if rule already exists (match by title + ruleGroup + folderUID)
+    existing_uid=""
+    if [[ -n "$EXISTING_RULES" && "$EXISTING_RULES" != "[]" ]]; then
+      existing_uid=$(echo "$EXISTING_RULES" | jq -r \
+        --arg title "$rule_title" --arg group "$rule_group" --arg folder "$FOLDER_UID" \
+        '.[] | select(.title == $title and .ruleGroup == $group and .folderUID == $folder) | .uid' \
+        | head -n1)
+    fi
+
+    if [[ -n "$existing_uid" ]]; then
+      METHOD="PUT"
+      URL="$GRAFANA_URL/api/v1/provisioning/alert-rules/$existing_uid"
+      rule=$(echo "$rule" | jq --arg uid "$existing_uid" '.uid = $uid')
+    else
+      METHOD="POST"
+      URL="$GRAFANA_URL/api/v1/provisioning/alert-rules"
+    fi
+
     if [[ "$DRY_RUN" == true ]]; then
-      echo "[DRY RUN] Rule: $rule_title"
+      echo "[DRY RUN] $( [[ -n "$existing_uid" ]] && echo "UPDATE" || echo "CREATE" ): $rule_title"
       echo "$rule" | jq .
     else
-      echo "Provisioning: $rule_title"
+      echo "$( [[ -n "$existing_uid" ]] && echo "Updating" || echo "Creating" ): $rule_title"
 
       RESPONSE=$(curl -s -w "\n%{http_code}" \
-        -X POST "$GRAFANA_URL/api/v1/provisioning/alert-rules" \
+        -X "$METHOD" "$URL" \
         -H "Authorization: Bearer $API_KEY" \
         -H "Content-Type: application/json" \
         -H "X-Disable-Provenance: true" \
@@ -193,7 +235,12 @@ for rule_file in "${JSON_FILES[@]}"; do
       BODY=$(echo "$RESPONSE" | sed '$d')
 
       if [[ "$HTTP_CODE" -ge 200 && "$HTTP_CODE" -lt 300 ]]; then
-        echo "  OK (HTTP $HTTP_CODE)"
+        if [[ -n "$existing_uid" ]]; then
+          echo "  Updated (HTTP $HTTP_CODE)"
+          UPDATE_COUNT=$((UPDATE_COUNT + 1))
+        else
+          echo "  Created (HTTP $HTTP_CODE)"
+        fi
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
       else
         echo "  FAILED (HTTP $HTTP_CODE)"
@@ -215,7 +262,8 @@ echo "Total rules:  $TOTAL_RULES"
 if [[ "$DRY_RUN" == true ]]; then
   echo "Mode:         DRY RUN (no changes applied)"
 else
-  echo "Succeeded:    $SUCCESS_COUNT"
+  echo "Created:      $((SUCCESS_COUNT - UPDATE_COUNT))"
+  echo "Updated:      $UPDATE_COUNT"
   echo "Failed:       $FAIL_COUNT"
 
   if [[ "$FAIL_COUNT" -gt 0 ]]; then
