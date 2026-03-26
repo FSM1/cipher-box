@@ -17,9 +17,13 @@ import { bytesToHex } from '@cipherbox/crypto';
 const API_URL = process.env.SDK_E2E_API_URL?.trim() || 'http://localhost:3000';
 const WEB_URL = process.env.WEB_URL?.trim() || 'http://localhost:5173';
 const IPFS_GATEWAY = process.env.RECOVERY_IPFS_GATEWAY?.trim() || 'http://localhost:8080';
-// IPNS resolution via delegated routing service (mock-ipns-routing in CI at port 3001;
-// Kubo can't resolve IPNS names published through it, and the CipherBox API requires auth)
-const IPNS_GATEWAY = process.env.RECOVERY_IPNS_GATEWAY?.trim() || 'http://localhost:3001';
+// IPNS resolution via delegated routing service (Kubo can't resolve IPNS names published
+// through it, and the CipherBox API requires auth). Derives from DELEGATED_ROUTING_URL
+// used by the API, so it stays in sync if the service runs on a different port.
+const IPNS_GATEWAY =
+  process.env.RECOVERY_IPNS_GATEWAY?.trim() ||
+  process.env.DELEGATED_ROUTING_URL?.trim() ||
+  'http://localhost:3001';
 
 test.describe('Vault Recovery Tool', () => {
   let account: TestAccount;

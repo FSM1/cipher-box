@@ -22,10 +22,10 @@ const fastify = Fastify({
   },
 });
 
-// CORS headers for browser-based recovery tool testing
+// CORS headers for browser-based recovery tool testing (read-only access)
 fastify.addHook('onRequest', async (request, reply) => {
   reply.header('Access-Control-Allow-Origin', '*');
-  reply.header('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS');
+  reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
   reply.header('Access-Control-Allow-Headers', 'Content-Type, Accept');
   if (request.method === 'OPTIONS') {
     return reply.status(204).send();
