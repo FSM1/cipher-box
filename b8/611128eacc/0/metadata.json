@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b8611128eacc",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T04:33:32.228621Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "344381bf1ee7",
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 34373,
+    "cache_read_tokens": 218100,
+    "output_tokens": 3606,
+    "api_call_count": 6
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) using wave-based parallel subagent execution to implement API backend, UI permission toggle, and write actions for shared folders.",
+    "outcome": "Waves 1 and 2 completed successfully — Share entity extended with permission/IPNS key columns, PATCH endpoint added, IPNS publish authorization expanded, and ShareDialog permission toggle with IPNS key wrapping implemented. Wave 3 (write actions checkpoint plan) was spawned but the transcript ends mid-execution.",
+    "learnings": {
+      "repo": [
+        "Phase 27 branch is `feat/phase-27-writable-shares` — already existed at execution start",
+        "Share entity was extended with a `permission` enum (read/write) and `encryptedIpnsKey` column",
+        "IPNS publish authorization was expanded to allow write-share recipients to publish",
+        "Plan 27-03 is a checkpoint plan (autonomous: false) requiring user interaction"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD orchestrator clears stale `_auto_chain_active` flag on manual invocation before reading config",
+        "Wave dependency pre-checks (verify key-links) ran clean for 27-02 — no cross-plan links declared",
+        "Spot-checks after each wave: SUMMARY.md existence, git log grep for phase-plan pattern, Self-Check: FAILED marker scan"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Wave 3 (27-03: write actions for shared folders) was spawned but not yet complete — transcript ends mid-execution",
+      "Post-wave-3 steps not yet run: regression gate, verification, roadmap update, PROJECT.md evolution"
+    ]
+  }
+}
