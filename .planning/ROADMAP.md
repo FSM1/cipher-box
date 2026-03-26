@@ -267,21 +267,44 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27
 
-| Phase                                     | Milestone | Plans Complete | Status   | Completed  |
-| ----------------------------------------- | --------- | -------------- | -------- | ---------- |
-| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete | 2026-03-07 |
-| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete | 2026-03-20 |
-| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete | 2026-03-23 |
-| 20. Vault Migration                       | v1.1      | 6/6            | Complete | 2026-03-24 |
-| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete | 2026-03-25 |
-| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete | 2026-03-25 |
-| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete | 2026-03-24 |
-| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete | 2026-03-25 |
-| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete | 2026-03-25 |
-| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete | 2026-03-26 |
+| Phase                                     | Milestone | Plans Complete | Status      | Completed  |
+| ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
+| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
+| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete    | 2026-03-25 |
+| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete    | 2026-03-25 |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
+| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete    | 2026-03-25 |
+| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete    | 2026-03-25 |
+| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete    | 2026-03-26 |
+| 27. Writable Shares (PoC)                 | v1.1      | 0/3            | Not Started |            |
+
+### Phase 27: Writable Shares (PoC)
+
+**Goal:** Extend Phase 14's read-only sharing to support read-write shares, leveraging existing server-side optimistic concurrency (expectedSequenceNumber / 409 conflict detection) to coordinate multi-writer IPNS publishes.
+**Requirements**: SHARE-01, SHARE-02, SHARE-03, SHARE-04, SHARE-05, SHARE-06, SHARE-07, SHARE-08, SHARE-09, SHARE-10
+**Depends on:** Phase 14 (User-to-User Sharing), Phase 16 (Advanced Sync -- conflict resolution)
+**Success Criteria** (what must be TRUE):
+
+1. Share entity supports permission levels (read/write) with default read for backward compatibility
+2. Write-share recipients receive ECIES-wrapped IPNS private key alongside existing folder key
+3. IPNS publish endpoint authorizes write-share recipients via shares table lookup
+4. Owner can upgrade/downgrade share permission in-place via API endpoint
+5. SharedFileBrowser shows [RW] badge, write toolbar, and full context menu for write shares
+6. Write operations use withConflictRetry for multi-writer coordination (same as multi-device sync)
+
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 27-01-PLAN.md -- Share entity/migration, DTOs, service methods, IPNS publish authorization expansion, API client regeneration
+- [ ] 27-02-PLAN.md -- Share store types, ShareDialog permission toggle, IPNS key wrapping, recipient permission management
+- [ ] 27-03-PLAN.md -- SharedFileBrowser write UI (badges, toolbar, context menu), useSharedNavigation write ops, 30s polling
 
 ---
 
