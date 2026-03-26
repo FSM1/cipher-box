@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.30.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.29.0...@cipherbox/sdk-core-v0.30.0) (2026-03-26)
+
+
+### Features
+
+* **phase-24:** bug fixes & test infrastructure ([#361](https://github.com/FSM1/cipher-box/issues/361)) ([2f1f93b](https://github.com/FSM1/cipher-box/commit/2f1f93ba7e7a9411e3a73b31e91992c95efd7bfa))
+* **phase-26:** observability alerting & UX timeout tuning ([#366](https://github.com/FSM1/cipher-box/issues/366)) ([0bd7001](https://github.com/FSM1/cipher-box/commit/0bd70019c277f1f3544643a7763808bae0a720c5))
+* **sdk-core:** extract vault key blob publish/load into SDK ([#368](https://github.com/FSM1/cipher-box/issues/368)) ([6d66be6](https://github.com/FSM1/cipher-box/commit/6d66be6843e6d5685c4bf740eea150e855fc2df0))
+
 ## [0.29.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.28.0...@cipherbox/sdk-core-v0.29.0) (2026-03-25)
 
 ### Features

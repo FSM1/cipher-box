@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.30.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.29.1...cipher-box-v0.30.0) (2026-03-26)
+
+
+### Features
+
+* desktop auto-updater, TEE file enrollment, and CI build workflow ([#360](https://github.com/FSM1/cipher-box/issues/360)) ([2bf8f4b](https://github.com/FSM1/cipher-box/commit/2bf8f4b1ef4e37e14b2b24905d70ea4d620874af))
+* **phase-24:** bug fixes & test infrastructure ([#361](https://github.com/FSM1/cipher-box/issues/361)) ([2f1f93b](https://github.com/FSM1/cipher-box/commit/2f1f93ba7e7a9411e3a73b31e91992c95efd7bfa))
+* **phase-26:** observability alerting & UX timeout tuning ([#366](https://github.com/FSM1/cipher-box/issues/366)) ([0bd7001](https://github.com/FSM1/cipher-box/commit/0bd70019c277f1f3544643a7763808bae0a720c5))
+* **sdk-core:** extract vault key blob publish/load into SDK ([#368](https://github.com/FSM1/cipher-box/issues/368)) ([6d66be6](https://github.com/FSM1/cipher-box/commit/6d66be6843e6d5685c4bf740eea150e855fc2df0))
+
+
+### Bug Fixes
+
+* **ci:** add SDK_E2E_SECRET and Kubo CORS config for recovery E2E test ([d4f20e3](https://github.com/FSM1/cipher-box/commit/d4f20e3ffcf0574ce7aef14b006be751c5d5dfa7))
+* **ci:** recovery E2E test auth and Kubo CORS ([#363](https://github.com/FSM1/cipher-box/issues/363)) ([d4f20e3](https://github.com/FSM1/cipher-box/commit/d4f20e3ffcf0574ce7aef14b006be751c5d5dfa7))
+* **e2e:** fix IPNS record parsing and resolution order in recovery tool ([#369](https://github.com/FSM1/cipher-box/issues/369)) ([392ccc9](https://github.com/FSM1/cipher-box/commit/392ccc9404d6ce1b0764ec6ef99af5b3be41d89d))
+* **e2e:** use CipherBox API for IPNS resolution in recovery test ([#364](https://github.com/FSM1/cipher-box/issues/364)) ([266656e](https://github.com/FSM1/cipher-box/commit/266656e1e7bab7a61ad8961c5be96a828cd22da5))
+* **e2e:** use mock-ipns-routing for recovery IPNS resolution ([#365](https://github.com/FSM1/cipher-box/issues/365)) ([da46ee3](https://github.com/FSM1/cipher-box/commit/da46ee312c2346c7686d11208bc871816da6a0f4))
+
 ## [0.29.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.29.0...cipher-box-v0.29.1) (2026-03-25)
 
 ### Bug Fixes

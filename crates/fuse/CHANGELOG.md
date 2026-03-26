@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.3.0...cipherbox-fuse-v0.4.0) (2026-03-26)
+
+
+### Features
+
+* desktop auto-updater, TEE file enrollment, and CI build workflow ([#360](https://github.com/FSM1/cipher-box/issues/360)) ([2bf8f4b](https://github.com/FSM1/cipher-box/commit/2bf8f4b1ef4e37e14b2b24905d70ea4d620874af))
+* **phase-24:** bug fixes & test infrastructure ([#361](https://github.com/FSM1/cipher-box/issues/361)) ([2f1f93b](https://github.com/FSM1/cipher-box/commit/2f1f93ba7e7a9411e3a73b31e91992c95efd7bfa))
+
 ## [0.3.0](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.2.0...cipherbox-fuse-v0.3.0) (2026-03-25)
 
 ### Features
