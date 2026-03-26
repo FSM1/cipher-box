@@ -63,3 +63,7 @@ please check that connection again - I can connect to it from hostinger dashboar
 ---
 
 https://github.com/FSM1/cipher-box/actions/runs/23576294028/job/68650602138 desktop build is failing on a missing signing key
+
+---
+
+the keys have already been configured on github repo secrets - these just need to be wired in to the github action i guess
