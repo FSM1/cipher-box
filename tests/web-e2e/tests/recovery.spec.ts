@@ -25,7 +25,12 @@ const IPNS_GATEWAY =
   process.env.DELEGATED_ROUTING_URL?.trim() ||
   'http://localhost:3001';
 
+// Skip in CI: the vault key blob IPNS record is published by the API directly to Kubo
+// (not through delegated routing), so mock-ipns-routing doesn't have it. The browser
+// can't resolve IPNS from Kubo due to CORS/timeout constraints. Run locally with a
+// CORS-configured Kubo or in staging where the full IPFS stack is accessible.
 test.describe('Vault Recovery Tool', () => {
+  test.skip(!!process.env.CI, 'Requires direct Kubo IPNS access (not available in CI)');
   let account: TestAccount;
   const testFileName = `recovery-test-${Date.now()}.txt`;
   const testFileContent = new TextEncoder().encode('CipherBox recovery test file content');
