@@ -1,0 +1,13 @@
+there is mention of writeable shares in the planning docs. please find it
+
+---
+
+ok, but is the sequence number and current conflict resolution not enough to provide at least a proof of concept that this could work.
+
+---
+
+ok, lets switch to a phase 27 branch, and then /gsd:add-phase with these details.
+
+---
+
+/gsd:discuss-phase 27
