@@ -1,0 +1,29 @@
+/gsd:execute-phase 26
+
+---
+
+please /gsd:plan-phase 26
+
+---
+
+/gsd:execute-phase 26
+
+---
+
+/simplify all phase 26
+
+---
+
+I am very confused why there are unrelated changes on the branch
+
+---
+
+would maybe merging the latest main solve this "issue"
+
+---
+
+ok could you help me investigate an issue I have with grafana at the moment: I am shown a notification `You've reached your free tier limit for Metrics. Upgrade to Pro to send more series.`
+
+---
+
+1+3 sounds great. think it makes sense to include in this work
