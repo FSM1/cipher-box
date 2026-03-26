@@ -74,6 +74,24 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Configure Kubo CORS for browser-based recovery test
+        run: |
+          # Allow browser cross-origin requests to Kubo gateway (needed by recovery.html)
+          docker exec $(docker ps -q --filter ancestor=ipfs/kubo:v0.40.0) ipfs config --json API.HTTPHeaders.Access-Control-Allow-Origin '["*"]'
+          docker exec $(docker ps -q --filter ancestor=ipfs/kubo:v0.40.0) ipfs config --json API.HTTPHeaders.Access-Control-Allow-Methods '["GET","POST","OPTIONS"]'
+          docker exec $(docker ps -q --filter ancestor=ipfs/kubo:v0.40.0) ipfs config --json Gateway.HTTPHeaders.Access-Control-Allow-Origin '["*"]'
+          docker exec $(docker ps -q --filter ancestor=ipfs/kubo:v0.40.0) ipfs config --json Gateway.HTTPHeaders.Access-Control-Allow-Methods '["GET","POST","OPTIONS"]'
+          # Restart Kubo to apply config (kill + Docker auto-restarts)
+          docker restart $(docker ps -q --filter ancestor=ipfs/kubo:v0.40.0)
+          # Wait for Kubo to be healthy again
+          for i in $(seq 1 30); do
+            if docker exec $(docker ps -q --filter ancestor=ipfs/kubo:v0.40.0) ipfs id > /dev/null 2>&1; then
+              echo "Kubo ready with CORS configured"
+              break
+            fi
+            sleep 2
+          done
+
       - name: Install Playwright browsers
         run: pnpm --filter @cipherbox/web-e2e exec playwright install chromium --with-deps
 
@@ -147,6 +165,7 @@ jobs:
           VITE_API_URL: http://localhost:3000
           # Test-login endpoint (bypasses Core Kit, uses deterministic keypair)
           TEST_LOGIN_SECRET: e2e-test-secret-ci-only
+          SDK_E2E_SECRET: e2e-test-secret-ci-only
           # Web3Auth test credentials (fallback if TEST_LOGIN_SECRET not set)
           WEB3AUTH_TEST_EMAIL: ${{ secrets.WEB3AUTH_TEST_EMAIL }}
           WEB3AUTH_TEST_OTP: ${{ secrets.WEB3AUTH_TEST_OTP }}
