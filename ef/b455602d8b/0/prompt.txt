@@ -251,3 +251,7 @@ pr is merged and latest e2e test run is running https://github.com/FSM1/cipher-b
 <summary>Background command "Retry fetching failed logs" completed (exit code 0)</summary>
 </task-notification>
 Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bqtc9szho.output
+
+---
+
+give it another try, probably jsut some github issues
