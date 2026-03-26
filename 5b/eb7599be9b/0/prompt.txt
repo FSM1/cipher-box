@@ -19,3 +19,7 @@ one thing I wanted to discuss with you is the folder ipns key derivation - why i
 ---
 
 ok great /gsd:plan-phase 27
+
+---
+
+/gsd:ui-phase 27
