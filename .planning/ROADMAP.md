@@ -28,7 +28,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (completed 2026-03-24)
 - [ ] **Phase 24: Bug Fixes & Test Infrastructure** - Fix known bugs (bin IPNS 404, device registry format error) and strengthen test infrastructure (headless load tests, vault recovery E2E, load test auth refresh)
 - [ ] **Phase 25: Desktop Enhancements** - Desktop auto-update mechanism and TEE file enrollment for new files
-- [ ] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX
+- [x] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX (completed 2026-03-26)
 
 ## Phase Details
 
@@ -245,7 +245,7 @@ Plans:
 3. Client-side timeouts and retry config are tuned based on Phase 18/22 baseline data for sub-2s UX on common operations
 4. Timeout changes are validated against the journey timing tests from Phase 22
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
@@ -269,7 +269,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
 | 24. Bug Fixes & Test Infrastructure       | v1.1      | 0/?            | Not started | -          |
 | 25. Desktop Enhancements                  | v1.1      | 0/?            | Not started | -          |
-| 26. Observability & UX Tuning             | 1/2       | In Progress    |             | -          |
+| 26. Observability & UX Tuning             | 2/2       | Complete       | 2026-03-26  | -          |
 
 ---
 
