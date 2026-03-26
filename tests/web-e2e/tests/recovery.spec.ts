@@ -16,6 +16,11 @@ import { bytesToHex } from '@cipherbox/crypto';
 
 const API_URL = process.env.SDK_E2E_API_URL ?? 'http://localhost:3000';
 const WEB_URL = process.env.WEB_URL ?? 'http://localhost:5173';
+// IPFS content gateway (Kubo) — for fetching CIDs
+const IPFS_GATEWAY = process.env.RECOVERY_IPFS_GATEWAY ?? 'http://localhost:8080';
+// IPNS resolution gateway — in CI, Kubo can't resolve IPNS names published via
+// mock-ipns-routing, so we use the CipherBox API which has DB cache + delegated routing
+const IPNS_GATEWAY = process.env.RECOVERY_IPNS_GATEWAY ?? 'http://localhost:3000';
 
 test.describe('Vault Recovery Tool', () => {
   let account: TestAccount;
@@ -60,14 +65,12 @@ test.describe('Vault Recovery Tool', () => {
     const privateKeyHex = bytesToHex(account.privateKey);
     await page.locator('[data-testid="recovery-key-input"]').fill(privateKeyHex);
 
-    // Set gateway URLs to localhost (Kubo + API)
-    // The IPFS gateway should point to local Kubo for content retrieval
+    // Set gateway URLs
     await page.locator('[data-testid="recovery-ipfs-gateway"]').clear();
-    await page.locator('[data-testid="recovery-ipfs-gateway"]').fill('http://localhost:8080');
+    await page.locator('[data-testid="recovery-ipfs-gateway"]').fill(IPFS_GATEWAY);
 
-    // The IPNS gateway should point to local Kubo gateway for IPNS resolution
     await page.locator('[data-testid="recovery-ipns-gateway"]').clear();
-    await page.locator('[data-testid="recovery-ipns-gateway"]').fill('http://localhost:8080');
+    await page.locator('[data-testid="recovery-ipns-gateway"]').fill(IPNS_GATEWAY);
 
     // Click start recovery
     await page.locator('[data-testid="recovery-start-btn"]').click();
