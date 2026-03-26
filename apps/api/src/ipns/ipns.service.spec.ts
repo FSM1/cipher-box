@@ -8,6 +8,7 @@ import { User } from '../auth/entities/user.entity';
 import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
+import { SharesService } from '../shares/shares.service';
 import { parseIpnsRecord } from './ipns-record-parser';
 
 jest.mock('./ipns-record-parser');
@@ -96,6 +97,12 @@ describe('IpnsService', () => {
         {
           provide: MetricsService,
           useValue: mockMetricsService,
+        },
+        {
+          provide: SharesService,
+          useValue: {
+            findActiveWriteShare: jest.fn().mockResolvedValue(null),
+          },
         },
       ],
     }).compile();
