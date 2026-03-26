@@ -39,7 +39,7 @@ Declared values (existing tokens from `index.css :root`):
 | lg    | 24px  | Section padding, larger gaps                      |
 | xl    | 32px  | Layout gaps                                       |
 
-Exceptions: Permission toggle buttons use `padding: 2px 8px` (matching existing `share-revoke-btn` pattern for compact inline controls). Badge internal padding uses `padding: 1px 6px` (matching existing `invite-status-badge` pattern).
+Exceptions: Permission toggle buttons use `padding: 4px 8px` (grid-aligned compact inline controls). Badge internal padding uses `padding: 0px 4px` (grid-aligned minimal badge padding).
 
 ---
 
@@ -52,9 +52,9 @@ All text uses `var(--font-family-mono)` ("JetBrains Mono", monospace). Existing 
 | Body / File   | 11px (`--font-size-sm`) | 400 (`--font-weight-normal`)   | 1.5         |
 | Label / Badge | 10px (`--font-size-xs`) | 600 (`--font-weight-semibold`) | 1.4         |
 | Heading       | 14px (`--font-size-md`) | 600 (`--font-weight-semibold`) | 1.2         |
-| Display       | 18px (`--font-size-lg`) | 700 (`--font-weight-bold`)     | 1.2         |
+| Display       | 18px (`--font-size-lg`) | 600 (`--font-weight-semibold`) | 1.2         |
 
-Source: Pre-populated from existing `index.css` tokens. No new sizes or weights introduced.
+Source: Pre-populated from existing `index.css` tokens. Display role uses semibold (600) to stay within the 2-weight budget (400, 600).
 
 ---
 
@@ -105,7 +105,7 @@ Location: Inside ShareDialog, between pubkey input and share button.
 - Each button: `role="radio"`, `aria-checked`, grouped under `role="radiogroup" aria-label="Permission level"`
 - Active state: `color: var(--color-green-primary); border-color: var(--color-green-primary); background-color: var(--color-green-darker);`
 - Inactive state: `color: var(--color-text-muted); border-color: var(--color-border-dim); background: transparent;`
-- Button padding: `2px 8px` (matches `share-revoke-btn` compact pattern)
+- Button padding: `4px 8px` (grid-aligned compact inline controls)
 - Font: `--font-family-mono`, `--font-size-xs`, `--font-weight-semibold`, `letter-spacing: 0.05em`
 - Focus: `:focus-visible { outline: 1px solid var(--color-green-primary); outline-offset: 1px; }`
 - Keyboard: ArrowLeft/ArrowRight to switch between options (standard radiogroup pattern)
@@ -151,7 +151,7 @@ Location: In share recipients list, between permission label and revoke button.
 - Single button per recipient showing opposite action: `--upgrade` or `--downgrade`
 - `--upgrade` button: `color: var(--color-green-primary); border-color: var(--color-green-dim);` (follows `share-submit-btn` pattern)
 - `--downgrade` button: `color: var(--color-warning); border-color: var(--color-warning-dim);` (orange/amber signals reduced access, not destructive)
-- Padding: `2px 8px` (matches revoke button)
+- Padding: `4px 8px` (grid-aligned compact inline controls)
 - Font: `--font-family-mono`, `--font-size-xs`
 - Hover: background tint matching the button color at 10% opacity
 - Downgrade confirmation: Inline `confirm? [y] [n]` pattern identical to existing revoke confirm
