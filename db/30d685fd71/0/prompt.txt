@@ -7,3 +7,7 @@ ok, but is the sequence number and current conflict resolution not enough to pro
 ---
 
 ok, lets switch to a phase 27 branch, and then /gsd:add-phase with these details.
+
+---
+
+/gsd:discuss-phase 27
