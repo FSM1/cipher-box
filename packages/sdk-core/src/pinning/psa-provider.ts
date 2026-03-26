@@ -1,6 +1,6 @@
 import type { PinningProvider, PinResult, PinStatus } from './types';
 
-/** Timeout for all PSA requests (15 seconds — external service, conservative reduction) */
+/** Timeout for all PSA requests — external service */
 const REQUEST_TIMEOUT_MS = 15_000;
 
 /** PSA pin object from the Pinning Service API response */

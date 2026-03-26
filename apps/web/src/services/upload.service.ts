@@ -5,7 +5,7 @@ import { useUploadStore } from '../stores/upload.store';
 import { CancelToken } from 'axios';
 
 const MAX_RETRIES = 3;
-const RETRY_BASE_DELAY = 500; // 500ms — faster recovery for transient upload failures
+const RETRY_BASE_DELAY = 500;
 
 export type UploadedFile = {
   cid: string;

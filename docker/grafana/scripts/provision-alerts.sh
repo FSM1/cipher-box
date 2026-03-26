@@ -48,8 +48,8 @@ if [[ -z "$GRAFANA_URL" || -z "$API_KEY" || -z "$DATASOURCE_UID" ]]; then
   exit 1
 fi
 
-# Check for --dry-run flag in any position
-for arg in "$@"; do
+# Check for --dry-run flag (only after the 3 positional args)
+for arg in "${@:4}"; do
   if [[ "$arg" == "--dry-run" ]]; then
     DRY_RUN=true
   fi
@@ -155,8 +155,7 @@ for rule_file in "${JSON_FILES[@]}"; do
 
   # Read file and replace placeholders
   file_content=$(cat "$rule_file")
-  file_content=$(echo "$file_content" | sed "s/GRAFANA_CLOUD_DATASOURCE_UID/$DATASOURCE_UID/g")
-  file_content=$(echo "$file_content" | sed "s/GRAFANA_ALERTS_FOLDER_UID/$FOLDER_UID/g")
+  file_content=$(echo "$file_content" | sed -e "s|GRAFANA_CLOUD_DATASOURCE_UID|$DATASOURCE_UID|g" -e "s|GRAFANA_ALERTS_FOLDER_UID|$FOLDER_UID|g")
 
   # Determine if file is an array (multiple rules) or single rule
   is_array=$(echo "$file_content" | jq 'type == "array"')
