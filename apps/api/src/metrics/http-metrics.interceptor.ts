@@ -34,9 +34,10 @@ export class HttpMetricsInterceptor implements NestInterceptor {
   }
 
   private recordDuration(req: Request, statusCode: number, startTime: bigint): void {
-    // Use the route template when available (already parameterised by Express/NestJS);
-    // only normalise the raw req.path when the route was not matched.
-    const route = req.route?.path ?? this.normalizeRoute(req.path);
+    const matched = req.route?.path;
+
+    // Unmatched routes (bot scanners, typos) get a single bucket to cap cardinality
+    const route = matched ?? '/:unmatched';
 
     // Exclude /metrics endpoint to avoid self-referential noise
     if (route === '/metrics') return;
@@ -47,13 +48,5 @@ export class HttpMetricsInterceptor implements NestInterceptor {
     this.metricsService.httpRequestDuration
       .labels(req.method, route, String(statusCode))
       .observe(durationSec);
-  }
-
-  private normalizeRoute(path: string): string {
-    // Replace UUIDs and CIDs with placeholders to keep cardinality low
-    return path
-      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id')
-      .replace(/\/ipfs\/[a-zA-Z0-9]+/, '/ipfs/:cid')
-      .replace(/\/ipns\/[a-zA-Z0-9]+/, '/ipns/:name');
   }
 }

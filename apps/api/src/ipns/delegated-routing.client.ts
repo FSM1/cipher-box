@@ -16,9 +16,9 @@ export class DelegatedRoutingClient {
   private readonly primaryUrl: string;
   private readonly fallbackUrl: string | null;
   private readonly maxRetries = 3;
-  private readonly baseDelayMs = 1000;
+  private readonly baseDelayMs = 500;
   private readonly maxRetryDelayMs = 30_000;
-  private readonly requestTimeoutMs = 10_000;
+  private readonly requestTimeoutMs = 5_000;
 
   constructor(
     private readonly configService: ConfigService,

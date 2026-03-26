@@ -66,6 +66,19 @@ prometheus.scrape "cipherbox_api" {
   forward_to = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
+// Filter Kubo/Someguy metrics to only those used by dashboards.
+// Without filtering, Kubo alone exports 10k+ series (DHT, bitswap,
+// per-peer stats) which exceeds Grafana Cloud free tier limits.
+prometheus.relabel "keep_infra_metrics" {
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "go_goroutines|go_memstats_alloc_bytes|libp2p_swarm_connections_opened_total|libp2p_swarm_connections_closed_total|libp2p_network_in_bytes_total|libp2p_network_out_bytes_total"
+    action        = "keep"
+  }
+}
+
 // Scrape Kubo /debug/metrics/prometheus endpoint for IPFS node health
 prometheus.scrape "kubo" {
   targets = [{
@@ -74,7 +87,7 @@ prometheus.scrape "kubo" {
   metrics_path = "/debug/metrics/prometheus"
   scrape_interval = "30s"
 
-  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+  forward_to = [prometheus.relabel.keep_infra_metrics.receiver]
 }
 
 // Scrape Someguy /debug/metrics/prometheus endpoint for delegated routing health
@@ -85,7 +98,7 @@ prometheus.scrape "someguy" {
   metrics_path = "/debug/metrics/prometheus"
   scrape_interval = "30s"
 
-  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+  forward_to = [prometheus.relabel.keep_infra_metrics.receiver]
 }
 
 // Ship metrics to Grafana Cloud Mimir (Prometheus-compatible)

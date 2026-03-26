@@ -120,8 +120,8 @@ describe('DelegatedRoutingClient', () => {
       expect(mockFetch).toHaveBeenCalledTimes(3);
       // Delay called twice (attempts 0 and 1)
       expect(delaySpy).toHaveBeenCalledTimes(2);
-      expect(delaySpy).toHaveBeenNthCalledWith(1, 1000); // 1000 * 2^0
-      expect(delaySpy).toHaveBeenNthCalledWith(2, 2000); // 1000 * 2^1
+      expect(delaySpy).toHaveBeenNthCalledWith(1, 500); // 500 * 2^0
+      expect(delaySpy).toHaveBeenNthCalledWith(2, 1000); // 500 * 2^1
     });
 
     it('throws BAD_GATEWAY after exhausting retries on network errors', async () => {
@@ -224,7 +224,7 @@ describe('DelegatedRoutingClient', () => {
 
       expect(result).toBeInstanceOf(Uint8Array);
       expect(mockFetch).toHaveBeenCalledTimes(2);
-      expect(delaySpy).toHaveBeenCalledWith(1000);
+      expect(delaySpy).toHaveBeenCalledWith(500);
     });
 
     it('retries on 429 with Retry-After', async () => {
@@ -402,8 +402,8 @@ describe('DelegatedRoutingClient', () => {
 
       await client.publish(ipnsName, recordBytes);
 
-      // Fallback for attempt 0: min(1000 * 2^0, 30000) = 1000ms
-      expect(delaySpy).toHaveBeenCalledWith(1000);
+      // Fallback for attempt 0: min(500 * 2^0, 30000) = 500ms
+      expect(delaySpy).toHaveBeenCalledWith(500);
     });
 
     it('encodes ipnsName in URL to handle reserved characters', async () => {

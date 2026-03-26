@@ -3,8 +3,8 @@ import type { PinningProvider, PinResult, PinStatus } from './types';
 /** Fixed upload URL for Pinata file uploads (always this domain, not configurable) */
 const UPLOAD_URL = 'https://uploads.pinata.cloud';
 
-/** Timeout for all Pinata API requests (60 seconds -- uploads can be large) */
-const REQUEST_TIMEOUT_MS = 60_000;
+/** Timeout for all Pinata API requests — higher ceiling for external network uploads */
+const REQUEST_TIMEOUT_MS = 30_000;
 
 /**
  * PinningProvider implementation for Pinata's native v3 API.

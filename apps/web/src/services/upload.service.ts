@@ -5,7 +5,7 @@ import { useUploadStore } from '../stores/upload.store';
 import { CancelToken } from 'axios';
 
 const MAX_RETRIES = 3;
-const RETRY_BASE_DELAY = 1000; // 1 second
+const RETRY_BASE_DELAY = 500;
 
 export type UploadedFile = {
   cid: string;

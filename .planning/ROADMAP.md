@@ -28,7 +28,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (completed 2026-03-24)
 - [x] **Phase 24: Bug Fixes & Test Infrastructure** - Fix known bugs (bin IPNS 404, device registry format error) and strengthen test infrastructure (headless load tests, vault recovery E2E, load test auth refresh) (completed 2026-03-25)
 - [x] **Phase 25: Desktop Enhancements** - Desktop auto-update mechanism and TEE file enrollment for new files (completed 2026-03-25)
-- [ ] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX
+- [x] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX (completed 2026-03-26)
 
 ## Phase Details
 
@@ -257,28 +257,33 @@ Plans:
 3. Client-side timeouts and retry config are tuned based on Phase 18/22 baseline data for sub-2s UX on common operations
 4. Timeout changes are validated against the journey timing tests from Phase 22
 
-**Plans**: TBD
+**Plans:** 2/2 plans complete
+
+Plans:
+
+- [x] 26-01-PLAN.md -- Grafana alert rule JSON definitions + provisioning script for five alert categories
+- [x] 26-02-PLAN.md -- Client-side timeout and retry constant tuning across SDK providers and API services
 
 ## Progress
 
 **Execution Order:**
 Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26
 
-| Phase                                     | Milestone | Plans Complete | Status      | Completed  |
-| ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
-| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
-| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
-| 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
-| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete    | 2026-03-25 |
-| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete    | 2026-03-25 |
-| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
-| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete    | 2026-03-25 |
-| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete    | 2026-03-25 |
-| 26. Observability & UX Tuning             | v1.1      | 0/?            | Not started | -          |
+| Phase                                     | Milestone | Plans Complete | Status   | Completed  |
+| ----------------------------------------- | --------- | -------------- | -------- | ---------- |
+| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete | 2026-03-07 |
+| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete | 2026-03-20 |
+| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete | 2026-03-23 |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete | 2026-03-25 |
+| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete | 2026-03-24 |
+| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete | 2026-03-26 |
 
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-25_
+_Last updated: 2026-03-26_

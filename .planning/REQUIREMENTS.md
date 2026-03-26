@@ -87,8 +87,8 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 
 ### Observability & UX Tuning (Phase 26)
 
-- [ ] **OBS-01**: Grafana alerts fire when IPNS/IPFS/API response times exceed p95 thresholds from Phase 18/22 baselines
-- [ ] **OBS-02**: Client-side timeouts and retry config tuned for sub-2s perceived latency on common operations
+- [x] **OBS-01**: Grafana alerts fire when IPNS/IPFS/API response times exceed p95 thresholds from Phase 18/22 baselines
+- [x] **OBS-02**: Client-side timeouts and retry config tuned for sub-2s perceived latency on common operations
 
 ## v1.2 Requirements
 
@@ -182,8 +182,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-03     | Phase 24   | Complete |
 | DESKTOP-01  | Phase 25   | Complete |
 | DESKTOP-02  | Phase 25   | Complete |
-| OBS-01      | Phase 26   | Pending  |
-| OBS-02      | Phase 26   | Pending  |
+| OBS-01      | Phase 26   | Complete |
+| OBS-02      | Phase 26   | Complete |
 
 **Coverage:**
 
