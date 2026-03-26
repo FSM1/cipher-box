@@ -119,6 +119,21 @@ function isForbiddenError(error: unknown): boolean {
   return e.status === 403;
 }
 
+/** Parse a 0x-prefixed or bare hex public key string into bytes. */
+function parsePublicKey(keyHex: string): Uint8Array {
+  const hex = keyHex.startsWith('0x') ? keyHex.slice(2) : keyHex;
+  return hexToBytes(hex);
+}
+
+/** Safe base64 encoding that avoids call stack overflow from spread operator. */
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 /**
  * Hook for browsing shared content.
  *
@@ -297,10 +312,9 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         entry.folderKey.fill(0);
       }
       navStackRef.current = [];
-      // Zero IPNS private key on unmount
       zeroIpnsKey();
-      // Clear polling on unmount
       clearPolling();
+      shareKeysCache.current.clear();
     };
   }, [zeroIpnsKey, clearPolling]);
 
@@ -473,13 +487,17 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
             });
           }
 
-          // Update state
-          setFolderChildren(metadata.children ?? []);
+          // Update state + refs
+          const children = metadata.children ?? [];
+          const seqNum = BigInt(resolved.sequenceNumber);
+          setFolderChildren(children);
+          folderChildrenRef.current = children;
           setFolderKey(subfolderKey);
           subfolderKeyStored = true;
           setBreadcrumbs((prev) => [...prev, { id: folderId, name: folderName }]);
           setIpnsName(folderEntry.ipnsName);
-          setCurrentSequenceNumber(resolved.sequenceNumber);
+          setCurrentSequenceNumber(seqNum);
+          sequenceNumberRef.current = seqNum;
         } finally {
           if (!subfolderKeyStored) subfolderKey.fill(0);
         }
@@ -539,10 +557,12 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       // Pop from nav stack
       const prev = navStackRef.current.pop()!;
       setFolderChildren(prev.children);
+      folderChildrenRef.current = prev.children;
       setFolderKey(prev.folderKey);
       setBreadcrumbs((crumbs) => crumbs.slice(0, -1));
       setIpnsName(prev.ipnsName);
       setCurrentSequenceNumber(prev.sequenceNumber);
+      sequenceNumberRef.current = prev.sequenceNumber;
     } else if (currentView === 'folder') {
       // Back to top-level list
       navigateToRoot();
@@ -568,10 +588,12 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       const target = navStackRef.current.pop();
       if (target) {
         setFolderChildren(target.children);
+        folderChildrenRef.current = target.children;
         setFolderKey(target.folderKey);
         setBreadcrumbs((crumbs) => crumbs.slice(0, crumbIndex + 1));
         setIpnsName(target.ipnsName);
         setCurrentSequenceNumber(target.sequenceNumber);
+        sequenceNumberRef.current = target.sequenceNumber;
       }
     },
     [breadcrumbs, folderKey]
@@ -817,10 +839,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setError('Share not found');
         return;
       }
-      const ownerPubKeyHex = shareItem.share.sharerPublicKey.startsWith('0x')
-        ? shareItem.share.sharerPublicKey.slice(2)
-        : shareItem.share.sharerPublicKey;
-      const ownerPublicKey = hexToBytes(ownerPubKeyHex);
+      const ownerPublicKey = parsePublicKey(shareItem.share.sharerPublicKey);
 
       setIsLoading(true);
       setError(null);
@@ -894,11 +913,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
                 ipnsLifetimeMs
               );
               const recordBytes = marshalIpnsRecord(record);
-              let binary = '';
-              for (let i = 0; i < recordBytes.length; i++) {
-                binary += String.fromCharCode(recordBytes[i]);
-              }
-              const recordBase64 = btoa(binary);
+              const recordBase64 = uint8ToBase64(recordBytes);
 
               await batchPublishIpnsRecords([
                 {
@@ -1033,10 +1048,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
 
           const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
           if (!shareItem) throw new Error('Share not found');
-          const ownerPubHex = shareItem.share.sharerPublicKey.startsWith('0x')
-            ? shareItem.share.sharerPublicKey.slice(2)
-            : shareItem.share.sharerPublicKey;
-          const ownerPubKey = hexToBytes(ownerPubHex);
+          const ownerPubKey = parsePublicKey(shareItem.share.sharerPublicKey);
 
           const wrappedFolderKey = await wrapSubfolderKey(subfolderKey, ownerPubKey);
           const wrappedIpnsKey = await wrapSubfolderKey(keypair.privateKey, ownerPubKey);
@@ -1222,10 +1234,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       if (!shareItem) {
         throw new Error('Share not found');
       }
-      const ownerPubKeyHex = shareItem.share.sharerPublicKey.startsWith('0x')
-        ? shareItem.share.sharerPublicKey.slice(2)
-        : shareItem.share.sharerPublicKey;
-      const ownerPublicKey = hexToBytes(ownerPubKeyHex);
+      const ownerPublicKey = parsePublicKey(shareItem.share.sharerPublicKey);
 
       // 1. Encrypt new content with AES-256-GCM
       const { encryptAesGcm, generateFileKey, generateIv } = await import('@cipherbox/crypto');
@@ -1402,13 +1411,13 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
 
     pollIntervalRef.current = setInterval(async () => {
       try {
-        // M-04: Re-fetch received shares from API (not just in-memory store)
+        // Re-fetch received shares from API to detect permission changes
         const freshShares = await fetchReceivedShares(100, 0);
-        useShareStore.getState().setReceivedShares(freshShares.shares);
         const currentShare = freshShares.shares.find((s) => s.shareId === currentShareId);
 
         // Check for silent revocation or permission downgrade
         if (!currentShare || currentShare.permission !== 'write') {
+          useShareStore.getState().setReceivedShares(freshShares.shares);
           handleRevocation(false);
           clearPolling();
           return;
