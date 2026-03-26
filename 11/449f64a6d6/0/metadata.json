@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "11449f64a6d6",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T04:42:36.355896Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "344381bf1ee7",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 36449,
+    "cache_read_tokens": 353792,
+    "output_tokens": 4923,
+    "api_call_count": 9
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) using wave-based parallel execution across 3 plans covering API backend, UI permission toggle, and SharedFileBrowser write actions.",
+    "outcome": "All 3 waves completed successfully. Share entity extended with permission/IPNS key columns, ShareDialog got read/write toggle with key wrapping, and SharedFileBrowser write actions were implemented. Wave 3 had a checkpoint (autonomous: false) but the transcript ends before checkpoint resolution is shown.",
+    "learnings": {
+      "repo": [
+        "Phase 27 branch is `feat/phase-27-writable-shares` — already existed at execution time",
+        "Share entity uses a `permission` enum (read/write) and `encryptedIpnsKey` column for write shares",
+        "IPNS publish authorization was extended to allow write-share recipients to publish",
+        "Plan 27-03 (SharedFileBrowser Write Actions) is marked `autonomous: false` — requires user checkpoint"
+      ],
+      "code": [],
+      "workflow": [
+        "The orchestrator skips cross-plan key-link verification when no key-links are defined in a plan's frontmatter",
+        "Wave sequencing here was strict 1→2→3 with no parallelism across waves (each plan depends on prior wave's artifacts)",
+        "Spot-checks after each wave: verify SUMMARY.md exists, git commits present, no Self-Check: FAILED marker"
+      ]
+    },
+    "friction": [
+      "Transcript ends mid-execution — Wave 3 executor was spawned but the checkpoint interaction and final verification/roadmap update are not shown, so phase completion status is unknown"
+    ],
+    "open_items": [
+      "Wave 3 checkpoint (human-verify or decision) needs user resolution before plan 27-03 can complete",
+      "SharedFileBrowser features to implement per plan 27-03: [RW] badge, write toolbar (upload, mkdir), full context menu (rename, delete), 30s sync polling, silent revocation transitions",
+      "Phase verification (gsd-verifier) and ROADMAP.md update have not yet run — phase is not marked complete"
+    ]
+  }
+}
