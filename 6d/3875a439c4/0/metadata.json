@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6d3875a439c4",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T01:36:32.955279Z",
+  "branch": "fix/recovery-e2e-kubo-ipns",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "34de2af74bec",
+  "token_usage": {
+    "input_tokens": 374,
+    "cache_creation_tokens": 321282,
+    "cache_read_tokens": 58852947,
+    "output_tokens": 69301,
+    "api_call_count": 310
+  },
+  "session_metrics": {
+    "turn_count": 32
+  },
+  "summary": {
+    "intent": "Execute Phase 24 (bug fixes + test infrastructure) for cipher-box, review and clean up the resulting code, get it merged via PR, and fix the recovery E2E test that was failing in CI.",
+    "outcome": "Phase 24 was executed successfully (3 plans, 9 commits), code reviewed and simplified, PR #361 merged. A series of follow-on PRs (#363, #364, #365) were opened to fix the recovery E2E test in CI, which is still iterating — the root cause was IPNS records being published via mock-ipns-routing (not Kubo DHT), requiring the browser to reach the mock directly with CORS enabled.",
+    "learnings": {
+      "repo": [
+        "IPNS records in CI are published via mock-ipns-routing (port 3001), NOT through Kubo's DHT. Kubo's gateway (8080) and API (5001) cannot resolve these names — only mock-ipns-routing and the CipherBox DB cache can.",
+        "The CipherBox API's /ipns/resolve endpoint requires JWT auth (JwtAuthGuard on entire IpnsController) — it cannot be used by unauthenticated tools like recovery.html.",
+        "recovery.html resolveIpns fallback chain: (1) /ipns/ HEAD on IPFS gateway → (2) /routing/v1/ipns/ delegated routing with retries → (3) localhost:3000/ipns/resolve API → (4) Kubo API POST /api/v0/name/resolve. Chain silently fails if all 4 fail.",
+        "Web E2E workflow was missing SDK_E2E_SECRET env var — recovery spec uses createTestAccount from SDK harness which reads this var; API uses TEST_LOGIN_SECRET. Both are 'e2e-test-secret-ci-only' in CI.",
+        "Kubo in CI has no CORS headers configured by default — browser cannot make cross-origin requests to localhost:8080 or localhost:5001 from the Vite dev server at localhost:5173.",
+        "computeIpHash() already existed in apps/web/src/lib/device/info.ts — useAuth.ts was inlining 7 lines of SHA-256 code unnecessarily.",
+        "DeviceRegistry was upgraded from v1 to v2 schema in this phase — v1-\u003ev2 migration added with lenient read and validateV2Registry. Only empty-string ipHash should be auto-healed; other malformed values should be rejected.",
+        "publishWithVerify was re-publishing on every retry — should publish once then retry only the verification step."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 202,
+          "end_line": 220,
+          "finding": "publishWithVerify: publish should happen once; retries should only re-run verification, not re-publish. Original code re-published on each retry."
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 80,
+          "end_line": 96,
+          "finding": "validateRegistryShape() helper deduplicates v1/v2 validation. TypeScript doesn't propagate narrowing across function boundaries — cast obj.devices as unknown[] after the call."
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 69,
+          "end_line": 69,
+          "finding": "let cid declared inside try block was inaccessible in finally block. Must be hoisted above try. Use string | undefined with localized ! assertions at usage sites, not definite assignment at declaration."
+        },
+        {
+          "path": "tools/mock-ipns-routing/src/index.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Mock IPNS routing server (Fastify) had no CORS headers — browser recovery tool couldn't reach it. Added Access-Control-Allow-Origin: * with GET + OPTIONS methods only."
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 23,
+          "end_line": 30,
+          "finding": "IPNS_GATEWAY should default to DELEGATED_ROUTING_URL (mock-ipns-routing at :3001), not the CipherBox API. All env vars should use .trim() || default pattern."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 725,
+          "end_line": 749,
+          "finding": "resolveIpns API fallback uses window.location.origin.replace(/:d+$/, ':3000') — works correctly but requires API to not have auth on the resolve endpoint (it does, causing silent 401 failure in fallback chain)."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/bin-operations.test.ts",
+          "line": 32,
+          "end_line": 32,
+          "finding": "After auto-repair change, fresh bin loadBin returns sequenceNumber: 1 (not 0) because it publishes immediately on first load."
+        }
+      ],
+      "workflow": [
+        "GSD wave-based parallel execution: 3 agents ran concurrently, each with fresh 200k context. Orchestrator stays at ~10-15% context. Spot-checks (SUMMARY.md exists + git commits present) validate success.",
+        "classifyHandoffIfNeeded CI bug: agent reports 'failed' but this is a Claude Code runtime bug firing after tool calls complete. Spot-checks determine real success/failure.",
+        "Code review agents (reuse/quality/efficiency) run in parallel on the full diff — effective pattern for post-execution cleanup.",
+        "Stale package .d.ts files caused 6 type errors in the web app — rebuilding @cipherbox/crypto and @cipherbox/api-client resolved them without code changes.",
+        "Recovery E2E debugging required downloading Playwright artifacts (error-context.md) since GitHub API was intermittently unreachable for log streaming.",
+        "PR merge conflicts in planning files (.planning/ROADMAP.md, STATE.md, REQUIREMENTS.md, PROJECT.md) are common when two phase branches are merged close together — both phases' completions must be preserved."
+      ]
+    },
+    "friction": [
+      "GitHub API was intermittently unreachable during CI debugging, requiring multiple retries and relying on artifact downloads instead of log streaming.",
+      "Recovery E2E test required 3 separate PRs (#363, #364, #365) to debug — each revealed a new layer: missing env var → CORS → auth-gated API → mock-ipns-routing not reachable.",
+      "TypeScript doesn't propagate narrowing from helper validation functions to callers — required explicit casts (as unknown[]) after calling validateRegistryShape().",
+      "Background bash tasks failing with exit code 128 (push already done by foreground command) created noisy notifications.",
+      "Kubo CORS must be configured after container starts via ipfs config commands — not configurable via Docker Compose service definition directly.",
+      "The recovery.html fallback chain silently swallows all errors and shows a generic 'Failed to resolve IPNS name' — makes debugging CI failures time-consuming."
+    ],
+    "open_items": [
+      "Recovery E2E test (PR #365) is still iterating in CI — CORS added to mock-ipns-routing, but test has not yet passed green.",
+      "recovery.html IPNS resolution uses the CipherBox API as a fallback but the endpoint requires JWT auth — recovery tool can never use this path. Should either add an unauthenticated /ipns/resolve endpoint or document the limitation.",
+      "Local development of the recovery E2E test requires Kubo CORS configured on the Docker host (192.168.133.12) — currently blocked without running ipfs config commands manually on the VM.",
+      "byo-file-workload.ts: pre-existing type errors (unrelated to phase 24) were fixed as a side effect but the underlying architecture (cid/pinSize scoping around try/finally) is fragile.",
+      "Integration tests in packages/sdk that require a live API (2 tests) are always skipped locally — these are never run unless CI is triggered."
+    ]
+  }
+}
