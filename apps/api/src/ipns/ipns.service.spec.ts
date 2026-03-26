@@ -1290,13 +1290,13 @@ describe('IpnsService', () => {
       expect(saved.keyEpoch).toBe(testKeyEpoch);
     });
 
-    it('should reject create when IPNS name already owned by another user', async () => {
-      mockFolderIpnsRepo.findOne
-        .mockResolvedValueOnce(null) // getFolderIpns = null (not owner)
-        .mockResolvedValueOnce({ ...mockFolderEntity }); // existingOther check finds a row
-
-      // No write share — falls through to create path
+    it('should create new IPNS entry for first-time publisher', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
       mockSharesService.findActiveWriteShare.mockResolvedValue(null);
+
+      const newEntity = { ...mockFolderEntity, userId: 'new-user-id', sequenceNumber: '1' };
+      mockFolderIpnsRepo.create.mockReturnValue(newEntity);
+      mockFolderIpnsRepo.save.mockResolvedValue(newEntity);
 
       mockParseIpnsRecord.mockReturnValue({
         value: `/ipfs/${testMetadataCid}`,
@@ -1309,7 +1309,8 @@ describe('IpnsService', () => {
         metadataCid: testMetadataCid,
       };
 
-      await expect(service.publishRecord('other-user-id', dto)).rejects.toThrow(ForbiddenException);
+      const result = await service.publishRecord('new-user-id', dto);
+      expect(result.sequenceNumber).toBe('1');
     });
   });
 });

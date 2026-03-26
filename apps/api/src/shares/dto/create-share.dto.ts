@@ -33,7 +33,9 @@ class ChildKeyDto {
     description: 'Hex-encoded ECIES ciphertext of the key wrapped for recipient',
   })
   @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'encryptedKey must be an even-length hex string',
+  })
   @MinLength(64)
   @MaxLength(1024)
   encryptedKey!: string;
@@ -78,7 +80,9 @@ export class CreateShareDto {
     description: 'Hex-encoded root key wrapped for recipient via ECIES',
   })
   @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'encryptedKey must be an even-length hex string',
+  })
   @MinLength(64)
   @MaxLength(1024)
   encryptedKey!: string;
@@ -99,7 +103,9 @@ export class CreateShareDto {
     required: false,
   })
   @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedIpnsKey must be a hex string' })
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'encryptedIpnsKey must be an even-length hex string',
+  })
   @MinLength(64)
   @MaxLength(2048)
   @IsOptional()

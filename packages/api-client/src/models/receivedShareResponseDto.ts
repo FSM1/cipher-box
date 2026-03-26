@@ -7,7 +7,6 @@
  */
 import type { ReceivedShareResponseDtoItemType } from './receivedShareResponseDtoItemType';
 import type { ReceivedShareResponseDtoPermission } from './receivedShareResponseDtoPermission';
-import type { ReceivedShareResponseDtoEncryptedIpnsKey } from './receivedShareResponseDtoEncryptedIpnsKey';
 
 export interface ReceivedShareResponseDto {
   shareId: string;
@@ -24,6 +23,6 @@ export interface ReceivedShareResponseDto {
    * Hex-encoded ECIES-wrapped IPNS private key for write shares
    * @nullable
    */
-  encryptedIpnsKey?: ReceivedShareResponseDtoEncryptedIpnsKey;
+  encryptedIpnsKey?: string | null;
   createdAt: string;
 }

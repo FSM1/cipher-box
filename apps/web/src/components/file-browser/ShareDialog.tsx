@@ -371,12 +371,14 @@ export function ShareDialog({
         const vaultKeypair = useAuthStore.getState().vaultKeypair;
         if (!vaultKeypair) {
           setError('vault keypair not available');
+          setUpgradingId(null);
           return;
         }
 
         // The item must be a folder to upgrade (file shares don't have IPNS keys)
         if (item.type !== 'folder') {
           setError('permission upgrade only applies to folder shares');
+          setUpgradingId(null);
           return;
         }
 
