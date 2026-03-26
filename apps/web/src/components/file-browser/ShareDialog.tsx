@@ -17,6 +17,7 @@ import { resolveIpnsRecord } from '../../services/ipns.service';
 import { fetchFromIpfs } from '../../lib/api/ipfs';
 import { useShareStore } from '../../stores/share.store';
 import { collectChildKeys, reWrapEncryptedKey } from '../../lib/crypto/key-wrapping';
+import { updateSharePermission } from '../../services/share.service';
 import { InviteLinkTab } from './InviteLinkTab';
 import '../../styles/share-dialog.css';
 
@@ -36,6 +37,7 @@ type SentShare = {
   itemType: string;
   ipnsName: string;
   itemName: string;
+  permission: 'read' | 'write';
   createdAt: string;
 };
 
@@ -87,8 +89,12 @@ export function ShareDialog({
   const [recipients, setRecipients] = useState<SentShare[]>([]);
   const [recipientsLoading, setRecipientsLoading] = useState(false);
   const [recipientsFetched, setRecipientsFetched] = useState(false);
+  const [permission, setPermission] = useState<'read' | 'write'>('read');
   const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [confirmDowngradeId, setConfirmDowngradeId] = useState<string | null>(null);
+  const [upgradingId, setUpgradingId] = useState<string | null>(null);
+  const [downgradingId, setDowngradingId] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const directTabRef = useRef<HTMLButtonElement>(null);
@@ -104,8 +110,12 @@ export function ShareDialog({
       setSuccess(null);
       setIsSharing(false);
       setProgress(null);
+      setPermission('read');
       setConfirmRevokeId(null);
       setRevokingId(null);
+      setConfirmDowngradeId(null);
+      setUpgradingId(null);
+      setDowngradingId(null);
       setRecipients([]);
       setRecipientsLoading(false);
       setRecipientsFetched(false);
@@ -133,6 +143,7 @@ export function ShareDialog({
             itemType: s.itemType as 'folder' | 'file',
             ipnsName: s.ipnsName,
             itemName: s.itemName,
+            permission: ((s.permission as 'read' | 'write') ?? 'read') as 'read' | 'write',
             createdAt: String(s.createdAt),
           }));
         allShares.push(...pageShares);
@@ -216,23 +227,12 @@ export function ShareDialog({
 
       let encryptedKey: string;
       let childKeys: ChildKeyDto[] | undefined;
+      let encryptedIpnsKeyHex: string | undefined;
 
       if (item.type === 'folder') {
         const folderEntry = item as FolderEntry;
 
-        // For folders shared from a parent, folderKey IS the folder's own key
-        // (it's the folderKey passed as prop which is the parent's key --
-        //  but the item is a FolderEntry child that has folderKeyEncrypted)
-        // We need to use folderKeyEncrypted from the FolderEntry to get the actual folder key.
-        // Wait -- the folderKey prop is the PARENT folder's key. The item's own key
-        // is obtained by unwrapping folderKeyEncrypted from the FolderEntry.
-        // Actually, looking at the plan more carefully:
-        //   "For folders: folderKey is passed as prop"
-        // But folderKey is the PARENT's key. For sharing a subfolder, we need the subfolder's key.
-        // Let's check: if the item is a direct child folder, its folderKeyEncrypted
-        // is wrapped with the owner's public key (ECIES). We unwrap it to get the folder's own key.
-
-        // Unwrap the folder's own key from its encrypted form
+        // Unwrap the folder's own key from its ECIES-encrypted form
         const itemFolderKey = await unwrapKey(
           hexToBytes(folderEntry.folderKeyEncrypted),
           ownerPrivateKey
@@ -243,8 +243,21 @@ export function ShareDialog({
           const wrappedForRecipient = await wrapKey(itemFolderKey, recipientPubKeyBytes);
           encryptedKey = bytesToHex(wrappedForRecipient);
 
-          // Now traverse children and re-wrap descendant keys
-          // First, resolve folder metadata to get children
+          // For write shares, also wrap the IPNS private key for the recipient
+          if (permission === 'write') {
+            const ipnsPrivKey = await unwrapKey(
+              hexToBytes(folderEntry.ipnsPrivateKeyEncrypted),
+              ownerPrivateKey
+            );
+            try {
+              const wrappedIpnsKey = await wrapKey(ipnsPrivKey, recipientPubKeyBytes);
+              encryptedIpnsKeyHex = bytesToHex(wrappedIpnsKey);
+            } finally {
+              ipnsPrivKey.fill(0);
+            }
+          }
+
+          // Traverse children and re-wrap descendant keys
           const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
           if (resolved) {
             const encryptedBytes = await fetchFromIpfs(resolved.cid);
@@ -297,6 +310,8 @@ export function ShareDialog({
         ipnsName,
         itemName: item.name,
         encryptedKey,
+        permission,
+        encryptedIpnsKey: encryptedIpnsKeyHex,
         childKeys: childKeys && childKeys.length > 0 ? childKeys : undefined,
       });
 
@@ -307,12 +322,17 @@ export function ShareDialog({
         itemType: item.type as 'folder' | 'file',
         ipnsName,
         itemName: item.name,
+        permission,
         createdAt: new Date().toISOString(),
       };
       setRecipients((prev) => [...prev, newShare]);
       useShareStore.getState().addSentShare(newShare);
 
-      setSuccess(`shared with ${truncateKey(key)}`);
+      setSuccess(
+        permission === 'write'
+          ? `shared (read-write) with ${truncateKey(key)}`
+          : `shared with ${truncateKey(key)}`
+      );
       setPubKeyInput('');
       setProgress(null);
     } catch (err) {
@@ -323,7 +343,7 @@ export function ShareDialog({
       setIsSharing(false);
       setProgress(null);
     }
-  }, [pubKeyInput, item, folderKey, ipnsName, parentFolderId]);
+  }, [pubKeyInput, item, folderKey, ipnsName, parentFolderId, permission]);
 
   const handleRevoke = useCallback(async (shareId: string) => {
     setRevokingId(shareId);
@@ -337,6 +357,88 @@ export function ShareDialog({
       setError('revoke failed');
     } finally {
       setRevokingId(null);
+    }
+  }, []);
+
+  const handleUpgrade = useCallback(
+    async (share: SentShare) => {
+      setError(null);
+      setSuccess(null);
+      setUpgradingId(share.shareId);
+
+      try {
+        // Get vault keypair for unwrapping IPNS key
+        const vaultKeypair = useAuthStore.getState().vaultKeypair;
+        if (!vaultKeypair) {
+          setError('vault keypair not available');
+          return;
+        }
+
+        // The item must be a folder to upgrade (file shares don't have IPNS keys)
+        if (item.type !== 'folder') {
+          setError('permission upgrade only applies to folder shares');
+          return;
+        }
+
+        const folderEntry = item as FolderEntry;
+        const ownerPrivateKey = vaultKeypair.privateKey;
+        const recipientPubKeyBytes = hexToBytes(
+          share.recipientPublicKey.startsWith('0x')
+            ? share.recipientPublicKey.slice(2)
+            : share.recipientPublicKey
+        );
+
+        // Unwrap IPNS private key and re-wrap for recipient
+        const ipnsPrivKey = await unwrapKey(
+          hexToBytes(folderEntry.ipnsPrivateKeyEncrypted),
+          ownerPrivateKey
+        );
+        let encryptedIpnsKeyHex: string;
+        try {
+          const wrappedIpnsKey = await wrapKey(ipnsPrivKey, recipientPubKeyBytes);
+          encryptedIpnsKeyHex = bytesToHex(wrappedIpnsKey);
+        } finally {
+          ipnsPrivKey.fill(0);
+        }
+
+        await updateSharePermission(share.shareId, 'write', encryptedIpnsKeyHex);
+
+        // Update local state
+        setRecipients((prev) =>
+          prev.map((r) => (r.shareId === share.shareId ? { ...r, permission: 'write' } : r))
+        );
+        useShareStore.getState().updateSentSharePermission(share.shareId, 'write');
+        setSuccess('> upgraded to read-write');
+      } catch (err) {
+        console.error('Permission upgrade failed:', err);
+        setError('> permission change failed, please try again');
+      } finally {
+        setUpgradingId(null);
+      }
+    },
+    [item]
+  );
+
+  const handleDowngradeConfirm = useCallback(async (share: SentShare) => {
+    setError(null);
+    setSuccess(null);
+    setDowngradingId(share.shareId);
+    setConfirmDowngradeId(null);
+
+    try {
+      await updateSharePermission(share.shareId, 'read');
+
+      // Update local state
+      setRecipients((prev) =>
+        prev.map((r) => (r.shareId === share.shareId ? { ...r, permission: 'read' } : r))
+      );
+      useShareStore.getState().updateSentSharePermission(share.shareId, 'read');
+      setSuccess('> downgraded to read-only');
+    } catch (err) {
+      console.error('Permission downgrade failed:', err);
+      setError('> permission change failed, please try again');
+    } finally {
+      setDowngradingId(null);
     }
   }, []);
 
@@ -435,6 +537,45 @@ export function ShareDialog({
                 </button>
               </div>
 
+              {/* Permission toggle */}
+              {item.type === 'folder' && (
+                <div className="share-permission-selector">
+                  <label className="share-permission-label">{'// permission'}</label>
+                  <div
+                    className="share-permission-toggle"
+                    role="radiogroup"
+                    aria-label="Permission level"
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                        e.preventDefault();
+                        setPermission((prev) => (prev === 'read' ? 'write' : 'read'));
+                      }
+                    }}
+                  >
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={permission === 'read'}
+                      tabIndex={permission === 'read' ? 0 : -1}
+                      className={`share-perm-btn${permission === 'read' ? ' share-perm-btn--active' : ''}`}
+                      onClick={() => setPermission('read')}
+                    >
+                      {'[ READ-ONLY ]'}
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={permission === 'write'}
+                      tabIndex={permission === 'write' ? 0 : -1}
+                      className={`share-perm-btn${permission === 'write' ? ' share-perm-btn--active' : ''}`}
+                      onClick={() => setPermission('write')}
+                    >
+                      {'[ READ-WRITE ]'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Error message */}
               {error && (
                 <div className="share-error" role="alert">
@@ -474,39 +615,99 @@ export function ShareDialog({
                       <span className="share-recipient-key">
                         {truncateKey(recipient.recipientPublicKey)}
                       </span>
+                      <span
+                        className={
+                          recipient.permission === 'write'
+                            ? 'recipient-perm-write'
+                            : 'recipient-perm-read'
+                        }
+                      >
+                        {recipient.permission === 'write' ? '[write]' : '[read]'}
+                      </span>
 
-                      {confirmRevokeId === recipient.shareId ? (
-                        <div className="share-revoke-confirm">
-                          <span className="share-revoke-confirm-text">{'confirm?'}</span>
+                      <div className="share-recipient-actions">
+                        {/* Upgrade/downgrade controls (folders only) */}
+                        {item.type === 'folder' && (
+                          <>
+                            {recipient.permission === 'read' ? (
+                              <button
+                                type="button"
+                                className="share-action-btn share-upgrade-btn"
+                                onClick={() => handleUpgrade(recipient)}
+                                disabled={upgradingId !== null || downgradingId !== null}
+                                aria-label={`Upgrade ${truncateKey(recipient.recipientPublicKey)} to read-write`}
+                              >
+                                {upgradingId === recipient.shareId ? '...' : '--upgrade'}
+                              </button>
+                            ) : confirmDowngradeId === recipient.shareId ? (
+                              <div className="share-revoke-confirm">
+                                <span className="share-revoke-confirm-text">{'confirm?'}</span>
+                                <button
+                                  type="button"
+                                  className="share-revoke-confirm-btn share-revoke-confirm-btn--yes"
+                                  onClick={() => handleDowngradeConfirm(recipient)}
+                                  disabled={downgradingId === recipient.shareId}
+                                  aria-label="Confirm downgrade"
+                                >
+                                  {downgradingId === recipient.shareId ? '...' : '[y]'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="share-revoke-confirm-btn share-revoke-confirm-btn--no"
+                                  onClick={() => setConfirmDowngradeId(null)}
+                                  aria-label="Cancel downgrade"
+                                >
+                                  {'[n]'}
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="share-action-btn share-downgrade-btn"
+                                onClick={() => setConfirmDowngradeId(recipient.shareId)}
+                                disabled={upgradingId !== null || downgradingId !== null}
+                                aria-label={`Downgrade ${truncateKey(recipient.recipientPublicKey)} to read-only`}
+                              >
+                                {'--downgrade'}
+                              </button>
+                            )}
+                          </>
+                        )}
+
+                        {/* Revoke button */}
+                        {confirmRevokeId === recipient.shareId ? (
+                          <div className="share-revoke-confirm">
+                            <span className="share-revoke-confirm-text">{'confirm?'}</span>
+                            <button
+                              type="button"
+                              className="share-revoke-confirm-btn share-revoke-confirm-btn--yes"
+                              onClick={() => handleRevoke(recipient.shareId)}
+                              disabled={revokingId === recipient.shareId}
+                              aria-label="Confirm revoke"
+                            >
+                              {revokingId === recipient.shareId ? '...' : '[y]'}
+                            </button>
+                            <button
+                              type="button"
+                              className="share-revoke-confirm-btn share-revoke-confirm-btn--no"
+                              onClick={() => setConfirmRevokeId(null)}
+                              aria-label="Cancel revoke"
+                            >
+                              {'[n]'}
+                            </button>
+                          </div>
+                        ) : (
                           <button
                             type="button"
-                            className="share-revoke-confirm-btn share-revoke-confirm-btn--yes"
-                            onClick={() => handleRevoke(recipient.shareId)}
-                            disabled={revokingId === recipient.shareId}
-                            aria-label="Confirm revoke"
+                            className="share-revoke-btn"
+                            onClick={() => setConfirmRevokeId(recipient.shareId)}
+                            disabled={revokingId !== null}
+                            aria-label={`Revoke share for ${truncateKey(recipient.recipientPublicKey)}`}
                           >
-                            {revokingId === recipient.shareId ? '...' : '[y]'}
+                            {'--revoke'}
                           </button>
-                          <button
-                            type="button"
-                            className="share-revoke-confirm-btn share-revoke-confirm-btn--no"
-                            onClick={() => setConfirmRevokeId(null)}
-                            aria-label="Cancel revoke"
-                          >
-                            [n]
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          className="share-revoke-btn"
-                          onClick={() => setConfirmRevokeId(recipient.shareId)}
-                          disabled={revokingId !== null}
-                          aria-label={`Revoke share for ${truncateKey(recipient.recipientPublicKey)}`}
-                        >
-                          --revoke
-                        </button>
-                      )}
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

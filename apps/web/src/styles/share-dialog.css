@@ -336,6 +336,135 @@
 }
 
 /* ==========================================================================
+   Permission Toggle
+   ========================================================================== */
+
+.share-permission-selector {
+  margin: var(--spacing-md) 0;
+}
+
+.share-permission-label {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  display: block;
+  margin-bottom: var(--spacing-xs);
+}
+
+.share-permission-toggle {
+  display: flex;
+  gap: 0;
+}
+
+.share-perm-btn {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.05em;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-dim);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background-color 0.15s;
+}
+
+.share-perm-btn--active {
+  color: var(--color-green-primary);
+  border-color: var(--color-green-primary);
+  background-color: var(--color-green-darker);
+}
+
+.share-perm-btn:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+/* ==========================================================================
+   Recipient Permission Labels
+   ========================================================================== */
+
+.recipient-perm-read {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-left: var(--spacing-xs);
+  flex-shrink: 0;
+}
+
+.recipient-perm-write {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-green-primary);
+  margin-left: var(--spacing-xs);
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Recipient Actions Container
+   ========================================================================== */
+
+.share-recipient-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* ==========================================================================
+   Upgrade / Downgrade Buttons
+   ========================================================================== */
+
+.share-action-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  background: transparent;
+  border: var(--border-thickness) solid var(--color-border-dim);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.share-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.share-action-btn:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.share-upgrade-btn {
+  color: var(--color-green-primary);
+  border-color: var(--color-green-dim);
+}
+
+.share-upgrade-btn:hover:not(:disabled) {
+  background: rgb(0 208 132 / 10%);
+}
+
+.share-downgrade-btn {
+  color: var(--color-warning);
+  border-color: var(--color-warning-dim);
+}
+
+.share-downgrade-btn:hover:not(:disabled) {
+  background: rgb(234 179 8 / 10%);
+}
+
+/* ==========================================================================
    Loading Spinner for Recipient List
    ========================================================================== */
 
