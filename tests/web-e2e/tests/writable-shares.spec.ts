@@ -562,9 +562,8 @@ test.describe.serial('Writable Shares', () => {
     const breadcrumbText = breadcrumbs.join('/').toLowerCase();
     expect(breadcrumbText).toContain(securitySubfolder.toLowerCase());
 
-    // Navigate back
-    await aliceNavigateBack();
-    await aliceNavigateBack();
+    // Navigate back to root via Files nav link
+    await navigateToFiles(alice);
   });
 
   // ============================================
