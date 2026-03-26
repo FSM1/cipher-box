@@ -145,3 +145,7 @@ ok have you pushed all these changes up?
 ---
 
 /security:review phase 27 work
+
+---
+
+ok I had a look through the report and feel that all 8 issues are significant enough to be fixed right now.
