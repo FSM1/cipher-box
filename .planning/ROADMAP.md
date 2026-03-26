@@ -282,7 +282,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete | 2026-03-25 |
 | 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete | 2026-03-25 |
 | 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete | 2026-03-26 |
-| 27. Writable Shares (PoC)                 | 2/3       | In Progress    |          |            |
+| 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete | 2026-03-26 |
 
 ### Phase 27: Writable Shares (PoC)
 
@@ -298,13 +298,13 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 5. SharedFileBrowser shows [RW] badge, write toolbar, and full context menu for write shares
 6. Write operations use withConflictRetry for multi-writer coordination (same as multi-device sync)
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 
-- [ ] 27-01-PLAN.md -- Share entity/migration, DTOs, service methods, IPNS publish authorization expansion, API client regeneration
-- [ ] 27-02-PLAN.md -- Share store types, ShareDialog permission toggle, IPNS key wrapping, recipient permission management
-- [ ] 27-03-PLAN.md -- SharedFileBrowser write UI (badges, toolbar, context menu), useSharedNavigation write ops, 30s polling
+- [x] 27-01-PLAN.md -- Share entity/migration, DTOs, service methods, IPNS publish authorization expansion, API client regeneration
+- [x] 27-02-PLAN.md -- Share store types, ShareDialog permission toggle, IPNS key wrapping, recipient permission management
+- [x] 27-03-PLAN.md -- SharedFileBrowser write UI (badges, toolbar, context menu), useSharedNavigation write ops, 30s polling
 
 ---
 

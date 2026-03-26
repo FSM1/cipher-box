@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: unknown
-last_updated: '2026-03-26T04:34:55.291Z'
+status: complete
+last_updated: '2026-03-26T05:00:00.000Z'
 progress:
   total_phases: 12
-  completed_phases: 11
+  completed_phases: 12
   total_plans: 53
-  completed_plans: 52
+  completed_plans: 53
 ---
 
 # Project State
@@ -18,18 +18,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 27 — writable-shares-poc
+**Current focus:** Phase 27 — writable-shares-poc (COMPLETE)
 
 ## Current Position
 
-Phase: 27 (writable-shares-poc) — EXECUTING
-Plan: 3 of 3
+Phase: 27 (writable-shares-poc) — COMPLETE
+Plan: 3 of 3 (all plans complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 160 (72 M1 + 83 M2 + 5 M3)
+- Total plans completed: 161 (72 M1 + 83 M2 + 6 M3)
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
@@ -77,6 +77,7 @@ Plan: 3 of 3
 | 26    | 01   | 5min     | 2     | 6     |
 | 27    | 01   | 6min     | 2     | 23    |
 | 27    | 02   | 5min     | 2     | 4     |
+| 27    | 03   | 25min    | 3     | 15    |
 
 ## Accumulated Context
 
@@ -150,6 +151,11 @@ Recent for v1.1:
 - Load test thresholds set at 2-3x observed baselines; spike test most generous (15s/15%); vitest expect() for CI failure on breach
 - Write-share authorization in upsertFolderIpns falls through to create-new-entry when no write share found (preserves backward compat for owner first publish)
 - TEE enrollFolder uses existing.userId (FolderIpns owner) for write-share publishes, not authenticated userId
+- Per-file IPNS records created for shared uploads (same as owner uploads) instead of empty fileMetaIpnsName PoC shortcut
+- File IPNS private key dual-wrapped: owner key in FilePointer, recipient key in share_keys (keyType: file-ipns)
+- addShareKeys API relaxed to allow write-share recipients to add keys to their own share
+- TextEditorDialog has separate shared file save path via onSaveSharedFile callback
+- Shared file download/view falls back to fileKeyEncrypted from metadata when no share_key exists
 
 ### Roadmap Evolution
 
@@ -176,4 +182,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-26 after completing Phase 27 Plan 02 (owner share dialog UI)
+Last updated: 2026-03-26 after completing Phase 27 Plan 03 (recipient write UI & operations) -- Phase 27 complete

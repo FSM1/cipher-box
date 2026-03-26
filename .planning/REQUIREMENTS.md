@@ -99,9 +99,9 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [x] **SHARE-05**: Share store types (ReceivedShare, SentShare) include `permission` field; ReceivedShare includes `encryptedIpnsKey`
 - [x] **SHARE-06**: ShareDialog has terminal-style permission toggle ([ READ-ONLY ] / [ READ-WRITE ]) with IPNS key wrapping for write shares
 - [x] **SHARE-07**: ShareDialog recipients list shows per-recipient permission label with inline upgrade/downgrade controls
-- [ ] **SHARE-08**: SharedFileBrowser shows [RW] badge (green) for write shares and [RO] badge (dim) for read-only shares
-- [ ] **SHARE-09**: Write-share recipients see upload/mkdir toolbar and full context menu (rename, delete) in shared folders
-- [ ] **SHARE-10**: Write operations in shared folders use unwrapped IPNS key with 30s sync polling and withConflictRetry for multi-writer coordination
+- [x] **SHARE-08**: SharedFileBrowser shows [RW] badge (green) for write shares and [RO] badge (dim) for read-only shares
+- [x] **SHARE-09**: Write-share recipients see upload/mkdir toolbar and full context menu (rename, delete) in shared folders
+- [x] **SHARE-10**: Write operations in shared folders use unwrapped IPNS key with 30s sync polling and withConflictRetry for multi-writer coordination
 
 ## v1.2 Requirements
 
@@ -204,9 +204,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SHARE-05    | Phase 27   | Complete |
 | SHARE-06    | Phase 27   | Complete |
 | SHARE-07    | Phase 27   | Complete |
-| SHARE-08    | Phase 27   | Pending  |
-| SHARE-09    | Phase 27   | Pending  |
-| SHARE-10    | Phase 27   | Pending  |
+| SHARE-08    | Phase 27   | Complete |
+| SHARE-09    | Phase 27   | Complete |
+| SHARE-10    | Phase 27   | Complete |
 
 **Coverage:**
 
@@ -217,4 +217,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 ---
 
 _Requirements defined: 2026-03-07_
-_Last updated: 2026-03-26 after Phase 27 planning (SHARE-01 through SHARE-10 registered)_
+_Last updated: 2026-03-26 after Phase 27 completion (SHARE-01 through SHARE-10 all complete)_
