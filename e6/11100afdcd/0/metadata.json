@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e611100afdcd",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T14:37:17.277278Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "da90e0f9f99a",
+  "token_usage": {
+    "input_tokens": 497,
+    "cache_creation_tokens": 632902,
+    "cache_read_tokens": 85792709,
+    "output_tokens": 121096,
+    "api_call_count": 430
+  },
+  "session_metrics": {
+    "turn_count": 30
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) end-to-end: implement API backend, owner UI, and recipient UI for write-enabled sharing with UAT checkpoint, then perform a security review and fix all identified issues.",
+    "outcome": "Phase 27 fully executed with 3 plans across 3 waves, UAT completed with 4 in-session bug fixes, 8 security issues fixed using TDD (red→green), 21 E2E tests written and passing, all changes committed and pushed to feat/phase-27-writable-shares.",
+    "learnings": {
+      "repo": [
+        "The cipher-box-ci-debug checkout does not share .env files with the main cipher-box repo — they must be copied manually when the DB host changes or on fresh checkouts",
+        "VITE_API_URL must be set explicitly in apps/web/.env; the fallback uses window.location.origin+'/api' which incorrectly points to the web port (5173) instead of the API port (3000)",
+        "The SDK dependency chain for the web app requires building in order: @cipherbox/core → @cipherbox/sdk-core → @cipherbox/sdk before the web dev server can start",
+        "Auth controller defined its own local RequestWithUser interface extending NestJS @nestjs/common Request (Fetch API) instead of the shared common/types.ts one extending Express Request, causing type incompatibility in specs",
+        "The writable-shares upload flow requires dual IPNS key wrapping: FilePointer.ipnsPrivateKeyEncrypted must use the owner's key (so owner can update), while the recipient gets a separate file-ipns share_key entry",
+        "withConflictRetry closures in useSharedNavigation.ts capture stale React state — refs (folderChildrenRef, sequenceNumberRef) must be synced alongside state setters for use inside closures",
+        "The ShareDialog downgrade flow used .share-revoke-confirm-btn--yes for confirmation, same selector as full revocation",
+        "SharedFileBrowser uses an inline input (.shared-inline-input-field) for mkdir rather than a modal CreateFolderDialog",
+        "SharedFileBrowser uses .shared-inline-rename-field for rename inline editing",
+        "The recipient-permission label classes are recipient-perm-write and recipient-perm-read, not share-recipient-permission"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Original shared upload set fileMetaIpnsName: '' — fixed by inlining full IPNS record creation with dual-key wrapping"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 921,
+          "end_line": 921,
+          "finding": "withConflictRetry upload closure used stale React state; must use folderChildrenRef.current and sequenceNumberRef.current"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 71,
+          "end_line": 71,
+          "finding": "Save path used owner's useFolder hook (updateFile); shared files need a separate onSaveSharedFile callback prop routed through SharedFileBrowser"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "finding": "handleUpdateFile did not re-wrap the new file key for share recipients after owner edits — reWrapForRecipients must be called after every file content update"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "updatePermission (downgrade path) did not delete file-ipns share_keys, leaving recipients able to modify file metadata after revocation"
+        },
+        {
+          "path": "apps/api/src/shares/dto/share-key.dto.ts",
+          "finding": "keyType enum needed 'file-ipns' added for storing recipient-wrapped IPNS private keys separately from file content keys"
+        },
+        {
+          "path": "apps/web/src/lib/api-config.ts",
+          "finding": "Falls back to window.location.origin+'/api' when VITE_API_URL is not set — this is wrong when API and web run on different ports"
+        },
+        {
+          "path": "apps/api/src/auth/auth.controller.ts",
+          "line": 10,
+          "end_line": 10,
+          "finding": "Imported Request from @nestjs/common (Fetch API) and defined local RequestWithUser; should import RequestWithUser from common/types.ts which extends Express Request"
+        }
+      ],
+      "workflow": [
+        "Background bash tasks in Claude Code are killed when conversation context shifts — use detached processes (nohup or disown) for dev servers that must survive",
+        "TDD red→green flow: stash fixes, write failing tests against unfixed code, verify they fail, pop stash, verify tests go green — ensures tests actually validate the fix",
+        "NestJS watch mode does not always pick up DTO @ApiProperty enum changes for OpenAPI spec generation; full server restart required before regenerating API client",
+        "When an API client is regenerated, TypeScript checks may still show old enum values if the server wasn't running with updated code during generation",
+        "E2E tests for IPNS-dependent flows need explicit page reloads and generous timeouts due to IPNS propagation delays between writer and reader",
+        "Security reviews should check both the intent of the spec and the actual implementation — several issues (H-01, M-01, L-03) were already correctly implemented"
+      ]
+    },
+    "friction": [
+      "DB host IP changed mid-session (192.168.133.114 → 192.168.133.12), requiring .env recreation from .env.example with manual IP substitution",
+      "Background task kills repeatedly interrupted dev server restarts — needed 3+ attempts before switching to detached processes",
+      "cipher-box-ci-debug had no .env files; web app silently fell back to wrong API URL causing 'disconnected' status with no clear error",
+      "NestJS OpenAPI spec didn't update after DTO change until full server restart, blocking API client regeneration",
+      "Git lock file interference required manual removal mid-commit sequence",
+      "E2E test selector mismatches on first run: recipient-perm-write vs share-recipient-permission, shared-inline-input-field vs folder-name-input, shared-inline-rename-field vs file-name-input — required screenshot-driven correction",
+      "The backend security fix agent ran in parallel with frontend work, requiring stash/pop coordination to maintain TDD ordering",
+      "Pre-existing TypeScript errors in auth and device-approval controller specs unrelated to phase 27 work surfaced during compilation checks and required investigation and fixing"
+    ],
+    "open_items": [
+      "E2E tests cover the happy path for writable shares but silent revocation (30s polling detecting permission changes) and the full revocation-to-read-only transition are marked as hard to test manually and not fully automated",
+      "The reWrapForRecipients call in useFileOperations.ts is a post-hoc fix — the owner file update flow has no mechanism to handle files shared with multiple recipients with different key types; needs audit if multi-recipient write shares are introduced",
+      "Subfolder key wrapping for C-02 fix adds a recipient share_key for the immediate subfolder but does not recursively handle nested subfolders created inside that subfolder",
+      "The 'file-ipns' keyType in share_keys is stored with an 'as any' cast in the delete call — the entity enum should be updated to include it properly in a follow-up",
+      "No PR created yet — the session ended after push with the question of whether to create a PR",
+      "The security review identified L-02 (BigInt sequence number coercion) as fixed but the implementation detail of how stale sequence numbers interact with multi-writer concurrent edits at the protocol level was not fully validated"
+    ]
+  }
+}
