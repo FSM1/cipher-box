@@ -61,6 +61,9 @@ test.describe('Vault Recovery Tool', () => {
   });
 
   test('recovers vault files via IPFS-direct v2 blob path', async ({ page }) => {
+    // Recovery involves multiple IPNS resolutions + IPFS fetches + decryption;
+    // 30s default is tight especially when IPFS gateway fallbacks are involved
+    test.setTimeout(90_000);
     // Navigate to recovery tool
     await page.goto(`${WEB_URL}/recovery.html`);
 
