@@ -70,3 +70,7 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 ---
 
 sorry back to the phase 26 branch
+
+---
+
+/resolve-pr-reviews
