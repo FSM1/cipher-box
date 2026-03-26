@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "01180fd8ff01",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T11:46:29.732507Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 14,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "9e996f78e13c",
+  "token_usage": {
+    "input_tokens": 155,
+    "cache_creation_tokens": 222557,
+    "cache_read_tokens": 11245465,
+    "output_tokens": 36734,
+    "api_call_count": 128
+  },
+  "session_metrics": {
+    "turn_count": 13
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) implementing a full writable sharing flow: API backend, owner UI for permission toggling, and recipient UI for write actions in SharedFileBrowser.",
+    "outcome": "All 3 plans executed successfully. A critical bug was discovered and fixed during UAT: files uploaded through shared folders lacked per-file IPNS records, making them unreadable. The fix creates proper IPNS metadata during shared uploads and adds fallback decryption paths.",
+    "learnings": {
+      "repo": [
+        "cipher-box-ci-debug is a separate checkout from cipher-box; .env files must be copied manually from ../cipher-box/ — they are not shared or symlinked",
+        "cipher-box-ci-debug requires packages to be built before the web dev server can start (@cipherbox/sdk, sdk-core, core must be built in dependency order)",
+        "Web app falls back to window.location.origin + '/api' when VITE_API_URL is unset, which points to the wrong port (5173 instead of 3000)",
+        "The addShareKeys API endpoint previously only allowed share owners to add keys; write-share recipients also need this permission to add share_keys for files they upload",
+        "Shared folder uploads set fileMetaIpnsName: '' (line 807 of useSharedNavigation.ts) — a PoC shortcut that skips per-file IPNS record creation, breaking file retrieval",
+        "ReceivedShare entity includes sharerPublicKey, enabling recipients to wrap file keys for the owner during shared uploads",
+        "OTP codes are visible in API server logs and can be retrieved from the console output"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Shared upload set fileMetaIpnsName: '' as a PoC shortcut — root cause of the IPNS-not-available error for files uploaded via shared folders"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 71,
+          "end_line": 71,
+          "finding": "Check for item.fileMetaIpnsName before attempting to open file — throws 'legacy v1 file?' error for shared-upload files without IPNS records; updated with fallback to fileKeyEncrypted from file metadata"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 98,
+          "end_line": 101,
+          "finding": "downloadSharedFile throws if no share_key found; needs fallback to fileKeyEncrypted from file metadata for files uploaded before the fix"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "addShareKeys authorization relaxed to allow write-share recipients (in addition to owners) to add keys to their own share"
+        },
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "finding": "batchPublishIpnsRecords accepts a recordType field and is the correct function for batch IPNS publishing during file uploads"
+        }
+      ],
+      "workflow": [
+        "Background tasks spawned by the Claude Code runtime are killed when the conversation context shifts — use detached processes (nohup/disown) for dev servers that need to persist across tool calls",
+        "API client must be regenerated after controller changes; the codegen produces warnings but no errors is acceptable",
+        "TypeScript check (tsc --noEmit) is a fast way to validate changes before committing in a monorepo without running the full build"
+      ]
+    },
+    "friction": [
+      "cipher-box-ci-debug had no .env files, requiring manual copy from the sibling cipher-box repo — caused multiple failed API server starts",
+      "PostgreSQL host IP changed (192.168.133.114 → 192.168.133.12), requiring .env creation from scratch",
+      "Background tasks were repeatedly killed by the Claude Code runtime when conversation context shifted, requiring 4+ server restart cycles",
+      "git lock file was stale and blocked commits, requiring manual removal",
+      "Web dev server failed on first start because SDK packages hadn't been built — build order (core → sdk-core → sdk) was not documented"
+    ],
+    "open_items": [
+      "Fallback decryption in TextEditorDialog and downloadSharedFile handles files uploaded before the fix (no share_key), but this is a transitional concern — could be cleaned up once all shares are migrated",
+      "The API client regeneration after controller changes should be automated as part of the build/dev workflow",
+      "Shared upload now creates per-file IPNS records but the full UAT for file read/edit/download in shared folders was not completed after the fix — needs re-verification"
+    ]
+  }
+}
