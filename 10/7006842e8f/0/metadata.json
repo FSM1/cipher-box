@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "107006842e8f",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T13:45:23.633961Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "af5474aa8fa7",
+  "token_usage": {
+    "input_tokens": 308,
+    "cache_creation_tokens": 525020,
+    "cache_read_tokens": 34593969,
+    "output_tokens": 80077,
+    "api_call_count": 257
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) to implement write-enabled folder sharing, including API backend, owner UI, and recipient UI for a cipher-box application.",
+    "outcome": "Phase 27 was fully executed and verified with 3/3 plans complete. Four UAT bugs were discovered and fixed during the checkpoint, plus two additional issues found during human verification testing (file re-encryption key propagation). E2E tests were written to cover the new write-sharing flows.",
+    "learnings": {
+      "repo": [
+        "The cipher-box-ci-debug checkout does not have .env files — they must be copied from the main cipher-box repo at ../cipher-box/",
+        "The web app has no VITE_API_URL set by default and falls back to window.location.origin + '/api' (port 5173), which is wrong when API runs on port 3000",
+        "SDK packages must be built before running the web dev server: core → sdk-core → sdk in dependency order",
+        "The NestJS API uses detached processes for stability; background task kills won't take down the server if started with nohup/disown",
+        "Swagger/OpenAPI spec at /api-docs-json doesn't update until the API is restarted AND @ApiProperty enum decorators are updated — changing only the DTO class enum is insufficient",
+        "The owner's file update flow (useFileOperations.ts handleUpdateFile) does not re-wrap the new file key for share recipients — a pre-existing gap that manifests when a recipient tries to read a file the owner has since edited",
+        "Permission downgrade clears encryptedIpnsKey from the Share entity but does not delete share_keys, so recipient can still access file keys after downgrade",
+        "E2E tests live in tests/web-e2e/ with page objects per component; multi-account wallet utilities are in tests/web-e2e/utils/multi-account-wallet.ts"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Shared upload sets fileMetaIpnsName: '' — original PoC limitation that caused 'File metadata IPNS name not available' errors. Fixed by inlining full IPNS keypair generation."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 98,
+          "end_line": 101,
+          "finding": "Save handler uses the owner's updateFile path (useFolder hook) which fails for shared files with 'Parent folder not found or vault not initialized'. Fixed with onSaveSharedFile callback prop."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 71,
+          "end_line": 71,
+          "finding": "Checks item.fileMetaIpnsName which is empty for files uploaded through shared folders under the old code path."
+        },
+        {
+          "path": "apps/api/src/shares/dto/share-key.dto.ts",
+          "finding": "keyType was constrained to 'file' | 'folder'. Extended to 'file' | 'folder' | 'file-ipns' to support storing recipient-wrapped IPNS private keys separately from the owner-wrapped copy in the FilePointer."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "finding": "handleUpdateFile does not call reWrapForRecipients after updating file metadata. After the owner edits a file, all share recipients lose access because the new file key is never wrapped for them."
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "addShareKeys authorization was owner-only. Relaxed to also allow write-share recipients to add keys to their own share (they can only affect their own access)."
+        }
+      ],
+      "workflow": [
+        "Background task kills in Claude Code conversation context can kill dev server processes — use nohup/disown to detach processes from the conversation",
+        "When NestJS DTO enums change, both the class validator enum AND the @ApiProperty enum decorator must be updated, then the API must be fully restarted before regenerating the API client",
+        "The GSD checkpoint pattern (autonomous: false) provides a useful UAT gate that blocks wave completion until the user manually verifies — enables live bug discovery and fixing within the execution session",
+        "OTP codes for the dev environment can be retrieved directly from API server logs without needing email access"
+      ]
+    },
+    "friction": [
+      "cipher-box-ci-debug checkout had no .env files at all — had to discover and copy from the main cipher-box repo",
+      "Web dev server failed to start due to missing @cipherbox/sdk build — required building the full core → sdk-core → sdk dependency chain first",
+      "PostgreSQL host IP had changed (192.168.133.114 → 192.168.133.12) mid-session, breaking the API connection",
+      "Background task kills repeatedly terminated the API and web dev servers during the conversation, requiring multiple restarts",
+      "NestJS OpenAPI spec did not reflect DTO changes until both the class enum AND @ApiProperty decorator were updated — regenerating the API client produced stale types initially",
+      "Git lock file conflict required manual removal before commits could proceed",
+      "The dual-key IPNS wrapping required multiple iterations to get right (three separate bugs: empty fileMetaIpnsName → IPNS key not accessible → owner can't decrypt after recipient upload)"
+    ],
+    "open_items": [
+      "Silent revocation flow (403 handling, [RW] to [RO] transition, key zeroing) was listed as a UAT item but not explicitly confirmed tested",
+      "30-second polling behavior was not explicitly verified during UAT",
+      "The re-wrap fix for owner file edits (reWrapForRecipients) needs to handle the case where a file has no share recipients gracefully at scale",
+      "Files uploaded through shared folders before the fix (empty fileMetaIpnsName) cannot be retroactively fixed — only deletion and re-upload resolves them",
+      "The 'file-ipns' key type addition to share_keys is not documented in the share key schema — API schema and any documentation should be updated",
+      "E2E tests for writable shares were written but not run to verify they pass against the current implementation",
+      "The owner file update flow gap (not re-wrapping file keys for recipients) was a pre-existing issue beyond phase 27 scope — may affect other shared file types"
+    ]
+  }
+}
