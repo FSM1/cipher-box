@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "813bbb598085",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T04:20:34.981056Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/shares/dto/update-permission.dto.ts",
+    "packages/api-client/src/generated/shares/shares.ts",
+    "packages/api-client/src/models/createShareResponseDtoPermission.ts",
+    "packages/api-client/src/models/receivedShareResponseDtoPermission.ts",
+    "packages/api-client/src/models/sentShareResponseDto.ts",
+    "packages/api-client/src/models/sentShareResponseDtoPermission.ts",
+    "packages/api-client/src/models/updatePermissionDtoPermission.ts",
+    "apps/api/src/shares/shares.service.ts",
+    "packages/api-client/openapi.json",
+    "packages/api-client/src/models/createShareDto.ts",
+    "packages/api-client/src/models/createShareResponseDto.ts",
+    "packages/api-client/src/models/index.ts",
+    "packages/api-client/src/models/receivedShareResponseDto.ts",
+    "packages/api-client/src/models/receivedShareResponseDtoEncryptedIpnsKey.ts",
+    "packages/api-client/src/models/updatePermissionDto.ts",
+    "apps/api/src/shares/shares.controller.ts",
+    "apps/api/src/shares/dto/create-share.dto.ts",
+    "apps/api/src/shares/dto/share-response.dto.ts",
+    "apps/api/src/shares/entities/share.entity.ts",
+    "packages/api-client/src/models/createShareDtoPermission.ts",
+    "apps/api/src/migrations/1743000000000-AddWritableShares.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "344381bf1ee7",
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 31769,
+    "cache_read_tokens": 89109,
+    "output_tokens": 2274,
+    "api_call_count": 3
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) using the GSD wave-based parallel execution workflow, implementing API backend support for writable shares with permission controls and IPNS key management.",
+    "outcome": "Wave 1 completed successfully: the API backend plan (27-01) was executed, adding writable share support via a new DB migration, permission upgrade/downgrade endpoint, IPNS publish authorization for write-share recipients, and regenerated API client models. Waves 2 and 3 were not shown as complete in the transcript.",
+    "learnings": {
+      "repo": [
+        "Project uses GSD (get-shit-done) workflow system with wave-based parallel subagent execution, located at .claude/get-shit-done/",
+        "Share entity was extended with `permission` and IPNS key columns — writable shares require recipients to be able to publish via IPNS",
+        "API client is auto-generated from openapi.json — any backend model changes require regenerating packages/api-client/src/",
+        "DB migrations follow timestamp-based naming: apps/api/src/migrations/\u003ctimestamp\u003e-\u003cDescription\u003e.ts",
+        "Project uses a monorepo structure: apps/api (NestJS backend), packages/api-client (generated client)"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/entities/share.entity.ts",
+          "finding": "Share entity was extended with permission and IPNS key columns to support writable shares"
+        },
+        {
+          "path": "apps/api/src/migrations/1743000000000-AddWritableShares.ts",
+          "finding": "New migration adds writable shares schema changes"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "Service updated to handle permission upgrade/downgrade and expanded IPNS publish authorization for write-share recipients"
+        },
+        {
+          "path": "packages/api-client/src/models/receivedShareResponseDtoEncryptedIpnsKey.ts",
+          "finding": "New model for encrypted IPNS key on received shares — needed for write-share recipients to publish"
+        },
+        {
+          "path": "apps/api/src/shares/dto/update-permission.dto.ts",
+          "finding": "New DTO for permission upgrade/downgrade endpoint"
+        }
+      ],
+      "workflow": [
+        "GSD orchestrator runs at ~15% context budget; each subagent gets a fresh 200k context window",
+        "Branch feat/phase-27-writable-shares was pre-created before execution began",
+        "Wave grouping is declared in plan frontmatter — each plan in this phase was assigned its own wave (sequential dependency chain)",
+        "STATE.md is updated at phase start via gsd-tools CLI before any agent is spawned"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Wave 2 (27-02): UI permission toggle and IPNS key wrapping not yet shown as complete",
+      "Wave 3 (27-03): Write actions for shared folders (checkpoint plan) not yet executed",
+      "Verification step not yet run — gaps may be found after all waves complete"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T04:20:18.02479Z",
+    "agent_lines": 0,
+    "human_added": 455,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 455,
+    "agent_percentage": 0
+  }
+}

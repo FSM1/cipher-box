@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "813bbb598085",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/migrations/1743000000000-AddWritableShares.ts",
+    "apps/api/src/shares/dto/create-share.dto.ts",
+    "apps/api/src/shares/dto/share-response.dto.ts",
+    "apps/api/src/shares/dto/update-permission.dto.ts",
+    "apps/api/src/shares/entities/share.entity.ts",
+    "apps/api/src/shares/shares.controller.ts",
+    "apps/api/src/shares/shares.service.ts",
+    "packages/api-client/openapi.json",
+    "packages/api-client/src/generated/shares/shares.ts",
+    "packages/api-client/src/models/createShareDto.ts",
+    "packages/api-client/src/models/createShareDtoPermission.ts",
+    "packages/api-client/src/models/createShareResponseDto.ts",
+    "packages/api-client/src/models/createShareResponseDtoPermission.ts",
+    "packages/api-client/src/models/index.ts",
+    "packages/api-client/src/models/receivedShareResponseDto.ts",
+    "packages/api-client/src/models/receivedShareResponseDtoEncryptedIpnsKey.ts",
+    "packages/api-client/src/models/receivedShareResponseDtoPermission.ts",
+    "packages/api-client/src/models/sentShareResponseDto.ts",
+    "packages/api-client/src/models/sentShareResponseDtoPermission.ts",
+    "packages/api-client/src/models/updatePermissionDto.ts",
+    "packages/api-client/src/models/updatePermissionDtoPermission.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/81/3bbb598085/0/metadata.json",
+      "transcript": "/81/3bbb598085/0/full.jsonl",
+      "content_hash": "/81/3bbb598085/0/content_hash.txt",
+      "prompt": "/81/3bbb598085/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 31769,
+    "cache_read_tokens": 89109,
+    "output_tokens": 2274,
+    "api_call_count": 3
+  }
+}
