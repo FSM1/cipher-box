@@ -109,7 +109,7 @@ export const sharesControllerGetShareKeys = (
   );
 };
 /**
- * Add re-wrapped child keys to an existing share. Only the sharer can add keys.
+ * Add re-wrapped child keys to an existing share. Allowed for the sharer or write-share recipients.
  * @summary Add share keys
  */
 export const sharesControllerAddShareKeys = (

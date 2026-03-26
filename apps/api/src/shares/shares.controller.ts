@@ -235,11 +235,12 @@ export class SharesController {
   @Post(':shareId/keys')
   @ApiOperation({
     summary: 'Add share keys',
-    description: 'Add re-wrapped child keys to an existing share. Only the sharer can add keys.',
+    description:
+      'Add re-wrapped child keys to an existing share. Allowed for the sharer or write-share recipients.',
   })
   @ApiResponse({ status: 201, description: 'Keys added' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Only the sharer can add keys' })
+  @ApiResponse({ status: 403, description: 'Not authorized to add keys to this share' })
   @ApiResponse({ status: 404, description: 'Share not found' })
   async addShareKeys(
     @Request() req: RequestWithUser,

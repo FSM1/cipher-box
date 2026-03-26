@@ -28,11 +28,21 @@ import {
   type EncryptedFolderMetadata,
   type EncryptedFileMetadata,
 } from '@cipherbox/core';
-import { unwrapKey, hexToBytes, generateRandomBytes, bytesToHex } from '@cipherbox/crypto';
+import { unwrapKey, wrapKey, hexToBytes, generateRandomBytes, bytesToHex } from '@cipherbox/crypto';
 import { useAuthStore } from '../stores/auth.store';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
-import { fetchReceivedShares, fetchShareKeys, hideShare } from '../services/share.service';
-import { resolveIpnsRecord, createAndPublishIpnsRecord } from '../services/ipns.service';
+import {
+  fetchReceivedShares,
+  fetchShareKeys,
+  hideShare,
+  addShareKeys,
+} from '../services/share.service';
+import {
+  resolveIpnsRecord,
+  createAndPublishIpnsRecord,
+  batchPublishIpnsRecords,
+} from '../services/ipns.service';
+import { createFileMetadata } from '../services/file-metadata.service';
 import { fetchFromIpfs, addToIpfs } from '../lib/api/ipfs';
 import { downloadFile, triggerBrowserDownload } from '../services/download.service';
 import { useDownloadStore } from '../stores/download.store';
@@ -637,20 +647,17 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
         const fileMeta = await decryptFileMetadata(encrypted, folderKey);
 
-        // Look for a re-wrapped file key in share_keys
+        // Look for a re-wrapped file key in share_keys,
+        // falling back to fileKeyEncrypted from metadata (for files uploaded by current user)
         const fileKeyRecord = keys.find((k) => k.keyType === 'file' && k.itemId === item.id);
+        const wrappedKey = fileKeyRecord?.encryptedKey ?? fileMeta.fileKeyEncrypted;
 
-        if (!fileKeyRecord) {
-          throw new Error('No re-wrapped file key available for this file');
-        }
-
-        // Use re-wrapped file key from share_keys
         // downloadFile handles unwrapping internally via wrappedKey + privateKey
         const plaintext = await downloadFile(
           {
             cid: fileMeta.cid,
             iv: fileMeta.fileIv,
-            wrappedKey: fileKeyRecord.encryptedKey,
+            wrappedKey,
             originalName: item.name,
             encryptionMode: fileMeta.encryptionMode,
           },
@@ -759,6 +766,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
 
   /**
    * Upload a file to the currently-viewed write-shared folder.
+   * Creates a proper per-file IPNS metadata record (same as owner uploads).
    */
   const uploadFileHandler = useCallback(
     async (file: File) => {
@@ -771,6 +779,23 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setError('Write access not available');
         return;
       }
+
+      const auth = useAuthStore.getState();
+      if (!auth.vaultKeypair) {
+        setError('No keypair available');
+        return;
+      }
+
+      // Get the owner's public key from the share record
+      const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
+      if (!shareItem) {
+        setError('Share not found');
+        return;
+      }
+      const ownerPubKeyHex = shareItem.share.sharerPublicKey.startsWith('0x')
+        ? shareItem.share.sharerPublicKey.slice(2)
+        : shareItem.share.sharerPublicKey;
+      const ownerPublicKey = hexToBytes(ownerPubKeyHex);
 
       setIsLoading(true);
       setError(null);
@@ -790,29 +815,48 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
             const ciphertext = await encryptAesGcm(data, fileKey, iv);
 
             // Upload encrypted content to IPFS
-            // Pass a clean Uint8Array copy -- never use .buffer (may include extra bytes)
             const fileBlob = new Blob([new Uint8Array(ciphertext)], {
               type: 'application/octet-stream',
             });
-            await addToIpfs(fileBlob);
+            const { cid: contentCid } = await addToIpfs(fileBlob);
 
-            // Create a FilePointer entry for the folder metadata
-            // PoC: no per-file IPNS metadata record for shared uploads.
-            // A full implementation would create per-file IPNS records.
+            // Wrap file key with owner's public key for file metadata
+            const ownerWrappedKey = await wrapKey(fileKey, ownerPublicKey);
+            const fileKeyEncrypted = bytesToHex(ownerWrappedKey);
+
+            // Create per-file IPNS metadata record (same as owner upload flow)
             const fileId = crypto.randomUUID();
+            const mimeType = file.type || 'application/octet-stream';
+            const { fileMetaIpnsName, ipnsRecord, ipnsPrivateKeyEncrypted } =
+              await createFileMetadata({
+                fileId,
+                cid: contentCid,
+                fileKeyEncrypted,
+                fileIv: bytesToHex(iv),
+                size: data.length,
+                mimeType,
+                folderKey: currentFolderKey,
+                userPublicKey: ownerPublicKey,
+                encryptionMode: 'GCM',
+              });
+
+            // Publish the file IPNS record
+            await batchPublishIpnsRecords([{ ...ipnsRecord, recordType: 'file' as const }]);
+
+            // Create FilePointer with proper IPNS reference
             const filePointer: FilePointer = {
               type: 'file',
               id: fileId,
               name: file.name,
-              fileMetaIpnsName: '', // PoC: no per-file IPNS for shared uploads
+              fileMetaIpnsName,
+              ipnsPrivateKeyEncrypted,
               createdAt: Date.now(),
               modifiedAt: Date.now(),
             };
 
-            // Use conflict retry to add file to folder metadata
+            // Add file to folder metadata with conflict retry
             await withConflictRetry(
               async () => {
-                // Get fresh state
                 const freshChildren = [...folderChildren, filePointer];
                 const newSeq = await publishSharedFolderMetadata(
                   freshChildren,
@@ -828,6 +872,15 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
                 await resyncSharedFolder();
               }
             );
+
+            // Add re-wrapped file key for the recipient (current user) as share_key
+            // so the recipient can read the file via the shared download path
+            const recipientWrappedKey = await wrapKey(fileKey, auth.vaultKeypair!.publicKey);
+            await addShareKeys(currentShareId!, [
+              { keyType: 'file', itemId: fileId, encryptedKey: bytesToHex(recipientWrappedKey) },
+            ]).catch((err) => {
+              console.warn('[share] Failed to add share_key for uploaded file:', err);
+            });
           } finally {
             fileKey.fill(0);
           }
@@ -846,7 +899,9 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       folderKey,
       ipnsName,
       currentSequenceNumber,
+      currentShareId,
       folderChildren,
+      sharedItems,
       publishSharedFolderMetadata,
       resyncSharedFolder,
       withRevocationGuard,

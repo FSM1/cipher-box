@@ -89,22 +89,21 @@ export function TextEditorDialog({
         let plaintext: Uint8Array;
 
         if (shareId) {
-          // Shared file path: use re-wrapped file key from share_keys
+          // Shared file path: use re-wrapped file key from share_keys,
+          // falling back to fileKeyEncrypted from metadata (for files uploaded by current user)
           const [{ metadata: fileMeta }, keys] = await Promise.all([
             resolveFileMetadata(item.fileMetaIpnsName, folderKey!),
             fetchShareKeys(shareId),
           ]);
 
           const fileKeyRecord = keys.find((k) => k.keyType === 'file' && k.itemId === item.id);
-          if (!fileKeyRecord) {
-            throw new Error('No re-wrapped file key available for this file');
-          }
+          const wrappedKey = fileKeyRecord?.encryptedKey ?? fileMeta.fileKeyEncrypted;
 
           plaintext = await downloadFile(
             {
               cid: fileMeta.cid,
               iv: fileMeta.fileIv,
-              wrappedKey: fileKeyRecord.encryptedKey,
+              wrappedKey,
               originalName: item.name,
               encryptionMode: fileMeta.encryptionMode,
             },

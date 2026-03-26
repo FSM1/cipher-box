@@ -183,17 +183,21 @@ export class SharesService {
 
   /**
    * Add or update re-wrapped keys for an existing share.
-   * Only the sharer can add keys.
+   * Allowed for the sharer (owner) or for write-share recipients.
    */
-  async addShareKeys(shareId: string, sharerId: string, dto: AddShareKeysDto): Promise<void> {
+  async addShareKeys(shareId: string, callerId: string, dto: AddShareKeysDto): Promise<void> {
     const share = await this.shareRepo.findOne({ where: { id: shareId } });
 
     if (!share) {
       throw new NotFoundException('Share not found');
     }
 
-    if (share.sharerId !== sharerId) {
-      throw new ForbiddenException('Only the sharer can add keys');
+    const isSharer = share.sharerId === callerId;
+    const isWriteRecipient =
+      share.recipientId === callerId && share.permission === 'write' && !share.revokedAt;
+
+    if (!isSharer && !isWriteRecipient) {
+      throw new ForbiddenException('Only the sharer or write-share recipient can add keys');
     }
 
     // Upsert: insert or update encrypted_key for each itemId

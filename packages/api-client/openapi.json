@@ -1466,7 +1466,7 @@
         "tags": ["shares"]
       },
       "post": {
-        "description": "Add re-wrapped child keys to an existing share. Only the sharer can add keys.",
+        "description": "Add re-wrapped child keys to an existing share. Allowed for the sharer or write-share recipients.",
         "operationId": "SharesController_addShareKeys",
         "parameters": [
           {
@@ -1496,7 +1496,7 @@
             "description": "Unauthorized"
           },
           "403": {
-            "description": "Only the sharer can add keys"
+            "description": "Not authorized to add keys to this share"
           },
           "404": {
             "description": "Share not found"
