@@ -1,0 +1,126 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "be32e2ffe20d",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T23:10:54.315849Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "fb3c35084223",
+  "token_usage": {
+    "input_tokens": 787,
+    "cache_creation_tokens": 1871376,
+    "cache_read_tokens": 183798383,
+    "output_tokens": 181324,
+    "api_call_count": 681
+  },
+  "session_metrics": {
+    "turn_count": 48
+  },
+  "summary": {
+    "intent": "Execute Phase 27 of the cipher-box project to implement a writable shares proof-of-concept, covering the full stack from API backend through owner/recipient UI and verification.",
+    "outcome": "Phase 27 shipped with all 3 plans complete, 12 security fixes applied (TDD), 21 E2E tests passing, a PR created and all 23 reviewer threads resolved across 4 review rounds.",
+    "learnings": {
+      "repo": [
+        "cipher-box uses IPNS for file metadata records; each file requires a per-file IPNS keypair — uploads via shared folders were missing this, causing files to be unreadable after upload",
+        "ECIES key wrapping must target the correct recipient's public key; shared uploads initially wrapped the IPNS private key with the owner's key instead of the recipient's, making the recipient unable to update files",
+        "Owner file updates via useFileOperations did not re-wrap the new file key for share recipients — a pre-existing gap that only became visible when write shares were added",
+        "The share_keys table stores per-recipient encrypted keys by keyType ('file', 'folder', 'file-ipns'); a new 'file-ipns' type was needed for recipient IPNS key access",
+        "Downgrading a share must delete file-ipns entries from share_keys to prevent continued metadata modification; this requires a DB transaction wrapping both the share update and key deletion",
+        "createShare lacked a permission/IPNS-key invariant: a write share without encryptedIpnsKey or a read share with one could be created; guard added at service layer",
+        "orval (OpenAPI client generator) generates an object union type for nullable string fields instead of `string | null` — this is a known orval limitation, not a spec error",
+        "FolderIpns ownership lookup must use the sharer's userId, not the calling user's, when a write-share recipient publishes to the shared folder's IPNS record",
+        "React types (React.DragEvent etc.) referenced without import — works due to `jsx: react-jsx` tsconfig but flagged by linter; explicit import preferred",
+        "The GSD execute-phase workflow uses VERIFICATION.md and STATE.md that are sometimes created by subagents but not auto-staged by the orchestrator — they need explicit commit steps"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 921,
+          "end_line": 1310,
+          "finding": "withConflictRetry closures captured stale React state for folderChildren and currentSequenceNumber; refs must be maintained alongside state and synced in all navigation functions (navigateToSubfolder, navigateUp, navigateToBreadcrumb, refreshFolderContents)"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Original shared upload set fileMetaIpnsName to empty string; the full IPNS keypair generation must be inlined to create proper per-file records for shared uploads"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 1062,
+          "end_line": 1130,
+          "finding": "Subfolder creation was wrapping keys with recipient's public key; must wrap with owner's key for FilePointer.ipnsPrivateKeyEncrypted and add a separate share_key entry for the recipient"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 98,
+          "end_line": 110,
+          "finding": "Save path used owner-only updateFile hook; requires onSaveSharedFile callback prop passed from SharedFileBrowser to route saves through the shared navigation's update path"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 185,
+          "end_line": 215,
+          "finding": "addShareKeys must restrict write-share recipients to 'file' and 'file-ipns' key types only — folder key injection must be blocked"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 389,
+          "end_line": 401,
+          "finding": "Permission downgrade (encryptedIpnsKey = null + delete file-ipns share_keys) must be wrapped in a transaction to prevent partial state"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "After injecting SharesService into IpnsService for write-share authorization, the unit test module must provide a mock SharesService or the test suite fails with Nest DI resolution error"
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "ECIES ciphertext hex fields need both MinLength(64) and a Matches(/^([0-9a-f]{2})+$/i) even-length hex regex — MinLength alone allows odd-length strings that fail hex decoding"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/ShareDialog.tsx",
+          "line": 367,
+          "end_line": 390,
+          "finding": "upgradingId/downgradingId state can get stuck if the handler throws before reaching the finally block; entire handler body must be wrapped in try/finally to guarantee cleanup"
+        }
+      ],
+      "workflow": [
+        "Dev servers in Claude Code background tasks are killed when the conversation context shifts; use nohup or detach with \u0026 disown to keep them alive across conversation events",
+        "SDK packages (core, sdk-core, sdk) must be built before the web dev server can resolve @cipherbox/sdk — build order: core → sdk-core → sdk",
+        "API client (orval) must be regenerated and committed after every DTO change; missing regeneration is a common CI failure cause",
+        "Generated OpenAPI JSON files may lack a trailing newline — CI diffs will flag this; add with printf or echo \u003e\u003e after generation",
+        "TDD for security fixes: stash partial fixes, write failing tests against unfixed code to confirm red phase, pop stash and verify green",
+        "Security review before merge caught 12 issues (2 critical) in a single-phase feature — running /security:review after crypto-heavy phases is high value",
+        "The /simplify parallel agent review caught a critical bug: navigation functions were not syncing state refs, causing stale data after navigation",
+        "When removing tests, always check if the test was the only consumer of an imported symbol to avoid unused-import lint failures in CI",
+        "Copying .env files from the canonical checkout (cipher-box/) to debug checkouts (cipher-box-ci-debug/) is the reliable setup step for dev environment parity"
+      ]
+    },
+    "friction": [
+      "PostgreSQL host IP changed mid-session (192.168.133.114 → 192.168.133.12); no .env existed in the debug checkout, requiring manual creation from .env.example",
+      "Web app defaulted to window.location.origin + '/api' when VITE_API_URL was unset, connecting to port 5173 instead of 3000 — not obvious from the codebase",
+      "Background tasks repeatedly killed by conversation context shifts, requiring multiple restarts before switching to detached processes",
+      "Git lock file blocked commit after a prior interrupted operation",
+      "orval regeneration is fragile: requires the API server to be running with latest code for OpenAPI spec to reflect DTO changes, and sometimes produces stale output",
+      "VERIFICATION.md and tee-worker/package-lock.json were left uncommitted after the phase completed — caught by the user, not the workflow",
+      "CI lint failure from unused ForbiddenException import left behind when a test was removed",
+      "CI failure from missing trailing newline in generated openapi.json file — subtle diff that only shows up in CI",
+      "Four rounds of PR review resolution required due to CodeRabbit flagging issues introduced in prior fix rounds"
+    ],
+    "open_items": [
+      "orval nullable string type limitation: encryptedIpnsKey in ReceivedShareResponseDto generates as a union object type instead of `string | null` — accepted as PoC limitation, consumers handle it correctly",
+      "Polling fetches all received shares every 30s instead of a single-share endpoint — a dedicated endpoint would be more efficient but requires new API work beyond PoC scope",
+      "reWrapForRecipients in useFileOperations does not re-wrap file-ipns keys when the owner edits a file — by design for PoC (recipient's IPNS key is their own), but creates a gap if the owner needs to rotate keys",
+      "TextEditorDialog falls back to an explicit error for files without a share_key (H-02 fix) — pre-existing owner-uploaded files in shared folders before the fix will be unreadable by recipients and require re-upload",
+      "100-share poll limit in the periodic permission check — acceptable for PoC but needs pagination for production",
+      "E2E tests for silent revocation (30s polling detects permission change) and the full upgrade→downgrade cycle are present but depend on timing; may be flaky under slow CI"
+    ]
+  }
+}
