@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.30.0...cipher-box-v0.30.1) (2026-03-26)
+
+
+### Bug Fixes
+
+* **ci:** wire Tauri signing keys into staging desktop builds ([#370](https://github.com/FSM1/cipher-box/issues/370)) ([ed62930](https://github.com/FSM1/cipher-box/commit/ed62930824b78e242b215563ed5e051624177482))
+
 ## [0.30.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.29.1...cipher-box-v0.30.0) (2026-03-26)
 
 
