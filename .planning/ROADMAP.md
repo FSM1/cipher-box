@@ -245,7 +245,12 @@ Plans:
 3. Client-side timeouts and retry config are tuned based on Phase 18/22 baseline data for sub-2s UX on common operations
 4. Timeout changes are validated against the journey timing tests from Phase 22
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 26-01-PLAN.md -- Grafana alert rule JSON definitions + provisioning script for five alert categories
+- [ ] 26-02-PLAN.md -- Client-side timeout and retry constant tuning across SDK providers and API services
 
 ## Progress
 
@@ -264,9 +269,9 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
 | 24. Bug Fixes & Test Infrastructure       | v1.1      | 0/?            | Not started | -          |
 | 25. Desktop Enhancements                  | v1.1      | 0/?            | Not started | -          |
-| 26. Observability & UX Tuning             | v1.1      | 0/?            | Not started | -          |
+| 26. Observability & UX Tuning             | v1.1      | 0/2            | Planned     | -          |
 
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-25_
+_Last updated: 2026-03-26_
