@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "09f75c9cdf61",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/09/f75c9cdf61/0/metadata.json",
+      "transcript": "/09/f75c9cdf61/0/full.jsonl",
+      "content_hash": "/09/f75c9cdf61/0/content_hash.txt",
+      "prompt": "/09/f75c9cdf61/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 413410,
+    "cache_read_tokens": 4777464,
+    "output_tokens": 4432,
+    "api_call_count": 14
+  }
+}
