@@ -1,0 +1,81 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "9a449c7978f1",
+  "session_id": "c0abe932-15e1-4254-8a98-20c8096f009c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T00:09:00.214784Z",
+  "branch": "feat/phase-26-observability-ux-tuning",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "47fcf46d63b9",
+  "token_usage": {
+    "input_tokens": 72,
+    "cache_creation_tokens": 116886,
+    "cache_read_tokens": 3729907,
+    "output_tokens": 16434,
+    "api_call_count": 54
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Determine the next workable phase after phases 24 and 25 went into PR review, then complete the discuss-phase and kick off plan-phase for Phase 26 (Observability \u0026 UX Tuning).",
+    "outcome": "Phase 26 CONTEXT.md created with locked decisions on alert thresholds, Grafana delivery strategy, timeout tuning targets, and validation approach. Research (26-RESEARCH.md) and validation strategy (26-VALIDATION.md) were written and committed. Planner was spawned but the transcript ends before the planning result is returned.",
+    "learnings": {
+      "repo": [
+        "Phases 24 and 25 are in active PR review — Phase 26 is the next actionable phase",
+        "Phase 18 explicitly deferred alerting as 'observation-only, alerts premature before baselines' — Phase 26 is the intended follow-through",
+        "Single Grafana dashboard strategy: cipherbox-staging.json is extended per phase rather than creating separate dashboards",
+        "Grafana Cloud requires HTTP API provisioning for alert rules — file-based provisioning does not work for alerts in Grafana Cloud",
+        "All threshold values for Phase 26 alerts are derivable from existing baseline documents in .planning/baselines/",
+        "Alloy config scrapes two endpoints: API /metrics every 30s and Kubo /debug/metrics/prometheus every 30s, ships to Grafana Cloud Mimir + Loki",
+        "Client-side perf instrumentation (packages/sdk-core/src/perf.ts) is non-production only — gated by NODE_ENV !== 'production' or __CIPHERBOX_PERF__ flag",
+        "There is 1 active debug session: vault-migration-iife-silent-failure",
+        "13 pending todos exist in the project"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/metrics/metrics.service.ts",
+          "finding": "5 Gauges (DB-polled every 30s), 8 Counters (event-driven), and 5 Histograms (HTTP, IPFS/IPNS general, republish batch, IPNS resolve, IPNS publish) — all alert thresholds for Phase 26 should reference these existing histograms"
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "finding": "Most comprehensive retry pattern in the codebase: 3 attempts, 1s base delay, 30s max delay, exponential backoff, respects Retry-After header for 429s, falls back to primary→fallback endpoint, 10s per-request timeout"
+        },
+        {
+          "path": "apps/web/src/services/upload.service.ts",
+          "finding": "MAX_RETRIES=3, RETRY_BASE_DELAY=1000ms with exponential backoff; skips retry if error message is 'Upload cancelled by user'"
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "Uses a shared promise for concurrent 401 refresh handlers — all concurrent 401 errors await the same refresh promise to prevent duplicate token refresh calls"
+        },
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "finding": "Performance mark format is cipherbox:\u003coperation\u003e:\u003cid\u003e:start → cipherbox:\u003coperation\u003e:\u003cid\u003e:end; outputs to browser Performance API (DevTools Performance tab)"
+        }
+      ],
+      "workflow": [
+        "Codebase scout agent can be launched in background while the orchestrator handles git branch creation in parallel",
+        "The researcher agent commits its own output file — the orchestrator should not attempt a second commit of the same file",
+        "Feature branch should be created early in discuss-phase (before presenting gray areas) so all context writes land on the correct branch",
+        "GSD auto-advance chain: discuss-phase → plan-phase → execute-phase can run at the same nesting level via Skill tool to avoid deep agent nesting freezes"
+      ]
+    },
+    "friction": [
+      "Orchestrator attempted to commit the research file after the researcher agent had already committed it, causing a redundant git operation that required investigation before proceeding",
+      "Had to run /gsd:progress first to discover that phases 24 and 25 were in PR review — this context wasn't surfaced until explicitly queried"
+    ],
+    "open_items": [
+      "Phase 26 planning is in progress — planner was spawned but transcript ends before result; plans (PLAN.md files) are not yet written",
+      "Phases 24 and 25 PRs are pending review and merge",
+      "Active debug session vault-migration-iife-silent-failure is unresolved",
+      "13 pending todos need review (/gsd:check-todos)",
+      "Deferred: dedicated timeout regression test suite (future phase)",
+      "Deferred: push notification channels for alerts (when team/on-call structure exists)",
+      "Deferred: automated CI timing gates (when CI is stable)"
+    ]
+  }
+}
