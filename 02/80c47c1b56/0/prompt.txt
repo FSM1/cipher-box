@@ -98,3 +98,7 @@ now a new error: > Cannot update: file IPNS key not accessible
 ---
 
 can you get me the otp to log in
+
+---
+
+ok i was able to save on the shared side, and retrieval worked on the owner side, but attempting to save edits to the file from the owner side threw a `> Key unwrapping failed`
