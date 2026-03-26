@@ -71,3 +71,7 @@ ok just need the latest otp please
 ---
 
 ok visual changes are confirmed - I attempted to edit a text file in a shared folder and received a `> File metadata IPNS name not available (legacy v1 file?)` message in the text editor dialog.
+
+---
+
+this seems like a pretty large gap to me - file ipns entries should be created whether the file is uploaded to a user folder or a shared folder.
