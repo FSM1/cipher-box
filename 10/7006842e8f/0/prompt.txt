@@ -118,3 +118,7 @@ ok what is the latest otp?
 ---
 
 ok once the sahre was downgraded to read only, I am now unable to decrypt the text file from the `shared user` side.
+
+---
+
+ok, I think that the sharing e2e tests need to be updated to cover all the new write enabled sharing flows we have fixed.
