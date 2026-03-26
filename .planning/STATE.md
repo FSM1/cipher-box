@@ -152,6 +152,7 @@ Recent for v1.1:
 - Phase 19.1 inserted after Phase 19: Extract core crypto SDK as shared package (URGENT)
 - Phase 19.2 inserted after Phase 19: IPFS Upload Performance Optimization (URGENT) — concurrent pins, Kubo worker tuning, pin batching to address ~95% bottleneck in upload path identified by Phase 19 baselines
 - Phase 23 added: Rust SDK Extraction — extract shared cipherbox-core crate, replace duplicated logic in desktop FUSE code, enable unit testing parity with TypeScript
+- Phase 27 added: Writable Shares (PoC) — extend read-only sharing to read-write using existing server-coordinated conflict resolution
 
 ### Open Concerns
 
