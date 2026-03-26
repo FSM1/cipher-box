@@ -1,0 +1,65 @@
+https://github.com/FSM1/cipher-box/actions/runs/23574752203/job/68644678809 vault recovery e2e is still failing. 
+
+unless you know what the problem is, you will get the e2e tests passing locally before committing to a branch and PR'ing
+
+---
+
+<task-notification>
+<task-id>bhpgce5u2</task-id>
+<tool-use-id>toolu_01QEoRhE81yaYWMUhLARAZBX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bhpgce5u2.output</output-file>
+<status>completed</status>
+<summary>Background command "Start API with test config" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bhpgce5u2.output
+
+---
+
+<task-notification>
+<task-id>b8evtj5dt</task-id>
+<tool-use-id>toolu_01LXuw6L4Sy65HTeVzrbYCoH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/b8evtj5dt.output</output-file>
+<status>completed</status>
+<summary>Background command "Start web dev server" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/b8evtj5dt.output
+
+---
+
+/resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23568112633/job/68625811687 the last few deployments have been throwing errors during grafana dashboard provisioning - why?
+
+---
+
+health returns ok
+
+---
+
+I am seeing grafana loki api key and grafana prometheus api key - which one do i need to update
+
+---
+
+ok secret is updated - its a repo secret not an env secret.
+
+---
+
+just kicked off a fresh staging deployment https://github.com/FSM1/cipher-box/actions/runs/23576294028
+
+---
+
+please check that connection again - I can connect to it from hostinger dashboard
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23576294028/job/68650602138 desktop build is failing on a missing signing key
