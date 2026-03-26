@@ -11,6 +11,7 @@
 import { CipherBoxClient } from '@cipherbox/sdk';
 import { initializeVault } from '@cipherbox/core';
 import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
+import { publishVaultKeyBlob } from '@cipherbox/sdk-core';
 
 const API_URL = process.env.SDK_E2E_API_URL ?? 'http://localhost:3000';
 const SECRET = process.env.SDK_E2E_SECRET ?? 'e2e-test-secret-do-not-use-in-production';
@@ -87,7 +88,15 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
     const vault = await initializeVault(privateKey);
     const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
 
-    // 3. Register vault on server (v2: only ownerPublicKey + rootIpnsName, crypto lives in IPFS)
+    // 3. Publish vault key blob to IPNS (rootFolderKey storage for recovery)
+    await publishVaultKeyBlob({
+      userPrivateKey: privateKey,
+      userPublicKey: publicKey,
+      rootFolderKey: vault.rootFolderKey,
+      ctx: { apiUrl, getAccessToken: async () => accessToken },
+    });
+
+    // 4. Register vault on server (v2: only ownerPublicKey + rootIpnsName, crypto lives in IPFS)
     const initRes = await fetch(`${apiUrl}/vault/init`, {
       method: 'POST',
       headers: fetchHeaders({

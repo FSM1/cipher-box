@@ -44,6 +44,9 @@ export { uploadFile, type UploadResult } from './upload';
 // Download operations
 export { downloadAndDecrypt } from './download';
 
+// Vault key blob operations
+export { publishVaultKeyBlob, loadVaultKeyBlob } from './vault';
+
 // Pinning providers (BYO-IPFS)
 export {
   type PinningProvider,
