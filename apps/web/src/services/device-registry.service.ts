@@ -118,7 +118,7 @@ export async function initializeOrSyncRegistry(params: {
     } else {
       // No existing registry -- first device, auto-authorized
       registry = {
-        version: 'v1',
+        version: 'v2',
         sequenceNumber: 0,
         devices: [
           createEmptyDeviceEntry({

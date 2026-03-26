@@ -31,7 +31,7 @@ export type DeviceEntry = {
   appVersion: string;
   /** Device model or OS version (e.g., "macOS 15.2", "Chrome 123") */
   deviceModel: string;
-  /** SHA-256 hash of IP address at registration (hex, privacy-preserving) */
+  /** SHA-256 hash of IP address at registration (hex, privacy-preserving). May be '0'.repeat(64) for v1-migrated entries. */
   ipHash: string;
   /** Authorization status */
   status: DeviceAuthStatus;
@@ -51,9 +51,12 @@ export type DeviceEntry = {
  * Encrypted as a single JSON blob with the user's publicKey via ECIES,
  * then stored on IPFS and referenced by a dedicated IPNS name.
  */
+/** Schema version for device registry */
+export type DeviceRegistryVersion = 'v1' | 'v2';
+
 export type DeviceRegistry = {
   /** Schema version for future migrations */
-  version: 'v1';
+  version: DeviceRegistryVersion;
   /** Monotonically increasing update counter */
   sequenceNumber: number;
   /** Array of all device entries (including revoked, for audit trail) */

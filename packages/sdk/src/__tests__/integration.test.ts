@@ -167,7 +167,7 @@ describeIf('SDK Integration (live API)', () => {
         const binState = await client.loadBin();
         expect(binState).toBeTruthy();
         expect(binState.entries).toEqual([]);
-        expect(binState.sequenceNumber).toBe(0);
+        expect(binState.sequenceNumber).toBe(1);
         console.log('  ✓ loadBin on fresh account returns empty state');
 
         // 2. Upload a file

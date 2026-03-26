@@ -8,6 +8,7 @@ mod registry;
 mod state;
 mod sync;
 mod tray;
+mod updater;
 
 use tauri::{Manager, WindowEvent};
 use state::AppState;
@@ -94,6 +95,7 @@ fn main() {
         ))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
         .setup(|app| {
             // Hide dock icon -- menu bar only (pure background utility)
@@ -131,6 +133,9 @@ fn main() {
 
             // Initial tray status: NotConnected
             let _ = tray::update_tray_status(&handle, &tray::TrayStatus::NotConnected);
+
+            // Check for updates on launch (5s delay, non-blocking)
+            updater::check_on_launch(&handle);
 
             // In dev-key mode, auto-create the login webview so the JS auth
             // flow runs immediately without user interaction.

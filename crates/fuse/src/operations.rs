@@ -129,6 +129,9 @@ pub(crate) mod implementation {
         file_ipns_private_key: &zeroize::Zeroizing<Vec<u8>>,
         file_ipns_name: &str,
         coordinator: &crate::PublishCoordinator,
+        tee_public_key: Option<&[u8]>,
+        tee_key_epoch: Option<u32>,
+        is_first_publish: bool,
     ) -> Result<(), String> {
         let folder_key_arr: [u8; 32] = folder_key.try_into()
             .map_err(|_| "Invalid folder key length for FileMetadata encryption".to_string())?;
@@ -159,12 +162,26 @@ pub(crate) mod implementation {
 
         let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
 
+        // TEE enrollment on first publish only (same pattern as folder creation in write_ops.rs)
+        let (encrypted_ipns_for_tee, tee_epoch) = match (is_first_publish, tee_public_key, tee_key_epoch) {
+            (true, Some(tee_key), Some(epoch)) => {
+                let wrapped = cipherbox_crypto::wrap_key(
+                    file_ipns_private_key.as_slice(), tee_key
+                ).map_err(|e| format!("TEE key wrapping failed: {}", e))?;
+                (Some(hex::encode(&wrapped)), Some(epoch))
+            }
+            (true, Some(_), None) => {
+                return Err("TEE public key present but key_epoch missing".to_string());
+            }
+            _ => (None, None),
+        };
+
         let req = cipherbox_api_client::IpnsPublishRequest {
             ipns_name: file_ipns_name.to_string(),
             record: record_b64,
             metadata_cid: file_meta_cid.clone(),
-            encrypted_ipns_private_key: None,
-            key_epoch: None,
+            encrypted_ipns_private_key: encrypted_ipns_for_tee,
+            key_epoch: tee_epoch,
             expected_sequence_number: None,
         };
         match cipherbox_api_client::ipns::publish_ipns(api, &req).await.map_err(|e| format!("{}", e))? {
