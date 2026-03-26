@@ -1,0 +1,138 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d6b1871b8f6f",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T02:10:53.049878Z",
+  "branch": "feat/sdk-vault-key-blob-publish",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "bee3bbbe3f28",
+  "token_usage": {
+    "input_tokens": 475,
+    "cache_creation_tokens": 367919,
+    "cache_read_tokens": 86595888,
+    "output_tokens": 86481,
+    "api_call_count": 397
+  },
+  "session_metrics": {
+    "turn_count": 38
+  },
+  "summary": {
+    "intent": "Execute Phase 24 (bug fixes and test infrastructure), get the PR merged, and fix a newly added recovery E2E test that was consistently failing in CI.",
+    "outcome": "Phase 24 executed and merged successfully. The recovery E2E test root cause was identified: the SDK's createTestAccount never publishes the vault key blob IPNS record (only the web app's useAuth hook does), making recovery impossible in tests. A fix was started to move vault key blob publish into sdk-core.",
+    "learnings": {
+      "repo": [
+        "The vault key blob IPNS record is published exclusively by the web app's useAuth hook (deriveVaultKeyIpnsKeypair + serializeVaultBlobV2 + createAndPublishIpnsRecord), not by the SDK — creating a gap in createTestAccount and any non-web client.",
+        "In CI, IPNS records are published through mock-ipns-routing (port 3001) via delegated routing, not through Kubo's DHT — Kubo's gateway cannot resolve these names.",
+        "The API's /ipns/resolve endpoint requires JWT auth (JwtAuthGuard on the entire IpnsController), making it unreachable from unauthenticated tools like recovery.html.",
+        "The CipherBox API publishes IPNS records via delegated routing (mock-ipns-routing in CI, someguy in prod), not directly through Kubo's name/publish — so Kubo's local IPNS resolver won't have records either.",
+        "recovery.html window.location.origin.replace(/:\\d+$/, ':3000') correctly derives the API base from any Vite dev server port.",
+        "The mock-ipns-routing server (tools/mock-ipns-routing) is a simple Fastify server with no CORS headers by default.",
+        "validateRegistryShape() narrows obj.devices inside its scope but TypeScript doesn't propagate narrowing across function call boundaries — callers need an explicit cast after calling it.",
+        "publishWithVerify was originally re-publishing on every retry instead of publishing once and only retrying the verification step.",
+        "useAuth.ts was inlining 7 lines of SHA-256 for ipHash when computeIpHash() already exists in the device/info module.",
+        "Stale package builds (.d.ts files) in @cipherbox/crypto and @cipherbox/api-client caused 6 false type errors in the web app — pnpm --filter build regenerates them.",
+        "The recovery.html resolveIpns fallback chain: (1) /ipns/ HEAD on gateway with 30s timeout, (2) /routing/v1/ipns/:name with 3 retries + backoff, (3) CipherBox API /ipns/resolve (requires auth), (4) POST /api/v0/name/resolve on IPFS node."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 202,
+          "end_line": 202,
+          "finding": "publishWithVerify was calling createAndPublishIpnsRecord on every retry iteration — should publish once then loop only on the verification fetch."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 176,
+          "end_line": 185,
+          "finding": "Vault key blob IPNS publish lives here (deriveVaultKeyIpnsKeypair + serializeVaultBlobV2 + addToIpfs + createAndPublishIpnsRecord) — not in the SDK, causing createTestAccount to skip it entirely."
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 80,
+          "end_line": 96,
+          "finding": "validateV2Registry uses validateRegistryShape() but TypeScript cannot narrow obj.devices after the call — needs explicit as unknown[] cast. Also: migration should only auto-heal empty string ipHash, not other malformed values."
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "line": 86,
+          "end_line": 115,
+          "finding": "createTestAccount calls initializeVault, registers vault, creates CipherBoxClient, registers root folder — but never publishes the vault key blob IPNS record, making recovery.html unable to find the vault."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/bin-operations.test.ts",
+          "line": 32,
+          "end_line": 32,
+          "finding": "Expected sequenceNumber: 0 for fresh bin, but after adding auto-repair in loadBin, a fresh bin now immediately publishes and returns sequenceNumber: 1."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 170,
+          "end_line": 170,
+          "finding": "Same sequenceNumber assertion needed updating after auto-repair change."
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 69,
+          "end_line": 69,
+          "finding": "let cid declared inside try block is not accessible in finally block — must be hoisted above try. Also: let cid!: string with definite assignment weakens type safety vs string | undefined with narrowing."
+        },
+        {
+          "path": "tools/mock-ipns-routing/src/index.ts",
+          "line": 33,
+          "end_line": 33,
+          "finding": "No CORS headers — browser cannot make cross-origin requests from localhost:5173. Added CORS with GET and OPTIONS only."
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 22,
+          "end_line": 27,
+          "finding": "IPNS_GATEWAY should default to DELEGATED_ROUTING_URL (mock-ipns-routing) not API URL or hardcoded port. IPFS_GATEWAY should default to Kubo gateway port 8080. All env vars should use .trim() || default pattern."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1104,
+          "end_line": 1104,
+          "finding": "Error message said only hex accepted but code had vestigial base64 fallback from old export-file mode — removed. Also: base64 branch was dead code since v2 recovery only uses hex keys."
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "line": 149,
+          "end_line": 149,
+          "finding": "Web E2E step sets TEST_LOGIN_SECRET for the API but not SDK_E2E_SECRET for the test runner process — CipherBoxClient test harness reads SDK_E2E_SECRET and falls back to a different default, causing 401 on /auth/test-login."
+        }
+      ],
+      "workflow": [
+        "When a TypeScript narrowing function is extracted from inline control flow, callers lose the narrowed type — add explicit casts at call sites or use assertion function signature.",
+        "Browser CORS issues with local services (Kubo, mock routing) are a recurring friction point for E2E tests — configure CORS at the service level in CI rather than proxying through authenticated services.",
+        "Debugging E2E test failures: download Playwright artifacts (error-context.md, screenshots) from CI to understand exactly where in the page flow the failure occurs rather than guessing from test output alone.",
+        "When a test helper (createTestAccount) builds a partial representation of a user session, any functionality added to the full client-side flow afterward silently diverges — SDK should be the source of truth for all vault operations.",
+        "pnpm --filter @scope/package build must be re-run after changing package exports for downstream TypeScript to pick up new .d.ts files.",
+        "Verifying Git push via background tasks can produce spurious failures if a foreground push already completed — background task failure exit code 128 (not a repo) is a false alarm in this scenario.",
+        "The GSD execute-phase classifyHandoffIfNeeded bug: agents can report 'failed' after completing all work — spot-check SUMMARY.md + git commits to distinguish real failure from Claude Code runtime bug.",
+        "Kubo in CI with mock-ipns-routing: only records published through delegated routing exist in the mock; Kubo's local IPNS store is separate and empty."
+      ]
+    },
+    "friction": [
+      "Recovery E2E test required 5 separate PRs (#361, #363, #364, #365, #367) and extensive debugging before root cause (missing vault key blob publish in SDK) was found.",
+      "GitHub API timeouts during CI log fetching forced multiple retries and delays in diagnosing failures.",
+      "Background bash tasks produced spurious exit-128 failures when a foreground push had already completed, causing confusion.",
+      "Each recovery test CI run takes ~8 minutes, making the debug loop very slow.",
+      "Kubo has no CORS configured by default — required a CI workflow step to configure it, which was still insufficient since IPNS records weren't in Kubo at all.",
+      "The mock-ipns-routing /routing/v1/ipns/:name endpoint returns a raw binary IPNS record (application/vnd.ipfs.ipns-record), and recovery.html's protobuf parser silently failed to extract the CID, falling through all fallbacks without a clear error.",
+      "Docker host IP changed (192.168.133.114 → 192.168.133.12) mid-session, requiring .env update and surfacing the gateway URL assumptions baked into the recovery test.",
+      "Git stash was needed mid-session when user wanted to switch branches with uncommitted recovery.spec.ts changes.",
+      "Pre-existing type errors in the codebase (stale .d.ts builds, byo-file-workload.ts cid scoping) were conflated with phase 24 changes during review."
+    ],
+    "open_items": [
+      "Extract vault key blob IPNS publish from useAuth.ts into sdk-core (publishVaultKeyBlob / loadVaultKeyBlob functions) — branch feat/sdk-vault-key-blob-publish started but not yet merged.",
+      "Update createTestAccount to call publishVaultKeyBlob so recovery E2E test works without test.skip.",
+      "Remove test.skip(!!process.env.CI) from recovery.spec.ts once SDK vault key blob publish is wired in.",
+      "Configure Kubo CORS locally (ipfs config --json API.HTTPHeaders for port 5001 and 8080) on Docker host 192.168.133.12 to enable local recovery E2E testing without needing CI.",
+      "Consider whether /ipns/resolve API endpoint should have an optional public mode or separate unauthenticated endpoint for the recovery tool use case.",
+      "PR #367 (recovery test CI skip) was created but may be superseded by the SDK vault key blob fix — evaluate whether to merge or close it."
+    ]
+  }
+}
