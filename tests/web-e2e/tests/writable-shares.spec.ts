@@ -165,8 +165,8 @@ test.describe.serial('Writable Shares', () => {
     // Verify recipient shows [write] label
     const recipientRow = aliceShareDialog.recipientRow(truncateKey(bob.publicKey));
     await expect(recipientRow).toBeVisible();
-    const permLabel = recipientRow.locator('.share-recipient-permission');
-    await expect(permLabel).toContainText('write');
+    const permLabel = recipientRow.locator('.recipient-perm-write');
+    await expect(permLabel).toContainText('[write]');
 
     await aliceShareDialog.close();
   });
@@ -221,11 +221,11 @@ test.describe.serial('Writable Shares', () => {
     const mkdirBtn = bob.page.locator('.toolbar-btn', { hasText: '--mkdir' });
     await mkdirBtn.click();
 
-    // Wait for create folder dialog and enter name
-    const folderInput = bob.page.locator('#create-folder-input');
+    // SharedFileBrowser uses an inline input (not a modal dialog)
+    const folderInput = bob.page.locator('.shared-inline-input-field');
     await folderInput.waitFor({ state: 'visible', timeout: 5000 });
     await folderInput.fill(recipientSubfolderName);
-    await bob.page.locator('.create-folder-submit-btn').click();
+    await folderInput.press('Enter');
 
     // Wait for subfolder to appear
     await bobSharedBrowser.getFolderItem(recipientSubfolderName).waitFor({
@@ -273,12 +273,16 @@ test.describe.serial('Writable Shares', () => {
   // ============================================
 
   test("4.1 Alice can see Bob's uploaded file in her folder", async () => {
+    test.setTimeout(90000);
+
+    // Navigate to Alice's files — reload to pick up IPNS propagation from Bob's writes
     await navigateToFiles(alice);
-    await aliceFileList.waitForItemToAppear(folderName, { timeout: 15000 });
+    await alice.page.reload({ waitUntil: 'networkidle' });
+    await aliceFileList.waitForItemToAppear(folderName, { timeout: 30000 });
     await aliceNavigateIntoFolder(folderName);
 
-    // Wait for Bob's file to appear (may need a moment for IPNS propagation)
-    await aliceFileList.waitForItemToAppear(recipientFileName, { timeout: 30000 });
+    // Wait for Bob's file to appear (IPNS propagation may take a few seconds)
+    await aliceFileList.waitForItemToAppear(recipientFileName, { timeout: 60000 });
     expect(await aliceFileList.isItemVisible(recipientFileName)).toBe(true);
 
     // Also verify Bob's subfolder
@@ -372,9 +376,9 @@ test.describe.serial('Writable Shares', () => {
     const confirmBtn = bobRow.locator('.share-revoke-confirm-btn--yes');
     await confirmBtn.click();
 
-    // Wait for permission label to change
-    const permLabel = bobRow.locator('.share-recipient-permission');
-    await expect(permLabel).toContainText('read', { timeout: 10000 });
+    // Wait for permission label to change to [read]
+    const permLabel = bobRow.locator('.recipient-perm-read');
+    await expect(permLabel).toContainText('[read]', { timeout: 10000 });
 
     // Verify upgrade button now appears
     const upgradeBtn = bobRow.locator('.share-upgrade-btn');
@@ -441,9 +445,9 @@ test.describe.serial('Writable Shares', () => {
     const upgradeBtn = bobRow.locator('.share-upgrade-btn');
     await upgradeBtn.click();
 
-    // Wait for permission label to change back to write
-    const permLabel = bobRow.locator('.share-recipient-permission');
-    await expect(permLabel).toContainText('write', { timeout: 15000 });
+    // Wait for permission label to change back to [write]
+    const permLabel = bobRow.locator('.recipient-perm-write');
+    await expect(permLabel).toContainText('[write]', { timeout: 15000 });
 
     // Downgrade button should be visible again
     const downgradeBtn = bobRow.locator('.share-downgrade-btn');
@@ -484,8 +488,8 @@ test.describe.serial('Writable Shares', () => {
     const renameOption = bob.page.locator('.context-menu-item', { hasText: /rename/i });
     await renameOption.click();
 
-    // Wait for rename input and enter new name
-    const renameInput = bob.page.locator('.file-name-input');
+    // SharedFileBrowser uses an inline rename field
+    const renameInput = bob.page.locator('.shared-inline-rename-field');
     await renameInput.waitFor({ state: 'visible', timeout: 5000 });
     const renamedFileName = `renamed-${runId}.txt`;
     await renameInput.fill(renamedFileName);
