@@ -767,21 +767,25 @@ describe('SharesService', () => {
         encryptedIpnsKey: Buffer.from('ee'.repeat(64), 'hex'),
       };
       mockShareRepo.findOne.mockResolvedValue(writeShare);
-      mockShareRepo.save.mockResolvedValue({});
-      mockShareKeyRepo.delete.mockResolvedValue({ affected: 2 });
+
+      // Mock the transaction manager used for atomic downgrade
+      const txSave = jest.fn().mockResolvedValue({});
+      const txDelete = jest.fn().mockResolvedValue({ affected: 2 });
+      (mockShareRepo as any).manager = {
+        transaction: jest.fn().mockImplementation(async (cb: any) => {
+          await cb({ save: txSave, delete: txDelete });
+        }),
+      };
 
       await service.updatePermission(shareId, sharerId, 'read');
 
-      // Verify permission changed
-      const saved = mockShareRepo.save.mock.calls[0][0];
-      expect(saved.permission).toBe('read');
-      expect(saved.encryptedIpnsKey).toBeNull();
+      // Verify permission changed via transaction
+      expect(txSave).toHaveBeenCalledWith(
+        expect.objectContaining({ permission: 'read', encryptedIpnsKey: null })
+      );
 
-      // Verify file-ipns keys were deleted
-      expect(mockShareKeyRepo.delete).toHaveBeenCalledWith({
-        shareId,
-        keyType: 'file-ipns',
-      });
+      // Verify file-ipns keys were deleted in the same transaction
+      expect(txDelete).toHaveBeenCalledWith(ShareKey, { shareId, keyType: 'file-ipns' });
     });
 
     it('should not delete share_keys on upgrade to write', async () => {

@@ -634,7 +634,11 @@ export function ShareDialog({
                                 type="button"
                                 className="share-action-btn share-upgrade-btn"
                                 onClick={() => handleUpgrade(recipient)}
-                                disabled={upgradingId !== null || downgradingId !== null}
+                                disabled={
+                                  upgradingId !== null ||
+                                  downgradingId !== null ||
+                                  revokingId !== null
+                                }
                                 aria-label={`Upgrade ${truncateKey(recipient.recipientPublicKey)} to read-write`}
                               >
                                 {upgradingId === recipient.shareId ? '...' : '--upgrade'}
@@ -665,7 +669,11 @@ export function ShareDialog({
                                 type="button"
                                 className="share-action-btn share-downgrade-btn"
                                 onClick={() => setConfirmDowngradeId(recipient.shareId)}
-                                disabled={upgradingId !== null || downgradingId !== null}
+                                disabled={
+                                  upgradingId !== null ||
+                                  downgradingId !== null ||
+                                  revokingId !== null
+                                }
                                 aria-label={`Downgrade ${truncateKey(recipient.recipientPublicKey)} to read-only`}
                               >
                                 {'--downgrade'}
@@ -701,7 +709,9 @@ export function ShareDialog({
                             type="button"
                             className="share-revoke-btn"
                             onClick={() => setConfirmRevokeId(recipient.shareId)}
-                            disabled={revokingId !== null}
+                            disabled={
+                              revokingId !== null || upgradingId !== null || downgradingId !== null
+                            }
                             aria-label={`Revoke share for ${truncateKey(recipient.recipientPublicKey)}`}
                           >
                             {'--revoke'}

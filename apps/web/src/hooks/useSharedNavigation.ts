@@ -1042,86 +1042,85 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           // Generate a random folder key for the subfolder
           const subfolderKey = generateRandomBytes(32);
 
-          // C-02: Wrap subfolder keys with OWNER's key (not recipient's) for FolderEntry
-          const auth = useAuthStore.getState();
-          if (!auth.vaultKeypair) throw new Error('No keypair available');
+          try {
+            // Wrap subfolder keys with OWNER's key for FolderEntry
+            const auth = useAuthStore.getState();
+            if (!auth.vaultKeypair) throw new Error('No keypair available');
 
-          const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
-          if (!shareItem) throw new Error('Share not found');
-          const ownerPubKey = parsePublicKey(shareItem.share.sharerPublicKey);
+            const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
+            if (!shareItem) throw new Error('Share not found');
+            const ownerPubKey = parsePublicKey(shareItem.share.sharerPublicKey);
 
-          const wrappedFolderKey = await wrapSubfolderKey(subfolderKey, ownerPubKey);
-          const wrappedIpnsKey = await wrapSubfolderKey(keypair.privateKey, ownerPubKey);
+            const wrappedFolderKey = await wrapSubfolderKey(subfolderKey, ownerPubKey);
+            const wrappedIpnsKey = await wrapSubfolderKey(keypair.privateKey, ownerPubKey);
 
-          // Create empty folder metadata and publish for the subfolder
-          const subfolderMetadata: FolderMetadata = { version: 'v2', children: [] };
-          const encryptedSubfolder = await encryptFolderMetadata(subfolderMetadata, subfolderKey);
-          const subfolderBlob = new Blob([JSON.stringify(encryptedSubfolder)], {
-            type: 'application/json',
-          });
-          const { cid: subfolderCid } = await addToIpfs(subfolderBlob);
+            // Create empty folder metadata and publish for the subfolder
+            const subfolderMetadata: FolderMetadata = { version: 'v2', children: [] };
+            const encryptedSubfolder = await encryptFolderMetadata(subfolderMetadata, subfolderKey);
+            const subfolderBlob = new Blob([JSON.stringify(encryptedSubfolder)], {
+              type: 'application/json',
+            });
+            const { cid: subfolderCid } = await addToIpfs(subfolderBlob);
 
-          // Publish the subfolder's IPNS record
-          await createAndPublishIpnsRecord({
-            ipnsPrivateKey: keypair.privateKey,
-            ipnsName: subfolderIpnsName,
-            metadataCid: subfolderCid,
-            sequenceNumber: 1n,
-          });
+            // Publish the subfolder's IPNS record
+            await createAndPublishIpnsRecord({
+              ipnsPrivateKey: keypair.privateKey,
+              ipnsName: subfolderIpnsName,
+              metadataCid: subfolderCid,
+              sequenceNumber: 1n,
+            });
 
-          // Create a FolderEntry for the parent folder's metadata
-          const folderId = crypto.randomUUID();
-          const folderEntry: FolderEntry = {
-            type: 'folder',
-            id: folderId,
-            name,
-            ipnsName: subfolderIpnsName,
-            ipnsPrivateKeyEncrypted: bytesToHex(wrappedIpnsKey),
-            folderKeyEncrypted: bytesToHex(wrappedFolderKey),
-            createdAt: Date.now(),
-            modifiedAt: Date.now(),
-          };
+            // Create a FolderEntry for the parent folder's metadata
+            const folderId = crypto.randomUUID();
+            const folderEntry: FolderEntry = {
+              type: 'folder',
+              id: folderId,
+              name,
+              ipnsName: subfolderIpnsName,
+              ipnsPrivateKeyEncrypted: bytesToHex(wrappedIpnsKey),
+              folderKeyEncrypted: bytesToHex(wrappedFolderKey),
+              createdAt: Date.now(),
+              modifiedAt: Date.now(),
+            };
 
-          // Add subfolder entry to parent folder with conflict retry (C-01: read from refs)
-          await withConflictRetry(
-            async () => {
-              const freshChildren = [...folderChildrenRef.current, folderEntry];
-              const seqNum = sequenceNumberRef.current ?? 0n;
-              const newSeq = await publishSharedFolderMetadata(
-                freshChildren,
-                currentFolderKey,
-                currentIpnsName,
-                currentIpnsKey,
-                seqNum
-              );
-              sequenceNumberRef.current = newSeq;
-              folderChildrenRef.current = freshChildren;
-              setCurrentSequenceNumber(newSeq);
-              setFolderChildren(freshChildren);
-            },
-            async () => {
-              await resyncSharedFolder();
-            }
-          );
+            // Add subfolder entry to parent folder with conflict retry
+            await withConflictRetry(
+              async () => {
+                const freshChildren = [...folderChildrenRef.current, folderEntry];
+                const seqNum = sequenceNumberRef.current ?? 0n;
+                const newSeq = await publishSharedFolderMetadata(
+                  freshChildren,
+                  currentFolderKey,
+                  currentIpnsName,
+                  currentIpnsKey,
+                  seqNum
+                );
+                sequenceNumberRef.current = newSeq;
+                folderChildrenRef.current = freshChildren;
+                setCurrentSequenceNumber(newSeq);
+                setFolderChildren(freshChildren);
+              },
+              async () => {
+                await resyncSharedFolder();
+              }
+            );
 
-          // Add share_key for the recipient so they can access the subfolder
-          const recipientWrappedFolderKey = await wrapSubfolderKey(
-            subfolderKey,
-            auth.vaultKeypair!.publicKey
-          );
-          await addShareKeys(currentShareId!, [
-            {
-              keyType: 'folder',
-              itemId: folderId,
-              encryptedKey: bytesToHex(recipientWrappedFolderKey),
-            },
-          ]).catch((err) => {
-            console.warn('[share] Failed to add subfolder share_key:', err);
-          });
-
-          // Clean up
-          subfolderKey.fill(0);
-          keypair.privateKey.fill(0);
+            // Add share_key for the recipient so they can access the subfolder
+            const recipientWrappedFolderKey = await wrapSubfolderKey(
+              subfolderKey,
+              auth.vaultKeypair!.publicKey
+            );
+            await addShareKeys(currentShareId!, [
+              {
+                keyType: 'folder',
+                itemId: folderId,
+                encryptedKey: bytesToHex(recipientWrappedFolderKey),
+              },
+            ]);
+          } finally {
+            subfolderKey.fill(0);
+            keypair.privateKey.fill(0);
+          }
         });
       } catch (err) {
         const message = (err as Error).message || 'Failed to create folder';

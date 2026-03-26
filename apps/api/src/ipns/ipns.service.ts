@@ -4,6 +4,7 @@ import {
   HttpStatus,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
   Logger,
   Inject,
@@ -248,6 +249,13 @@ export class IpnsService {
       }
 
       return saved;
+    }
+
+    // Guard: if another user already owns this ipnsName, reject the create
+    // to prevent duplicate rows for the same IPNS name.
+    const existingOther = await this.folderIpnsRepository.findOne({ where: { ipnsName } });
+    if (existingOther) {
+      throw new ForbiddenException('IPNS name already registered by another user');
     }
 
     // Create new entry — sequence starts at '1' to match the IPNS record

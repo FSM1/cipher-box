@@ -300,12 +300,12 @@ export function SharedFileBrowser() {
     await deleteItem(item);
   }, [contextMenu.item, deleteItem]);
 
-  // Drag-and-drop handlers for write shares
+  // Drag-and-drop handlers — always preventDefault to avoid browser navigation
   const handleDragOver = useCallback(
     (e: DragEvent) => {
-      if (!isWritable) return;
       e.preventDefault();
       e.stopPropagation();
+      if (!isWritable) return;
       setIsDragOver(true);
     },
     [isWritable]
@@ -313,9 +313,9 @@ export function SharedFileBrowser() {
 
   const handleDragLeave = useCallback(
     (e: DragEvent) => {
-      if (!isWritable) return;
       e.preventDefault();
       e.stopPropagation();
+      if (!isWritable) return;
       setIsDragOver(false);
     },
     [isWritable]
@@ -323,10 +323,10 @@ export function SharedFileBrowser() {
 
   const handleDrop = useCallback(
     async (e: DragEvent) => {
-      if (!isWritable) return;
       e.preventDefault();
       e.stopPropagation();
       setIsDragOver(false);
+      if (!isWritable) return;
 
       const files = e.dataTransfer.files;
       if (!files || files.length === 0) return;

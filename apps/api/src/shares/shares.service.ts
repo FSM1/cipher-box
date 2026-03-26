@@ -194,7 +194,10 @@ export class SharesService {
 
     const isSharer = share.sharerId === callerId;
     const isWriteRecipient =
-      share.recipientId === callerId && share.permission === 'write' && !share.revokedAt;
+      share.recipientId === callerId &&
+      share.permission === 'write' &&
+      share.encryptedIpnsKey !== null &&
+      !share.revokedAt;
 
     if (!isSharer && !isWriteRecipient) {
       throw new ForbiddenException('Only the sharer or write-share recipient can add keys');
@@ -378,15 +381,16 @@ export class SharesService {
       }
       share.permission = 'write';
       share.encryptedIpnsKey = Buffer.from(encryptedIpnsKey, 'hex');
+      await this.shareRepo.save(share);
     } else {
-      share.permission = 'read';
-      share.encryptedIpnsKey = null;
-
-      // Clean up file-ipns share_keys so recipient loses IPNS update capability
-      await this.shareKeyRepo.delete({ shareId, keyType: 'file-ipns' as any });
+      // Downgrade atomically: update share + delete file-ipns keys in one transaction
+      await this.shareRepo.manager.transaction(async (txManager) => {
+        share.permission = 'read';
+        share.encryptedIpnsKey = null;
+        await txManager.save(share);
+        await txManager.delete(ShareKey, { shareId, keyType: 'file-ipns' });
+      });
     }
-
-    await this.shareRepo.save(share);
   }
 
   /**
@@ -399,6 +403,7 @@ export class SharesService {
         recipientId,
         ipnsName,
         permission: 'write',
+        encryptedIpnsKey: Not(IsNull()),
         revokedAt: IsNull(),
       },
     });

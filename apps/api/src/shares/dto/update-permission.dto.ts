@@ -16,8 +16,10 @@ export class UpdatePermissionDto {
     required: false,
   })
   @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedIpnsKey must be a hex string' })
-  @MinLength(2)
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'encryptedIpnsKey must be an even-length hex string',
+  })
+  @MinLength(64)
   @MaxLength(2048)
   @IsOptional()
   encryptedIpnsKey?: string;
