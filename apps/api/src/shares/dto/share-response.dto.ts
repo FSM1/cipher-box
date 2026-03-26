@@ -16,6 +16,9 @@ export class CreateShareResponseDto {
   @ApiProperty({ description: 'Hex-encoded ECIES-wrapped key for recipient' })
   encryptedKey!: string;
 
+  @ApiProperty({ description: 'Permission level', enum: ['read', 'write'] })
+  permission!: string;
+
   @ApiProperty({ description: 'When the share was created' })
   createdAt!: Date;
 }
@@ -39,6 +42,16 @@ export class ReceivedShareResponseDto {
   @ApiProperty({ description: 'Hex-encoded ECIES-wrapped key for recipient' })
   encryptedKey!: string;
 
+  @ApiProperty({ description: 'Permission level', enum: ['read', 'write'] })
+  permission!: string;
+
+  @ApiProperty({
+    description: 'Hex-encoded ECIES-wrapped IPNS private key for write shares',
+    required: false,
+    nullable: true,
+  })
+  encryptedIpnsKey!: string | null;
+
   @ApiProperty()
   createdAt!: Date;
 }
@@ -58,6 +71,9 @@ export class SentShareResponseDto {
 
   @ApiProperty()
   itemName!: string;
+
+  @ApiProperty({ description: 'Permission level', enum: ['read', 'write'] })
+  permission!: string;
 
   @ApiProperty()
   createdAt!: Date;

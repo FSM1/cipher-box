@@ -6,6 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ReceivedShareResponseDtoItemType } from './receivedShareResponseDtoItemType';
+import type { ReceivedShareResponseDtoPermission } from './receivedShareResponseDtoPermission';
+import type { ReceivedShareResponseDtoEncryptedIpnsKey } from './receivedShareResponseDtoEncryptedIpnsKey';
 
 export interface ReceivedShareResponseDto {
   shareId: string;
@@ -16,5 +18,12 @@ export interface ReceivedShareResponseDto {
   itemName: string;
   /** Hex-encoded ECIES-wrapped key for recipient */
   encryptedKey: string;
+  /** Permission level */
+  permission: ReceivedShareResponseDtoPermission;
+  /**
+   * Hex-encoded ECIES-wrapped IPNS private key for write shares
+   * @nullable
+   */
+  encryptedIpnsKey?: ReceivedShareResponseDtoEncryptedIpnsKey;
   createdAt: string;
 }

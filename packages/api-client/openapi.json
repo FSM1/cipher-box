@@ -1511,6 +1511,56 @@
         "tags": ["shares"]
       }
     },
+    "/shares/{shareId}/permission": {
+      "patch": {
+        "description": "Upgrade or downgrade permission level. Only the sharer can change permission. Upgrading to write requires an ECIES-wrapped IPNS private key.",
+        "operationId": "SharesController_updatePermission",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePermissionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Permission updated"
+          },
+          "400": {
+            "description": "encryptedIpnsKey required for write permission"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Only the sharer can change permission"
+          },
+          "404": {
+            "description": "Share not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update share permission",
+        "tags": ["shares"]
+      }
+    },
     "/shares/{shareId}": {
       "delete": {
         "description": "Soft-delete a share by setting revokedAt. Only the sharer can revoke. Keys are kept for lazy rotation.",
@@ -2870,6 +2920,16 @@
             "type": "string",
             "description": "Hex-encoded root key wrapped for recipient via ECIES"
           },
+          "permission": {
+            "type": "string",
+            "description": "Permission level for the share",
+            "enum": ["read", "write"],
+            "default": "read"
+          },
+          "encryptedIpnsKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of IPNS private key for write shares"
+          },
           "childKeys": {
             "description": "Re-wrapped descendant keys (subfolder/file keys)",
             "type": "array",
@@ -2903,13 +2963,26 @@
             "type": "string",
             "description": "Hex-encoded ECIES-wrapped key for recipient"
           },
+          "permission": {
+            "type": "string",
+            "description": "Permission level",
+            "enum": ["read", "write"]
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string",
             "description": "When the share was created"
           }
         },
-        "required": ["shareId", "itemType", "ipnsName", "itemName", "encryptedKey", "createdAt"]
+        "required": [
+          "shareId",
+          "itemType",
+          "ipnsName",
+          "itemName",
+          "encryptedKey",
+          "permission",
+          "createdAt"
+        ]
       },
       "ReceivedShareResponseDto": {
         "type": "object",
@@ -2935,6 +3008,16 @@
             "type": "string",
             "description": "Hex-encoded ECIES-wrapped key for recipient"
           },
+          "permission": {
+            "type": "string",
+            "description": "Permission level",
+            "enum": ["read", "write"]
+          },
+          "encryptedIpnsKey": {
+            "type": "object",
+            "description": "Hex-encoded ECIES-wrapped IPNS private key for write shares",
+            "nullable": true
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -2947,6 +3030,7 @@
           "ipnsName",
           "itemName",
           "encryptedKey",
+          "permission",
           "createdAt"
         ]
       },
@@ -2987,6 +3071,11 @@
           "itemName": {
             "type": "string"
           },
+          "permission": {
+            "type": "string",
+            "description": "Permission level",
+            "enum": ["read", "write"]
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -2998,6 +3087,7 @@
           "itemType",
           "ipnsName",
           "itemName",
+          "permission",
           "createdAt"
         ]
       },
@@ -3111,6 +3201,21 @@
           }
         },
         "required": ["keys"]
+      },
+      "UpdatePermissionDto": {
+        "type": "object",
+        "properties": {
+          "permission": {
+            "type": "string",
+            "description": "Permission level for the share",
+            "enum": ["read", "write"]
+          },
+          "encryptedIpnsKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of IPNS private key. Required when upgrading to write, omitted when downgrading to read."
+          }
+        },
+        "required": ["permission"]
       },
       "UpdateEncryptedKeyDto": {
         "type": "object",

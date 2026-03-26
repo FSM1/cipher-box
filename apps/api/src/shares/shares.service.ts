@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not } from 'typeorm';
@@ -81,6 +82,8 @@ export class SharesService {
       ipnsName: dto.ipnsName,
       itemName: dto.itemName,
       encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
+      permission: dto.permission || 'read',
+      encryptedIpnsKey: dto.encryptedIpnsKey ? Buffer.from(dto.encryptedIpnsKey, 'hex') : null,
       hiddenByRecipient: false,
       revokedAt: null,
     });
@@ -330,5 +333,56 @@ export class SharesService {
 
     share.encryptedKey = Buffer.from(encryptedKey, 'hex');
     await this.shareRepo.save(share);
+  }
+
+  /**
+   * Update the permission level of a share.
+   * Only the sharer (owner) can upgrade or downgrade permission.
+   * Upgrading to 'write' requires an ECIES-wrapped IPNS private key.
+   * Downgrading to 'read' clears the IPNS key.
+   */
+  async updatePermission(
+    shareId: string,
+    sharerId: string,
+    permission: 'read' | 'write',
+    encryptedIpnsKey?: string
+  ): Promise<void> {
+    const share = await this.shareRepo.findOne({ where: { id: shareId } });
+
+    if (!share) {
+      throw new NotFoundException('Share not found');
+    }
+
+    if (share.sharerId !== sharerId) {
+      throw new ForbiddenException('Only the sharer can change permission');
+    }
+
+    if (permission === 'write') {
+      if (!encryptedIpnsKey) {
+        throw new BadRequestException('encryptedIpnsKey required for write permission');
+      }
+      share.permission = 'write';
+      share.encryptedIpnsKey = Buffer.from(encryptedIpnsKey, 'hex');
+    } else {
+      share.permission = 'read';
+      share.encryptedIpnsKey = null;
+    }
+
+    await this.shareRepo.save(share);
+  }
+
+  /**
+   * Find an active write share for a given recipient and IPNS name.
+   * Used by IPNS publish authorization to allow write-share recipients to publish.
+   */
+  async findActiveWriteShare(recipientId: string, ipnsName: string): Promise<Share | null> {
+    return this.shareRepo.findOne({
+      where: {
+        recipientId,
+        ipnsName,
+        permission: 'write',
+        revokedAt: IsNull(),
+      },
+    });
   }
 }

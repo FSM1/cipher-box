@@ -18,6 +18,7 @@ import type {
   SharesControllerGetSentSharesParams,
   SharesControllerLookupUserParams,
   UpdateEncryptedKeyDto,
+  UpdatePermissionDto,
 } from '../../models';
 
 import { customInstance } from '../../instance';
@@ -127,6 +128,25 @@ export const sharesControllerAddShareKeys = (
   );
 };
 /**
+ * Upgrade or downgrade permission level. Only the sharer can change permission. Upgrading to write requires an ECIES-wrapped IPNS private key.
+ * @summary Update share permission
+ */
+export const sharesControllerUpdatePermission = (
+  shareId: string,
+  updatePermissionDto: BodyType<UpdatePermissionDto>,
+  options?: SecondParameter<typeof customInstance<void>>
+) => {
+  return customInstance<void>(
+    {
+      url: `/shares/${shareId}/permission`,
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      data: updatePermissionDto,
+    },
+    options
+  );
+};
+/**
  * Soft-delete a share by setting revokedAt. Only the sharer can revoke. Keys are kept for lazy rotation.
  * @summary Revoke a share
  */
@@ -198,6 +218,9 @@ export type SharesControllerGetShareKeysResult = NonNullable<
 >;
 export type SharesControllerAddShareKeysResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerAddShareKeys>>
+>;
+export type SharesControllerUpdatePermissionResult = NonNullable<
+  Awaited<ReturnType<typeof sharesControllerUpdatePermission>>
 >;
 export type SharesControllerRevokeShareResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerRevokeShare>>

@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { CreateShareResponseDtoItemType } from './createShareResponseDtoItemType';
+import type { CreateShareResponseDtoPermission } from './createShareResponseDtoPermission';
 
 export interface CreateShareResponseDto {
   /** UUID of the created share */
@@ -17,6 +18,8 @@ export interface CreateShareResponseDto {
   itemName: string;
   /** Hex-encoded ECIES-wrapped key for recipient */
   encryptedKey: string;
+  /** Permission level */
+  permission: CreateShareResponseDtoPermission;
   /** When the share was created */
   createdAt: string;
 }

@@ -58,6 +58,21 @@ export class Share {
   encryptedKey!: Buffer;
 
   /**
+   * Permission level for the share: 'read' (default) or 'write'.
+   * Defaults to 'read' for backward compatibility with existing shares.
+   */
+  @Column({ type: 'varchar', length: 10, default: 'read' })
+  permission!: 'read' | 'write';
+
+  /**
+   * ECIES-wrapped IPNS private key for write shares, allowing
+   * recipients to publish to the shared IPNS name.
+   * NULL for read-only shares.
+   */
+  @Column({ type: 'bytea', name: 'encrypted_ipns_key', nullable: true })
+  encryptedIpnsKey!: Buffer | null;
+
+  /**
    * Recipient has hidden/dismissed this share from their view.
    */
   @Column({ type: 'boolean', name: 'hidden_by_recipient', default: false })

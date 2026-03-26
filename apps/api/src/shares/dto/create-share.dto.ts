@@ -84,6 +84,28 @@ export class CreateShareDto {
   encryptedKey!: string;
 
   @ApiProperty({
+    description: 'Permission level for the share',
+    enum: ['read', 'write'],
+    default: 'read',
+    required: false,
+  })
+  @IsString()
+  @IsIn(['read', 'write'])
+  @IsOptional()
+  permission?: 'read' | 'write';
+
+  @ApiProperty({
+    description: 'Hex-encoded ECIES ciphertext of IPNS private key for write shares',
+    required: false,
+  })
+  @IsString()
+  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedIpnsKey must be a hex string' })
+  @MinLength(2)
+  @MaxLength(2048)
+  @IsOptional()
+  encryptedIpnsKey?: string;
+
+  @ApiProperty({
     description: 'Re-wrapped descendant keys (subfolder/file keys)',
     required: false,
     type: [ChildKeyDto],
