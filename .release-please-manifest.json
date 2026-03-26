@@ -1,13 +1,13 @@
 {
-  ".": "0.29.1",
-  "packages/core": "0.28.0",
-  "packages/crypto": "0.28.0",
-  "packages/api-client": "0.29.0",
-  "packages/sdk-core": "0.29.0",
-  "packages/sdk": "0.29.0",
-  "crates/crypto": "0.3.0",
-  "crates/core": "0.3.0",
-  "crates/api-client": "0.3.0",
-  "crates/fuse": "0.3.0",
-  "crates/sdk": "0.3.0"
+  ".": "0.30.0",
+  "packages/core": "0.29.0",
+  "packages/crypto": "0.29.0",
+  "packages/api-client": "0.30.0",
+  "packages/sdk-core": "0.30.0",
+  "packages/sdk": "0.30.0",
+  "crates/crypto": "0.4.0",
+  "crates/core": "0.4.0",
+  "crates/api-client": "0.4.0",
+  "crates/fuse": "0.4.0",
+  "crates/sdk": "0.4.0"
 }

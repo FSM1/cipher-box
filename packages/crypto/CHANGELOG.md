@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.28.0...@cipherbox/crypto-v0.29.0) (2026-03-26)
+
+
+### Features
+
+* **phase-24:** bug fixes & test infrastructure ([#361](https://github.com/FSM1/cipher-box/issues/361)) ([2f1f93b](https://github.com/FSM1/cipher-box/commit/2f1f93ba7e7a9411e3a73b31e91992c95efd7bfa))
+
 ## [0.28.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.27.0...@cipherbox/crypto-v0.28.0) (2026-03-25)
 
 ### Features
