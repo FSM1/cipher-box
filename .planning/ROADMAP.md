@@ -217,7 +217,13 @@ Plans:
 4. Vault v2 recovery tool has automated E2E test coverage
 5. Load tests handle 401 responses with automatic token refresh instead of failing
 
-**Plans**: TBD
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] 24-01-PLAN.md -- Fix bin IPNS 404 (auto-repair + retry/verify) and device registry v2 schema migration
+- [x] 24-02-PLAN.md -- Headless sdk-core load tests (3 scenarios) and 401 token refresh interceptor
+- [x] 24-03-PLAN.md -- Recovery tool cleanup (remove export mode) and Playwright E2E test
 
 ### Phase 25: Desktop Enhancements
 
@@ -231,7 +237,13 @@ Plans:
 3. Files created via the desktop FUSE mount are enrolled with the TEE for automatic 3-hour IPNS republishing
 4. TEE enrollment works for both CipherBox-pinned and BYO-pinned files
 
-**Plans**: TBD
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] 25-01-PLAN.md -- TEE file enrollment on per-file IPNS publish (Unix + Windows)
+- [x] 25-02-PLAN.md -- Tauri updater plugin integration (config, updater module, tray menu)
+- [x] 25-03-PLAN.md -- CI desktop build workflow (cross-platform build, sign, upload to GitHub Release)
 
 ### Phase 26: Observability & UX Tuning
 
@@ -249,27 +261,27 @@ Plans:
 
 Plans:
 
-- [ ] 26-01-PLAN.md -- Grafana alert rule JSON definitions + provisioning script for five alert categories
-- [ ] 26-02-PLAN.md -- Client-side timeout and retry constant tuning across SDK providers and API services
+- [x] 26-01-PLAN.md -- Grafana alert rule JSON definitions + provisioning script for five alert categories
+- [x] 26-02-PLAN.md -- Client-side timeout and retry constant tuning across SDK providers and API services
 
 ## Progress
 
 **Execution Order:**
 Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26
 
-| Phase                                     | Milestone | Plans Complete | Status     | Completed  |
-| ----------------------------------------- | --------- | -------------- | ---------- | ---------- |
-| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete   | 2026-03-07 |
-| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete   | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete   | 2026-03-20 |
-| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete   | 2026-03-23 |
-| 20. Vault Migration                       | v1.1      | 6/6            | Complete   | 2026-03-24 |
-| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete   | 2026-03-25 |
-| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete   | 2026-03-25 |
-| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete   | 2026-03-24 |
-| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete   | 2026-03-25 |
-| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete   | 2026-03-25 |
-| 26. Observability & UX Tuning             | 2/2       | Complete       | 2026-03-26 | -          |
+| Phase                                     | Milestone | Plans Complete | Status   | Completed  |
+| ----------------------------------------- | --------- | -------------- | -------- | ---------- |
+| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete | 2026-03-07 |
+| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete | 2026-03-20 |
+| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete | 2026-03-23 |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete | 2026-03-25 |
+| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete | 2026-03-24 |
+| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete | 2026-03-26 |
 
 ---
 
