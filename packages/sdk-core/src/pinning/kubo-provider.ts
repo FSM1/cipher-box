@@ -1,7 +1,7 @@
 import type { PinningProvider, PinResult, PinStatus } from './types';
 
-/** Timeout for all Kubo RPC requests (30 seconds) */
-const REQUEST_TIMEOUT_MS = 30_000;
+/** Timeout for all Kubo RPC requests (10 seconds — ~44x client-side pin p99 of 227ms, generous for large files) */
+const REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * PinningProvider implementation for Kubo RPC API (/api/v0/*).
