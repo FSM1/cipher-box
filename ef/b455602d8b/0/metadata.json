@@ -1,0 +1,113 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "efb455602d8b",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T00:52:01.496535Z",
+  "branch": "fix/recovery-e2e-gateways",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "tests/web-e2e/tests/recovery.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cc72e51cf435",
+  "token_usage": {
+    "input_tokens": 306,
+    "cache_creation_tokens": 289611,
+    "cache_read_tokens": 43093314,
+    "output_tokens": 57278,
+    "api_call_count": 254
+  },
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Execute Phase 24 (Bug Fixes \u0026 Test Infrastructure) of the cipher-box project, then review and clean up the resulting code, get a PR merged, and fix CI failures including a flaky web E2E recovery test.",
+    "outcome": "Phase 24 executed successfully with 3 plans (bin IPNS 404 fix, sdk-core load tests, recovery page cleanup), PR #361 merged after resolving CodeRabbit/Copilot review threads and CI failures. A separate PR #363 was created and merged to fix the recovery E2E test in CI (auth secret + Kubo CORS configuration).",
+    "learnings": {
+      "repo": [
+        "The `resolveIpnsRecord` function in sdk-core throws on transient HTTP errors (5xx, network) but returns `null` for explicit 404s — so `loadBin` auto-repair only triggers on genuine 'not found' responses, not transient failures.",
+        "IPNS records are published via a mock-ipns-routing service on port 3001 in CI, not Kubo's DHT. This means Kubo's gateway (port 8080) cannot resolve IPNS names in CI; the CipherBox API's DB cache (localhost:3000/ipns/resolve) is the only reliable resolver in that environment.",
+        "The web E2E workflow was missing `SDK_E2E_SECRET` env var that the recovery spec's `createTestAccount` helper reads from the SDK E2E harness. The API used `TEST_LOGIN_SECRET` but the test process needed `SDK_E2E_SECRET`.",
+        "Kubo's CORS headers are not configured by default — browser-side code (recovery.html) cannot make cross-origin requests to localhost:8080 or localhost:5001 without explicit CORS config on the Kubo node.",
+        "The device registry underwent a v1→v2 schema migration: v2 requires SHA-256 `ipHash` instead of empty string; `validateRegistryShape()` was extracted to deduplicate v1/v2 validation logic.",
+        "TypeScript does not propagate narrowing from a called function back to the caller — after `validateRegistryShape(obj)` checks `Array.isArray(obj.devices)`, the caller still sees `obj.devices` as `unknown`; an explicit cast is required.",
+        "The `publishWithVerify` helper was initially re-publishing on every retry; it should publish once and only retry the verification step.",
+        "`computeIpHash()` already existed in `apps/web/src/lib/device/info.ts` — `useAuth.ts` was duplicating 7 lines of inline SHA-256 instead of using it.",
+        "Stale package builds (missing `pnpm --filter @cipherbox/crypto build`) caused 6 apparent type errors in the web app that disappeared after rebuilding `.d.ts` files."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 202,
+          "end_line": 215,
+          "finding": "publishWithVerify should publish once then retry only verification, not re-publish on each retry attempt."
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 80,
+          "end_line": 96,
+          "finding": "ipHash auto-healing should only accept empty string migration, not other malformed values. Cast needed after validateRegistryShape() due to TS cross-function narrowing limitation."
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 69,
+          "end_line": 69,
+          "finding": "cid/pinSize must be declared above try block so the finally block can access them; TypeScript scopes let declarations to their block."
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 1,
+          "end_line": 91,
+          "finding": "Recovery E2E test needs IPFS_GATEWAY_URL=localhost:8080 for content but IPNS resolution must go through CipherBox API (localhost:3000/ipns/resolve) in CI, not Kubo gateway, because IPNS is published via mock routing not DHT."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/bin-operations.test.ts",
+          "line": 32,
+          "end_line": 32,
+          "finding": "After auto-repair change, fresh bin sequenceNumber is 1 not 0 — loadBin now publishes immediately on 404."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 170,
+          "end_line": 170,
+          "finding": "Same sequenceNumber: 0 → 1 assertion fix required as in bin-operations E2E test."
+        }
+      ],
+      "workflow": [
+        "The GSD execute-phase workflow runs 3 executor subagents in parallel for Wave 1, each with fresh 200k context; orchestrator stays at ~10-15% context.",
+        "Spot-checks after wave completion: verify SUMMARY.md exists, git log for commits matching plan prefix, check for Self-Check: FAILED marker.",
+        "When merging a PR branch while another branch has also completed, planning files (ROADMAP, STATE, REQUIREMENTS, PROJECT) all get conflicts that must be manually resolved by keeping both phases' changes.",
+        "CodeRabbit and GitHub Copilot automated reviewers generate actionable comments; Copilot flagged ROADMAP.md table alignment issues in addition to code quality.",
+        "The classifyHandoffIfNeeded Claude Code runtime bug fires after tool calls complete and should be treated as success if spot-checks pass.",
+        "Recovery.html uses a multi-stage fallback for IPNS resolution: gateway /ipns/ path → delegated routing with retries → CipherBox API → Kubo API POST. Each stage has a timeout so total resolution time can exceed 37 seconds."
+      ]
+    },
+    "friction": [
+      "GitHub API was intermittently unreachable, causing CI log fetches to timeout and requiring manual retries.",
+      "Recovery E2E test required multiple CI iterations to diagnose: first the missing SDK_E2E_SECRET, then the Kubo CORS issue, then the IPNS routing mismatch between mock-routing and Kubo DHT.",
+      "TypeScript doesn't propagate narrowing across function boundaries, requiring an explicit `as unknown[]` cast after validateRegistryShape() to fix a CI build failure that didn't reproduce locally.",
+      "Local Docker network reset (192.168.133.114 → 192.168.133.12) broke the API .env mid-session.",
+      "Playwright E2E test showed empty progress log with no error detail visible in screenshots — had to read error-context.md artifact for actual error messages.",
+      "Git push background tasks failed with exit 128 due to race conditions with foreground push, causing noisy false-alarm notifications.",
+      "The stash workflow was needed when the user tried to switch branches with uncommitted recovery.spec.ts changes."
+    ],
+    "open_items": [
+      "Recovery E2E test still not confirmed passing in CI — final PR #363 fixes were pushed but CI run outcome was not confirmed before transcript ended.",
+      "Kubo CORS configuration in CI is done via `ipfs config` commands in a CI step — this is a workaround; ideally Kubo would start with CORS pre-configured in its Docker image or compose file.",
+      "Local recovery E2E test cannot run without either configuring Kubo CORS on the Docker host (192.168.133.12) or adding an IPFS content proxy endpoint to the CipherBox API.",
+      "The recovery.html IPNS resolution has a 30s timeout on the first gateway attempt before falling through to the API fallback — this makes tests slow and is inefficient.",
+      "Two SDK integration tests consistently fail with ECONNREFUSED when the API isn't running locally — these should either be tagged/skipped or the test environment should document the prerequisite.",
+      "Pre-existing type errors in byo-file-workload.ts were fixed as a side-effect of /simplify, but the load test suite has other pre-existing TS errors in different files."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T00:51:05.056658Z",
+    "agent_lines": 0,
+    "human_added": 2,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 0
+  }
+}
