@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "9012adcc400d",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T01:07:52.839601Z",
+  "branch": "fix/recovery-e2e-gateways",
+  "checkpoints_count": 4,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "47ed3ce22dbc",
+  "token_usage": {
+    "input_tokens": 323,
+    "cache_creation_tokens": 296652,
+    "cache_read_tokens": 46317300,
+    "output_tokens": 60422,
+    "api_call_count": 266
+  },
+  "session_metrics": {
+    "turn_count": 28
+  },
+  "summary": {
+    "intent": "Execute Phase 24 (Bug Fixes \u0026 Test Infrastructure) for cipher-box, including parallel plan execution, code review/simplification, PR creation, CI fixes, and reviewer comment resolution.",
+    "outcome": "Phase 24 was fully executed and merged to main with 3 plans completed (bin IPNS 404 fix, SDK load tests, recovery page cleanup). A secondary PR (#364) was opened to fix the recovery E2E test in CI by routing IPNS resolution through the CipherBox API instead of Kubo's gateway.",
+    "learnings": {
+      "repo": [
+        "IPNS records are published via mock-ipns-routing (port 3001) in CI, not Kubo's DHT — so Kubo's gateway (8080) cannot resolve IPNS names published during tests; only the CipherBox API (localhost:3000) can resolve them via DB cache",
+        "recovery.html resolveIpns fallback chain: (1) /ipns/ path on IPFS gateway → (2) /routing/v1/ipns/ delegated routing with 3 retries → (3) localhost:3000/ipns/resolve CipherBox API → (4) Kubo /api/v0/name/resolve POST",
+        "Kubo running in CI Docker containers has no CORS headers configured by default — browser-based tests cannot make cross-origin requests to Kubo API (5001) or gateway (8080) without explicit config",
+        "The web E2E workflow was missing SDK_E2E_SECRET env var for the test runner process — the API had TEST_LOGIN_SECRET but createTestAccount from the SDK harness reads SDK_E2E_SECRET separately",
+        "publishWithVerify was re-publishing on every verification retry — the correct behavior is publish once, then retry only the verification check",
+        "computeIpHash() exists in apps/web/src/lib/device/info.ts but useAuth.ts was inlining 7 lines of SHA-256 logic",
+        "DeviceRegistry now has v1/v2 schema versioning — v1 registries are read leniently but new registries are created as v2 with SHA-256 ipHash",
+        "loadBin auto-repair behavior changes sequenceNumber from 0 to 1 for a fresh account — SDK E2E and integration tests needed updating to expect sequenceNumber: 1",
+        "Web app type errors (deriveVaultKeyIpnsKeypair, deriveByoConfigIpnsKeypair) were caused by stale package builds, not code issues — pnpm build on crypto and api-client packages resolved them"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 202,
+          "end_line": 210,
+          "finding": "publishWithVerify now publishes once then retries only verification — previously re-published on every retry attempt"
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 80,
+          "end_line": 96,
+          "finding": "validateRegistryShape() extracted to deduplicate v1/v2 validation; only auto-heals empty ipHash strings, rejects other malformed values"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 69,
+          "end_line": 69,
+          "finding": "cid/pinSize must be declared above the try block (not inside) so the finally block can access them — TypeScript scopes let declarations to their enclosing block"
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "IPFS_GATEWAY defaults to localhost:8080, IPNS_GATEWAY defaults to API_URL (localhost:3000) — separating them is necessary because CI's mock routing only makes IPNS resolvable via the CipherBox API, not Kubo's gateway"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1104,
+          "end_line": 1104,
+          "finding": "Removed vestigial base64 fallback for private key input — v2 recovery only uses 64-character hex keys; the base64 path was dead code from removed export file mode"
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "line": 149,
+          "end_line": 155,
+          "finding": "Web E2E job needs both TEST_LOGIN_SECRET (for the API process) and SDK_E2E_SECRET (for the test runner process) — they must match but are read by different parts of the stack"
+        }
+      ],
+      "workflow": [
+        "GSD wave-based parallel execution with 3 simultaneous subagents completed in ~10min; plan 24-01 (most complex with registry schema changes) was the bottleneck at 10min vs 4-7min for others",
+        "classifyHandoffIfNeeded runtime bug in Claude Code: agent may report 'failed' despite completing all work — spot-check SUMMARY.md + git commits to determine true status",
+        "TypeScript cross-function narrowing doesn't propagate — validateRegistryShape() narrowing obj.devices inside the function doesn't narrow the caller; requires explicit cast (as unknown[]) after the call",
+        "Mock-ipns-routing is preferred over someguy in CI for determinism and speed — the only gap is recovery.html which bypasses the API, fixable by routing its IPNS calls through the API",
+        "Kubo CORS config in CI: ipfs config --json API.HTTPHeaders.Access-Control-Allow-Origin '[\"*\"]' and Gateway equivalent, then ipfs restart — must be done after the container is healthy"
+      ]
+    },
+    "friction": [
+      "recovery.html E2E test required 3 separate PRs and multiple CI runs to fix: (1) missing SDK_E2E_SECRET, (2) Kubo CORS headers, (3) IPNS resolution routing through API instead of Kubo gateway",
+      "GitHub API was repeatedly timing out during log fetching, requiring manual polling and delays",
+      "Background task exit code 128 false alarms — push had already succeeded via a later explicit git push, but background tasks reported failure",
+      "Docker host IP changed (192.168.133.114 → 192.168.133.12) after network reset, requiring .env update — no config abstraction for this",
+      "TypeScript stale package builds (.d.ts files) caused 6 apparent type errors that were not real code bugs — had to build dependent packages to resolve",
+      "byo-file-workload.ts cid/pinSize hoisting fix was complicated by Copilot suggesting string|undefined while usage sites still needed non-null assertions, making the improvement cosmetic",
+      "Planning file conflicts from concurrent phase 24 and 25 branches required manual resolution of ROADMAP, STATE, PROJECT, and REQUIREMENTS markdown files"
+    ],
+    "open_items": [
+      "recovery.html E2E test still failing in CI as of end of transcript — PR #364 with IPNS_GATEWAY defaulting to API_URL is open but not yet merged/verified",
+      "Local recovery.html testing requires Kubo CORS configuration (ipfs config commands on Docker host) — not documented anywhere and requires manual setup each time network resets",
+      "recovery.html IPFS content fetch still goes through Kubo gateway (8080) which will CORS-fail in local browser testing unless Kubo CORS is configured on the Docker host",
+      "2 SDK integration tests always fail locally (ECONNREFUSED) because they require the live API — these are not skipped, just quietly fail every run",
+      "byo-file-workload.ts has pre-existing errors in CI that were not addressed — only the cid/pinSize hoisting was fixed",
+      "No proxy endpoint in the CipherBox API for IPFS content (/ipfs/cat/:cid) — adding one would eliminate the Kubo CORS dependency for browser-based recovery testing"
+    ]
+  }
+}
