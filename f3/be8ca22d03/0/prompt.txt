@@ -31,3 +31,7 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 ---
 
 /resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
