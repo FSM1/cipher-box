@@ -23,7 +23,7 @@
         "relativeTimeRange": { "from": 600, "to": 0 },
         "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
         "model": {
-          "expr": "sum(rate(cipherbox_delegated_routing_fallbacks_total{operation=\"resolve\"}[10m])) / sum(rate(cipherbox_delegated_routing_requests_total{operation=\"resolve\"}[10m]))",
+          "expr": "sum(rate(cipherbox_ipns_resolves_total{source=\"db_cache\"}[10m])) / sum(rate(cipherbox_ipns_resolves_total[10m]))",
           "intervalMs": 15000,
           "maxDataPoints": 43200,
           "refId": "A"
