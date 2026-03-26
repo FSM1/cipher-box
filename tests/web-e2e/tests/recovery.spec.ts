@@ -25,6 +25,11 @@ const IPNS_GATEWAY =
   process.env.DELEGATED_ROUTING_URL?.trim() ||
   'http://localhost:3001';
 
+// Recovery involves multiple IPNS resolutions + IPFS fetches + decryption.
+// Keep test timeout and assertion timeout in sync so the assertion doesn't
+// expire before the test itself does.
+const RECOVERY_TIMEOUT_MS = 90_000;
+
 test.describe('Vault Recovery Tool', () => {
   let account: TestAccount;
   const testFileName = `recovery-test-${Date.now()}.txt`;
@@ -61,9 +66,7 @@ test.describe('Vault Recovery Tool', () => {
   });
 
   test('recovers vault files via IPFS-direct v2 blob path', async ({ page }) => {
-    // Recovery involves multiple IPNS resolutions + IPFS fetches + decryption;
-    // 30s default is tight especially when IPFS gateway fallbacks are involved
-    test.setTimeout(90_000);
+    test.setTimeout(RECOVERY_TIMEOUT_MS);
     // Navigate to recovery tool
     await page.goto(`${WEB_URL}/recovery.html`);
 
@@ -89,7 +92,7 @@ test.describe('Vault Recovery Tool', () => {
     // Wait for the progress log to contain the file name or a success indicator
     // The recovery tool logs each discovered file
     await expect(progressLog).toContainText(testFileName, {
-      timeout: 60_000,
+      timeout: RECOVERY_TIMEOUT_MS - 10_000,
     });
 
     // Verify the download button becomes visible (recovery succeeded)

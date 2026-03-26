@@ -679,7 +679,13 @@
             headers: { 'Accept': 'application/json, application/vnd.ipfs.ipns-record' }
           });
 
-          if (resp.ok) {
+          if (!resp.ok) {
+            // Back off on retriable status codes (429, 5xx)
+            if (attempt < maxRetries - 1 && (resp.status === 429 || resp.status >= 500)) {
+              await sleep(1000 * Math.pow(2, attempt));
+              continue;
+            }
+          } else {
             const contentType = resp.headers.get('Content-Type') || '';
 
             if (contentType.includes('application/json')) {
