@@ -92,10 +92,10 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 
 ### Writable Shares PoC (Phase 27)
 
-- [ ] **SHARE-01**: Share entity has `permission` column (`'read' | 'write'`, default `'read'`) and `encrypted_ipns_key` column (nullable bytea) with idempotent migration
-- [ ] **SHARE-02**: CreateShareDto and response DTOs include `permission` and `encryptedIpnsKey` fields; API client regenerated
-- [ ] **SHARE-03**: IPNS publish endpoint authorizes write-share recipients (checks shares table for active write share when userId does not match FolderIpns owner)
-- [ ] **SHARE-04**: Owner can upgrade (read->write) or downgrade (write->read) a share's permission via PATCH /shares/:shareId/permission
+- [x] **SHARE-01**: Share entity has `permission` column (`'read' | 'write'`, default `'read'`) and `encrypted_ipns_key` column (nullable bytea) with idempotent migration
+- [x] **SHARE-02**: CreateShareDto and response DTOs include `permission` and `encryptedIpnsKey` fields; API client regenerated
+- [x] **SHARE-03**: IPNS publish endpoint authorizes write-share recipients (checks shares table for active write share when userId does not match FolderIpns owner)
+- [x] **SHARE-04**: Owner can upgrade (read->write) or downgrade (write->read) a share's permission via PATCH /shares/:shareId/permission
 - [ ] **SHARE-05**: Share store types (ReceivedShare, SentShare) include `permission` field; ReceivedShare includes `encryptedIpnsKey`
 - [ ] **SHARE-06**: ShareDialog has terminal-style permission toggle ([ READ-ONLY ] / [ READ-WRITE ]) with IPNS key wrapping for write shares
 - [ ] **SHARE-07**: ShareDialog recipients list shows per-recipient permission label with inline upgrade/downgrade controls
@@ -197,10 +197,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DESKTOP-02  | Phase 25   | Complete |
 | OBS-01      | Phase 26   | Complete |
 | OBS-02      | Phase 26   | Complete |
-| SHARE-01    | Phase 27   | Pending  |
-| SHARE-02    | Phase 27   | Pending  |
-| SHARE-03    | Phase 27   | Pending  |
-| SHARE-04    | Phase 27   | Pending  |
+| SHARE-01    | Phase 27   | Complete |
+| SHARE-02    | Phase 27   | Complete |
+| SHARE-03    | Phase 27   | Complete |
+| SHARE-04    | Phase 27   | Complete |
 | SHARE-05    | Phase 27   | Pending  |
 | SHARE-06    | Phase 27   | Pending  |
 | SHARE-07    | Phase 27   | Pending  |

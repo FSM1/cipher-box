@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: complete
-last_updated: '2026-03-26T01:30:00.000Z'
+status: unknown
+last_updated: '2026-03-26T04:25:13.339Z'
 progress:
-  total_phases: 11
+  total_phases: 12
   completed_phases: 11
-  total_plans: 50
-  completed_plans: 50
+  total_plans: 53
+  completed_plans: 51
 ---
 
 # Project State
@@ -18,12 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone v1.1 complete
+**Current focus:** Phase 27 — writable-shares-poc
 
 ## Current Position
 
-Phase: 26 (observability-ux-tuning) — COMPLETE
-Plan: 2 of 2
+Phase: 27 (writable-shares-poc) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -75,6 +75,7 @@ Plan: 2 of 2
 | 22    | 03   | 8min     | 2     | 8     |
 | 26    | 02   | 4min     | 2     | 5     |
 | 26    | 01   | 5min     | 2     | 6     |
+| 27    | 01   | 6min     | 2     | 23    |
 
 ## Accumulated Context
 
@@ -146,6 +147,8 @@ Recent for v1.1:
 - BYO Pinata baselines: pin p50=2.0s (+47% vs local Kubo), tail latency p99 13.5% better, 98% CipherBox API load reduction per file
 - perf.ts PERF_ENABLED evaluated once at module load (zero overhead in production); **CIPHERBOX_PERF** global for opt-in production debugging
 - Load test thresholds set at 2-3x observed baselines; spike test most generous (15s/15%); vitest expect() for CI failure on breach
+- Write-share authorization in upsertFolderIpns falls through to create-new-entry when no write share found (preserves backward compat for owner first publish)
+- TEE enrollFolder uses existing.userId (FolderIpns owner) for write-share publishes, not authenticated userId
 
 ### Roadmap Evolution
 
@@ -172,4 +175,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-25 after completing Phase 22 (performance baselines completion)
+Last updated: 2026-03-26 after completing Phase 27 Plan 01 (backend writable shares)
