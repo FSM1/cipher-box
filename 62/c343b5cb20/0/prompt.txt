@@ -338,3 +338,7 @@ why is an ipns publish from the api not using the same delegated routing path th
 ---
 
 what you are describing as happening entirely in the useAuth hook seems to be a perfect candidate for an SDK function. also createTestAccount should not be skipping the vault key blob publishing.
+
+---
+
+Yes, lets create a gsd:todo for this, and address it immediately.
