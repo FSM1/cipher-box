@@ -75,6 +75,19 @@ export class SharesService {
       await this.shareRepo.remove(revoked);
     }
 
+    // Validate permission/IPNS-key invariant
+    const permission = dto.permission ?? 'read';
+    let encryptedIpnsKey: Buffer | null = null;
+
+    if (permission === 'write') {
+      if (!dto.encryptedIpnsKey) {
+        throw new BadRequestException('encryptedIpnsKey required for write permission');
+      }
+      encryptedIpnsKey = Buffer.from(dto.encryptedIpnsKey, 'hex');
+    } else if (dto.encryptedIpnsKey) {
+      throw new BadRequestException('encryptedIpnsKey must be omitted for read permission');
+    }
+
     const share = this.shareRepo.create({
       sharerId,
       recipientId: recipient.id,
@@ -82,8 +95,8 @@ export class SharesService {
       ipnsName: dto.ipnsName,
       itemName: dto.itemName,
       encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
-      permission: dto.permission || 'read',
-      encryptedIpnsKey: dto.encryptedIpnsKey ? Buffer.from(dto.encryptedIpnsKey, 'hex') : null,
+      permission,
+      encryptedIpnsKey,
       hiddenByRecipient: false,
       revokedAt: null,
     });
