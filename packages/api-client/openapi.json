@@ -11,9 +11,7 @@
           }
         },
         "summary": "Get API info",
-        "tags": [
-          "Root"
-        ]
+        "tags": ["Root"]
       }
     },
     "/auth/login": {
@@ -46,9 +44,7 @@
           }
         },
         "summary": "Authenticate user with Web3Auth ID token",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/refresh": {
@@ -81,9 +77,7 @@
           }
         },
         "summary": "Refresh access token using HTTP-only refresh token cookie",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/logout": {
@@ -111,9 +105,7 @@
           }
         ],
         "summary": "Logout user and invalidate all refresh tokens",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/account": {
@@ -154,9 +146,7 @@
           }
         ],
         "summary": "Permanently delete user account and all associated data",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/methods": {
@@ -187,9 +177,7 @@
           }
         ],
         "summary": "Get all linked auth methods for the current user",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/link": {
@@ -233,9 +221,7 @@
           }
         ],
         "summary": "Link a new auth method to the current user account",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/unlink": {
@@ -276,9 +262,7 @@
           }
         ],
         "summary": "Unlink an auth method from the current user account",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/test-login": {
@@ -314,9 +298,7 @@
           }
         },
         "summary": "Test-only login bypassing Core Kit (requires TEST_LOGIN_SECRET)",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/.well-known/jwks.json": {
@@ -338,18 +320,14 @@
                       }
                     }
                   },
-                  "required": [
-                    "keys"
-                  ]
+                  "required": ["keys"]
                 }
               }
             }
           }
         },
         "summary": "JWKS endpoint for CipherBox identity provider",
-        "tags": [
-          "Identity"
-        ]
+        "tags": ["Identity"]
       }
     },
     "/auth/identity/google": {
@@ -382,9 +360,7 @@
           }
         },
         "summary": "Login with Google OAuth token, returns CipherBox identity JWT",
-        "tags": [
-          "Identity"
-        ]
+        "tags": ["Identity"]
       }
     },
     "/auth/identity/email/send-otp": {
@@ -417,9 +393,7 @@
           }
         },
         "summary": "Send OTP to email address",
-        "tags": [
-          "Identity"
-        ]
+        "tags": ["Identity"]
       }
     },
     "/auth/identity/email/verify-otp": {
@@ -452,9 +426,7 @@
           }
         },
         "summary": "Verify email OTP and return CipherBox identity JWT",
-        "tags": [
-          "Identity"
-        ]
+        "tags": ["Identity"]
       }
     },
     "/auth/identity/wallet/nonce": {
@@ -473,18 +445,14 @@
                       "type": "string"
                     }
                   },
-                  "required": [
-                    "nonce"
-                  ]
+                  "required": ["nonce"]
                 }
               }
             }
           }
         },
         "summary": "Generate SIWE nonce for wallet login",
-        "tags": [
-          "Identity"
-        ]
+        "tags": ["Identity"]
       }
     },
     "/auth/identity/wallet": {
@@ -517,9 +485,7 @@
           }
         },
         "summary": "Verify SIWE wallet signature and return CipherBox identity JWT",
-        "tags": [
-          "Identity"
-        ]
+        "tags": ["Identity"]
       }
     },
     "/ipfs/upload": {
@@ -540,9 +506,7 @@
                     "description": "Encrypted file blob (max 100MB)"
                   }
                 },
-                "required": [
-                  "file"
-                ]
+                "required": ["file"]
               }
             }
           }
@@ -571,9 +535,7 @@
           }
         ],
         "summary": "Upload encrypted file to IPFS with quota tracking",
-        "tags": [
-          "IPFS"
-        ]
+        "tags": ["IPFS"]
       }
     },
     "/ipfs/unpin": {
@@ -612,9 +574,7 @@
           }
         ],
         "summary": "Unpin file from IPFS",
-        "tags": [
-          "IPFS"
-        ]
+        "tags": ["IPFS"]
       }
     },
     "/ipfs/register-cid": {
@@ -650,9 +610,7 @@
           }
         ],
         "summary": "Register externally-pinned CID for advisory quota tracking",
-        "tags": [
-          "IPFS"
-        ]
+        "tags": ["IPFS"]
       }
     },
     "/ipfs/{cid}": {
@@ -694,9 +652,7 @@
           }
         ],
         "summary": "Get file from IPFS",
-        "tags": [
-          "IPFS"
-        ]
+        "tags": ["IPFS"]
       }
     },
     "/vault/init": {
@@ -738,9 +694,7 @@
           }
         ],
         "summary": "Initialize user vault",
-        "tags": [
-          "Vault"
-        ]
+        "tags": ["Vault"]
       }
     },
     "/vault/config": {
@@ -769,9 +723,7 @@
           }
         ],
         "summary": "Get vault configuration",
-        "tags": [
-          "Vault"
-        ]
+        "tags": ["Vault"]
       }
     },
     "/vault/export": {
@@ -803,9 +755,7 @@
           }
         ],
         "summary": "Export vault for independent recovery",
-        "tags": [
-          "Vault"
-        ]
+        "tags": ["Vault"]
       }
     },
     "/vault": {
@@ -837,9 +787,7 @@
           }
         ],
         "summary": "Get user vault",
-        "tags": [
-          "Vault"
-        ]
+        "tags": ["Vault"]
       }
     },
     "/vault/quota": {
@@ -868,9 +816,7 @@
           }
         ],
         "summary": "Get storage quota",
-        "tags": [
-          "Vault"
-        ]
+        "tags": ["Vault"]
       }
     },
     "/ipns/publish": {
@@ -918,9 +864,7 @@
           }
         ],
         "summary": "Publish IPNS record",
-        "tags": [
-          "IPNS"
-        ]
+        "tags": ["IPNS"]
       }
     },
     "/ipns/publish-batch": {
@@ -968,9 +912,7 @@
           }
         ],
         "summary": "Batch publish IPNS records",
-        "tags": [
-          "IPNS"
-        ]
+        "tags": ["IPNS"]
       }
     },
     "/ipns/resolve": {
@@ -1019,9 +961,7 @@
           }
         ],
         "summary": "Resolve IPNS name",
-        "tags": [
-          "IPNS"
-        ]
+        "tags": ["IPNS"]
       }
     },
     "/device-approval/request": {
@@ -1065,9 +1005,7 @@
           }
         ],
         "summary": "Create device approval request",
-        "tags": [
-          "device-approval"
-        ]
+        "tags": ["device-approval"]
       }
     },
     "/device-approval/{requestId}/status": {
@@ -1093,12 +1031,7 @@
                   "properties": {
                     "status": {
                       "type": "string",
-                      "enum": [
-                        "pending",
-                        "approved",
-                        "denied",
-                        "expired"
-                      ]
+                      "enum": ["pending", "approved", "denied", "expired"]
                     },
                     "encryptedFactorKey": {
                       "type": "string",
@@ -1123,9 +1056,7 @@
           }
         ],
         "summary": "Poll approval request status",
-        "tags": [
-          "device-approval"
-        ]
+        "tags": ["device-approval"]
       }
     },
     "/device-approval/pending": {
@@ -1179,9 +1110,7 @@
           }
         ],
         "summary": "List pending approval requests",
-        "tags": [
-          "device-approval"
-        ]
+        "tags": ["device-approval"]
       }
     },
     "/device-approval/{requestId}/respond": {
@@ -1228,9 +1157,7 @@
           }
         ],
         "summary": "Respond to approval request",
-        "tags": [
-          "device-approval"
-        ]
+        "tags": ["device-approval"]
       }
     },
     "/device-approval/{requestId}": {
@@ -1264,9 +1191,7 @@
           }
         ],
         "summary": "Cancel approval request",
-        "tags": [
-          "device-approval"
-        ]
+        "tags": ["device-approval"]
       }
     },
     "/shares": {
@@ -1311,9 +1236,7 @@
           }
         ],
         "summary": "Create a share",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/shares/received": {
@@ -1366,9 +1289,7 @@
           }
         ],
         "summary": "List received shares",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/shares/sent": {
@@ -1421,9 +1342,7 @@
           }
         ],
         "summary": "List sent shares",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/shares/lookup": {
@@ -1465,9 +1384,7 @@
           }
         ],
         "summary": "Look up user by public key",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/shares/pending-rotations": {
@@ -1499,9 +1416,7 @@
           }
         ],
         "summary": "Get pending rotations",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/shares/{shareId}/keys": {
@@ -1548,9 +1463,7 @@
           }
         ],
         "summary": "Get share keys",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       },
       "post": {
         "description": "Add re-wrapped child keys to an existing share. Allowed for the sharer or write-share recipients.",
@@ -1595,9 +1508,7 @@
           }
         ],
         "summary": "Add share keys",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/shares/{shareId}/permission": {
@@ -1647,9 +1558,7 @@
           }
         ],
         "summary": "Update share permission",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/shares/{shareId}": {
@@ -1686,9 +1595,7 @@
           }
         ],
         "summary": "Revoke a share",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/shares/{shareId}/hide": {
@@ -1725,9 +1632,7 @@
           }
         ],
         "summary": "Hide a share",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/shares/{shareId}/encrypted-key": {
@@ -1774,9 +1679,7 @@
           }
         ],
         "summary": "Update share encrypted key",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/shares/{shareId}/complete-rotation": {
@@ -1816,9 +1719,7 @@
           }
         ],
         "summary": "Complete key rotation",
-        "tags": [
-          "shares"
-        ]
+        "tags": ["shares"]
       }
     },
     "/invites/{token}": {
@@ -1852,9 +1753,7 @@
           }
         },
         "summary": "Get invite status (public)",
-        "tags": [
-          "invites"
-        ]
+        "tags": ["invites"]
       }
     },
     "/invites/{token}/data": {
@@ -1896,9 +1795,7 @@
           }
         ],
         "summary": "Get invite data for claim flow (authenticated)",
-        "tags": [
-          "invites"
-        ]
+        "tags": ["invites"]
       }
     },
     "/invites/{token}/claim": {
@@ -1953,9 +1850,7 @@
           }
         ],
         "summary": "Claim an invite link",
-        "tags": [
-          "invites"
-        ]
+        "tags": ["invites"]
       }
     },
     "/shares/invites": {
@@ -1994,9 +1889,7 @@
           }
         ],
         "summary": "Create an invite link",
-        "tags": [
-          "share-invites"
-        ]
+        "tags": ["share-invites"]
       },
       "get": {
         "description": "Get all active (unclaimed, unexpired) invite links created by the authenticated user for the specified item. Expired invites are auto-cleaned.",
@@ -2036,9 +1929,7 @@
           }
         ],
         "summary": "List active invites for an item",
-        "tags": [
-          "share-invites"
-        ]
+        "tags": ["share-invites"]
       }
     },
     "/shares/invites/{inviteId}": {
@@ -2075,9 +1966,7 @@
           }
         ],
         "summary": "Revoke an invite link",
-        "tags": [
-          "share-invites"
-        ]
+        "tags": ["share-invites"]
       }
     },
     "/tee/connection-test": {
@@ -2113,18 +2002,14 @@
           }
         ],
         "summary": "Test connection to an external IPFS provider via TEE",
-        "tags": [
-          "tee"
-        ]
+        "tags": ["tee"]
       }
     },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
         "summary": "Check API and database health",
-        "tags": [
-          "Health"
-        ],
+        "tags": ["Health"],
         "responses": {
           "200": {
             "description": "Health check passed",
@@ -2249,17 +2134,11 @@
           "loginType": {
             "type": "string",
             "description": "Type of login used (always corekit)",
-            "enum": [
-              "corekit"
-            ],
+            "enum": ["corekit"],
             "example": "corekit"
           }
         },
-        "required": [
-          "idToken",
-          "publicKey",
-          "loginType"
-        ]
+        "required": ["idToken", "publicKey", "loginType"]
       },
       "LoginResponseDto": {
         "type": "object",
@@ -2280,10 +2159,7 @@
             "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
           }
         },
-        "required": [
-          "accessToken",
-          "isNewUser"
-        ]
+        "required": ["accessToken", "isNewUser"]
       },
       "DesktopRefreshDto": {
         "type": "object",
@@ -2314,9 +2190,7 @@
             "example": "user@example.com"
           }
         },
-        "required": [
-          "accessToken"
-        ]
+        "required": ["accessToken"]
       },
       "LogoutResponseDto": {
         "type": "object",
@@ -2327,9 +2201,7 @@
             "example": true
           }
         },
-        "required": [
-          "success"
-        ]
+        "required": ["success"]
       },
       "DeleteAccountDto": {
         "type": "object",
@@ -2340,9 +2212,7 @@
             "example": "DELETE"
           }
         },
-        "required": [
-          "confirmation"
-        ]
+        "required": ["confirmation"]
       },
       "DeleteAccountResponseDto": {
         "type": "object",
@@ -2352,9 +2222,7 @@
             "description": "Whether the account was successfully deleted"
           }
         },
-        "required": [
-          "success"
-        ]
+        "required": ["success"]
       },
       "AuthMethodResponseDto": {
         "type": "object",
@@ -2364,13 +2232,7 @@
           },
           "type": {
             "type": "string",
-            "enum": [
-              "google",
-              "apple",
-              "github",
-              "email",
-              "wallet"
-            ]
+            "enum": ["google", "apple", "github", "email", "wallet"]
           },
           "identifier": {
             "type": "string",
@@ -2386,13 +2248,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "id",
-          "type",
-          "identifier",
-          "lastUsedAt",
-          "createdAt"
-        ]
+        "required": ["id", "type", "identifier", "lastUsedAt", "createdAt"]
       },
       "LinkMethodDto": {
         "type": "object",
@@ -2404,11 +2260,7 @@
           "loginType": {
             "type": "string",
             "description": "Auth method type to link",
-            "enum": [
-              "google",
-              "email",
-              "wallet"
-            ]
+            "enum": ["google", "email", "wallet"]
           },
           "walletAddress": {
             "type": "string",
@@ -2423,10 +2275,7 @@
             "description": "SIWE signature (required when loginType is wallet)"
           }
         },
-        "required": [
-          "idToken",
-          "loginType"
-        ]
+        "required": ["idToken", "loginType"]
       },
       "UnlinkMethodDto": {
         "type": "object",
@@ -2435,9 +2284,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "methodId"
-        ]
+        "required": ["methodId"]
       },
       "UnlinkMethodResponseDto": {
         "type": "object",
@@ -2446,9 +2293,7 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "success"
-        ]
+        "required": ["success"]
       },
       "TestLoginDto": {
         "type": "object",
@@ -2462,10 +2307,7 @@
             "description": "Secret that must match TEST_LOGIN_SECRET env var"
           }
         },
-        "required": [
-          "email",
-          "secret"
-        ]
+        "required": ["email", "secret"]
       },
       "TestLoginResponseDto": {
         "type": "object",
@@ -2491,13 +2333,7 @@
             "description": "secp256k1 private key (hex, 64 chars)"
           }
         },
-        "required": [
-          "accessToken",
-          "refreshToken",
-          "isNewUser",
-          "publicKeyHex",
-          "privateKeyHex"
-        ]
+        "required": ["accessToken", "refreshToken", "isNewUser", "publicKeyHex", "privateKeyHex"]
       },
       "GoogleLoginDto": {
         "type": "object",
@@ -2510,15 +2346,10 @@
           "intent": {
             "type": "string",
             "description": "Intent: \"login\" (default) creates/finds a user, \"link\" only verifies ownership",
-            "enum": [
-              "login",
-              "link"
-            ]
+            "enum": ["login", "link"]
           }
         },
-        "required": [
-          "idToken"
-        ]
+        "required": ["idToken"]
       },
       "IdentityTokenResponseDto": {
         "type": "object",
@@ -2544,11 +2375,7 @@
             "example": "user@example.com"
           }
         },
-        "required": [
-          "idToken",
-          "userId",
-          "isNewUser"
-        ]
+        "required": ["idToken", "userId", "isNewUser"]
       },
       "SendOtpDto": {
         "type": "object",
@@ -2559,9 +2386,7 @@
             "example": "user@example.com"
           }
         },
-        "required": [
-          "email"
-        ]
+        "required": ["email"]
       },
       "SendOtpResponseDto": {
         "type": "object",
@@ -2572,9 +2397,7 @@
             "example": true
           }
         },
-        "required": [
-          "success"
-        ]
+        "required": ["success"]
       },
       "VerifyOtpDto": {
         "type": "object",
@@ -2592,16 +2415,10 @@
           "intent": {
             "type": "string",
             "description": "Intent: \"login\" (default) creates/finds a user, \"link\" only verifies ownership",
-            "enum": [
-              "login",
-              "link"
-            ]
+            "enum": ["login", "link"]
           }
         },
-        "required": [
-          "email",
-          "otp"
-        ]
+        "required": ["email", "otp"]
       },
       "WalletVerifyDto": {
         "type": "object",
@@ -2619,16 +2436,10 @@
           "intent": {
             "type": "string",
             "description": "Intent: \"login\" (default) creates/finds a user, \"link\" only verifies ownership",
-            "enum": [
-              "login",
-              "link"
-            ]
+            "enum": ["login", "link"]
           }
         },
-        "required": [
-          "message",
-          "signature"
-        ]
+        "required": ["message", "signature"]
       },
       "UploadResponseDto": {
         "type": "object",
@@ -2649,11 +2460,7 @@
             "example": true
           }
         },
-        "required": [
-          "cid",
-          "size",
-          "recorded"
-        ]
+        "required": ["cid", "size", "recorded"]
       },
       "UnpinDto": {
         "type": "object",
@@ -2664,9 +2471,7 @@
             "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi"
           }
         },
-        "required": [
-          "cid"
-        ]
+        "required": ["cid"]
       },
       "UnpinResponseDto": {
         "type": "object",
@@ -2677,9 +2482,7 @@
             "example": true
           }
         },
-        "required": [
-          "success"
-        ]
+        "required": ["success"]
       },
       "RegisterCidDto": {
         "type": "object",
@@ -2693,10 +2496,7 @@
             "description": "Size of the pinned content in bytes"
           }
         },
-        "required": [
-          "cid",
-          "sizeBytes"
-        ]
+        "required": ["cid", "sizeBytes"]
       },
       "RegisterCidResponseDto": {
         "type": "object",
@@ -2706,9 +2506,7 @@
             "description": "Whether the CID was recorded"
           }
         },
-        "required": [
-          "recorded"
-        ]
+        "required": ["recorded"]
       },
       "InitVaultDto": {
         "type": "object",
@@ -2724,10 +2522,7 @@
             "example": "k51qzi5uqu5dg..."
           }
         },
-        "required": [
-          "ownerPublicKey",
-          "rootIpnsName"
-        ]
+        "required": ["ownerPublicKey", "rootIpnsName"]
       },
       "TeeKeysDto": {
         "type": "object",
@@ -2755,12 +2550,7 @@
             "nullable": true
           }
         },
-        "required": [
-          "currentEpoch",
-          "currentPublicKey",
-          "previousEpoch",
-          "previousPublicKey"
-        ]
+        "required": ["currentEpoch", "currentPublicKey", "previousEpoch", "previousPublicKey"]
       },
       "VaultResponseDto": {
         "type": "object",
@@ -2803,13 +2593,7 @@
             ]
           }
         },
-        "required": [
-          "id",
-          "ownerPublicKey",
-          "rootIpnsName",
-          "createdAt",
-          "initializedAt"
-        ]
+        "required": ["id", "ownerPublicKey", "rootIpnsName", "createdAt", "initializedAt"]
       },
       "VaultConfigResponseDto": {
         "type": "object",
@@ -2820,9 +2604,7 @@
             "example": 30
           }
         },
-        "required": [
-          "recycleBinRetentionDays"
-        ]
+        "required": ["recycleBinRetentionDays"]
       },
       "VaultExportDto": {
         "type": "object",
@@ -2854,12 +2636,7 @@
             "nullable": true
           }
         },
-        "required": [
-          "format",
-          "version",
-          "exportedAt",
-          "rootIpnsName"
-        ]
+        "required": ["format", "version", "exportedAt", "rootIpnsName"]
       },
       "QuotaResponseDto": {
         "type": "object",
@@ -2885,12 +2662,7 @@
             "example": false
           }
         },
-        "required": [
-          "usedBytes",
-          "limitBytes",
-          "remainingBytes",
-          "advisory"
-        ]
+        "required": ["usedBytes", "limitBytes", "remainingBytes", "advisory"]
       },
       "PublishIpnsDto": {
         "type": "object",
@@ -2926,11 +2698,7 @@
             "example": "5"
           }
         },
-        "required": [
-          "ipnsName",
-          "record",
-          "metadataCid"
-        ]
+        "required": ["ipnsName", "record", "metadataCid"]
       },
       "PublishIpnsResponseDto": {
         "type": "object",
@@ -2951,11 +2719,7 @@
             "example": "1"
           }
         },
-        "required": [
-          "success",
-          "ipnsName",
-          "sequenceNumber"
-        ]
+        "required": ["success", "ipnsName", "sequenceNumber"]
       },
       "PublishIpnsEntryDto": {
         "type": "object",
@@ -2988,10 +2752,7 @@
           "recordType": {
             "type": "string",
             "description": "Record type: 'folder' for folder metadata, 'file' for per-file metadata",
-            "enum": [
-              "folder",
-              "file"
-            ],
+            "enum": ["folder", "file"],
             "default": "folder",
             "example": "file"
           },
@@ -3001,11 +2762,7 @@
             "example": "5"
           }
         },
-        "required": [
-          "ipnsName",
-          "record",
-          "metadataCid"
-        ]
+        "required": ["ipnsName", "record", "metadataCid"]
       },
       "BatchPublishIpnsDto": {
         "type": "object",
@@ -3018,9 +2775,7 @@
             }
           }
         },
-        "required": [
-          "records"
-        ]
+        "required": ["records"]
       },
       "BatchPublishIpnsResponseDto": {
         "type": "object",
@@ -3043,11 +2798,7 @@
             "example": 0
           }
         },
-        "required": [
-          "results",
-          "totalSucceeded",
-          "totalFailed"
-        ]
+        "required": ["results", "totalSucceeded", "totalFailed"]
       },
       "ResolveIpnsResponseDto": {
         "type": "object",
@@ -3080,11 +2831,7 @@
             "description": "Base64-encoded raw Ed25519 public key (32 bytes). Only present when resolved from delegated routing (not DB cache)."
           }
         },
-        "required": [
-          "success",
-          "cid",
-          "sequenceNumber"
-        ]
+        "required": ["success", "cid", "sequenceNumber"]
       },
       "CreateApprovalDto": {
         "type": "object",
@@ -3105,11 +2852,7 @@
             "example": "04abc123..."
           }
         },
-        "required": [
-          "deviceId",
-          "deviceName",
-          "ephemeralPublicKey"
-        ]
+        "required": ["deviceId", "deviceName", "ephemeralPublicKey"]
       },
       "RespondApprovalDto": {
         "type": "object",
@@ -3117,10 +2860,7 @@
           "action": {
             "type": "string",
             "description": "Approval action",
-            "enum": [
-              "approve",
-              "deny"
-            ],
+            "enum": ["approve", "deny"],
             "example": "approve"
           },
           "encryptedFactorKey": {
@@ -3134,10 +2874,7 @@
             "example": "a1b2c3d4e5f6..."
           }
         },
-        "required": [
-          "action",
-          "respondedByDeviceId"
-        ]
+        "required": ["action", "respondedByDeviceId"]
       },
       "ChildKeyDto": {
         "type": "object",
@@ -3145,10 +2882,7 @@
           "keyType": {
             "type": "string",
             "description": "Type of key: file or folder",
-            "enum": [
-              "file",
-              "folder"
-            ]
+            "enum": ["file", "folder"]
           },
           "itemId": {
             "type": "string",
@@ -3159,11 +2893,7 @@
             "description": "Hex-encoded ECIES ciphertext of the key wrapped for recipient"
           }
         },
-        "required": [
-          "keyType",
-          "itemId",
-          "encryptedKey"
-        ]
+        "required": ["keyType", "itemId", "encryptedKey"]
       },
       "CreateShareDto": {
         "type": "object",
@@ -3176,10 +2906,7 @@
           "itemType": {
             "type": "string",
             "description": "Type of shared item",
-            "enum": [
-              "folder",
-              "file"
-            ]
+            "enum": ["folder", "file"]
           },
           "ipnsName": {
             "type": "string",
@@ -3196,10 +2923,7 @@
           "permission": {
             "type": "string",
             "description": "Permission level for the share",
-            "enum": [
-              "read",
-              "write"
-            ],
+            "enum": ["read", "write"],
             "default": "read"
           },
           "encryptedIpnsKey": {
@@ -3214,13 +2938,7 @@
             }
           }
         },
-        "required": [
-          "recipientPublicKey",
-          "itemType",
-          "ipnsName",
-          "itemName",
-          "encryptedKey"
-        ]
+        "required": ["recipientPublicKey", "itemType", "ipnsName", "itemName", "encryptedKey"]
       },
       "CreateShareResponseDto": {
         "type": "object",
@@ -3231,10 +2949,7 @@
           },
           "itemType": {
             "type": "string",
-            "enum": [
-              "folder",
-              "file"
-            ]
+            "enum": ["folder", "file"]
           },
           "ipnsName": {
             "type": "string",
@@ -3251,10 +2966,7 @@
           "permission": {
             "type": "string",
             "description": "Permission level",
-            "enum": [
-              "read",
-              "write"
-            ]
+            "enum": ["read", "write"]
           },
           "createdAt": {
             "format": "date-time",
@@ -3284,10 +2996,7 @@
           },
           "itemType": {
             "type": "string",
-            "enum": [
-              "folder",
-              "file"
-            ]
+            "enum": ["folder", "file"]
           },
           "ipnsName": {
             "type": "string"
@@ -3302,10 +3011,7 @@
           "permission": {
             "type": "string",
             "description": "Permission level",
-            "enum": [
-              "read",
-              "write"
-            ]
+            "enum": ["read", "write"]
           },
           "encryptedIpnsKey": {
             "type": "string",
@@ -3343,10 +3049,7 @@
             "minimum": 0
           }
         },
-        "required": [
-          "shares",
-          "total"
-        ]
+        "required": ["shares", "total"]
       },
       "SentShareResponseDto": {
         "type": "object",
@@ -3360,10 +3063,7 @@
           },
           "itemType": {
             "type": "string",
-            "enum": [
-              "folder",
-              "file"
-            ]
+            "enum": ["folder", "file"]
           },
           "ipnsName": {
             "type": "string"
@@ -3374,10 +3074,7 @@
           "permission": {
             "type": "string",
             "description": "Permission level",
-            "enum": [
-              "read",
-              "write"
-            ]
+            "enum": ["read", "write"]
           },
           "createdAt": {
             "format": "date-time",
@@ -3409,10 +3106,7 @@
             "minimum": 0
           }
         },
-        "required": [
-          "shares",
-          "total"
-        ]
+        "required": ["shares", "total"]
       },
       "LookupUserResponseDto": {
         "type": "object",
@@ -3422,9 +3116,7 @@
             "description": "Whether a registered user was found for the given public key"
           }
         },
-        "required": [
-          "exists"
-        ]
+        "required": ["exists"]
       },
       "PendingRotationResponseDto": {
         "type": "object",
@@ -3438,10 +3130,7 @@
           },
           "itemType": {
             "type": "string",
-            "enum": [
-              "folder",
-              "file"
-            ]
+            "enum": ["folder", "file"]
           },
           "ipnsName": {
             "type": "string"
@@ -3468,11 +3157,7 @@
         "properties": {
           "keyType": {
             "type": "string",
-            "enum": [
-              "file",
-              "folder",
-              "file-ipns"
-            ]
+            "enum": ["file", "folder", "file-ipns"]
           },
           "itemId": {
             "type": "string",
@@ -3483,11 +3168,7 @@
             "description": "Hex-encoded ECIES-wrapped key for recipient"
           }
         },
-        "required": [
-          "keyType",
-          "itemId",
-          "encryptedKey"
-        ]
+        "required": ["keyType", "itemId", "encryptedKey"]
       },
       "ShareKeyEntryDto": {
         "type": "object",
@@ -3495,11 +3176,7 @@
           "keyType": {
             "type": "string",
             "description": "Type of key: file, folder, or file-ipns",
-            "enum": [
-              "file",
-              "folder",
-              "file-ipns"
-            ]
+            "enum": ["file", "folder", "file-ipns"]
           },
           "itemId": {
             "type": "string",
@@ -3510,11 +3187,7 @@
             "description": "Hex-encoded ECIES ciphertext of the key wrapped for recipient"
           }
         },
-        "required": [
-          "keyType",
-          "itemId",
-          "encryptedKey"
-        ]
+        "required": ["keyType", "itemId", "encryptedKey"]
       },
       "AddShareKeysDto": {
         "type": "object",
@@ -3527,9 +3200,7 @@
             }
           }
         },
-        "required": [
-          "keys"
-        ]
+        "required": ["keys"]
       },
       "UpdatePermissionDto": {
         "type": "object",
@@ -3537,19 +3208,14 @@
           "permission": {
             "type": "string",
             "description": "Permission level for the share",
-            "enum": [
-              "read",
-              "write"
-            ]
+            "enum": ["read", "write"]
           },
           "encryptedIpnsKey": {
             "type": "string",
             "description": "Hex-encoded ECIES ciphertext of IPNS private key. Required when upgrading to write, omitted when downgrading to read."
           }
         },
-        "required": [
-          "permission"
-        ]
+        "required": ["permission"]
       },
       "UpdateEncryptedKeyDto": {
         "type": "object",
@@ -3559,24 +3225,18 @@
             "description": "Hex-encoded ECIES ciphertext of the new key wrapped for recipient"
           }
         },
-        "required": [
-          "encryptedKey"
-        ]
+        "required": ["encryptedKey"]
       },
       "InviteStatusResponseDto": {
         "type": "object",
         "properties": {
           "status": {
             "type": "string",
-            "enum": [
-              "active"
-            ],
+            "enum": ["active"],
             "description": "Invite status. Only \"active\" is returned; all other states result in 404 to prevent token-existence oracle attacks."
           }
         },
-        "required": [
-          "status"
-        ]
+        "required": ["status"]
       },
       "InviteChildKeyDto": {
         "type": "object",
@@ -3584,10 +3244,7 @@
           "keyType": {
             "type": "string",
             "description": "Type of key: file or folder",
-            "enum": [
-              "file",
-              "folder"
-            ]
+            "enum": ["file", "folder"]
           },
           "itemId": {
             "type": "string",
@@ -3598,23 +3255,14 @@
             "description": "Hex-encoded ECIES ciphertext of the key wrapped with ephemeral public key"
           }
         },
-        "required": [
-          "keyType",
-          "itemId",
-          "encryptedKey"
-        ]
+        "required": ["keyType", "itemId", "encryptedKey"]
       },
       "InviteDataResponseDto": {
         "type": "object",
         "properties": {
           "status": {
             "type": "string",
-            "enum": [
-              "active",
-              "expired",
-              "claimed",
-              "revoked"
-            ],
+            "enum": ["active", "expired", "claimed", "revoked"],
             "description": "Current status of the invite"
           },
           "encryptedKey": {
@@ -3631,10 +3279,7 @@
           },
           "itemType": {
             "type": "string",
-            "enum": [
-              "folder",
-              "file"
-            ]
+            "enum": ["folder", "file"]
           },
           "ipnsName": {
             "type": "string",
@@ -3660,10 +3305,7 @@
           "keyType": {
             "type": "string",
             "description": "Type of key: file or folder",
-            "enum": [
-              "file",
-              "folder"
-            ]
+            "enum": ["file", "folder"]
           },
           "itemId": {
             "type": "string",
@@ -3674,11 +3316,7 @@
             "description": "Hex-encoded ECIES ciphertext of the key re-wrapped for recipient"
           }
         },
-        "required": [
-          "keyType",
-          "itemId",
-          "encryptedKey"
-        ]
+        "required": ["keyType", "itemId", "encryptedKey"]
       },
       "ClaimInviteDto": {
         "type": "object",
@@ -3695,9 +3333,7 @@
             }
           }
         },
-        "required": [
-          "encryptedKey"
-        ]
+        "required": ["encryptedKey"]
       },
       "ClaimInviteResponseDto": {
         "type": "object",
@@ -3707,9 +3343,7 @@
             "description": "UUID of the created share"
           }
         },
-        "required": [
-          "shareId"
-        ]
+        "required": ["shareId"]
       },
       "CreateInviteDto": {
         "type": "object",
@@ -3717,10 +3351,7 @@
           "itemType": {
             "type": "string",
             "description": "Type of shared item",
-            "enum": [
-              "folder",
-              "file"
-            ]
+            "enum": ["folder", "file"]
           },
           "ipnsName": {
             "type": "string",
@@ -3742,12 +3373,7 @@
             }
           }
         },
-        "required": [
-          "itemType",
-          "ipnsName",
-          "itemName",
-          "encryptedKey"
-        ]
+        "required": ["itemType", "ipnsName", "itemName", "encryptedKey"]
       },
       "InviteResponseDto": {
         "type": "object",
@@ -3762,10 +3388,7 @@
           },
           "itemType": {
             "type": "string",
-            "enum": [
-              "folder",
-              "file"
-            ]
+            "enum": ["folder", "file"]
           },
           "ipnsName": {
             "type": "string",
@@ -3777,11 +3400,7 @@
           },
           "status": {
             "type": "string",
-            "enum": [
-              "active",
-              "claimed",
-              "revoked"
-            ]
+            "enum": ["active", "claimed", "revoked"]
           },
           "expiresAt": {
             "type": "string",
@@ -3817,10 +3436,7 @@
             "description": "TEE epoch for key selection"
           }
         },
-        "required": [
-          "encryptedConfig",
-          "epoch"
-        ]
+        "required": ["encryptedConfig", "epoch"]
       },
       "ConnectionTestResponseDto": {
         "type": "object",
@@ -3831,10 +3447,7 @@
           },
           "protocol": {
             "type": "string",
-            "enum": [
-              "kubo",
-              "psa"
-            ],
+            "enum": ["kubo", "psa"],
             "description": "Detected protocol"
           },
           "version": {
@@ -3850,10 +3463,7 @@
             "description": "Error message on failure"
           }
         },
-        "required": [
-          "success",
-          "latencyMs"
-        ]
+        "required": ["success", "latencyMs"]
       }
     }
   }
