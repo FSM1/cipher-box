@@ -23,6 +23,7 @@ import {
   sharesControllerGetPendingRotations,
   sharesControllerUpdateShareEncryptedKey,
   sharesControllerCompleteRotation,
+  sharesControllerUpdatePermission,
 } from '@cipherbox/api-client';
 
 import { wrapKey, bytesToHex, hexToBytes, generateRandomBytes } from '@cipherbox/crypto';
@@ -47,6 +48,8 @@ export async function fetchReceivedShares(
       ipnsName: s.ipnsName,
       itemName: s.itemName,
       encryptedKey: s.encryptedKey,
+      permission: (s.permission as 'read' | 'write') ?? 'read',
+      encryptedIpnsKey: (s.encryptedIpnsKey as string | null | undefined) ?? null,
       createdAt: String(s.createdAt),
     })),
     total: response.total,
@@ -69,6 +72,7 @@ export async function fetchSentShares(
       itemType: s.itemType as 'folder' | 'file',
       ipnsName: s.ipnsName,
       itemName: s.itemName,
+      permission: (s.permission as 'read' | 'write') ?? 'read',
       createdAt: String(s.createdAt),
     })),
     total: response.total,
@@ -117,6 +121,26 @@ export async function createShare(params: {
   });
 
   return { shareId: response.shareId };
+}
+
+/**
+ * Update the permission level of an existing share.
+ * Only the sharer can change permission. Upgrading to write requires
+ * an ECIES-wrapped IPNS private key for the recipient.
+ *
+ * @param shareId - ID of the share to update
+ * @param permission - New permission level ('read' or 'write')
+ * @param encryptedIpnsKey - ECIES-wrapped IPNS key (required for upgrade to write)
+ */
+export async function updateSharePermission(
+  shareId: string,
+  permission: 'read' | 'write',
+  encryptedIpnsKey?: string
+): Promise<void> {
+  await sharesControllerUpdatePermission(shareId, {
+    permission,
+    encryptedIpnsKey,
+  });
 }
 
 /**
