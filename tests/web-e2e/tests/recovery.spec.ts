@@ -14,13 +14,12 @@ import {
 } from '../../sdk-e2e/src/fixtures/test-harness';
 import { bytesToHex } from '@cipherbox/crypto';
 
-const API_URL = process.env.SDK_E2E_API_URL ?? 'http://localhost:3000';
-const WEB_URL = process.env.WEB_URL ?? 'http://localhost:5173';
-// IPFS content gateway (Kubo) — for fetching CIDs
-const IPFS_GATEWAY = process.env.RECOVERY_IPFS_GATEWAY ?? 'http://localhost:8080';
-// IPNS resolution gateway — in CI, Kubo can't resolve IPNS names published via
-// mock-ipns-routing, so we use the CipherBox API which has DB cache + delegated routing
-const IPNS_GATEWAY = process.env.RECOVERY_IPNS_GATEWAY ?? 'http://localhost:3000';
+const API_URL = process.env.SDK_E2E_API_URL?.trim() || 'http://localhost:3000';
+const WEB_URL = process.env.WEB_URL?.trim() || 'http://localhost:5173';
+const IPFS_GATEWAY = process.env.RECOVERY_IPFS_GATEWAY?.trim() || 'http://localhost:8080';
+// IPNS resolution via CipherBox API (has DB cache + delegated routing; Kubo can't resolve
+// IPNS names published via mock-ipns-routing in CI)
+const IPNS_GATEWAY = process.env.RECOVERY_IPNS_GATEWAY?.trim() || API_URL;
 
 test.describe('Vault Recovery Tool', () => {
   let account: TestAccount;
