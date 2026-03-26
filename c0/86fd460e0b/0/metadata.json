@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c086fd460e0b",
+  "session_id": "7b31620d-c2e8-46d6-a947-69565d923f68",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T14:41:55.307747Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "tee-worker/package-lock.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "35ac5e0b78b4",
+  "token_usage": {
+    "input_tokens": 5735,
+    "cache_creation_tokens": 276878,
+    "cache_read_tokens": 27146507,
+    "output_tokens": 57717,
+    "api_call_count": 197
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Execute Phase 26 (Observability \u0026 UX Tuning) to add Grafana alert rules and tune client timeouts/retries, then get the PR reviewed and merged.",
+    "outcome": "Phase 26 fully executed and merged to main — 5 Grafana alert rule JSONs, a provisioning script, Alloy metric filtering, HTTP route cardinality capping, and timeout/retry tuning across 5 files. PR #366 passed 14/14 verification must-haves and all CI checks after fixing stale test assertions.",
+    "learnings": {
+      "repo": [
+        "Phase 26 branch was created from main before PRs #360, #361, #363 landed — the 'unrelated changes' in the diff were main moving ahead, not stray commits. A rebase/merge was needed before PR.",
+        "The GSD tools (gsd-tools.cjs) must be run from the correct working directory — running from cipher-box (not cipher-box-ci-debug) caused the 'no plans found' false error on first execute-phase attempt.",
+        "Grafana Cloud Free tier has a 10,000 active series limit — Kubo and Someguy IPFS nodes export massive cardinality (DHT, bitswap per-peer, libp2p protocol metrics) and were the likely cause of hitting the limit.",
+        "The dashboard only uses 6 external metrics from Kubo/Someguy: go_goroutines, go_memstats_alloc_bytes, libp2p_swarm_connections_opened/closed_total, libp2p_network_in/out_bytes_total.",
+        "The merge resolution for ROADMAP.md, STATE.md, and REQUIREMENTS.md took the branch version which predated Phase 24/25 completions on main — 7 planning doc inconsistencies had to be manually fixed post-merge.",
+        "Merging main into the feature branch is better than rebasing here — the GSD planning docs have frequent conflicts that need careful resolution to preserve both phase histories."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/metrics/http-metrics.interceptor.ts",
+          "line": 43,
+          "end_line": 43,
+          "finding": "NestJS registers full flat routes (not fragments) — req.route.path already includes the controller prefix, so Copilot's complaint about missing prefix was incorrect."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.spec.ts",
+          "finding": "Tests asserted old baseDelayMs of 1000ms — after Phase 26 tuned it to 500ms, three test assertions failed CI (expected 1000/2000/1000, needed 500/1000/500)."
+        },
+        {
+          "path": "docker/grafana/alerts/db-fallback-rate.json",
+          "line": 26,
+          "end_line": 26,
+          "finding": "Alert was using wrong metric — should track cipherbox_ipns_resolves_total{source='db_cache'} not a delegated routing fallback counter."
+        },
+        {
+          "path": "docker/grafana/alerts/ipfs-pin-latency.json",
+          "line": 26,
+          "end_line": 77,
+          "finding": "Both p95 and p99 PromQL expressions were missing result='success' label filter, causing the histogram to include failed pin attempts in latency calculations."
+        },
+        {
+          "path": "docker/grafana/scripts/provision-alerts.sh",
+          "line": 70,
+          "end_line": 70,
+          "finding": "Usage header showed 2 positional args but code expected 3 — caused by iterating review cycles. Arg mapping was also wrong after the idempotent upsert refactor."
+        },
+        {
+          "path": "docker/alloy-config.river",
+          "finding": "Added prometheus.relabel filter stage to whitelist only 6 used metrics from Kubo/Someguy scrapes before remote_write, eliminating thousands of unused series."
+        },
+        {
+          "path": "apps/api/src/metrics/http-metrics.interceptor.ts",
+          "finding": "Unmatched routes (bot scanners hitting /wp-admin, /.env etc.) were creating unique histogram label values — collapsed to /:unmatched to cap cardinality."
+        }
+      ],
+      "workflow": [
+        "The GSD execute-phase workflow correctly handles the case where plans don't exist yet — it errors with a clear message and suggests /gsd:plan-phase.",
+        "Running /gsd:plan-phase when plans already exist correctly detects them and skips to the offer_next step without replanning.",
+        "The Grafana series limit issue surfaced organically during Phase 26 and was fixed within the same PR — a good example of in-scope scope expansion.",
+        "Iterative PR review resolution (3 separate resolve-comments invocations) is expected — automated reviewers (Copilot, CodeRabbit) post new comments as each push triggers re-review.",
+        "Documentation-only review comments from Copilot on planning files (.planning/) are consistently not worth fixing — they misunderstand the GSD workflow artifact structure."
+      ]
+    },
+    "friction": [
+      "First execute-phase invocation failed because gsd-tools ran against the wrong working directory (cipher-box vs cipher-box-ci-debug) — the phase directory existed but the tool couldn't find it.",
+      "Merge conflict resolution for planning docs (ROADMAP.md, STATE.md, REQUIREMENTS.md) silently dropped Phase 24 and 25 completion marks — required manual inspection and repair across 3 files.",
+      "CI failed immediately after merge due to delegated-routing.client.spec.ts assertions that were never updated when baseDelayMs was tuned from 1000→500ms.",
+      "The provision-alerts.sh script accumulated arg-mapping inconsistencies across multiple review cycles, requiring a dedicated fix pass.",
+      "CodeRabbit and Copilot generate substantial noise on planning documentation files (.planning/phases/) that always need to be dismissed as 'not applicable'."
+    ],
+    "open_items": [
+      "The 5 Grafana alert JSON files (~877 lines total) have heavy structural duplication — a config table + template approach would significantly reduce this but was deferred as out of scope.",
+      "5s delegated routing timeout (tuned from 10s) may be aggressive under load since delegated-ipfs.dev is an external DHT-backed service — worth monitoring after deploy.",
+      "The ipHash: '' empty string in existing code fails strict 64-char hex validation — flagged but not fixed as it predates Phase 26 work.",
+      "PR #365 (fix/recovery-e2e-kubo-ipns) had a valid nitpick comment at pullrequestreview-4010875870 that was interrupted before being applied."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T14:41:06.439059Z",
+    "agent_lines": 2,
+    "human_added": 7295,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7297,
+    "agent_percentage": 0.027408524050979852
+  }
+}
