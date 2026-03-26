@@ -827,6 +827,8 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
             const fileKeyEncrypted = bytesToHex(ownerWrappedKey);
 
             // Create per-file IPNS metadata record (same as owner upload flow)
+            // userPublicKey = recipient's key for IPNS key wrapping (so recipient can update)
+            // fileKeyEncrypted is already wrapped with owner's key (so owner can decrypt)
             const fileId = crypto.randomUUID();
             const mimeType = file.type || 'application/octet-stream';
             const { fileMetaIpnsName, ipnsRecord, ipnsPrivateKeyEncrypted } =
@@ -838,7 +840,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
                 size: data.length,
                 mimeType,
                 folderKey: currentFolderKey,
-                userPublicKey: ownerPublicKey,
+                userPublicKey: auth.vaultKeypair!.publicKey,
                 encryptionMode: 'GCM',
               });
 
