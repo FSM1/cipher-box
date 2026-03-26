@@ -1,0 +1,80 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "89bb1acea317",
+  "session_id": "c0abe932-15e1-4254-8a98-20c8096f009c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T00:02:11.465419Z",
+  "branch": "feat/phase-26-observability-ux-tuning",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "47fcf46d63b9",
+  "token_usage": {
+    "input_tokens": 71,
+    "cache_creation_tokens": 116645,
+    "cache_read_tokens": 3629834,
+    "output_tokens": 15107,
+    "api_call_count": 53
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Continue CipherBox development by checking project status, then discussing and beginning planning for Phase 26 (Observability \u0026 UX Tuning) after learning phases 24 and 25 are already in PR review.",
+    "outcome": "Phase 26 CONTEXT.md and RESEARCH.md were created and committed, a validation strategy (VALIDATION.md) was written, and the planning session was in progress when the transcript ended — planner agent had been spawned but had not yet returned.",
+    "learnings": {
+      "repo": [
+        "Phases 24 and 25 were already in PR review, making Phase 26 the next active work item",
+        "Phase 18 explicitly deferred Grafana alerting as 'observation only, alerts premature before baselines' — Phase 26 is the payoff for that decision",
+        "Grafana Cloud requires HTTP API provisioning for alert rules — file-based provisioning (docker/grafana/) does not work for cloud-hosted Grafana",
+        "Five histograms already instrumented: HTTP requests, IPFS/IPNS general, republish batch, IPNS resolve, IPNS publish",
+        "Single Grafana dashboard strategy: extend cipherbox-staging.json per phase rather than creating separate dashboards",
+        "Client-side perf instrumentation (sdk-core/src/perf.ts) is gated to non-production only via NODE_ENV check",
+        "Existing timeouts: Kubo 30s, Pinata 60s, PSA 30s, delegated routing 10s, TEE 30s, connection probe 5s",
+        "Phase 22 journey baselines: login-to-vault 23,569ms, upload-to-visible 1,355ms (100KB), share-to-accessible 3,039ms"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/metrics/metrics.service.ts",
+          "finding": "5 gauges (DB-polled every 30s), 8+ counters (event-driven), 5 histograms covering HTTP, IPFS/IPNS, TEE batch, IPNS resolve, and IPNS publish operations"
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "finding": "Most comprehensive retry pattern in the codebase: 3 attempts, 1s base delay, 30s max delay, respects Retry-After header for 429s, exponential backoff for network errors, immediate failure for non-retryable 4xx/5xx"
+        },
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "finding": "Non-production gate: enabled when NODE_ENV !== 'production' OR globalThis.__CIPHERBOX_PERF__ === true — the escape hatch flag allows enabling in prod if needed"
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "401 handler uses a shared promise to deduplicate concurrent refresh calls — prevents multiple token refresh requests when multiple in-flight requests get 401 simultaneously"
+        },
+        {
+          "path": "docker/alloy-config.river",
+          "finding": "Scrapes both CipherBox API /metrics and Kubo /debug/metrics/prometheus every 30s; ships metrics to Grafana Cloud Mimir, logs to Grafana Cloud Loki"
+        }
+      ],
+      "workflow": [
+        "GSD auto-advance chain (--auto flag) flattens nested agent calls via Skill tool to avoid runtime freezes from deep agent nesting",
+        "Researcher agent auto-commits its output file, causing duplicate commit attempts if the orchestrator also tries to commit — need to check recent commits before committing research artifacts",
+        "When PRs are in review for upcoming phases, the GSD progress workflow still routes to those phases — requires manual override to skip to the next unreviewed phase"
+      ]
+    },
+    "friction": [
+      "Researcher agent committed 26-RESEARCH.md itself, but the orchestrator then attempted to commit it again — required multiple bash commands to diagnose the duplicate commit situation",
+      "Feature branch creation happened mid-workflow (after scout started) rather than at the start — minor ordering issue in the discuss-phase workflow",
+      "GSD progress check showed Phase 24 as next even though it was already in PR review — no mechanism in the planning state to mark phases as 'in review'"
+    ],
+    "open_items": [
+      "Phase 26 planning incomplete — planner agent had been spawned but transcript ends before it returns",
+      "Phases 24 and 25 are in PR review and pending merge",
+      "Dedicated timeout regression test suite deferred to a future phase",
+      "Grafana push notification channels deferred until team/on-call structure exists",
+      "Automated CI timing gates deferred until stable CI is available",
+      "1 active debug session: vault-migration-iife-silent-failure",
+      "13 pending todos flagged in GSD progress check"
+    ]
+  }
+}
