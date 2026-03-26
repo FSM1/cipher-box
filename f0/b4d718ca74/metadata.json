@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f0b4d718ca74",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f0/b4d718ca74/0/metadata.json",
+      "transcript": "/f0/b4d718ca74/0/full.jsonl",
+      "content_hash": "/f0/b4d718ca74/0/content_hash.txt",
+      "prompt": "/f0/b4d718ca74/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 103,
+    "cache_creation_tokens": 300368,
+    "cache_read_tokens": 7478099,
+    "output_tokens": 25463,
+    "api_call_count": 82
+  }
+}
