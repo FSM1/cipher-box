@@ -21,9 +21,14 @@ import {
   decryptFolderMetadata,
   decryptFileMetadata,
   encryptFolderMetadata,
+  encryptFileMetadata,
+  generateFileIpnsKeypair,
+  createIpnsRecord,
+  marshalIpnsRecord,
   type FolderChild,
   type FolderEntry,
   type FilePointer,
+  type FileMetadata,
   type FolderMetadata,
   type EncryptedFolderMetadata,
   type EncryptedFileMetadata,
@@ -42,7 +47,6 @@ import {
   createAndPublishIpnsRecord,
   batchPublishIpnsRecords,
 } from '../services/ipns.service';
-import { createFileMetadata } from '../services/file-metadata.service';
 import { fetchFromIpfs, addToIpfs } from '../lib/api/ipfs';
 import { downloadFile, triggerBrowserDownload } from '../services/download.service';
 import { useDownloadStore } from '../stores/download.store';
@@ -157,7 +161,11 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     Map<
       string,
       {
-        keys: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>;
+        keys: Array<{
+          keyType: 'file' | 'folder' | 'file-ipns';
+          itemId: string;
+          encryptedKey: string;
+        }>;
         fetchedAt: number;
       }
     >
@@ -826,65 +834,117 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
             const ownerWrappedKey = await wrapKey(fileKey, ownerPublicKey);
             const fileKeyEncrypted = bytesToHex(ownerWrappedKey);
 
-            // Create per-file IPNS metadata record (same as owner upload flow)
-            // userPublicKey = recipient's key for IPNS key wrapping (so recipient can update)
-            // fileKeyEncrypted is already wrapped with owner's key (so owner can decrypt)
+            // Generate IPNS keypair for this file's metadata record
+            // Inline instead of using createFileMetadata so we can wrap with both keys
             const fileId = crypto.randomUUID();
             const mimeType = file.type || 'application/octet-stream';
-            const { fileMetaIpnsName, ipnsRecord, ipnsPrivateKeyEncrypted } =
-              await createFileMetadata({
-                fileId,
+            const ipnsKeypair = await generateFileIpnsKeypair();
+
+            try {
+              // Wrap IPNS private key with owner's key (stored in FilePointer — owner can update)
+              const ownerWrappedIpnsKey = await wrapKey(ipnsKeypair.privateKey, ownerPublicKey);
+              const ipnsPrivateKeyEncrypted = bytesToHex(ownerWrappedIpnsKey);
+
+              // Wrap IPNS private key with recipient's key (stored in share_keys — recipient can update)
+              const recipientWrappedIpnsKey = await wrapKey(
+                ipnsKeypair.privateKey,
+                auth.vaultKeypair!.publicKey
+              );
+
+              // Create and encrypt file metadata
+              const now = Date.now();
+              const fileMeta: FileMetadata = {
+                version: 'v1',
                 cid: contentCid,
                 fileKeyEncrypted,
                 fileIv: bytesToHex(iv),
                 size: data.length,
                 mimeType,
-                folderKey: currentFolderKey,
-                userPublicKey: auth.vaultKeypair!.publicKey,
                 encryptionMode: 'GCM',
-              });
+                createdAt: now,
+                modifiedAt: now,
+              };
+              const encrypted = await encryptFileMetadata(fileMeta, currentFolderKey);
 
-            // Publish the file IPNS record
-            await batchPublishIpnsRecords([{ ...ipnsRecord, recordType: 'file' as const }]);
+              // Upload encrypted metadata to IPFS
+              const metaBlob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
+              const { cid: metadataCid } = await addToIpfs(metaBlob);
 
-            // Create FilePointer with proper IPNS reference
-            const filePointer: FilePointer = {
-              type: 'file',
-              id: fileId,
-              name: file.name,
-              fileMetaIpnsName,
-              ipnsPrivateKeyEncrypted,
-              createdAt: Date.now(),
-              modifiedAt: Date.now(),
-            };
-
-            // Add file to folder metadata with conflict retry
-            await withConflictRetry(
-              async () => {
-                const freshChildren = [...folderChildren, filePointer];
-                const newSeq = await publishSharedFolderMetadata(
-                  freshChildren,
-                  currentFolderKey,
-                  currentIpnsName,
-                  currentIpnsKey,
-                  currentSequenceNumber ?? 0n
-                );
-                setCurrentSequenceNumber(newSeq);
-                setFolderChildren(freshChildren);
-              },
-              async () => {
-                await resyncSharedFolder();
+              // Create and publish IPNS record
+              const ipnsLifetimeMs = 24 * 60 * 60 * 1000;
+              const record = await createIpnsRecord(
+                ipnsKeypair.privateKey,
+                `/ipfs/${metadataCid}`,
+                1n,
+                ipnsLifetimeMs
+              );
+              const recordBytes = marshalIpnsRecord(record);
+              let binary = '';
+              for (let i = 0; i < recordBytes.length; i++) {
+                binary += String.fromCharCode(recordBytes[i]);
               }
-            );
+              const recordBase64 = btoa(binary);
 
-            // Add re-wrapped file key for the recipient (current user) as share_key
-            // so the recipient can read the file via the shared download path
-            const recipientWrappedKey = await wrapKey(fileKey, auth.vaultKeypair!.publicKey);
-            await addShareKeys(currentShareId!, [
-              { keyType: 'file', itemId: fileId, encryptedKey: bytesToHex(recipientWrappedKey) },
-            ]).catch((err) => {
-              console.warn('[share] Failed to add share_key for uploaded file:', err);
-            });
+              await batchPublishIpnsRecords([
+                {
+                  ipnsName: ipnsKeypair.ipnsName,
+                  recordBase64,
+                  metadataCid,
+                  recordType: 'file' as const,
+                },
+              ]);
+
+              // Create FilePointer with owner-wrapped IPNS key
+              const filePointer: FilePointer = {
+                type: 'file',
+                id: fileId,
+                name: file.name,
+                fileMetaIpnsName: ipnsKeypair.ipnsName,
+                ipnsPrivateKeyEncrypted,
+                createdAt: now,
+                modifiedAt: now,
+              };
+
+              // Add file to folder metadata with conflict retry
+              await withConflictRetry(
+                async () => {
+                  const freshChildren = [...folderChildren, filePointer];
+                  const newSeq = await publishSharedFolderMetadata(
+                    freshChildren,
+                    currentFolderKey,
+                    currentIpnsName,
+                    currentIpnsKey,
+                    currentSequenceNumber ?? 0n
+                  );
+                  setCurrentSequenceNumber(newSeq);
+                  setFolderChildren(freshChildren);
+                },
+                async () => {
+                  await resyncSharedFolder();
+                }
+              );
+
+              // Add share_keys for the recipient:
+              // 1. File key (for reading/downloading)
+              // 2. IPNS private key (for updating file content)
+              const recipientWrappedFileKey = await wrapKey(fileKey, auth.vaultKeypair!.publicKey);
+              await addShareKeys(currentShareId!, [
+                {
+                  keyType: 'file',
+                  itemId: fileId,
+                  encryptedKey: bytesToHex(recipientWrappedFileKey),
+                },
+                {
+                  keyType: 'file-ipns',
+                  itemId: fileId,
+                  encryptedKey: bytesToHex(recipientWrappedIpnsKey),
+                },
+              ]).catch((err) => {
+                console.warn('[share] Failed to add share_key for uploaded file:', err);
+              });
+            } finally {
+              ipnsKeypair.privateKey.fill(0);
+            }
           } finally {
             fileKey.fill(0);
           }
@@ -1138,25 +1198,33 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         const ownerWrappedKey = await wrapKey(fileKey, ownerPublicKey);
         const fileKeyEncrypted = bytesToHex(ownerWrappedKey);
 
-        // 4. Get the file's IPNS private key (wrapped with owner's key in FilePointer)
-        // For files uploaded by the recipient, ipnsPrivateKeyEncrypted is wrapped
-        // with the owner's public key, so we need the owner to unwrap it.
-        // Fallback: use the recipient's unwrap path if available via share_keys.
-        const { getFileIpnsPrivateKey } = await import('../services/file-metadata.service');
+        // 4. Get the file's IPNS private key
+        // For recipient-uploaded files: wrapped with recipient's key in share_keys (file-ipns)
+        // For owner-uploaded files: wrapped with owner's key in FilePointer (try unwrap)
         const { updateFileMetadata } = await import('../services/file-metadata.service');
 
-        // Try to get the IPNS private key — it may be wrapped with the owner's key
-        // For shared files, try unwrapping with current user's key first
         let ipnsPrivKey: Uint8Array;
-        try {
-          const result = await getFileIpnsPrivateKey(
-            item,
-            auth.vaultKeypair.privateKey,
-            auth.vaultKeypair.publicKey
+        const keys = await fetchShareKeys(currentShareId!);
+        const ipnsKeyRecord = keys.find((k) => k.keyType === 'file-ipns' && k.itemId === item.id);
+
+        if (ipnsKeyRecord) {
+          // Recipient-uploaded file: unwrap from share_keys
+          ipnsPrivKey = await unwrapKey(
+            hexToBytes(ipnsKeyRecord.encryptedKey),
+            auth.vaultKeypair.privateKey
           );
-          ipnsPrivKey = result.privateKey;
-        } catch {
-          throw new Error('Cannot update: file IPNS key not accessible');
+        } else if (item.ipnsPrivateKeyEncrypted) {
+          // Owner-uploaded file: try unwrapping from FilePointer
+          try {
+            ipnsPrivKey = await unwrapKey(
+              hexToBytes(item.ipnsPrivateKeyEncrypted),
+              auth.vaultKeypair.privateKey
+            );
+          } catch {
+            throw new Error('Cannot update: file IPNS key not accessible');
+          }
+        } else {
+          throw new Error('Cannot update: no IPNS key available');
         }
 
         try {

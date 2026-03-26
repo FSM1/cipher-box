@@ -164,7 +164,9 @@ export async function hideShare(shareId: string): Promise<void> {
  */
 export async function fetchShareKeys(
   shareId: string
-): Promise<Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>> {
+): Promise<
+  Array<{ keyType: 'file' | 'folder' | 'file-ipns'; itemId: string; encryptedKey: string }>
+> {
   const response = await sharesControllerGetShareKeys(shareId);
 
   return response.map((k) => ({
@@ -179,7 +181,7 @@ export async function fetchShareKeys(
  */
 export async function addShareKeys(
   shareId: string,
-  keys: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>
+  keys: Array<{ keyType: 'file' | 'folder' | 'file-ipns'; itemId: string; encryptedKey: string }>
 ): Promise<void> {
   await sharesControllerAddShareKeys(shareId, {
     keys: keys.map((k) => ({

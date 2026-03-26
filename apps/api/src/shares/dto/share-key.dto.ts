@@ -12,12 +12,12 @@ import { Type } from 'class-transformer';
 
 class ShareKeyEntryDto {
   @ApiProperty({
-    description: 'Type of key: file or folder',
-    enum: ['file', 'folder'],
+    description: 'Type of key: file, folder, or file-ipns',
+    enum: ['file', 'folder', 'file-ipns'],
   })
   @IsString()
-  @IsIn(['file', 'folder'])
-  keyType!: 'file' | 'folder';
+  @IsIn(['file', 'folder', 'file-ipns'])
+  keyType!: 'file' | 'folder' | 'file-ipns';
 
   @ApiProperty({
     description: 'UUID of the file or subfolder',

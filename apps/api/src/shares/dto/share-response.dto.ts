@@ -100,7 +100,7 @@ export class PendingRotationResponseDto {
 }
 
 export class ShareKeyResponseDto {
-  @ApiProperty({ enum: ['file', 'folder'] })
+  @ApiProperty({ enum: ['file', 'folder', 'file-ipns'] })
   keyType!: string;
 
   @ApiProperty({ description: 'UUID of the file or folder' })

@@ -8,7 +8,7 @@
 import type { ShareKeyEntryDtoKeyType } from './shareKeyEntryDtoKeyType';
 
 export interface ShareKeyEntryDto {
-  /** Type of key: file or folder */
+  /** Type of key: file, folder, or file-ipns */
   keyType: ShareKeyEntryDtoKeyType;
   /** UUID of the file or subfolder */
   itemId: string;
