@@ -1,7 +1,8 @@
 const PERF_ENABLED =
   typeof performance !== 'undefined' &&
   typeof performance.mark === 'function' &&
-  ((typeof globalThis !== 'undefined' && (globalThis as any).__CIPHERBOX_PERF__) ||
+  ((typeof globalThis !== 'undefined' &&
+    (globalThis as Record<string, unknown>).__CIPHERBOX_PERF__) ||
     (typeof process !== 'undefined' &&
       typeof process.env?.NODE_ENV === 'string' &&
       process.env.NODE_ENV !== 'production'));

@@ -6,9 +6,15 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import type { BinEntry } from '@cipherbox/core';
 import { createTestContext, deleteTestAccount, type TestContext } from '../fixtures/test-harness';
 import { expectChildNamed, expectNoChildNamed, getChild } from '../helpers/assertions';
 import { generateTextContent } from '../helpers/data-generators';
+
+/** Internal bin state shape exposed via `(client as unknown as HasBinState).binState` */
+interface HasBinState {
+  binState: { entries: BinEntry[]; sequenceNumber: number; ipnsName: string };
+}
 
 describe('Bin Operations', () => {
   let ctx: TestContext;
@@ -48,7 +54,7 @@ describe('Bin Operations', () => {
     expectNoChildNamed(ctx.client, ctx.rootIpnsName, 'bin-file.txt');
 
     // Verify in bin state
-    const binState = (ctx.client as any).binState;
+    const binState = (ctx.client as unknown as HasBinState).binState;
     expect(binState.entries.length).toBe(1);
     expect(binState.entries[0].name).toBe('bin-file.txt');
     expect(binState.entries[0].itemType).toBe('file');
@@ -67,15 +73,15 @@ describe('Bin Operations', () => {
     await ctx.client.deleteToBin(ctx.rootIpnsName, folder.id, 'My Vault');
     expectNoChildNamed(ctx.client, ctx.rootIpnsName, 'BinFolder');
 
-    const binState = (ctx.client as any).binState;
-    const folderEntry = binState.entries.find((e: any) => e.name === 'BinFolder');
+    const binState = (ctx.client as unknown as HasBinState).binState;
+    const folderEntry = binState.entries.find((e: BinEntry) => e.name === 'BinFolder');
     expect(folderEntry).toBeTruthy();
     expect(folderEntry.itemType).toBe('folder');
   });
 
   it('should restore a file from bin', async () => {
-    const binState = (ctx.client as any).binState;
-    const fileEntry = binState.entries.find((e: any) => e.name === 'bin-file.txt');
+    const binState = (ctx.client as unknown as HasBinState).binState;
+    const fileEntry = binState.entries.find((e: BinEntry) => e.name === 'bin-file.txt');
     expect(fileEntry).toBeTruthy();
 
     await ctx.client.restoreFromBin(fileEntry.id, ctx.rootIpnsName);
@@ -84,20 +90,20 @@ describe('Bin Operations', () => {
     expectChildNamed(ctx.client, ctx.rootIpnsName, 'bin-file.txt');
 
     // Verify removed from bin
-    const updatedBin = (ctx.client as any).binState;
-    const stillInBin = updatedBin.entries.find((e: any) => e.name === 'bin-file.txt');
+    const updatedBin = (ctx.client as unknown as HasBinState).binState;
+    const stillInBin = updatedBin.entries.find((e: BinEntry) => e.name === 'bin-file.txt');
     expect(stillInBin).toBeUndefined();
   });
 
   it('should permanently delete a bin entry', async () => {
-    const binState = (ctx.client as any).binState;
-    const folderEntry = binState.entries.find((e: any) => e.name === 'BinFolder');
+    const binState = (ctx.client as unknown as HasBinState).binState;
+    const folderEntry = binState.entries.find((e: BinEntry) => e.name === 'BinFolder');
     expect(folderEntry).toBeTruthy();
 
     await ctx.client.permanentDelete(folderEntry.id);
 
-    const updatedBin = (ctx.client as any).binState;
-    const stillInBin = updatedBin.entries.find((e: any) => e.name === 'BinFolder');
+    const updatedBin = (ctx.client as unknown as HasBinState).binState;
+    const stillInBin = updatedBin.entries.find((e: BinEntry) => e.name === 'BinFolder');
     expect(stillInBin).toBeUndefined();
   });
 
@@ -114,12 +120,12 @@ describe('Bin Operations', () => {
     await ctx.client.deleteToBin(ctx.rootIpnsName, child1.id, 'My Vault');
     await ctx.client.deleteToBin(ctx.rootIpnsName, child2.id, 'My Vault');
 
-    const binBefore = (ctx.client as any).binState;
+    const binBefore = (ctx.client as unknown as HasBinState).binState;
     expect(binBefore.entries.length).toBeGreaterThanOrEqual(2);
 
     await ctx.client.emptyBin();
 
-    const binAfter = (ctx.client as any).binState;
+    const binAfter = (ctx.client as unknown as HasBinState).binState;
     expect(binAfter.entries.length).toBe(0);
   });
 

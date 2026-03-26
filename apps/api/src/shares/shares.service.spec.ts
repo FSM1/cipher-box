@@ -777,9 +777,13 @@ describe('SharesService', () => {
       const txSave = jest.fn().mockResolvedValue({});
       const txDelete = jest.fn().mockResolvedValue({ affected: 2 });
       (mockShareRepo as any).manager = {
-        transaction: jest.fn().mockImplementation(async (cb: any) => {
-          await cb({ save: txSave, delete: txDelete });
-        }),
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            async (cb: (mgr: { save: jest.Mock; delete: jest.Mock }) => Promise<void>) => {
+              await cb({ save: txSave, delete: txDelete });
+            }
+          ),
       };
 
       await service.updatePermission(shareId, sharerId, 'read');
