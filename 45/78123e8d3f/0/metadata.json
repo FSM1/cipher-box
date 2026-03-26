@@ -1,0 +1,103 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4578123e8d3f",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T00:29:27.170023Z",
+  "branch": "fix/recovery-e2e-ci",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "fcc9cde0b46d",
+  "token_usage": {
+    "input_tokens": 277,
+    "cache_creation_tokens": 277875,
+    "cache_read_tokens": 37677000,
+    "output_tokens": 52693,
+    "api_call_count": 233
+  },
+  "session_metrics": {
+    "turn_count": 21
+  },
+  "summary": {
+    "intent": "Execute Phase 24 (Bug Fixes \u0026 Test Infrastructure) for cipher-box, then review/simplify the code, create a PR, and resolve all automated reviewer comments until CI passes.",
+    "outcome": "Phase 24 was executed successfully (3 plans, 9 commits), code was simplified, PR #361 was created and all CodeRabbit/Copilot review threads were resolved. CI is still failing on the recovery E2E spec due to missing SDK_E2E_SECRET env var and missing Kubo CORS config in CI.",
+    "learnings": {
+      "repo": [
+        "Device registry has a v1/v2 schema migration — v1 records with empty ipHash are auto-healed to SHA-256 hash on read; other malformed values are rejected",
+        "publishWithVerify in bin/index.ts should publish once then retry only the verification step, not re-publish on each retry",
+        "computeIpHash('0.0.0.0') already exists in apps/web/src/lib/device/info.ts — no need to inline SHA-256 in useAuth.ts",
+        "SDK E2E tests use SDK_E2E_SECRET env var; Web E2E workflow was not passing this secret, causing 401 on /auth/test-login",
+        "Kubo CORS is not configured on either local Docker host (192.168.133.12) or CI — browser cannot fetch from Kubo gateway (8080) or API (5001) cross-origin",
+        "Recovery.html resolveIpns falls back to CipherBox API at localhost:3000 as last resort, but fetchFromIpfs still hits Kubo directly — both need CORS or a proxy",
+        "loadBin auto-repair now publishes an empty bin immediately, so fresh bins return sequenceNumber: 1 instead of 0 — bin-operations.test.ts and integration.test.ts both needed updating",
+        "Package declaration files (.d.ts) can become stale after code changes — rebuilding @cipherbox/crypto and @cipherbox/api-client resolved 6 phantom TypeScript errors in the web app",
+        "TypeScript does not propagate narrowing from called functions back to caller — validateRegistryShape() narrows obj.devices inside its scope but caller still sees unknown[], requiring an explicit cast"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 202,
+          "end_line": 202,
+          "finding": "publishWithVerify was re-publishing on every retry iteration; fix: publish once outside the retry loop, retry only the verification check"
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 80,
+          "end_line": 96,
+          "finding": "validateRegistryShape() extracted to deduplicate v1/v2 validation; but caller needs explicit 'as unknown[]' cast after calling it due to TS cross-function narrowing limitation"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 69,
+          "end_line": 69,
+          "finding": "cid and pinSize must be declared with 'let' ABOVE the try block so the finally block can access them — declaring inside try makes them out of scope in finally"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 35,
+          "end_line": 35,
+          "finding": "Uses computeIpHash() from device/info.ts — replaces 7 lines of inline SHA-256 hex encoding"
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "line": 149,
+          "end_line": 149,
+          "finding": "Web E2E workflow sets TEST_LOGIN_SECRET for the API process but was missing SDK_E2E_SECRET for the test runner — recovery.spec.ts imports createTestAccount which reads SDK_E2E_SECRET"
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/bin-operations.test.ts",
+          "line": 32,
+          "end_line": 32,
+          "finding": "Expected sequenceNumber: 0 for fresh bin, must be 1 now that loadBin auto-repairs by publishing immediately"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 170,
+          "end_line": 170,
+          "finding": "Same sequenceNumber issue — updated to expect 1 after auto-repair change"
+        }
+      ],
+      "workflow": [
+        "GSD phase execution with 3 parallel subagents completed cleanly — wave 1 all independent, no cross-plan dependencies",
+        "Stale package builds can mask real type errors; always rebuild dependent packages before concluding type errors are genuine",
+        "When merging main into a feature branch with planning file conflicts, keep both phases' completion data (both marked complete)",
+        "The classifyHandoffIfNeeded error in Claude Code is a runtime bug fired after tool calls complete — spot-check SUMMARY.md + commits to confirm actual success"
+      ]
+    },
+    "friction": [
+      "Background bash commands for commit+push raced with explicit sequential push, causing exit code 128 failures on the background tasks (harmless but noisy)",
+      "Docker host IP changed (192.168.133.114 → 192.168.133.12) mid-session, breaking API .env and requiring manual update",
+      "Kubo CORS not configured anywhere (local or CI) — recovery E2E test fundamentally cannot work from a browser without either CORS headers on Kubo or an API proxy for IPFS content",
+      "Recovery.spec.ts was written with hardcoded localhost:8080/5001 gateway URLs that only work if Kubo is on localhost with CORS — local Docker setup requires the actual host IP",
+      "TypeScript DTS build failure in CI (TS18046 on registry/schema.ts:96) was caused by the refactor to extract validateRegistryShape() — required adding explicit cast that wasn't needed before the refactor"
+    ],
+    "open_items": [
+      "Recovery E2E test still failing in CI — needs Kubo CORS configured in e2e.yml (ipfs config commands added but not yet confirmed working)",
+      "Recovery spec gateway URLs are hardcoded to localhost — should be env-configurable for local development against a remote Docker host",
+      "Stashed changes to recovery.spec.ts (env-configurable gateways) were dropped — may need to be re-applied if the localhost CORS fix doesn't fully resolve the CI failure",
+      "Kubo on local Docker host (192.168.133.12) still has no CORS configured — recovery.html cannot be tested locally without either Kubo CORS or an API proxy for /ipfs/{cid} content",
+      "Two SDK integration tests always fail locally due to API not running (ECONNREFUSED) — these are expected infra gaps but add noise to test runs"
+    ]
+  }
+}
