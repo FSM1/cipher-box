@@ -200,6 +200,13 @@ export class SharesService {
       throw new ForbiddenException('Only the sharer or write-share recipient can add keys');
     }
 
+    if (isWriteRecipient) {
+      const hasFolder = dto.keys.some((k) => k.keyType === 'folder');
+      if (hasFolder) {
+        throw new ForbiddenException('Write-share recipients cannot modify folder keys');
+      }
+    }
+
     // Upsert: insert or update encrypted_key for each itemId
     for (const entry of dto.keys) {
       const existing = await this.shareKeyRepo.findOne({
@@ -361,6 +368,10 @@ export class SharesService {
       throw new ForbiddenException('Only the sharer can change permission');
     }
 
+    if (share.revokedAt) {
+      throw new ConflictException('Cannot change permission on a revoked share');
+    }
+
     if (permission === 'write') {
       if (!encryptedIpnsKey) {
         throw new BadRequestException('encryptedIpnsKey required for write permission');
@@ -370,6 +381,9 @@ export class SharesService {
     } else {
       share.permission = 'read';
       share.encryptedIpnsKey = null;
+
+      // Clean up file-ipns share_keys so recipient loses IPNS update capability
+      await this.shareKeyRepo.delete({ shareId, keyType: 'file-ipns' as any });
     }
 
     await this.shareRepo.save(share);

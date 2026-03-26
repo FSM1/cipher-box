@@ -141,6 +141,10 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   const [ipnsName, setIpnsName] = useState<string | null>(null);
   const [currentSequenceNumber, setCurrentSequenceNumber] = useState<bigint | null>(null);
 
+  // Refs for values consumed in retry closures (C-01: avoids stale closure captures)
+  const folderChildrenRef = useRef<FolderChild[]>([]);
+  const sequenceNumberRef = useRef<bigint | null>(null);
+
   // IPNS private key stored in ref to avoid re-renders; zeroed on cleanup
   const ipnsPrivateKeyRef = useRef<Uint8Array | null>(null);
 
@@ -223,9 +227,13 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
         const metadata = await decryptFolderMetadata(encrypted, currentFolderKey);
 
-        setFolderChildren(metadata.children ?? []);
-        setCurrentSequenceNumber(resolved.sequenceNumber);
-        return metadata.children ?? [];
+        const children = metadata.children ?? [];
+        const seqNum = BigInt(resolved.sequenceNumber);
+        setFolderChildren(children);
+        folderChildrenRef.current = children;
+        setCurrentSequenceNumber(seqNum);
+        sequenceNumberRef.current = seqNum;
+        return children;
       } catch {
         return null;
       }
@@ -369,16 +377,20 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
               }
             }
 
-            // Set folder state
+            // Set folder state (sync refs for retry closures — C-01)
+            const children = metadata.children ?? [];
+            const seqNum = BigInt(resolved.sequenceNumber);
             setCurrentView('folder');
             setCurrentShareId(shareId);
-            setFolderChildren(metadata.children ?? []);
+            setFolderChildren(children);
+            folderChildrenRef.current = children;
             setFolderKey(itemKey);
             folderKeyStored = true;
             setBreadcrumbs([{ id: shareId, name: share.itemName }]);
             setPermission(ipnsPrivateKeyRef.current ? share.permission : 'read');
             setIpnsName(share.ipnsName);
-            setCurrentSequenceNumber(resolved.sequenceNumber);
+            setCurrentSequenceNumber(seqNum);
+            sequenceNumberRef.current = seqNum;
             navStackRef.current = [];
           } finally {
             if (!folderKeyStored) itemKey.fill(0);
@@ -660,7 +672,10 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         // Look for a re-wrapped file key in share_keys,
         // falling back to fileKeyEncrypted from metadata (for files uploaded by current user)
         const fileKeyRecord = keys.find((k) => k.keyType === 'file' && k.itemId === item.id);
-        const wrappedKey = fileKeyRecord?.encryptedKey ?? fileMeta.fileKeyEncrypted;
+        if (!fileKeyRecord) {
+          throw new Error('File key not available — the folder owner may need to re-share');
+        }
+        const wrappedKey = fileKeyRecord.encryptedKey;
 
         // downloadFile handles unwrapping internally via wrappedKey + privateKey
         const plaintext = await downloadFile(
@@ -905,17 +920,20 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
                 modifiedAt: now,
               };
 
-              // Add file to folder metadata with conflict retry
+              // Add file to folder metadata with conflict retry (C-01: read from refs)
               await withConflictRetry(
                 async () => {
-                  const freshChildren = [...folderChildren, filePointer];
+                  const freshChildren = [...folderChildrenRef.current, filePointer];
+                  const seqNum = sequenceNumberRef.current ?? 0n;
                   const newSeq = await publishSharedFolderMetadata(
                     freshChildren,
                     currentFolderKey,
                     currentIpnsName,
                     currentIpnsKey,
-                    currentSequenceNumber ?? 0n
+                    seqNum
                   );
+                  sequenceNumberRef.current = newSeq;
+                  folderChildrenRef.current = freshChildren;
                   setCurrentSequenceNumber(newSeq);
                   setFolderChildren(freshChildren);
                 },
@@ -927,21 +945,25 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
               // Add share_keys for the recipient:
               // 1. File key (for reading/downloading)
               // 2. IPNS private key (for updating file content)
+              // M-03: Non-fire-and-forget — show error if keys can't be saved
               const recipientWrappedFileKey = await wrapKey(fileKey, auth.vaultKeypair!.publicKey);
-              await addShareKeys(currentShareId!, [
-                {
-                  keyType: 'file',
-                  itemId: fileId,
-                  encryptedKey: bytesToHex(recipientWrappedFileKey),
-                },
-                {
-                  keyType: 'file-ipns',
-                  itemId: fileId,
-                  encryptedKey: bytesToHex(recipientWrappedIpnsKey),
-                },
-              ]).catch((err) => {
+              try {
+                await addShareKeys(currentShareId!, [
+                  {
+                    keyType: 'file',
+                    itemId: fileId,
+                    encryptedKey: bytesToHex(recipientWrappedFileKey),
+                  },
+                  {
+                    keyType: 'file-ipns',
+                    itemId: fileId,
+                    encryptedKey: bytesToHex(recipientWrappedIpnsKey),
+                  },
+                ]);
+              } catch (err) {
                 console.warn('[share] Failed to add share_key for uploaded file:', err);
-              });
+                setError('File uploaded but access keys could not be saved. Please re-upload.');
+              }
             } finally {
               ipnsKeypair.privateKey.fill(0);
             }
@@ -1005,17 +1027,19 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           // Generate a random folder key for the subfolder
           const subfolderKey = generateRandomBytes(32);
 
-          // Wrap subfolder key and IPNS key for storage
+          // C-02: Wrap subfolder keys with OWNER's key (not recipient's) for FolderEntry
           const auth = useAuthStore.getState();
           if (!auth.vaultKeypair) throw new Error('No keypair available');
-          const wrappedFolderKey = await wrapSubfolderKey(
-            subfolderKey,
-            auth.vaultKeypair.publicKey
-          );
-          const wrappedIpnsKey = await wrapSubfolderKey(
-            keypair.privateKey,
-            auth.vaultKeypair.publicKey
-          );
+
+          const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
+          if (!shareItem) throw new Error('Share not found');
+          const ownerPubHex = shareItem.share.sharerPublicKey.startsWith('0x')
+            ? shareItem.share.sharerPublicKey.slice(2)
+            : shareItem.share.sharerPublicKey;
+          const ownerPubKey = hexToBytes(ownerPubHex);
+
+          const wrappedFolderKey = await wrapSubfolderKey(subfolderKey, ownerPubKey);
+          const wrappedIpnsKey = await wrapSubfolderKey(keypair.privateKey, ownerPubKey);
 
           // Create empty folder metadata and publish for the subfolder
           const subfolderMetadata: FolderMetadata = { version: 'v2', children: [] };
@@ -1046,17 +1070,20 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
             modifiedAt: Date.now(),
           };
 
-          // Add subfolder entry to parent folder with conflict retry
+          // Add subfolder entry to parent folder with conflict retry (C-01: read from refs)
           await withConflictRetry(
             async () => {
-              const freshChildren = [...folderChildren, folderEntry];
+              const freshChildren = [...folderChildrenRef.current, folderEntry];
+              const seqNum = sequenceNumberRef.current ?? 0n;
               const newSeq = await publishSharedFolderMetadata(
                 freshChildren,
                 currentFolderKey,
                 currentIpnsName,
                 currentIpnsKey,
-                currentSequenceNumber ?? 0n
+                seqNum
               );
+              sequenceNumberRef.current = newSeq;
+              folderChildrenRef.current = freshChildren;
               setCurrentSequenceNumber(newSeq);
               setFolderChildren(freshChildren);
             },
@@ -1064,6 +1091,21 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
               await resyncSharedFolder();
             }
           );
+
+          // Add share_key for the recipient so they can access the subfolder
+          const recipientWrappedFolderKey = await wrapSubfolderKey(
+            subfolderKey,
+            auth.vaultKeypair!.publicKey
+          );
+          await addShareKeys(currentShareId!, [
+            {
+              keyType: 'folder',
+              itemId: folderId,
+              encryptedKey: bytesToHex(recipientWrappedFolderKey),
+            },
+          ]).catch((err) => {
+            console.warn('[share] Failed to add subfolder share_key:', err);
+          });
 
           // Clean up
           subfolderKey.fill(0);
@@ -1083,7 +1125,9 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       folderKey,
       ipnsName,
       currentSequenceNumber,
+      currentShareId,
       folderChildren,
+      sharedItems,
       publishSharedFolderMetadata,
       resyncSharedFolder,
       withRevocationGuard,
@@ -1112,17 +1156,20 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         await withRevocationGuard(async () => {
           await withConflictRetry(
             async () => {
-              // Update the item's name in folder metadata
-              const updatedChildren = folderChildren.map((child) =>
+              // Update the item's name in folder metadata (C-01: read from refs)
+              const updatedChildren = folderChildrenRef.current.map((child) =>
                 child.id === item.id ? { ...child, name: newName, modifiedAt: Date.now() } : child
               );
+              const seqNum = sequenceNumberRef.current ?? 0n;
               const newSeq = await publishSharedFolderMetadata(
                 updatedChildren,
                 currentFolderKey,
                 currentIpnsName,
                 currentIpnsKey,
-                currentSequenceNumber ?? 0n
+                seqNum
               );
+              sequenceNumberRef.current = newSeq;
+              folderChildrenRef.current = updatedChildren;
               setCurrentSequenceNumber(newSeq);
               setFolderChildren(updatedChildren);
             },
@@ -1295,15 +1342,20 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         await withRevocationGuard(async () => {
           await withConflictRetry(
             async () => {
-              // Remove item from folder metadata
-              const updatedChildren = folderChildren.filter((child) => child.id !== item.id);
+              // Remove item from folder metadata (C-01: read from refs)
+              const updatedChildren = folderChildrenRef.current.filter(
+                (child) => child.id !== item.id
+              );
+              const seqNum = sequenceNumberRef.current ?? 0n;
               const newSeq = await publishSharedFolderMetadata(
                 updatedChildren,
                 currentFolderKey,
                 currentIpnsName,
                 currentIpnsKey,
-                currentSequenceNumber ?? 0n
+                seqNum
               );
+              sequenceNumberRef.current = newSeq;
+              folderChildrenRef.current = updatedChildren;
               setCurrentSequenceNumber(newSeq);
               setFolderChildren(updatedChildren);
             },
@@ -1350,12 +1402,13 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
 
     pollIntervalRef.current = setInterval(async () => {
       try {
-        // Re-fetch received shares to detect permission changes
-        const shares = useShareStore.getState().receivedShares;
-        const currentShare = shares.find((s) => s.shareId === currentShareId);
+        // M-04: Re-fetch received shares from API (not just in-memory store)
+        const freshShares = await fetchReceivedShares(100, 0);
+        useShareStore.getState().setReceivedShares(freshShares.shares);
+        const currentShare = freshShares.shares.find((s) => s.shareId === currentShareId);
 
-        // Check for silent revocation
-        if (currentShare && currentShare.permission !== 'write') {
+        // Check for silent revocation or permission downgrade
+        if (!currentShare || currentShare.permission !== 'write') {
           handleRevocation(false);
           clearPolling();
           return;

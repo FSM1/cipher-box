@@ -217,8 +217,10 @@ export class IpnsService {
       existing.recordType = recordType;
       existing.updatedAt = new Date();
 
-      // Only update encrypted key if provided (e.g., on key rotation)
-      if (encryptedIpnsPrivateKey && keyEpoch !== undefined) {
+      // Only update encrypted key if provided (e.g., on key rotation).
+      // Guard: only the owner can update TEE enrollment fields — write-share
+      // recipients must not overwrite encryptedIpnsPrivateKey or keyEpoch.
+      if (encryptedIpnsPrivateKey && keyEpoch !== undefined && existing.userId === userId) {
         existing.encryptedIpnsPrivateKey = Buffer.from(encryptedIpnsPrivateKey, 'hex');
         existing.keyEpoch = keyEpoch;
       }
@@ -228,7 +230,7 @@ export class IpnsService {
       // Auto-enroll for TEE republishing when encrypted key is provided.
       // Use existing.userId (the FolderIpns owner) for enrollment, not the
       // authenticated user — a write-share recipient publishes to the owner's record.
-      if (encryptedIpnsPrivateKey && keyEpoch !== undefined) {
+      if (encryptedIpnsPrivateKey && keyEpoch !== undefined && existing.userId === userId) {
         this.republishService
           .enrollFolder(
             existing.userId,

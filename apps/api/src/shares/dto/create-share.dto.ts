@@ -34,7 +34,7 @@ class ChildKeyDto {
   })
   @IsString()
   @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
-  @MinLength(2)
+  @MinLength(64)
   @MaxLength(1024)
   encryptedKey!: string;
 }
@@ -79,7 +79,7 @@ export class CreateShareDto {
   })
   @IsString()
   @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
-  @MinLength(2)
+  @MinLength(64)
   @MaxLength(1024)
   encryptedKey!: string;
 
@@ -100,7 +100,7 @@ export class CreateShareDto {
   })
   @IsString()
   @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedIpnsKey must be a hex string' })
-  @MinLength(2)
+  @MinLength(64)
   @MaxLength(2048)
   @IsOptional()
   encryptedIpnsKey?: string;

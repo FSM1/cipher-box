@@ -525,4 +525,118 @@ test.describe.serial('Writable Shares', () => {
       timeout: 15000,
     });
   });
+
+  // ============================================
+  // Phase 8: Security — Subfolder Access (C-02)
+  // ============================================
+
+  test('8.1 Owner can navigate into subfolder created by recipient', async () => {
+    test.setTimeout(90000);
+
+    // Bob creates a subfolder (re-create since 7.2 deleted the previous one)
+    const securitySubfolder = `sec-subfolder-${runId}`;
+    const mkdirBtn = bob.page.locator('.toolbar-btn', { hasText: '--mkdir' });
+    await mkdirBtn.click();
+    const folderInput = bob.page.locator('.shared-inline-input-field');
+    await folderInput.waitFor({ state: 'visible', timeout: 5000 });
+    await folderInput.fill(securitySubfolder);
+    await folderInput.press('Enter');
+    await bobSharedBrowser.getFolderItem(securitySubfolder).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+
+    // Alice navigates to her folder and enters the subfolder Bob created
+    // C-02 fix: subfolder keys must be wrapped with owner's key so owner can access
+    await navigateToFiles(alice);
+    await alice.page.reload({ waitUntil: 'networkidle' });
+    await aliceFileList.waitForItemToAppear(folderName, { timeout: 30000 });
+    await aliceNavigateIntoFolder(folderName);
+    await aliceFileList.waitForItemToAppear(securitySubfolder, { timeout: 60000 });
+
+    // Owner should be able to enter the subfolder without decryption errors
+    await aliceNavigateIntoFolder(securitySubfolder);
+
+    // Should see empty folder (no errors, breadcrumbs should show subfolder)
+    const breadcrumbs = await alice.page.locator('.breadcrumb-item').allTextContents();
+    const breadcrumbText = breadcrumbs.join('/').toLowerCase();
+    expect(breadcrumbText).toContain(securitySubfolder.toLowerCase());
+
+    // Navigate back
+    await aliceNavigateBack();
+    await aliceNavigateBack();
+  });
+
+  // ============================================
+  // Phase 9: Security — Post-Downgrade Behavior (H-03)
+  // ============================================
+
+  test('9.1 After downgrade, recipient write toolbar is hidden', async () => {
+    // Downgrade Bob again
+    await navigateToFiles(alice);
+    await aliceFileList.waitForItemToAppear(folderName, { timeout: 15000 });
+    await aliceOpenShareDialog(folderName);
+
+    const bobRow = aliceShareDialog.recipientRow(truncateKey(bob.publicKey));
+    const downgradeBtn = bobRow.locator('.share-downgrade-btn');
+    await downgradeBtn.click();
+    const confirmBtn = bobRow.locator('.share-revoke-confirm-btn--yes');
+    await confirmBtn.click();
+    const permLabel = bobRow.locator('.recipient-perm-read');
+    await expect(permLabel).toContainText('[read]', { timeout: 10000 });
+    await aliceShareDialog.close();
+
+    // Bob re-enters the shared folder
+    await bobSharedBrowser.navigateToRoot();
+    await navigateToShared(bob);
+    await bobSharedBrowser.waitForLoaded({ timeout: 30000 });
+    await bobSharedBrowser.navigateIntoFolder(folderName);
+
+    // Write toolbar should be hidden (H-03: downgrade removes write capability)
+    const uploadBtn = bob.page.locator('.toolbar-btn', { hasText: '--upload' });
+    await expect(uploadBtn).not.toBeVisible();
+
+    // Context menu should not show rename/delete
+    const renamedFile = `renamed-${runId}.txt`;
+    const targetFile = (await bobSharedBrowser.getFolderItem(renamedFile).isVisible())
+      ? renamedFile
+      : ownerFileName;
+
+    await bobSharedBrowser.rightClickFolderItem(targetFile);
+    await bobContextMenu.waitForOpen();
+    const renameOption = bob.page.locator('.context-menu-item', { hasText: /rename/i });
+    await expect(renameOption).not.toBeVisible();
+    // Close context menu
+    await bob.page.keyboard.press('Escape');
+  });
+
+  test('9.2 Downgraded recipient can still read files', async () => {
+    test.setTimeout(60000);
+
+    const renamedFile = `renamed-${runId}.txt`;
+    const targetFile = (await bobSharedBrowser.getFolderItem(renamedFile).isVisible())
+      ? renamedFile
+      : ownerFileName;
+
+    await bobSharedBrowser.rightClickFolderItem(targetFile);
+    await bobContextMenu.waitForOpen();
+    const viewOption = bob.page.locator('.context-menu-item', { hasText: /edit|view/i });
+    await viewOption.click();
+
+    const textEditor = bob.page.locator('.text-editor-modal');
+    await textEditor.waitFor({ state: 'visible', timeout: 15000 });
+    await bob.page.locator('.text-editor-loading').waitFor({ state: 'hidden', timeout: 15000 });
+
+    // Should load without decryption errors
+    const textarea = bob.page.locator('.text-editor-textarea');
+    await expect(textarea).toBeVisible();
+    const content = await textarea.inputValue();
+    expect(content.length).toBeGreaterThan(0);
+
+    // Should be read-only
+    await expect(textarea).toHaveAttribute('readonly', '');
+
+    await bob.page.keyboard.press('Escape');
+    await textEditor.waitFor({ state: 'hidden', timeout: 5000 });
+  });
 });

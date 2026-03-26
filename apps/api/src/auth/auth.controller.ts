@@ -31,12 +31,8 @@ import { DeleteAccountDto, DeleteAccountResponseDto } from './dto/delete-account
 import { Throttle } from '@nestjs/throttler';
 import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { User } from './entities/user.entity';
 import { MetricsService } from '../metrics/metrics.service';
-
-interface RequestWithUser extends Request {
-  user: User;
-}
+import { RequestWithUser } from '../common/types';
 
 // Cookie configuration
 const REFRESH_TOKEN_COOKIE_OPTIONS = {

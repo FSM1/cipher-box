@@ -100,7 +100,10 @@ export function TextEditorDialog({
           ]);
 
           const fileKeyRecord = keys.find((k) => k.keyType === 'file' && k.itemId === item.id);
-          const wrappedKey = fileKeyRecord?.encryptedKey ?? fileMeta.fileKeyEncrypted;
+          if (!fileKeyRecord) {
+            throw new Error('File key not available — the folder owner may need to re-share');
+          }
+          const wrappedKey = fileKeyRecord.encryptedKey;
 
           plaintext = await downloadFile(
             {

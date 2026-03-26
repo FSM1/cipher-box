@@ -23,6 +23,7 @@ describe('SharesService', () => {
     find: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
+    delete: jest.Mock;
   };
   let mockUserRepo: {
     findOne: jest.Mock;
@@ -46,6 +47,8 @@ describe('SharesService', () => {
     ipnsName: testIpnsName,
     itemName: 'My Folder',
     encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
+    permission: 'read',
+    encryptedIpnsKey: null,
     hiddenByRecipient: false,
     revokedAt: null,
     shareKeys: [],
@@ -77,6 +80,7 @@ describe('SharesService', () => {
       find: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
+      delete: jest.fn(),
     };
     mockUserRepo = {
       findOne: jest.fn(),
@@ -458,14 +462,13 @@ describe('SharesService', () => {
       );
     });
 
-    it('should throw ForbiddenException when user is not sharer', async () => {
+    it('should throw ForbiddenException when user is not sharer or write-recipient', async () => {
+      // mockShare has permission: 'read', so recipient is not a write-recipient
       mockShareRepo.findOne.mockResolvedValue(mockShare);
+      const otherId = '990e8400-e29b-41d4-a716-446655440009';
 
-      await expect(service.addShareKeys(shareId, recipientId, addKeysDto)).rejects.toThrow(
+      await expect(service.addShareKeys(shareId, otherId, addKeysDto)).rejects.toThrow(
         ForbiddenException
-      );
-      await expect(service.addShareKeys(shareId, recipientId, addKeysDto)).rejects.toThrow(
-        'Only the sharer can add keys'
       );
     });
   });
@@ -656,6 +659,139 @@ describe('SharesService', () => {
       await expect(
         service.updateShareEncryptedKey(shareId, recipientId, 'ff'.repeat(64))
       ).rejects.toThrow('Only the sharer can update share keys');
+    });
+  });
+
+  // =========================================================================
+  // Security: Phase 27 writable shares fixes
+  // =========================================================================
+
+  describe('addShareKeys - write-share recipient authorization (M-02)', () => {
+    const writeShare: Share = {
+      ...mockShare,
+      permission: 'write',
+      encryptedIpnsKey: Buffer.from('ee'.repeat(64), 'hex'),
+    };
+
+    it('should allow write-share recipient to add file keys', async () => {
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+      mockShareKeyRepo.findOne.mockResolvedValue(null);
+      mockShareKeyRepo.create.mockImplementation((data) => data);
+      mockShareKeyRepo.save.mockResolvedValue({});
+
+      const dto: AddShareKeysDto = {
+        keys: [
+          {
+            keyType: 'file',
+            itemId: '880e8400-e29b-41d4-a716-446655440003',
+            encryptedKey: 'dd'.repeat(64),
+          },
+        ],
+      };
+
+      await service.addShareKeys(shareId, recipientId, dto);
+      expect(mockShareKeyRepo.save).toHaveBeenCalled();
+    });
+
+    it('should allow write-share recipient to add file-ipns keys', async () => {
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+      mockShareKeyRepo.findOne.mockResolvedValue(null);
+      mockShareKeyRepo.create.mockImplementation((data) => data);
+      mockShareKeyRepo.save.mockResolvedValue({});
+
+      const dto: AddShareKeysDto = {
+        keys: [
+          {
+            keyType: 'file-ipns' as any,
+            itemId: '880e8400-e29b-41d4-a716-446655440003',
+            encryptedKey: 'dd'.repeat(64),
+          },
+        ],
+      };
+
+      await service.addShareKeys(shareId, recipientId, dto);
+      expect(mockShareKeyRepo.save).toHaveBeenCalled();
+    });
+
+    it('should reject write-share recipient adding folder keys', async () => {
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+
+      const dto: AddShareKeysDto = {
+        keys: [
+          {
+            keyType: 'folder',
+            itemId: '880e8400-e29b-41d4-a716-446655440003',
+            encryptedKey: 'dd'.repeat(64),
+          },
+        ],
+      };
+
+      await expect(service.addShareKeys(shareId, recipientId, dto)).rejects.toThrow(
+        ForbiddenException
+      );
+    });
+
+    it('should reject read-only recipient from adding any keys', async () => {
+      mockShareRepo.findOne.mockResolvedValue(mockShare); // permission: 'read'
+
+      const dto: AddShareKeysDto = {
+        keys: [
+          {
+            keyType: 'file',
+            itemId: '880e8400-e29b-41d4-a716-446655440003',
+            encryptedKey: 'dd'.repeat(64),
+          },
+        ],
+      };
+
+      await expect(service.addShareKeys(shareId, recipientId, dto)).rejects.toThrow(
+        ForbiddenException
+      );
+    });
+  });
+
+  describe('updatePermission - security checks', () => {
+    it('should reject permission change on revoked share (L-01)', async () => {
+      const revokedShare = { ...mockShare, revokedAt: new Date() };
+      mockShareRepo.findOne.mockResolvedValue(revokedShare);
+
+      await expect(
+        service.updatePermission(shareId, sharerId, 'write', 'ee'.repeat(64))
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should clean up file-ipns share_keys on downgrade (H-03)', async () => {
+      const writeShare = {
+        ...mockShare,
+        permission: 'write' as const,
+        encryptedIpnsKey: Buffer.from('ee'.repeat(64), 'hex'),
+      };
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+      mockShareRepo.save.mockResolvedValue({});
+      mockShareKeyRepo.delete.mockResolvedValue({ affected: 2 });
+
+      await service.updatePermission(shareId, sharerId, 'read');
+
+      // Verify permission changed
+      const saved = mockShareRepo.save.mock.calls[0][0];
+      expect(saved.permission).toBe('read');
+      expect(saved.encryptedIpnsKey).toBeNull();
+
+      // Verify file-ipns keys were deleted
+      expect(mockShareKeyRepo.delete).toHaveBeenCalledWith({
+        shareId,
+        keyType: 'file-ipns',
+      });
+    });
+
+    it('should not delete share_keys on upgrade to write', async () => {
+      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
+      mockShareRepo.save.mockResolvedValue({});
+
+      await service.updatePermission(shareId, sharerId, 'write', 'ee'.repeat(64));
+
+      // Should NOT delete any share_keys
+      expect(mockShareKeyRepo.delete).not.toHaveBeenCalled();
     });
   });
 });
