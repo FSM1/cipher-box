@@ -1,0 +1,130 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fea452f23c79",
+  "session_id": "1986a6a4-e18b-403e-a50f-9f54ae3d2e8c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T15:55:05.267326Z",
+  "branch": "fix/desktop-build-action-version",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/build-desktop.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "9e3ed732ca6b",
+  "token_usage": {
+    "input_tokens": 7435,
+    "cache_creation_tokens": 1256969,
+    "cache_read_tokens": 76915974,
+    "output_tokens": 97025,
+    "api_call_count": 376
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Fix a failing vault recovery E2E test in CI, resolve cascading staging deployment issues (Grafana provisioning, VPS SSH timeouts, desktop build signing), and fix writable shares E2E test failures introduced by the new feature.",
+    "outcome": "All issues resolved and merged: vault recovery fixed (protobuf field bug + IPNS resolution order), Grafana API key updated, desktop build signing wired in, writable shares file-IPNS key lookup fixed, throttle limits relaxed for test mode, and tauri-action version corrected. Full web E2E suite passes in CI (163/163).",
+    "learnings": {
+      "repo": [
+        "IPNS records use protobuf field 1 for `value` (the IPFS path), field 2 for `signatureV1` — the recovery.html `extractCidFromIpnsRecord` had this backwards.",
+        "The `resolveIpns` function in recovery.html previously tried the slow IPFS gateway HEAD first (15s timeout) before delegated routing — in CI where Kubo can't resolve mock-published IPNS names, this wasted time before fallback.",
+        "Standalone file shares create a synthetic FilePointer with `id = shareId`, but `file-ipns` keys in share_keys are stored with `itemId = fileId` (real file UUID) — causing the IPNS key lookup to fail in `updateSharedFile`.",
+        "The ThrottlerModule in app.module.ts had hardcoded limits (100 req/min) with no environment-based relaxation, causing full E2E suite to 429 when all specs run sequentially.",
+        "NODE_ENV=test enables the `test-login` route (auth bypass for E2E) but did not previously affect throttle limits — now fixed to use 200/sec, 2000/min in test mode.",
+        "build-desktop.yml referenced `tauri-apps/tauri-action@v1` which doesn't exist (latest major is `@v0`, current `v0.6.2`), causing `startup_failure` on every release event.",
+        "deploy-staging.yml correctly uses `tauri-apps/tauri-action@v0` but build-desktop.yml diverged.",
+        "TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD were configured as repo secrets but not wired into any of the three desktop build job steps (macOS, Windows, Linux) in deploy-staging.yml.",
+        "Grafana Cloud service account tokens (for dashboard provisioning via HTTP API) are separate from Loki/Prometheus data source API keys — the dashboard CRUD key lives in Administration \u003e Service Accounts.",
+        "Grafana Cloud returns HTTP 404 (not 401/403) when the Bearer token is invalid or expired, making auth failures look like routing failures."
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 791,
+          "end_line": 795,
+          "finding": "extractCidFromIpnsRecord checked `fieldNumber === 2` (signatureV1) instead of `fieldNumber === 1` (value) when parsing IPNS protobuf records from delegated routing responses."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 682,
+          "end_line": 686,
+          "finding": "Backoff retry logic only triggered on thrown errors, not non-OK HTTP responses (429/5xx). Fixed to check `!resp.ok` before consuming body."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 695,
+          "end_line": 700,
+          "finding": "resp.json() was called to parse protobuf then resp.arrayBuffer() was called in fallthrough — double-consuming the body. Fixed with else branch."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 1050,
+          "end_line": 1055,
+          "finding": "getFileIpnsKeyFn for standalone file shares failed because shareId was used as FilePointer.id but file-ipns keys are indexed by real fileId. Fixed with fallback to first file-ipns key when itemType === 'file' and exact match fails."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/SharedFileBrowser.tsx",
+          "line": 349,
+          "end_line": 349,
+          "finding": "Synthetic FilePointer for standalone file shares uses shareId as `id`, not the real file UUID — root cause of the IPNS key lookup mismatch."
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "ThrottlerModule converted from forRoot() to forRootAsync() with ConfigService injection to allow environment-based limit relaxation (200/sec, 2000/min in NODE_ENV=test)."
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Recovery test timeout raised to 90s (from default 30s) since recovery involves multiple IPNS resolutions and IPFS fetches."
+        },
+        {
+          "path": ".github/workflows/build-desktop.yml",
+          "line": 100,
+          "end_line": 100,
+          "finding": "tauri-apps/tauri-action@v1 doesn't exist — must use @v0 (current v0.6.2). This caused startup_failure on every release event trigger."
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 1,
+          "end_line": 300,
+          "finding": "All three desktop build jobs (macOS, Windows, Linux) were missing TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD env vars despite pubkey being present in tauri.conf.json."
+        }
+      ],
+      "workflow": [
+        "Run web E2E tests with `NODE_ENV=test` API to avoid throttle interference — the full 163-test suite cannot complete with default 100 req/min limits.",
+        "All 7 .planning/codebase docs (STACK, ARCHITECTURE, STRUCTURE, CONVENTIONS, INTEGRATIONS, TESTING, CONCERNS) were rewritten by parallel mapper subagents to reflect current multi-package/Rust-crate architecture.",
+        "The stale vault-migration-iife-silent-failure debug session was from Phase 20 on a now-deleted worktree — resolved as fixed since the migration feature shipped in a later milestone.",
+        "Worktrees should be cleaned up after their branches merge — `git worktree prune` handles stale references when the directory is already gone.",
+        "Grafana Cloud health endpoint returns 404 (not 401) for invalid service account tokens, making it look like a URL issue rather than an auth issue.",
+        "Parallel Playwright suites sharing the same API/DB/mock-ipns-routing instance will interfere — run E2E suites sequentially against a single API instance."
+      ]
+    },
+    "friction": [
+      "Multiple CI round-trips before getting writable-shares E2E passing — user explicitly requested local verification before committing in future.",
+      "1Password SSH agent inaccessible from subprocess during commit signing — required user to commit manually or retry from a fresh terminal.",
+      "Full E2E suite local runs collided when background and foreground Playwright processes shared the same API, database, and mock-ipns-routing service.",
+      "The tauri-action@v1 error caused startup_failure with zero jobs created — no useful error output, required checking npm registry manually to discover the version doesn't exist.",
+      "NODE_ENV=test being set but dotenv potentially overriding it caused confusion about whether the API was actually in test mode.",
+      "VPS SSH timeout (io timeout on port 22) during staging deployment was a transient network blip — wasted a deploy run."
+    ],
+    "open_items": [
+      "The `docs/milestone-v1.1-completion` branch with updated codebase docs has not been merged or PR'd yet.",
+      "The full local E2E suite still has 3 environment-specific failures: recycle-bin TC01 (login auth stuck), mfa-flows TC-MFA-01 (Web3Auth MFA infra not available locally), and full-workflow 6.5.4 (CID verification timing with local IPFS).",
+      "The milestone v1.1 completion workflow (`/gsd:complete-milestone`) has not been run yet — milestone is complete but not archived.",
+      "6 pending todos in the planning system — not reviewed this session.",
+      "The synthetic FilePointer approach in SharedFileBrowser (using shareId as file id) is a known mismatch that required a fallback workaround — the proper fix would be to include the real fileId in the share response DTO."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-27T15:54:06.419503Z",
+    "agent_lines": 1,
+    "human_added": 51,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 52,
+    "agent_percentage": 1.9230769230769231
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fea452f23c79",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-build-action-version",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/build-desktop.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fe/a452f23c79/0/metadata.json",
+      "transcript": "/fe/a452f23c79/0/full.jsonl",
+      "content_hash": "/fe/a452f23c79/0/content_hash.txt",
+      "prompt": "/fe/a452f23c79/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7435,
+    "cache_creation_tokens": 1256969,
+    "cache_read_tokens": 76915974,
+    "output_tokens": 97025,
+    "api_call_count": 376
+  }
+}
