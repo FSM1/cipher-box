@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.31.0...cipher-box-v0.31.1) (2026-03-27)
+
+
+### Bug Fixes
+
+* **ci:** use tauri-action@v0 in desktop build workflow ([#377](https://github.com/FSM1/cipher-box/issues/377)) ([dfff93d](https://github.com/FSM1/cipher-box/commit/dfff93d9b0f2d25b31ae539379f35edb8d20b77c))
+
 ## [0.31.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.30.1...cipher-box-v0.31.0) (2026-03-27)
 
 
