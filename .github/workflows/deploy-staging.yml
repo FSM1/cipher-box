@@ -191,7 +191,8 @@ jobs:
           releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
           releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch) and Windows (unsigned - click "More info" > "Run anyway").'
           releaseDraft: false
-          prerelease: true
+          prerelease: false
+          includeUpdaterJson: true
 
   build-desktop-windows:
     name: Build Desktop App (Windows)
@@ -285,7 +286,8 @@ jobs:
           releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
           releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch), Windows (unsigned - click "More info" > "Run anyway"), and Linux (AppImage/deb).'
           releaseDraft: false
-          prerelease: true
+          prerelease: false
+          includeUpdaterJson: true
           args: -- --no-default-features --features winfsp
 
   build-desktop-linux:
@@ -361,7 +363,8 @@ jobs:
           releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
           releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch), Windows (unsigned - click "More info" > "Run anyway"), and Linux (AppImage/deb).'
           releaseDraft: false
-          prerelease: true
+          prerelease: false
+          includeUpdaterJson: true
           args: -- --no-default-features --features fuse
 
   deploy-vps:
