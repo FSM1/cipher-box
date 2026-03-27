@@ -19,7 +19,7 @@ Extend Phase 14's read-only sharing to support read-write shares. Write-share re
 - New `encryptedIpnsKey` column on the Share entity (NULL for read-only shares, populated for write shares)
 - Existing `encryptedKey` column unchanged — clean separation, no migration needed for existing read-only shares
 - Write-share recipients derive child IPNS keypairs via HKDF (same derivation as owner) for subfolders they create
-- Write-share recipients can enroll new subfolders with TEE for auto-republishing — TEE enrollment endpoint must accept share-authorized users, not just owners
+- TEE enrollment is blocked for write-share recipients — only the owner can enroll folders for auto-republishing. Subfolder writes by recipients are limited to the root shared folder level in this PoC
 
 ### Write scope for recipients
 

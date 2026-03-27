@@ -26,10 +26,10 @@ export class ShareKey {
 
   /**
    * Type of key stored: 'file' for fileKey, 'folder' for subfolder folderKey,
-   * 'file-ipns' for file IPNS private key (write-share recipients).
+   * 'file-ipns' for file IPNS private key, 'folder-ipns' for subfolder IPNS private key.
    */
-  @Column({ type: 'varchar', length: 10, name: 'key_type' })
-  keyType!: 'file' | 'folder' | 'file-ipns';
+  @Column({ type: 'varchar', length: 12, name: 'key_type' })
+  keyType!: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
 
   /**
    * UUID of the file or subfolder this key belongs to.

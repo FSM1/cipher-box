@@ -263,6 +263,7 @@ export class SharesController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Only the sharer can change permission' })
   @ApiResponse({ status: 404, description: 'Share not found' })
+  @ApiResponse({ status: 409, description: 'Cannot change permission on a revoked share' })
   async updatePermission(
     @Request() req: RequestWithUser,
     @Param('shareId', ParseUUIDPipe) shareId: string,

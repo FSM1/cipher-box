@@ -181,7 +181,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       string,
       {
         keys: Array<{
-          keyType: 'file' | 'folder' | 'file-ipns';
+          keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
           itemId: string;
           encryptedKey: string;
         }>;
@@ -498,6 +498,33 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           setIpnsName(folderEntry.ipnsName);
           setCurrentSequenceNumber(seqNum);
           sequenceNumberRef.current = seqNum;
+
+          // For write-share recipients: unwrap the subfolder's IPNS private key
+          // from share_keys (folder-ipns) so write operations work at any depth.
+          if (permission === 'write' && currentShareId) {
+            zeroIpnsKey(); // Zero parent key before replacing
+            let restored = false;
+            try {
+              const subKeys = await getShareKeys(currentShareId);
+              const ipnsKeyRecord = subKeys.find(
+                (k) => k.keyType === 'folder-ipns' && k.itemId === folderId
+              );
+              if (ipnsKeyRecord) {
+                const ipnsPrivKey = await unwrapKey(
+                  hexToBytes(ipnsKeyRecord.encryptedKey),
+                  auth.vaultKeypair.privateKey
+                );
+                ipnsPrivateKeyRef.current = ipnsPrivKey;
+                restored = true;
+              }
+            } catch {
+              // Couldn't get subfolder IPNS key from share_keys
+            }
+            if (!restored) {
+              // No subfolder IPNS key available — drop to read-only for this subfolder
+              setPermission('read');
+            }
+          }
         } finally {
           if (!subfolderKeyStored) subfolderKey.fill(0);
         }
@@ -517,6 +544,8 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       ipnsName,
       currentSequenceNumber,
       clearPolling,
+      permission,
+      zeroIpnsKey,
     ]
   );
 
@@ -550,7 +579,55 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   /**
    * Navigate up one level.
    */
-  const navigateUp = useCallback(() => {
+  /**
+   * Restore the correct IPNS private key for the current depth.
+   * Root level: unwrap from share record. Subfolder level: unwrap from folder-ipns share_key.
+   */
+  const restoreIpnsKeyForDepth = useCallback(
+    async (targetFolderId?: string) => {
+      if (!currentShareId) return;
+      const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
+      const share = shareItem?.share;
+      if (share?.permission !== 'write') return;
+
+      zeroIpnsKey();
+      const auth = useAuthStore.getState();
+      if (!auth.vaultKeypair) return;
+
+      try {
+        if (!targetFolderId && share.encryptedIpnsKey) {
+          // Root share level — unwrap from share record
+          const ipnsPrivKey = await unwrapKey(
+            hexToBytes(share.encryptedIpnsKey),
+            auth.vaultKeypair.privateKey
+          );
+          ipnsPrivateKeyRef.current = ipnsPrivKey;
+          setPermission('write');
+        } else if (targetFolderId) {
+          // Subfolder level — unwrap from folder-ipns share_key
+          const keys = await getShareKeys(currentShareId);
+          const ipnsKeyRecord = keys.find(
+            (k) => k.keyType === 'folder-ipns' && k.itemId === targetFolderId
+          );
+          if (ipnsKeyRecord) {
+            const ipnsPrivKey = await unwrapKey(
+              hexToBytes(ipnsKeyRecord.encryptedKey),
+              auth.vaultKeypair.privateKey
+            );
+            ipnsPrivateKeyRef.current = ipnsPrivKey;
+            setPermission('write');
+          } else {
+            setPermission('read');
+          }
+        }
+      } catch {
+        // Couldn't restore — stay read-only
+      }
+    },
+    [currentShareId, getShareKeys, sharedItems, zeroIpnsKey]
+  );
+
+  const navigateUp = useCallback(async () => {
     if (navStackRef.current.length > 0) {
       // Zero current folder key before replacing
       if (folderKey) folderKey.fill(0);
@@ -563,18 +640,25 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       setIpnsName(prev.ipnsName);
       setCurrentSequenceNumber(prev.sequenceNumber);
       sequenceNumberRef.current = prev.sequenceNumber;
+
+      // Restore IPNS key: root level (no stack) or subfolder (top of remaining stack)
+      if (navStackRef.current.length === 0) {
+        await restoreIpnsKeyForDepth(); // root level
+      } else {
+        await restoreIpnsKeyForDepth(prev.folderId);
+      }
     } else if (currentView === 'folder') {
       // Back to top-level list
       navigateToRoot();
     }
-  }, [currentView, folderKey, navigateToRoot]);
+  }, [currentView, folderKey, navigateToRoot, restoreIpnsKeyForDepth]);
 
   /**
    * Navigate directly to a breadcrumb level, zeroing all intermediate keys.
    * More efficient than calling navigateUp() in a loop.
    */
   const navigateToBreadcrumb = useCallback(
-    (crumbIndex: number) => {
+    async (crumbIndex: number) => {
       const popsNeeded = breadcrumbs.length - 1 - crumbIndex;
       if (popsNeeded <= 0) return;
       // Zero the current folder key
@@ -594,9 +678,16 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setIpnsName(target.ipnsName);
         setCurrentSequenceNumber(target.sequenceNumber);
         sequenceNumberRef.current = target.sequenceNumber;
+
+        // Restore IPNS key for the target depth
+        if (navStackRef.current.length === 0) {
+          await restoreIpnsKeyForDepth(); // root level
+        } else {
+          await restoreIpnsKeyForDepth(target.folderId);
+        }
       }
     },
-    [breadcrumbs, folderKey]
+    [breadcrumbs, folderKey, restoreIpnsKeyForDepth]
   );
 
   /**
@@ -975,6 +1066,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
                     encryptedKey: bytesToHex(recipientWrappedIpnsKey),
                   },
                 ]);
+                shareKeysCache.current.delete(currentShareId!);
               } catch (err) {
                 console.warn('[share] Failed to add share_key for uploaded file:', err);
                 setError('File uploaded but access keys could not be saved. Please re-upload.');
@@ -1105,9 +1197,15 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
               }
             );
 
-            // Add share_key for the recipient so they can access the subfolder
+            // Add share_keys for the recipient so they can access the subfolder:
+            // 1. folder key (for decrypting subfolder metadata)
+            // 2. folder-ipns key (for signing subfolder IPNS publishes — enables writes at depth)
             const recipientWrappedFolderKey = await wrapSubfolderKey(
               subfolderKey,
+              auth.vaultKeypair!.publicKey
+            );
+            const recipientWrappedIpnsKey = await wrapSubfolderKey(
+              keypair.privateKey,
               auth.vaultKeypair!.publicKey
             );
             await addShareKeys(currentShareId!, [
@@ -1116,7 +1214,13 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
                 itemId: folderId,
                 encryptedKey: bytesToHex(recipientWrappedFolderKey),
               },
+              {
+                keyType: 'folder-ipns',
+                itemId: folderId,
+                encryptedKey: bytesToHex(recipientWrappedIpnsKey),
+              },
             ]);
+            shareKeysCache.current.delete(currentShareId!);
           } finally {
             subfolderKey.fill(0);
             keypair.privateKey.fill(0);
@@ -1312,9 +1416,13 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           const recipientWrappedKey = await wrapKey(fileKey, auth.vaultKeypair!.publicKey);
           await addShareKeys(currentShareId!, [
             { keyType: 'file', itemId: item.id, encryptedKey: bytesToHex(recipientWrappedKey) },
-          ]).catch((err) => {
-            console.warn('[share] Failed to update share_key after file edit:', err);
-          });
+          ])
+            .then(() => {
+              shareKeysCache.current.delete(currentShareId!);
+            })
+            .catch((err) => {
+              console.warn('[share] Failed to update share_key after file edit:', err);
+            });
         } finally {
           ipnsPrivKey.fill(0);
         }

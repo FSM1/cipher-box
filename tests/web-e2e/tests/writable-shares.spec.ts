@@ -567,6 +567,159 @@ test.describe.serial('Writable Shares', () => {
   });
 
   // ============================================
+  // Phase 8b: Deep Subfolder Write Operations
+  // ============================================
+
+  const deepSubfolder = `deep-sub-${runId}`;
+  const deepFileName = `deep-file-${runId}.txt`;
+  const nestedSubfolder = `nested-sub-${runId}`;
+  const nestedFileName = `nested-file-${runId}.txt`;
+
+  test('8.2 Bob uploads a file inside the subfolder he created', async () => {
+    test.setTimeout(90000);
+
+    // Bob should be at the shared folder root — navigate there if needed
+    await bobSharedBrowser.navigateToRoot();
+    await navigateToShared(bob);
+    await bobSharedBrowser.waitForLoaded({ timeout: 30000 });
+    await bobSharedBrowser.navigateIntoFolder(folderName);
+
+    // Create a new subfolder for deep-write testing (the previous one was deleted in 7.2)
+    const mkdirBtn = bob.page.locator('.toolbar-btn', { hasText: '--mkdir' });
+    await mkdirBtn.click();
+    const folderInput = bob.page.locator('.shared-inline-input-field');
+    await folderInput.waitFor({ state: 'visible', timeout: 5000 });
+    await folderInput.fill(deepSubfolder);
+    await folderInput.press('Enter');
+    await bobSharedBrowser.getFolderItem(deepSubfolder).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+
+    // Navigate into the subfolder
+    await bobSharedBrowser.doubleClickFolderItem(deepSubfolder);
+    await bobSharedBrowser.parentDirRow().waitFor({ state: 'visible', timeout: 30000 });
+
+    // Write toolbar should be visible (subfolder write access via folder-ipns key)
+    const uploadBtn = bob.page.locator('.toolbar-btn', { hasText: '--upload' });
+    await expect(uploadBtn).toBeVisible({ timeout: 10000 });
+
+    // Upload a file inside the subfolder
+    const testFile = createTestTextFile(deepFileName, 'Deep subfolder content by Bob');
+    const fileInput = bob.page.locator('input[type="file"]');
+    await fileInput.setInputFiles(testFile.path);
+    await bobSharedBrowser.getFolderItem(deepFileName).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+  });
+
+  test('8.3 Bob creates a nested subfolder (depth 2) and uploads a file', async () => {
+    test.setTimeout(90000);
+
+    // Still inside deepSubfolder from previous test — create a nested subfolder
+    const mkdirBtn = bob.page.locator('.toolbar-btn', { hasText: '--mkdir' });
+    await mkdirBtn.click();
+    const folderInput = bob.page.locator('.shared-inline-input-field');
+    await folderInput.waitFor({ state: 'visible', timeout: 5000 });
+    await folderInput.fill(nestedSubfolder);
+    await folderInput.press('Enter');
+    await bobSharedBrowser.getFolderItem(nestedSubfolder).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+
+    // Navigate into the nested subfolder (now at depth 2)
+    await bobSharedBrowser.doubleClickFolderItem(nestedSubfolder);
+    await bobSharedBrowser.parentDirRow().waitFor({ state: 'visible', timeout: 30000 });
+
+    // Write toolbar should be visible at depth 2
+    const uploadBtn = bob.page.locator('.toolbar-btn', { hasText: '--upload' });
+    await expect(uploadBtn).toBeVisible({ timeout: 10000 });
+
+    // Upload a file at depth 2
+    const testFile = createTestTextFile(nestedFileName, 'Nested subfolder content by Bob');
+    const fileInput = bob.page.locator('input[type="file"]');
+    await fileInput.setInputFiles(testFile.path);
+    await bobSharedBrowser.getFolderItem(nestedFileName).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+
+    // Verify breadcrumbs show the full path
+    const breadcrumbPath = await bobSharedBrowser.getBreadcrumbPath();
+    expect(breadcrumbPath.toLowerCase()).toContain(deepSubfolder.toLowerCase());
+    expect(breadcrumbPath.toLowerCase()).toContain(nestedSubfolder.toLowerCase());
+  });
+
+  test('8.4 Bob navigates back to root and re-enters subfolder with write access', async () => {
+    test.setTimeout(90000);
+
+    // Navigate all the way back to shared root
+    await bobSharedBrowser.navigateToRoot();
+    await bobSharedBrowser.waitForLoaded({ timeout: 15000 });
+
+    // Re-enter the folder
+    await bobSharedBrowser.navigateIntoFolder(folderName);
+
+    // Root level should have write access
+    const uploadBtn = bob.page.locator('.toolbar-btn', { hasText: '--upload' });
+    await expect(uploadBtn).toBeVisible({ timeout: 10000 });
+
+    // Navigate into the subfolder — write access should be restored via folder-ipns key
+    await bobSharedBrowser.doubleClickFolderItem(deepSubfolder);
+    await bobSharedBrowser.parentDirRow().waitFor({ state: 'visible', timeout: 30000 });
+    await expect(uploadBtn).toBeVisible({ timeout: 10000 });
+
+    // Verify the file we uploaded earlier is still there
+    await bobSharedBrowser.getFolderItem(deepFileName).waitFor({
+      state: 'visible',
+      timeout: 15000,
+    });
+
+    // Navigate into nested subfolder — write access at depth 2
+    await bobSharedBrowser.doubleClickFolderItem(nestedSubfolder);
+    await bobSharedBrowser.parentDirRow().waitFor({ state: 'visible', timeout: 30000 });
+    await expect(uploadBtn).toBeVisible({ timeout: 10000 });
+
+    // Verify the file at depth 2
+    await bobSharedBrowser.getFolderItem(nestedFileName).waitFor({
+      state: 'visible',
+      timeout: 15000,
+    });
+
+    // Navigate back to shared folder root for subsequent tests
+    await bobSharedBrowser.navigateToRoot();
+    await bobSharedBrowser.waitForLoaded({ timeout: 15000 });
+    await bobSharedBrowser.navigateIntoFolder(folderName);
+  });
+
+  test('8.5 Alice can read files at all depths created by Bob', async () => {
+    test.setTimeout(90000);
+
+    // Navigate Alice into the shared folder
+    await navigateToFiles(alice);
+    await alice.page.reload({ waitUntil: 'networkidle' });
+    await aliceFileList.waitForItemToAppear(folderName, { timeout: 30000 });
+    await aliceNavigateIntoFolder(folderName);
+
+    // Alice should see the deepSubfolder
+    await aliceFileList.waitForItemToAppear(deepSubfolder, { timeout: 60000 });
+    await aliceNavigateIntoFolder(deepSubfolder);
+
+    // Alice should see Bob's file and the nested subfolder
+    await aliceFileList.waitForItemToAppear(deepFileName, { timeout: 30000 });
+    await aliceFileList.waitForItemToAppear(nestedSubfolder, { timeout: 15000 });
+
+    // Navigate into nested subfolder
+    await aliceNavigateIntoFolder(nestedSubfolder);
+    await aliceFileList.waitForItemToAppear(nestedFileName, { timeout: 30000 });
+
+    // Navigate back to root
+    await navigateToFiles(alice);
+  });
+
+  // ============================================
   // Phase 9: Security — Post-Downgrade Behavior (H-03)
   // ============================================
 

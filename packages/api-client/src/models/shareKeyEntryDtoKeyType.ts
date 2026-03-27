@@ -7,7 +7,7 @@
  */
 
 /**
- * Type of key: file, folder, or file-ipns
+ * Type of key: file, folder, file-ipns, or folder-ipns
  */
 export type ShareKeyEntryDtoKeyType =
   (typeof ShareKeyEntryDtoKeyType)[keyof typeof ShareKeyEntryDtoKeyType];
@@ -16,4 +16,5 @@ export const ShareKeyEntryDtoKeyType = {
   file: 'file',
   folder: 'folder',
   'file-ipns': 'file-ipns',
+  'folder-ipns': 'folder-ipns',
 } as const;

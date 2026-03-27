@@ -13,4 +13,5 @@ export const ShareKeyResponseDtoKeyType = {
   file: 'file',
   folder: 'folder',
   'file-ipns': 'file-ipns',
+  'folder-ipns': 'folder-ipns',
 } as const;

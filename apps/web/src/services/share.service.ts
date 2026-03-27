@@ -181,7 +181,11 @@ export async function fetchShareKeys(
  */
 export async function addShareKeys(
   shareId: string,
-  keys: Array<{ keyType: 'file' | 'folder' | 'file-ipns'; itemId: string; encryptedKey: string }>
+  keys: Array<{
+    keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+    itemId: string;
+    encryptedKey: string;
+  }>
 ): Promise<void> {
   await sharesControllerAddShareKeys(shareId, {
     keys: keys.map((k) => ({
