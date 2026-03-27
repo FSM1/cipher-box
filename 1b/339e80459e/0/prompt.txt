@@ -1,0 +1,5 @@
+can you analyze all the changes on phase 27 branch so far and identify if there are any functions that have been implemented in the web ui that might make good candidates for inclusion in the sdk
+
+---
+
+yeah please implement this change, dont forget to ensure sufficient sdk and sdk-core test coverage.
