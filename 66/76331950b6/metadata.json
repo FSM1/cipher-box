@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6676331950b6",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/shares/dto/share-key.dto.ts",
+    "apps/api/src/shares/dto/share-response.dto.ts",
+    "apps/api/src/shares/entities/share-key.entity.ts",
+    "apps/api/src/shares/shares.controller.ts",
+    "apps/web/src/hooks/useSharedNavigation.ts",
+    "apps/web/src/services/share.service.ts",
+    "tests/web-e2e/tests/writable-shares.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/66/76331950b6/0/metadata.json",
+      "transcript": "/66/76331950b6/0/full.jsonl",
+      "content_hash": "/66/76331950b6/0/content_hash.txt",
+      "prompt": "/66/76331950b6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 795,
+    "cache_creation_tokens": 1872688,
+    "cache_read_tokens": 186744555,
+    "output_tokens": 181806,
+    "api_call_count": 687
+  }
+}
