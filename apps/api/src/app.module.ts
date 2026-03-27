@@ -52,18 +52,27 @@ import { PinMigration } from './migration/migration.entity';
     // BypassableThrottlerGuard allows SDK E2E / load tests to skip rate limits
     // via X-Throttle-Bypass header when THROTTLE_BYPASS_SECRET is configured.
     // Bypass is blocked in production (NODE_ENV === 'production').
-    ThrottlerModule.forRoot([
-      {
-        name: 'short',
-        ttl: 1000, // 1 second
-        limit: 10, // 10 requests per second
+    // In test mode (NODE_ENV=test), limits are relaxed for browser-based E2E tests
+    // which can't set the bypass header.
+    ThrottlerModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (configService: ConfigService) => {
+        const isTest = configService.get<string>('NODE_ENV') === 'test';
+        return [
+          {
+            name: 'short',
+            ttl: 1000,
+            limit: isTest ? 200 : 10,
+          },
+          {
+            name: 'medium',
+            ttl: 60000,
+            limit: isTest ? 2000 : 100,
+          },
+        ];
       },
-      {
-        name: 'medium',
-        ttl: 60000, // 1 minute
-        limit: 100, // 100 requests per minute
-      },
-    ]),
+      inject: [ConfigService],
+    }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
