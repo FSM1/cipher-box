@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d06904abd923",
+  "session_id": "fd3a1636-56e5-471c-8426-11bac6330f43",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T00:31:08.654873Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "2faabf1ba031",
+  "token_usage": {
+    "input_tokens": 348,
+    "cache_creation_tokens": 226867,
+    "cache_read_tokens": 46284657,
+    "output_tokens": 77184,
+    "api_call_count": 335
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Address CodeRabbit review comments on PR #372 (writable shares PoC), then extend the feature to support writable file shares (not just folder shares).",
+    "outcome": "All CodeRabbit threads resolved with fixes for: subfolder IPNS key management (new `folder-ipns` key type), shareKeysCache invalidation, missing 409 Swagger response, and doc correction. Writable file shares fully implemented with ShareDialog UI, recipient text-editor flow, shared key types, and E2E tests. Two follow-up CR threads resolved in a subsequent pass.",
+    "learnings": {
+      "repo": [
+        "Subfolder IPNS private keys in FolderEntry are ECIES-wrapped with the owner's public key — recipients cannot unwrap them directly; instead, recipients must self-wrap the key at subfolder creation time and store it as a `folder-ipns` share_key.",
+        "The `addShareKeys` write-recipient validation blocks `folder` keys (owner sets those) but intentionally allows `folder-ipns` keys (created and self-wrapped by the recipient).",
+        "The ShareDialog calls `sharesControllerCreateShare` directly (not share.service.ts's `createShare`) and already passes `permission` and `encryptedIpnsKey` — share.service.ts's createShare wrapper is a separate, lower-level abstraction.",
+        "CodeRabbit posts reviews both as formal review objects AND as issue comments; the review count can jump from 14 to 30 when a new review arrives.",
+        "Key types are validated with `@IsIn()` decorators in NestJS DTOs — centralising them in a `types.ts` with const arrays allows the same source to drive both TypeScript types and runtime validation.",
+        "The `ChildKeyDto` (used in create-share and invite flows) and `AddShareKeyDto` (used in addShareKeys) are separate types with overlapping but distinct allowed key type sets.",
+        "Schema drift CI checks compare the TypeORM entity column lengths against the current DB schema — adding `folder-ipns` (11 chars) to a varchar(10) column requires a migration.",
+        "The `fetchShareKeys` helper in share.service.ts had a hardcoded cast that silently dropped any key types not in the original union."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 235,
+          "end_line": 235,
+          "finding": "useFolderNavigation unwraps subfolder IPNS key from folderEntry.ipnsPrivateKeyEncrypted using the owner's vault keypair — this field is owner-key-wrapped, unavailable to recipients."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 1106,
+          "end_line": 1106,
+          "finding": "When a recipient creates a subfolder, ipnsPrivateKeyEncrypted in the FolderEntry is wrapped with the owner's public key only — no recipient-wrapped copy is stored unless explicitly added as a folder-ipns share_key."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 825,
+          "end_line": 825,
+          "finding": "Write operations guard on ipnsPrivateKeyRef.current being non-null — so if the key is zeroed on subfolder navigation, writes silently fail without crashing."
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 78,
+          "end_line": 89,
+          "finding": "The addShareKeys validation blocks keyType === 'folder' for write recipients but folder-ipns is intentionally not blocked."
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "fetchShareKeys return type and internal cast only included file|folder|file-ipns, silently dropping folder-ipns keys introduced in this session."
+        },
+        {
+          "path": "apps/api/src/shares/types.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "New file: centralises ChildKeyType and ShareKeyType as const arrays + TypeScript union types, used by both @IsIn() validators and TypeScript type annotations across DTOs and entities."
+        }
+      ],
+      "workflow": [
+        "When adding a new enum-like string value to a NestJS entity column, always check varchar length and generate a migration — the drift CI will catch it but it's faster to do proactively.",
+        "Regenerate the API client after every DTO change, not just at the end — cascading type errors are much harder to debug when multiple changes accumulate.",
+        "When a CodeRabbit review is still processing, polling with `gh api` for review count changes is effective; watch for the count to jump (14→30 in this case).",
+        "Reply to ALL review threads (including false positives) with reasoning before resolving — resolving without a comment can look like the comment was ignored.",
+        "For shared string union types used in both runtime validators and TypeScript types, `as const` arrays with a derived `typeof` type is the idiomatic NestJS pattern."
+      ]
+    },
+    "friction": [
+      "CodeRabbit review took ~10+ minutes to post after acknowledging the request, requiring active polling loop.",
+      "API client regeneration needed to be run multiple times (after each DTO change) due to cascading type errors that only surfaced post-regeneration.",
+      "The `folder-only write` validation was added and then reverted mid-session after realising individual file write-shares are a valid use case — required cleanup of tests too.",
+      "TypeScript errors cascaded across invite DTOs, entities, controller, and the web invite service when widening the ChildKeyDto key type union.",
+      "The lint formatter rejected a `.then().catch()` chain that was too long — required manual reformatting.",
+      "Background task notifications arrived mid-session for already-completed work, requiring output file reads that added noise."
+    ],
+    "open_items": [
+      "E2E tests for deep subfolder writes (8.2–8.5) and writable file shares are added but not yet run against a real environment — they cover new code paths that haven't been integration-tested.",
+      "Non-text writable file shares (images, PDFs) fall back to download — no edit UI for binary file write-shares.",
+      "Subfolder write access only works for subfolders created by the recipient in the current session — pre-existing subfolders created by the owner before the share was granted don't have a folder-ipns share_key for the recipient.",
+      "The `ipnsPrivateKeyEncrypted` on owner-created FolderEntries is owner-key-wrapped; a mechanism to re-wrap existing subfolder IPNS keys for new write-share recipients doesn't exist yet.",
+      "Migration `1743100000000-WidenShareKeyType.ts` created but not verified to run cleanly against all environments."
+    ]
+  }
+}
