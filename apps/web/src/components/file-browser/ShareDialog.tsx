@@ -324,6 +324,10 @@ export function ShareDialog({
         }
       }
 
+      // Downgrade to read if write was requested but IPNS key is unavailable (legacy files)
+      const effectivePermission =
+        permission === 'write' && !encryptedIpnsKeyHex ? 'read' : permission;
+
       // Create the share via API
       const itemType: CreateShareDtoItemType = item.type === 'folder' ? 'folder' : 'file';
       const result = await sharesControllerCreateShare({
@@ -332,7 +336,7 @@ export function ShareDialog({
         ipnsName,
         itemName: item.name,
         encryptedKey,
-        permission,
+        permission: effectivePermission,
         encryptedIpnsKey: encryptedIpnsKeyHex,
         childKeys: childKeys && childKeys.length > 0 ? childKeys : undefined,
       });
@@ -344,14 +348,14 @@ export function ShareDialog({
         itemType: item.type as 'folder' | 'file',
         ipnsName,
         itemName: item.name,
-        permission,
+        permission: effectivePermission,
         createdAt: new Date().toISOString(),
       };
       setRecipients((prev) => [...prev, newShare]);
       useShareStore.getState().addSentShare(newShare);
 
       setSuccess(
-        permission === 'write'
+        effectivePermission === 'write'
           ? `shared (read-write) with ${truncateKey(key)}`
           : `shared with ${truncateKey(key)}`
       );

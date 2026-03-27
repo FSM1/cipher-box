@@ -181,7 +181,8 @@ export async function fetchShareKeys(shareId: string): Promise<
 }
 
 /**
- * Add re-wrapped child keys to an existing share. Only the sharer can add keys.
+ * Add re-wrapped child keys to an existing share.
+ * Allowed for the sharer (owner) or write-share recipients (file/file-ipns keys only).
  */
 export async function addShareKeys(
   shareId: string,
