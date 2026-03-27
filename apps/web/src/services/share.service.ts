@@ -162,15 +162,17 @@ export async function hideShare(shareId: string): Promise<void> {
  * Get all re-wrapped child keys for a share.
  * Accessible by both sharer and recipient.
  */
-export async function fetchShareKeys(
-  shareId: string
-): Promise<
-  Array<{ keyType: 'file' | 'folder' | 'file-ipns'; itemId: string; encryptedKey: string }>
+export async function fetchShareKeys(shareId: string): Promise<
+  Array<{
+    keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+    itemId: string;
+    encryptedKey: string;
+  }>
 > {
   const response = await sharesControllerGetShareKeys(shareId);
 
   return response.map((k) => ({
-    keyType: k.keyType as 'file' | 'folder' | 'file-ipns',
+    keyType: k.keyType as 'file' | 'folder' | 'file-ipns' | 'folder-ipns',
     itemId: k.itemId,
     encryptedKey: k.encryptedKey,
   }));
