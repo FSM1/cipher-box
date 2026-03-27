@@ -130,12 +130,14 @@ jobs:
         run: |
           TAG="${{ inputs.staging_tag || github.ref_name }}"
           BODY="Staging build for ${TAG}. macOS (unsigned - right-click > Open to launch), Windows (unsigned - click \"More info\" > \"Run anyway\"), and Linux (AppImage/deb)."
-          # Create the release if it doesn't exist yet; ignore error if it does
+          # Create the release if it doesn't exist yet; ignore error if it does.
+          # Not marked as prerelease — staging is the production environment and
+          # /releases/latest/ must resolve to these builds for the Tauri auto-updater.
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --title "CipherBox Desktop ${TAG}" \
             --notes "$BODY" \
-            --prerelease 2>/dev/null || true
+            2>/dev/null || true
 
   build-desktop:
     name: Build Desktop App (macOS)
@@ -191,7 +193,8 @@ jobs:
           releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
           releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch) and Windows (unsigned - click "More info" > "Run anyway").'
           releaseDraft: false
-          prerelease: true
+          prerelease: false
+          includeUpdaterJson: true
 
   build-desktop-windows:
     name: Build Desktop App (Windows)
@@ -285,7 +288,8 @@ jobs:
           releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
           releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch), Windows (unsigned - click "More info" > "Run anyway"), and Linux (AppImage/deb).'
           releaseDraft: false
-          prerelease: true
+          prerelease: false
+          includeUpdaterJson: true
           args: -- --no-default-features --features winfsp
 
   build-desktop-linux:
@@ -361,7 +365,8 @@ jobs:
           releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
           releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch), Windows (unsigned - click "More info" > "Run anyway"), and Linux (AppImage/deb).'
           releaseDraft: false
-          prerelease: true
+          prerelease: false
+          includeUpdaterJson: true
           args: -- --no-default-features --features fuse
 
   deploy-vps:
