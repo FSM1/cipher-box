@@ -862,6 +862,12 @@ test.describe.serial('Writable Shares', () => {
     // Edit the content
     await textarea.fill('Edited file content by Bob');
 
+    // Wait for React to process the state change (isDirty must be true
+    // before Ctrl+S fires, otherwise the stale closure skips the save)
+    await bob.page
+      .locator('.text-editor-status--modified')
+      .waitFor({ state: 'visible', timeout: 5000 });
+
     // Save via Ctrl+S
     await bob.page.keyboard.press('Control+s');
     await textEditor.waitFor({ state: 'hidden', timeout: 30000 });
