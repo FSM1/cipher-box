@@ -5,6 +5,7 @@ import { DeviceApprovalService } from './device-approval.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateApprovalDto } from './dto/create-approval.dto';
 import { RespondApprovalDto } from './dto/respond-approval.dto';
+import { RequestWithUser } from '../common/types';
 
 describe('DeviceApprovalController', () => {
   let controller: DeviceApprovalController;
@@ -25,7 +26,7 @@ describe('DeviceApprovalController', () => {
 
   const mockRequest = {
     user: { id: testUserId },
-  } as unknown as Request & { user: { id: string } };
+  } as unknown as RequestWithUser;
 
   beforeEach(async () => {
     mockService = {

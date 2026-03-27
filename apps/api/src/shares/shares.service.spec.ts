@@ -1,12 +1,18 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { SharesService } from './shares.service';
 import { Share } from './entities/share.entity';
 import { ShareKey } from './entities/share-key.entity';
 import { User } from '../auth/entities/user.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 import { AddShareKeysDto } from './dto/share-key.dto';
+import { In } from 'typeorm';
 
 describe('SharesService', () => {
   let service: SharesService;
@@ -23,6 +29,7 @@ describe('SharesService', () => {
     find: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
+    delete: jest.Mock;
   };
   let mockUserRepo: {
     findOne: jest.Mock;
@@ -46,6 +53,8 @@ describe('SharesService', () => {
     ipnsName: testIpnsName,
     itemName: 'My Folder',
     encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
+    permission: 'read',
+    encryptedIpnsKey: null,
     hiddenByRecipient: false,
     revokedAt: null,
     shareKeys: [],
@@ -77,6 +86,7 @@ describe('SharesService', () => {
       find: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
+      delete: jest.fn(),
     };
     mockUserRepo = {
       findOne: jest.fn(),
@@ -458,14 +468,13 @@ describe('SharesService', () => {
       );
     });
 
-    it('should throw ForbiddenException when user is not sharer', async () => {
+    it('should throw ForbiddenException when user is not sharer or write-recipient', async () => {
+      // mockShare has permission: 'read', so recipient is not a write-recipient
       mockShareRepo.findOne.mockResolvedValue(mockShare);
+      const otherId = '990e8400-e29b-41d4-a716-446655440009';
 
-      await expect(service.addShareKeys(shareId, recipientId, addKeysDto)).rejects.toThrow(
+      await expect(service.addShareKeys(shareId, otherId, addKeysDto)).rejects.toThrow(
         ForbiddenException
-      );
-      await expect(service.addShareKeys(shareId, recipientId, addKeysDto)).rejects.toThrow(
-        'Only the sharer can add keys'
       );
     });
   });
@@ -656,6 +665,234 @@ describe('SharesService', () => {
       await expect(
         service.updateShareEncryptedKey(shareId, recipientId, 'ff'.repeat(64))
       ).rejects.toThrow('Only the sharer can update share keys');
+    });
+  });
+
+  // =========================================================================
+  // Security: Phase 27 writable shares fixes
+  // =========================================================================
+
+  describe('addShareKeys - write-share recipient authorization (M-02)', () => {
+    const writeShare: Share = {
+      ...mockShare,
+      permission: 'write',
+      encryptedIpnsKey: Buffer.from('ee'.repeat(64), 'hex'),
+    };
+
+    it('should allow write-share recipient to add file keys', async () => {
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+      mockShareKeyRepo.findOne.mockResolvedValue(null);
+      mockShareKeyRepo.create.mockImplementation((data) => data);
+      mockShareKeyRepo.save.mockResolvedValue({});
+
+      const dto: AddShareKeysDto = {
+        keys: [
+          {
+            keyType: 'file',
+            itemId: '880e8400-e29b-41d4-a716-446655440003',
+            encryptedKey: 'dd'.repeat(64),
+          },
+        ],
+      };
+
+      await service.addShareKeys(shareId, recipientId, dto);
+      expect(mockShareKeyRepo.save).toHaveBeenCalled();
+    });
+
+    it('should allow write-share recipient to add file-ipns keys', async () => {
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+      mockShareKeyRepo.findOne.mockResolvedValue(null);
+      mockShareKeyRepo.create.mockImplementation((data) => data);
+      mockShareKeyRepo.save.mockResolvedValue({});
+
+      const dto: AddShareKeysDto = {
+        keys: [
+          {
+            keyType: 'file-ipns',
+            itemId: '880e8400-e29b-41d4-a716-446655440003',
+            encryptedKey: 'dd'.repeat(64),
+          },
+        ],
+      };
+
+      await service.addShareKeys(shareId, recipientId, dto);
+      expect(mockShareKeyRepo.save).toHaveBeenCalled();
+    });
+
+    it('should reject write-share recipient adding folder keys', async () => {
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+
+      const dto: AddShareKeysDto = {
+        keys: [
+          {
+            keyType: 'folder',
+            itemId: '880e8400-e29b-41d4-a716-446655440003',
+            encryptedKey: 'dd'.repeat(64),
+          },
+        ],
+      };
+
+      await expect(service.addShareKeys(shareId, recipientId, dto)).rejects.toThrow(
+        ForbiddenException
+      );
+    });
+
+    it('should allow write-share recipient to add folder-ipns keys (subfolder write access)', async () => {
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+      mockShareKeyRepo.findOne.mockResolvedValue(null);
+      mockShareKeyRepo.create.mockImplementation((data) => data);
+      mockShareKeyRepo.save.mockResolvedValue({});
+
+      const dto: AddShareKeysDto = {
+        keys: [
+          {
+            keyType: 'folder-ipns',
+            itemId: '880e8400-e29b-41d4-a716-446655440003',
+            encryptedKey: 'dd'.repeat(64),
+          },
+        ],
+      };
+
+      await expect(service.addShareKeys(shareId, recipientId, dto)).resolves.not.toThrow();
+    });
+
+    it('should reject read-only recipient from adding any keys', async () => {
+      mockShareRepo.findOne.mockResolvedValue(mockShare); // permission: 'read'
+
+      const dto: AddShareKeysDto = {
+        keys: [
+          {
+            keyType: 'file',
+            itemId: '880e8400-e29b-41d4-a716-446655440003',
+            encryptedKey: 'dd'.repeat(64),
+          },
+        ],
+      };
+
+      await expect(service.addShareKeys(shareId, recipientId, dto)).rejects.toThrow(
+        ForbiddenException
+      );
+    });
+  });
+
+  describe('updatePermission - security checks', () => {
+    it('should reject permission change on revoked share (L-01)', async () => {
+      const revokedShare = { ...mockShare, revokedAt: new Date() };
+      mockShareRepo.findOne.mockResolvedValue(revokedShare);
+
+      await expect(
+        service.updatePermission(shareId, sharerId, 'write', 'ee'.repeat(64))
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should clean up file-ipns share_keys on downgrade (H-03)', async () => {
+      const writeShare = {
+        ...mockShare,
+        permission: 'write' as const,
+        encryptedIpnsKey: Buffer.from('ee'.repeat(64), 'hex'),
+      };
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+
+      // Mock the transaction manager used for atomic downgrade
+      const txSave = jest.fn().mockResolvedValue({});
+      const txDelete = jest.fn().mockResolvedValue({ affected: 2 });
+      (mockShareRepo as unknown as { manager: unknown }).manager = {
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            async (cb: (mgr: { save: jest.Mock; delete: jest.Mock }) => Promise<void>) => {
+              await cb({ save: txSave, delete: txDelete });
+            }
+          ),
+      };
+
+      await service.updatePermission(shareId, sharerId, 'read');
+
+      // Verify permission changed via transaction
+      expect(txSave).toHaveBeenCalledWith(
+        expect.objectContaining({ permission: 'read', encryptedIpnsKey: null })
+      );
+
+      // Verify all write-enabling keys were deleted in the same transaction
+      expect(txDelete).toHaveBeenCalledWith(ShareKey, {
+        shareId,
+        keyType: In(['file-ipns', 'folder-ipns']),
+      });
+    });
+
+    it('should not delete share_keys on upgrade to write', async () => {
+      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
+      mockShareRepo.save.mockResolvedValue({});
+
+      await service.updatePermission(shareId, sharerId, 'write', 'ee'.repeat(64));
+
+      // Should NOT delete any share_keys
+      expect(mockShareKeyRepo.delete).not.toHaveBeenCalled();
+    });
+
+    it('should throw NotFoundException when share not found', async () => {
+      mockShareRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.updatePermission(shareId, sharerId, 'write', 'ee'.repeat(64))
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ForbiddenException when caller is not the sharer', async () => {
+      mockShareRepo.findOne.mockResolvedValue(mockShare);
+
+      await expect(
+        service.updatePermission(shareId, recipientId, 'write', 'ee'.repeat(64))
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should throw BadRequestException when upgrading without IPNS key', async () => {
+      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
+
+      await expect(service.updatePermission(shareId, sharerId, 'write')).rejects.toThrow(
+        BadRequestException
+      );
+    });
+
+    it('should upgrade to write and save encryptedIpnsKey', async () => {
+      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
+      mockShareRepo.save.mockResolvedValue({});
+
+      await service.updatePermission(shareId, sharerId, 'write', 'ee'.repeat(64));
+
+      const saved = mockShareRepo.save.mock.calls[0][0];
+      expect(saved.permission).toBe('write');
+      expect(saved.encryptedIpnsKey).toEqual(Buffer.from('ee'.repeat(64), 'hex'));
+    });
+  });
+
+  describe('findActiveWriteShare', () => {
+    it('should return a write share for valid recipient and IPNS name', async () => {
+      const writeShare = {
+        ...mockShare,
+        permission: 'write',
+        encryptedIpnsKey: Buffer.from('ee'.repeat(64), 'hex'),
+      };
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+
+      const result = await service.findActiveWriteShare(recipientId, testIpnsName);
+
+      expect(result).toEqual(writeShare);
+      expect(mockShareRepo.findOne).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          recipientId,
+          ipnsName: testIpnsName,
+          permission: 'write',
+        }),
+      });
+    });
+
+    it('should return null when no active write share exists', async () => {
+      mockShareRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.findActiveWriteShare(recipientId, testIpnsName);
+
+      expect(result).toBeNull();
     });
   });
 });

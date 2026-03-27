@@ -1,15 +1,17 @@
 /**
- * SharedFileBrowser -- Read-only file browser for shared content.
+ * SharedFileBrowser -- File browser for shared content with conditional write support.
  *
  * Shows items shared with the current user at ~/shared.
  * - Top-level: flat list of received shares with SHARED BY column
- * - Inside folder: standard file list with [RO] badges, no write actions
- * - Context menu: Download, Preview, Details, Hide only
- * - No upload, no create folder, no rename, no move, no delete
+ * - Inside folder: standard file list with [RW]/[RO] badges
+ * - Write shares: upload/mkdir toolbar, full context menu (rename, delete)
+ * - Read-only shares: no write actions, download/preview/details only
+ * - Drag-and-drop upload zone for write shares
  */
 
-import { useState, useCallback, type MouseEvent } from 'react';
-import type { FolderChild } from '@cipherbox/core';
+import type React from 'react';
+import { useState, useCallback, useRef, useEffect, type MouseEvent, type DragEvent } from 'react';
+import type { FolderChild, FilePointer } from '@cipherbox/core';
 import { useSharedNavigation, type SharedListItem } from '../../hooks/useSharedNavigation';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import {
@@ -74,6 +76,7 @@ export function SharedFileBrowser() {
     breadcrumbs,
     isLoading,
     error,
+    permission,
     navigateToShare,
     navigateToSubfolder,
     navigateUp,
@@ -81,6 +84,11 @@ export function SharedFileBrowser() {
     navigateToBreadcrumb,
     downloadSharedFile,
     hideSharedItem,
+    uploadFile,
+    createFolder,
+    renameItem,
+    deleteItem,
+    updateSharedFile,
   } = useSharedNavigation();
 
   const contextMenu = useContextMenu();
@@ -107,6 +115,24 @@ export function SharedFileBrowser() {
 
   // Track which shared item the context menu is for (for hide action)
   const [contextShareId, setContextShareId] = useState<string | null>(null);
+
+  // Inline new folder creation state
+  const [showNewFolderInput, setShowNewFolderInput] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const newFolderInputRef = useRef<HTMLInputElement>(null);
+
+  // File input ref for upload button
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Drag-and-drop state
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  // Inline rename state
+  const [renamingItem, setRenamingItem] = useState<FolderChild | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const isWritable = permission === 'write';
 
   // Context menu handlers for folder view
   const handleContextMenu = useCallback(
@@ -174,6 +200,174 @@ export function SharedFileBrowser() {
       await hideSharedItem(contextShareId);
     }
   }, [contextShareId, hideSharedItem]);
+
+  // -------------------------------------------------------------------------
+  // Write action handlers
+  // -------------------------------------------------------------------------
+
+  const handleUploadClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileSelected = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
+
+      for (let i = 0; i < files.length; i++) {
+        await uploadFile(files[i]);
+      }
+
+      // Reset input so the same file can be re-uploaded
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    },
+    [uploadFile]
+  );
+
+  const handleCreateFolderClick = useCallback(() => {
+    setShowNewFolderInput(true);
+    setNewFolderName('');
+    // Focus the input after React renders it
+    setTimeout(() => newFolderInputRef.current?.focus(), 0);
+  }, []);
+
+  const handleCreateFolderSubmit = useCallback(async () => {
+    const name = newFolderName.trim();
+    if (!name) {
+      setShowNewFolderInput(false);
+      return;
+    }
+
+    await createFolder(name);
+    setShowNewFolderInput(false);
+    setNewFolderName('');
+  }, [newFolderName, createFolder]);
+
+  const handleCreateFolderKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleCreateFolderSubmit();
+      } else if (e.key === 'Escape') {
+        setShowNewFolderInput(false);
+        setNewFolderName('');
+      }
+    },
+    [handleCreateFolderSubmit]
+  );
+
+  // Context menu rename handler
+  const handleRename = useCallback(() => {
+    const item = contextMenu.item;
+    if (!item) return;
+    setRenamingItem(item);
+    setRenameValue(item.name);
+    contextMenu.hide();
+    setTimeout(() => renameInputRef.current?.focus(), 0);
+  }, [contextMenu]);
+
+  const handleRenameSubmit = useCallback(async () => {
+    if (!renamingItem) return;
+    const name = renameValue.trim();
+    if (!name || name === renamingItem.name) {
+      setRenamingItem(null);
+      return;
+    }
+
+    await renameItem(renamingItem, name);
+    setRenamingItem(null);
+    setRenameValue('');
+  }, [renamingItem, renameValue, renameItem]);
+
+  const handleRenameKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleRenameSubmit();
+      } else if (e.key === 'Escape') {
+        setRenamingItem(null);
+        setRenameValue('');
+      }
+    },
+    [handleRenameSubmit]
+  );
+
+  // Context menu delete handler
+  const handleDelete = useCallback(async () => {
+    const item = contextMenu.item;
+    if (!item) return;
+    await deleteItem(item);
+  }, [contextMenu.item, deleteItem]);
+
+  // Drag-and-drop handlers — always preventDefault to avoid browser navigation
+  const handleDragOver = useCallback(
+    (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!isWritable) return;
+      setIsDragOver(true);
+    },
+    [isWritable]
+  );
+
+  const handleDragLeave = useCallback(
+    (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!isWritable) return;
+      setIsDragOver(false);
+    },
+    [isWritable]
+  );
+
+  const handleDrop = useCallback(
+    async (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragOver(false);
+      if (!isWritable) return;
+
+      const files = e.dataTransfer.files;
+      if (!files || files.length === 0) return;
+
+      for (let i = 0; i < files.length; i++) {
+        await uploadFile(files[i]);
+      }
+    },
+    [isWritable, uploadFile]
+  );
+
+  // Auto-open text editor when entering a writable file share view
+  useEffect(() => {
+    if (currentView === 'file' && currentShareId) {
+      const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
+      if (shareItem && isTextFile(shareItem.share.itemName)) {
+        const fakeFilePointer: FilePointer = {
+          type: 'file',
+          id: shareItem.share.shareId,
+          name: shareItem.share.itemName,
+          fileMetaIpnsName: shareItem.share.ipnsName,
+          createdAt: Date.parse(shareItem.share.createdAt),
+          modifiedAt: Date.parse(shareItem.share.createdAt),
+        };
+        setEditorDialog({ open: true, item: fakeFilePointer });
+      } else {
+        // Non-text files: download and return to list
+        if (shareItem) {
+          downloadSharedFile({
+            type: 'file',
+            id: shareItem.share.shareId,
+            name: shareItem.share.itemName,
+            fileMetaIpnsName: shareItem.share.ipnsName,
+            createdAt: Date.parse(shareItem.share.createdAt),
+            modifiedAt: Date.parse(shareItem.share.createdAt),
+          }).finally(() => navigateToRoot());
+        }
+      }
+    }
+  }, [currentView, currentShareId, sharedItems, downloadSharedFile, navigateToRoot]);
 
   // Render top-level shared list
   if (currentView === 'list') {
@@ -309,8 +503,13 @@ export function SharedFileBrowser() {
   const hasChildren = folderChildren.length > 0;
 
   return (
-    <div className="file-browser-content shared-browser">
-      {/* Toolbar with breadcrumbs */}
+    <div
+      className={`file-browser-content shared-browser${isDragOver ? ' shared-drag-over' : ''}`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Toolbar with breadcrumbs and write actions */}
       <div className="file-browser-toolbar">
         <nav className="breadcrumb-nav" aria-label="Current location" data-testid="breadcrumbs">
           <span className="breadcrumb-prefix">~</span>
@@ -340,7 +539,53 @@ export function SharedFileBrowser() {
             );
           })}
         </nav>
+
+        {/* Write toolbar -- only visible for write shares */}
+        {isWritable && (
+          <div className="file-browser-actions">
+            <button
+              type="button"
+              className="toolbar-btn toolbar-btn--primary"
+              onClick={handleUploadClick}
+            >
+              {'--upload'}
+            </button>
+            <button
+              type="button"
+              className="toolbar-btn toolbar-btn--primary"
+              onClick={handleCreateFolderClick}
+            >
+              {'--mkdir'}
+            </button>
+            {/* Hidden file input for upload */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handleFileSelected}
+            />
+          </div>
+        )}
       </div>
+
+      {/* Inline new folder input */}
+      {showNewFolderInput && (
+        <div className="shared-inline-input">
+          <span className="shared-inline-input-label">{'> mkdir '}</span>
+          <input
+            ref={newFolderInputRef}
+            type="text"
+            className="shared-inline-input-field"
+            value={newFolderName}
+            onChange={(e) => setNewFolderName(e.target.value)}
+            onKeyDown={handleCreateFolderKeyDown}
+            onBlur={handleCreateFolderSubmit}
+            placeholder="folder-name"
+            aria-label="New folder name"
+          />
+        </div>
+      )}
 
       {/* Loading state */}
       {isLoading && (
@@ -406,6 +651,13 @@ export function SharedFileBrowser() {
               <SharedFolderRow
                 key={item.id}
                 item={item}
+                permission={permission}
+                isRenaming={renamingItem?.id === item.id}
+                renameValue={renameValue}
+                renameInputRef={renameInputRef}
+                onRenameChange={setRenameValue}
+                onRenameKeyDown={handleRenameKeyDown}
+                onRenameSubmit={handleRenameSubmit}
                 onContextMenu={(e) => handleContextMenu(e, item)}
                 onDoubleClick={() => {
                   if (item.type === 'folder') {
@@ -428,12 +680,16 @@ export function SharedFileBrowser() {
               {sharedEmptyArt}
             </pre>
             <p className="empty-state-text">{'// EMPTY SHARED FOLDER'}</p>
-            <p className="empty-state-hint">this shared folder has no contents</p>
+            <p className="empty-state-hint">
+              {isWritable
+                ? 'drag files here or use --upload'
+                : 'this shared folder has no contents'}
+            </p>
           </div>
         </div>
       )}
 
-      {/* Read-only context menu */}
+      {/* Context menu -- conditional readOnly based on permission */}
       {contextMenu.visible && contextMenu.item && (
         <ContextMenu
           x={contextMenu.x}
@@ -452,10 +708,10 @@ export function SharedFileBrowser() {
               ? handlePreviewClick
               : undefined
           }
-          onRename={() => {}}
-          onDelete={() => {}}
+          onRename={isWritable ? handleRename : () => {}}
+          onDelete={isWritable ? handleDelete : () => {}}
           onDetails={handleDetailsClick}
-          readOnly
+          readOnly={permission !== 'write'}
         />
       )}
 
@@ -468,15 +724,22 @@ export function SharedFileBrowser() {
         parentFolderId=""
       />
 
-      {/* Text viewer dialog (read-only) */}
+      {/* Text viewer dialog (read-only for read shares, editable for write shares) */}
       <TextEditorDialog
         open={editorDialog.open}
-        onClose={() => setEditorDialog({ open: false, item: null })}
+        onClose={() => {
+          setEditorDialog({ open: false, item: null });
+          // If viewing a standalone file share, go back to list on close
+          if (currentView === 'file') {
+            navigateToRoot();
+          }
+        }}
         item={editorDialog.item && isFilePointer(editorDialog.item) ? editorDialog.item : null}
         parentFolderId=""
         folderKey={folderKey}
-        readOnly
+        readOnly={!isWritable}
         shareId={currentShareId}
+        onSaveSharedFile={isWritable ? updateSharedFile : undefined}
       />
 
       {/* Image preview dialog */}
@@ -550,6 +813,7 @@ function SharedListRow({
   const isFolder = share.itemType === 'folder';
   const icon = isFolder ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
   const date = new Date(share.createdAt).toLocaleDateString();
+  const isWrite = share.permission === 'write';
 
   return (
     <div
@@ -574,7 +838,11 @@ function SharedListRow({
           {share.itemName}
           {isFolder ? '/' : ''}
         </span>
-        <span className="shared-ro-badge">[RO]</span>
+        {isWrite ? (
+          <span className="shared-rw-badge">{'[RW]'}</span>
+        ) : (
+          <span className="shared-ro-badge">{'[RO]'}</span>
+        )}
       </div>
       <div className="file-list-cell shared-by-cell" role="gridcell">
         {truncatePubkey(share.sharerPublicKey)}
@@ -588,31 +856,49 @@ function SharedListRow({
 
 /**
  * Row component for items within a shared folder.
+ * Shows [RW] or [RO] badge based on the share's permission level.
+ * Supports inline renaming when isRenaming is true.
  */
 function SharedFolderRow({
   item,
+  permission,
+  isRenaming,
+  renameValue,
+  renameInputRef,
+  onRenameChange,
+  onRenameKeyDown,
+  onRenameSubmit,
   onContextMenu,
   onDoubleClick,
 }: {
   item: FolderChild;
+  permission: 'read' | 'write' | null;
+  isRenaming: boolean;
+  renameValue: string;
+  renameInputRef: React.RefObject<HTMLInputElement>;
+  onRenameChange: (value: string) => void;
+  onRenameKeyDown: (e: React.KeyboardEvent) => void;
+  onRenameSubmit: () => void;
   onContextMenu: (e: MouseEvent) => void;
   onDoubleClick: () => void;
 }) {
   const isFolder = item.type === 'folder';
   const icon = isFolder ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
   const date = item.modifiedAt ? new Date(item.modifiedAt).toLocaleDateString() : '--';
+  const isWrite = permission === 'write';
 
   return (
     <div
       className="file-list-row"
       role="row"
       tabIndex={0}
-      onDoubleClick={onDoubleClick}
+      onDoubleClick={isRenaming ? undefined : onDoubleClick}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu(e);
       }}
       onKeyDown={(e) => {
+        if (isRenaming) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onDoubleClick();
@@ -621,11 +907,30 @@ function SharedFolderRow({
     >
       <div className="file-list-cell file-list-cell-name" role="gridcell">
         <span className="file-icon">{icon}</span>
-        <span className="file-name">
-          {item.name}
-          {isFolder ? '/' : ''}
-        </span>
-        <span className="shared-ro-badge">[RO]</span>
+        {isRenaming ? (
+          <input
+            ref={renameInputRef}
+            type="text"
+            className="shared-inline-rename-field"
+            value={renameValue}
+            onChange={(e) => onRenameChange(e.target.value)}
+            onKeyDown={onRenameKeyDown}
+            onBlur={onRenameSubmit}
+            aria-label="Rename item"
+          />
+        ) : (
+          <>
+            <span className="file-name">
+              {item.name}
+              {isFolder ? '/' : ''}
+            </span>
+            {isWrite ? (
+              <span className="shared-rw-badge">{'[RW]'}</span>
+            ) : (
+              <span className="shared-ro-badge">{'[RO]'}</span>
+            )}
+          </>
+        )}
       </div>
       <div className="file-list-cell file-list-cell-size" role="gridcell">
         --

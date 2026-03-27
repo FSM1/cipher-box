@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { CHILD_KEY_TYPES, type ChildKeyType } from '../types';
 import {
   IsString,
   IsIn,
@@ -13,12 +14,12 @@ import { Type } from 'class-transformer';
 
 class ChildKeyDto {
   @ApiProperty({
-    description: 'Type of key: file or folder',
-    enum: ['file', 'folder'],
+    description: 'Type of key: file, folder, or file-ipns',
+    enum: [...CHILD_KEY_TYPES],
   })
   @IsString()
-  @IsIn(['file', 'folder'])
-  keyType!: 'file' | 'folder';
+  @IsIn(CHILD_KEY_TYPES)
+  keyType!: ChildKeyType;
 
   @ApiProperty({
     description: 'UUID of the file or subfolder',
@@ -33,8 +34,10 @@ class ChildKeyDto {
     description: 'Hex-encoded ECIES ciphertext of the key wrapped for recipient',
   })
   @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
-  @MinLength(2)
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'encryptedKey must be an even-length hex string',
+  })
+  @MinLength(64)
   @MaxLength(1024)
   encryptedKey!: string;
 }
@@ -78,10 +81,36 @@ export class CreateShareDto {
     description: 'Hex-encoded root key wrapped for recipient via ECIES',
   })
   @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
-  @MinLength(2)
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'encryptedKey must be an even-length hex string',
+  })
+  @MinLength(64)
   @MaxLength(1024)
   encryptedKey!: string;
+
+  @ApiProperty({
+    description: 'Permission level for the share',
+    enum: ['read', 'write'],
+    default: 'read',
+    required: false,
+  })
+  @IsString()
+  @IsIn(['read', 'write'])
+  @IsOptional()
+  permission?: 'read' | 'write';
+
+  @ApiProperty({
+    description: 'Hex-encoded ECIES ciphertext of IPNS private key for write shares',
+    required: false,
+  })
+  @IsString()
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'encryptedIpnsKey must be an even-length hex string',
+  })
+  @MinLength(64)
+  @MaxLength(2048)
+  @IsOptional()
+  encryptedIpnsKey?: string;
 
   @ApiProperty({
     description: 'Re-wrapped descendant keys (subfolder/file keys)',

@@ -4,6 +4,7 @@
 
 import { expect } from 'vitest';
 import type { CipherBoxClient } from '@cipherbox/sdk';
+import type { FolderChild } from '@cipherbox/core';
 
 /**
  * Assert that a folder's in-memory children contain an item with the given name.
@@ -50,7 +51,11 @@ export function expectChildCount(
  * Get a child entry from the folder tree by name.
  * Throws if not found.
  */
-export function getChild(client: CipherBoxClient, folderIpnsName: string, name: string): any {
+export function getChild(
+  client: CipherBoxClient,
+  folderIpnsName: string,
+  name: string
+): FolderChild {
   const folder = client.getFolderTree().get(folderIpnsName);
   if (!folder) throw new Error(`Folder ${folderIpnsName} not in tree`);
   const match = folder.children.find((c) => c.name === name);
@@ -61,7 +66,7 @@ export function getChild(client: CipherBoxClient, folderIpnsName: string, name: 
 /**
  * Get all children from the folder tree.
  */
-export function getChildren(client: CipherBoxClient, folderIpnsName: string): any[] {
+export function getChildren(client: CipherBoxClient, folderIpnsName: string): FolderChild[] {
   const folder = client.getFolderTree().get(folderIpnsName);
   if (!folder) throw new Error(`Folder ${folderIpnsName} not in tree`);
   return folder.children;

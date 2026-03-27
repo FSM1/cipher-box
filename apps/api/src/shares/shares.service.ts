@@ -3,9 +3,10 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not } from 'typeorm';
+import { Repository, IsNull, Not, In } from 'typeorm';
 import { Share } from './entities/share.entity';
 import { ShareKey } from './entities/share-key.entity';
 import { User } from '../auth/entities/user.entity';
@@ -74,6 +75,19 @@ export class SharesService {
       await this.shareRepo.remove(revoked);
     }
 
+    // Validate permission/IPNS-key invariant
+    const permission = dto.permission ?? 'read';
+    let encryptedIpnsKey: Buffer | null = null;
+
+    if (permission === 'write') {
+      if (!dto.encryptedIpnsKey) {
+        throw new BadRequestException('encryptedIpnsKey required for write permission');
+      }
+      encryptedIpnsKey = Buffer.from(dto.encryptedIpnsKey, 'hex');
+    } else if (dto.encryptedIpnsKey) {
+      throw new BadRequestException('encryptedIpnsKey must be omitted for read permission');
+    }
+
     const share = this.shareRepo.create({
       sharerId,
       recipientId: recipient.id,
@@ -81,6 +95,8 @@ export class SharesService {
       ipnsName: dto.ipnsName,
       itemName: dto.itemName,
       encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
+      permission,
+      encryptedIpnsKey,
       hiddenByRecipient: false,
       revokedAt: null,
     });
@@ -180,17 +196,31 @@ export class SharesService {
 
   /**
    * Add or update re-wrapped keys for an existing share.
-   * Only the sharer can add keys.
+   * Allowed for the sharer (owner) or for write-share recipients.
    */
-  async addShareKeys(shareId: string, sharerId: string, dto: AddShareKeysDto): Promise<void> {
+  async addShareKeys(shareId: string, callerId: string, dto: AddShareKeysDto): Promise<void> {
     const share = await this.shareRepo.findOne({ where: { id: shareId } });
 
     if (!share) {
       throw new NotFoundException('Share not found');
     }
 
-    if (share.sharerId !== sharerId) {
-      throw new ForbiddenException('Only the sharer can add keys');
+    const isSharer = share.sharerId === callerId;
+    const isWriteRecipient =
+      share.recipientId === callerId &&
+      share.permission === 'write' &&
+      share.encryptedIpnsKey !== null &&
+      !share.revokedAt;
+
+    if (!isSharer && !isWriteRecipient) {
+      throw new ForbiddenException('Only the sharer or write-share recipient can add keys');
+    }
+
+    if (isWriteRecipient) {
+      const hasFolderKey = dto.keys.some((k) => k.keyType === 'folder');
+      if (hasFolderKey) {
+        throw new ForbiddenException('Write-share recipients cannot modify folder keys');
+      }
     }
 
     // Upsert: insert or update encrypted_key for each itemId
@@ -330,5 +360,65 @@ export class SharesService {
 
     share.encryptedKey = Buffer.from(encryptedKey, 'hex');
     await this.shareRepo.save(share);
+  }
+
+  /**
+   * Update the permission level of a share.
+   * Only the sharer (owner) can upgrade or downgrade permission.
+   * Upgrading to 'write' requires an ECIES-wrapped IPNS private key.
+   * Downgrading to 'read' clears the IPNS key.
+   */
+  async updatePermission(
+    shareId: string,
+    sharerId: string,
+    permission: 'read' | 'write',
+    encryptedIpnsKey?: string
+  ): Promise<void> {
+    const share = await this.shareRepo.findOne({ where: { id: shareId } });
+
+    if (!share) {
+      throw new NotFoundException('Share not found');
+    }
+
+    if (share.sharerId !== sharerId) {
+      throw new ForbiddenException('Only the sharer can change permission');
+    }
+
+    if (share.revokedAt) {
+      throw new ConflictException('Cannot change permission on a revoked share');
+    }
+
+    if (permission === 'write') {
+      if (!encryptedIpnsKey) {
+        throw new BadRequestException('encryptedIpnsKey required for write permission');
+      }
+      share.permission = 'write';
+      share.encryptedIpnsKey = Buffer.from(encryptedIpnsKey, 'hex');
+      await this.shareRepo.save(share);
+    } else {
+      // Downgrade atomically: update share + delete all write-enabling keys in one transaction
+      await this.shareRepo.manager.transaction(async (txManager) => {
+        share.permission = 'read';
+        share.encryptedIpnsKey = null;
+        await txManager.save(share);
+        await txManager.delete(ShareKey, { shareId, keyType: In(['file-ipns', 'folder-ipns']) });
+      });
+    }
+  }
+
+  /**
+   * Find an active write share for a given recipient and IPNS name.
+   * Used by IPNS publish authorization to allow write-share recipients to publish.
+   */
+  async findActiveWriteShare(recipientId: string, ipnsName: string): Promise<Share | null> {
+    return this.shareRepo.findOne({
+      where: {
+        recipientId,
+        ipnsName,
+        permission: 'write',
+        encryptedIpnsKey: Not(IsNull()),
+        revokedAt: IsNull(),
+      },
+    });
   }
 }

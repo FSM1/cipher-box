@@ -8,7 +8,7 @@
 import type { ChildKeyDtoKeyType } from './childKeyDtoKeyType';
 
 export interface ChildKeyDto {
-  /** Type of key: file or folder */
+  /** Type of key: file, folder, or file-ipns */
   keyType: ChildKeyDtoKeyType;
   /** UUID of the file or subfolder */
   itemId: string;

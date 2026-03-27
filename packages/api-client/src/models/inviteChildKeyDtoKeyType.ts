@@ -7,7 +7,7 @@
  */
 
 /**
- * Type of key: file or folder
+ * Type of key: file, folder, or file-ipns
  */
 export type InviteChildKeyDtoKeyType =
   (typeof InviteChildKeyDtoKeyType)[keyof typeof InviteChildKeyDtoKeyType];
@@ -15,4 +15,5 @@ export type InviteChildKeyDtoKeyType =
 export const InviteChildKeyDtoKeyType = {
   file: 'file',
   folder: 'folder',
+  'file-ipns': 'file-ipns',
 } as const;

@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { BinNotLoadedError } from '@cipherbox/sdk';
+import { BinNotLoadedError, type SdkEvent } from '@cipherbox/sdk';
 import { createTestContext, deleteTestAccount, type TestContext } from '../fixtures/test-harness';
 
 describe('Error Cases', () => {
@@ -100,15 +100,19 @@ describe('Error Cases', () => {
 
   describe('Event emission', () => {
     it('should emit operation:start and operation:end events', async () => {
-      const events: any[] = [];
+      const events: SdkEvent[] = [];
       const unsub = ctx.client.on((event) => events.push(event));
 
       await ctx.client.createFolder(ctx.rootIpnsName, 'EventTest');
 
       unsub();
 
-      const starts = events.filter((e) => e.type === 'operation:start');
-      const ends = events.filter((e) => e.type === 'operation:end');
+      const starts = events.filter(
+        (e): e is Extract<SdkEvent, { type: 'operation:start' }> => e.type === 'operation:start'
+      );
+      const ends = events.filter(
+        (e): e is Extract<SdkEvent, { type: 'operation:end' }> => e.type === 'operation:end'
+      );
 
       expect(starts.length).toBeGreaterThan(0);
       expect(ends.length).toBeGreaterThan(0);
@@ -118,7 +122,7 @@ describe('Error Cases', () => {
     });
 
     it('should emit error events on failure', async () => {
-      const events: any[] = [];
+      const events: SdkEvent[] = [];
       const unsub = ctx.client.on((event) => events.push(event));
 
       try {
@@ -129,7 +133,9 @@ describe('Error Cases', () => {
 
       unsub();
 
-      const errors = events.filter((e) => e.type === 'error');
+      const errors = events.filter(
+        (e): e is Extract<SdkEvent, { type: 'error' }> => e.type === 'error'
+      );
       expect(errors.length).toBe(1);
       expect(errors[0].operation).toBe('createFolder');
       expect(errors[0].error).toBeInstanceOf(Error);

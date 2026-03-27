@@ -12,6 +12,14 @@ import { createMultiAccountFixture, type MultiAccountFixture } from '../fixtures
 import { API_URL, testFetch } from '../fixtures/test-harness';
 import { generateTextContent } from '../helpers/data-generators';
 
+/** Shape of a share object in the API response */
+interface ShareResponse {
+  shareId: string;
+  itemName: string;
+  itemType: string;
+  encryptedKey: string;
+}
+
 describe('Share Operations', () => {
   let fixture: MultiAccountFixture;
 
@@ -83,7 +91,7 @@ describe('Share Operations', () => {
 
     const data = await res.json();
     expect(data.shares.length).toBeGreaterThanOrEqual(1);
-    const share = data.shares.find((s: any) => s.shareId === shareId);
+    const share = data.shares.find((s: ShareResponse) => s.shareId === shareId);
     expect(share).toBeTruthy();
     expect(share.itemName).toBe('SharedFolder');
     expect(share.itemType).toBe('folder');
@@ -98,7 +106,7 @@ describe('Share Operations', () => {
     expect(res.ok).toBe(true);
 
     const data = await res.json();
-    const share = data.shares.find((s: any) => s.shareId === shareId);
+    const share = data.shares.find((s: ShareResponse) => s.shareId === shareId);
     expect(share).toBeTruthy();
   });
 
@@ -109,7 +117,7 @@ describe('Share Operations', () => {
       headers: { Authorization: `Bearer ${bob.accessToken}` },
     });
     const data = await res.json();
-    const share = data.shares.find((s: any) => s.shareId === shareId);
+    const share = data.shares.find((s: ShareResponse) => s.shareId === shareId);
 
     // Bob unwraps the key with his private key (API returns hex-encoded ciphertext)
     const folderKey = await unwrapKey(hexToBytes(share.encryptedKey), bob.privateKey);
@@ -155,7 +163,7 @@ describe('Share Operations', () => {
       headers: { Authorization: `Bearer ${bob.accessToken}` },
     });
     const data = await res.json();
-    const share = data.shares.find((s: any) => s.shareId === shareId);
+    const share = data.shares.find((s: ShareResponse) => s.shareId === shareId);
     // Revoked shares should not appear in received list
     expect(share).toBeUndefined();
   });

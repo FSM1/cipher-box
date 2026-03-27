@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: complete
-last_updated: '2026-03-26T01:30:00.000Z'
+last_updated: '2026-03-26T05:00:00.000Z'
 progress:
-  total_phases: 11
-  completed_phases: 11
-  total_plans: 50
-  completed_plans: 50
+  total_phases: 12
+  completed_phases: 12
+  total_plans: 53
+  completed_plans: 53
 ---
 
 # Project State
@@ -18,18 +18,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone v1.1 complete
+**Current focus:** Phase 27 — writable-shares-poc (COMPLETE)
 
 ## Current Position
 
-Phase: 26 (observability-ux-tuning) — COMPLETE
-Plan: 2 of 2
+Phase: 27 (writable-shares-poc) — COMPLETE
+Plan: 3 of 3 (all plans complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 160 (72 M1 + 83 M2 + 5 M3)
+- Total plans completed: 161 (72 M1 + 83 M2 + 6 M3)
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
@@ -75,6 +75,9 @@ Plan: 2 of 2
 | 22    | 03   | 8min     | 2     | 8     |
 | 26    | 02   | 4min     | 2     | 5     |
 | 26    | 01   | 5min     | 2     | 6     |
+| 27    | 01   | 6min     | 2     | 23    |
+| 27    | 02   | 5min     | 2     | 4     |
+| 27    | 03   | 25min    | 3     | 15    |
 
 ## Accumulated Context
 
@@ -146,12 +149,20 @@ Recent for v1.1:
 - BYO Pinata baselines: pin p50=2.0s (+47% vs local Kubo), tail latency p99 13.5% better, 98% CipherBox API load reduction per file
 - perf.ts PERF_ENABLED evaluated once at module load (zero overhead in production); **CIPHERBOX_PERF** global for opt-in production debugging
 - Load test thresholds set at 2-3x observed baselines; spike test most generous (15s/15%); vitest expect() for CI failure on breach
+- Write-share authorization in upsertFolderIpns falls through to create-new-entry when no write share found (preserves backward compat for owner first publish)
+- TEE enrollFolder uses existing.userId (FolderIpns owner) for write-share publishes, not authenticated userId
+- Per-file IPNS records created for shared uploads (same as owner uploads) instead of empty fileMetaIpnsName PoC shortcut
+- File IPNS private key dual-wrapped: owner key in FilePointer, recipient key in share_keys (keyType: file-ipns)
+- addShareKeys API relaxed to allow write-share recipients to add keys to their own share
+- TextEditorDialog has separate shared file save path via onSaveSharedFile callback
+- Shared file download/view falls back to fileKeyEncrypted from metadata when no share_key exists
 
 ### Roadmap Evolution
 
 - Phase 19.1 inserted after Phase 19: Extract core crypto SDK as shared package (URGENT)
 - Phase 19.2 inserted after Phase 19: IPFS Upload Performance Optimization (URGENT) — concurrent pins, Kubo worker tuning, pin batching to address ~95% bottleneck in upload path identified by Phase 19 baselines
 - Phase 23 added: Rust SDK Extraction — extract shared cipherbox-core crate, replace duplicated logic in desktop FUSE code, enable unit testing parity with TypeScript
+- Phase 27 added: Writable Shares (PoC) — extend read-only sharing to read-write using existing server-coordinated conflict resolution
 
 ### Open Concerns
 
@@ -169,6 +180,12 @@ Recent for v1.1:
 
 All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`.
 
+### Quick Tasks Completed
+
+| #          | Description                                                   | Date       | Commit     | Directory                                                                                                           |
+| ---------- | ------------------------------------------------------------- | ---------- | ---------- | ------------------------------------------------------------------------------------------------------------------- |
+| 260327-2ab | Extract shared-write operations from web UI into SDK packages | 2026-03-27 | see branch | [260327-2ab-extract-shared-write-operations-from-web](./quick/260327-2ab-extract-shared-write-operations-from-web/) |
+
 ---
 
-Last updated: 2026-03-25 after completing Phase 22 (performance baselines completion)
+Last activity: 2026-03-27 - Completed quick task 260327-2ab: Extract shared-write operations from web UI into SDK packages

@@ -47,4 +47,19 @@ export { SdkEventEmitter } from './events';
 export type { BinOperationContext, BinState } from './bin';
 
 // Share operations (types only -- operations accessed via CipherBoxClient)
-export type { ShareOperationContext, SentShareInfo } from './share';
+export type {
+  ShareOperationContext,
+  SentShareInfo,
+  SharedWriteContext,
+  ShareKeyType,
+} from './share';
+
+// Shared-write operations (stateless functions for write-share recipients)
+export {
+  uploadToSharedFolder,
+  createSharedSubfolder,
+  renameInSharedFolder,
+  deleteFromSharedFolder,
+  updateSharedFile,
+  updateSharePermission,
+} from './share';

@@ -7,11 +7,12 @@
  */
 
 /**
- * Type of key: file or folder
+ * Type of key: file, folder, or file-ipns
  */
 export type ChildKeyDtoKeyType = (typeof ChildKeyDtoKeyType)[keyof typeof ChildKeyDtoKeyType];
 
 export const ChildKeyDtoKeyType = {
   file: 'file',
   folder: 'folder',
+  'file-ipns': 'file-ipns',
 } as const;

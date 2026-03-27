@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { CreateShareDtoItemType } from './createShareDtoItemType';
+import type { CreateShareDtoPermission } from './createShareDtoPermission';
 import type { ChildKeyDto } from './childKeyDto';
 
 export interface CreateShareDto {
@@ -19,6 +20,10 @@ export interface CreateShareDto {
   itemName: string;
   /** Hex-encoded root key wrapped for recipient via ECIES */
   encryptedKey: string;
+  /** Permission level for the share */
+  permission?: CreateShareDtoPermission;
+  /** Hex-encoded ECIES ciphertext of IPNS private key for write shares */
+  encryptedIpnsKey?: string;
   /** Re-wrapped descendant keys (subfolder/file keys) */
   childKeys?: ChildKeyDto[];
 }

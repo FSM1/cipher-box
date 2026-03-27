@@ -4,8 +4,21 @@
  */
 import { describe, it, expect } from 'vitest';
 import { CipherBoxClient } from '../client';
-import { initializeVault, encryptVaultKeys } from '@cipherbox/core';
+import {
+  initializeVault,
+  encryptVaultKeys,
+  type FolderChild,
+  type FilePointer,
+} from '@cipherbox/core';
 import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
+import type { FolderTree } from '../state/folder-tree';
+import type { BinState } from '../bin';
+
+/** Expose private members for testing */
+interface ClientInternals {
+  folderTree: FolderTree;
+  binState: BinState;
+}
 
 const API = 'http://localhost:3000';
 const SECRET = 'e2e-test-secret-do-not-use-in-production';
@@ -72,14 +85,14 @@ describeIf('SDK Integration (live API)', () => {
         console.log('  ✓ Upload file');
 
         // 3. Download via downloadFromIpns (same path the web app uses)
-        const root = (client as any).folderTree.get(rootIpnsName);
+        const root = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
         const fileChild = root?.children.find(
-          (c: any) => c.type === 'file' && c.name === 'test.txt'
+          (c): c is FilePointer => c.type === 'file' && c.name === 'test.txt'
         );
         expect(fileChild).toBeTruthy();
 
         const downloaded = await client.downloadFromIpns(
-          fileChild.fileMetaIpnsName,
+          fileChild!.fileMetaIpnsName,
           vault.rootFolderKey
         );
         const downloadedText = new TextDecoder().decode(downloaded);
@@ -88,15 +101,19 @@ describeIf('SDK Integration (live API)', () => {
 
         // 4. Rename file
         await client.renameItem(rootIpnsName, fileChild.id, 'renamed.txt');
-        const afterRename = (client as any).folderTree.get(rootIpnsName);
-        expect(afterRename.children.find((c: any) => c.name === 'renamed.txt')).toBeTruthy();
+        const afterRename = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
+        expect(
+          afterRename.children.find((c: FolderChild) => c.name === 'renamed.txt')
+        ).toBeTruthy();
         console.log('  ✓ Rename file');
 
         // 5. Rename folder
         await client.renameItem(rootIpnsName, folder.id, 'RenamedFolder');
-        const afterFolderRename = (client as any).folderTree.get(rootIpnsName);
+        const afterFolderRename = (client as unknown as ClientInternals).folderTree.get(
+          rootIpnsName
+        );
         expect(
-          afterFolderRename.children.find((c: any) => c.name === 'RenamedFolder')
+          afterFolderRename.children.find((c: FolderChild) => c.name === 'RenamedFolder')
         ).toBeTruthy();
         console.log('  ✓ Rename folder');
 
@@ -111,7 +128,7 @@ describeIf('SDK Integration (live API)', () => {
         console.log('  ✓ Delete folder');
 
         // Verify root is empty
-        const finalRoot = (client as any).folderTree.get(rootIpnsName);
+        const finalRoot = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
         expect(finalRoot.children.length).toBe(0);
         console.log('  ✓ Root folder empty');
       } finally {
@@ -173,24 +190,24 @@ describeIf('SDK Integration (live API)', () => {
         // 2. Upload a file
         const fileData = new TextEncoder().encode('bin test ' + Date.now());
         await client.uploadFile(rootIpnsName, fileData, 'bin-test.txt', 'text/plain');
-        const root = (client as any).folderTree.get(rootIpnsName);
-        const fileChild = root.children.find((c: any) => c.name === 'bin-test.txt');
+        const root = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
+        const fileChild = root!.children.find((c) => c.name === 'bin-test.txt');
         expect(fileChild).toBeTruthy();
         console.log('  ✓ Uploaded file for bin test');
 
         // 3. deleteToBin — should NOT throw "Bin not loaded"
-        await client.deleteToBin(rootIpnsName, fileChild.id, 'My Vault');
+        await client.deleteToBin(rootIpnsName, fileChild!.id, 'My Vault');
         console.log('  ✓ deleteToBin succeeded (no "Bin not loaded" error)');
 
         // 4. Verify bin state has the entry
-        const updatedBin = (client as any).binState;
+        const updatedBin = (client as unknown as ClientInternals).binState;
         expect(updatedBin.entries.length).toBe(1);
         expect(updatedBin.entries[0].name).toBe('bin-test.txt');
         expect(updatedBin.entries[0].itemType).toBe('file');
         console.log('  ✓ Bin contains deleted file entry');
 
         // 5. Verify file removed from root
-        const rootAfterDelete = (client as any).folderTree.get(rootIpnsName);
+        const rootAfterDelete = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
         expect(rootAfterDelete.children.length).toBe(0);
         console.log('  ✓ File removed from root folder');
 

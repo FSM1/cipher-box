@@ -90,6 +90,19 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [x] **OBS-01**: Grafana alerts fire when IPNS/IPFS/API response times exceed p95 thresholds from Phase 18/22 baselines
 - [x] **OBS-02**: Client-side timeouts and retry config tuned for sub-2s perceived latency on common operations
 
+### Writable Shares PoC (Phase 27)
+
+- [x] **SHARE-01**: Share entity has `permission` column (`'read' | 'write'`, default `'read'`) and `encrypted_ipns_key` column (nullable bytea) with idempotent migration
+- [x] **SHARE-02**: CreateShareDto and response DTOs include `permission` and `encryptedIpnsKey` fields; API client regenerated
+- [x] **SHARE-03**: IPNS publish endpoint authorizes write-share recipients (checks shares table for active write share when userId does not match FolderIpns owner)
+- [x] **SHARE-04**: Owner can upgrade (read->write) or downgrade (write->read) a share's permission via PATCH /shares/:shareId/permission
+- [x] **SHARE-05**: Share store types (ReceivedShare, SentShare) include `permission` field; ReceivedShare includes `encryptedIpnsKey`
+- [x] **SHARE-06**: ShareDialog has terminal-style permission toggle ([ READ-ONLY ] / [ READ-WRITE ]) with IPNS key wrapping for write shares
+- [x] **SHARE-07**: ShareDialog recipients list shows per-recipient permission label with inline upgrade/downgrade controls
+- [x] **SHARE-08**: SharedFileBrowser shows [RW] badge (green) for write shares and [RO] badge (dim) for read-only shares
+- [x] **SHARE-09**: Write-share recipients see upload/mkdir toolbar and full context menu (rename, delete) in shared folders
+- [x] **SHARE-10**: Write operations in shared folders use unwrapped IPNS key with 30s sync polling and withConflictRetry for multi-writer coordination
+
 ## v1.2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -184,14 +197,24 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DESKTOP-02  | Phase 25   | Complete |
 | OBS-01      | Phase 26   | Complete |
 | OBS-02      | Phase 26   | Complete |
+| SHARE-01    | Phase 27   | Complete |
+| SHARE-02    | Phase 27   | Complete |
+| SHARE-03    | Phase 27   | Complete |
+| SHARE-04    | Phase 27   | Complete |
+| SHARE-05    | Phase 27   | Complete |
+| SHARE-06    | Phase 27   | Complete |
+| SHARE-07    | Phase 27   | Complete |
+| SHARE-08    | Phase 27   | Complete |
+| SHARE-09    | Phase 27   | Complete |
+| SHARE-10    | Phase 27   | Complete |
 
 **Coverage:**
 
-- v1.1 requirements: 56 total
-- Mapped to phases: 56
+- v1.1 requirements: 66 total
+- Mapped to phases: 66
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-07_
-_Last updated: 2026-03-24 after Phase 23 planning (RSDK-01 through RSDK-10 registered)_
+_Last updated: 2026-03-26 after Phase 27 completion (SHARE-01 through SHARE-10 all complete)_

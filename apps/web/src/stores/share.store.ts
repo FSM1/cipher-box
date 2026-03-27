@@ -12,6 +12,10 @@ export type ReceivedShare = {
   itemName: string;
   /** Hex-encoded ECIES ciphertext of the item key */
   encryptedKey: string;
+  /** Permission level: read-only or read-write */
+  permission: 'read' | 'write';
+  /** Hex-encoded ECIES ciphertext of IPNS private key (write shares only) */
+  encryptedIpnsKey: string | null;
   createdAt: string;
 };
 
@@ -25,6 +29,8 @@ export type SentShare = {
   itemType: 'folder' | 'file';
   ipnsName: string;
   itemName: string;
+  /** Permission level: read-only or read-write */
+  permission: 'read' | 'write';
   createdAt: string;
 };
 
@@ -44,6 +50,7 @@ type ShareState = {
   addSentShare: (share: SentShare) => void;
   removeSentShare: (shareId: string) => void;
   removeReceivedShare: (shareId: string) => void;
+  updateSentSharePermission: (shareId: string, permission: 'read' | 'write') => void;
   clearShares: () => void;
 };
 
@@ -88,6 +95,11 @@ export const useShareStore = create<ShareState>((set) => ({
   removeReceivedShare: (shareId) =>
     set((state) => ({
       receivedShares: state.receivedShares.filter((s) => s.shareId !== shareId),
+    })),
+
+  updateSentSharePermission: (shareId, permission) =>
+    set((state) => ({
+      sentShares: state.sentShares.map((s) => (s.shareId === shareId ? { ...s, permission } : s)),
     })),
 
   clearShares: () =>

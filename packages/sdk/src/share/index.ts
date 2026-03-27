@@ -16,6 +16,9 @@
 import { wrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import type { SdkContext } from '@cipherbox/sdk-core';
 
+/** Re-export the canonical share key type for consumers */
+export type { ShareKeyType } from './shared-write';
+
 /**
  * Context for share operations. Replaces Zustand store access.
  */
@@ -137,3 +140,14 @@ export async function revokeShare(params: {
 }): Promise<void> {
   await params.revokeShareFn(params.shareId);
 }
+
+// Shared-write operations (stateless functions for write-share recipients)
+export {
+  uploadToSharedFolder,
+  createSharedSubfolder,
+  renameInSharedFolder,
+  deleteFromSharedFolder,
+  updateSharedFile,
+  updateSharePermission,
+  type SharedWriteContext,
+} from './shared-write';

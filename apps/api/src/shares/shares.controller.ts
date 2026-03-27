@@ -21,6 +21,7 @@ import { SharesService } from './shares.service';
 import { CreateShareDto } from './dto/create-share.dto';
 import { AddShareKeysDto } from './dto/share-key.dto';
 import { UpdateEncryptedKeyDto } from './dto/update-encrypted-key.dto';
+import { UpdatePermissionDto } from './dto/update-permission.dto';
 import {
   PaginationQueryDto,
   PaginatedReceivedSharesDto,
@@ -61,6 +62,7 @@ export class SharesController {
     ipnsName: string;
     itemName: string;
     encryptedKey: string;
+    permission: string;
     createdAt: Date;
   }> {
     const share = await this.sharesService.createShare(req.user.id, dto);
@@ -70,6 +72,7 @@ export class SharesController {
       ipnsName: share.ipnsName,
       itemName: share.itemName,
       encryptedKey: share.encryptedKey.toString('hex'),
+      permission: share.permission,
       createdAt: share.createdAt,
     };
   }
@@ -102,6 +105,8 @@ export class SharesController {
         ipnsName: s.ipnsName,
         itemName: s.itemName,
         encryptedKey: s.encryptedKey.toString('hex'),
+        permission: s.permission,
+        encryptedIpnsKey: s.encryptedIpnsKey ? s.encryptedIpnsKey.toString('hex') : null,
         createdAt: s.createdAt,
       })),
       total,
@@ -135,6 +140,7 @@ export class SharesController {
         itemType: s.itemType,
         ipnsName: s.ipnsName,
         itemName: s.itemName,
+        permission: s.permission,
         createdAt: s.createdAt,
       })),
       total,
@@ -229,11 +235,12 @@ export class SharesController {
   @Post(':shareId/keys')
   @ApiOperation({
     summary: 'Add share keys',
-    description: 'Add re-wrapped child keys to an existing share. Only the sharer can add keys.',
+    description:
+      'Add re-wrapped child keys to an existing share. Allowed for the sharer or write-share recipients.',
   })
   @ApiResponse({ status: 201, description: 'Keys added' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Only the sharer can add keys' })
+  @ApiResponse({ status: 403, description: 'Not authorized to add keys to this share' })
   @ApiResponse({ status: 404, description: 'Share not found' })
   async addShareKeys(
     @Request() req: RequestWithUser,
@@ -241,6 +248,33 @@ export class SharesController {
     @Body() dto: AddShareKeysDto
   ): Promise<void> {
     await this.sharesService.addShareKeys(shareId, req.user.id, dto);
+  }
+
+  @Patch(':shareId/permission')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Update share permission',
+    description:
+      'Upgrade or downgrade permission level. Only the sharer can change permission. ' +
+      'Upgrading to write requires an ECIES-wrapped IPNS private key.',
+  })
+  @ApiResponse({ status: 204, description: 'Permission updated' })
+  @ApiResponse({ status: 400, description: 'encryptedIpnsKey required for write permission' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Only the sharer can change permission' })
+  @ApiResponse({ status: 404, description: 'Share not found' })
+  @ApiResponse({ status: 409, description: 'Cannot change permission on a revoked share' })
+  async updatePermission(
+    @Request() req: RequestWithUser,
+    @Param('shareId', ParseUUIDPipe) shareId: string,
+    @Body() dto: UpdatePermissionDto
+  ): Promise<void> {
+    await this.sharesService.updatePermission(
+      shareId,
+      req.user.id,
+      dto.permission,
+      dto.encryptedIpnsKey
+    );
   }
 
   @Delete(':shareId')

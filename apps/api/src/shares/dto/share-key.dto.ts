@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { SHARE_KEY_TYPES, type ShareKeyType } from '../types';
 import {
   IsString,
   IsIn,
@@ -12,12 +13,12 @@ import { Type } from 'class-transformer';
 
 class ShareKeyEntryDto {
   @ApiProperty({
-    description: 'Type of key: file or folder',
-    enum: ['file', 'folder'],
+    description: 'Type of key: file, folder, file-ipns, or folder-ipns',
+    enum: [...SHARE_KEY_TYPES],
   })
   @IsString()
-  @IsIn(['file', 'folder'])
-  keyType!: 'file' | 'folder';
+  @IsIn(SHARE_KEY_TYPES)
+  keyType!: ShareKeyType;
 
   @ApiProperty({
     description: 'UUID of the file or subfolder',
@@ -32,8 +33,10 @@ class ShareKeyEntryDto {
     description: 'Hex-encoded ECIES ciphertext of the key wrapped for recipient',
   })
   @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
-  @MinLength(2)
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'encryptedKey must be an even-length hex string',
+  })
+  @MinLength(64)
   @MaxLength(1024)
   encryptedKey!: string;
 }

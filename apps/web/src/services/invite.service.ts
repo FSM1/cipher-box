@@ -20,6 +20,7 @@ import {
   shareInvitesControllerCreateInvite,
   shareInvitesControllerListInvites,
   shareInvitesControllerRevokeInvite,
+  type ChildKeyDtoKeyType,
 } from '@cipherbox/api-client';
 import { collectChildKeys } from '../lib/crypto/key-wrapping';
 import { resolveFileMetadata } from './file-metadata.service';
@@ -117,7 +118,7 @@ export async function createInviteLink(params: {
     const ownerPrivateKey = vaultKeypair.privateKey;
     let encryptedKey: string;
     let encryptedChildKeys:
-      | Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>
+      | Array<{ keyType: ChildKeyDtoKeyType; itemId: string; encryptedKey: string }>
       | undefined;
 
     if (item.type === 'folder') {
@@ -246,7 +247,7 @@ export async function claimInvite(
 
     // Re-wrap child keys
     const childKeys: Array<{
-      keyType: 'file' | 'folder';
+      keyType: ChildKeyDtoKeyType;
       itemId: string;
       encryptedKey: string;
     }> = [];

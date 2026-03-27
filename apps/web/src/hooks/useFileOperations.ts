@@ -457,7 +457,31 @@ export function useFileOperations() {
             });
         }
 
-        // 8. Only unpin CIDs of pruned versions (excess beyond max 10)
+        // 8. Re-wrap new file key for share recipients (fire-and-forget)
+        (async () => {
+          try {
+            const authState = useAuthStore.getState();
+            if (!authState.vaultKeypair) return;
+            const fileKey = await unwrapKey(
+              hexToBytes(fileData.newFileKeyEncrypted),
+              authState.vaultKeypair.privateKey
+            );
+            try {
+              await reWrapForRecipients({
+                folderIpnsName: parentFolder.ipnsName,
+                folders: useFolderStore.getState().folders,
+                currentFolderId: parentId === 'root' ? null : parentId,
+                newItems: [{ keyType: 'file', itemId: fileData.fileId, plaintextKey: fileKey }],
+              });
+            } finally {
+              fileKey.fill(0);
+            }
+          } catch (err) {
+            console.warn('[share] Post-update re-wrap failed:', err);
+          }
+        })();
+
+        // 9. Only unpin CIDs of pruned versions (excess beyond max 10)
         // Old CIDs stay pinned as version history (VER-01)
         for (const prunedCid of prunedCids) {
           unpinFromIpfs(prunedCid).catch(() => {});

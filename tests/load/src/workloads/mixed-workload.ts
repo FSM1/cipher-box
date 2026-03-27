@@ -5,6 +5,7 @@
  * renames, moves, and deletes with weighted probabilities.
  */
 
+import type { FolderChild } from '@cipherbox/core';
 import type { PoolClient } from '../harness/client-pool';
 
 export interface MixedWorkloadOptions {
@@ -83,7 +84,7 @@ export async function runMixedWorkload(pc: PoolClient, opts: MixedWorkloadOption
         );
 
         const folder = client.getFolderTree().get(rootIpnsName);
-        const child = folder?.children.find((c: any) => c.name === fileName);
+        const child = folder?.children.find((c: FolderChild) => c.name === fileName);
         if (child) fileIds.push({ id: child.id, name: fileName });
       } catch {
         /* non-fatal */

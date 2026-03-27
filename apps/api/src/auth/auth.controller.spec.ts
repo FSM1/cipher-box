@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UnauthorizedException } from '@nestjs/common';
 import { Response, Request as ExpressRequest } from 'express';
+import { RequestWithUser } from '../common/types';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { AuthMethodService } from './services/auth-method.service';
@@ -372,7 +373,7 @@ describe('AuthController', () => {
       const mockRequest = {
         user: mockUser,
         headers: {},
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       authService.logout.mockResolvedValue({ success: true });
 
@@ -385,7 +386,7 @@ describe('AuthController', () => {
       const mockRequest = {
         user: mockUser,
         headers: {},
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       authService.logout.mockResolvedValue({ success: true });
 
@@ -398,7 +399,7 @@ describe('AuthController', () => {
       const mockRequest = {
         user: mockUser,
         headers: {},
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       authService.logout.mockResolvedValue({ success: true });
 
@@ -413,7 +414,7 @@ describe('AuthController', () => {
       const mockRequest = {
         user: mockUser,
         headers: { 'x-client-type': 'desktop' },
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       authService.logout.mockResolvedValue({ success: true });
 
@@ -426,7 +427,7 @@ describe('AuthController', () => {
       const mockRequest = {
         user: mockUser,
         headers: { 'x-client-type': 'desktop' },
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       authService.logout.mockResolvedValue({ success: true });
 
@@ -441,7 +442,7 @@ describe('AuthController', () => {
     it('should call authMethodService.getLinkedMethods with user.id', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       const mockMethods = [
         {
@@ -463,7 +464,7 @@ describe('AuthController', () => {
     it('should return array of auth methods', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       const mockMethods = [
         {
@@ -500,7 +501,7 @@ describe('AuthController', () => {
     it('should call authMethodService.linkMethod with user.id and linkDto', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       const mockMethods = [
         {
@@ -522,7 +523,7 @@ describe('AuthController', () => {
     it('should return updated methods array', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       const mockMethods = [
         {
@@ -553,7 +554,7 @@ describe('AuthController', () => {
     it('should call authMethodService.unlinkMethod with user.id and methodId', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       const unlinkDto = { methodId: 'method-to-unlink' };
 
@@ -570,7 +571,7 @@ describe('AuthController', () => {
     it('should return { success: true }', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       const unlinkDto = { methodId: 'method-to-unlink' };
 

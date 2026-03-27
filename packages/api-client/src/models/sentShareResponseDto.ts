@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { SentShareResponseDtoItemType } from './sentShareResponseDtoItemType';
+import type { SentShareResponseDtoPermission } from './sentShareResponseDtoPermission';
 
 export interface SentShareResponseDto {
   shareId: string;
@@ -14,5 +15,7 @@ export interface SentShareResponseDto {
   itemType: SentShareResponseDtoItemType;
   ipnsName: string;
   itemName: string;
+  /** Permission level */
+  permission: SentShareResponseDtoPermission;
   createdAt: string;
 }
