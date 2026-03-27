@@ -70,7 +70,11 @@ export type SharedWriteContext = {
   /** Callback to add share keys for the recipient */
   addShareKeysFn: (
     shareId: string,
-    keys: Array<{ keyType: string; itemId: string; encryptedKey: string }>
+    keys: Array<{
+      keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+      itemId: string;
+      encryptedKey: string;
+    }>
   ) => Promise<void>;
 };
 
@@ -398,7 +402,11 @@ export async function updateSharedFile(params: {
   shareId: string;
   addShareKeysFn: (
     shareId: string,
-    keys: Array<{ keyType: string; itemId: string; encryptedKey: string }>
+    keys: Array<{
+      keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+      itemId: string;
+      encryptedKey: string;
+    }>
   ) => Promise<void>;
   filePointer: FilePointer;
   newContent: Uint8Array;
