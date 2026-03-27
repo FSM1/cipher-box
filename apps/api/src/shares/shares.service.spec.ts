@@ -12,6 +12,7 @@ import { ShareKey } from './entities/share-key.entity';
 import { User } from '../auth/entities/user.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 import { AddShareKeysDto } from './dto/share-key.dto';
+import { In } from 'typeorm';
 
 describe('SharesService', () => {
   let service: SharesService;
@@ -736,6 +737,24 @@ describe('SharesService', () => {
       );
     });
 
+    it('should reject write-share recipient adding folder-ipns keys', async () => {
+      mockShareRepo.findOne.mockResolvedValue(writeShare);
+
+      const dto: AddShareKeysDto = {
+        keys: [
+          {
+            keyType: 'folder-ipns',
+            itemId: '880e8400-e29b-41d4-a716-446655440003',
+            encryptedKey: 'dd'.repeat(64),
+          },
+        ],
+      };
+
+      await expect(service.addShareKeys(shareId, recipientId, dto)).rejects.toThrow(
+        ForbiddenException
+      );
+    });
+
     it('should reject read-only recipient from adding any keys', async () => {
       mockShareRepo.findOne.mockResolvedValue(mockShare); // permission: 'read'
 
@@ -793,8 +812,11 @@ describe('SharesService', () => {
         expect.objectContaining({ permission: 'read', encryptedIpnsKey: null })
       );
 
-      // Verify file-ipns keys were deleted in the same transaction
-      expect(txDelete).toHaveBeenCalledWith(ShareKey, { shareId, keyType: 'file-ipns' });
+      // Verify all write-enabling keys were deleted in the same transaction
+      expect(txDelete).toHaveBeenCalledWith(ShareKey, {
+        shareId,
+        keyType: In(['file-ipns', 'folder-ipns']),
+      });
     });
 
     it('should not delete share_keys on upgrade to write', async () => {
