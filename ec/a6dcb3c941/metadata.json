@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "eca6dcb3c941",
+  "strategy": "manual-commit",
+  "branch": "fix/e2e-writable-shares-navigation-race",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ec/a6dcb3c941/0/metadata.json",
+      "transcript": "/ec/a6dcb3c941/0/full.jsonl",
+      "content_hash": "/ec/a6dcb3c941/0/content_hash.txt",
+      "prompt": "/ec/a6dcb3c941/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1288,
+    "cache_creation_tokens": 660181,
+    "cache_read_tokens": 20978210,
+    "output_tokens": 61723,
+    "api_call_count": 163
+  }
+}

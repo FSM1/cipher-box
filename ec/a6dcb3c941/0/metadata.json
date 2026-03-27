@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "eca6dcb3c941",
+  "session_id": "2a0f30d5-57fe-43a7-a7ec-527c4b85e3b3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T12:15:48.45242Z",
+  "branch": "fix/e2e-writable-shares-navigation-race",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "c0034e30b5fd",
+  "token_usage": {
+    "input_tokens": 1288,
+    "cache_creation_tokens": 660181,
+    "cache_read_tokens": 20978210,
+    "output_tokens": 61723,
+    "api_call_count": 163
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Investigate and fix a failing CI E2E test in writable-shares.spec.ts where breadcrumbs didn't update after navigating into a nested subfolder created by a write-share recipient.",
+    "outcome": "Identified and fixed two bugs: (1) the API's addShareKeys endpoint incorrectly blocked write-share recipients from adding 'folder' type keys for subfolders they create, and (2) an E2E test race condition where navigation completion wasn't properly awaited. PR #374 was created and review comments were resolved.",
+    "learnings": {
+      "repo": [
+        "Write-share recipient subfolder keys (folder, folder-ipns) are stored in share_keys table; the root folder key lives in the shares table itself — so restricting folder-type keys in share_keys was overly broad.",
+        "navigateToSubfolder in useSharedNavigation.ts has a catch block that swallows errors with console.warn, displaying 'Failed to open subfolder' in the UI but not surfacing the error to callers.",
+        "The API runs with NODE_ENV=development locally which enforces rate limiting; CI uses NODE_ENV=test which relaxes throttle limits — mixing these breaks auth (Web3Auth) and causes 429s.",
+        "The writable-shares E2E tests are fully serial — tests 8.x depend on earlier phases (1.x account creation, share setup) so individual tests cannot be run in isolation.",
+        "The api-client package must be rebuilt after branch switches if new endpoints were added; stale builds cause blank-page JS import errors in the web app."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 219,
+          "end_line": 223,
+          "finding": "Overly broad guard blocked write-share recipients from adding any 'folder' keyType keys, including for subfolders they legitimately create. The fix removes this restriction so recipients can add subfolder keys."
+        },
+        {
+          "path": "tests/web-e2e/page-objects/file-browser/shared-file-browser.page.ts",
+          "finding": "Added navigateIntoSubfolder(name) method that double-clicks a folder and awaits breadcrumb update (toContainText with 30s timeout) to prove async navigation completed before the test proceeds."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "navigateToSubfolder is async (IPNS resolution + key unwrapping + metadata decryption). The old test pattern waited on parentDirRow visibility which was already true, causing a race condition on slow CI."
+        }
+      ],
+      "workflow": [
+        "Screenshots in test-results/*/test-failed-N.png are the primary debugging tool for E2E failures — UI error messages rendered in the app are visible there.",
+        "Playwright error-context.md only captures the page context of the test's primary actor (Alice), not secondary browser contexts (Bob) — so errors on Bob's page require reading screenshots.",
+        "Adding temporary console.error with detailed messages to catch blocks is an effective local debugging technique for swallowed async errors in hooks.",
+        "1Password SSH signing requires an active desktop session — commits from terminal sessions where the agent isn't available will fail; must retry when desktop is active."
+      ]
+    },
+    "friction": [
+      "Local E2E run initially failed with blank page because the api-client package was stale after branch switch — required full package rebuild before tests could run.",
+      "NODE_ENV=development causes rate limiting (429) that blocks E2E tests locally; NODE_ENV=test breaks Web3Auth initialization — no clean local equivalent of CI's environment.",
+      "navigateToSubfolder's silent catch block required adding temporary debug logging to identify the actual error ('No key available for this subfolder'), which wasn't surfaced anywhere.",
+      "1Password SSH agent unavailable during commit attempt required user to return from AFK before the commit could proceed.",
+      "Serial E2E test structure means the full suite (~8 phases) must run even to test a Phase 8 fix, making iteration slow.",
+      "The stash created during branch switch reverted code changes, requiring all edits to be re-applied."
+    ],
+    "open_items": [
+      "The SDK's addShareKeysFn catch block in createSharedSubfolder silently swallows errors with console.warn — should propagate so callers can handle failures rather than leaving orphaned folder metadata.",
+      "Local E2E environment parity with CI for rate limiting is unresolved — no documented way to run E2E tests locally without hitting 429s or breaking auth.",
+      "The navigateIntoSubfolder breadcrumb check uses toContainText which could theoretically match an ancestor crumb with the same name — CodeRabbit flagged this; exact-match assertion would be more robust."
+    ]
+  }
+}
