@@ -6,7 +6,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not } from 'typeorm';
+import { Repository, IsNull, Not, In } from 'typeorm';
 import { Share } from './entities/share.entity';
 import { ShareKey } from './entities/share-key.entity';
 import { User } from '../auth/entities/user.entity';
@@ -217,8 +217,10 @@ export class SharesService {
     }
 
     if (isWriteRecipient) {
-      const hasFolder = dto.keys.some((k) => k.keyType === 'folder');
-      if (hasFolder) {
+      const hasFolderKey = dto.keys.some(
+        (k) => k.keyType === 'folder' || k.keyType === 'folder-ipns'
+      );
+      if (hasFolderKey) {
         throw new ForbiddenException('Write-share recipients cannot modify folder keys');
       }
     }
@@ -396,12 +398,12 @@ export class SharesService {
       share.encryptedIpnsKey = Buffer.from(encryptedIpnsKey, 'hex');
       await this.shareRepo.save(share);
     } else {
-      // Downgrade atomically: update share + delete file-ipns keys in one transaction
+      // Downgrade atomically: update share + delete all write-enabling keys in one transaction
       await this.shareRepo.manager.transaction(async (txManager) => {
         share.permission = 'read';
         share.encryptedIpnsKey = null;
         await txManager.save(share);
-        await txManager.delete(ShareKey, { shareId, keyType: 'file-ipns' });
+        await txManager.delete(ShareKey, { shareId, keyType: In(['file-ipns', 'folder-ipns']) });
       });
     }
   }
