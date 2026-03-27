@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.30.0...@cipherbox/sdk-core-v0.31.0) (2026-03-27)
+
+
+### Features
+
+* **phase-27:** writable shares ([#372](https://github.com/FSM1/cipher-box/issues/372)) ([65721b4](https://github.com/FSM1/cipher-box/commit/65721b47f7791d908efb78323b27ee8487e9d3a5))
+
 ## [0.30.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.29.0...@cipherbox/sdk-core-v0.30.0) (2026-03-26)
 
 
