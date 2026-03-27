@@ -735,7 +735,7 @@ describe('SharesService', () => {
         ],
       };
 
-      await expect(service.addShareKeys(shareId, recipientId, dto)).resolves.not.toThrow();
+      await service.addShareKeys(shareId, recipientId, dto);
       expect(mockShareKeyRepo.save).toHaveBeenCalled();
     });
 
@@ -755,7 +755,8 @@ describe('SharesService', () => {
         ],
       };
 
-      await expect(service.addShareKeys(shareId, recipientId, dto)).resolves.not.toThrow();
+      await service.addShareKeys(shareId, recipientId, dto);
+      expect(mockShareKeyRepo.save).toHaveBeenCalled();
     });
 
     it('should reject read-only recipient from adding any keys', async () => {

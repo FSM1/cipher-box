@@ -236,12 +236,12 @@ export class SharedFileBrowserPage {
 
   /**
    * Navigate into a subfolder and wait for the async navigation to complete.
-   * Uses breadcrumb text to detect when navigateToSubfolder has finished
-   * (resolving IPNS, decrypting metadata, updating state).
+   * Waits for the last breadcrumb segment to match the target folder name,
+   * proving the hook's IPNS resolve + metadata decrypt cycle finished.
    */
   async navigateIntoSubfolder(name: string): Promise<void> {
     await this.doubleClickFolderItem(name);
-    await expect(this.breadcrumbs()).toContainText(name, {
+    await expect(this.breadcrumbs().locator('.breadcrumb-item--current')).toHaveText(name, {
       ignoreCase: true,
       timeout: 30000,
     });
