@@ -791,4 +791,108 @@ test.describe.serial('Writable Shares', () => {
     await bob.page.keyboard.press('Escape');
     await textEditor.waitFor({ state: 'hidden', timeout: 5000 });
   });
+
+  // ============================================
+  // Phase 10: Writable File Shares
+  // ============================================
+
+  const fileShareName = `file-share-${runId}.txt`;
+  const fileShareContent = 'Original file content by Alice';
+
+  test('10.1 Alice creates a text file and shares it with Bob with WRITE permission', async () => {
+    test.setTimeout(120000);
+
+    // Navigate to Alice's root and create a file
+    await navigateToFiles(alice);
+    await aliceFileList.waitForItemToAppear(folderName, { timeout: 15000 });
+
+    // Upload a text file at root level
+    const testFile = createTestTextFile(fileShareName, fileShareContent);
+    await aliceUploadZone.uploadFile(testFile.path);
+    await aliceFileList.waitForItemToAppear(fileShareName, { timeout: 30000 });
+
+    // Share it with Bob with write permission
+    await aliceFileList.rightClickItem(fileShareName);
+    await aliceContextMenu.waitForOpen();
+    await aliceContextMenu.clickShare();
+    await aliceShareDialog.waitForOpen();
+    await aliceShareDialog.waitForRecipientsLoaded();
+
+    // Select write permission
+    const writeBtn = alice.page.locator('.share-perm-btn', { hasText: '[ READ-WRITE ]' });
+    await writeBtn.click();
+    await expect(writeBtn).toHaveClass(/share-perm-btn--active/);
+
+    // Share with Bob
+    await aliceShareDialog.shareWithKey(bob.publicKey);
+    const successText = await aliceShareDialog.waitForSuccess({ timeout: 60000 });
+    expect(successText).toContain(truncateKey(bob.publicKey));
+    expect(successText).toContain('read-write');
+
+    await aliceShareDialog.close();
+  });
+
+  test('10.2 Bob sees the write-shared file with [RW] badge', async () => {
+    test.setTimeout(60000);
+
+    await navigateToShared(bob);
+    await bobSharedBrowser.waitForLoaded({ timeout: 30000 });
+    await bobSharedBrowser.waitForSharedItem(fileShareName, { timeout: 15000 });
+
+    // Verify [RW] badge
+    const rwBadge = bobSharedBrowser.getSharedItem(fileShareName).locator('.shared-rw-badge');
+    await expect(rwBadge).toBeVisible();
+    await expect(rwBadge).toContainText('[RW]');
+  });
+
+  test('10.3 Bob opens the write-shared file and can edit it', async () => {
+    test.setTimeout(90000);
+
+    // Double-click to open the file (should auto-open text editor for text files)
+    await bobSharedBrowser.doubleClickSharedItem(fileShareName);
+
+    // Wait for text editor to open
+    const textEditor = bob.page.locator('.text-editor-modal');
+    await textEditor.waitFor({ state: 'visible', timeout: 30000 });
+    await bob.page.locator('.text-editor-loading').waitFor({ state: 'hidden', timeout: 15000 });
+
+    // Should be editable (NOT read-only)
+    const textarea = bob.page.locator('.text-editor-textarea');
+    await expect(textarea).toBeVisible();
+    const content = await textarea.inputValue();
+    expect(content).toBe(fileShareContent);
+    await expect(textarea).not.toHaveAttribute('readonly');
+
+    // Edit the content
+    await textarea.fill('Edited file content by Bob');
+
+    // Save via Ctrl+S
+    await bob.page.keyboard.press('Control+s');
+    await textEditor.waitFor({ state: 'hidden', timeout: 30000 });
+  });
+
+  test('10.4 Alice can read the file edited by Bob', async () => {
+    test.setTimeout(90000);
+
+    await navigateToFiles(alice);
+    await alice.page.reload({ waitUntil: 'networkidle' });
+    await aliceFileList.waitForItemToAppear(fileShareName, { timeout: 30000 });
+
+    // Open the file
+    await aliceFileList.rightClickItem(fileShareName);
+    await aliceContextMenu.waitForOpen();
+    const editOption = alice.page.locator('.context-menu-item', { hasText: /edit|view/i });
+    await editOption.click();
+
+    const textEditor = alice.page.locator('.text-editor-modal');
+    await textEditor.waitFor({ state: 'visible', timeout: 15000 });
+    await alice.page.locator('.text-editor-loading').waitFor({ state: 'hidden', timeout: 15000 });
+
+    const textarea = alice.page.locator('.text-editor-textarea');
+    const content = await textarea.inputValue();
+    expect(content).toBe('Edited file content by Bob');
+
+    await alice.page.keyboard.press('Escape');
+    await textEditor.waitFor({ state: 'hidden', timeout: 5000 });
+  });
 });

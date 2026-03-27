@@ -117,7 +117,7 @@ export async function createInviteLink(params: {
     const ownerPrivateKey = vaultKeypair.privateKey;
     let encryptedKey: string;
     let encryptedChildKeys:
-      | Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>
+      | Array<{ keyType: 'file' | 'folder' | 'file-ipns'; itemId: string; encryptedKey: string }>
       | undefined;
 
     if (item.type === 'folder') {
@@ -246,7 +246,7 @@ export async function claimInvite(
 
     // Re-wrap child keys
     const childKeys: Array<{
-      keyType: 'file' | 'folder';
+      keyType: 'file' | 'folder' | 'file-ipns';
       itemId: string;
       encryptedKey: string;
     }> = [];

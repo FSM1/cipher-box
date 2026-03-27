@@ -300,6 +300,28 @@ export function ShareDialog({
         childKeys = [
           { keyType: 'file' as const, itemId: filePointer.id, encryptedKey: reWrappedFileKey },
         ];
+
+        // For write shares, also wrap the file's IPNS private key for the recipient
+        if (permission === 'write' && filePointer.ipnsPrivateKeyEncrypted) {
+          const fileIpnsPrivKey = await unwrapKey(
+            hexToBytes(filePointer.ipnsPrivateKeyEncrypted),
+            ownerPrivateKey
+          );
+          try {
+            const wrappedIpnsKey = await wrapKey(fileIpnsPrivKey, recipientPubKeyBytes);
+            encryptedIpnsKeyHex = bytesToHex(wrappedIpnsKey);
+
+            // Also add file-ipns child key so recipient can update file content
+            const recipientWrappedIpnsKey = await wrapKey(fileIpnsPrivKey, recipientPubKeyBytes);
+            childKeys.push({
+              keyType: 'file-ipns' as const,
+              itemId: filePointer.id,
+              encryptedKey: bytesToHex(recipientWrappedIpnsKey),
+            });
+          } finally {
+            fileIpnsPrivKey.fill(0);
+          }
+        }
       }
 
       // Create the share via API
@@ -375,14 +397,6 @@ export function ShareDialog({
           return;
         }
 
-        // The item must be a folder to upgrade (file shares don't have IPNS keys)
-        if (item.type !== 'folder') {
-          setError('permission upgrade only applies to folder shares');
-          setUpgradingId(null);
-          return;
-        }
-
-        const folderEntry = item as FolderEntry;
         const ownerPrivateKey = vaultKeypair.privateKey;
         const recipientPubKeyBytes = hexToBytes(
           share.recipientPublicKey.startsWith('0x')
@@ -391,10 +405,18 @@ export function ShareDialog({
         );
 
         // Unwrap IPNS private key and re-wrap for recipient
-        const ipnsPrivKey = await unwrapKey(
-          hexToBytes(folderEntry.ipnsPrivateKeyEncrypted),
-          ownerPrivateKey
-        );
+        const ipnsKeyEncrypted =
+          item.type === 'folder'
+            ? (item as FolderEntry).ipnsPrivateKeyEncrypted
+            : (item as FilePointer).ipnsPrivateKeyEncrypted;
+
+        if (!ipnsKeyEncrypted) {
+          setError('IPNS key not available for this item');
+          setUpgradingId(null);
+          return;
+        }
+
+        const ipnsPrivKey = await unwrapKey(hexToBytes(ipnsKeyEncrypted), ownerPrivateKey);
         let encryptedIpnsKeyHex: string;
         try {
           const wrappedIpnsKey = await wrapKey(ipnsPrivKey, recipientPubKeyBytes);
@@ -540,43 +562,41 @@ export function ShareDialog({
               </div>
 
               {/* Permission toggle */}
-              {item.type === 'folder' && (
-                <div className="share-permission-selector">
-                  <label className="share-permission-label">{'// permission'}</label>
-                  <div
-                    className="share-permission-toggle"
-                    role="radiogroup"
-                    aria-label="Permission level"
-                    onKeyDown={(e) => {
-                      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-                        e.preventDefault();
-                        setPermission((prev) => (prev === 'read' ? 'write' : 'read'));
-                      }
-                    }}
+              <div className="share-permission-selector">
+                <label className="share-permission-label">{'// permission'}</label>
+                <div
+                  className="share-permission-toggle"
+                  role="radiogroup"
+                  aria-label="Permission level"
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                      e.preventDefault();
+                      setPermission((prev) => (prev === 'read' ? 'write' : 'read'));
+                    }
+                  }}
+                >
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={permission === 'read'}
+                    tabIndex={permission === 'read' ? 0 : -1}
+                    className={`share-perm-btn${permission === 'read' ? ' share-perm-btn--active' : ''}`}
+                    onClick={() => setPermission('read')}
                   >
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={permission === 'read'}
-                      tabIndex={permission === 'read' ? 0 : -1}
-                      className={`share-perm-btn${permission === 'read' ? ' share-perm-btn--active' : ''}`}
-                      onClick={() => setPermission('read')}
-                    >
-                      {'[ READ-ONLY ]'}
-                    </button>
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={permission === 'write'}
-                      tabIndex={permission === 'write' ? 0 : -1}
-                      className={`share-perm-btn${permission === 'write' ? ' share-perm-btn--active' : ''}`}
-                      onClick={() => setPermission('write')}
-                    >
-                      {'[ READ-WRITE ]'}
-                    </button>
-                  </div>
+                    {'[ READ-ONLY ]'}
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={permission === 'write'}
+                    tabIndex={permission === 'write' ? 0 : -1}
+                    className={`share-perm-btn${permission === 'write' ? ' share-perm-btn--active' : ''}`}
+                    onClick={() => setPermission('write')}
+                  >
+                    {'[ READ-WRITE ]'}
+                  </button>
                 </div>
-              )}
+              </div>
 
               {/* Error message */}
               {error && (

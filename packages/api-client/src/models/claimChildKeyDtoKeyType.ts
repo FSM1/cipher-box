@@ -7,7 +7,7 @@
  */
 
 /**
- * Type of key: file or folder
+ * Type of key: file, folder, or file-ipns
  */
 export type ClaimChildKeyDtoKeyType =
   (typeof ClaimChildKeyDtoKeyType)[keyof typeof ClaimChildKeyDtoKeyType];
@@ -15,4 +15,5 @@ export type ClaimChildKeyDtoKeyType =
 export const ClaimChildKeyDtoKeyType = {
   file: 'file',
   folder: 'folder',
+  'file-ipns': 'file-ipns',
 } as const;

@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { InviteChildKeyDto } from './create-invite.dto';
+import type { ChildKeyType } from '../types';
 
 /**
  * Response for creating or listing invites (sharer's view).
@@ -66,7 +67,7 @@ export class InviteDataResponseDto {
     nullable: true,
   })
   encryptedChildKeys!: Array<{
-    keyType: 'file' | 'folder';
+    keyType: ChildKeyType;
     itemId: string;
     encryptedKey: string;
   }> | null;

@@ -2884,8 +2884,8 @@
         "properties": {
           "keyType": {
             "type": "string",
-            "description": "Type of key: file or folder",
-            "enum": ["file", "folder"]
+            "description": "Type of key: file, folder, or file-ipns",
+            "enum": ["file", "folder", "file-ipns"]
           },
           "itemId": {
             "type": "string",
@@ -3246,8 +3246,8 @@
         "properties": {
           "keyType": {
             "type": "string",
-            "description": "Type of key: file or folder",
-            "enum": ["file", "folder"]
+            "description": "Type of key: file, folder, or file-ipns",
+            "enum": ["file", "folder", "file-ipns"]
           },
           "itemId": {
             "type": "string",
@@ -3307,8 +3307,8 @@
         "properties": {
           "keyType": {
             "type": "string",
-            "description": "Type of key: file or folder",
-            "enum": ["file", "folder"]
+            "description": "Type of key: file, folder, or file-ipns",
+            "enum": ["file", "folder", "file-ipns"]
           },
           "itemId": {
             "type": "string",

@@ -9,6 +9,7 @@ import {
   Unique,
 } from 'typeorm';
 import { Share } from './share.entity';
+import type { ShareKeyType } from '../types';
 
 @Entity('share_keys')
 @Unique(['shareId', 'keyType', 'itemId'])
@@ -29,7 +30,7 @@ export class ShareKey {
    * 'file-ipns' for file IPNS private key, 'folder-ipns' for subfolder IPNS private key.
    */
   @Column({ type: 'varchar', length: 12, name: 'key_type' })
-  keyType!: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+  keyType!: ShareKeyType;
 
   /**
    * UUID of the file or subfolder this key belongs to.

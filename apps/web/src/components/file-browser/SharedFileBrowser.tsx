@@ -10,8 +10,8 @@
  */
 
 import type React from 'react';
-import { useState, useCallback, useRef, type MouseEvent, type DragEvent } from 'react';
-import type { FolderChild } from '@cipherbox/core';
+import { useState, useCallback, useRef, useEffect, type MouseEvent, type DragEvent } from 'react';
+import type { FolderChild, FilePointer } from '@cipherbox/core';
 import { useSharedNavigation, type SharedListItem } from '../../hooks/useSharedNavigation';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import {
@@ -338,6 +338,36 @@ export function SharedFileBrowser() {
     },
     [isWritable, uploadFile]
   );
+
+  // Auto-open text editor when entering a writable file share view
+  useEffect(() => {
+    if (currentView === 'file' && currentShareId) {
+      const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
+      if (shareItem && isTextFile(shareItem.share.itemName)) {
+        const fakeFilePointer: FilePointer = {
+          type: 'file',
+          id: shareItem.share.shareId,
+          name: shareItem.share.itemName,
+          fileMetaIpnsName: shareItem.share.ipnsName,
+          createdAt: Date.parse(shareItem.share.createdAt),
+          modifiedAt: Date.parse(shareItem.share.createdAt),
+        };
+        setEditorDialog({ open: true, item: fakeFilePointer });
+      } else {
+        // Non-text files: download and return to list
+        if (shareItem) {
+          downloadSharedFile({
+            type: 'file',
+            id: shareItem.share.shareId,
+            name: shareItem.share.itemName,
+            fileMetaIpnsName: shareItem.share.ipnsName,
+            createdAt: Date.parse(shareItem.share.createdAt),
+            modifiedAt: Date.parse(shareItem.share.createdAt),
+          }).finally(() => navigateToRoot());
+        }
+      }
+    }
+  }, [currentView, currentShareId, sharedItems, downloadSharedFile, navigateToRoot]);
 
   // Render top-level shared list
   if (currentView === 'list') {
@@ -697,7 +727,13 @@ export function SharedFileBrowser() {
       {/* Text viewer dialog (read-only for read shares, editable for write shares) */}
       <TextEditorDialog
         open={editorDialog.open}
-        onClose={() => setEditorDialog({ open: false, item: null })}
+        onClose={() => {
+          setEditorDialog({ open: false, item: null });
+          // If viewing a standalone file share, go back to list on close
+          if (currentView === 'file') {
+            navigateToRoot();
+          }
+        }}
         item={editorDialog.item && isFilePointer(editorDialog.item) ? editorDialog.item : null}
         parentFolderId=""
         folderKey={folderKey}

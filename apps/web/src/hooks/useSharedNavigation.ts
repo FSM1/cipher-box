@@ -72,7 +72,7 @@ export type SharedListItem = {
   folderKey: Uint8Array | null;
 };
 
-type SharedView = 'list' | 'folder';
+type SharedView = 'list' | 'folder' | 'file';
 
 type UseSharedNavigationReturn = {
   currentView: SharedView;
@@ -410,10 +410,33 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
             if (!folderKeyStored) itemKey.fill(0);
           }
         } else {
-          // For files, trigger download directly
-          // itemKey is the parent folder key; downloadSharedFileFromShare unwraps its own copy
-          itemKey.fill(0);
-          await downloadSharedFileFromShare(share, auth.vaultKeypair.privateKey);
+          // For file shares, set up state so the file can be opened/edited in the UI
+          let folderKeyStored = false;
+          try {
+            // Unwrap IPNS private key for write shares
+            if (share.permission === 'write' && share.encryptedIpnsKey) {
+              try {
+                const ipnsPrivKey = await unwrapKey(
+                  hexToBytes(share.encryptedIpnsKey),
+                  auth.vaultKeypair.privateKey
+                );
+                ipnsPrivateKeyRef.current = ipnsPrivKey;
+              } catch (err) {
+                console.error('Failed to unwrap IPNS key for write file share:', err);
+              }
+            }
+
+            // Set file share state — folderKey is the parent folder key (used to decrypt file metadata)
+            setCurrentView('file');
+            setCurrentShareId(shareId);
+            setFolderKey(itemKey);
+            folderKeyStored = true;
+            setPermission(ipnsPrivateKeyRef.current ? share.permission : 'read');
+            setIpnsName(share.ipnsName);
+            setBreadcrumbs([{ id: shareId, name: share.itemName }]);
+          } finally {
+            if (!folderKeyStored) itemKey.fill(0);
+          }
         }
       } catch (err) {
         console.error('Failed to navigate to shared item:', err);
@@ -647,7 +670,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       } else {
         await restoreIpnsKeyForDepth(prev.folderId);
       }
-    } else if (currentView === 'folder') {
+    } else if (currentView === 'folder' || currentView === 'file') {
       // Back to top-level list
       navigateToRoot();
     }
@@ -689,70 +712,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     },
     [breadcrumbs, folderKey, restoreIpnsKeyForDepth]
   );
-
-  /**
-   * Download a shared file from the top-level list.
-   * The share's encryptedKey wraps the parent folder key (needed to decrypt file metadata).
-   * The actual file key is stored as a child key in share_keys.
-   */
-  async function downloadSharedFileFromShare(
-    share: ReceivedShare,
-    privateKey: Uint8Array
-  ): Promise<void> {
-    if (share.itemType !== 'file') return;
-
-    const downloadStore = useDownloadStore.getState();
-
-    try {
-      downloadStore.startDownload(share.itemName);
-
-      // Unwrap the parent folder key from the share record
-      const parentFolderKey = await unwrapKey(hexToBytes(share.encryptedKey), privateKey);
-
-      let fileMeta: Awaited<ReturnType<typeof decryptFileMetadata>>;
-      try {
-        // Resolve file IPNS metadata and decrypt with parent folder key
-        const resolved = await resolveIpnsRecord(share.ipnsName);
-        if (!resolved) {
-          throw new Error('File metadata IPNS not found');
-        }
-
-        const encryptedBytes = await fetchFromIpfs(resolved.cid);
-        const encryptedJson = new TextDecoder().decode(encryptedBytes);
-        const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
-        fileMeta = await decryptFileMetadata(encrypted, parentFolderKey);
-      } finally {
-        parentFolderKey.fill(0);
-      }
-
-      // Get the re-wrapped file key from share_keys
-      const keys = await fetchShareKeys(share.shareId);
-      const fileKeyRecord = keys.find((k) => k.keyType === 'file');
-      if (!fileKeyRecord) {
-        throw new Error('No re-wrapped file key available for this file');
-      }
-
-      // Download and decrypt using the re-wrapped file key
-      const plaintext = await downloadFile(
-        {
-          cid: fileMeta.cid,
-          iv: fileMeta.fileIv,
-          wrappedKey: fileKeyRecord.encryptedKey,
-          originalName: share.itemName,
-          encryptionMode: fileMeta.encryptionMode,
-        },
-        privateKey
-      );
-
-      downloadStore.setDecrypting();
-      triggerBrowserDownload(plaintext, share.itemName);
-      downloadStore.setSuccess();
-    } catch (err) {
-      const message = (err as Error).message || 'Download failed';
-      downloadStore.setError(message);
-      console.error('Shared file download failed:', err);
-    }
-  }
 
   /**
    * Download a shared file from within a shared folder.

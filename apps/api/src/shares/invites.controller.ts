@@ -13,6 +13,7 @@ import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/thr
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShareInviteService } from './share-invite.service';
 import { ClaimInviteDto } from './dto/claim-invite.dto';
+import type { ChildKeyType } from './types';
 import {
   InviteStatusResponseDto,
   InviteDataResponseDto,
@@ -86,7 +87,7 @@ export class InvitesController {
     status: string;
     encryptedKey: string;
     encryptedChildKeys: Array<{
-      keyType: 'file' | 'folder';
+      keyType: ChildKeyType;
       itemId: string;
       encryptedKey: string;
     }> | null;

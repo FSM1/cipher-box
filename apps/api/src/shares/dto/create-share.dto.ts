@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { CHILD_KEY_TYPES, type ChildKeyType } from '../types';
 import {
   IsString,
   IsIn,
@@ -13,12 +14,12 @@ import { Type } from 'class-transformer';
 
 class ChildKeyDto {
   @ApiProperty({
-    description: 'Type of key: file or folder',
-    enum: ['file', 'folder'],
+    description: 'Type of key: file, folder, or file-ipns',
+    enum: [...CHILD_KEY_TYPES],
   })
   @IsString()
-  @IsIn(['file', 'folder'])
-  keyType!: 'file' | 'folder';
+  @IsIn(CHILD_KEY_TYPES)
+  keyType!: ChildKeyType;
 
   @ApiProperty({
     description: 'UUID of the file or subfolder',

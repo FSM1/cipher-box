@@ -8,6 +8,7 @@ import {
   Index,
 } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
+import type { ChildKeyType } from '../types';
 
 @Entity('share_invites')
 export class ShareInvite {
@@ -47,7 +48,7 @@ export class ShareInvite {
    */
   @Column({ type: 'jsonb', name: 'encrypted_child_keys', nullable: true })
   encryptedChildKeys!: Array<{
-    keyType: 'file' | 'folder';
+    keyType: ChildKeyType;
     itemId: string;
     encryptedKey: string; // hex
   }> | null;

@@ -8,7 +8,7 @@
 import type { InviteChildKeyDtoKeyType } from './inviteChildKeyDtoKeyType';
 
 export interface InviteChildKeyDto {
-  /** Type of key: file or folder */
+  /** Type of key: file, folder, or file-ipns */
   keyType: InviteChildKeyDtoKeyType;
   /** UUID of the file or subfolder */
   itemId: string;

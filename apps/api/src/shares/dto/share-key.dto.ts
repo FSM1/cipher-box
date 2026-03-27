@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { SHARE_KEY_TYPES, type ShareKeyType } from '../types';
 import {
   IsString,
   IsIn,
@@ -13,11 +14,11 @@ import { Type } from 'class-transformer';
 class ShareKeyEntryDto {
   @ApiProperty({
     description: 'Type of key: file, folder, file-ipns, or folder-ipns',
-    enum: ['file', 'folder', 'file-ipns', 'folder-ipns'],
+    enum: [...SHARE_KEY_TYPES],
   })
   @IsString()
-  @IsIn(['file', 'folder', 'file-ipns', 'folder-ipns'])
-  keyType!: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+  @IsIn(SHARE_KEY_TYPES)
+  keyType!: ShareKeyType;
 
   @ApiProperty({
     description: 'UUID of the file or subfolder',

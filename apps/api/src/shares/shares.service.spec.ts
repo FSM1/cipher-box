@@ -776,7 +776,7 @@ describe('SharesService', () => {
       // Mock the transaction manager used for atomic downgrade
       const txSave = jest.fn().mockResolvedValue({});
       const txDelete = jest.fn().mockResolvedValue({ affected: 2 });
-      (mockShareRepo as any).manager = {
+      (mockShareRepo as unknown as { manager: unknown }).manager = {
         transaction: jest
           .fn()
           .mockImplementation(
