@@ -216,12 +216,9 @@ export class SharesService {
       throw new ForbiddenException('Only the sharer or write-share recipient can add keys');
     }
 
-    if (isWriteRecipient) {
-      const hasFolderKey = dto.keys.some((k) => k.keyType === 'folder');
-      if (hasFolderKey) {
-        throw new ForbiddenException('Write-share recipients cannot modify folder keys');
-      }
-    }
+    // Note: write-share recipients may add any key type to share_keys.
+    // This includes 'folder' keys for subfolders they create — the root
+    // folder key is stored in the shares table, not share_keys.
 
     // Upsert: insert or update encrypted_key for each itemId
     for (const entry of dto.keys) {

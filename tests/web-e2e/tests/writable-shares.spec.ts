@@ -596,9 +596,8 @@ test.describe.serial('Writable Shares', () => {
       timeout: 30000,
     });
 
-    // Navigate into the subfolder
-    await bobSharedBrowser.doubleClickFolderItem(deepSubfolder);
-    await bobSharedBrowser.parentDirRow().waitFor({ state: 'visible', timeout: 30000 });
+    // Navigate into the subfolder (wait for breadcrumbs to confirm navigation completed)
+    await bobSharedBrowser.navigateIntoSubfolder(deepSubfolder);
 
     // Write toolbar should be visible (subfolder write access via folder-ipns key)
     const uploadBtn = bob.page.locator('.toolbar-btn', { hasText: '--upload' });
@@ -630,8 +629,7 @@ test.describe.serial('Writable Shares', () => {
     });
 
     // Navigate into the nested subfolder (now at depth 2)
-    await bobSharedBrowser.doubleClickFolderItem(nestedSubfolder);
-    await bobSharedBrowser.parentDirRow().waitFor({ state: 'visible', timeout: 30000 });
+    await bobSharedBrowser.navigateIntoSubfolder(nestedSubfolder);
 
     // Write toolbar should be visible at depth 2
     const uploadBtn = bob.page.locator('.toolbar-btn', { hasText: '--upload' });
@@ -667,8 +665,7 @@ test.describe.serial('Writable Shares', () => {
     await expect(uploadBtn).toBeVisible({ timeout: 10000 });
 
     // Navigate into the subfolder — write access should be restored via folder-ipns key
-    await bobSharedBrowser.doubleClickFolderItem(deepSubfolder);
-    await bobSharedBrowser.parentDirRow().waitFor({ state: 'visible', timeout: 30000 });
+    await bobSharedBrowser.navigateIntoSubfolder(deepSubfolder);
     await expect(uploadBtn).toBeVisible({ timeout: 10000 });
 
     // Verify the file we uploaded earlier is still there
@@ -678,8 +675,7 @@ test.describe.serial('Writable Shares', () => {
     });
 
     // Navigate into nested subfolder — write access at depth 2
-    await bobSharedBrowser.doubleClickFolderItem(nestedSubfolder);
-    await bobSharedBrowser.parentDirRow().waitFor({ state: 'visible', timeout: 30000 });
+    await bobSharedBrowser.navigateIntoSubfolder(nestedSubfolder);
     await expect(uploadBtn).toBeVisible({ timeout: 10000 });
 
     // Verify the file at depth 2
