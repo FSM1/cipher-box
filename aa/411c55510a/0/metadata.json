@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "aa411c55510a",
+  "session_id": "1986a6a4-e18b-403e-a50f-9f54ae3d2e8c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T02:10:44.112644Z",
+  "branch": "docs/milestone-v1.1-completion",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".planning/codebase/ARCHITECTURE.md",
+    ".planning/codebase/CONCERNS.md",
+    ".planning/codebase/CONVENTIONS.md",
+    ".planning/codebase/INTEGRATIONS.md",
+    ".planning/codebase/STACK.md",
+    ".planning/codebase/STRUCTURE.md",
+    ".planning/codebase/TESTING.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "4dbc1419e35b",
+  "token_usage": {
+    "input_tokens": 7222,
+    "cache_creation_tokens": 457554,
+    "cache_read_tokens": 24194430,
+    "output_tokens": 50742,
+    "api_call_count": 189
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Fix a failing vault recovery E2E test in CI, resolve cascading deployment failures (Grafana provisioning, desktop build signing), and perform milestone v1.1 housekeeping including codebase doc updates.",
+    "outcome": "Fixed vault recovery E2E via a protobuf field number bug and IPNS resolution order fix (PR #369 merged), identified and fixed Tauri signing key wiring in deploy workflow (PR #370), identified Grafana API key expiry for user to rotate, resolved stale debug session, and rewrote all 7 codebase planning docs to reflect current multi-package/crate architecture.",
+    "learnings": {
+      "repo": [
+        "IPNS records encode the CID/path value at protobuf field 1, not field 2 (field 2 is signatureV1) — this caused extractCidFromIpnsRecord to silently fail for all delegated routing responses",
+        "resolveIpns tried the IPFS gateway HEAD first (15s timeout per call) before delegated routing — in CI, Kubo cannot resolve mock-published IPNS names, so every call wasted 15s; delegated routing must come first",
+        "Vault key blob fetch in recovery.html used direct IPFS gateway /ipns/ path (30s timeout) as primary, which hung CI since the default test timeout was also 30s",
+        "Grafana Cloud returns HTTP 404 (not 401/403) on /api/health when a Bearer token is invalid or expired — indistinguishable from a missing endpoint without context",
+        "Grafana Cloud has separate key types: data source keys (Loki/Prometheus) vs service account tokens for the Grafana HTTP API — only service account tokens work for dashboard provisioning",
+        "Tauri updater signing requires TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD env vars passed explicitly to each tauri-action step — having a pubkey in tauri.conf.json without the private key causes a hard build failure"
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 768,
+          "end_line": 791,
+          "finding": "extractCidFromIpnsRecord checked fieldNumber === 2 when it should be === 1; function header comment also said 'field number 2' — both were stale from an earlier protobuf schema assumption"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 695,
+          "end_line": 700,
+          "finding": "resp.json() consumed the response body, then a subsequent resp.arrayBuffer() call in the same branch would always fail — fixed by putting protobuf parse in an else branch"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 682,
+          "end_line": 686,
+          "finding": "fetchWithRetry backoff only triggered on thrown errors, not non-OK HTTP responses (429/5xx) — added !resp.ok check to trigger sleep before retry"
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 31,
+          "end_line": 31,
+          "finding": "Introduced shared RECOVERY_TIMEOUT_MS constant (90s) used for both test timeout and assertion timeout — previously they were mismatched (30s test timeout vs 60s assertion timeout)"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "finding": "All three desktop build jobs (macOS, Windows, Linux) were missing TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD env vars on the tauri-action step despite secrets existing in the repo"
+        }
+      ],
+      "workflow": [
+        "For E2E tests involving network services, always run locally with services up before pushing — the test passed in 1s locally vs timing out at 30s in CI",
+        "When CI fails with SSH timeout to VPS, verify connectivity from local machine before assuming it's a persistent infra issue — was a transient GitHub Actions network blip",
+        "Grafana Cloud service account tokens are managed at /org/serviceaccounts, not in the data source configuration — easy to confuse with Loki/Prometheus API keys",
+        "Mapper agents writing docs in parallel need a cleanup pass for markdownlint compliance (bare code fences, emphasis-as-heading) — automated formatting validation catches these before commit"
+      ]
+    },
+    "friction": [
+      "Local E2E test environment required manually starting mock-ipns-routing, API, and web dev server before tests could run",
+      "IPNS protobuf field number bug was silent — no error thrown, IPNS resolution just returned null, requiring stepping through the protobuf parsing logic manually",
+      "markdownlint hook blocked the codebase docs commit; generated docs had bare code fences and italic footers formatted as emphasis-as-heading across multiple files, requiring multiple fix rounds",
+      "CONVENTIONS.md was not covered by the three parallel mapper agents and needed a fourth agent run",
+      "PR review thread for encodeURIComponent suggestion required careful reasoning about IPNS name character sets to justify dismissal"
+    ],
+    "open_items": [
+      "PR #370 (Tauri signing keys wired into deploy-staging.yml) needs merge before next staging deploy will produce signed desktop binaries",
+      "Milestone v1.1 completion not yet run — /gsd:complete-milestone still pending on docs/milestone-v1.1-completion branch",
+      "6 pending todos from /gsd:check-todos not reviewed this session",
+      "Updated codebase docs committed locally but branch not yet pushed or PR'd"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-27T02:09:52.283373Z",
+    "agent_lines": 135,
+    "human_added": 1201,
+    "human_modified": 842,
+    "human_removed": 0,
+    "total_committed": 1995,
+    "agent_percentage": 6.7669172932330826
+  }
+}
