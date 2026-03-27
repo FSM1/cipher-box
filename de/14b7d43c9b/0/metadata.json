@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "de14b7d43c9b",
+  "session_id": "6145a5e4-6423-4826-b1cd-37384a2af563",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T01:12:00.430395Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "0cebc67e955a",
+  "token_usage": {
+    "input_tokens": 98,
+    "cache_creation_tokens": 120690,
+    "cache_read_tokens": 8867319,
+    "output_tokens": 23294,
+    "api_call_count": 88
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Extract the 5 shared-folder write operations from the useSharedNavigation React hook into stateless SDK functions in a new shared-write.ts module, then refactor the web UI to delegate to the SDK. Also add comprehensive unit tests.",
+    "outcome": "shared-write.ts was created in packages/sdk/src/share/ with all 5 write handlers plus updateSharePermission, 14 unit tests pass, both sdk and web builds succeed. A follow-on type consolidation pass replaced all inline 'file'|'folder'|'file-ipns'|'folder-ipns' unions with generated api-client types and fixed a dynamic import in shared-write.ts.",
+    "learnings": {
+      "repo": [
+        "The api-client package already has auto-generated key type enums: ShareKeyEntryDtoKeyType ('file'|'folder'|'file-ipns'|'folder-ipns'), ChildKeyDtoKeyType ('file'|'folder'|'file-ipns'), and ShareKeyResponseDtoKeyType — these should be imported instead of using inline unions.",
+        "There are 3 semantically distinct key type unions: ShareKeyEntryDtoKeyType (widest, share_keys table), ChildKeyDtoKeyType (create-share DTO), and bare 'file'|'folder' (owner-side re-wrap only — no generated type exists for this).",
+        "The SDK previously only covered the owner's write path (shareFolder, revokeShare, reWrapForRecipients). The recipient write path was entirely missing from the SDK prior to this session.",
+        "publishSharedFolderMetadata in useSharedNavigation is the recipient-side counterpart to updateFolderMetadataAndPublish in sdk-core — it uses a re-wrapped IPNS key rather than the owner's key.",
+        "Quick task IDs use YYMMDD-xxx format with 2-second Base36 precision, stored under .planning/quick/."
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/models/shareKeyEntryDtoKeyType.ts",
+          "finding": "Defines the widest ShareKeyType union ('file'|'folder'|'file-ipns'|'folder-ipns') — canonical source for this type across SDK and web app"
+        },
+        {
+          "path": "packages/api-client/src/models/childKeyDtoKeyType.ts",
+          "finding": "Defines ChildKeyDtoKeyType ('file'|'folder'|'file-ipns') — correct type for createShare child keys, narrower than ShareKeyEntryDtoKeyType"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 719,
+          "finding": "publishSharedFolderMetadata — core building block for all recipient-side write ops; encrypts metadata, uploads to IPFS, publishes IPNS using re-wrapped key"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 761,
+          "finding": "withRevocationGuard — wraps any write operation to detect 403 responses and transition to read-only; not yet extracted to SDK"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 254,
+          "finding": "refreshFolderContents — resolves IPNS, decrypts folder metadata, returns refreshed children + sequence number for shared-folder context; not yet extracted to SDK"
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "finding": "create-share DTO uses ChildKeyDto (ChildKeyDtoKeyType), not the wider ShareKeyEntryDtoKeyType — important distinction when typing createShare parameters"
+        }
+      ],
+      "workflow": [
+        "vitest does not support filtering test files by filename using -- syntax directly; use a path glob argument instead (e.g. vitest run packages/sdk/src/share/shared-write.test.ts).",
+        "Integration tests that require a live API will always fail in local runs, polluting test output — run targeted unit test files when verifying specific new functionality.",
+        "Build both packages (sdk then web) before committing to catch type errors that tests alone won't surface.",
+        "When type consolidation causes cascading changes, work outward from the narrowest type (api-client generated types) and be careful to revert widening in places where semantic narrowness is intentional."
+      ]
+    },
+    "friction": [
+      "Type narrowing required multiple reversal passes — initial changes incorrectly widened 'file'|'folder' to ShareKeyEntryDtoKeyType in owner-side re-wrap code, requiring several read-revert-edit cycles across client.ts, types.ts, and share/index.ts.",
+      "The executor used a dynamic import (await import(...)) inside shared-write.ts that had to be manually converted to a static import as a follow-up fix.",
+      "vitest integration test failures (no live API) create noise when running the full sdk test suite, making it hard to confirm unit test status at a glance.",
+      "The git commit command failed on the first attempt due to running from the wrong working directory, requiring a directory check before retrying."
+    ],
+    "open_items": [
+      "withRevocationGuard and isForbiddenError are strong SDK candidates (identified in analysis) but were not extracted — still live only in useSharedNavigation.ts.",
+      "refreshFolderContents (useSharedNavigation.ts ~line 254) identified as moderate SDK candidate but not extracted.",
+      "restoreIpnsKeyForDepth key-unwrapping logic identified as extractable but not extracted.",
+      "The 'after any mutation, re-wrap for recipients' pattern should be baked into the SDK's write path (noted in analysis but deferred).",
+      "No generated type covers the bare 'file'|'folder' union used in owner-side re-wrap — either a local type alias should be created or the semantic narrowing should be documented.",
+      "E2E / integration tests for shared-write SDK functions require a live API and were not added."
+    ]
+  }
+}
