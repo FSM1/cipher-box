@@ -1,4 +1,4 @@
-import { type Page, type Locator } from '@playwright/test';
+import { expect, type Page, type Locator } from '@playwright/test';
 
 /**
  * Page object for SharedFileBrowser component interactions.
@@ -232,6 +232,19 @@ export class SharedFileBrowserPage {
    */
   async doubleClickFolderItem(name: string): Promise<void> {
     await this.getFolderItem(name).dblclick();
+  }
+
+  /**
+   * Navigate into a subfolder and wait for the async navigation to complete.
+   * Uses breadcrumb text to detect when navigateToSubfolder has finished
+   * (resolving IPNS, decrypting metadata, updating state).
+   */
+  async navigateIntoSubfolder(name: string): Promise<void> {
+    await this.doubleClickFolderItem(name);
+    await expect(this.breadcrumbs()).toContainText(name, {
+      ignoreCase: true,
+      timeout: 30000,
+    });
   }
 
   /**
