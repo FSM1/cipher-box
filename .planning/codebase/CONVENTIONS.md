@@ -1,297 +1,760 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-01-20
+**Analysis Date:** 2026-03-27
+
+## TypeScript Configuration
+
+**Base Config:** `tsconfig.base.json` (all packages/apps extend this)
+
+```json
+{
+  "target": "ES2022",
+  "module": "ESNext",
+  "moduleResolution": "bundler",
+  "strict": true,
+  "strictNullChecks": true,
+  "isolatedModules": true,
+  "noUnusedLocals": true,
+  "noUnusedParameters": true,
+  "noImplicitReturns": true,
+  "noFallthroughCasesInSwitch": true,
+  "declaration": true,
+  "declarationMap": true
+}
+```
+
+**Per-workspace overrides:**
+
+| Workspace      | Module             | moduleResolution | Extras                                             |
+| -------------- | ------------------ | ---------------- | -------------------------------------------------- |
+| `packages/*`   | ESNext (from base) | bundler          | `outDir: ./dist`, `rootDir: ./src`                 |
+| `apps/api`     | CommonJS           | node             | `emitDecoratorMetadata`, `experimentalDecorators`  |
+| `apps/web`     | ESNext             | bundler          | `jsx: react-jsx`, `noEmit: true`, `target: ES2020` |
+| `apps/desktop` | ESNext             | bundler          | Extends base                                       |
 
 ## Naming Patterns
 
-**Files (NestJS Backend):**
-- All files: lowercase with hyphens (`kebab-case.ts`)
-- Pattern: `PascalCaseSuffix` class → `pascal-case.suffix.ts` file
-- Services: `[name].service.ts` (e.g., `vault.service.ts`)
-- Controllers: `[name].controller.ts` (e.g., `auth.controller.ts`)
-- Modules: `[name].module.ts` (e.g., `ipfs.module.ts`)
-- DTOs: `[action]-[entity].dto.ts` (e.g., `create-vault.dto.ts`)
-- Guards: `[name].guard.ts` (e.g., `jwt-auth.guard.ts`)
-- Pipes: `[name].pipe.ts` (e.g., `validation.pipe.ts`)
-- Unit tests: `[name].spec.ts` beside implementation
-- E2E tests: `[name].e2e-spec.ts` in `test/` directory
-- Single entry point per module directory: `index.ts`
+### Files
 
-**Folders (NestJS Backend):**
-- Domain folders: singular (`user/`, `vault/`, `ipfs/`)
-- Reusable code folders: plural (`guards/`, `pipes/`, `utils/`, `filters/`)
+**Backend (`apps/api/src/`):** kebab-case with NestJS suffix convention:
 
-**Files (PoC/Scripts):**
-- Scripts use descriptive hyphenated names: `gen-private-key.ts`
+- Controllers: `vault.controller.ts`
+- Services: `vault.service.ts`
+- Modules: `vault.module.ts`
+- DTOs: `init-vault.dto.ts`, `create-share.dto.ts`
+- Entities: `vault.entity.ts`, `pinned-cid.entity.ts`
+- Guards: `jwt-auth.guard.ts`, `throttler-bypass.guard.ts`
+- Strategies: `jwt.strategy.ts`
+- Decorators: `allow-scope.decorator.ts`
+- Unit tests: `vault.service.spec.ts` (co-located)
 
-**Functions:**
-- camelCase for all functions: `hexToBytes`, `encryptName`, `publishFolderMetadata`
-- Prefix helper functions with verb: `logStep`, `formatBytes`, `collectChunks`
-- Async functions use descriptive names indicating async nature: `fetchFolderMetadata`, `waitForIpns`
+**Frontend (`apps/web/src/`):** PascalCase for components, camelCase for hooks/services:
 
-**Variables:**
-- camelCase for local variables: `privateKey`, `folderKey`, `metadataCid`
-- UPPER_SNAKE_CASE for constants: `TAG_SIZE`, `IV_SIZE`
-- Context objects named with `ctx` suffix pattern: `HarnessContext`
+- Components: `FileBrowser.tsx`, `ConfirmDialog.tsx`, `AppShell.tsx`
+- Hooks: `useFolder.ts`, `useSyncPolling.ts`, `useFileDownload.ts`
+- Stores: `folder.store.ts`, `auth.store.ts`, `upload.store.ts`
+- Services: `upload.service.ts`, `folder.service.ts`, `ipns.service.ts`
+- Utilities: `fileTypes.ts`, `format.ts`
+- CSS modules: `file-browser.css`, `layout.css` (per-component, not CSS modules)
 
-**Types:**
-- PascalCase for types and interfaces: `FolderEntry`, `FileEntry`, `FolderMetadata`
-- Use `type` keyword (not interfaces) for data shapes
-- Suffixed with purpose: `Entry` for items, `State` for stateful objects, `Config` for configuration
-- Prefer the use of string literals over Typescript enums 
+**Packages (`packages/*/src/`):** kebab-case, organized by domain:
 
-**API Fields vs Database Columns (per project rules):**
-- API fields: camelCase (`publicKey`, `rootFolderKey`, `ipnsName`)
-- Database columns: snake_case (`public_key`, `root_folder_key`)
+- Module entry: `index.ts` (barrel re-exports)
+- Domain dirs: `aes/`, `ecies/`, `folder/`, `file/`
+- Within domains: `encrypt.ts`, `decrypt.ts`, `types.ts`, `metadata.ts`
+- Tests: `__tests__/` directory at package root
+
+**Rust (`crates/*/src/`, `apps/desktop/src-tauri/src/`):** snake_case per Rust convention:
+
+- Module files: `mod.rs` for directories, `lib.rs` for crate root
+- Feature files: `inode.rs`, `cache.rs`, `file_handle.rs`
+- Error types: `error.rs` in every crate
+- Platform-specific: `platform/windows/`, `platform/macos/` (feature-gated)
+
+### Directories
+
+**Backend domain modules:** singular nouns: `auth/`, `vault/`, `ipfs/`, `ipns/`, `shares/`, `tee/`
+
+**Backend sub-dirs within modules:** plural nouns: `dto/`, `entities/`, `guards/`, `services/`, `strategies/`, `decorators/`
+
+**Frontend component groups:** feature-based: `file-browser/`, `layout/`, `auth/`, `settings/`, `mfa/`, `ui/`
+
+### Functions and Variables
+
+- **Functions:** camelCase everywhere in TypeScript: `encryptAesGcm`, `fetchAndDecryptMetadata`, `createSubfolder`
+- **Variables:** camelCase: `privateKey`, `folderKey`, `rootIpnsName`
+- **Constants:** UPPER_SNAKE_CASE: `AES_KEY_SIZE`, `QUOTA_LIMIT_BYTES`, `ROOT_INO`
+- **Unused params:** prefix with underscore: `_ctx`, `_error`, `_removed`
+
+### Types
+
+- **Use `type` keyword** (not `interface`) for data shapes. Interfaces only for class contracts (e.g., `RequestWithUser extends Request`).
+- **PascalCase** for all types: `FolderMetadata`, `VaultKey`, `SdkContext`, `CipherBoxClientConfig`
+- **Suffixes by purpose:**
+  - Data shapes: `Entry`, `Metadata`, `Config`, `State`, `Result`
+  - DTOs: suffixed `Dto` (`InitVaultDto`, `CreateShareDto`, `QuotaResponseDto`)
+  - Events: domain:action pattern (`SdkEvent` union type)
+
+### String Literal Unions Over Enums
+
+**Never use TypeScript `enum`**. The codebase has zero enum declarations. Use string literal union types:
+
+```typescript
+// Correct
+export type CryptoErrorCode =
+  | 'ENCRYPTION_FAILED'
+  | 'DECRYPTION_FAILED'
+  | 'KEY_WRAPPING_FAILED';
+
+export type DeviceAuthStatus = 'pending' | 'approved' | 'denied';
+
+// Wrong -- never do this
+export enum CryptoErrorCode { ... }
+```
+
+### API Fields vs Database Columns
+
+**API/TypeScript:** camelCase for all fields:
+
+```typescript
+// DTO (camelCase)
+ownerPublicKey!: string;
+rootIpnsName!: string;
+encryptedKey!: Buffer;
+```
+
+**Database columns:** snake_case via TypeORM `name` option:
+
+```typescript
+// Entity (property camelCase, column snake_case)
+@Column({ type: 'uuid', name: 'owner_id' })
+ownerId!: string;
+
+@Column({ type: 'bytea', name: 'owner_public_key' })
+ownerPublicKey!: Buffer;
+
+@CreateDateColumn({ name: 'created_at' })
+createdAt!: Date;
+```
 
 ## Code Style
 
-**Formatting:**
-- No explicit formatter config detected (ESLint present but minimal config)
-- 2-space indentation in TypeScript files
-- Semicolons required at statement ends
-- single quotes for strings
+### Formatting
 
-**Linting:**
-- ESLint 8.x configured via `package.json` script
-- Lint command: `npm run lint`
-- Lints only `src/` directory with `.ts` extension
+**Tool:** Prettier 3.x (root-level dependency, no `.prettierrc` file -- uses defaults)
 
-**TypeScript Configuration:**
-- Target: ES2022
-- Module: ES2022 with Bundler resolution
-- Strict mode enabled
-- Skip lib check enabled
-- Output to `dist/` directory
+- 2-space indentation
+- Single quotes for strings
+- Semicolons required
+- Trailing commas (Prettier default: `all` in v3)
+- 100-char print width (default)
+
+### Linting
+
+**Tool:** ESLint 9.x with flat config (`eslint.config.js`)
+
+```javascript
+// Key rules:
+'@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }]
+'@typescript-eslint/explicit-function-return-type': 'off'
+'@typescript-eslint/no-explicit-any': 'warn'  // warn, not error
+```
+
+**Plugins:** `@eslint/js`, `typescript-eslint`, `eslint-plugin-prettier`
+
+**No Biome:** Despite the web app CLAUDE.md referencing "Biome lint", the repo has no `biome.json`. JSX lint rules (e.g., `noCommentText`) are from the web app's review process, not an active Biome config.
+
+### Pre-commit Hooks
+
+**husky + lint-staged** enforced on every commit:
+
+1. `scripts/check-api-client.sh` -- blocks commits that modify `.dto.ts`, `.controller.ts`, or `.entity.ts` files without also staging regenerated `packages/api-client/openapi.json`. Fix: run `pnpm api:generate`.
+2. `lint-staged` runs:
+   - `*.{ts,tsx,js,jsx}` -> `eslint --fix` + `prettier --write`
+   - `*.{json,yml,yaml}` -> `prettier --write`
+   - `*.md` -> `markdownlint --fix` + `prettier --write`
+
+### Commit Messages
+
+**commitlint** enforces Conventional Commits via husky `commit-msg` hook:
+
+```text
+type(optional-scope): description
+```
+
+Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+
+**Custom rule:** Subject must not contain parenthesized text -- Release Please misparses it as a scope. Use dashes or brackets instead.
+
+```bash
+# Correct
+feat(api): add vault export endpoint
+chore: remove unused config
+
+# Wrong -- will be rejected by commitlint
+fix: update handler (legacy)  # parens in subject
+```
 
 ## Import Organization
 
-**Order:**
-1. External package imports (`ipfs-http-client`, `dotenv`, `crypto`)
-2. Third-party crypto libraries (`eciesjs`, `@noble/secp256k1`)
-3. Node.js built-in modules (`fs/promises`, `fs`, `path`)
+### Order
 
-**Path Aliases:**
-- None configured; use relative imports
+1. External framework imports (`react`, `@nestjs/*`, `typeorm`, `zustand`, `tauri`)
+2. Monorepo package imports (`@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/sdk-core`, `@cipherbox/sdk`, `@cipherbox/api-client`)
+3. Local absolute imports (from `../` or `./`)
+4. CSS imports (last, in `.tsx` files)
 
-**Example:**
+### Example (Backend Controller)
+
 ```typescript
-import { create } from "ipfs-http-client";
-import dotenv from "dotenv";
-import { randomBytes, createCipheriv, createDecipheriv } from "crypto";
-import { encrypt as eciesEncrypt, decrypt as eciesDecrypt } from "eciesjs";
-import { getPublicKey } from "@noble/secp256k1";
-import { mkdir, writeFile } from "fs/promises";
-import { existsSync } from "fs";
-import path from "path";
+import { Controller, Post, Get, Body, UseGuards, Request } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { VaultService } from './vault.service';
+import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
+import { RequestWithUser } from '../common/types';
 ```
 
-## Error Handling
+### Example (Frontend Component)
 
-**Patterns:**
-- Throw `Error` with descriptive messages for critical failures
-- Use try-catch with console.warn for recoverable operations
-- Type errors explicitly with `as Error` cast pattern
-
-**Example - Critical Error:**
 ```typescript
-if (!privateKeyHex) {
-    throw new Error("ECDSA_PRIVATE_KEY is required");
+import { useState, useCallback, useEffect } from 'react';
+import type { FolderChild, FilePointer } from '@cipherbox/core';
+import { useFolderNavigation } from '../../hooks/useFolderNavigation';
+import { useFolder } from '../../hooks/useFolder';
+import { useFolderStore } from '../../stores/folder.store';
+import { FileList } from './FileList';
+import '../../styles/file-browser.css';
+```
+
+### Path Aliases
+
+- No path aliases configured. Use relative imports everywhere.
+- Monorepo packages are imported by package name: `@cipherbox/crypto`, `@cipherbox/core`, etc.
+
+### Barrel Files
+
+**All packages use `index.ts` barrel exports:**
+
+- `packages/crypto/src/index.ts` -- re-exports all public crypto functions and types
+- `packages/core/src/index.ts` -- re-exports folder, file, vault, IPNS types and functions
+- `packages/sdk-core/src/index.ts` -- re-exports IPFS, IPNS, folder, file, upload, download ops
+- `packages/sdk/src/index.ts` -- re-exports `CipherBoxClient`, events, types
+- `packages/api-client/src/index.ts` -- re-exports generated API functions and models
+
+**Within packages, sub-modules also have barrel files:**
+
+- `packages/crypto/src/aes/index.ts` re-exports `encrypt`, `decrypt`, `seal`, `unseal`
+- `packages/core/src/folder/index.ts` re-exports types and metadata functions
+
+**Backend entities and DTOs use barrel files:**
+
+- `apps/api/src/vault/dto/index.ts`
+- `apps/api/src/vault/entities/index.ts`
+- `apps/api/src/shares/entities/index.ts`
+
+**Frontend component groups use barrel files:**
+
+- `apps/web/src/components/file-browser/index.ts` -- selectively exports main components
+- `apps/web/src/components/layout/index.ts` -- exports all layout components
+
+## NestJS Backend Conventions (`apps/api`)
+
+### Module Structure
+
+Every domain is a NestJS module with this structure:
+
+```text
+apps/api/src/{domain}/
+  {domain}.module.ts       # Module declaration
+  {domain}.controller.ts   # HTTP endpoints
+  {domain}.service.ts      # Business logic
+  {domain}.controller.spec.ts
+  {domain}.service.spec.ts
+  dto/
+    index.ts               # Barrel export
+    {action}-{entity}.dto.ts
+  entities/
+    index.ts               # Barrel export
+    {entity}.entity.ts
+```
+
+### Controller Pattern
+
+```typescript
+@ApiTags('Vault')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard)
+@Controller('vault')
+export class VaultController {
+  constructor(private readonly vaultService: VaultService) {}
+
+  @Post('init')
+  @ApiOperation({ summary: '...', description: '...' })
+  @ApiResponse({ status: 201, description: '...', type: VaultResponseDto })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 409, description: 'Conflict' })
+  async initializeVault(
+    @Request() req: RequestWithUser,
+    @Body() dto: InitVaultDto
+  ): Promise<VaultResponseDto> {
+    return this.vaultService.initializeVault(req.user.id, dto);
+  }
 }
 ```
 
-**Example - Recoverable Error:**
+**Rules:**
+
+- Always use `@ApiTags`, `@ApiBearerAuth`, `@ApiOperation`, `@ApiResponse` decorators
+- Inject services via `private readonly` constructor params
+- Extract `userId` from `req.user.id` (typed via `RequestWithUser`)
+- Controllers delegate to services -- no business logic in controllers
+- Return typed DTOs from all endpoints
+
+### Service Pattern
+
 ```typescript
-try {
-    await ctx.ipfs.pin.rm(cid);
-} catch (error) {
-    console.warn(`Pin rm skipped for ${cid}: ${(error as Error).message}`);
+@Injectable()
+export class VaultService {
+  constructor(
+    @InjectRepository(Vault) private readonly vaultRepository: Repository<Vault>,
+    private readonly configService: ConfigService
+  ) {}
 }
 ```
 
-**Async Error Handling:**
-- Main entry point uses `.catch()` with `process.exit(1)` pattern:
+**Rules:**
+
+- All services are `@Injectable()`
+- Use `@InjectRepository` for TypeORM repositories
+- Throw NestJS exceptions (`ConflictException`, `NotFoundException`, `BadRequestException`)
+- JSDoc comments on all public methods
+
+### DTO Pattern
+
 ```typescript
-main().catch((error) => {
-    console.error("PoC harness failed:", error);
-    process.exit(1);
-});
+export class InitVaultDto {
+  @ApiProperty({ description: '...', example: '...' })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^[0-9a-fA-F]+$/, { message: '...' })
+  ownerPublicKey!: string;
+}
 ```
 
-## Logging
+**Rules:**
 
-### Backend Server Logging (NestJS)
+- Use `class-validator` decorators for request DTOs
+- Use `@ApiProperty` for Swagger documentation on all fields
+- Use definite assignment assertion (`!:`) on all DTO fields
+- Response DTOs need `@ApiProperty` but not validation decorators
 
-**Framework:** Winston with structured JSON logging
+### Entity Pattern
 
-**Transport Configuration by Environment:**
-
-| Environment | Transports | Format |
-|-------------|------------|--------|
-| Local | Console (pretty-print) | Human-readable with colors |
-| Development | Console + Datadog/Splunk | JSON structured |
-| Production | Datadog/Splunk (no console) | JSON structured |
-
-**Log Levels:**
-- `error` - Critical failures requiring immediate attention
-- `warn` - Recoverable issues, degraded functionality
-- `info` - Significant business events (auth, API calls, IPFS operations)
-- `debug` - Detailed diagnostic information (dev/local only)
-
-**Structured Log Fields:**
 ```typescript
-// Required fields in all log entries
-{
-  timestamp: string;      // ISO 8601 format
-  level: string;          // error, warn, info, debug
-  message: string;        // Human-readable description
-  service: 'cipherbox-api';
-  environment: string;    // local, development, production
-  correlationId?: string; // Request tracking across services
-}
+@Entity('vaults') // table name is plural, snake_case
+export class Vault {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string;
 
-// Context-specific fields
-{
-  userId?: string;        // Authenticated user (never log keys!)
-  operation?: string;     // e.g., 'ipfs.add', 'vault.create'
-  duration?: number;      // Operation duration in ms
-  ipfsCid?: string;       // IPFS content identifier
-  error?: {               // Error details (errors only)
-    name: string;
-    message: string;
-    stack?: string;       // Dev/local only, never in prod logs
+  @Column({ type: 'uuid', name: 'owner_id' })
+  ownerId!: string;
+
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'owner_id' })
+  owner!: User;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt!: Date;
+}
+```
+
+**Rules:**
+
+- Table names: plural snake_case (`vaults`, `pinned_cids`, `folder_ipns`)
+- Column names: explicit snake_case via `name` option
+- Property names: camelCase
+- Binary data stored as `bytea` type, typed as `Buffer`
+- UUIDs as primary keys via `@PrimaryGeneratedColumn('uuid')`
+- Definite assignment assertions (`!:`) on all fields
+- `onDelete: 'CASCADE'` on foreign key relations
+
+## React Frontend Conventions (`apps/web`)
+
+### Component Pattern
+
+```typescript
+type ConfirmDialogProps = {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  isDestructive?: boolean;
+  isLoading?: boolean;
+};
+
+/**
+ * JSDoc with description and @example block.
+ */
+export function ConfirmDialog({ open, onClose, onConfirm, ... }: ConfirmDialogProps) {
+  // ...
+}
+```
+
+**Rules:**
+
+- Use `function` declarations (not arrow functions) for components
+- Props type defined as `type XxxProps` above the component
+- Named exports, not default exports
+- JSDoc with `@example` on major components
+- CSS via imported stylesheets, not CSS modules or CSS-in-JS
+
+### Zustand Store Pattern
+
+```typescript
+import { create } from 'zustand';
+
+type FolderState = {
+  // State fields
+  folders: Record<string, FolderNode>;
+  currentFolderId: string | null;
+  // Action signatures
+  setFolder: (folder: FolderNode) => void;
+  clearFolders: () => void;
+};
+
+export const useFolderStore = create<FolderState>((set, get) => ({
+  // Initial state
+  folders: {},
+  currentFolderId: null,
+
+  // Actions (inline)
+  setFolder: (folder) =>
+    set((state) => ({
+      folders: { ...state.folders, [folder.id]: folder },
+    })),
+
+  clearFolders: () => {
+    /* ... */
+  },
+}));
+```
+
+**Rules:**
+
+- Store files named `{domain}.store.ts`
+- State type includes both data fields and action signatures
+- Use `set` for state updates, `get` for reading current state
+- Immutable updates via spread operator
+- **Security:** Zero-fill `Uint8Array` key material in cleanup actions
+- **Stale closures:** Inside async callbacks, use `useFolderStore.getState()` not hook selectors
+
+### Hook Pattern
+
+```typescript
+/**
+ * JSDoc with @example showing usage in JSX.
+ */
+export function useFolder() {
+  const folderMutations = useFolderMutations();
+  const fileOperations = useFileOperations();
+
+  const isLoading = folderMutations.isLoading || fileOperations.isLoading;
+  const error = folderMutations.error || fileOperations.error;
+
+  return {
+    isLoading,
+    error,
+    createFolder: folderMutations.createFolder,
+    // ...
   };
 }
 ```
 
-**Security Requirements:**
-- NEVER log `privateKey`, `folderKey`, `fileKey`, or any encryption keys
-- NEVER log full request/response bodies containing sensitive data
-- Sanitize user input before logging
-- Stack traces only in local/dev environments
+**Rules:**
 
-**Winston Setup Example:**
-```typescript
-import { WinstonModule } from 'nest-winston';
-import * as winston from 'winston';
+- Hook files named `use{Feature}.ts`
+- Compose smaller hooks into larger facade hooks
+- Return object with named properties (not tuples)
+- Combine loading/error state from sub-hooks
 
-// Configure based on NODE_ENV
-const transports: winston.transport[] = [];
+### Routing
 
-if (process.env.NODE_ENV === 'local') {
-  transports.push(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.simple(),
-    ),
-  }));
-} else {
-  // Dev/Prod: JSON format for log aggregation
-  transports.push(new winston.transports.Console({
-    format: winston.format.json(),
-  }));
-  // Add Datadog/Splunk transport here
+- `react-router-dom` with `HashRouter` (required for Tauri webview)
+- Route pages in `apps/web/src/routes/`: `FilesPage.tsx`, `BinPage.tsx`, etc.
+- Protected routes: `useEffect` redirect to `/` when `!isAuthenticated`
+- Layout via `AppShell` wrapper component
+
+### CSS
+
+- Plain CSS files per component group in `apps/web/src/styles/`
+- Modern color function notation: `rgb(0 0 0 / 50%)` not `rgba(0,0,0,0.5)`
+- All interactive elements must have `:focus-visible` styles alongside `:hover`
+
+### Accessibility
+
+- ARIA roles require matching keyboard handlers (`role="button"` needs `onKeyDown` for Enter/Space)
+- Remove `tabIndex` if keyboard interaction is not needed
+- See `apps/web/CLAUDE.md` for full a11y checklist
+
+## Package Layer Conventions
+
+### `@cipherbox/crypto` -- Pure Cryptographic Primitives
+
+- No CipherBox domain knowledge; generic crypto operations only
+- All inputs/outputs are `Uint8Array`
+- Error messages are generic to prevent oracle attacks
+- Custom `CryptoError` class with typed `CryptoErrorCode` string literal union
+- Web Crypto API for AES operations; `@noble/*` and `eciesjs` for ECC
+
+### `@cipherbox/core` -- Domain Types and Metadata
+
+- Knows CipherBox data model (FolderMetadata, FileMetadata, DeviceRegistry)
+- Imports from `@cipherbox/crypto` only
+- Types use `type` keyword, not `interface`
+- Validation functions: `validateFolderMetadata`, `validateFileMetadata`
+- Encrypt/decrypt functions pair: `encryptFolderMetadata` / `decryptFolderMetadata`
+
+### `@cipherbox/sdk-core` -- Stateless Operations
+
+- Pure functions taking `SdkContext` as first argument (dependency injection)
+- No global state; no Zustand; no React
+- `SdkContext` provides `apiUrl`, `getAccessToken()`, and optional `axiosInstance`
+
+### `@cipherbox/sdk` -- Stateful Client
+
+- `CipherBoxClient` class with internal state (`FolderTree`, `KeyCache`)
+- Event-driven via `SdkEventEmitter` with typed `SdkEvent` union
+- Zero React/browser dependencies
+- Defensive copy of key material in constructor; zeroed on `destroy()`
+- Operations wrapped with `withOperation()` for consistent start/end/error events
+
+### `@cipherbox/api-client` -- Generated API Client
+
+- Auto-generated by Orval from OpenAPI spec
+- **Never edit `src/generated/` or `src/models/` manually**
+- Custom axios instance in `src/instance.ts` (the only hand-written file)
+- Regenerate after any API change: `pnpm api:generate`
+
+## Rust Conventions (`crates/*`, `apps/desktop/src-tauri/`)
+
+### Module Structure
+
+```text
+crates/{name}/src/
+  lib.rs          # Public API re-exports
+  error.rs        # Crate-specific error enum
+  {feature}.rs    # Feature modules
+```
+
+### Error Handling
+
+Use `thiserror` derive macro for error enums in every crate:
+
+```rust
+#[derive(Debug, Error)]
+pub enum CryptoError {
+    #[error("AES-GCM encryption failed")]
+    AesEncryptionFailed,
+    #[error("Invalid key size: expected {expected}, got {actual}")]
+    InvalidKeySize { expected: usize, actual: usize },
 }
 ```
 
-### PoC/Script Logging
+**Composition:** Higher-level crates use `#[from]` for automatic conversion:
 
-**Framework:** Native `console` methods (PoC only)
-
-**Patterns:**
-- Use `console.log()` for standard output and progress
-- Use `console.warn()` for non-fatal issues
-- Use `console.error()` for fatal errors
-- Use helper functions for formatted output: `logStep()` for section headers
-
-**Log Format Examples:**
-```typescript
-// Section headers
-const logStep = (message: string) => {
-    console.log(`\n=== ${message} ===`);
-};
-
-// Progress messages
-console.log(`Publishing metadata for ${folder.name}...`);
-
-// Warnings
-console.warn(`Pin rm skipped for ${cid}: ${error.message}`);
+```rust
+#[derive(Debug, Error)]
+pub enum SdkError {
+    #[error("Crypto error: {0}")]
+    Crypto(#[from] cipherbox_crypto::CryptoError),
+    #[error("API error: {0}")]
+    Api(#[from] cipherbox_api_client::ApiError),
+}
 ```
 
-## Comments
+**Tauri commands** return `Result<T, String>` (Tauri's IPC serialization constraint). Map errors with `.map_err(|e| format!("...: {}", e))`.
 
-**When to Comment:**
-- Document disabled/stubbed functionality with reason
-- No JSDoc comments observed in codebase
-- Inline comments for non-obvious behavior
+### Unsafe Usage
 
-**Example:**
-```typescript
-const logIpnsRecordSize = async (_ctx: HarnessContext, _ipnsName: string, _label: string): Promise<void> => {
-    // The routing API is not available in ipfs-http-client v60.
-    // IPNS record size logging is disabled.
-};
-```
+Minimal and isolated. Only used for:
 
-**Underscore Prefix:**
-- Use `_` prefix for intentionally unused parameters: `_ctx`, `_ipnsName`
+- `libc::getuid()` / `libc::getgid()` in FUSE operations (`crates/fuse/src/operations.rs`)
+- WinFSP raw pointer operations (`crates/fuse/src/platform/windows/read_ops.rs`)
 
-## Function Design
+No `unsafe` in application code (`apps/desktop/src-tauri/src/`), crypto, core, SDK, or API client crates.
 
-**Size:**
-- Functions are focused and single-purpose
-- Typical function length: 10-30 lines
-- Complex operations broken into helper functions
+### Key Material
 
-**Parameters:**
-- Use typed parameters with explicit types
-- Context objects passed as first parameter when needed (`ctx: HarnessContext`)
-- Optional parameters use `?` syntax or default values
+- `Zeroizing<Vec<u8>>` from the `zeroize` crate for automatic zeroing on drop
+- Private keys stored as `Zeroizing<Vec<u8>>`, never as raw `Vec<u8>`
 
-**Return Values:**
-- Explicit return type annotations on all functions
-- Use object returns for multiple values: `{ cid: string; delayMs: number }`
-- Async functions return `Promise<T>`
+### Naming
 
-## Module Design
+- snake_case for everything per Rust convention
+- Crate names: `cipherbox_crypto`, `cipherbox_core`, `cipherbox_sdk`, `cipherbox_fuse`, `cipherbox_api_client`
+- Type names: PascalCase (`CryptoError`, `InodeKind`, `FileAttrs`)
+- Constants: UPPER_SNAKE_CASE (`ROOT_INO`, `BLOCK_SIZE`)
 
-**Exports:**
-- POC uses single-file architecture (no exports needed)
-- For multi-file modules, prefer named exports
+### Documentation
 
-**Barrel Files:**
-- Not used in current codebase
+- `//!` module-level doc comments in `lib.rs` and `mod.rs`
+- `///` doc comments on all public items
+- `#[cfg(feature = "...")]` for platform-specific code (e.g., `fuse`, `winfsp`)
 
 ## Binary Data Handling
 
-**Critical Convention (per project rules):**
-- Use `Uint8Array` for all binary data, not strings
-- Convert between formats using helper functions:
+### TypeScript
+
+- **Always use `Uint8Array`** for binary data, never raw `ArrayBuffer`
+- **Never use `.buffer` on `Uint8Array` for Blob construction** -- it returns the entire underlying ArrayBuffer which may be larger than the view:
 
 ```typescript
-const hexToBytes = (hex: string): Uint8Array => {
-    const normalized = hex.startsWith("0x") ? hex.slice(2) : hex;
-    return Uint8Array.from(Buffer.from(normalized, "hex"));
-};
+// WRONG -- silent data corruption
+new Blob([uint8array.buffer]);
 
-const bytesToHex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex");
-
-const utf8ToBytes = (value: string): Uint8Array => Buffer.from(value, "utf8");
-const bytesToUtf8 = (value: Uint8Array): string => Buffer.from(value).toString("utf8");
+// CORRECT
+new Blob([uint8array]);
 ```
 
-## Cryptographic Conventions
+- Hex encoding/decoding via `@cipherbox/crypto` utilities: `hexToBytes()`, `bytesToHex()`
+- API transport: hex-encoded strings for keys, base64 for encrypted data blobs
 
-**Encryption:**
-- AES-256-GCM for content encryption
-- ECIES for key wrapping
-- 12-byte IVs, 16-byte auth tags
+### Rust
 
-**Key Handling:**
-- Never log keys
-- Never store keys in localStorage/sessionStorage
-- Clear sensitive data after use
+- `Vec<u8>` for owned byte data
+- `&[u8]` for borrowed byte data
+- `Zeroizing<Vec<u8>>` for sensitive key material
+- `hex::encode()` / `hex::decode()` for hex conversion
+
+## Error Handling Patterns Per Layer
+
+### Package Layer (crypto, core, sdk-core)
+
+Custom typed errors. Never throw generic `Error`:
+
+```typescript
+throw new CryptoError('Encryption failed', 'ENCRYPTION_FAILED');
+```
+
+### SDK Layer (sdk)
+
+`withOperation()` wrapper emits `operation:start`, `operation:end`, and `error` events. Errors propagate to caller:
+
+```typescript
+// SdkEventEmitter catches subscriber errors silently
+try {
+  handler(event);
+} catch {
+  /* subscriber bugs don't crash SDK */
+}
+```
+
+### API Backend (NestJS)
+
+Throw NestJS HTTP exceptions:
+
+```typescript
+throw new ConflictException('Vault already exists for this user');
+throw new NotFoundException('Vault not found');
+throw new BadRequestException('Invalid input');
+```
+
+### Frontend Services
+
+Retry wrapper with exponential backoff for network operations:
+
+```typescript
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 500): Promise<T>;
+```
+
+Error detection via status code inspection:
+
+```typescript
+export function isConflictError(error: unknown): boolean {
+  const e = error as Record<string, unknown>;
+  return e.status === 409;
+}
+```
+
+### Frontend Hooks
+
+Combine loading/error state from sub-hooks. Errors clear when next operation starts.
+
+### React Async Safety
+
+- Re-check refs for null after every `await` in async callbacks
+- Never use non-null assertions (`!`) on refs in async code
+- Wrap `HTMLMediaElement.play()` in try/catch (autoplay policy)
+
+## API Client Generation Workflow
+
+After modifying any `.dto.ts`, `.controller.ts`, or `.entity.ts` in `apps/api`:
+
+```bash
+pnpm api:generate
+```
+
+This command:
+
+1. Generates OpenAPI spec from NestJS decorators (`pnpm openapi:generate`)
+2. Regenerates typed client functions via Orval (`pnpm --filter @cipherbox/api-client generate`)
+3. Builds the api-client package
+4. Runs lint fix across the monorepo
+
+The pre-commit hook (`scripts/check-api-client.sh`) blocks commits that modify API source files without staging the regenerated `packages/api-client/openapi.json`.
+
+## Logging
+
+### Backend
+
+NestJS default logger (console output). No Winston or structured logging framework currently configured.
+
+**Security rules:**
+
+- NEVER log `privateKey`, `folderKey`, `fileKey`, or any encryption keys
+- NEVER log full request/response bodies containing encrypted data
+
+### Frontend
+
+`console.log` / `console.warn` / `console.error` for development.
+
+### Rust Desktop
+
+`env_logger` + `log` crate macros:
+
+```rust
+log::info!("CipherBox Desktop starting...");
+log::error!("Failed to build tray: {}", e);
+```
+
+## Comments and Documentation
+
+### TypeScript
+
+- JSDoc with `@example` blocks on public API functions and major components
+- Module-level JSDoc on `index.ts` barrel files (especially in packages)
+- Inline comments for non-obvious behavior, security considerations marked with `[SECURITY: ...]`
+- `_` prefix for intentionally unused variables (enforced by ESLint)
+
+### Rust
+
+- `//!` for module-level documentation
+- `///` for public item documentation
+- `// SAFETY:` comments required near `unsafe` blocks
+- Section dividers with `// -- SectionName ---...` pattern
+
+## Security Conventions
+
+- **Memory-only keys:** `Uint8Array` key material is never persisted to localStorage/sessionStorage
+- **Zero-fill on cleanup:** `Uint8Array.fill(0)` before releasing references (stores, SDK `destroy()`)
+- **Rust:** `Zeroizing<Vec<u8>>` for automatic zeroization on drop
+- **ECIES wrapping:** All key transport uses ECIES (secp256k1); server never sees plaintext keys
+- **Generic crypto errors:** Error messages from crypto layer are deliberately vague to prevent oracle attacks
+- **Exposed dev stores:** Zustand stores attached to `window.__ZUSTAND_*` only when `import.meta.env.DEV`
 
 ---
 
-*Convention analysis: 2026-01-20*
+<!-- Convention analysis: 2026-03-27 -->
