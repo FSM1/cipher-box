@@ -29,6 +29,8 @@ vi.mock('@cipherbox/core', async () => {
     }),
     encryptFolderMetadata: vi.fn().mockResolvedValue({ iv: 'mock-iv', data: 'mock-data' }),
     encryptFileMetadata: vi.fn().mockResolvedValue({ iv: 'mock-iv', data: 'mock-data' }),
+    createIpnsRecord: vi.fn().mockResolvedValue({ value: new Uint8Array([1, 2, 3]) }),
+    marshalIpnsRecord: vi.fn().mockReturnValue(new Uint8Array([4, 5, 6])),
   };
 });
 

@@ -137,3 +137,14 @@ export async function revokeShare(params: {
 }): Promise<void> {
   await params.revokeShareFn(params.shareId);
 }
+
+// Shared-write operations (stateless functions for write-share recipients)
+export {
+  uploadToSharedFolder,
+  createSharedSubfolder,
+  renameInSharedFolder,
+  deleteFromSharedFolder,
+  updateSharedFile,
+  updateSharePermission,
+  type SharedWriteContext,
+} from './shared-write';
