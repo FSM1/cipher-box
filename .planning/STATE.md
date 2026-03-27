@@ -180,6 +180,12 @@ Recent for v1.1:
 
 All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`.
 
+### Quick Tasks Completed
+
+| #          | Description                                                   | Date       | Commit     | Directory                                                                                                           |
+| ---------- | ------------------------------------------------------------- | ---------- | ---------- | ------------------------------------------------------------------------------------------------------------------- |
+| 260327-2ab | Extract shared-write operations from web UI into SDK packages | 2026-03-27 | see branch | [260327-2ab-extract-shared-write-operations-from-web](./quick/260327-2ab-extract-shared-write-operations-from-web/) |
+
 ---
 
-Last updated: 2026-03-26 after completing Phase 27 Plan 03 (recipient write UI & operations) -- Phase 27 complete
+Last activity: 2026-03-27 - Completed quick task 260327-2ab: Extract shared-write operations from web UI into SDK packages

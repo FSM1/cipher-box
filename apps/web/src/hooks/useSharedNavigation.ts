@@ -27,6 +27,7 @@ import {
   type EncryptedFileMetadata,
 } from '@cipherbox/core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
+import type { ShareKeyEntryDtoKeyType } from '@cipherbox/api-client';
 import {
   uploadToSharedFolder,
   createSharedSubfolder,
@@ -170,7 +171,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       string,
       {
         keys: Array<{
-          keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+          keyType: ShareKeyEntryDtoKeyType;
           itemId: string;
           encryptedKey: string;
         }>;

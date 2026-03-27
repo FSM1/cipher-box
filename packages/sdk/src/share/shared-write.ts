@@ -28,6 +28,8 @@ import {
   generateFileIpnsKeypair,
   encryptFolderMetadata,
   encryptFileMetadata,
+  createIpnsRecord,
+  marshalIpnsRecord,
   type FolderChild,
   type FolderEntry,
   type FilePointer,
@@ -43,6 +45,10 @@ import {
   updateFileMetadata,
 } from '@cipherbox/sdk-core';
 import type { SdkContext } from '@cipherbox/sdk-core';
+import type { ShareKeyEntryDtoKeyType } from '@cipherbox/api-client';
+
+/** Re-export the canonical share key type for consumers */
+export type ShareKeyType = ShareKeyEntryDtoKeyType;
 
 /**
  * Context for shared-write operations on a folder.
@@ -71,7 +77,7 @@ export type SharedWriteContext = {
   addShareKeysFn: (
     shareId: string,
     keys: Array<{
-      keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+      keyType: ShareKeyType;
       itemId: string;
       encryptedKey: string;
     }>
@@ -154,7 +160,6 @@ export async function uploadToSharedFolder(
       // 8. Create and publish file IPNS record
       // Use createAndPublishIpnsRecord for single file IPNS, then batch publish
       const ipnsLifetimeMs = 24 * 60 * 60 * 1000;
-      const { createIpnsRecord, marshalIpnsRecord } = await import('@cipherbox/core');
       const record = await createIpnsRecord(
         ipnsKeypair.privateKey,
         `/ipfs/${metadataCid}`,
@@ -403,7 +408,7 @@ export async function updateSharedFile(params: {
   addShareKeysFn: (
     shareId: string,
     keys: Array<{
-      keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+      keyType: ShareKeyType;
       itemId: string;
       encryptedKey: string;
     }>

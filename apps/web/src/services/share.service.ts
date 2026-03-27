@@ -24,6 +24,8 @@ import {
   sharesControllerUpdateShareEncryptedKey,
   sharesControllerCompleteRotation,
   sharesControllerUpdatePermission,
+  type ShareKeyEntryDtoKeyType,
+  type ChildKeyDtoKeyType,
 } from '@cipherbox/api-client';
 
 import { wrapKey, bytesToHex, hexToBytes, generateRandomBytes } from '@cipherbox/crypto';
@@ -105,7 +107,7 @@ export async function createShare(params: {
   ipnsName: string;
   itemName: string;
   encryptedKey: string;
-  childKeys?: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>;
+  childKeys?: Array<{ keyType: ChildKeyDtoKeyType; itemId: string; encryptedKey: string }>;
 }): Promise<{ shareId: string }> {
   const response = await sharesControllerCreateShare({
     recipientPublicKey: params.recipientPublicKey,
@@ -164,7 +166,7 @@ export async function hideShare(shareId: string): Promise<void> {
  */
 export async function fetchShareKeys(shareId: string): Promise<
   Array<{
-    keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+    keyType: ShareKeyEntryDtoKeyType;
     itemId: string;
     encryptedKey: string;
   }>
@@ -172,7 +174,7 @@ export async function fetchShareKeys(shareId: string): Promise<
   const response = await sharesControllerGetShareKeys(shareId);
 
   return response.map((k) => ({
-    keyType: k.keyType as 'file' | 'folder' | 'file-ipns' | 'folder-ipns',
+    keyType: k.keyType as ShareKeyEntryDtoKeyType,
     itemId: k.itemId,
     encryptedKey: k.encryptedKey,
   }));
@@ -184,7 +186,7 @@ export async function fetchShareKeys(shareId: string): Promise<
 export async function addShareKeys(
   shareId: string,
   keys: Array<{
-    keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns';
+    keyType: ShareKeyEntryDtoKeyType;
     itemId: string;
     encryptedKey: string;
   }>
