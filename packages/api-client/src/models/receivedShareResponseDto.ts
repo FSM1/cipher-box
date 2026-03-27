@@ -23,6 +23,6 @@ export interface ReceivedShareResponseDto {
    * Hex-encoded ECIES-wrapped IPNS private key for write shares
    * @nullable
    */
-  encryptedIpnsKey?: string | null;
+  encryptedIpnsKey: string | null;
   createdAt: string;
 }

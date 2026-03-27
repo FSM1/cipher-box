@@ -737,8 +737,11 @@ describe('SharesService', () => {
       );
     });
 
-    it('should reject write-share recipient adding folder-ipns keys', async () => {
+    it('should allow write-share recipient to add folder-ipns keys (subfolder write access)', async () => {
       mockShareRepo.findOne.mockResolvedValue(writeShare);
+      mockShareKeyRepo.findOne.mockResolvedValue(null);
+      mockShareKeyRepo.create.mockImplementation((data) => data);
+      mockShareKeyRepo.save.mockResolvedValue({});
 
       const dto: AddShareKeysDto = {
         keys: [
@@ -750,9 +753,7 @@ describe('SharesService', () => {
         ],
       };
 
-      await expect(service.addShareKeys(shareId, recipientId, dto)).rejects.toThrow(
-        ForbiddenException
-      );
+      await expect(service.addShareKeys(shareId, recipientId, dto)).resolves.not.toThrow();
     });
 
     it('should reject read-only recipient from adding any keys', async () => {

@@ -48,7 +48,6 @@ export class ReceivedShareResponseDto {
   @ApiProperty({
     description: 'Hex-encoded ECIES-wrapped IPNS private key for write shares',
     type: String,
-    required: false,
     nullable: true,
   })
   encryptedIpnsKey!: string | null;

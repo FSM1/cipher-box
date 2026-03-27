@@ -1022,44 +1022,51 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       }
       const ownerPublicKey = parsePublicKey(shareItem.share.sharerPublicKey);
 
-      await updateSharedFile({
-        ctx: {
-          apiUrl,
-          getAccessToken: async () => useAuthStore.getState().accessToken || '',
-          axiosInstance: apiAxios,
-        },
-        folderKey,
-        ownerPublicKey,
-        recipientPublicKey: auth.vaultKeypair.publicKey,
-        shareId: currentShareId!,
-        addShareKeysFn: async (sid, keys) => {
-          await addShareKeys(sid, keys);
-          shareKeysCache.current.delete(sid);
-        },
-        filePointer: item,
-        newContent,
-        getFileIpnsKeyFn: async (itemId: string) => {
-          // Try share_keys (file-ipns) first, then FilePointer fallback
-          const keys = await fetchShareKeys(currentShareId!);
-          const ipnsKeyRecord = keys.find((k) => k.keyType === 'file-ipns' && k.itemId === itemId);
-          if (ipnsKeyRecord) {
-            return unwrapKey(hexToBytes(ipnsKeyRecord.encryptedKey), auth.vaultKeypair!.privateKey);
-          }
-          if (item.ipnsPrivateKeyEncrypted) {
-            try {
-              return await unwrapKey(
-                hexToBytes(item.ipnsPrivateKeyEncrypted),
+      await withRevocationGuard(async () => {
+        await updateSharedFile({
+          ctx: {
+            apiUrl,
+            getAccessToken: async () => useAuthStore.getState().accessToken || '',
+            axiosInstance: apiAxios,
+          },
+          folderKey,
+          ownerPublicKey,
+          recipientPublicKey: auth.vaultKeypair!.publicKey,
+          shareId: currentShareId!,
+          addShareKeysFn: async (sid, keys) => {
+            await addShareKeys(sid, keys);
+            shareKeysCache.current.delete(sid);
+          },
+          filePointer: item,
+          newContent,
+          getFileIpnsKeyFn: async (itemId: string) => {
+            // Try share_keys (file-ipns) first, then FilePointer fallback
+            const keys = await fetchShareKeys(currentShareId!);
+            const ipnsKeyRecord = keys.find(
+              (k) => k.keyType === 'file-ipns' && k.itemId === itemId
+            );
+            if (ipnsKeyRecord) {
+              return unwrapKey(
+                hexToBytes(ipnsKeyRecord.encryptedKey),
                 auth.vaultKeypair!.privateKey
               );
-            } catch {
-              return null;
             }
-          }
-          return null;
-        },
+            if (item.ipnsPrivateKeyEncrypted) {
+              try {
+                return await unwrapKey(
+                  hexToBytes(item.ipnsPrivateKeyEncrypted),
+                  auth.vaultKeypair!.privateKey
+                );
+              } catch {
+                return null;
+              }
+            }
+            return null;
+          },
+        });
       });
     },
-    [folderKey, currentShareId, sharedItems]
+    [folderKey, currentShareId, sharedItems, withRevocationGuard]
   );
 
   /**

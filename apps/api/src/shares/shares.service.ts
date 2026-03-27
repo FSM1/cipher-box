@@ -217,9 +217,7 @@ export class SharesService {
     }
 
     if (isWriteRecipient) {
-      const hasFolderKey = dto.keys.some(
-        (k) => k.keyType === 'folder' || k.keyType === 'folder-ipns'
-      );
+      const hasFolderKey = dto.keys.some((k) => k.keyType === 'folder');
       if (hasFolderKey) {
         throw new ForbiddenException('Write-share recipients cannot modify folder keys');
       }
