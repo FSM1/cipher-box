@@ -9,7 +9,7 @@
 #[allow(unused_imports)]
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use cipherbox_fuse::{
-    CipherBoxFS, PublishCoordinator, PendingRefresh, PendingContent, UploadComplete,
+    CipherBoxFS, PublishCoordinator, PendingRefresh, PendingContent, PendingFilePointer, UploadComplete,
     encrypt_metadata_to_json, spawn_bin_entry_publish, mount_point,
 };
 
@@ -107,6 +107,7 @@ pub async fn mount_filesystem(
 
     let (refresh_tx, refresh_rx) = std::sync::mpsc::channel::<PendingRefresh>();
     let (content_tx, content_rx) = std::sync::mpsc::channel::<PendingContent>();
+    let (filepointer_tx, filepointer_rx) = std::sync::mpsc::channel::<PendingFilePointer>();
     let (upload_tx, upload_rx) = std::sync::mpsc::channel::<UploadComplete>();
 
     // Pre-populate root folder
@@ -200,6 +201,8 @@ pub async fn mount_filesystem(
         refresh_rx, refresh_tx,
         prefetching: std::collections::HashSet::new(),
         content_rx, content_tx,
+        filepointer_rx, filepointer_tx,
+        resolving_file_pointers: std::collections::HashSet::new(),
         pending_content: HashMap::new(),
         upload_rx, upload_tx,
         mutated_folders: HashMap::new(),

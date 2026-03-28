@@ -84,6 +84,23 @@ pub enum PendingContent {
     Failure { cid: String },
 }
 
+/// Pending FilePointer resolution result sent from background async tasks.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub enum PendingFilePointer {
+    Success {
+        ino: u64,
+        cid: String,
+        encrypted_file_key: String,
+        iv: String,
+        size: u64,
+        encryption_mode: String,
+        versions: Option<Vec<cipherbox_core::folder::VersionEntry>>,
+    },
+    Failure {
+        ino: u64,
+    },
+}
+
 /// Notification from a background upload thread that a file upload completed.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct UploadComplete {
@@ -471,6 +488,9 @@ pub struct CipherBoxFS {
     pub prefetching: std::collections::HashSet<String>,
     pub content_rx: std::sync::mpsc::Receiver<PendingContent>,
     pub content_tx: std::sync::mpsc::Sender<PendingContent>,
+    pub filepointer_rx: std::sync::mpsc::Receiver<PendingFilePointer>,
+    pub filepointer_tx: std::sync::mpsc::Sender<PendingFilePointer>,
+    pub resolving_file_pointers: std::collections::HashSet<u64>,
     pub pending_content: HashMap<u64, Vec<u8>>,
     pub upload_rx: std::sync::mpsc::Receiver<UploadComplete>,
     pub upload_tx: std::sync::mpsc::Sender<UploadComplete>,
@@ -650,6 +670,41 @@ impl CipherBoxFS {
             match msg {
                 PendingContent::Success { cid, data } => { self.prefetching.remove(&cid); self.content_cache.set(&cid, data); }
                 PendingContent::Failure { cid } => { self.prefetching.remove(&cid); }
+            }
+        }
+    }
+
+    /// Drain completed FilePointer async resolution results.
+    /// Mirrors drain_content_prefetches() -- applies resolved metadata to inodes
+    /// and removes entries from the resolving_file_pointers dedup guard.
+    pub fn drain_filepointer_completions(&mut self) {
+        while let Ok(msg) = self.filepointer_rx.try_recv() {
+            match msg {
+                PendingFilePointer::Success {
+                    ino,
+                    cid,
+                    encrypted_file_key,
+                    iv,
+                    size,
+                    encryption_mode,
+                    versions,
+                } => {
+                    self.resolving_file_pointers.remove(&ino);
+                    self.inodes.resolve_file_pointer(
+                        ino,
+                        cid,
+                        encrypted_file_key,
+                        iv,
+                        size,
+                        encryption_mode,
+                        versions,
+                    );
+                    log::debug!("FilePointer resolved async for ino {}", ino);
+                }
+                PendingFilePointer::Failure { ino } => {
+                    self.resolving_file_pointers.remove(&ino);
+                    log::warn!("FilePointer async resolution failed for ino {}", ino);
+                }
             }
         }
     }
