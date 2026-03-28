@@ -6,11 +6,7 @@ import { useContextMenu } from '../../hooks/useContextMenu';
 import { useSyncPolling } from '../../hooks/useSyncPolling';
 import { useDeviceRegistrySync } from '../../hooks/useDeviceRegistrySync';
 import { useDropUpload } from '../../hooks/useDropUpload';
-import {
-  isFilePointer,
-  isPreviewableFile,
-  isTextFile,
-} from '../../utils/fileTypes';
+import { isFilePointer, isPreviewableFile, isTextFile } from '../../utils/fileTypes';
 import { useVaultStore } from '../../stores/vault.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { FileList } from './FileList';

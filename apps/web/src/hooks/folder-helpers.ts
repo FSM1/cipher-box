@@ -22,7 +22,7 @@ export async function resyncFolder(folderIpnsName: string, folderId: string): Pr
 
   const remoteMetadata = await folderService.fetchAndDecryptMetadata(
     resolved.cid,
-    folderNode.folderKey,
+    folderNode.folderKey
   );
 
   store.updateFolderChildren(folderId, remoteMetadata.children ?? []);
@@ -38,7 +38,7 @@ export async function resyncFolder(folderIpnsName: string, folderId: string): Pr
 export async function withConflictRetry<T>(
   perform: () => Promise<T>,
   resync: () => Promise<void>,
-  preRetry?: () => void,
+  preRetry?: () => void
 ): Promise<T> {
   return sdkWithConflictRetry(
     perform,
@@ -50,7 +50,7 @@ export async function withConflictRetry<T>(
         useSyncStore.getState().clearConflict();
       }
     },
-    preRetry,
+    preRetry
   );
 }
 

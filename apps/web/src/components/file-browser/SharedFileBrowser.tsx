@@ -789,4 +789,3 @@ export function SharedFileBrowser() {
     </div>
   );
 }
-

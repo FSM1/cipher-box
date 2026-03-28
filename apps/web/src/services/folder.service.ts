@@ -68,7 +68,7 @@ function uint8ToBase64(bytes: Uint8Array): string {
  */
 export function getDepth(
   folderId: string | null,
-  folders: Record<string, { id: string; parentId: string | null }>,
+  folders: Record<string, { id: string; parentId: string | null }>
 ): number {
   return sdkGetDepth(folderId, folders);
 }
@@ -700,7 +700,7 @@ export async function replaceFileInFolder(params: {
  */
 export function calculateSubtreeDepth(
   folderId: string,
-  folders: Record<string, { id: string; parentId: string | null }>,
+  folders: Record<string, { id: string; parentId: string | null }>
 ): number {
   return sdkCalculateSubtreeDepth(folderId, folders);
 }
@@ -718,7 +718,7 @@ export function calculateSubtreeDepth(
 export function isDescendantOf(
   folderId: string,
   potentialAncestorId: string,
-  folders: Record<string, { id: string; parentId: string | null }>,
+  folders: Record<string, { id: string; parentId: string | null }>
 ): boolean {
   return sdkIsDescendantOf(folderId, potentialAncestorId, folders);
 }

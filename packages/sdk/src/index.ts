@@ -69,9 +69,4 @@ export {
 } from './share';
 
 // Error handling and retry utilities
-export {
-  isForbiddenError,
-  isConflictError,
-  withRevocationGuard,
-  withConflictRetry,
-} from './error';
+export { isForbiddenError, isConflictError, withRevocationGuard, withConflictRetry } from './error';

@@ -158,7 +158,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setError('> write access revoked -- folder is now read-only');
       }
     },
-    [zeroIpnsKey],
+    [zeroIpnsKey]
   );
 
   const refreshFolderContents = useCallback(
@@ -183,7 +183,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         return null;
       }
     },
-    [],
+    []
   );
 
   const getShareKeys = useCallback(async (shareId: string) => {
