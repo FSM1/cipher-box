@@ -50,6 +50,19 @@ function scrubValue(value: unknown): unknown {
   return value;
 }
 
+function scrubArray(arr: unknown[], depth: number): unknown[] {
+  if (depth > 3) return ['[DEPTH_LIMIT]'];
+  return arr.map((item) => {
+    const s = scrubValue(item);
+    if (s !== item) return s;
+    if (Array.isArray(item)) return scrubArray(item, depth + 1);
+    if (typeof item === 'object' && item !== null) {
+      return scrubObject(item as Record<string, unknown>, depth + 1);
+    }
+    return item;
+  });
+}
+
 /** Recursively scrub sensitive keys/values. Beyond max depth, redacts rather than leaks. */
 function scrubObject(obj: Record<string, unknown>, depth = 0): Record<string, unknown> {
   if (depth > 3) return { _redacted: '[DEPTH_LIMIT]' };
@@ -70,14 +83,7 @@ function scrubObject(obj: Record<string, unknown>, depth = 0): Record<string, un
     }
 
     if (Array.isArray(value)) {
-      result[key] = value.map((item) => {
-        const s = scrubValue(item);
-        if (s !== item) return s;
-        if (typeof item === 'object' && item !== null) {
-          return scrubObject(item as Record<string, unknown>, depth + 1);
-        }
-        return item;
-      });
+      result[key] = scrubArray(value, depth + 1);
     } else if (typeof value === 'object' && value !== null) {
       result[key] = scrubObject(value as Record<string, unknown>, depth + 1);
     } else {
