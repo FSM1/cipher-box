@@ -79,7 +79,7 @@ describe('CipherBoxClient pinning', () => {
 
       vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
         updatedChildren: [],
-        addedChild: {
+        filePointer: {
           type: 'file',
           id: 'f1',
           name: 'test.txt',
@@ -90,6 +90,7 @@ describe('CipherBoxClient pinning', () => {
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
         newSequenceNumber: 2n,
       });
 
@@ -128,7 +129,7 @@ describe('CipherBoxClient pinning', () => {
 
       vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
         updatedChildren: [],
-        addedChild: {
+        filePointer: {
           type: 'file',
           id: 'f1',
           name: 'new.txt',
@@ -139,6 +140,7 @@ describe('CipherBoxClient pinning', () => {
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
         newSequenceNumber: 2n,
       });
 
@@ -177,7 +179,7 @@ describe('CipherBoxClient pinning', () => {
 
       vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
         updatedChildren: [],
-        addedChild: {
+        filePointer: {
           type: 'file',
           id: 'f1',
           name: 'new.txt',
@@ -188,6 +190,7 @@ describe('CipherBoxClient pinning', () => {
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
         newSequenceNumber: 2n,
       });
 
@@ -233,7 +236,7 @@ describe('CipherBoxClient pinning', () => {
 
       vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
         updatedChildren: [],
-        addedChild: {
+        filePointer: {
           type: 'file',
           id: 'f1',
           name: 'new.txt',
@@ -244,6 +247,7 @@ describe('CipherBoxClient pinning', () => {
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
         newSequenceNumber: 2n,
       });
 
@@ -292,7 +296,7 @@ describe('CipherBoxClient pinning', () => {
 
       vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
         updatedChildren: [],
-        addedChild: {
+        filePointer: {
           type: 'file',
           id: 'f1',
           name: 'new.txt',
@@ -303,6 +307,7 @@ describe('CipherBoxClient pinning', () => {
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
         newSequenceNumber: 2n,
       });
 
@@ -340,7 +345,7 @@ describe('CipherBoxClient pinning', () => {
 
       vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
         updatedChildren: [],
-        addedChild: {
+        filePointer: {
           type: 'file',
           id: 'f1',
           name: 'new.txt',
@@ -351,6 +356,7 @@ describe('CipherBoxClient pinning', () => {
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
         newSequenceNumber: 2n,
       });
 
@@ -385,7 +391,7 @@ describe('CipherBoxClient pinning', () => {
         setupFolder(client, 'folder-ipns');
         vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
           updatedChildren: [],
-          addedChild: {
+          filePointer: {
             type: 'file',
             id: 'f1',
             name: 'new.txt',
@@ -396,6 +402,7 @@ describe('CipherBoxClient pinning', () => {
           },
         });
         vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+          cid: 'bafynew',
           newSequenceNumber: 2n,
         });
       };
