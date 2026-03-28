@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "392c6e215102",
+  "strategy": "manual-commit",
+  "branch": "phase-28-code-hygiene-logging",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/39/2c6e215102/0/metadata.json",
+      "transcript": "/39/2c6e215102/0/full.jsonl",
+      "content_hash": "/39/2c6e215102/0/content_hash.txt",
+      "prompt": "/39/2c6e215102/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 129,
+    "cache_creation_tokens": 317269,
+    "cache_read_tokens": 8164415,
+    "output_tokens": 31812,
+    "api_call_count": 91
+  }
+}

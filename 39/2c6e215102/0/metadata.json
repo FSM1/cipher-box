@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "392c6e215102",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T03:02:38.895725Z",
+  "branch": "phase-28-code-hygiene-logging",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3fc13e901cde",
+  "token_usage": {
+    "input_tokens": 129,
+    "cache_creation_tokens": 317269,
+    "cache_read_tokens": 8164415,
+    "output_tokens": 31812,
+    "api_call_count": 91
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Review and update codebase maps, identify E2E testing gaps and infrastructure concerns, capture todos, add new roadmap phases for technical debt resolution, and begin Phase 28 context discussion.",
+    "outcome": "Created 6 new GSD todos for E2E testing and staging baselines, added 5 new roadmap phases (28-32) for code hygiene/observability/structural work, completed Phase 28 context discussion with logger design decision (custom wrapper over pino/browser), and filed two PRs (FSM1/cipher-box#380, FSM1/cipher-box#381). Fixed a markdownlint escaping issue that was breaking GSD tooling JSON output.",
+    "learnings": {
+      "repo": [
+        "AES-CTR streaming is used for media files \u003e256KB, GCM for everything else — implemented in streaming-crypto.service.ts with Service Worker interception at /decrypt-stream/* URLs",
+        "deleteTestAccount() helper exists in tests/sdk-e2e/src/fixtures/test-harness.ts but only recovery.spec.ts actually calls it — 11 of 12 specs leave orphaned test accounts",
+        "00-Preliminary-R\u0026D/poc/ contains 89MB of committed node_modules and deprecated ipfs-http-client@60.0.1 — fully superseded by production SDK, safe to delete",
+        "Web app has 139 console.* calls across 29 files; hooks.ts alone has 34 (Web3Auth debug logging leaking SDK state)",
+        "Pino browser mode lacks redaction support and Node.js-only Sentry integration — custom logger wrapper is correct choice for a zero-knowledge app needing sensitive field stripping",
+        ".planning/ROADMAP.md and .planning/codebase/ were not in .markdownlintignore, causing the linter to escape asterisks (e.g. console.*) which broke gsd-tools.cjs JSON parsing",
+        "All v1.1 phases (18-27) are complete; new phases start at 28",
+        "unenrollIpns() API endpoint already exists for IPNS orphan cleanup — just needs to be wired up",
+        "useSharedNavigation.ts is 1199 lines with zero unit tests — identified as highest-risk fragile area"
+      ],
+      "code": [
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "deleteTestAccount() helper calls DELETE /auth/account with { confirmation: 'DELETE' } but is only used in recovery.spec.ts"
+        },
+        {
+          "path": "apps/web/src/main.tsx",
+          "finding": "Uses import.meta.env.DEV for gating and has a DEV-only global error capture that should remain as-is during logger migration"
+        },
+        {
+          "path": "apps/web/src/hooks.ts",
+          "finding": "34 console.* calls (largest offender); contains coreKit: any and loginParams: any that could use Web3AuthMPCCoreKit type from core-kit.ts"
+        },
+        {
+          "path": ".markdownlintignore",
+          "finding": "Only excluded .planning/phases/ and .planning/milestones/ — needed to also exclude .planning/*.md and .planning/codebase/ to prevent linter from escaping special chars in planning docs"
+        }
+      ],
+      "workflow": [
+        "GSD STATE.md todo counts can go stale across sessions — always verify actual file count before computing deltas rather than reading the stored number",
+        "The gsd-tools.cjs init manager command fails if ROADMAP.md contains markdown-escaped characters like \\* — markdownlint must be configured to ignore planning docs",
+        "When adding phases requiring discuss-first, Phase 28 (logger) should complete before Phase 30 (observability) since observability hooks into the logger transport array",
+        "GSD assumptions mode is effective for mechanical phases — surfaced all 5 concern areas with evidence and only needed one research detour (pino vs custom wrapper) before user confirmed"
+      ]
+    },
+    "friction": [
+      "STATE.md had a stale todo count (showed 10 before session, was actually 6) causing incorrect arithmetic — reported 6→14 when actual was 6→10",
+      "markdownlint escaped console.* to console.\\* in ROADMAP.md after commit, breaking gsd-tools.cjs JSON parsing of the manager init command — required a separate fix commit and .markdownlintignore update",
+      "gsd-tools init manager returned parse errors multiple times before the ROADMAP.md escaping issue was identified and resolved"
+    ],
+    "open_items": [
+      "Phase 28 context captured but not yet planned or executed — /gsd:plan-phase 28 is next step",
+      "Phases 29 (Infrastructure Hardening) and 32 (FUSE Async FilePointer) are ready to plan immediately and can run in parallel with 28",
+      "Phases 30 (Web App Observability) and 31 (Structural Decomposition) blocked on Phase 28 completion",
+      "6 E2E todos captured: shared deleteAccount teardown, media preview suite, AES-CTR streaming suite, batch download suite, staging metrics baselines, BYO-IPFS load test baselines",
+      "Link/unlink auth methods E2E deferred to full-lifecycle flow test rather than standalone spec",
+      "TEE IPNS republishing, pin migration, and Prometheus metrics noted as integration/smoke tests rather than E2E candidates"
+    ]
+  }
+}
