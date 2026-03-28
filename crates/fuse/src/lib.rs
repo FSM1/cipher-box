@@ -643,50 +643,59 @@ impl CipherBoxFS {
                     _ => None,
                 });
                 if let Some(fk) = folder_key {
+                    let fk_arr = match <[u8; 32]>::try_from(fk.as_slice()) {
+                        Ok(arr) => arr,
+                        Err(_) => {
+                            log::warn!(
+                                "FilePointer resolution skipped for folder ino {}: folder_key length is {} (expected 32)",
+                                refresh.ino,
+                                fk.len()
+                            );
+                            continue;
+                        }
+                    };
                     for (ino, fp_ipns) in unresolved {
                         if self.resolving_file_pointers.contains(&ino) {
                             continue; // Already in-flight
                         }
-                        if let Ok(fk_arr) = <[u8; 32]>::try_from(fk.as_slice()) {
-                            self.resolving_file_pointers.insert(ino);
-                            let api = self.api.clone();
-                            let tx = self.filepointer_tx.clone();
-                            self.rt.spawn(async move {
-                                let result = tokio::time::timeout(
-                                    NETWORK_TIMEOUT,
-                                    async {
-                                        let resp = cipherbox_api_client::ipns::resolve_ipns(&api, &fp_ipns)
-                                            .await.map_err(|e| format!("{}", e))?;
-                                        let enc_bytes = cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid)
-                                            .await.map_err(|e| format!("{}", e))?;
-                                        cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr)
-                                    },
-                                ).await;
+                        self.resolving_file_pointers.insert(ino);
+                        let api = self.api.clone();
+                        let tx = self.filepointer_tx.clone();
+                        self.rt.spawn(async move {
+                            let result = tokio::time::timeout(
+                                NETWORK_TIMEOUT,
+                                async {
+                                    let resp = cipherbox_api_client::ipns::resolve_ipns(&api, &fp_ipns)
+                                        .await.map_err(|e| format!("{}", e))?;
+                                    let enc_bytes = cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid)
+                                        .await.map_err(|e| format!("{}", e))?;
+                                    cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr)
+                                },
+                            ).await;
 
-                                match result {
-                                    Ok(Ok(fm)) => {
-                                        log::debug!("FilePointer async resolved for ino {} (cid={})", ino, &fm.cid[..fm.cid.len().min(12)]);
-                                        let _ = tx.send(PendingFilePointer::Success {
-                                            ino,
-                                            cid: fm.cid,
-                                            encrypted_file_key: fm.file_key_encrypted,
-                                            iv: fm.file_iv,
-                                            size: fm.size,
-                                            encryption_mode: fm.encryption_mode,
-                                            versions: fm.versions,
-                                        });
-                                    }
-                                    Ok(Err(e)) => {
-                                        log::warn!("FilePointer resolve failed for ino {}: {}", ino, e);
-                                        let _ = tx.send(PendingFilePointer::Failure { ino });
-                                    }
-                                    Err(_) => {
-                                        log::warn!("FilePointer resolve timed out for ino {} ({}s)", ino, NETWORK_TIMEOUT.as_secs());
-                                        let _ = tx.send(PendingFilePointer::Failure { ino });
-                                    }
+                            match result {
+                                Ok(Ok(fm)) => {
+                                    log::debug!("FilePointer async resolved for ino {} (cid={})", ino, &fm.cid[..fm.cid.len().min(12)]);
+                                    let _ = tx.send(PendingFilePointer::Success {
+                                        ino,
+                                        cid: fm.cid,
+                                        encrypted_file_key: fm.file_key_encrypted,
+                                        iv: fm.file_iv,
+                                        size: fm.size,
+                                        encryption_mode: fm.encryption_mode,
+                                        versions: fm.versions,
+                                    });
                                 }
-                            });
-                        }
+                                Ok(Err(e)) => {
+                                    log::warn!("FilePointer resolve failed for ino {}: {}", ino, e);
+                                    let _ = tx.send(PendingFilePointer::Failure { ino });
+                                }
+                                Err(_) => {
+                                    log::warn!("FilePointer resolve timed out for ino {} ({}s)", ino, NETWORK_TIMEOUT.as_secs());
+                                    let _ = tx.send(PendingFilePointer::Failure { ino });
+                                }
+                            }
+                        });
                     }
                 }
             }

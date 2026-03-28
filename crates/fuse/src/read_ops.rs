@@ -24,14 +24,19 @@ pub(crate) mod implementation {
 
     /// Poll for an in-flight async FilePointer resolution to complete.
     /// Returns true if the inode was resolved within the timeout.
+    /// Only blocks if an async resolution task is actually in-flight for this inode.
     fn poll_filepointer_resolution(fs: &mut CipherBoxFS, ino: u64) -> bool {
+        if !fs.resolving_file_pointers.contains(&ino) {
+            log::debug!("poll_filepointer_resolution: ino={} has no in-flight resolution, skipping poll", ino);
+            return false;
+        }
         let deadline = std::time::Instant::now() + FILEPOINTER_POLL_TIMEOUT;
         while std::time::Instant::now() < deadline {
             std::thread::sleep(FILEPOINTER_POLL_INTERVAL);
             fs.drain_filepointer_completions();
             if let Some(inode) = fs.inodes.get(ino) {
-                if let crate::inode::InodeKind::File { cid: ref c, file_meta_resolved: true, .. } = inode.kind {
-                    if !c.is_empty() {
+                if let crate::inode::InodeKind::File { cid, file_meta_resolved: true, .. } = &inode.kind {
+                    if !cid.is_empty() {
                         return true;
                     }
                 }
@@ -241,8 +246,8 @@ pub(crate) mod implementation {
                     log::debug!("open: ino={} is unresolved FilePointer, polling...", ino);
                     if poll_filepointer_resolution(fs, ino) {
                         if let Some(inode) = fs.inodes.get(ino) {
-                            if let InodeKind::File { cid: ref c, encrypted_file_key: ref efk, iv: ref i, encryption_mode: ref em, .. } = inode.kind {
-                                info = (c.clone(), efk.clone(), i.clone(), em.clone());
+                            if let InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } = &inode.kind {
+                                info = (cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone());
                             }
                         }
                     }
@@ -438,15 +443,13 @@ pub(crate) mod implementation {
                 log::debug!("read: ino={} is unresolved FilePointer, polling...", ino);
                 if poll_filepointer_resolution(fs, ino) {
                     if let Some(inode) = fs.inodes.get(ino) {
-                        if let InodeKind::File { cid: ref c, file_meta_resolved: true, .. } = inode.kind {
-                            if !c.is_empty() {
-                                // Re-extract file info and fall through to normal read path
-                                let (new_cid, new_efk, new_iv, new_em) = match &inode.kind {
-                                    InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } => {
-                                        (cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone())
-                                    }
-                                    _ => unreachable!(),
-                                };
+                        if let InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, file_meta_resolved: true, .. } = &inode.kind {
+                            if !cid.is_empty() {
+                                // Re-extract file info for the normal read path
+                                let new_cid = cid.clone();
+                                let new_efk = encrypted_file_key.clone();
+                                let new_iv = iv.clone();
+                                let new_em = encryption_mode.clone();
                                 // Check cache first
                                 if let Some(cached) = fs.content_cache.get(&new_cid) {
                                     let start = offset as usize;
