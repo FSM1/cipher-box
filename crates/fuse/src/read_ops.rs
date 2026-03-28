@@ -69,6 +69,7 @@ pub(crate) mod implementation {
     ) {
         fs.drain_upload_completions();
         fs.drain_refresh_completions();
+        fs.drain_filepointer_completions();
 
         let name_str = match name.to_str() {
             Some(n) => n,

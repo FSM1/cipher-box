@@ -634,7 +634,8 @@ impl CipherBoxFS {
             if let Err(e) = self.inodes.populate_folder(refresh.ino, &refresh.metadata, &self.private_key, &self.public_key, true) {
                 log::warn!("Drain refresh apply failed for ino {}: {}", refresh.ino, e);
             }
-            let unresolved = self.inodes.get_unresolved_file_pointers();
+            // Spawn async resolution for unresolved FilePointers in this folder
+            let unresolved = self.inodes.get_unresolved_file_pointers_for_parent(refresh.ino);
             if !unresolved.is_empty() {
                 let folder_key = self.inodes.get(refresh.ino).and_then(|i| match &i.kind {
                     inode::InodeKind::Root { .. } => Some(self.root_folder_key.to_vec()),
@@ -642,22 +643,49 @@ impl CipherBoxFS {
                     _ => None,
                 });
                 if let Some(fk) = folder_key {
-                    for (ino, fp_ipns) in &unresolved {
+                    for (ino, fp_ipns) in unresolved {
+                        if self.resolving_file_pointers.contains(&ino) {
+                            continue; // Already in-flight
+                        }
                         if let Ok(fk_arr) = <[u8; 32]>::try_from(fk.as_slice()) {
+                            self.resolving_file_pointers.insert(ino);
                             let api = self.api.clone();
-                            let resolve_result = block_with_timeout(&self.rt, async {
-                                let resp = cipherbox_api_client::ipns::resolve_ipns(&api, fp_ipns).await.map_err(|e| format!("{}", e))?;
-                                cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid).await.map_err(|e| format!("{}", e))
-                            });
-                            match resolve_result {
-                                Ok(enc_bytes) => {
-                                    match cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr) {
-                                        Ok(fm) => self.inodes.resolve_file_pointer(*ino, fm.cid, fm.file_key_encrypted, fm.file_iv, fm.size, fm.encryption_mode, fm.versions),
-                                        Err(e) => log::warn!("FilePointer decrypt failed for ino {}: {}", ino, e),
+                            let tx = self.filepointer_tx.clone();
+                            self.rt.spawn(async move {
+                                let result = tokio::time::timeout(
+                                    NETWORK_TIMEOUT,
+                                    async {
+                                        let resp = cipherbox_api_client::ipns::resolve_ipns(&api, &fp_ipns)
+                                            .await.map_err(|e| format!("{}", e))?;
+                                        let enc_bytes = cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid)
+                                            .await.map_err(|e| format!("{}", e))?;
+                                        cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr)
+                                    },
+                                ).await;
+
+                                match result {
+                                    Ok(Ok(fm)) => {
+                                        log::debug!("FilePointer async resolved for ino {} (cid={})", ino, &fm.cid[..fm.cid.len().min(12)]);
+                                        let _ = tx.send(PendingFilePointer::Success {
+                                            ino,
+                                            cid: fm.cid,
+                                            encrypted_file_key: fm.file_key_encrypted,
+                                            iv: fm.file_iv,
+                                            size: fm.size,
+                                            encryption_mode: fm.encryption_mode,
+                                            versions: fm.versions,
+                                        });
+                                    }
+                                    Ok(Err(e)) => {
+                                        log::warn!("FilePointer resolve failed for ino {}: {}", ino, e);
+                                        let _ = tx.send(PendingFilePointer::Failure { ino });
+                                    }
+                                    Err(_) => {
+                                        log::warn!("FilePointer resolve timed out for ino {} ({}s)", ino, NETWORK_TIMEOUT.as_secs());
+                                        let _ = tx.send(PendingFilePointer::Failure { ino });
                                     }
                                 }
-                                Err(e) => log::warn!("FilePointer resolve failed for ino {}: {}", ino, e),
-                            }
+                            });
                         }
                     }
                 }
