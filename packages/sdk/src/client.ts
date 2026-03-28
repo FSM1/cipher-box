@@ -18,7 +18,7 @@ import type { PinningProvider } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
 import { createAxiosInstance, ipnsControllerUnenrollBatch } from '@cipherbox/api-client';
 import { clearBytes } from '@cipherbox/crypto';
-import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/core';
+import type { FolderChild, FolderEntry, FilePointer, BinEntry } from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
