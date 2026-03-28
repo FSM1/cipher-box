@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestContext, deleteTestAccount, type TestContext } from '../fixtures/test-harness';
 import { getChild } from '../helpers/assertions';
 import { generateTextContent } from '../helpers/data-generators';
-import { ipnsControllerUnenrollBatch } from '@cipherbox/api-client';
+import { ipnsControllerUnenrollBatch, createAxiosInstance } from '@cipherbox/api-client';
 import type { FilePointer } from '@cipherbox/core';
 
 describe('IPNS Consistency', () => {
@@ -124,20 +124,22 @@ describe('IPNS Consistency', () => {
     // Delete the file — triggers fireAndForgetUnenroll internally
     await ctx.client.deleteItem(ctx.rootIpnsName, fileChild.id);
 
-    // Wait briefly for the fire-and-forget unenroll to complete
-    await new Promise((r) => setTimeout(r, 500));
+    // Wait for the fire-and-forget unenroll to complete
+    await new Promise((r) => setTimeout(r, 1000));
 
-    // Calling unenroll again should succeed (idempotent) with 0 unenrolled
-    // because fireAndForgetUnenroll already removed the enrollment
-    const apiOptions = ctx.client['ctx'].axiosInstance
-      ? { _axiosInstance: ctx.client['ctx'].axiosInstance }
-      : undefined;
+    // Create a dedicated axios instance from the test context's access token
+    const axiosInstance = createAxiosInstance({
+      baseUrl: process.env.API_URL ?? 'http://localhost:3000',
+      getAccessToken: async () => ctx.accessToken,
+    });
 
-    const result = await ipnsControllerUnenrollBatch({ ipnsNames: [fileIpnsName] }, apiOptions);
-    // Either 0 (already unenrolled by delete) or 1 (if enrollment didn't exist)
-    // The key assertion: no error thrown — the endpoint works E2E
+    // Calling unenroll again should return 0 — deleteItem already unenrolled it
+    const result = await ipnsControllerUnenrollBatch(
+      { ipnsNames: [fileIpnsName] },
+      { _axiosInstance: axiosInstance }
+    );
     expect(result.totalRequested).toBe(1);
-    expect(result.totalUnenrolled).toBeGreaterThanOrEqual(0);
+    expect(result.totalUnenrolled).toBe(0);
   });
 
   it('should maintain sequence number monotonicity after many operations', async () => {

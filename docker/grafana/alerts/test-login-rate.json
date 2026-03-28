@@ -25,7 +25,7 @@
         "model": {
           "expr": "increase(cipherbox_auth_logins_total{method=\"test\"}[1h])",
           "intervalMs": 60000,
-          "maxDataPoints": 100,
+          "maxDataPoints": 43200,
           "refId": "A"
         }
       },

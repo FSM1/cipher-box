@@ -101,7 +101,7 @@ describe('IpnsService', () => {
           provide: RepublishService,
           useValue: {
             enrollFolder: jest.fn().mockResolvedValue(undefined),
-            unenrollIpns: jest.fn().mockResolvedValue(undefined),
+            unenrollIpns: jest.fn().mockResolvedValue(1),
           },
         },
         {
@@ -1323,7 +1323,7 @@ describe('IpnsService', () => {
 
     it('should unenroll all provided IPNS names', async () => {
       const republishService = getRepublishMock();
-      republishService.unenrollIpns.mockResolvedValue(undefined);
+      republishService.unenrollIpns.mockResolvedValue(1);
 
       const result = await service.unenrollBatch('user-1', [
         'k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz',
@@ -1337,9 +1337,9 @@ describe('IpnsService', () => {
     it('should continue processing when individual unenroll fails', async () => {
       const republishService = getRepublishMock();
       republishService.unenrollIpns
-        .mockResolvedValueOnce(undefined) // first succeeds
+        .mockResolvedValueOnce(1) // first succeeds
         .mockRejectedValueOnce(new Error('not found')) // second fails
-        .mockResolvedValueOnce(undefined); // third succeeds
+        .mockResolvedValueOnce(1); // third succeeds
 
       const result = await service.unenrollBatch('user-1', ['name1', 'name2', 'name3']);
 

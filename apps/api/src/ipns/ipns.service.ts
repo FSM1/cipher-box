@@ -302,7 +302,7 @@ export class IpnsService {
     let unenrolled = 0;
     for (let i = 0; i < results.length; i++) {
       if (results[i].status === 'fulfilled') {
-        unenrolled++;
+        unenrolled += (results[i] as PromiseFulfilledResult<number>).value;
       } else {
         const err = (results[i] as PromiseRejectedResult).reason;
         this.logger.warn(
