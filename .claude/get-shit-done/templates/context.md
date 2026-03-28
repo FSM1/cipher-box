@@ -33,16 +33,16 @@ Template for `.planning/phases/XX-name/{phase_num}-CONTEXT.md` - captures implem
 
 ### [Area 1 that was discussed]
 
-- [Specific decision made]
-- [Another decision if applicable]
+- **D-01:** [Specific decision made]
+- **D-02:** [Another decision if applicable]
 
 ### [Area 2 that was discussed]
 
-- [Specific decision made]
+- **D-03:** [Specific decision made]
 
 ### [Area 3 that was discussed]
 
-- [Specific decision made]
+- **D-04:** [Specific decision made]
 
 ### Claude's Discretion
 

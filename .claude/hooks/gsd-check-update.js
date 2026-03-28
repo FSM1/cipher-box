@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// gsd-hook-version: 1.26.0
+// gsd-hook-version: 1.30.0
 // Check for GSD updates in background, write result to cache
 // Called by SessionStart hook - runs once per session
 
@@ -69,12 +69,13 @@ const child = spawn(
   } catch (e) {}
 
   // Check for stale hooks — compare hook version headers against installed VERSION
+  // Hooks live inside get-shit-done/hooks/, not configDir/hooks/
   let staleHooks = [];
   if (configDir) {
-    const hooksDir = path.join(configDir, 'hooks');
+    const hooksDir = path.join(configDir, 'get-shit-done', 'hooks');
     try {
       if (fs.existsSync(hooksDir)) {
-        const hookFiles = fs.readdirSync(hooksDir).filter(f => f.endsWith('.js'));
+        const hookFiles = fs.readdirSync(hooksDir).filter(f => f.startsWith('gsd-') && f.endsWith('.js'));
         for (const hookFile of hookFiles) {
           try {
             const content = fs.readFileSync(path.join(hooksDir, hookFile), 'utf8');

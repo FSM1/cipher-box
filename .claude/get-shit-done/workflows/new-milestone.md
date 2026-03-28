@@ -10,9 +10,24 @@ Read all files referenced by the invoking prompt's execution_context before star
 
 </required_reading>
 
+<available_agent_types>
+Valid GSD subagent types (use exact names — do not fall back to 'general-purpose'):
+
+- gsd-project-researcher — Researches project-level technical decisions
+- gsd-research-synthesizer — Synthesizes findings from parallel research agents
+- gsd-roadmapper — Creates phased execution roadmaps
+  </available_agent_types>
+
 <process>
 
 ## 1. Load Context
+
+Parse `$ARGUMENTS` before doing anything else:
+
+- `--reset-phase-numbers` flag → opt into restarting roadmap phase numbering at `1`
+- remaining text → use as milestone name if present
+
+If the flag is absent, keep the current behavior of continuing phase numbering from the previous milestone.
 
 - Read PROJECT.md (existing project, validated requirements, decisions)
 - Read MILESTONES.md (what shipped previously)
@@ -39,6 +54,39 @@ Read all files referenced by the invoking prompt's execution_context before star
 - Suggest next version (v1.0 → v1.1, or v2.0 for major)
 - Confirm with user
 
+## 3.5. Verify Milestone Understanding
+
+Before writing any files, present a summary of what was gathered and ask for confirmation.
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► MILESTONE SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Milestone v[X.Y]: [Name]**
+
+**Goal:** [One sentence]
+
+**Target features:**
+- [Feature 1]
+- [Feature 2]
+- [Feature 3]
+
+**Key context:** [Any important constraints, decisions, or notes from questioning]
+```
+
+AskUserQuestion:
+
+- header: "Confirm?"
+- question: "Does this capture what you want to build in this milestone?"
+- options:
+  - "Looks good" — Proceed to write PROJECT.md
+  - "Adjust" — Let me correct or add details
+
+**If "Adjust":** Ask what needs changing (plain text, NOT AskUserQuestion). Incorporate changes, re-present the summary. Loop until "Looks good" is selected.
+
+**If "Looks good":** Proceed to Step 4.
+
 ## 4. Update PROJECT.md
 
 Add/update:
@@ -56,6 +104,29 @@ Add/update:
 ```
 
 Update Active requirements section and "Last updated" footer.
+
+Ensure the `## Evolution` section exists in PROJECT.md. If missing (projects created before this feature), add it before the footer:
+
+```markdown
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd:transition`):
+
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd:complete-milestone`):
+
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+```
 
 ## 5. Update STATE.md
 
@@ -83,9 +154,33 @@ node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" co
 ```bash
 INIT=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" init new-milestone)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+AGENT_SKILLS_RESEARCHER=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" agent-skills gsd-project-researcher 2>/dev/null)
+AGENT_SKILLS_SYNTHESIZER=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" agent-skills gsd-synthesizer 2>/dev/null)
+AGENT_SKILLS_ROADMAPPER=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" agent-skills gsd-roadmapper 2>/dev/null)
 ```
 
-Extract from init JSON: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `research_enabled`, `current_milestone`, `project_exists`, `roadmap_exists`.
+Extract from init JSON: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `research_enabled`, `current_milestone`, `project_exists`, `roadmap_exists`, `latest_completed_milestone`, `phase_dir_count`, `phase_archive_path`.
+
+## 7.5 Reset-phase safety (only when `--reset-phase-numbers`)
+
+If `--reset-phase-numbers` is active:
+
+1. Set starting phase number to `1` for the upcoming roadmap.
+2. If `phase_dir_count > 0`, archive the old phase directories before roadmapping so new `01-*` / `02-*` directories cannot collide with stale milestone directories.
+
+If `phase_dir_count > 0` and `phase_archive_path` is available:
+
+```bash
+mkdir -p "${phase_archive_path}"
+find .planning/phases -mindepth 1 -maxdepth 1 -type d -exec mv {} "${phase_archive_path}/" \;
+```
+
+Then verify `.planning/phases/` no longer contains old milestone directories before continuing.
+
+If `phase_dir_count > 0` but `phase_archive_path` is missing:
+
+- Stop and explain that reset numbering is unsafe without a completed milestone archive target.
+- Tell the user to complete/archive the previous milestone first, then rerun `/gsd:new-milestone --reset-phase-numbers ${GSD_WS}`.
 
 ## 8. Research Decision
 
@@ -142,6 +237,8 @@ Focus ONLY on what's needed for the NEW features.
 - .planning/PROJECT.md (Project context)
 </files_to_read>
 
+${AGENT_SKILLS_RESEARCHER}
+
 <downstream_consumer>{CONSUMER}</downstream_consumer>
 
 <quality_gate>{GATES}</quality_gate>
@@ -175,6 +272,8 @@ Synthesize research outputs into SUMMARY.md.
 - .planning/research/ARCHITECTURE.md
 - .planning/research/PITFALLS.md
 </files_to_read>
+
+${AGENT_SKILLS_SYNTHESIZER}
 
 Write to: .planning/research/SUMMARY.md
 Use template: /Users/michael/Code/cipher-box/.claude/get-shit-done/templates/research-project/SUMMARY.md
@@ -283,7 +382,10 @@ node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" co
 ◆ Spawning roadmapper...
 ```
 
-**Starting phase number:** Read MILESTONES.md for last phase number. Continue from there (v1.0 ended at phase 5 → v1.1 starts at phase 6).
+**Starting phase number:**
+
+- If `--reset-phase-numbers` is active, start at **Phase 1**
+- Otherwise, continue from the previous milestone's last phase number (v1.0 ended at phase 5 → v1.1 starts at phase 6)
 
 ```
 Task(prompt="
@@ -295,11 +397,16 @@ Task(prompt="
 - .planning/config.json
 - .planning/MILESTONES.md
 </files_to_read>
+
+${AGENT_SKILLS_ROADMAPPER}
+
 </planning_context>
 
 <instructions>
 Create roadmap for milestone v[X.Y]:
-1. Start phase numbering from [N]
+1. Respect the selected numbering mode:
+   - `--reset-phase-numbers` → start at Phase 1
+   - default behavior → continue from the previous milestone's last phase number
 2. Derive phases from THIS MILESTONE's requirements only
 3. Map every requirement to exactly one phase
 4. Derive 2-5 success criteria per phase (observable user behaviors)
@@ -374,11 +481,11 @@ node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" co
 
 **Phase [N]: [Phase Name]** — [Goal]
 
-`/gsd:discuss-phase [N]` — gather context and clarify approach
+`/gsd:discuss-phase [N] ${GSD_WS}` — gather context and clarify approach
 
 <sub>`/clear` first → fresh context window</sub>
 
-Also: `/gsd:plan-phase [N]` — skip discussion, plan directly
+Also: `/gsd:plan-phase [N] ${GSD_WS}` — skip discussion, plan directly
 ```
 
 </process>
@@ -394,9 +501,9 @@ Also: `/gsd:plan-phase [N]` — skip discussion, plan directly
 - [ ] gsd-roadmapper spawned with phase numbering context
 - [ ] Roadmap files written immediately (not draft)
 - [ ] User feedback incorporated (if any)
-- [ ] ROADMAP.md phases continue from previous milestone
+- [ ] Phase numbering mode respected (continued or reset)
 - [ ] All commits made (if planning docs committed)
-- [ ] User knows next step: `/gsd:discuss-phase [N]`
+- [ ] User knows next step: `/gsd:discuss-phase [N] ${GSD_WS}`
 
 **Atomic commits:** Each phase commits its artifacts immediately.
 </success_criteria>

@@ -12,7 +12,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 
 ```bash
 # Find the most recent audit file
-ls -t .planning/v*-MILESTONE-AUDIT.md 2>/dev/null | head -1
+(ls -t .planning/v*-MILESTONE-AUDIT.md 2>/dev/null || true) | head -1
 ```
 
 Parse YAML frontmatter to extract structured gaps:
@@ -70,8 +70,7 @@ Find highest existing phase:
 
 ```bash
 # Get sorted phase list, extract last one
-PHASES=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" phases list)
-HIGHEST=$(printf '%s\n' "$PHASES" | jq -r '.directories[-1]')
+HIGHEST=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" phases list --pick directories[-1])
 ```
 
 New phases continue from there:

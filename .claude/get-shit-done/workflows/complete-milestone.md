@@ -93,7 +93,7 @@ If user selects "Proceed anyway": note incomplete requirements in MILESTONES.md 
 <config-check>
 
 ```bash
-cat .planning/config.json 2>/dev/null
+cat .planning/config.json 2>/dev/null || true
 ```
 
 </config-check>
@@ -133,7 +133,7 @@ Calculate milestone statistics:
 ```bash
 git log --oneline --grep="feat(" | head -20
 git diff --stat FIRST_COMMIT..LAST_COMMIT | tail -1
-find . -name "*.swift" -o -name "*.ts" -o -name "*.py" | xargs wc -l 2>/dev/null
+find . -name "*.swift" -o -name "*.ts" -o -name "*.py" | xargs wc -l 2>/dev/null || true
 git log --format="%ai" FIRST_COMMIT | tail -1
 git log --format="%ai" LAST_COMMIT | head -1
 ```
@@ -160,7 +160,8 @@ Extract one-liners from SUMMARY.md files using summary-extract:
 ```bash
 # For each phase in milestone, extract one-liner
 for summary in .planning/phases/*-*/*-SUMMARY.md; do
-  node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" summary-extract "$summary" --fields one_liner | jq -r '.one_liner'
+  [ -e "$summary" ] || continue
+  node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" summary-extract "$summary" --fields one_liner --pick one_liner
 done
 ```
 
@@ -456,7 +457,7 @@ rm .planning/REQUIREMENTS.md
 Check for existing retrospective:
 
 ```bash
-ls .planning/RETROSPECTIVE.md 2>/dev/null
+ls .planning/RETROSPECTIVE.md 2>/dev/null || true
 ```
 
 **If exists:** Read the file, append new milestone section before the "## Cross-Milestone Trends" section.
