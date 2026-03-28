@@ -52,6 +52,8 @@ export type {
   SentShareInfo,
   SharedWriteContext,
   ShareKeyType,
+  SharedWriteContextParams,
+  CachedShareKey,
 } from './share';
 
 // Shared-write operations (stateless functions for write-share recipients)
@@ -62,4 +64,14 @@ export {
   deleteFromSharedFolder,
   updateSharedFile,
   updateSharePermission,
+  buildSharedWriteContext,
+  ShareKeyCache,
 } from './share';
+
+// Error handling and retry utilities
+export {
+  isForbiddenError,
+  isConflictError,
+  withRevocationGuard,
+  withConflictRetry,
+} from './error';

@@ -151,3 +151,9 @@ export {
   updateSharePermission,
   type SharedWriteContext,
 } from './shared-write';
+
+// Shared write context builder
+export { buildSharedWriteContext, type SharedWriteContextParams } from './context';
+
+// Share key cache
+export { ShareKeyCache, type CachedShareKey } from './key-cache';
