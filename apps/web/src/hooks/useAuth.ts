@@ -40,6 +40,7 @@ import { useBinStore } from '../stores/bin.store';
 import { vaultControllerGetConfig } from '@cipherbox/api-client';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../services/ipns.service';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
+import { logger } from '../lib/logger';
 
 // Module-level deduplication for vault init/load.
 // Multiple React effects can call initializeOrLoadVault concurrently after
@@ -124,7 +125,7 @@ export function useAuth() {
       } catch (error) {
         const is404 = (error as { response?: { status?: number } })?.response?.status === 404;
         if (!is404) {
-          console.error('[useAuth] Failed to load vault:', error);
+          logger.error('[useAuth] Failed to load vault:', error);
           throw error;
         }
       }
@@ -161,7 +162,7 @@ export function useAuth() {
         });
       } else {
         // New user -- initialize vault with separate key blob + folder metadata
-        console.log('[Auth] New user -- initializing vault');
+        logger.info('[Auth] New user -- initializing vault');
         const newVault = await initializeVault(userKeypair.privateKey);
         const rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey);
 
@@ -345,7 +346,7 @@ export function useAuth() {
               .setRegistry(result.registry, result.ipnsName, deviceKeypair.deviceId);
           }
         } catch (error) {
-          console.error('[Auth] Device registry init failed (non-blocking):', error);
+          logger.error('[Auth] Device registry init failed (non-blocking):', error);
         }
       })();
 
@@ -363,7 +364,7 @@ export function useAuth() {
             await getSdkClient().loadBin();
           }
         } catch (error) {
-          console.error('[Auth] Bin initialization failed (non-blocking):', error);
+          logger.error('[Auth] Bin initialization failed (non-blocking):', error);
         }
       })();
 
@@ -375,7 +376,7 @@ export function useAuth() {
             useBinStore.getState().setRetentionDays(config.recycleBinRetentionDays);
           }
         } catch (error) {
-          console.error('[Auth] Failed to fetch vault config (non-blocking):', error);
+          logger.error('[Auth] Failed to fetch vault config (non-blocking):', error);
         }
       })();
     };
@@ -519,7 +520,7 @@ export function useAuth() {
 
         // Navigation handled by Login.tsx redirect effect (isAuthenticated → /files)
       } catch (error) {
-        console.error('[useAuth] Google login failed:', error);
+        logger.error('[useAuth] Google login failed:', error);
         throw error;
       } finally {
         setIsLoggingIn(false);
@@ -559,7 +560,7 @@ export function useAuth() {
         setUserEmail(email);
         // Navigation handled by Login.tsx redirect effect (isAuthenticated → /files)
       } catch (error) {
-        console.error('[useAuth] Email login failed:', error);
+        logger.error('[useAuth] Email login failed:', error);
         throw error;
       } finally {
         setIsLoggingIn(false);
@@ -601,7 +602,7 @@ export function useAuth() {
         // vault init completes — by which point the user may have navigated away from
         // the login page, causing a disruptive late redirect.
       } catch (error) {
-        console.error('[useAuth] Wallet login failed:', error);
+        logger.error('[useAuth] Wallet login failed:', error);
         throw error;
       } finally {
         setIsLoggingIn(false);
@@ -636,7 +637,7 @@ export function useAuth() {
       // 4. Navigate to login
       navigate('/');
     } catch (error) {
-      console.error('[useAuth] Logout failed:', error);
+      logger.error('[useAuth] Logout failed:', error);
       // Still clear state even if backend fails
       clearAllUserStores();
       clearFaroUser();

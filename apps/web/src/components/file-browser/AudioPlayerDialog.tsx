@@ -4,6 +4,7 @@ import { Modal } from '../ui/Modal';
 import { useFilePreview } from '../../hooks/useFilePreview';
 import { useStreamingPreview } from '../../hooks/useStreamingPreview';
 import '../../styles/audio-player-dialog.css';
+import { logger } from '../../lib/logger';
 
 type AudioPlayerDialogProps = {
   open: boolean;
@@ -122,7 +123,9 @@ export function AudioPlayerDialog({
         audioRef.current = null;
       }
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current
+          .close()
+          .catch((err) => logger.warn('[Audio] AudioContext close failed:', err));
       }
       audioContextRef.current = null;
       analyserRef.current = null;
@@ -161,7 +164,7 @@ export function AudioPlayerDialog({
       source.connect(analyser);
       analyser.connect(ctx.destination);
     } catch (err) {
-      console.warn('Web Audio API setup failed:', err);
+      logger.warn('[Audio] Web Audio API setup failed:', err);
     }
 
     return () => {
@@ -177,7 +180,9 @@ export function AudioPlayerDialog({
       audio.src = '';
 
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current
+          .close()
+          .catch((err) => logger.warn('[Audio] AudioContext close failed:', err));
       }
       audioContextRef.current = null;
       analyserRef.current = null;

@@ -3,6 +3,7 @@ import { addToIpfs, AddResponse } from '../lib/api/ipfs';
 import { useQuotaStore } from '../stores/quota.store';
 import { useUploadStore } from '../stores/upload.store';
 import { CancelToken } from 'axios';
+import { logger } from '../lib/logger';
 
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY = 500;
@@ -128,7 +129,7 @@ export async function uploadFiles(
     const message = (error as Error).message;
     if (message !== 'Upload cancelled by user') {
       uploadStore.setError(message);
-      console.error('Upload failed:', error);
+      logger.error('[Upload] Upload failed:', error);
     }
     throw error;
   } finally {

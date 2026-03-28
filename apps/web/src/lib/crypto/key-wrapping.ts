@@ -16,6 +16,7 @@ import { resolveFileMetadata } from '../../services/file-metadata.service';
 import { resolveIpnsRecord } from '../../services/ipns.service';
 import { fetchFromIpfs } from '../api/ipfs';
 import type { ChildKeyDto } from '@cipherbox/api-client';
+import { logger } from '../logger';
 
 /**
  * Collect all descendant keys from a folder for sharing.
@@ -60,7 +61,7 @@ export async function collectChildKeys(
         wrapped++;
         onProgress(wrapped);
       } catch (err) {
-        console.error(`Failed to re-wrap file key for ${fp.name}:`, err);
+        logger.error(`Failed to re-wrap file key for ${fp.name}:`, err);
         // Continue with other children
       }
     } else {
@@ -109,7 +110,7 @@ export async function collectChildKeys(
           }
         }
       } catch (err) {
-        console.error(`Failed to re-wrap folder key for ${folder.name}:`, err);
+        logger.error(`Failed to re-wrap folder key for ${folder.name}:`, err);
         // Continue with other children
       }
     }

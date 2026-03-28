@@ -915,6 +915,48 @@
         "tags": ["IPNS"]
       }
     },
+    "/ipns/unenroll": {
+      "post": {
+        "description": "Remove IPNS names from the TEE republish schedule. Called after file/folder deletion to prevent orphaned records from accumulating. Accepts up to 200 IPNS names per call.",
+        "operationId": "IpnsController_unenrollBatch",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchUnenrollIpnsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Unenrollment results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchUnenrollIpnsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid IPNS name format or array too large"
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Batch unenroll IPNS records from TEE republishing",
+        "tags": ["IPNS"]
+      }
+    },
     "/ipns/resolve": {
       "get": {
         "description": "Resolve an IPNS name to its current CID via delegated routing. Returns the CID and sequence number of the current IPNS record.",
@@ -2802,6 +2844,36 @@
           }
         },
         "required": ["results", "totalSucceeded", "totalFailed"]
+      },
+      "BatchUnenrollIpnsDto": {
+        "type": "object",
+        "properties": {
+          "ipnsNames": {
+            "description": "Array of IPNS names to unenroll from TEE republishing (max 200)",
+            "example": ["k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["ipnsNames"]
+      },
+      "BatchUnenrollIpnsResponseDto": {
+        "type": "object",
+        "properties": {
+          "totalUnenrolled": {
+            "type": "number",
+            "description": "Number of IPNS names successfully unenrolled",
+            "example": 5
+          },
+          "totalRequested": {
+            "type": "number",
+            "description": "Total IPNS names in the request",
+            "example": 5
+          }
+        },
+        "required": ["totalUnenrolled", "totalRequested"]
       },
       "ResolveIpnsResponseDto": {
         "type": "object",

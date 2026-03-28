@@ -5,13 +5,15 @@
  * decrypts AES-CTR content, and returns proper HTTP responses.
  */
 
+import { logger } from './logger';
+
 /**
  * Register the decrypt Service Worker.
  * Returns the registration or null if SW is not supported.
  */
 export async function registerDecryptSW(): Promise<ServiceWorkerRegistration | null> {
   if (!('serviceWorker' in navigator)) {
-    console.warn('[SW] Service Workers not supported in this browser');
+    logger.warn('[SW] Service Workers not supported in this browser');
     return null;
   }
 
@@ -28,7 +30,7 @@ export async function registerDecryptSW(): Promise<ServiceWorkerRegistration | n
     await navigator.serviceWorker.ready;
     return registration;
   } catch (err) {
-    console.error('[SW] Registration failed:', err);
+    logger.error('[SW] Registration failed:', err);
     return null;
   }
 }

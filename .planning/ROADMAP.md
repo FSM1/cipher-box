@@ -29,11 +29,12 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 24: Bug Fixes & Test Infrastructure** - Fix known bugs (bin IPNS 404, device registry format error) and strengthen test infrastructure (headless load tests, vault recovery E2E, load test auth refresh) (completed 2026-03-25)
 - [x] **Phase 25: Desktop Enhancements** - Desktop auto-update mechanism and TEE file enrollment for new files (completed 2026-03-25)
 - [x] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX (completed 2026-03-26)
-- [ ] **Phase 28: Code Hygiene & Logging** - Structured logger wrapper, replace 127 console calls (log/warn/error), fix silenced unpin failures, clean any casts, archive legacy POC
-- [ ] **Phase 29: Infrastructure Hardening** - Wire up IPNS unenrollment on deletion, test login endpoint hardening, IPFS node access control
-- [x] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (NEEDS DISCUSSION) (completed 2026-03-28)
+- [x] **Phase 28: Code Hygiene & Logging** - Structured logger wrapper, replace 124 console.\* calls, fix silenced unpin failures, clean any casts, archive legacy POC (completed 2026-03-28)
+- [x] **Phase 29: Infrastructure Hardening** - Wire up IPNS unenrollment on deletion, test login endpoint hardening, IPFS node access control (completed 2026-03-28)
+- [ ] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (NEEDS DISCUSSION)
 - [ ] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (NEEDS DISCUSSION)
 - [ ] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread
+- [ ] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend
 
 ## Phase Details
 
@@ -271,18 +272,23 @@ Plans:
 
 ### Phase 28: Code Hygiene & Logging
 
-**Goal**: Production web app uses structured logging instead of raw console calls (log/warn/error), unpin failures are visible, type safety gaps are closed, and legacy POC is archived
+**Goal**: Production web app uses structured logging instead of raw console.\* calls, unpin failures are visible, type safety gaps are closed, and legacy POC is archived
 **Depends on**: None
 **Requirements**: None (tech debt reduction)
 **Research flag**: Skip -- all items are mechanical find-replace or small wrapper creation
 **Success Criteria** (what must be TRUE):
 
-1. A `lib/logger.ts` module exists with level filtering (debug/info/warn/error) and all 127 console calls (log/warn/error) in production web code are replaced with logger calls
+1. A `lib/logger.ts` module exists with level filtering (debug/info/warn/error) and all 127 console.\* calls in production web code are replaced with logger calls
 2. All `.catch(() => {})` patterns on IPFS unpin calls are replaced with `.catch(logger.warn)` so failures are visible in logs
 3. All `as any` casts in production web code are replaced with typed alternatives (except acceptable polyfill shims)
 4. `00-Preliminary-R&D/poc/` is archived (moved to branch or deleted) and no longer pollutes searches
 
-**Plans**: TBD
+**Plans**:
+
+- [x] 28-01-PLAN.md -- Structured logger wrapper and console.\* replacement across 28 files
+- [x] 28-02-PLAN.md -- Fix silenced .catch empty-block patterns on unpin calls
+- [x] 28-03-PLAN.md -- Eliminate as-any casts with proper type declarations
+- [x] 28-04-PLAN.md -- Archive legacy POC directory
 
 ### Phase 29: Infrastructure Hardening
 
@@ -301,9 +307,9 @@ Plans:
 
 Plans:
 
-- [ ] 29-01-PLAN.md -- IPNS batch unenroll API endpoint (POST /ipns/unenroll) + API client regeneration
-- [ ] 29-02-PLAN.md -- SDK IPNS unenrollment on delete (fireAndForgetUnenroll in deleteItem/deleteToBin/permanentDelete) + legacy TODO cleanup
-- [ ] 29-03-PLAN.md -- Test login Grafana monitoring alert + Kubo access verification
+- [x] 29-01-PLAN.md -- IPNS batch unenroll API endpoint (POST /ipns/unenroll) + API client regeneration
+- [x] 29-02-PLAN.md -- SDK IPNS unenrollment on delete (fireAndForgetUnenroll in deleteItem/deleteToBin/permanentDelete) + legacy TODO cleanup
+- [x] 29-03-PLAN.md -- Test login Grafana monitoring alert + Kubo access verification
 
 ### Phase 30: Web App Observability
 
@@ -351,10 +357,25 @@ Plans:
 
 **Plans**: TBD
 
+### Phase 33: Windows Async FilePointer Resolution
+
+**Goal**: WinFsp FilePointer resolution no longer blocks the filesystem thread, eliminating Explorer hangs during metadata refresh on Windows
+**Depends on**: Phase 32 (macOS implementation establishes the pattern; Windows ports it to platform/windows/)
+**Requirements**: None (performance improvement, Windows parity)
+**Research flag**: Skip -- direct port of Phase 32 pattern to Windows-specific code paths
+**Success Criteria** (what must be TRUE):
+
+1. FilePointer resolution in platform/windows/ spawns async tasks via channel pair instead of blocking
+2. Windows Explorer operations do not hang during background metadata refresh
+3. Resolution latency bounded by timeout rather than O(N \* network_timeout)
+4. Windows desktop E2E tests pass with the async resolution path
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33
 
 | Phase                                     | Milestone | Plans Complete | Status      | Completed  |
 | ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
@@ -370,11 +391,12 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete    | 2026-03-25 |
 | 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete    | 2026-03-26 |
 | 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete    | 2026-03-26 |
-| 28. Code Hygiene & Logging                | v1.1      | 0/TBD          | Not started | -          |
-| 29. Infrastructure Hardening              | v1.1      | 0/3            | Not started | -          |
-| 30. Web App Observability                 | v1.1      | 0/TBD          | Complete    | 2026-03-28 |
+| 28. Code Hygiene & Logging                | v1.1      | 4/4            | Complete    | 2026-03-28 |
+| 29. Infrastructure Hardening              | v1.1      | 3/3            | Complete    | 2026-03-28 |
+| 30. Web App Observability                 | v1.1      | 0/TBD          | Not started | -          |
 | 31. Structural Decomposition              | v1.1      | 0/TBD          | Not started | -          |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 0/TBD          | Not started | -          |
+| 33. Windows Async FilePointer Resolution  | v1.1      | 0/TBD          | Not started | -          |
 
 ### Phase 27: Writable Shares (PoC)
 
@@ -390,7 +412,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 5. SharedFileBrowser shows [RW] badge, write toolbar, and full context menu for write shares
 6. Write operations use withConflictRetry for multi-writer coordination (same as multi-device sync)
 
-**Plans:** 4/4 plans complete
+**Plans:** 3/3 plans complete
 
 Plans:
 

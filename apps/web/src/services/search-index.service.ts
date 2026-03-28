@@ -10,6 +10,7 @@
 
 import MiniSearch from 'minisearch';
 import type { FolderNode } from '../stores/folder.store';
+import { logger } from '../lib/logger';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -220,7 +221,7 @@ export class SearchIndexService {
         tx.onerror = () => reject(tx.error);
       });
     } catch (err) {
-      console.warn('[SearchIndex] Failed to persist encrypted index:', err);
+      logger.warn('[SearchIndex] Failed to persist encrypted index:', err);
     }
   }
 
@@ -259,7 +260,7 @@ export class SearchIndexService {
       this.miniSearch = MiniSearch.loadJSON(JSON.stringify(json), MINISEARCH_OPTIONS);
       return true;
     } catch (err) {
-      console.warn('[SearchIndex] Failed to load encrypted index:', err);
+      logger.warn('[SearchIndex] Failed to load encrypted index:', err);
       return false;
     }
   }
@@ -282,7 +283,7 @@ export class SearchIndexService {
         tx.onerror = () => reject(tx.error);
       });
     } catch (err) {
-      console.warn('[SearchIndex] Failed to clear IndexedDB entry:', err);
+      logger.warn('[SearchIndex] Failed to clear IndexedDB entry:', err);
     }
   }
 

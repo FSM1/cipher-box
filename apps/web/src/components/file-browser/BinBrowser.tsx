@@ -13,6 +13,7 @@ import { BinListItem } from './BinListItem';
 import { BinEmptyState } from './BinEmptyState';
 import { ConfirmDialog } from './ConfirmDialog';
 import '../../styles/bin-browser.css';
+import { logger } from '../../lib/logger';
 
 type SortField = 'name' | 'deletedAt' | 'size' | 'daysRemaining';
 type SortDirection = 'asc' | 'desc';
@@ -210,7 +211,7 @@ export function BinBrowser() {
         await restore(entryId);
         clearSelection();
       } catch {
-        console.error('[Bin] Restore failed');
+        logger.error('[Bin] Restore failed');
       }
     },
     [restore, clearSelection]
@@ -231,7 +232,7 @@ export function BinBrowser() {
             clearSelection();
             setConfirmDialog((prev) => ({ ...prev, open: false }));
           } catch {
-            console.error('[Bin] Permanent delete failed');
+            logger.error('[Bin] Permanent delete failed');
           }
         },
       });
@@ -259,7 +260,7 @@ export function BinBrowser() {
       await restoreMultiple([...selectedIds]);
       clearSelection();
     } catch {
-      console.error('[Bin] Batch restore failed');
+      logger.error('[Bin] Batch restore failed');
     }
   }, [selectedIds, restoreMultiple, clearSelection]);
 
@@ -277,7 +278,7 @@ export function BinBrowser() {
           clearSelection();
           setConfirmDialog((prev) => ({ ...prev, open: false }));
         } catch {
-          console.error('[Bin] Batch permanent delete failed');
+          logger.error('[Bin] Batch permanent delete failed');
         }
       },
     });
@@ -297,7 +298,7 @@ export function BinBrowser() {
           clearSelection();
           setConfirmDialog((prev) => ({ ...prev, open: false }));
         } catch {
-          console.error('[Bin] Empty bin failed');
+          logger.error('[Bin] Empty bin failed');
         }
       },
     });

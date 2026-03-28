@@ -5,6 +5,7 @@ import { hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { useCoreKit } from './core-kit-provider';
 import { COREKIT_STATUS } from './core-kit';
 import { authApi } from '../api/auth';
+import { logger } from '../logger';
 
 export type CoreKitLoginResult = 'logged_in' | 'required_share';
 
@@ -77,19 +78,19 @@ export function useCoreKitAuth() {
     if (!coreKit || coreKit.status !== COREKIT_STATUS.LOGGED_IN) return null;
 
     try {
-      console.log('[CoreKit] _UNSAFE_exportTssKey starting...');
+      logger.debug('[CoreKit] _UNSAFE_exportTssKey starting...');
       console.time('[CoreKit] exportTssKey');
       const privateKeyHex = await coreKit._UNSAFE_exportTssKey();
       console.timeEnd('[CoreKit] exportTssKey');
-      console.log('[CoreKit] exportTssKey done, hex length:', privateKeyHex.length);
+      logger.debug('[CoreKit] exportTssKey done, hex length:', privateKeyHex.length);
       const privKeyHex = privateKeyHex.startsWith('0x') ? privateKeyHex.slice(2) : privateKeyHex;
       const privateKey = hexToBytes(privKeyHex);
       const publicKey = secp256k1.getPublicKey(privateKey, false); // uncompressed (65 bytes)
-      console.log('[CoreKit] keypair derived, pubkey hex length:', publicKey.length * 2);
+      logger.debug('[CoreKit] keypair derived, pubkey hex length:', publicKey.length * 2);
       return { publicKey, privateKey };
     } catch (err) {
       console.timeEnd('[CoreKit] exportTssKey');
-      console.error('[CoreKit] Failed to export TSS key:', err);
+      logger.error('[CoreKit] Failed to export TSS key:', err);
       return null;
     }
   }, [coreKit]);
@@ -113,7 +114,7 @@ export function useCoreKitAuth() {
         await coreKit.logout();
       }
     } catch (err) {
-      console.error('[CoreKit] Logout error:', err);
+      logger.error('[CoreKit] Logout error:', err);
     } finally {
       syncStatus();
     }
@@ -155,49 +156,48 @@ async function doLoginWithCoreKit(
     idToken: cipherboxJwt,
   };
 
-  console.log('[CoreKit] loginWithJWT starting...', {
+  logger.debug('[CoreKit] loginWithJWT starting...', {
     verifier: loginParams.verifier,
-    verifierId: userId,
   });
   console.time('[CoreKit] loginWithJWT');
   try {
     await coreKit.loginWithJWT(loginParams);
     console.timeEnd('[CoreKit] loginWithJWT');
-    console.log('[CoreKit] loginWithJWT completed, status:', coreKit.status);
+    logger.debug('[CoreKit] loginWithJWT completed, status:', coreKit.status);
   } catch (err) {
     console.timeEnd('[CoreKit] loginWithJWT');
-    console.error('[CoreKit] loginWithJWT FAILED:', err);
+    logger.error('[CoreKit] loginWithJWT FAILED:', err);
     throw err;
   }
 
   // Handle status
   if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
-    console.log('[CoreKit] commitChanges starting...');
+    logger.debug('[CoreKit] commitChanges starting...');
     console.time('[CoreKit] commitChanges');
     try {
       await coreKit.commitChanges();
       console.timeEnd('[CoreKit] commitChanges');
-      console.log('[CoreKit] commitChanges done');
+      logger.debug('[CoreKit] commitChanges done');
     } catch (err) {
       console.timeEnd('[CoreKit] commitChanges');
-      console.error('[CoreKit] commitChanges FAILED:', err);
+      logger.error('[CoreKit] commitChanges FAILED:', err);
     }
 
     // DEBUG: Test exportTssKey in isolation BEFORE triggering React updates
-    console.log('[CoreKit] DEBUG: testing exportTssKey in isolation...');
+    logger.debug('[CoreKit] DEBUG: testing exportTssKey in isolation...');
     console.time('[CoreKit] exportTssKey-test');
     try {
       const testKey = await coreKit._UNSAFE_exportTssKey();
       console.timeEnd('[CoreKit] exportTssKey-test');
-      console.log('[CoreKit] exportTssKey-test succeeded, length:', testKey.length);
+      logger.debug('[CoreKit] exportTssKey-test succeeded, length:', testKey.length);
     } catch (err) {
       console.timeEnd('[CoreKit] exportTssKey-test');
-      console.error('[CoreKit] exportTssKey-test FAILED:', err);
+      logger.error('[CoreKit] exportTssKey-test FAILED:', err);
     }
 
-    console.log('[CoreKit] calling syncStatus...');
+    logger.debug('[CoreKit] calling syncStatus...');
     syncStatus();
-    console.log('[CoreKit] syncStatus called, returning logged_in');
+    logger.debug('[CoreKit] syncStatus called, returning logged_in');
     return 'logged_in';
   }
 
@@ -205,28 +205,28 @@ async function doLoginWithCoreKit(
     // Bug fix: Web3Auth's handleExistingUser() does NOT auto-check localStorage
     // for the device factor when the hashedShare has been deleted (post-MFA).
     // We must manually retrieve and input the device factor if it exists.
-    console.log('[CoreKit] REQUIRED_SHARE — checking for device factor in localStorage...');
+    logger.debug('[CoreKit] REQUIRED_SHARE — checking for device factor in localStorage...');
     try {
       const deviceFactorHex = await coreKit.getDeviceFactor();
       if (deviceFactorHex) {
-        console.log('[CoreKit] Device factor found in localStorage, auto-inputting...');
+        logger.debug('[CoreKit] Device factor found in localStorage, auto-inputting...');
         await coreKit.inputFactorKey(new BN(deviceFactorHex, 'hex'));
 
         if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
-          console.log('[CoreKit] Device factor accepted — now LOGGED_IN');
+          logger.debug('[CoreKit] Device factor accepted — now LOGGED_IN');
           try {
             await coreKit.commitChanges();
           } catch (err) {
-            console.error('[CoreKit] commitChanges after device factor FAILED:', err);
+            logger.error('[CoreKit] commitChanges after device factor FAILED:', err);
           }
           syncStatus();
           return 'logged_in';
         }
       } else {
-        console.log('[CoreKit] No device factor in localStorage — true REQUIRED_SHARE');
+        logger.debug('[CoreKit] No device factor in localStorage — true REQUIRED_SHARE');
       }
     } catch (err) {
-      console.warn('[CoreKit] Device factor check failed (expected on new device):', err);
+      logger.warn('[CoreKit] Device factor check failed (expected on new device):', err);
     }
 
     syncStatus();
