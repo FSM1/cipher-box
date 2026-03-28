@@ -295,10 +295,7 @@ export class IpnsService {
    * Called when files/folders are deleted to prevent orphaned enrollments.
    * Failures for individual names are logged but do not fail the batch.
    */
-  async unenrollBatch(
-    userId: string,
-    ipnsNames: string[]
-  ): Promise<{ totalUnenrolled: number }> {
+  async unenrollBatch(userId: string, ipnsNames: string[]): Promise<{ totalUnenrolled: number }> {
     let unenrolled = 0;
     for (const ipnsName of ipnsNames) {
       try {
