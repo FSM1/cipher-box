@@ -284,6 +284,15 @@ pub mod implementation {
         };
 
         if cid.is_empty() {
+            // Check if this is an unresolved FilePointer (async resolution pending)
+            let is_unresolved = fs.inodes.get(ino)
+                .map(|i| matches!(&i.kind, InodeKind::File { file_meta_resolved: false, .. }))
+                .unwrap_or(false);
+            if is_unresolved {
+                log::debug!("read(win): ino={} is unresolved FilePointer, returning STATUS_DEVICE_NOT_READY", ino);
+                return Err(FspError::from(0xC00000A3u32)); // STATUS_DEVICE_NOT_READY — Explorer retries
+            }
+
             if let Some(content) = fs.pending_content.get(&ino) {
                 let start = offset as usize;
                 if start >= content.len() {

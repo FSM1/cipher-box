@@ -34,6 +34,20 @@ pub(crate) mod implementation {
         while std::time::Instant::now() < deadline {
             std::thread::sleep(FILEPOINTER_POLL_INTERVAL);
             fs.drain_filepointer_completions();
+            // Break early if async task completed with Failure (ino removed from set)
+            if !fs.resolving_file_pointers.contains(&ino) {
+                if let Some(inode) = fs.inodes.get(ino) {
+                    if let crate::inode::InodeKind::File { file_meta_resolved: true, cid, .. } = &inode.kind {
+                        if !cid.is_empty() {
+                            return true;
+                        }
+                    }
+                }
+                // Task completed but resolution failed — no point continuing to poll
+                log::debug!("poll_filepointer_resolution: ino={} no longer in-flight, stopping poll", ino);
+                return false;
+            }
+            // Still in-flight — check if resolved yet
             if let Some(inode) = fs.inodes.get(ino) {
                 if let crate::inode::InodeKind::File { cid, file_meta_resolved: true, .. } = &inode.kind {
                     if !cid.is_empty() {
