@@ -20,6 +20,8 @@ import {
   BatchPublishIpnsResponseDto,
   ResolveIpnsQueryDto,
   ResolveIpnsResponseDto,
+  BatchUnenrollIpnsDto,
+  BatchUnenrollIpnsResponseDto,
 } from './dto';
 import { MetricsService } from '../metrics/metrics.service';
 import { RequestWithUser } from '../common/types';
@@ -117,6 +119,35 @@ export class IpnsController {
     const result = await this.ipnsService.publishBatch(req.user.id, dto);
     this.metricsService.ipnsPublishes.inc({ type: 'batch' }, result.totalSucceeded);
     return result;
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 batch unenrolls per minute per user
+  @Post('unenroll')
+  @ApiOperation({
+    summary: 'Batch unenroll IPNS records from TEE republishing',
+    description:
+      'Remove IPNS names from the TEE republish schedule. Called after file/folder deletion ' +
+      'to prevent orphaned records from accumulating. Accepts up to 200 IPNS names per call.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Unenrollment results',
+    type: BatchUnenrollIpnsResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad Request - Invalid IPNS name format or array too large',
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized - JWT token required' })
+  async unenrollBatch(
+    @Request() req: RequestWithUser,
+    @Body() dto: BatchUnenrollIpnsDto
+  ): Promise<BatchUnenrollIpnsResponseDto> {
+    const result = await this.ipnsService.unenrollBatch(req.user.id, dto.ipnsNames);
+    return {
+      totalUnenrolled: result.totalUnenrolled,
+      totalRequested: dto.ipnsNames.length,
+    };
   }
 
   // [SECURITY: HIGH-04] Rate limit IPNS resolve - higher limit than publish since read-only
