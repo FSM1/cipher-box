@@ -1,7 +1,6 @@
 /**
  * SharedFolderRow -- Row component for items within a shared folder.
  *
- * Extracted from SharedFileBrowser.tsx.
  * Shows [RW] or [RO] badge based on the share's permission level.
  * Supports inline renaming when isRenaming is true.
  */

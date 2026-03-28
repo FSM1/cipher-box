@@ -1,8 +1,7 @@
 /**
  * useSharedWriteOps -- Write operation handlers for shared folders.
  *
- * Extracted from useSharedNavigation.ts to separate write concerns
- * from navigation. Takes navigation state as params.
+ * Handles upload, create folder, rename, and delete within shared folders.
  */
 
 import { useCallback, type MutableRefObject } from 'react';
@@ -108,7 +107,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
     async <T>(operation: () => Promise<T>): Promise<T> => {
       return sdkWithRevocationGuard(operation, () => p.handleRevocation(true));
     },
-    [p.handleRevocation],
+    [p.handleRevocation]
   );
 
   /**
@@ -148,7 +147,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
             },
             async () => {
               await resyncSharedFolder();
-            },
+            }
           );
         });
       } catch (err) {
@@ -161,7 +160,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         p.setIsLoading(false);
       }
     },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard],
+    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
   );
 
   /**
@@ -195,7 +194,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
             },
             async () => {
               await resyncSharedFolder();
-            },
+            }
           );
         });
       } catch (err) {
@@ -208,7 +207,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         p.setIsLoading(false);
       }
     },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard],
+    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
   );
 
   /**
@@ -242,7 +241,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
             },
             async () => {
               await resyncSharedFolder();
-            },
+            }
           );
         });
       } catch (err) {
@@ -255,7 +254,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         p.setIsLoading(false);
       }
     },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard],
+    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
   );
 
   /**
@@ -300,14 +299,14 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
             if (ipnsKeyRecord) {
               return unwrapKey(
                 hexToBytes(ipnsKeyRecord.encryptedKey),
-                auth.vaultKeypair!.privateKey,
+                auth.vaultKeypair!.privateKey
               );
             }
             if (item.ipnsPrivateKeyEncrypted) {
               try {
                 return await unwrapKey(
                   hexToBytes(item.ipnsPrivateKeyEncrypted),
-                  auth.vaultKeypair!.privateKey,
+                  auth.vaultKeypair!.privateKey
                 );
               } catch {
                 return null;
@@ -318,7 +317,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         });
       });
     },
-    [p.folderKey, p.currentShareId, p.sharedItems, withRevocationGuard],
+    [p.folderKey, p.currentShareId, p.sharedItems, withRevocationGuard]
   );
 
   /**
@@ -352,7 +351,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
             },
             async () => {
               await resyncSharedFolder();
-            },
+            }
           );
         });
       } catch (err) {
@@ -365,7 +364,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         p.setIsLoading(false);
       }
     },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard],
+    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
   );
 
   return {

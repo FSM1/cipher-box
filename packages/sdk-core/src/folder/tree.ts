@@ -1,7 +1,7 @@
 /**
  * @cipherbox/sdk-core - Tree traversal utilities
  *
- * Pure tree algorithms extracted from apps/web/src/services/folder.service.ts.
+ * Pure tree algorithms for folder hierarchy operations.
  * Framework-agnostic -- no React/Zustand dependencies.
  */
 
@@ -41,10 +41,7 @@ export function getDepth(folderId: string | null, folders: Record<string, TreeNo
  * @param folders - Map of folder ID to TreeNode
  * @returns Maximum depth relative to folderId (0 if no children)
  */
-export function calculateSubtreeDepth(
-  folderId: string,
-  folders: Record<string, TreeNode>,
-): number {
+export function calculateSubtreeDepth(folderId: string, folders: Record<string, TreeNode>): number {
   let maxDepth = 0;
   for (const [id, node] of Object.entries(folders)) {
     if (id === folderId) continue;
@@ -75,7 +72,7 @@ export function calculateSubtreeDepth(
 export function isDescendantOf(
   childId: string,
   ancestorId: string,
-  folders: Record<string, TreeNode>,
+  folders: Record<string, TreeNode>
 ): boolean {
   let current: string | null = childId;
   while (current) {

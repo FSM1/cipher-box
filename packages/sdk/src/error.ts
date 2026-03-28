@@ -1,8 +1,7 @@
 /**
  * @cipherbox/sdk - Error handling and retry utilities
  *
- * Framework-agnostic error detection and retry logic extracted from
- * apps/web/src/hooks/useSharedNavigation.ts and folder-helpers.ts.
+ * Framework-agnostic error detection and retry logic for shared folder operations.
  */
 
 /**
@@ -44,7 +43,7 @@ export function isConflictError(error: unknown): boolean {
  */
 export async function withRevocationGuard<T>(
   operation: () => Promise<T>,
-  onRevoked: () => void,
+  onRevoked: () => void
 ): Promise<T> {
   try {
     return await operation();
@@ -71,7 +70,7 @@ export async function withRevocationGuard<T>(
 export async function withConflictRetry<T>(
   perform: () => Promise<T>,
   resync: () => Promise<void>,
-  preRetry?: () => void,
+  preRetry?: () => void
 ): Promise<T> {
   try {
     return await perform();
@@ -85,9 +84,7 @@ export async function withConflictRetry<T>(
       return await perform();
     } catch (retryErr) {
       if (isConflictError(retryErr)) {
-        throw new Error(
-          'Folder was modified by another device. Please refresh and try again.',
-        );
+        throw new Error('Folder was modified by another device. Please refresh and try again.');
       }
       throw retryErr;
     }

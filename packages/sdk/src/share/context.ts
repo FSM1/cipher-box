@@ -1,8 +1,7 @@
 /**
  * @cipherbox/sdk - Shared write context builder
  *
- * Extracted from apps/web/src/hooks/useSharedNavigation.ts buildSharedWriteCtx().
- * Takes explicit params instead of reading React state directly.
+ * Takes explicit params to construct a SharedWriteContext for write operations.
  */
 
 import type { FolderChild } from '@cipherbox/core';
@@ -25,7 +24,7 @@ export type SharedWriteContextParams = {
   shareId: string;
   addShareKeysFn: (
     shareId: string,
-    keys: Array<{ keyType: ShareKeyType; itemId: string; encryptedKey: string }>,
+    keys: Array<{ keyType: ShareKeyType; itemId: string; encryptedKey: string }>
   ) => Promise<void>;
 };
 

@@ -1,8 +1,7 @@
 /**
  * useSharedNavigationActions -- Navigation action handlers for shared content.
  *
- * Extracted from useSharedNavigation.ts. Contains all navigation callbacks
- * including key unwrapping during share/subfolder entry, download, and hide.
+ * Handles key unwrapping during share/subfolder entry, download, and hide.
  */
 
 import { useCallback, type MutableRefObject } from 'react';
@@ -57,7 +56,9 @@ export type SharedNavigationActionsParams = {
   setCurrentShareId: (id: string | null) => void;
   setFolderChildren: (children: FolderChild[]) => void;
   setFolderKey: (key: Uint8Array | null) => void;
-  setBreadcrumbs: (crumbs: SharedBreadcrumb[] | ((prev: SharedBreadcrumb[]) => SharedBreadcrumb[])) => void;
+  setBreadcrumbs: (
+    crumbs: SharedBreadcrumb[] | ((prev: SharedBreadcrumb[]) => SharedBreadcrumb[])
+  ) => void;
   setPermission: (perm: 'read' | 'write' | null) => void;
   setIpnsName: (name: string | null) => void;
   setCurrentSequenceNumber: (seq: bigint | null) => void;
@@ -67,7 +68,9 @@ export type SharedNavigationActionsParams = {
   // Helpers from orchestrator
   clearPolling: () => void;
   zeroIpnsKey: () => void;
-  getShareKeys: (shareId: string) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
+  getShareKeys: (
+    shareId: string
+  ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
 };
 
 export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
@@ -94,7 +97,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       try {
         const itemKey = await unwrapKey(
           hexToBytes(share.encryptedKey),
-          auth.vaultKeypair.privateKey,
+          auth.vaultKeypair.privateKey
         );
 
         if (share.itemType === 'folder') {
@@ -112,7 +115,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
               try {
                 const ipnsPrivKey = await unwrapKey(
                   hexToBytes(share.encryptedIpnsKey),
-                  auth.vaultKeypair.privateKey,
+                  auth.vaultKeypair.privateKey
                 );
                 p.ipnsPrivateKeyRef.current = ipnsPrivKey;
               } catch (err) {
@@ -144,7 +147,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
               try {
                 const ipnsPrivKey = await unwrapKey(
                   hexToBytes(share.encryptedIpnsKey),
-                  auth.vaultKeypair.privateKey,
+                  auth.vaultKeypair.privateKey
                 );
                 p.ipnsPrivateKeyRef.current = ipnsPrivKey;
               } catch (err) {
@@ -169,7 +172,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         p.setIsLoading(false);
       }
     },
-    [p.sharedItems, p.clearPolling],
+    [p.sharedItems, p.clearPolling]
   );
 
   /**
@@ -191,13 +194,13 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
 
         const subfolderKey = await unwrapKey(
           hexToBytes(keyRecord.encryptedKey),
-          auth.vaultKeypair.privateKey,
+          auth.vaultKeypair.privateKey
         );
         let subfolderKeyStored = false;
 
         try {
           const folderEntry = p.folderChildren.find(
-            (c): c is FolderEntry => c.type === 'folder' && c.id === folderId,
+            (c): c is FolderEntry => c.type === 'folder' && c.id === folderId
           );
           if (!folderEntry) throw new Error('Subfolder not found in current children');
 
@@ -237,12 +240,12 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             try {
               const subKeys = await p.getShareKeys(p.currentShareId);
               const ipnsKeyRecord = subKeys.find(
-                (k) => k.keyType === 'folder-ipns' && k.itemId === folderId,
+                (k) => k.keyType === 'folder-ipns' && k.itemId === folderId
               );
               if (ipnsKeyRecord) {
                 const ipnsPrivKey = await unwrapKey(
                   hexToBytes(ipnsKeyRecord.encryptedKey),
-                  auth.vaultKeypair.privateKey,
+                  auth.vaultKeypair.privateKey
                 );
                 p.ipnsPrivateKeyRef.current = ipnsPrivKey;
                 restored = true;
@@ -273,7 +276,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.clearPolling,
       p.permission,
       p.zeroIpnsKey,
-    ],
+    ]
   );
 
   /**
@@ -316,19 +319,19 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         if (!targetFolderId && share.encryptedIpnsKey) {
           const ipnsPrivKey = await unwrapKey(
             hexToBytes(share.encryptedIpnsKey),
-            auth.vaultKeypair.privateKey,
+            auth.vaultKeypair.privateKey
           );
           p.ipnsPrivateKeyRef.current = ipnsPrivKey;
           p.setPermission('write');
         } else if (targetFolderId) {
           const keys = await p.getShareKeys(p.currentShareId);
           const ipnsKeyRecord = keys.find(
-            (k) => k.keyType === 'folder-ipns' && k.itemId === targetFolderId,
+            (k) => k.keyType === 'folder-ipns' && k.itemId === targetFolderId
           );
           if (ipnsKeyRecord) {
             const ipnsPrivKey = await unwrapKey(
               hexToBytes(ipnsKeyRecord.encryptedKey),
-              auth.vaultKeypair.privateKey,
+              auth.vaultKeypair.privateKey
             );
             p.ipnsPrivateKeyRef.current = ipnsPrivKey;
             p.setPermission('write');
@@ -340,7 +343,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         // Couldn't restore — stay read-only
       }
     },
-    [p.currentShareId, p.getShareKeys, p.sharedItems, p.zeroIpnsKey],
+    [p.currentShareId, p.getShareKeys, p.sharedItems, p.zeroIpnsKey]
   );
 
   /**
@@ -397,7 +400,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         }
       }
     },
-    [p.breadcrumbs, p.folderKey, restoreIpnsKeyForDepth],
+    [p.breadcrumbs, p.folderKey, restoreIpnsKeyForDepth]
   );
 
   /**
@@ -437,7 +440,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             originalName: item.name,
             encryptionMode: fileMeta.encryptionMode,
           },
-          auth.vaultKeypair.privateKey,
+          auth.vaultKeypair.privateKey
         );
 
         downloadStore.setDecrypting();
@@ -449,7 +452,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         logger.error('[SharedNav] Shared file download failed:', err);
       }
     },
-    [p.currentShareId, p.folderKey, p.getShareKeys],
+    [p.currentShareId, p.folderKey, p.getShareKeys]
   );
 
   /**

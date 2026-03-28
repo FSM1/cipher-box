@@ -1,7 +1,6 @@
 /**
  * useFileBrowserActions -- Handler logic for FileBrowser.
  *
- * Extracted from FileBrowser.tsx to separate handler logic from JSX.
  * Contains all useCallback handlers, dialog state, selection state,
  * and drag state management.
  */
@@ -46,23 +45,23 @@ export type FileBrowserActionsParams = {
     itemId: string,
     itemType: 'file' | 'folder',
     newName: string,
-    parentId: string,
+    parentId: string
   ) => Promise<void>;
   moveItem: (
     itemId: string,
     itemType: 'file' | 'folder',
     sourceParentId: string,
-    destParentId: string,
+    destParentId: string
   ) => Promise<void>;
   moveItems: (
     items: Array<{ id: string; type: 'file' | 'folder' }>,
     sourceParentId: string,
-    destParentId: string,
+    destParentId: string
   ) => Promise<void>;
   deleteItem: (itemId: string, itemType: 'file' | 'folder', parentId: string) => Promise<void>;
   deleteItems: (
     items: Array<{ id: string; type: 'file' | 'folder' }>,
-    parentId: string,
+    parentId: string
   ) => Promise<void>;
   isOperating: boolean;
   isDownloading: boolean;
@@ -195,7 +194,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       const files = Array.from(e.dataTransfer.files);
       handleFileDrop(files, currentFolderId);
     },
-    [handleFileDrop, currentFolderId],
+    [handleFileDrop, currentFolderId]
   );
 
   const handleExternalFileDrop = useCallback(
@@ -204,7 +203,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       setIsDraggingExternal(false);
       handleFileDrop(files, targetFolderId);
     },
-    [handleFileDrop],
+    [handleFileDrop]
   );
 
   // ---------------------------------------------------------------------------
@@ -226,7 +225,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
 
   const selectedItems = useMemo(
     () => children.filter((c) => selectedIds.has(c.id)),
-    [children, selectedIds],
+    [children, selectedIds]
   );
   const multiSelectActive = selectedIds.size > 0;
 
@@ -270,7 +269,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       lastSelectedIdRef.current = null;
       navigateTo(folderId);
     },
-    [navigateTo],
+    [navigateTo]
   );
 
   const handleSelect = useCallback(
@@ -310,7 +309,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         lastSelectedIdRef.current = itemId;
       }
     },
-    [children],
+    [children]
   );
 
   const handleSelectAll = useCallback(() => {
@@ -335,7 +334,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       }
       contextMenu.show(event, item);
     },
-    [contextMenu, selectedIds],
+    [contextMenu, selectedIds]
   );
 
   const handleDragStart = useCallback((_event: DragEvent, _item: FolderChild) => {
@@ -346,7 +345,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     async (
       items: Array<{ id: string; type: 'file' | 'folder' }>,
       sourceParentId: string,
-      destFolderId: string,
+      destFolderId: string
     ) => {
       try {
         if (items.length === 1) {
@@ -359,7 +358,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         logger.error('[FileBrowser] Move failed:', err);
       }
     },
-    [moveItem, moveItems, clearSelection],
+    [moveItem, moveItems, clearSelection]
   );
 
   const handleDownload = useCallback(async () => {
@@ -452,7 +451,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     try {
       await deleteItems(
         items.map((i) => ({ id: i.id, type: i.type })),
-        currentFolderId,
+        currentFolderId
       );
       setBatchDeleteDialog({ open: false, items: [] });
       clearSelection();
@@ -469,7 +468,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         await moveItems(
           items.map((i) => ({ id: i.id, type: i.type })),
           currentFolderId,
-          destinationFolderId,
+          destinationFolderId
         );
         setBatchMoveDialog({ open: false, items: [] });
         clearSelection();
@@ -477,7 +476,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         logger.error('[FileBrowser] Batch move failed:', err);
       }
     },
-    [batchMoveDialog.items, moveItems, currentFolderId, clearSelection],
+    [batchMoveDialog.items, moveItems, currentFolderId, clearSelection]
   );
 
   const closeBatchDeleteDialog = useCallback(() => {
@@ -499,7 +498,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         logger.error('[FileBrowser] Rename failed:', err);
       }
     },
-    [renameDialog.item, renameItem, currentFolderId, closeRenameDialog],
+    [renameDialog.item, renameItem, currentFolderId, closeRenameDialog]
   );
 
   const handleDeleteConfirm = useCallback(async () => {
@@ -524,7 +523,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         logger.error('[FileBrowser] Move failed:', err);
       }
     },
-    [moveDialog.item, moveItem, currentFolderId, closeMoveDialog],
+    [moveDialog.item, moveItem, currentFolderId, closeMoveDialog]
   );
 
   const closeShareDialog = useCallback(() => {
@@ -549,7 +548,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         setCreateFolderDialogOpen(false);
       }
     },
-    [createFolder, currentFolderId],
+    [createFolder, currentFolderId]
   );
 
   return {

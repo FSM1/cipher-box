@@ -1,8 +1,4 @@
-/**
- * SharedListRow -- Row component for the top-level shared items list.
- *
- * Extracted from SharedFileBrowser.tsx.
- */
+/** SharedListRow -- Row component for the top-level shared items list. */
 
 import type { MouseEvent } from 'react';
 import type { SharedListItem } from '../../hooks/useSharedNavigation';
