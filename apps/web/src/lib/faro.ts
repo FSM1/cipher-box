@@ -33,9 +33,12 @@ function scrubValue(value: unknown): unknown {
       return '[REDACTED_KEY]';
     }
     // Scrub hex keys embedded in URLs (e.g., invite links with key material in hash/query)
-    if (value.length > 64 && URL_HEX_KEY_PATTERN.test(value)) {
-      URL_HEX_KEY_PATTERN.lastIndex = 0; // Reset regex state after test()
-      return value.replace(URL_HEX_KEY_PATTERN, '[REDACTED_KEY]');
+    if (value.length > 64) {
+      URL_HEX_KEY_PATTERN.lastIndex = 0;
+      if (URL_HEX_KEY_PATTERN.test(value)) {
+        URL_HEX_KEY_PATTERN.lastIndex = 0;
+        return value.replace(URL_HEX_KEY_PATTERN, '[REDACTED_KEY]');
+      }
     }
   }
   if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
