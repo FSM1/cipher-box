@@ -1,0 +1,19 @@
+/gsd:map-codebase
+
+---
+
+2
+
+---
+
+actually I think we are good - the docs were updated recently and should be mostly accurate
+
+---
+
+ok, can you analyze the @.planning/FEATURES.md and prepare a list of possible candidates for inclusion in web/desktop e2e testing?
+
+---
+
+ok, I agree on all the high feasibility items except for link/unkink auth methods. I think these can be included in the full-lifecycle flow. I would also like to test the AES-CTR streaming implementation, though I don't know how doable this is. 
+
+Also, an improvement to make to all the e2e test flows is to ensure that `delete account` is called at the end. I know a few tests were doing this, but not sure if its done universally. Would probably be a good thing to include in the test harness teardown.
