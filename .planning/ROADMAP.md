@@ -34,6 +34,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (NEEDS DISCUSSION)
 - [ ] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (NEEDS DISCUSSION)
 - [ ] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread
+- [ ] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend
 
 ## Phase Details
 
@@ -356,10 +357,25 @@ Plans:
 
 **Plans**: TBD
 
+### Phase 33: Windows Async FilePointer Resolution
+
+**Goal**: WinFsp FilePointer resolution no longer blocks the filesystem thread, eliminating Explorer hangs during metadata refresh on Windows
+**Depends on**: Phase 32 (macOS implementation establishes the pattern; Windows ports it to platform/windows/)
+**Requirements**: None (performance improvement, Windows parity)
+**Research flag**: Skip -- direct port of Phase 32 pattern to Windows-specific code paths
+**Success Criteria** (what must be TRUE):
+
+1. FilePointer resolution in platform/windows/ spawns async tasks via channel pair instead of blocking
+2. Windows Explorer operations do not hang during background metadata refresh
+3. Resolution latency bounded by timeout rather than O(N \* network_timeout)
+4. Windows desktop E2E tests pass with the async resolution path
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33
 
 | Phase                                     | Milestone | Plans Complete | Status      | Completed  |
 | ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
@@ -376,10 +392,11 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete    | 2026-03-26 |
 | 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete    | 2026-03-26 |
 | 28. Code Hygiene & Logging                | v1.1      | 4/4            | Complete    | 2026-03-28 |
-| 29. Infrastructure Hardening              | v1.1      | 3/3 | Complete    | 2026-03-28 |
+| 29. Infrastructure Hardening              | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 30. Web App Observability                 | v1.1      | 0/TBD          | Not started | -          |
 | 31. Structural Decomposition              | v1.1      | 0/TBD          | Not started | -          |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 0/TBD          | Not started | -          |
+| 33. Windows Async FilePointer Resolution  | v1.1      | 0/TBD          | Not started | -          |
 
 ### Phase 27: Writable Shares (PoC)
 
