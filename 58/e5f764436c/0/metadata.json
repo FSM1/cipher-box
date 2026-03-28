@@ -1,0 +1,113 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "58e5f764436c",
+  "session_id": "16707061-06f8-49fd-82d9-2a0e213d2c5d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T20:35:45.555435Z",
+  "branch": "phase-30-web-app-observability",
+  "checkpoints_count": 5,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "2fc3a6f8c485",
+  "token_usage": {
+    "input_tokens": 3315,
+    "cache_creation_tokens": 669826,
+    "cache_read_tokens": 59061146,
+    "output_tokens": 100997,
+    "api_call_count": 317
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Manage the cipher-box milestone dashboard using the GSD manager workflow: clean up stale state, execute/plan/discuss phases 29-32 in parallel, resolve PR reviews, and simplify code across phases 30-31-32.",
+    "outcome": "Phases 28-32 all executed and planned; PRs #386 (Phase 30), #387 (Phase 31), #388 (Phase 32) created; Phase 29 PR #383 merged; all Phase 29/30 PR review threads resolved; Phase 32 FUSE async implementation drops worst-case blocking from O(N×10s) to O(10s); Phase 31 test coverage improvement and final Phase 30 review fixes still in-flight at transcript end.",
+    "learnings": {
+      "repo": [
+        "FUSE-T uses SMB backend exclusively — NFS has an unfixable macOS kernel bug; single-thread constraint means all FUSE-T callbacks run on one thread",
+        "Channel-based prefetch pattern (PendingContent/content_tx/content_rx/prefetching HashSet) is the established pattern for async work on the FUSE thread — Phase 32 mirrors it exactly for FilePointers",
+        "drain_refresh_completions() was calling block_with_timeout() sequentially per FilePointer on the FUSE thread, blocking for up to 10s per file (100s for 10 files), causing Finder 'connection lost'",
+        "Phase 28 logger exports a mutable transports array; registerFaroTransport() pushes into it at runtime — tight coupling by design for post-init injection",
+        "GSD planning artifacts live on branches and in worktrees — manager init reads disk state and can show stale status when planning commits are on a different branch than the working tree",
+        "bin.service.ts is already deprecated with only 2 consumers and SDK equivalents exist — D-09/D-15 deferral was correct",
+        "unenrollIpns() was returning void despite executing a DELETE; callers summing affected counts were always getting 0"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 617,
+          "end_line": 643,
+          "finding": "drain_refresh_completions() blocked the FUSE thread calling block_with_timeout() sequentially per FilePointer — replaced with tokio::spawn() async tasks"
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "line": 41,
+          "end_line": 41,
+          "finding": "scrubObject depth limit was returning the raw object at depth \u003e 3 instead of a redacted placeholder — security gap"
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "line": 20,
+          "end_line": 20,
+          "finding": "SENSITIVE_KEYS was missing 'email' — added; arrays were not traversed in scrubObject — added array handling"
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "line": 172,
+          "end_line": 195,
+          "finding": "registerFaroTransport was forwarding context to Faro without scrubbing — potential PII/key leakage; also had duplicate context transformation between error/warn branches that was extracted to toStringContext helper"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 307,
+          "end_line": 307,
+          "finding": "unenrollIpns() returned void; unenrollBatch() summed results as 0 always — fixed return type to number (affected rows)"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 1,
+          "end_line": 1206,
+          "finding": "1206-line file split into 3 hooks (orchestrator 378, actions 478, write ops 378) plus SDK extraction of tree utils, error/retry, share context builder, and TTL key cache"
+        },
+        {
+          "path": "crates/fuse/src/read_ops.rs",
+          "line": 1,
+          "finding": "Poll-wait fallback (5s/100ms) added to handle_open() and handle_read() for unresolved FilePointers — returns EIO on timeout (Finder retries automatically); extracted poll loop into wait_for_filepointer_resolution() helper"
+        },
+        {
+          "path": "apps/web/vite.config.ts",
+          "line": 24,
+          "end_line": 41,
+          "finding": "Source maps should only be 'hidden' (uploaded but not served) when all three env vars are present (VITE_FARO_URL, GRAFANA_FARO_API_KEY, GRAFANA_STACK_ID); missing GRAFANA_STACK_ID check caused potential empty-string stackId"
+        }
+      ],
+      "workflow": [
+        "GSD manager can dispatch plan/execute as background agents and discuss inline simultaneously — effective for parallelizing phase work from one terminal",
+        "Worktrees from merged PRs must be explicitly removed; they're not cleaned up automatically and can cause false 'active background' indicators in the dashboard",
+        "When a feature branch is ahead of main and both modify ROADMAP.md, always take main's version for the planning sections — main is authoritative for completion status",
+        "Phase execution agents in worktrees commit to worktree-specific branches (worktree-agent-XXXX); these need to be pushed to a named feature branch and merged back via PR",
+        "prettier --write on the worktree directory after agent execution catches formatting issues before CI; agents don't always run prettier on generated files",
+        "The 'resolve PR review comments' workflow correctly distinguishes 'already fixed' vs 'not applicable' vs 'valid fix needed' — prevents redundant fixes for threads posted before earlier commits"
+      ]
+    },
+    "friction": [
+      "ROADMAP.md had repeated merge conflicts across multiple sessions — the three-way conflict format made it easy to accidentally keep both versions",
+      "Phase 31 CI failed with 11 prettier formatting errors — agent-generated code wasn't formatted before push",
+      "Phase 30 required three separate rounds of PR review resolution (GitHub Copilot → CodeRabbit → second CodeRabbit pass) — each round added new scrubbing security findings",
+      "Worktree cleanup caused unexpected branch checkout changes — after removing the Phase 32 planning worktree, the main repo switched to the Phase 32 branch silently",
+      "Phase 30 simplify fixes landed on the wrong branch (Phase 32) due to worktree confusion and had to be recovered",
+      "The GSD manager's disk-state polling couldn't detect that Phase 30 was already executed in a worktree — showed 'ready to execute' when the work was done but on a different branch",
+      "Phase 31 SDK tests had 35 pre-existing type errors unrelated to Phase 31 work — needed a separate fix agent"
+    ],
+    "open_items": [
+      "Phase 31 test coverage improvement (agent still running at transcript end) — CodeRabbit flagged that SDK error/retry utilities and key-cache had no unit tests",
+      "Phase 30 second-round review fixes (URL hex scrubbing, Faro instrumentation privacy config) — commit created but push not confirmed at transcript end",
+      "Phase 32 simplify changes in worktree — compiled clean but push not confirmed at transcript end",
+      "Phase 33 (Windows WinFsp async FilePointer) — context ready, PR #385 merged to docs branch, but planning and execution deferred pending Phase 32 merge",
+      "GitHub Actions secrets VITE_FARO_URL, GRAFANA_FARO_API_KEY, GRAFANA_STACK_ID need to be configured in the staging environment before Faro activates",
+      "Cargo.lock discrepancy in Phase 32 worktree from version-bump divergence — left uncommitted, should be rebased onto main after merge",
+      "Phase 28 logger module is a missing dependency for faro.ts registerFaroTransport() — main.tsx wiring call is deferred; stringly-typed log level constants can't be imported until Phase 28 ships",
+      "Batch IPNS resolve API endpoint noted as future optimization during Phase 32 discussion"
+    ]
+  }
+}
