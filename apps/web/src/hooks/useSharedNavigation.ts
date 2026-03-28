@@ -1,16 +1,9 @@
 /**
- * useSharedNavigation -- Navigation hook for browsing shared content.
+ * useSharedNavigation -- Orchestrator hook for browsing shared content.
  *
- * Similar to useFolderNavigation but with a different key source:
- * - Top level: shares received via share records
- * - Folder browsing: re-wrapped keys from share_keys table
- * - File download: re-wrapped fileKey from share_keys table
- *
- * Write-share recipients additionally get:
- * - IPNS private key unwrapping for publishing changes
- * - Upload, mkdir, rename, delete operations with conflict retry
- * - 30s sync polling for the currently-viewed shared folder
- * - Silent revocation handling (badge transitions [RW] -> [RO])
+ * Owns state declarations, share loading, polling, cleanup, and delegates to:
+ * - useSharedNavigationActions: navigation callbacks (navigate, download, hide)
+ * - useSharedWriteOps: write operation handlers (upload, mkdir, rename, delete)
  *
  * Security: All keys are ECIES-wrapped for the current user.
  * The server never sees plaintext keys.
@@ -19,40 +12,18 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   decryptFolderMetadata,
-  decryptFileMetadata,
   type FolderChild,
-  type FolderEntry,
   type FilePointer,
   type EncryptedFolderMetadata,
-  type EncryptedFileMetadata,
 } from '@cipherbox/core';
-import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
-import {
-  uploadToSharedFolder,
-  createSharedSubfolder,
-  renameInSharedFolder,
-  deleteFromSharedFolder,
-  updateSharedFile,
-  type SharedWriteContext,
-  withRevocationGuard as sdkWithRevocationGuard,
-  ShareKeyCache,
-  buildSharedWriteContext,
-} from '@cipherbox/sdk';
-import { useAuthStore } from '../stores/auth.store';
+import { ShareKeyCache } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
-import {
-  fetchReceivedShares,
-  fetchShareKeys,
-  hideShare,
-  addShareKeys,
-} from '../services/share.service';
+import { fetchReceivedShares, fetchShareKeys } from '../services/share.service';
 import { resolveIpnsRecord } from '../services/ipns.service';
 import { fetchFromIpfs } from '../lib/api/ipfs';
-import { downloadFile, triggerBrowserDownload } from '../services/download.service';
-import { useDownloadStore } from '../stores/download.store';
-import { withConflictRetry } from './folder-helpers';
-import { apiAxios, apiUrl } from '../lib/api-config';
 import { logger } from '../lib/logger';
+import { useSharedNavigationActions } from './useSharedNavigationActions';
+import { useSharedWriteOps } from './useSharedWriteOps';
 
 /**
  * Breadcrumb entry for shared navigation.
@@ -64,7 +35,6 @@ export type SharedBreadcrumb = {
 
 /**
  * A shared item displayed in the top-level shared list.
- * Extends the original FolderChild with sharing metadata.
  */
 export type SharedListItem = {
   share: ReceivedShare;
@@ -112,12 +82,6 @@ type UseSharedNavigationReturn = {
   updateSharedFile: (item: FilePointer, newContent: Uint8Array) => Promise<void>;
 };
 
-/** Parse a 0x-prefixed or bare hex public key string into bytes. */
-function parsePublicKey(keyHex: string): Uint8Array {
-  const hex = keyHex.startsWith('0x') ? keyHex.slice(2) : keyHex;
-  return hexToBytes(hex);
-}
-
 /**
  * Hook for browsing shared content.
  *
@@ -128,6 +92,9 @@ function parsePublicKey(keyHex: string): Uint8Array {
  * For write shares, also provides write operation handlers and 30s polling.
  */
 export function useSharedNavigation(): UseSharedNavigationReturn {
+  // ---------------------------------------------------------------------------
+  // State declarations
+  // ---------------------------------------------------------------------------
   const [currentView, setCurrentView] = useState<SharedView>('list');
   const [currentShareId, setCurrentShareId] = useState<string | null>(null);
   const [sharedItems, setSharedItems] = useState<SharedListItem[]>([]);
@@ -165,9 +132,10 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   // Polling interval ref for 30s sync
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  /**
-   * Zero the IPNS private key and clear the ref.
-   */
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
   const zeroIpnsKey = useCallback(() => {
     if (ipnsPrivateKeyRef.current) {
       ipnsPrivateKeyRef.current.fill(0);
@@ -175,9 +143,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     }
   }, []);
 
-  /**
-   * Clear polling interval.
-   */
   const clearPolling = useCallback(() => {
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
@@ -185,9 +150,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     }
   }, []);
 
-  /**
-   * Handle silent revocation: transition from write to read-only.
-   */
   const handleRevocation = useCallback(
     (showError?: boolean) => {
       zeroIpnsKey();
@@ -196,13 +158,9 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setError('> write access revoked -- folder is now read-only');
       }
     },
-    [zeroIpnsKey]
+    [zeroIpnsKey],
   );
 
-  /**
-   * Refresh folder contents from IPNS (used by polling and after write ops).
-   * Returns the refreshed children, or null on failure.
-   */
   const refreshFolderContents = useCallback(
     async (folderIpnsName: string, currentFolderKey: Uint8Array): Promise<FolderChild[] | null> => {
       try {
@@ -225,12 +183,22 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         return null;
       }
     },
-    []
+    [],
   );
 
-  /**
-   * Load received shares on mount.
-   */
+  const getShareKeys = useCallback(async (shareId: string) => {
+    const cached = shareKeysCacheRef.current.get(shareId);
+    if (cached) return cached;
+
+    const keys = await fetchShareKeys(shareId);
+    shareKeysCacheRef.current.set(shareId, keys);
+    return keys;
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Share loading effect
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
     let cancelled = false;
 
@@ -239,7 +207,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       setError(null);
 
       try {
-        // Paginate through all received shares (API max 100 per page)
         const pageSize = 100;
         let offset = 0;
         const shares: ReceivedShare[] = [];
@@ -275,7 +242,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     loadShares();
     return () => {
       cancelled = true;
-      // Zero all decrypted folder keys on unmount
       setFolderKey((prev) => {
         if (prev) prev.fill(0);
         return null;
@@ -290,833 +256,78 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     };
   }, [zeroIpnsKey, clearPolling]);
 
-  /**
-   * Get share keys for a share, with TTL-based caching.
-   */
-  const getShareKeys = useCallback(async (shareId: string) => {
-    const cached = shareKeysCacheRef.current.get(shareId);
-    if (cached) return cached;
-
-    const keys = await fetchShareKeys(shareId);
-    shareKeysCacheRef.current.set(shareId, keys);
-    return keys;
-  }, []);
-
-  /**
-   * Navigate into a shared folder from the top-level list.
-   */
-  const navigateToShare = useCallback(
-    async (shareId: string) => {
-      const auth = useAuthStore.getState();
-      if (!auth.vaultKeypair) {
-        setError('No keypair available');
-        return;
-      }
-
-      const shareItem = sharedItems.find((s) => s.share.shareId === shareId);
-      if (!shareItem) return;
-
-      const share = shareItem.share;
-
-      setIsLoading(true);
-      setError(null);
-      clearPolling();
-
-      try {
-        // Unwrap the shared item's key with our private key
-        const itemKey = await unwrapKey(
-          hexToBytes(share.encryptedKey),
-          auth.vaultKeypair.privateKey
-        );
-
-        if (share.itemType === 'folder') {
-          let folderKeyStored = false;
-          try {
-            // Resolve folder IPNS to get metadata
-            const resolved = await resolveIpnsRecord(share.ipnsName);
-            if (!resolved) {
-              throw new Error('Could not resolve shared folder IPNS');
-            }
-
-            // Fetch and decrypt folder metadata
-            const encryptedBytes = await fetchFromIpfs(resolved.cid);
-            const encryptedJson = new TextDecoder().decode(encryptedBytes);
-            const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
-            const metadata = await decryptFolderMetadata(encrypted, itemKey);
-
-            // Unwrap IPNS private key for write shares
-            if (share.permission === 'write' && share.encryptedIpnsKey) {
-              try {
-                const ipnsPrivKey = await unwrapKey(
-                  hexToBytes(share.encryptedIpnsKey),
-                  auth.vaultKeypair.privateKey
-                );
-                ipnsPrivateKeyRef.current = ipnsPrivKey;
-              } catch (err) {
-                logger.error('[SharedNav] Failed to unwrap IPNS key for write share:', err);
-                // Fall back to read-only if IPNS key unwrap fails
-              }
-            }
-
-            // Set folder state (sync refs for retry closures — C-01)
-            const children = metadata.children ?? [];
-            const seqNum = BigInt(resolved.sequenceNumber);
-            setCurrentView('folder');
-            setCurrentShareId(shareId);
-            setFolderChildren(children);
-            folderChildrenRef.current = children;
-            setFolderKey(itemKey);
-            folderKeyStored = true;
-            setBreadcrumbs([{ id: shareId, name: share.itemName }]);
-            setPermission(ipnsPrivateKeyRef.current ? share.permission : 'read');
-            setIpnsName(share.ipnsName);
-            setCurrentSequenceNumber(seqNum);
-            sequenceNumberRef.current = seqNum;
-            navStackRef.current = [];
-          } finally {
-            if (!folderKeyStored) itemKey.fill(0);
-          }
-        } else {
-          // For file shares, set up state so the file can be opened/edited in the UI
-          let folderKeyStored = false;
-          try {
-            // Unwrap IPNS private key for write shares
-            if (share.permission === 'write' && share.encryptedIpnsKey) {
-              try {
-                const ipnsPrivKey = await unwrapKey(
-                  hexToBytes(share.encryptedIpnsKey),
-                  auth.vaultKeypair.privateKey
-                );
-                ipnsPrivateKeyRef.current = ipnsPrivKey;
-              } catch (err) {
-                logger.error('[SharedNav] Failed to unwrap IPNS key for write file share:', err);
-              }
-            }
-
-            // Set file share state — folderKey is the parent folder key (used to decrypt file metadata)
-            setCurrentView('file');
-            setCurrentShareId(shareId);
-            setFolderKey(itemKey);
-            folderKeyStored = true;
-            setPermission(ipnsPrivateKeyRef.current ? share.permission : 'read');
-            setIpnsName(share.ipnsName);
-            setBreadcrumbs([{ id: shareId, name: share.itemName }]);
-          } finally {
-            if (!folderKeyStored) itemKey.fill(0);
-          }
-        }
-      } catch (err) {
-        logger.error('[SharedNav] Failed to navigate to shared item:', err);
-        setError('Failed to open shared item');
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [sharedItems, clearPolling]
-  );
-
-  /**
-   * Navigate into a subfolder within a shared folder.
-   */
-  const navigateToSubfolder = useCallback(
-    async (folderId: string, folderName: string) => {
-      const auth = useAuthStore.getState();
-      if (!auth.vaultKeypair || !currentShareId) return;
-
-      setIsLoading(true);
-      setError(null);
-      clearPolling();
-
-      try {
-        // Get re-wrapped keys for this share
-        const keys = await getShareKeys(currentShareId);
-
-        // Find the re-wrapped folder key for this subfolder
-        const keyRecord = keys.find((k) => k.keyType === 'folder' && k.itemId === folderId);
-        if (!keyRecord) {
-          throw new Error('No key available for this subfolder');
-        }
-
-        // Unwrap the subfolder key
-        const subfolderKey = await unwrapKey(
-          hexToBytes(keyRecord.encryptedKey),
-          auth.vaultKeypair.privateKey
-        );
-        let subfolderKeyStored = false;
-
-        try {
-          // Find the subfolder entry to get its IPNS name
-          const folderEntry = folderChildren.find(
-            (c): c is FolderEntry => c.type === 'folder' && c.id === folderId
-          );
-          if (!folderEntry) {
-            throw new Error('Subfolder not found in current children');
-          }
-
-          // Resolve subfolder IPNS
-          const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
-          if (!resolved) {
-            throw new Error('Could not resolve subfolder IPNS');
-          }
-
-          // Fetch and decrypt subfolder metadata
-          const encryptedBytes = await fetchFromIpfs(resolved.cid);
-          const encryptedJson = new TextDecoder().decode(encryptedBytes);
-          const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
-          const metadata = await decryptFolderMetadata(encrypted, subfolderKey);
-
-          // Push current state to nav stack
-          if (folderKey && ipnsName) {
-            navStackRef.current.push({
-              folderId: breadcrumbs[breadcrumbs.length - 1]?.id ?? '',
-              folderName: breadcrumbs[breadcrumbs.length - 1]?.name ?? '',
-              children: folderChildren,
-              folderKey,
-              ipnsName,
-              sequenceNumber: currentSequenceNumber,
-            });
-          }
-
-          // Update state + refs
-          const children = metadata.children ?? [];
-          const seqNum = BigInt(resolved.sequenceNumber);
-          setFolderChildren(children);
-          folderChildrenRef.current = children;
-          setFolderKey(subfolderKey);
-          subfolderKeyStored = true;
-          setBreadcrumbs((prev) => [...prev, { id: folderId, name: folderName }]);
-          setIpnsName(folderEntry.ipnsName);
-          setCurrentSequenceNumber(seqNum);
-          sequenceNumberRef.current = seqNum;
-
-          // For write-share recipients: unwrap the subfolder's IPNS private key
-          // from share_keys (folder-ipns) so write operations work at any depth.
-          if (permission === 'write' && currentShareId) {
-            zeroIpnsKey(); // Zero parent key before replacing
-            let restored = false;
-            try {
-              const subKeys = await getShareKeys(currentShareId);
-              const ipnsKeyRecord = subKeys.find(
-                (k) => k.keyType === 'folder-ipns' && k.itemId === folderId
-              );
-              if (ipnsKeyRecord) {
-                const ipnsPrivKey = await unwrapKey(
-                  hexToBytes(ipnsKeyRecord.encryptedKey),
-                  auth.vaultKeypair.privateKey
-                );
-                ipnsPrivateKeyRef.current = ipnsPrivKey;
-                restored = true;
-              }
-            } catch {
-              // Couldn't get subfolder IPNS key from share_keys
-            }
-            if (!restored) {
-              // No subfolder IPNS key available — drop to read-only for this subfolder
-              setPermission('read');
-            }
-          }
-        } finally {
-          if (!subfolderKeyStored) subfolderKey.fill(0);
-        }
-      } catch (err) {
-        logger.error('[SharedNav] Failed to navigate to subfolder:', err);
-        setError('Failed to open subfolder');
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [
-      currentShareId,
-      folderChildren,
-      folderKey,
-      breadcrumbs,
-      getShareKeys,
-      ipnsName,
-      currentSequenceNumber,
-      clearPolling,
-      permission,
-      zeroIpnsKey,
-    ]
-  );
-
-  /**
-   * Navigate back to the top-level shared list.
-   * Zeroes all decrypted folder keys from memory before clearing state.
-   */
-  const navigateToRoot = useCallback(() => {
-    // Zero current folder key
-    if (folderKey) folderKey.fill(0);
-    // Zero all nav stack folder keys
-    for (const entry of navStackRef.current) {
-      entry.folderKey.fill(0);
-    }
-    // Zero IPNS private key
-    zeroIpnsKey();
-    // Clear polling
-    clearPolling();
-    setCurrentView('list');
-    setCurrentShareId(null);
-    setFolderChildren([]);
-    setFolderKey(null);
-    setBreadcrumbs([]);
-    setPermission(null);
-    setIpnsName(null);
-    setCurrentSequenceNumber(null);
-    navStackRef.current = [];
-    setError(null);
-  }, [folderKey, zeroIpnsKey, clearPolling]);
-
-  /**
-   * Navigate up one level.
-   */
-  /**
-   * Restore the correct IPNS private key for the current depth.
-   * Root level: unwrap from share record. Subfolder level: unwrap from folder-ipns share_key.
-   */
-  const restoreIpnsKeyForDepth = useCallback(
-    async (targetFolderId?: string) => {
-      if (!currentShareId) return;
-      const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
-      const share = shareItem?.share;
-      if (share?.permission !== 'write') return;
-
-      zeroIpnsKey();
-      const auth = useAuthStore.getState();
-      if (!auth.vaultKeypair) return;
-
-      try {
-        if (!targetFolderId && share.encryptedIpnsKey) {
-          // Root share level — unwrap from share record
-          const ipnsPrivKey = await unwrapKey(
-            hexToBytes(share.encryptedIpnsKey),
-            auth.vaultKeypair.privateKey
-          );
-          ipnsPrivateKeyRef.current = ipnsPrivKey;
-          setPermission('write');
-        } else if (targetFolderId) {
-          // Subfolder level — unwrap from folder-ipns share_key
-          const keys = await getShareKeys(currentShareId);
-          const ipnsKeyRecord = keys.find(
-            (k) => k.keyType === 'folder-ipns' && k.itemId === targetFolderId
-          );
-          if (ipnsKeyRecord) {
-            const ipnsPrivKey = await unwrapKey(
-              hexToBytes(ipnsKeyRecord.encryptedKey),
-              auth.vaultKeypair.privateKey
-            );
-            ipnsPrivateKeyRef.current = ipnsPrivKey;
-            setPermission('write');
-          } else {
-            setPermission('read');
-          }
-        }
-      } catch {
-        // Couldn't restore — stay read-only
-      }
-    },
-    [currentShareId, getShareKeys, sharedItems, zeroIpnsKey]
-  );
-
-  const navigateUp = useCallback(async () => {
-    if (navStackRef.current.length > 0) {
-      // Zero current folder key before replacing
-      if (folderKey) folderKey.fill(0);
-      // Pop from nav stack
-      const prev = navStackRef.current.pop()!;
-      setFolderChildren(prev.children);
-      folderChildrenRef.current = prev.children;
-      setFolderKey(prev.folderKey);
-      setBreadcrumbs((crumbs) => crumbs.slice(0, -1));
-      setIpnsName(prev.ipnsName);
-      setCurrentSequenceNumber(prev.sequenceNumber);
-      sequenceNumberRef.current = prev.sequenceNumber;
-
-      // Restore IPNS key: root level (no stack) or subfolder (top of remaining stack)
-      if (navStackRef.current.length === 0) {
-        await restoreIpnsKeyForDepth(); // root level
-      } else {
-        await restoreIpnsKeyForDepth(prev.folderId);
-      }
-    } else if (currentView === 'folder' || currentView === 'file') {
-      // Back to top-level list
-      navigateToRoot();
-    }
-  }, [currentView, folderKey, navigateToRoot, restoreIpnsKeyForDepth]);
-
-  /**
-   * Navigate directly to a breadcrumb level, zeroing all intermediate keys.
-   * More efficient than calling navigateUp() in a loop.
-   */
-  const navigateToBreadcrumb = useCallback(
-    async (crumbIndex: number) => {
-      const popsNeeded = breadcrumbs.length - 1 - crumbIndex;
-      if (popsNeeded <= 0) return;
-      // Zero the current folder key
-      if (folderKey) folderKey.fill(0);
-      // Zero and discard all intermediate keys
-      for (let i = 0; i < popsNeeded - 1; i++) {
-        const entry = navStackRef.current.pop();
-        if (entry) entry.folderKey.fill(0);
-      }
-      // Restore the target level
-      const target = navStackRef.current.pop();
-      if (target) {
-        setFolderChildren(target.children);
-        folderChildrenRef.current = target.children;
-        setFolderKey(target.folderKey);
-        setBreadcrumbs((crumbs) => crumbs.slice(0, crumbIndex + 1));
-        setIpnsName(target.ipnsName);
-        setCurrentSequenceNumber(target.sequenceNumber);
-        sequenceNumberRef.current = target.sequenceNumber;
-
-        // Restore IPNS key for the target depth
-        if (navStackRef.current.length === 0) {
-          await restoreIpnsKeyForDepth(); // root level
-        } else {
-          await restoreIpnsKeyForDepth(target.folderId);
-        }
-      }
-    },
-    [breadcrumbs, folderKey, restoreIpnsKeyForDepth]
-  );
-
-  /**
-   * Download a shared file from within a shared folder.
-   * Uses re-wrapped file keys from share_keys.
-   */
-  const downloadSharedFile = useCallback(
-    async (item: FilePointer) => {
-      const auth = useAuthStore.getState();
-      if (!auth.vaultKeypair || !currentShareId || !folderKey) return;
-
-      const downloadStore = useDownloadStore.getState();
-
-      try {
-        downloadStore.startDownload(item.name);
-
-        // Get share keys for file key lookup
-        const keys = await getShareKeys(currentShareId);
-
-        // First resolve the file metadata using the parent folder key
-        const resolved = await resolveIpnsRecord(item.fileMetaIpnsName);
-        if (!resolved) {
-          throw new Error('File metadata IPNS not found');
-        }
-
-        const encryptedBytes = await fetchFromIpfs(resolved.cid);
-        const encryptedJson = new TextDecoder().decode(encryptedBytes);
-        const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
-        const fileMeta = await decryptFileMetadata(encrypted, folderKey);
-
-        // Look for a re-wrapped file key in share_keys,
-        // falling back to fileKeyEncrypted from metadata (for files uploaded by current user)
-        const fileKeyRecord = keys.find((k) => k.keyType === 'file' && k.itemId === item.id);
-        if (!fileKeyRecord) {
-          throw new Error('File key not available — the folder owner may need to re-share');
-        }
-        const wrappedKey = fileKeyRecord.encryptedKey;
-
-        // downloadFile handles unwrapping internally via wrappedKey + privateKey
-        const plaintext = await downloadFile(
-          {
-            cid: fileMeta.cid,
-            iv: fileMeta.fileIv,
-            wrappedKey,
-            originalName: item.name,
-            encryptionMode: fileMeta.encryptionMode,
-          },
-          auth.vaultKeypair.privateKey
-        );
-
-        downloadStore.setDecrypting();
-        triggerBrowserDownload(plaintext, item.name);
-        downloadStore.setSuccess();
-      } catch (err) {
-        const message = (err as Error).message || 'Download failed';
-        downloadStore.setError(message);
-        logger.error('[SharedNav] Shared file download failed:', err);
-      }
-    },
-    [currentShareId, folderKey, getShareKeys]
-  );
-
-  /**
-   * Hide a shared item from the user's view.
-   */
-  const hideSharedItem = useCallback(async (shareId: string) => {
-    try {
-      await hideShare(shareId);
-      useShareStore.getState().removeReceivedShare(shareId);
-      setSharedItems((prev) => prev.filter((s) => s.share.shareId !== shareId));
-    } catch (err) {
-      logger.error('[SharedNav] Failed to hide share:', err);
-      setError('Failed to hide shared item');
-    }
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // Write operation helpers for write-share recipients
-  // -------------------------------------------------------------------------
-
-  /**
-   * Re-sync the current shared folder for conflict retry.
-   * Updates folderChildren and currentSequenceNumber in-place.
-   */
-  const resyncSharedFolder = useCallback(async () => {
-    if (!ipnsName || !folderKey) return;
-    await refreshFolderContents(ipnsName, folderKey);
-  }, [ipnsName, folderKey, refreshFolderContents]);
-
-  /**
-   * Build SharedWriteContext for SDK shared-write operations.
-   * Returns null if any required state is missing.
-   */
-  const buildSharedWriteCtx = useCallback((): SharedWriteContext | null => {
-    const currentIpnsKey = ipnsPrivateKeyRef.current;
-    const auth = useAuthStore.getState();
-    if (
-      !currentIpnsKey ||
-      !folderKey ||
-      !ipnsName ||
-      currentSequenceNumber === null ||
-      !auth.vaultKeypair
-    )
-      return null;
-
-    const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
-    if (!shareItem) return null;
-    const ownerPubKey = parsePublicKey(shareItem.share.sharerPublicKey);
-
-    return buildSharedWriteContext({
-      ctx: {
-        apiUrl,
-        getAccessToken: async () => useAuthStore.getState().accessToken || '',
-        axiosInstance: apiAxios,
-      },
-      folderKey,
-      ipnsPrivateKey: currentIpnsKey,
-      ipnsName,
-      sequenceNumber: currentSequenceNumber,
-      children: folderChildrenRef.current,
-      ownerPublicKey: ownerPubKey,
-      recipientPublicKey: auth.vaultKeypair.publicKey,
-      shareId: currentShareId!,
-      addShareKeysFn: async (sid, keys) => {
-        await addShareKeys(sid, keys);
-        shareKeysCacheRef.current.invalidate(sid);
-      },
-    });
-  }, [folderKey, ipnsName, currentSequenceNumber, currentShareId, sharedItems]);
-
-  /**
-   * Wrap a write operation with 403 revocation detection.
-   * If 403 is received, transitions to read-only silently.
-   */
-  const withRevocationGuard = useCallback(
-    async <T>(operation: () => Promise<T>): Promise<T> => {
-      return sdkWithRevocationGuard(operation, () => handleRevocation(true));
-    },
-    [handleRevocation],
-  );
-
-  /**
-   * Upload a file to the currently-viewed write-shared folder.
-   * Delegates to SDK uploadToSharedFolder.
-   */
-  const uploadFileHandler = useCallback(
-    async (file: File) => {
-      const swCtx = buildSharedWriteCtx();
-      if (!swCtx) {
-        setError('Write access not available');
-        return;
-      }
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        await withRevocationGuard(async () => {
-          const data = new Uint8Array(await file.arrayBuffer());
-
-          await withConflictRetry(
-            async () => {
-              // Re-read refs for conflict retry (C-01)
-              const freshCtx = {
-                ...swCtx,
-                children: folderChildrenRef.current,
-                sequenceNumber: sequenceNumberRef.current ?? 0n,
-              };
-              const result = await uploadToSharedFolder(freshCtx, {
-                data,
-                fileName: file.name,
-                mimeType: file.type || undefined,
-              });
-              sequenceNumberRef.current = result.newSequenceNumber;
-              folderChildrenRef.current = result.updatedChildren;
-              setCurrentSequenceNumber(result.newSequenceNumber);
-              setFolderChildren(result.updatedChildren);
-            },
-            async () => {
-              await resyncSharedFolder();
-            }
-          );
-        });
-      } catch (err) {
-        const message = (err as Error).message || 'Upload failed';
-        if (!message.includes('write access revoked')) {
-          setError(message);
-        }
-        logger.error('[SharedNav] Shared folder upload failed:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
-  );
-
-  /**
-   * Create a subfolder in the currently-viewed write-shared folder.
-   * Delegates to SDK createSharedSubfolder.
-   */
-  const createFolderHandler = useCallback(
-    async (name: string) => {
-      const swCtx = buildSharedWriteCtx();
-      if (!swCtx) {
-        setError('Write access not available');
-        return;
-      }
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        await withRevocationGuard(async () => {
-          await withConflictRetry(
-            async () => {
-              const freshCtx = {
-                ...swCtx,
-                children: folderChildrenRef.current,
-                sequenceNumber: sequenceNumberRef.current ?? 0n,
-              };
-              const result = await createSharedSubfolder(freshCtx, { name });
-              sequenceNumberRef.current = result.newSequenceNumber;
-              folderChildrenRef.current = result.updatedChildren;
-              setCurrentSequenceNumber(result.newSequenceNumber);
-              setFolderChildren(result.updatedChildren);
-            },
-            async () => {
-              await resyncSharedFolder();
-            }
-          );
-        });
-      } catch (err) {
-        const message = (err as Error).message || 'Failed to create folder';
-        if (!message.includes('write access revoked')) {
-          setError(message);
-        }
-        logger.error('[SharedNav] Shared folder create failed:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
-  );
-
-  /**
-   * Rename an item in the currently-viewed write-shared folder.
-   * Delegates to SDK renameInSharedFolder.
-   */
-  const renameItemHandler = useCallback(
-    async (item: FolderChild, newName: string) => {
-      const swCtx = buildSharedWriteCtx();
-      if (!swCtx) {
-        setError('Write access not available');
-        return;
-      }
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        await withRevocationGuard(async () => {
-          await withConflictRetry(
-            async () => {
-              const freshCtx = {
-                ...swCtx,
-                children: folderChildrenRef.current,
-                sequenceNumber: sequenceNumberRef.current ?? 0n,
-              };
-              const result = await renameInSharedFolder(freshCtx, { itemId: item.id, newName });
-              sequenceNumberRef.current = result.newSequenceNumber;
-              folderChildrenRef.current = result.updatedChildren;
-              setCurrentSequenceNumber(result.newSequenceNumber);
-              setFolderChildren(result.updatedChildren);
-            },
-            async () => {
-              await resyncSharedFolder();
-            }
-          );
-        });
-      } catch (err) {
-        const message = (err as Error).message || 'Failed to rename';
-        if (!message.includes('write access revoked')) {
-          setError(message);
-        }
-        logger.error('[SharedNav] Shared folder rename failed:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
-  );
-
-  /**
-   * Update a file's content in the currently-viewed write-shared folder.
-   * Delegates to SDK updateSharedFile.
-   */
-  const updateSharedFileHandler = useCallback(
-    async (item: FilePointer, newContent: Uint8Array): Promise<void> => {
-      if (!folderKey) {
-        throw new Error('Folder key not available');
-      }
-
-      const auth = useAuthStore.getState();
-      if (!auth.vaultKeypair) {
-        throw new Error('No keypair available');
-      }
-
-      const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
-      if (!shareItem) {
-        throw new Error('Share not found');
-      }
-      const ownerPublicKey = parsePublicKey(shareItem.share.sharerPublicKey);
-
-      await withRevocationGuard(async () => {
-        await updateSharedFile({
-          ctx: {
-            apiUrl,
-            getAccessToken: async () => useAuthStore.getState().accessToken || '',
-            axiosInstance: apiAxios,
-          },
-          folderKey,
-          ownerPublicKey,
-          recipientPublicKey: auth.vaultKeypair!.publicKey,
-          shareId: currentShareId!,
-          addShareKeysFn: async (sid, keys) => {
-            await addShareKeys(sid, keys);
-            shareKeysCacheRef.current.invalidate(sid);
-          },
-          filePointer: item,
-          newContent,
-          getFileIpnsKeyFn: async (itemId: string) => {
-            // Try share_keys (file-ipns) by exact itemId match first.
-            // For standalone file shares, the synthetic FilePointer uses shareId as id
-            // (not the real file UUID), so exact match fails. Fall back to the sole
-            // file-ipns key only when this is a standalone file share (itemType === 'file').
-            const keys = await fetchShareKeys(currentShareId!);
-            const exactMatch = keys.find((k) => k.keyType === 'file-ipns' && k.itemId === itemId);
-            const ipnsKeyRecord =
-              exactMatch ??
-              (shareItem.share.itemType === 'file'
-                ? keys.find((k) => k.keyType === 'file-ipns')
-                : undefined);
-            if (ipnsKeyRecord) {
-              return unwrapKey(
-                hexToBytes(ipnsKeyRecord.encryptedKey),
-                auth.vaultKeypair!.privateKey
-              );
-            }
-            if (item.ipnsPrivateKeyEncrypted) {
-              try {
-                return await unwrapKey(
-                  hexToBytes(item.ipnsPrivateKeyEncrypted),
-                  auth.vaultKeypair!.privateKey
-                );
-              } catch {
-                return null;
-              }
-            }
-            return null;
-          },
-        });
-      });
-    },
-    [folderKey, currentShareId, sharedItems, withRevocationGuard]
-  );
-
-  /**
-   * Delete an item from the currently-viewed write-shared folder.
-   * Delegates to SDK deleteFromSharedFolder.
-   *
-   * PoC limitation: Simply removes the item from folder metadata.
-   * Full implementation would move to owner's recycle bin.
-   */
-  const deleteItemHandler = useCallback(
-    async (item: FolderChild) => {
-      const swCtx = buildSharedWriteCtx();
-      if (!swCtx) {
-        setError('Write access not available');
-        return;
-      }
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        await withRevocationGuard(async () => {
-          await withConflictRetry(
-            async () => {
-              const freshCtx = {
-                ...swCtx,
-                children: folderChildrenRef.current,
-                sequenceNumber: sequenceNumberRef.current ?? 0n,
-              };
-              const result = await deleteFromSharedFolder(freshCtx, { itemId: item.id });
-              sequenceNumberRef.current = result.newSequenceNumber;
-              folderChildrenRef.current = result.updatedChildren;
-              setCurrentSequenceNumber(result.newSequenceNumber);
-              setFolderChildren(result.updatedChildren);
-            },
-            async () => {
-              await resyncSharedFolder();
-            }
-          );
-        });
-      } catch (err) {
-        const message = (err as Error).message || 'Failed to delete';
-        if (!message.includes('write access revoked')) {
-          setError(message);
-        }
-        logger.error('[SharedNav] Shared folder delete failed:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
-  );
-
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Delegate to sub-hooks
+  // ---------------------------------------------------------------------------
+
+  const navActions = useSharedNavigationActions({
+    sharedItems,
+    folderChildren,
+    folderKey,
+    breadcrumbs,
+    currentShareId,
+    permission,
+    ipnsName,
+    currentSequenceNumber,
+    currentView,
+    folderChildrenRef,
+    sequenceNumberRef,
+    ipnsPrivateKeyRef,
+    navStackRef,
+    shareKeysCacheRef,
+    setCurrentView,
+    setCurrentShareId,
+    setFolderChildren,
+    setFolderKey,
+    setBreadcrumbs,
+    setPermission,
+    setIpnsName,
+    setCurrentSequenceNumber,
+    setIsLoading,
+    setError,
+    setSharedItems,
+    clearPolling,
+    zeroIpnsKey,
+    getShareKeys,
+  });
+
+  const writeOps = useSharedWriteOps({
+    currentShareId,
+    folderKey,
+    ipnsName,
+    currentSequenceNumber,
+    sharedItems,
+    folderChildrenRef,
+    sequenceNumberRef,
+    ipnsPrivateKeyRef,
+    shareKeysCacheRef,
+    setFolderChildren,
+    setCurrentSequenceNumber,
+    setPermission,
+    setIsLoading,
+    setError,
+    refreshFolderContents,
+    handleRevocation,
+  });
+
+  // ---------------------------------------------------------------------------
   // 30s sync polling for write shares
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    // Only poll when viewing a write-shared folder
     if (currentView !== 'folder' || permission !== 'write' || !ipnsName || !folderKey) {
       clearPolling();
       return;
     }
 
-    // Start 30s polling
     const currentIpnsName = ipnsName;
     const currentFolderKey = folderKey;
 
     pollIntervalRef.current = setInterval(async () => {
       try {
-        // Re-fetch received shares from API to detect permission changes
         const freshShares = await fetchReceivedShares(100, 0);
         const currentShare = freshShares.shares.find((s) => s.shareId === currentShareId);
 
-        // Check for silent revocation or permission downgrade
         if (!currentShare || currentShare.permission !== 'write') {
           useShareStore.getState().setReceivedShares(freshShares.shares);
           handleRevocation(false);
@@ -1124,10 +335,9 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           return;
         }
 
-        // Refresh folder contents
         await refreshFolderContents(currentIpnsName, currentFolderKey);
       } catch {
-        // Silent failure during polling -- don't disrupt the UI
+        // Silent failure during polling
       }
     }, 30000);
 
@@ -1145,6 +355,10 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     refreshFolderContents,
   ]);
 
+  // ---------------------------------------------------------------------------
+  // Return unified API
+  // ---------------------------------------------------------------------------
+
   return {
     currentView,
     currentShareId,
@@ -1158,17 +372,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     ipnsPrivateKey: ipnsPrivateKeyRef.current,
     ipnsName,
     currentSequenceNumber,
-    navigateToShare,
-    navigateToSubfolder,
-    navigateUp,
-    navigateToRoot,
-    navigateToBreadcrumb,
-    downloadSharedFile,
-    hideSharedItem,
-    uploadFile: uploadFileHandler,
-    createFolder: createFolderHandler,
-    renameItem: renameItemHandler,
-    deleteItem: deleteItemHandler,
-    updateSharedFile: updateSharedFileHandler,
+    ...navActions,
+    ...writeOps,
   };
 }
