@@ -304,6 +304,10 @@ pub mod implementation {
                         break;
                     }
                 }
+                // Early exit: resolution finished (failed) but inode still unresolved
+                if !fs.resolving_file_pointers.contains(&ino) {
+                    break;
+                }
                 if poll_start.elapsed() > max_wait {
                     log::warn!("FilePointer resolve poll timed out for ino {} after 5s", ino);
                     return Err(status_device_not_ready());
