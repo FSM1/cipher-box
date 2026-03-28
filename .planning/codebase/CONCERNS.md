@@ -44,7 +44,7 @@
 
 - Issue: 127 `console.error`/`console.warn`/`console.log` calls across 29 files in production web code instead of a structured logging abstraction.
 - Files: Top offenders: `apps/web/src/lib/web3auth/hooks.ts` (22 calls), `apps/web/src/services/bin.service.ts` (16 calls), `apps/web/src/hooks/useSharedNavigation.ts` (11 calls), `apps/web/src/components/file-browser/FileBrowser.tsx` (10 calls), `apps/web/src/hooks/useAuth.ts` (9 calls)
-- Impact: No log level filtering, no structured output, no ability to ship logs to an observability service. Debug logs leak into production.
+- Impact: No log level filtering, no structured output, no ability to ship logs to an observability service. Debug logs leak into staging.
 - Fix approach: Introduce a lightweight logging wrapper (e.g., `lib/logger.ts`) with level filtering. Replace all direct `console.*` calls.
 
 **Silenced unpin failures across the codebase:**
@@ -94,15 +94,15 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 - Risk: Kubo API endpoint has no built-in authentication. Anyone with network access to port 5001 can pin/unpin.
 - Files: `apps/api/src/ipfs/providers/local.provider.ts`
-- Current mitigation: Kubo API bound to localhost in dev. Docker network isolation in staging/production.
-- Recommendations: Use reverse proxy with auth or Kubo's API access controls for production.
+- Current mitigation: Kubo API bound to localhost in dev. Docker network isolation in staging.
+- Recommendations: Use reverse proxy with auth or Kubo's API access controls before production deployment.
 
 **Test login endpoint available in staging:**
 
 - Risk: `POST /auth/test-login` bypasses all real authentication. Available when `TEST_LOGIN_SECRET` is set and `NODE_ENV !== 'production'`.
 - Files: `apps/api/src/auth/` (test-auth service)
 - Current mitigation: Guarded by `NODE_ENV` check and requires knowing the secret.
-- Recommendations: Ensure CI/CD never sets `TEST_LOGIN_SECRET` in production. Add monitoring alert for staging usage.
+- Recommendations: Ensure `TEST_LOGIN_SECRET` is never set when a production environment is deployed. Add monitoring alert for staging usage.
 
 ## Performance Bottlenecks
 
@@ -160,7 +160,7 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 **Delegated routing dependency:**
 
 - Files: `apps/api/src/ipns/delegated-routing.client.ts`
-- Why fragile: Staging uses self-hosted Someguy sidecar. Production relies on delegated-ipfs.dev (public, no SLA).
+- Why fragile: Staging uses self-hosted Someguy sidecar. Production environment not yet deployed — planned to use delegated-ipfs.dev (public, no SLA) unless Someguy is deployed there too.
 - Safe modification: Client has retry with exponential backoff (3 retries, 1s base delay, 30s cap). The `DELEGATED_ROUTING_URL` env var controls which endpoint is used.
 - Test coverage: Unit tests at `apps/api/src/ipns/delegated-routing.client.spec.ts` cover retry logic. No integration tests against real service.
 
@@ -208,9 +208,9 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 **Delegated routing service availability:**
 
-- Risk: Production uses delegated-ipfs.dev (no SLA). Recovery tool uses it directly from the browser.
-- Impact: Service downtime = no IPNS publishing/resolving. DB-cached CID fallback exists for resolution.
-- Migration plan: Deploy Someguy to production (same pattern as staging). Recovery tool could accept configurable routing endpoint.
+- Risk: Staging uses self-hosted Someguy sidecar. Recovery tool uses delegated-ipfs.dev (public, no SLA) directly from the browser. A future production environment would need a reliable routing solution.
+- Impact: Someguy downtime = no IPNS publishing/resolving on staging. DB-cached CID fallback exists for resolution.
+- Migration plan: Deploy Someguy to production when it exists (same pattern as staging). Recovery tool could accept configurable routing endpoint.
 
 **Web3Auth MPC Core Kit (@web3auth/mpc-core-kit@^3.5.0):**
 
@@ -240,7 +240,7 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 **No monitoring/observability (web app):**
 
 - Problem: Web app has no error tracking service (Sentry, etc.). Errors are logged to `console.error` and lost (127 occurrences across 29 files).
-- Blocks: Cannot detect or diagnose production issues. API has Prometheus metrics (`apps/api/src/metrics/`) but web has nothing.
+- Blocks: Cannot detect or diagnose issues in staging or any future deployed environment. API has Prometheus metrics (`apps/api/src/metrics/`) but web has nothing.
 
 ## Test Coverage Gaps
 
