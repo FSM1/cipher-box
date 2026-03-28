@@ -42,6 +42,7 @@ export function getDepth(folderId: string | null, folders: Record<string, TreeNo
  * @returns Maximum depth relative to folderId (0 if no children)
  */
 export function calculateSubtreeDepth(folderId: string, folders: Record<string, TreeNode>): number {
+  if (!folders[folderId]) return 0;
   let maxDepth = 0;
   for (const [id, node] of Object.entries(folders)) {
     if (id === folderId) continue;

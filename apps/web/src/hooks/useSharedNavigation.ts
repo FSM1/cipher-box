@@ -155,7 +155,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       zeroIpnsKey();
       setPermission('read');
       if (showError) {
-        setError('> write access revoked -- folder is now read-only');
+        setError('Write access revoked. Folder is now read-only.');
       }
     },
     [zeroIpnsKey]

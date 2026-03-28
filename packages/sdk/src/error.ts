@@ -54,7 +54,7 @@ export async function withRevocationGuard<T>(
   } catch (err) {
     if (isForbiddenError(err)) {
       onRevoked();
-      throw new Error('> write access revoked -- folder is now read-only');
+      throw new Error('Write access revoked. Folder is now read-only.', { cause: err });
     }
     throw err;
   }
