@@ -4,6 +4,7 @@ import { Modal } from '../ui/Modal';
 import { useFilePreview } from '../../hooks/useFilePreview';
 import { useStreamingPreview } from '../../hooks/useStreamingPreview';
 import '../../styles/audio-player-dialog.css';
+import { logger } from '../../lib/logger';
 
 type AudioPlayerDialogProps = {
   open: boolean;
@@ -161,7 +162,7 @@ export function AudioPlayerDialog({
       source.connect(analyser);
       analyser.connect(ctx.destination);
     } catch (err) {
-      console.warn('Web Audio API setup failed:', err);
+      logger.warn('Web Audio API setup failed:', err);
     }
 
     return () => {

@@ -15,6 +15,7 @@ import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
 import type { FilePointer } from '@cipherbox/core';
 import { getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
+import { logger } from '../lib/logger';
 
 /**
  * React hook for file version management operations (restore, delete).
@@ -133,7 +134,7 @@ export function useFileVersions() {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
             })
             .catch((err) => {
-              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+              logger.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
             });
         }
 
@@ -253,7 +254,7 @@ export function useFileVersions() {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
             })
             .catch((err) => {
-              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+              logger.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
             });
         }
 

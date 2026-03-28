@@ -32,6 +32,7 @@ import { wrapKey, bytesToHex, hexToBytes, generateRandomBytes } from '@cipherbox
 import type { ReceivedShare, SentShare } from '../stores/share.store';
 import { useShareStore } from '../stores/share.store';
 import type { FolderNode } from '../stores/folder.store';
+import { logger } from '../lib/logger';
 
 /**
  * Fetch active, non-hidden shares received by the current user (paginated).
@@ -356,7 +357,7 @@ export async function reWrapForRecipients(params: {
       // Add the wrapped keys to this share via API
       await addShareKeys(share.shareId, wrappedKeys);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[share] Failed to re-wrap keys for recipient ${share.recipientPublicKey.slice(0, 10)}...:`,
         err
       );
@@ -474,7 +475,7 @@ export async function executeLazyRotation(params: {
       const wrapped = await wrapKey(newFolderKey, recipientPubKey);
       await updateShareKey(share.shareId, bytesToHex(wrapped));
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[share] Failed to update share key for remaining recipient ${share.recipientPublicKey.slice(0, 10)}...:`,
         err
       );
@@ -495,7 +496,7 @@ export async function executeLazyRotation(params: {
     try {
       await completeShareRotation(revoked.shareId);
     } catch (err) {
-      console.warn(`[share] Failed to complete rotation for share ${revoked.shareId}:`, err);
+      logger.warn(`[share] Failed to complete rotation for share ${revoked.shareId}:`, err);
     }
   }
 

@@ -4,6 +4,7 @@ import { useAuthStore } from '../stores/auth.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { initializeBin, purgeExpired } from '../services/bin.service';
 import type { BinEntry } from '@cipherbox/core';
+import { logger } from '../lib/logger';
 
 /**
  * React hook for recycle bin operations.
@@ -56,7 +57,7 @@ export function useBin() {
         userPublicKey: auth.vaultKeypair.publicKey,
         userPrivateKey: auth.vaultKeypair.privateKey,
       }).catch(() => {
-        console.error('[useBin] Auto-purge failed (non-blocking)');
+        logger.error('[useBin] Auto-purge failed (non-blocking)');
       });
 
       setState({ isLoading: false, error: null });

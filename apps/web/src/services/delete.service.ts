@@ -1,5 +1,6 @@
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import { useQuotaStore } from '../stores/quota.store';
+import { logger } from '../lib/logger';
 
 /**
  * Deletes a file by unpinning from IPFS and updating quota.
@@ -44,7 +45,7 @@ export async function deleteFiles(
       await deleteFile(file.cid, file.size);
       succeeded.push(file.cid);
     } catch (error) {
-      console.error(`Failed to delete ${file.cid}:`, error);
+      logger.error(`Failed to delete ${file.cid}:`, error);
       failed.push(file.cid);
     }
   }

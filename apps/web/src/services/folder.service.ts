@@ -37,6 +37,7 @@ import { isConflictError } from '../lib/errors';
 import { useAuthStore } from '../stores/auth.store';
 import type { FolderNode } from '../stores/folder.store';
 import type { FileIpnsRecordPayload } from './file-metadata.service';
+import { logger } from '../lib/logger';
 
 /** Maximum folder nesting depth per FOLD-03 */
 const MAX_FOLDER_DEPTH = 20;
@@ -107,7 +108,7 @@ export async function loadFolder(
   // 2. If IPNS resolution returns null, return unloaded folder so it can be retried
   //    This handles newly-created subfolders whose IPNS hasn't propagated yet
   if (!resolved) {
-    console.warn(
+    logger.warn(
       `IPNS resolution returned null for folder "${name}" (${ipnsName}). Marking as not loaded for retry.`
     );
     return {
@@ -512,7 +513,7 @@ export async function deleteFileFromFolder(params: {
   // 5. TEE unenrollment: no API endpoint available yet.
   // TODO: Phase 14 should expose unenrollIpns via REST API.
   if (fileMetaIpnsName) {
-    console.warn(
+    logger.warn(
       `File IPNS record ${fileMetaIpnsName} orphaned after deletion. TEE unenrollment deferred to Phase 14.`
     );
   }
@@ -578,7 +579,7 @@ export async function addFileToFolder(params: {
   ]);
 
   if (publishResult.totalFailed > 0) {
-    console.error(
+    logger.error(
       `Batch publish partial failure: ${publishResult.totalFailed}/${publishResult.totalFailed + publishResult.totalSucceeded} records failed`
     );
     throw new Error('Failed to publish one or more IPNS records');
@@ -653,7 +654,7 @@ export async function addFilesToFolder(params: {
   const publishResult = await batchPublishIpnsRecords(allRecords);
 
   if (publishResult.totalFailed > 0) {
-    console.error(
+    logger.error(
       `Batch publish partial failure: ${publishResult.totalFailed}/${publishResult.totalFailed + publishResult.totalSucceeded} records failed`
     );
     throw new Error('Failed to publish one or more IPNS records');
@@ -1020,7 +1021,7 @@ export async function checkAndRotateIfNeeded(params: {
   const auth = useAuthStore.getState();
   if (!auth.vaultKeypair) {
     // Cannot rotate without owner's keypair -- skip rotation, use existing key
-    console.warn('[share] Cannot perform lazy rotation: no vault keypair available');
+    logger.warn('[share] Cannot perform lazy rotation: no vault keypair available');
     return { folderKey: folderNode.folderKey, rotated: false };
   }
 
@@ -1039,7 +1040,7 @@ export async function checkAndRotateIfNeeded(params: {
     // IPNS resolution failed after rotation was committed (share keys already re-wrapped,
     // revoked shares hard-deleted). Metadata is still encrypted with the old key.
     // Throw so the caller doesn't proceed with the new key in an inconsistent state.
-    console.error(
+    logger.error(
       `[share] IPNS resolution failed after lazy rotation for ${folderNode.ipnsName}. ` +
         'Share keys were updated but metadata was not re-encrypted.'
     );
@@ -1070,7 +1071,7 @@ export async function checkAndRotateIfNeeded(params: {
       // Metadata publish failed due to concurrent modification. On next sync
       // the folder will be re-read with fresh state; checkAndRotateIfNeeded
       // will detect the still-pending rotation and retry re-encryption then.
-      console.warn(
+      logger.warn(
         `[share] Conflict during lazy rotation metadata publish for ${folderNode.ipnsName}. ` +
           'Will retry on next sync cycle.'
       );

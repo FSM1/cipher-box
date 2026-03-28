@@ -39,6 +39,7 @@ import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useQuotaStore } from '../stores/quota.store';
 import type { FolderNode } from '../stores/folder.store';
+import { logger } from '../lib/logger';
 
 // Track whether TEE enrollment has been done for this session
 let binTeeEnrolled = false;
@@ -108,7 +109,7 @@ async function saveBinMetadata(params: {
         encryptedIpnsKey = bytesToHex(wrappedKey);
         keyEpoch = teeKeys.currentEpoch;
       } catch (err) {
-        console.error('[Bin] TEE enrollment failed (non-blocking):', err);
+        logger.error('[Bin] TEE enrollment failed (non-blocking):', err);
       }
     }
   }
@@ -170,7 +171,7 @@ export async function initializeBin(params: {
       store.setEntries([], 0);
     }
   } catch (error) {
-    console.error('[Bin] Failed to initialize bin:', error);
+    logger.error('[Bin] Failed to initialize bin:', error);
     store.setError(error instanceof Error ? error.message : 'Failed to initialize bin');
     store.setLoading(false);
   }
@@ -202,7 +203,7 @@ async function enrichBinEntryWithFileMetadata(
         .map((v) => ({ cid: v.cid, size: v.size ?? 0 }));
     }
   } catch (err) {
-    console.warn('[Bin] Failed to resolve file CID for bin entry (non-blocking):', err);
+    logger.warn('[Bin] Failed to resolve file CID for bin entry (non-blocking):', err);
   }
 }
 
@@ -268,7 +269,7 @@ export async function addToBin(params: {
     await saveBinMetadata({ metadata, userPublicKey, userPrivateKey });
     store.setEntries(currentEntries, newSeq);
   } catch {
-    console.error('[Bin] addToBin publish failed (non-blocking)');
+    logger.error('[Bin] addToBin publish failed (non-blocking)');
   }
 }
 
@@ -333,7 +334,7 @@ export async function addManyToBin(params: {
     await saveBinMetadata({ metadata, userPublicKey, userPrivateKey });
     store.setEntries(currentEntries, newSeq);
   } catch {
-    console.error('[Bin] addManyToBin publish failed (non-blocking)');
+    logger.error('[Bin] addManyToBin publish failed (non-blocking)');
   }
 }
 
@@ -491,7 +492,7 @@ export async function restoreFromBinBatch(params: {
 
       restoredIds.push(entryId);
     } catch (err) {
-      console.error(`[Bin] Failed to restore entry ${entry.id}:`, err);
+      logger.error(`[Bin] Failed to restore entry ${entry.id}:`, err);
     }
   }
 
@@ -555,7 +556,7 @@ export async function permanentlyDeleteBatch(params: {
     try {
       await cleanupEntryCids(entry, userPrivateKey);
     } catch (err) {
-      console.error(`[Bin] CID cleanup failed for entry ${entry.id}:`, err);
+      logger.error(`[Bin] CID cleanup failed for entry ${entry.id}:`, err);
     }
   }
 
@@ -586,7 +587,7 @@ export async function emptyBin(params: {
     try {
       await cleanupEntryCids(entry, userPrivateKey);
     } catch (err) {
-      console.error(`[Bin] Failed to cleanup CIDs for entry ${entry.id}:`, err);
+      logger.error(`[Bin] Failed to cleanup CIDs for entry ${entry.id}:`, err);
     }
   }
 
@@ -628,14 +629,14 @@ export async function purgeExpired(params: {
   const expired = binStore.entries.filter((e) => now - e.deletedAt > retentionMs);
   if (expired.length === 0) return;
 
-  console.log(`[Bin] Purging ${expired.length} expired entries`);
+  logger.info(`[Bin] Purging ${expired.length} expired entries`);
 
   // Cleanup CIDs for expired entries (best-effort)
   for (const entry of expired) {
     try {
       await cleanupEntryCids(entry, userPrivateKey);
     } catch (err) {
-      console.error(`[Bin] Failed to cleanup CIDs for expired entry ${entry.id}:`, err);
+      logger.error(`[Bin] Failed to cleanup CIDs for expired entry ${entry.id}:`, err);
     }
   }
 
@@ -747,7 +748,7 @@ async function unpinFileCids(entry: BinEntry): Promise<void> {
 
     await unpinFromIpfs(resolved.cid).catch(() => {});
   } catch (err) {
-    console.error(`[Bin] CID cleanup failed for file ${entry.id}:`, err);
+    logger.error(`[Bin] CID cleanup failed for file ${entry.id}:`, err);
   }
 }
 
@@ -831,11 +832,11 @@ async function cleanupFolderCids(
           await cleanupFolderCids(subFe, userPrivateKey);
         }
       } catch (childErr) {
-        console.error(`[Bin] Failed to cleanup CIDs for child ${child.name}:`, childErr);
+        logger.error(`[Bin] Failed to cleanup CIDs for child ${child.name}:`, childErr);
       }
     }
   } catch (err) {
-    console.error(`[Bin] Folder CID cleanup failed for ${folderEntry.ipnsName}:`, err);
+    logger.error(`[Bin] Folder CID cleanup failed for ${folderEntry.ipnsName}:`, err);
   } finally {
     // Always unpin the folder metadata CID, even if child cleanup threw
     if (folderMetadataCid) {
@@ -858,7 +859,7 @@ async function resolveTargetFolder(
 ): Promise<FolderNode> {
   // Max recursion depth to prevent infinite loops
   if (depth > 5) {
-    console.warn('[Bin] Max restore depth reached, falling back to root');
+    logger.warn('[Bin] Max restore depth reached, falling back to root');
     return getRootFolder();
   }
 
@@ -878,7 +879,7 @@ async function resolveTargetFolder(
 
   if (parentBinEntry) {
     // Restore parent first (recursive, depth incremented)
-    console.log(`[Bin] Restoring parent folder (id: ${parentBinEntry.id}) first`);
+    logger.debug(`[Bin] Restoring parent folder (id: ${parentBinEntry.id}) first`);
     await restoreFromBinInternal(
       {
         entryId: parentBinEntry.id,
@@ -897,7 +898,7 @@ async function resolveTargetFolder(
   }
 
   // Parent truly gone -- restore to root
-  console.warn(`[Bin] Original parent not found (${parentIpnsName}), restoring to root`);
+  logger.warn(`[Bin] Original parent not found (${parentIpnsName}), restoring to root`);
   return getRootFolder();
 }
 

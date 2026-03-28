@@ -50,6 +50,7 @@ import { downloadFile, triggerBrowserDownload } from '../services/download.servi
 import { useDownloadStore } from '../stores/download.store';
 import { withConflictRetry } from './folder-helpers';
 import { apiAxios, apiUrl } from '../lib/api-config';
+import { logger } from '../lib/logger';
 
 /**
  * Breadcrumb entry for shared navigation.
@@ -281,7 +282,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setSharedItems(items);
       } catch (err) {
         if (cancelled) return;
-        console.error('Failed to load shared items:', err);
+        logger.error('Failed to load shared items:', err);
         setError('Failed to load shared items');
       } finally {
         if (!cancelled) {
@@ -376,7 +377,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
                 );
                 ipnsPrivateKeyRef.current = ipnsPrivKey;
               } catch (err) {
-                console.error('Failed to unwrap IPNS key for write share:', err);
+                logger.error('Failed to unwrap IPNS key for write share:', err);
                 // Fall back to read-only if IPNS key unwrap fails
               }
             }
@@ -412,7 +413,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
                 );
                 ipnsPrivateKeyRef.current = ipnsPrivKey;
               } catch (err) {
-                console.error('Failed to unwrap IPNS key for write file share:', err);
+                logger.error('Failed to unwrap IPNS key for write file share:', err);
               }
             }
 
@@ -429,7 +430,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           }
         }
       } catch (err) {
-        console.error('Failed to navigate to shared item:', err);
+        logger.error('Failed to navigate to shared item:', err);
         setError('Failed to open shared item');
       } finally {
         setIsLoading(false);
@@ -542,7 +543,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           if (!subfolderKeyStored) subfolderKey.fill(0);
         }
       } catch (err) {
-        console.error('Failed to navigate to subfolder:', err);
+        logger.error('Failed to navigate to subfolder:', err);
         setError('Failed to open subfolder');
       } finally {
         setIsLoading(false);
@@ -757,7 +758,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       } catch (err) {
         const message = (err as Error).message || 'Download failed';
         downloadStore.setError(message);
-        console.error('Shared file download failed:', err);
+        logger.error('Shared file download failed:', err);
       }
     },
     [currentShareId, folderKey, getShareKeys]
@@ -772,7 +773,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       useShareStore.getState().removeReceivedShare(shareId);
       setSharedItems((prev) => prev.filter((s) => s.share.shareId !== shareId));
     } catch (err) {
-      console.error('Failed to hide share:', err);
+      logger.error('Failed to hide share:', err);
       setError('Failed to hide shared item');
     }
   }, []);
@@ -897,7 +898,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         if (!message.includes('write access revoked')) {
           setError(message);
         }
-        console.error('Shared folder upload failed:', err);
+        logger.error('Shared folder upload failed:', err);
       } finally {
         setIsLoading(false);
       }
@@ -945,7 +946,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         if (!message.includes('write access revoked')) {
           setError(message);
         }
-        console.error('Shared folder create failed:', err);
+        logger.error('Shared folder create failed:', err);
       } finally {
         setIsLoading(false);
       }
@@ -993,7 +994,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         if (!message.includes('write access revoked')) {
           setError(message);
         }
-        console.error('Shared folder rename failed:', err);
+        logger.error('Shared folder rename failed:', err);
       } finally {
         setIsLoading(false);
       }
@@ -1118,7 +1119,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         if (!message.includes('write access revoked')) {
           setError(message);
         }
-        console.error('Shared folder delete failed:', err);
+        logger.error('Shared folder delete failed:', err);
       } finally {
         setIsLoading(false);
       }

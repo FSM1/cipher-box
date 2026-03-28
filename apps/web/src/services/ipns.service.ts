@@ -13,6 +13,7 @@ import {
   ipnsControllerResolveRecord,
 } from '@cipherbox/api-client';
 import type { PublishIpnsEntryDtoRecordType } from '@cipherbox/api-client';
+import { logger } from '../lib/logger';
 
 /**
  * Create an IPNS record locally and publish via backend.
@@ -160,7 +161,7 @@ export async function resolveIpnsRecord(
       }
       signatureVerified = true;
     } else {
-      console.warn('IPNS resolve returned without signature data, skipping verification');
+      logger.warn('IPNS resolve returned without signature data, skipping verification');
     }
 
     return {

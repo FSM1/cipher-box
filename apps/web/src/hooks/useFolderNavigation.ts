@@ -6,6 +6,7 @@ import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
 import { loadFolder } from '../services/folder.service';
+import { logger } from '../lib/logger';
 
 /**
  * Breadcrumb entry for navigation.
@@ -192,7 +193,7 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       }
 
       if (!folderEntry) {
-        console.error(
+        logger.error(
           `Cannot load folder ${targetFolderId}: no parent with its FolderEntry is loaded`
         );
         return;
@@ -201,7 +202,7 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       // Get user's ECIES private key for unwrapping
       const vaultKeypair = useAuthStore.getState().vaultKeypair;
       if (!vaultKeypair) {
-        console.error('Cannot load folder: no vault keypair available');
+        logger.error('Cannot load folder: no vault keypair available');
         return;
       }
 
@@ -265,7 +266,7 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
 
         useFolderStore.getState().setFolder(folderNode!);
       } catch (err) {
-        console.error('Failed to load subfolder:', err);
+        logger.error('Failed to load subfolder:', err);
         // Only clean up if this is still the latest navigation
         if (latestNavTarget.current !== targetFolderId) return;
         // Remove the loading placeholder and navigate back to parent.

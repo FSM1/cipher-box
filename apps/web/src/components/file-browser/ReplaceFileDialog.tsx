@@ -6,6 +6,7 @@ import { useFileOperations } from '../../hooks/useFileOperations';
 import { unpinFromIpfs } from '../../lib/api/ipfs';
 import { useQuotaStore } from '../../stores/quota.store';
 import '../../styles/dialogs.css';
+import { logger } from '../../lib/logger';
 
 type ReplaceFileDialogProps = {
   replacements: PendingReplacement[];
@@ -48,7 +49,7 @@ export function ReplaceFileDialog({ replacements, onComplete }: ReplaceFileDialo
       });
       advance();
     } catch (err) {
-      console.error('[replace] Failed to replace file:', err);
+      logger.error('[replace] Failed to replace file:', err);
       // Clean up orphaned pin + quota on failure
       void unpinFromIpfs(current.encryptedData.cid).catch(() => {});
       useQuotaStore.getState().removeUsage(current.encryptedData.size);

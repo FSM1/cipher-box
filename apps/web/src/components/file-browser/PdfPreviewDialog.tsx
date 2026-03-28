@@ -5,6 +5,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { Modal } from '../ui/Modal';
 import { useFilePreview } from '../../hooks/useFilePreview';
 import '../../styles/pdf-preview-dialog.css';
+import { logger } from '../../lib/logger';
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -90,7 +91,7 @@ export function PdfPreviewDialog({
         setPdfLoading(false);
       } catch (err) {
         if (cancelled) return;
-        console.error('Failed to load PDF:', err);
+        logger.error('Failed to load PDF:', err);
         setPdfLoading(false);
       }
     })();
@@ -126,7 +127,7 @@ export function PdfPreviewDialog({
           await page.render({ canvas, viewport }).promise;
         }
       } catch (err) {
-        console.error('Failed to render PDF pages:', err);
+        logger.error('Failed to render PDF pages:', err);
       } finally {
         renderingRef.current = false;
         if (pendingRenderRef.current) {

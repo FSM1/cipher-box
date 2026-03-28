@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { triggerBrowserDownload } from '../services/download.service';
 import { useDownloadStore } from '../stores/download.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
+import { logger } from '../lib/logger';
 
 export function useFileDownload() {
   const {
@@ -53,7 +54,7 @@ export function useFileDownload() {
       } catch (err) {
         const message = (err as Error).message || 'Download failed';
         setError(message);
-        console.error('Download failed:', err);
+        logger.error('Download failed:', err);
         throw err;
       }
     },
