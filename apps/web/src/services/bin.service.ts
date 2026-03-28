@@ -715,7 +715,9 @@ async function unpinFileCids(entry: BinEntry): Promise<void> {
       if (entry.filePointer) {
         const resolved = await resolveIpnsRecord(entry.filePointer.fileMetaIpnsName);
         if (resolved?.cid) {
-          await unpinFromIpfs(resolved.cid).catch(() => {});
+          await unpinFromIpfs(resolved.cid).catch((err) =>
+            logger.warn('[Bin] Unpin file metadata CID failed:', err)
+          );
         }
       }
       return;
@@ -746,7 +748,9 @@ async function unpinFileCids(entry: BinEntry): Promise<void> {
     }
     await unpinVersionCids(fileMeta);
 
-    await unpinFromIpfs(resolved.cid).catch(() => {});
+    await unpinFromIpfs(resolved.cid).catch((err) =>
+      logger.warn('[Bin] Unpin resolved CID failed:', err)
+    );
   } catch (err) {
     logger.error(`[Bin] CID cleanup failed for file ${entry.id}:`, err);
   }
@@ -824,7 +828,9 @@ async function cleanupFolderCids(
             // Unpin any historical version CIDs
             await unpinVersionCids(fileMeta);
             // Also unpin the file metadata CID
-            await unpinFromIpfs(fileResolved.cid).catch(() => {});
+            await unpinFromIpfs(fileResolved.cid).catch((err) =>
+              logger.warn('[Bin] Unpin file metadata CID failed:', err)
+            );
           }
         } else if (child.type === 'folder') {
           // Subfolder: folderKeyEncrypted is ECIES-wrapped with the user's publicKey
@@ -840,7 +846,9 @@ async function cleanupFolderCids(
   } finally {
     // Always unpin the folder metadata CID, even if child cleanup threw
     if (folderMetadataCid) {
-      await unpinFromIpfs(folderMetadataCid).catch(() => {});
+      await unpinFromIpfs(folderMetadataCid).catch((err) =>
+        logger.warn('[Bin] Unpin folder metadata CID failed:', err)
+      );
     }
   }
 }

@@ -485,7 +485,9 @@ export function useFileOperations() {
         // 9. Only unpin CIDs of pruned versions (excess beyond max 10)
         // Old CIDs stay pinned as version history (VER-01)
         for (const prunedCid of prunedCids) {
-          unpinFromIpfs(prunedCid).catch(() => {});
+          unpinFromIpfs(prunedCid).catch((err) =>
+            logger.warn('[FileOps] Unpin pruned CID failed:', err)
+          );
         }
 
         // Refresh quota

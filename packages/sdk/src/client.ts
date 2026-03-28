@@ -1069,7 +1069,9 @@ export class CipherBoxClient {
         );
       }
       // PSA accepted the pin request -- unpin from CipherBox (async, best-effort)
-      sdkCore.unpinFromIpfs(ctx, relayResult.cid).catch(() => {});
+      sdkCore
+        .unpinFromIpfs(ctx, relayResult.cid)
+        .catch((err) => console.warn('[SDK] Unpin from CipherBox after PSA pin failed:', err));
       // Register CID for advisory tracking (best-effort)
       try {
         await sdkCore.registerCid(ctx, relayResult.cid, relayResult.size);

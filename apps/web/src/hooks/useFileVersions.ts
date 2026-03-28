@@ -140,7 +140,9 @@ export function useFileVersions() {
 
         // Unpin pruned version CIDs
         for (const prunedCid of prunedCids) {
-          unpinFromIpfs(prunedCid).catch(() => {});
+          unpinFromIpfs(prunedCid).catch((err) =>
+            logger.warn('[Versions] Unpin pruned CID failed:', err)
+          );
         }
 
         // Refresh quota
@@ -259,7 +261,9 @@ export function useFileVersions() {
         }
 
         // Unpin deleted version CID
-        unpinFromIpfs(deletedCid).catch(() => {});
+        unpinFromIpfs(deletedCid).catch((err) =>
+          logger.warn('[Versions] Unpin deleted CID failed:', err)
+        );
 
         // Refresh quota
         useQuotaStore.getState().fetchQuota();

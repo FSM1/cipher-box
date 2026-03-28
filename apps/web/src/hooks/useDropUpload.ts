@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { logger } from '../lib/logger';
 import { useUploadStore } from '../stores/upload.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { useFolderStore } from '../stores/folder.store';
@@ -204,10 +205,12 @@ export function useDropUpload() {
         import('../lib/api/ipfs')
           .then(({ unpinFromIpfs }) => {
             for (const cid of uploadedCids) {
-              unpinFromIpfs(cid).catch(() => {});
+              unpinFromIpfs(cid).catch((err) =>
+                logger.warn('[Upload] Unpin orphaned CID failed:', err)
+              );
             }
           })
-          .catch(() => {});
+          .catch((err) => logger.warn('[Upload] Failed to load IPFS module for cleanup:', err));
       }
       return false;
     } finally {

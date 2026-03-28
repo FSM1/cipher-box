@@ -123,7 +123,9 @@ export function AudioPlayerDialog({
         audioRef.current = null;
       }
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current
+          .close()
+          .catch((err) => logger.warn('[Audio] AudioContext close failed:', err));
       }
       audioContextRef.current = null;
       analyserRef.current = null;
@@ -178,7 +180,9 @@ export function AudioPlayerDialog({
       audio.src = '';
 
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current
+          .close()
+          .catch((err) => logger.warn('[Audio] AudioContext close failed:', err));
       }
       audioContextRef.current = null;
       analyserRef.current = null;
