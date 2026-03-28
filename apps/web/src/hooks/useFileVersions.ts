@@ -15,6 +15,7 @@ import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
 import type { FilePointer } from '@cipherbox/core';
 import { getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
+import { logger } from '../lib/logger';
 
 /**
  * React hook for file version management operations (restore, delete).
@@ -133,13 +134,18 @@ export function useFileVersions() {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
             })
             .catch((err) => {
-              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+              logger.warn(
+                '[Versions] Lazy IPNS key migration: folder re-publish failed, will retry:',
+                err
+              );
             });
         }
 
         // Unpin pruned version CIDs
         for (const prunedCid of prunedCids) {
-          unpinFromIpfs(prunedCid).catch(() => {});
+          unpinFromIpfs(prunedCid).catch((err) =>
+            logger.warn('[Versions] Unpin pruned CID failed:', err)
+          );
         }
 
         // Refresh quota
@@ -253,12 +259,17 @@ export function useFileVersions() {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
             })
             .catch((err) => {
-              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+              logger.warn(
+                '[Versions] Lazy IPNS key migration: folder re-publish failed, will retry:',
+                err
+              );
             });
         }
 
         // Unpin deleted version CID
-        unpinFromIpfs(deletedCid).catch(() => {});
+        unpinFromIpfs(deletedCid).catch((err) =>
+          logger.warn('[Versions] Unpin deleted CID failed:', err)
+        );
 
         // Refresh quota
         useQuotaStore.getState().fetchQuota();

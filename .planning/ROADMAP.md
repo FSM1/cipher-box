@@ -29,7 +29,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 24: Bug Fixes & Test Infrastructure** - Fix known bugs (bin IPNS 404, device registry format error) and strengthen test infrastructure (headless load tests, vault recovery E2E, load test auth refresh) (completed 2026-03-25)
 - [x] **Phase 25: Desktop Enhancements** - Desktop auto-update mechanism and TEE file enrollment for new files (completed 2026-03-25)
 - [x] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX (completed 2026-03-26)
-- [ ] **Phase 28: Code Hygiene & Logging** - Structured logger wrapper, replace 127 console calls (log/warn/error), fix silenced unpin failures, clean any casts, archive legacy POC
+- [x] **Phase 28: Code Hygiene & Logging** - Structured logger wrapper, replace 124 console.\* calls, fix silenced unpin failures, clean any casts, archive legacy POC (completed 2026-03-28)
 - [ ] **Phase 29: Infrastructure Hardening** - Wire up IPNS unenrollment on deletion, test login endpoint hardening, IPFS node access control
 - [ ] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (NEEDS DISCUSSION)
 - [ ] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (NEEDS DISCUSSION)
@@ -282,7 +282,12 @@ Plans:
 3. All `as any` casts in production web code are replaced with typed alternatives (except acceptable polyfill shims)
 4. `00-Preliminary-R&D/poc/` is archived (moved to branch or deleted) and no longer pollutes searches
 
-**Plans**: TBD
+**Plans**:
+
+- [x] 28-01-PLAN.md -- Structured logger wrapper and console.\* replacement across 28 files
+- [x] 28-02-PLAN.md -- Fix silenced .catch empty-block patterns on unpin calls
+- [x] 28-03-PLAN.md -- Eliminate as-any casts with proper type declarations
+- [x] 28-04-PLAN.md -- Archive legacy POC directory
 
 ### Phase 29: Infrastructure Hardening
 
@@ -356,25 +361,32 @@ Plans:
 **Execution Order:**
 Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32
 
-| Phase                                     | Milestone | Plans Complete | Status      | Completed  |
-| ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
-| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
-| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
-| 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
-| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete    | 2026-03-25 |
-| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete    | 2026-03-25 |
-| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
-| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete    | 2026-03-25 |
-| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete    | 2026-03-25 |
-| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete    | 2026-03-26 |
-| 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete    | 2026-03-26 |
-| 28. Code Hygiene & Logging                | v1.1      | 0/TBD          | Not started | -          |
-| 29. Infrastructure Hardening              | v1.1      | 0/3            | Not started | -          |
-| 30. Web App Observability                 | v1.1      | 0/TBD          | Not started | -          |
-| 31. Structural Decomposition              | v1.1      | 0/TBD          | Not started | -          |
-| 32. FUSE Async FilePointer Resolution     | v1.1      | 0/TBD          | Not started | -          |
+| Phase                                     | Milestone | Plans Complete | Status   | Completed  |
+| ----------------------------------------- | --------- | -------------- | -------- | ---------- |
+| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete | 2026-03-07 |
+| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete | 2026-03-20 |
+| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete | 2026-03-23 |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete | 2026-03-25 |
+| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete | 2026-03-24 |
+| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete | 2026-03-26 |
+| 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete | 2026-03-26 |
+
+<<<<<<< HEAD
+| 28. Code Hygiene & Logging | v1.1 | 0/TBD | Not started | - |
+| 29. Infrastructure Hardening | v1.1 | 0/3 | Not started | - |
+=======
+| 28. Code Hygiene & Logging | v1.1 | 4/4 | Complete | 2026-03-28 |
+| 29. Infrastructure Hardening | v1.1 | 0/TBD | Not started | - |
+
+> > > > > > > origin/main
+> > > > > > > | 30. Web App Observability | v1.1 | 0/TBD | Not started | - |
+> > > > > > > | 31. Structural Decomposition | v1.1 | 0/TBD | Not started | - |
+> > > > > > > | 32. FUSE Async FilePointer Resolution | v1.1 | 0/TBD | Not started | - |
 
 ### Phase 27: Writable Shares (PoC)
 

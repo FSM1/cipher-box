@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { getCoreKit, initCoreKit, COREKIT_STATUS } from './core-kit';
 import type { Web3AuthMPCCoreKit } from './core-kit';
+import { logger } from '../logger';
 
 interface CoreKitContextValue {
   /** The Core Kit singleton instance (null until first render) */
@@ -51,7 +52,7 @@ export function CoreKitProvider({ children }: { children: ReactNode }) {
       const resultStatus = await initCoreKit();
       setStatus(resultStatus);
     } catch (err) {
-      console.error('[CoreKit] Initialization failed:', err);
+      logger.error('[CoreKit] Initialization failed:', err);
       setError(err instanceof Error ? err : new Error(String(err)));
     }
   }, []);

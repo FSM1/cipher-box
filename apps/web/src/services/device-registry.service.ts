@@ -23,6 +23,7 @@ import { bytesToHex, hexToBytes, wrapKey, type DeviceKeypair } from '@cipherbox/
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
 import { useAuthStore } from '../stores/auth.store';
+import { logger } from '../lib/logger';
 
 /** Minimum interval between registry republishes for lastSeenAt-only changes (ms) */
 const HEARTBEAT_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
@@ -170,7 +171,7 @@ export async function initializeOrSyncRegistry(params: {
     return { registry, ipnsName: registryIpns.ipnsName };
   } catch (error) {
     // Registry failures must NEVER block login
-    console.error('[DeviceRegistry] Failed to sync registry:', error);
+    logger.error('[DeviceRegistry] Failed to sync registry:', error);
     return null;
   }
 }
@@ -205,7 +206,7 @@ export async function loadRegistry(userPrivateKey: Uint8Array): Promise<{
       sequenceNumber: resolved.sequenceNumber,
     };
   } catch (error) {
-    console.error('[DeviceRegistry] Failed to load registry:', error);
+    logger.error('[DeviceRegistry] Failed to load registry:', error);
     return null;
   }
 }
