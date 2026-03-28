@@ -1,0 +1,115 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e9e432db85c7",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T03:53:35.663626Z",
+  "branch": "phase-31-structural-decomposition",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "b862fef42b78",
+  "token_usage": {
+    "input_tokens": 195,
+    "cache_creation_tokens": 381799,
+    "cache_read_tokens": 18342364,
+    "output_tokens": 60502,
+    "api_call_count": 148
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Review codebase concerns, plan and capture E2E testing gaps as todos, add new roadmap phases for technical debt resolution, and use the GSD manager to drive discussion/planning/execution of multiple phases in parallel.",
+    "outcome": "Created 6 E2E/staging todos, added phases 28-32 to roadmap (PRs #380 and #381), discussed all 4 new phases requiring discussion, executed Phase 28 fully, planned Phases 29 and 30, and captured Phase 31 context with a revised SDK-first decomposition strategy.",
+    "learnings": {
+      "repo": [
+        "Only 1 of 12 E2E specs (recovery.spec.ts) deletes test accounts after runs — the other 11 leave orphaned accounts",
+        "deleteTestAccount() helper already exists but is unused in most specs",
+        "AES-CTR streaming uses CTR mode for media files \u003e256KB, GCM for smaller files — 35 unit tests exist but zero E2E tests cover this path",
+        "Service worker intercepts /decrypt-stream/* URLs and handles HTTP Range requests for seeking",
+        "139 console.* calls across 29 web app source files (82 error, 27 warn, 18 log, 12 time/timeEnd) — hooks.ts alone has 34 due to Web3Auth debug logging",
+        "pino-browser's redact option is Node.js only and does not work in the browser — custom wrapper is correct choice for a ZK app needing sensitive field stripping",
+        "Grafana Faro has no session replay (privacy advantage), 50k sessions/month free tier vs Sentry's 5k errors, but 2 years old vs Sentry's 10",
+        "lint-staged runs markdownlint --fix on all *.md globs and passes explicit file paths, bypassing .markdownlintignore — planning docs need to be excluded from the lint-staged glob directly in package.json",
+        "unenrollIpns() exists in RepublishService at apps/api but has no REST endpoint — TODO in folder.service.ts has existed since Phase 14",
+        "Significant business logic is trapped in web app hooks that belongs in the SDK: tree validation (getDepth, isDescendantOf), buildSharedWriteCtx, withRevocationGuard, withConflictRetry, purgeExpired, share key caching with TTL"
+      ],
+      "code": [
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "deleteTestAccount() helper calls DELETE /auth/account with { confirmation: 'DELETE' } — exists but wired into only 1 of 12 specs"
+        },
+        {
+          "path": "apps/web/src/services/streaming-crypto.service.ts",
+          "finding": "Mode selection: CTR for media files \u003e256KB, GCM for everything else"
+        },
+        {
+          "path": "apps/web/src/decrypt-sw.ts",
+          "finding": "Service worker intercepts /decrypt-stream/* URLs, handles HTTP Range requests for video seeking, uses BigInt counter math for random-access decryption"
+        },
+        {
+          "path": "apps/web/src/hooks.ts",
+          "finding": "34 console calls from Web3Auth debug logging — highest concentration in web app. coreKit and loginParams typed as any but Web3AuthMPCCoreKit is exported from core-kit.ts"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "line": 255,
+          "finding": "unenrollIpns() exists here but has no REST endpoint — wired up in Phase 29"
+        },
+        {
+          "path": "apps/web/src/folder.service.ts",
+          "line": 513,
+          "finding": "TODO comment: 'Phase 14 should expose unenrollIpns via REST API' — deferred since Phase 14, resolved in Phase 29"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "1199 lines, zero unit tests — highest-risk fragile area. Contains buildSharedWriteCtx, withRevocationGuard, share key caching that belong in SDK, not React hooks"
+        },
+        {
+          "path": "apps/web/src/components/FileBrowser.tsx",
+          "finding": "964 lines — ~600 lines of handler logic can be extracted to useFileBrowserActions hook, leaving ~365 lines of pure presentational JSX"
+        },
+        {
+          "path": "apps/web/src/folder.service.ts",
+          "finding": "1089 lines — tree validation helpers (getDepth, isDescendantOf, calculateSubtreeDepth) should migrate to SDK, not just be split into a web-layer module"
+        },
+        {
+          "path": "apps/web/src/bin.service.ts",
+          "finding": "4 silenced unpin catches replaced in Phase 28; purgeExpired() is framework-agnostic and could migrate to SDK"
+        },
+        {
+          "path": "package.json",
+          "finding": "lint-staged markdownlint glob needed to exclude .planning/**/*.md to prevent asterisk escaping in GSD planning documents that broke manager JSON parsing"
+        }
+      ],
+      "workflow": [
+        "GSD manager enables parallel phase work: discuss runs inline while plan/execute run as background agents — Phase 28 was planned and executed while Phase 29 was being discussed",
+        "STATE.md todo counts can go stale between sessions — always verify actual file count before arithmetic when updating the count field",
+        "Adding a second executor agent to verify work already done by a worktree agent is a valid safety check — the second agent correctly reported 'already complete, no commits needed'",
+        "Asking 'could this be SDK logic rather than decomposed web modules' before finalizing decomposition strategy is the right architectural question — changed Phase 31 scope from file-splits to SDK migration",
+        "markdownlintignore is bypassed by lint-staged when it passes explicit file paths; the fix must be in the lint-staged glob pattern in package.json itself"
+      ]
+    },
+    "friction": [
+      "STATE.md pending todo count was stale (showed 10, was actually 6) — led to incorrect 6+4=10 then 10+4=14 arithmetic; caught by user",
+      "markdownlint lint-staged hook repeatedly escaped asterisks in ROADMAP.md (console.* became console.\\*), breaking GSD manager JSON parsing — required 4 commits to fully resolve by excluding .planning/ from the lint-staged glob",
+      "Phase 28 executor was spawned twice — the second run was redundant because the first worktree agent completed all work including verification and state updates",
+      "Manager init JSON parsing failed mid-session due to the lint-staged asterisk escaping issue, requiring inline ROADMAP.md repair before dashboard could refresh"
+    ],
+    "open_items": [
+      "Phase 28 (Code Hygiene \u0026 Logging): executed in worktree branch feat/phase-28-code-hygiene-logging — needs PR creation and merge",
+      "Phase 29 (Infrastructure Hardening): 3 plans created, not yet executed",
+      "Phase 30 (Web App Observability): 4 plans created (Faro init, ErrorBoundary, source maps, logger transport), not yet executed — blocked on Phase 28 merge",
+      "Phase 31 (Structural Decomposition): context captured with SDK-first approach, needs planning — SDK migration of tree validation, buildSharedWriteCtx, withRevocationGuard, withConflictRetry, purgeExpired, share key cache",
+      "Phase 32 (FUSE Async FilePointer Resolution): not yet discussed or planned",
+      "E2E todo: Add shared deleteAccount teardown to all 12 specs' afterAll hooks",
+      "E2E todo: media preview suite (PDF viewer, video player, audio player)",
+      "E2E todo: AES-CTR streaming playback tests (SW interception, seeking, progress, GCM fallback)",
+      "E2E todo: batch download zip tests",
+      "Staging todo: run metrics baselines with new instrumentation from recent metrics phase",
+      "Staging todo: BYO-IPFS load test baselines to measure capacity with IPFS workload offloaded"
+    ]
+  }
+}
