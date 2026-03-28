@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "56f18afef79f",
+  "strategy": "manual-commit",
+  "branch": "phase-31-structural-decomposition",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/56/f18afef79f/0/metadata.json",
+      "transcript": "/56/f18afef79f/0/full.jsonl",
+      "content_hash": "/56/f18afef79f/0/content_hash.txt",
+      "prompt": "/56/f18afef79f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 44273,
+    "cache_read_tokens": 682704,
+    "output_tokens": 7568,
+    "api_call_count": 15
+  }
+}
