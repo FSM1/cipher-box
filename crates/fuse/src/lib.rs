@@ -84,6 +84,23 @@ pub enum PendingContent {
     Failure { cid: String },
 }
 
+/// Pending FilePointer resolution result sent from background async tasks.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub enum PendingFilePointer {
+    Success {
+        ino: u64,
+        cid: String,
+        encrypted_file_key: String,
+        iv: String,
+        size: u64,
+        encryption_mode: String,
+        versions: Option<Vec<cipherbox_core::folder::VersionEntry>>,
+    },
+    Failure {
+        ino: u64,
+    },
+}
+
 /// Notification from a background upload thread that a file upload completed.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct UploadComplete {
@@ -471,6 +488,9 @@ pub struct CipherBoxFS {
     pub prefetching: std::collections::HashSet<String>,
     pub content_rx: std::sync::mpsc::Receiver<PendingContent>,
     pub content_tx: std::sync::mpsc::Sender<PendingContent>,
+    pub filepointer_rx: std::sync::mpsc::Receiver<PendingFilePointer>,
+    pub filepointer_tx: std::sync::mpsc::Sender<PendingFilePointer>,
+    pub resolving_file_pointers: std::collections::HashSet<u64>,
     pub pending_content: HashMap<u64, Vec<u8>>,
     pub upload_rx: std::sync::mpsc::Receiver<UploadComplete>,
     pub upload_tx: std::sync::mpsc::Sender<UploadComplete>,
@@ -614,7 +634,8 @@ impl CipherBoxFS {
             if let Err(e) = self.inodes.populate_folder(refresh.ino, &refresh.metadata, &self.private_key, &self.public_key, true) {
                 log::warn!("Drain refresh apply failed for ino {}: {}", refresh.ino, e);
             }
-            let unresolved = self.inodes.get_unresolved_file_pointers();
+            // Spawn async resolution for unresolved FilePointers in this folder
+            let unresolved = self.inodes.get_unresolved_file_pointers_for_parent(refresh.ino);
             if !unresolved.is_empty() {
                 let folder_key = self.inodes.get(refresh.ino).and_then(|i| match &i.kind {
                     inode::InodeKind::Root { .. } => Some(self.root_folder_key.to_vec()),
@@ -622,23 +643,66 @@ impl CipherBoxFS {
                     _ => None,
                 });
                 if let Some(fk) = folder_key {
-                    for (ino, fp_ipns) in &unresolved {
-                        if let Ok(fk_arr) = <[u8; 32]>::try_from(fk.as_slice()) {
-                            let api = self.api.clone();
-                            let resolve_result = block_with_timeout(&self.rt, async {
-                                let resp = cipherbox_api_client::ipns::resolve_ipns(&api, fp_ipns).await.map_err(|e| format!("{}", e))?;
-                                cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid).await.map_err(|e| format!("{}", e))
-                            });
-                            match resolve_result {
-                                Ok(enc_bytes) => {
-                                    match cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr) {
-                                        Ok(fm) => self.inodes.resolve_file_pointer(*ino, fm.cid, fm.file_key_encrypted, fm.file_iv, fm.size, fm.encryption_mode, fm.versions),
-                                        Err(e) => log::warn!("FilePointer decrypt failed for ino {}: {}", ino, e),
-                                    }
-                                }
-                                Err(e) => log::warn!("FilePointer resolve failed for ino {}: {}", ino, e),
-                            }
+                    let fk_arr = match <[u8; 32]>::try_from(fk.as_slice()) {
+                        Ok(arr) => arr,
+                        Err(_) => {
+                            log::warn!(
+                                "FilePointer resolution skipped for folder ino {}: folder_key length is {} (expected 32)",
+                                refresh.ino,
+                                fk.len()
+                            );
+                            continue;
                         }
+                    };
+                    // Cap concurrent resolution tasks to avoid network thrashing in large folders
+                    const MAX_CONCURRENT_FP_RESOLVES: usize = 10;
+                    let mut spawned = 0;
+                    for (ino, fp_ipns) in unresolved {
+                        if self.resolving_file_pointers.contains(&ino) {
+                            continue; // Already in-flight
+                        }
+                        if spawned >= MAX_CONCURRENT_FP_RESOLVES {
+                            break; // Remaining will be picked up on next refresh cycle
+                        }
+                        self.resolving_file_pointers.insert(ino);
+                        spawned += 1;
+                        let api = self.api.clone();
+                        let tx = self.filepointer_tx.clone();
+                        self.rt.spawn(async move {
+                            let result = tokio::time::timeout(
+                                NETWORK_TIMEOUT,
+                                async {
+                                    let resp = cipherbox_api_client::ipns::resolve_ipns(&api, &fp_ipns)
+                                        .await.map_err(|e| format!("{}", e))?;
+                                    let enc_bytes = cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid)
+                                        .await.map_err(|e| format!("{}", e))?;
+                                    cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr)
+                                },
+                            ).await;
+
+                            match result {
+                                Ok(Ok(fm)) => {
+                                    log::debug!("FilePointer async resolved for ino {} (cid={})", ino, &fm.cid[..fm.cid.len().min(12)]);
+                                    let _ = tx.send(PendingFilePointer::Success {
+                                        ino,
+                                        cid: fm.cid,
+                                        encrypted_file_key: fm.file_key_encrypted,
+                                        iv: fm.file_iv,
+                                        size: fm.size,
+                                        encryption_mode: fm.encryption_mode,
+                                        versions: fm.versions,
+                                    });
+                                }
+                                Ok(Err(e)) => {
+                                    log::warn!("FilePointer resolve failed for ino {}: {}", ino, e);
+                                    let _ = tx.send(PendingFilePointer::Failure { ino });
+                                }
+                                Err(_) => {
+                                    log::warn!("FilePointer resolve timed out for ino {} ({}s)", ino, NETWORK_TIMEOUT.as_secs());
+                                    let _ = tx.send(PendingFilePointer::Failure { ino });
+                                }
+                            }
+                        });
                     }
                 }
             }
@@ -650,6 +714,41 @@ impl CipherBoxFS {
             match msg {
                 PendingContent::Success { cid, data } => { self.prefetching.remove(&cid); self.content_cache.set(&cid, data); }
                 PendingContent::Failure { cid } => { self.prefetching.remove(&cid); }
+            }
+        }
+    }
+
+    /// Drain completed FilePointer async resolution results.
+    /// Mirrors drain_content_prefetches() -- applies resolved metadata to inodes
+    /// and removes entries from the resolving_file_pointers dedup guard.
+    pub fn drain_filepointer_completions(&mut self) {
+        while let Ok(msg) = self.filepointer_rx.try_recv() {
+            match msg {
+                PendingFilePointer::Success {
+                    ino,
+                    cid,
+                    encrypted_file_key,
+                    iv,
+                    size,
+                    encryption_mode,
+                    versions,
+                } => {
+                    self.resolving_file_pointers.remove(&ino);
+                    self.inodes.resolve_file_pointer(
+                        ino,
+                        cid,
+                        encrypted_file_key,
+                        iv,
+                        size,
+                        encryption_mode,
+                        versions,
+                    );
+                    log::debug!("FilePointer resolved async for ino {}", ino);
+                }
+                PendingFilePointer::Failure { ino } => {
+                    self.resolving_file_pointers.remove(&ino);
+                    log::warn!("FilePointer async resolution failed for ino {}", ino);
+                }
             }
         }
     }
