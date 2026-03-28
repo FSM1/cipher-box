@@ -15,7 +15,7 @@ export class BatchUnenrollIpnsDto {
     each: true,
     message: 'Each ipnsName must be a valid CIDv1 libp2p-key (k51qzi5uqu5... or bafzaa...)',
   })
-  @MaxLength(70, { each: true })
+  @MaxLength(76, { each: true })
   ipnsNames!: string[];
 }
 

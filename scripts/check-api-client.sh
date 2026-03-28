@@ -32,9 +32,14 @@ if [ "$API_CHANGED" = false ]; then
 fi
 
 # API files changed - check if generated files are also staged
+# Only flag files that have actual uncommitted changes (not already up to date)
 MISSING_GENERATED=()
 for file in "${GENERATED_FILES[@]}"; do
   if ! echo "$STAGED_FILES" | grep -q "^${file}$"; then
+    # Only require staging if the file actually has unstaged changes
+    if git diff --quiet "$file" 2>/dev/null; then
+      continue  # File is up to date, no staging needed
+    fi
     MISSING_GENERATED+=("$file")
   fi
 done

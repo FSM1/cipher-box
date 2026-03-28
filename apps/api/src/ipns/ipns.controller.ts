@@ -6,6 +6,7 @@ import {
   Query,
   UseGuards,
   Request,
+  HttpCode,
   NotFoundException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
@@ -123,6 +124,7 @@ export class IpnsController {
 
   @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 batch unenrolls per minute per user
   @Post('unenroll')
+  @HttpCode(200)
   @ApiOperation({
     summary: 'Batch unenroll IPNS records from TEE republishing',
     description:

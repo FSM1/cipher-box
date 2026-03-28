@@ -925,7 +925,7 @@ export class CipherBoxClient {
     return this.withOperation('deleteToBin', async () => {
       if (!this.binState) throw new BinNotLoadedError();
 
-      const { updatedBinState, removedItem } = await binOps.addToBin({
+      const { updatedBinState } = await binOps.addToBin({
         folderIpnsName,
         childId,
         parentPath,
@@ -947,8 +947,8 @@ export class CipherBoxClient {
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
 
-      // Fire-and-forget IPNS unenrollment for the removed item
-      this.fireAndForgetUnenroll(this.collectRemovedItemIpnsNames(removedItem));
+      // No IPNS unenrollment here — soft delete preserves items for restore.
+      // Unenrollment happens on permanentDelete() or emptyBin().
     });
   }
 
