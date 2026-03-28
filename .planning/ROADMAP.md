@@ -33,7 +33,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 29: Infrastructure Hardening** - Wire up IPNS unenrollment on deletion, test login endpoint hardening, IPFS node access control (completed 2026-03-28)
 - [ ] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (NEEDS DISCUSSION)
 - [ ] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (NEEDS DISCUSSION)
-- [ ] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread
+- [x] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread (completed 2026-03-28)
 - [ ] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend
 
 ## Phase Details
@@ -355,7 +355,13 @@ Plans:
 3. Resolution latency is bounded by a timeout rather than O(N \* network_timeout)
 4. Desktop E2E tests pass with the async resolution path
 
-**Plans**: TBD
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] 32-01-PLAN.md -- Add PendingFilePointer channel infrastructure to CipherBoxFS (enum, channel pair, dedup guard, drain method)
+- [x] 32-02-PLAN.md -- Refactor drain_refresh_completions to spawn async FilePointer resolution (replace block_with_timeout with rt.spawn)
+- [x] 32-03-PLAN.md -- Handle open/read for unresolved FilePointers with poll-wait fallback (5s poll timeout, EIO on miss)
 
 ### Phase 33: Windows Async FilePointer Resolution
 
@@ -395,7 +401,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 29. Infrastructure Hardening              | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 30. Web App Observability                 | v1.1      | 0/TBD          | Not started | -          |
 | 31. Structural Decomposition              | v1.1      | 0/TBD          | Not started | -          |
-| 32. FUSE Async FilePointer Resolution     | v1.1      | 0/TBD          | Not started | -          |
+| 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 0/TBD          | Not started | -          |
 
 ### Phase 27: Writable Shares (PoC)
