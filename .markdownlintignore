@@ -17,6 +17,5 @@ apps/desktop/src-tauri/target/
 .claude/get-shit-done/
 .claude/gsd-local-patches/
 
-# GSD plan files - XML task syntax not compatible with markdownlint
-.planning/phases/
-.planning/milestones/
+# GSD planning directory - contains generated/structured markdown with non-standard syntax
+.planning/

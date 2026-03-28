@@ -28,6 +28,9 @@ import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../ipns';
 import { withPerf } from '../perf';
 
+// Tree traversal utilities
+export { getDepth, calculateSubtreeDepth, isDescendantOf, type TreeNode } from './tree';
+
 /**
  * Fetch and decrypt folder metadata from IPFS.
  *

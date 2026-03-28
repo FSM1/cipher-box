@@ -272,13 +272,13 @@ Plans:
 
 ### Phase 28: Code Hygiene & Logging
 
-**Goal**: Production web app uses structured logging instead of raw console.\* calls, unpin failures are visible, type safety gaps are closed, and legacy POC is archived
+**Goal**: Production web app uses structured logging instead of raw console calls (log/warn/error), unpin failures are visible, type safety gaps are closed, and legacy POC is archived
 **Depends on**: None
 **Requirements**: None (tech debt reduction)
 **Research flag**: Skip -- all items are mechanical find-replace or small wrapper creation
 **Success Criteria** (what must be TRUE):
 
-1. A `lib/logger.ts` module exists with level filtering (debug/info/warn/error) and all 127 console.\* calls in production web code are replaced with logger calls
+1. A `lib/logger.ts` module exists with level filtering (debug/info/warn/error) and all 127 console calls (log/warn/error) in production web code are replaced with logger calls
 2. All `.catch(() => {})` patterns on IPFS unpin calls are replaced with `.catch(logger.warn)` so failures are visible in logs
 3. All `as any` casts in production web code are replaced with typed alternatives (except acceptable polyfill shims)
 4. `00-Preliminary-R&D/poc/` is archived (moved to branch or deleted) and no longer pollutes searches
@@ -405,8 +405,8 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete    | 2026-03-26 |
 | 28. Code Hygiene & Logging                | v1.1      | 4/4            | Complete    | 2026-03-28 |
 | 29. Infrastructure Hardening              | v1.1      | 3/3            | Complete    | 2026-03-28 |
-| 30. Web App Observability                 | v1.1      | 0/TBD          | Not started | -          |
-| 31. Structural Decomposition              | v1.1      | 0/TBD          | Not started | -          |
+| 30. Web App Observability                 | v1.1      | 4/4            | Complete    | 2026-03-28 |
+| 31. Structural Decomposition              | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 0/TBD          | Not started | -          |
 
@@ -424,7 +424,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 5. SharedFileBrowser shows [RW] badge, write toolbar, and full context menu for write shares
 6. Write operations use withConflictRetry for multi-writer coordination (same as multi-device sync)
 
-**Plans:** 3/3 plans complete
+**Plans:** 3/3 plans executed
 
 Plans:
 

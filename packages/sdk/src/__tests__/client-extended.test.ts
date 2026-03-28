@@ -77,6 +77,15 @@ describe('CipherBoxClient - extended', () => {
             modifiedAt: 0,
           },
         ],
+        renamedChild: {
+          type: 'file',
+          id: 'file1',
+          name: 'renamed.txt',
+          fileMetaIpnsName: 'k51file',
+          ipnsPrivateKeyEncrypted: 'abc',
+          createdAt: 0,
+          modifiedAt: 0,
+        },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
@@ -114,6 +123,15 @@ describe('CipherBoxClient - extended', () => {
             modifiedAt: 0,
           },
         ],
+        movedItem: {
+          type: 'file',
+          id: 'file1',
+          name: 'test.txt',
+          fileMetaIpnsName: 'k51file',
+          ipnsPrivateKeyEncrypted: 'abc',
+          createdAt: 0,
+          modifiedAt: 0,
+        },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
@@ -143,7 +161,13 @@ describe('CipherBoxClient - extended', () => {
 
       vi.mocked(sdkCore.uploadFile).mockResolvedValue({
         cid: 'bafyfile',
+        encryptedSize: 100,
         fileMetaIpnsName: 'k51filemeta',
+        ipnsRecord: {
+          ipnsName: 'k51filemeta',
+          recordBase64: 'mock-record',
+          metadataCid: 'bafymeta',
+        },
         ipnsPrivateKeyEncrypted: 'enc',
         fileKey: new Uint8Array(32).fill(0x42),
       });
@@ -216,7 +240,13 @@ describe('CipherBoxClient - extended', () => {
 
       vi.mocked(sdkCore.uploadFile).mockResolvedValue({
         cid: 'bafyfile',
+        encryptedSize: 100,
         fileMetaIpnsName: 'k51filemeta',
+        ipnsRecord: {
+          ipnsName: 'k51filemeta',
+          recordBase64: 'mock-record',
+          metadataCid: 'bafymeta',
+        },
         ipnsPrivateKeyEncrypted: 'enc',
         fileKey: new Uint8Array(32).fill(0x42),
       });
@@ -259,7 +289,13 @@ describe('CipherBoxClient - extended', () => {
 
       vi.mocked(sdkCore.uploadFile).mockResolvedValue({
         cid: 'bafyfile',
+        encryptedSize: 100,
         fileMetaIpnsName: 'k51filemeta',
+        ipnsRecord: {
+          ipnsName: 'k51filemeta',
+          recordBase64: 'mock-record',
+          metadataCid: 'bafymeta',
+        },
         ipnsPrivateKeyEncrypted: 'enc',
         fileKey: new Uint8Array(32).fill(0x42),
       });
@@ -306,7 +342,13 @@ describe('CipherBoxClient - extended', () => {
 
       vi.mocked(sdkCore.uploadFile).mockResolvedValue({
         cid: 'bafyfile',
+        encryptedSize: 100,
         fileMetaIpnsName: 'k51filemeta',
+        ipnsRecord: {
+          ipnsName: 'k51filemeta',
+          recordBase64: 'mock-record',
+          metadataCid: 'bafymeta',
+        },
         ipnsPrivateKeyEncrypted: 'enc',
         fileKey: new Uint8Array(32).fill(0x42),
       });
@@ -352,7 +394,13 @@ describe('CipherBoxClient - extended', () => {
 
       vi.mocked(sdkCore.uploadFile).mockResolvedValue({
         cid: 'bafyfile',
+        encryptedSize: 100,
         fileMetaIpnsName: 'k51filemeta',
+        ipnsRecord: {
+          ipnsName: 'k51filemeta',
+          recordBase64: 'mock-record',
+          metadataCid: 'bafymeta',
+        },
         ipnsPrivateKeyEncrypted: 'enc',
         fileKey,
       });

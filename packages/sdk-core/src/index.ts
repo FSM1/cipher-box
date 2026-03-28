@@ -30,6 +30,9 @@ export {
   moveItem,
 } from './folder';
 
+// Tree traversal utilities
+export { getDepth, calculateSubtreeDepth, isDescendantOf, type TreeNode } from './folder';
+
 // File metadata operations
 export {
   createFileMetadata,
