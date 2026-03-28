@@ -296,14 +296,11 @@ pub mod implementation {
                 fs.drain_file_pointer_completions();
 
                 if let Some(inode) = fs.inodes.get(ino) {
-                    if let InodeKind::File { file_meta_resolved: true, .. } = &inode.kind {
-                        // Re-extract the now-resolved metadata
-                        if let InodeKind::File { cid: ref c, encrypted_file_key: ref e, iv: ref i, encryption_mode: ref m, .. } = &inode.kind {
-                            cid = c.clone();
-                            encrypted_file_key_hex = e.clone();
-                            iv_hex = i.clone();
-                            encryption_mode = m.clone();
-                        }
+                    if let InodeKind::File { file_meta_resolved: true, cid: ref c, encrypted_file_key: ref e, iv: ref i, encryption_mode: ref m, .. } = &inode.kind {
+                        cid = c.clone();
+                        encrypted_file_key_hex = e.clone();
+                        iv_hex = i.clone();
+                        encryption_mode = m.clone();
                         break;
                     }
                 }
