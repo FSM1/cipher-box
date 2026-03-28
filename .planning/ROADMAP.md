@@ -29,6 +29,11 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 24: Bug Fixes & Test Infrastructure** - Fix known bugs (bin IPNS 404, device registry format error) and strengthen test infrastructure (headless load tests, vault recovery E2E, load test auth refresh) (completed 2026-03-25)
 - [x] **Phase 25: Desktop Enhancements** - Desktop auto-update mechanism and TEE file enrollment for new files (completed 2026-03-25)
 - [x] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX (completed 2026-03-26)
+- [ ] **Phase 28: Code Hygiene & Logging** - Structured logger wrapper, replace 127 console.\* calls, fix silenced unpin failures, clean any casts, archive legacy POC
+- [ ] **Phase 29: Infrastructure Hardening** - Wire up IPNS unenrollment on deletion, test login endpoint hardening, IPFS node access control
+- [ ] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (NEEDS DISCUSSION)
+- [ ] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (NEEDS DISCUSSION)
+- [ ] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread
 
 ## Phase Details
 
@@ -264,25 +269,106 @@ Plans:
 - [x] 26-01-PLAN.md -- Grafana alert rule JSON definitions + provisioning script for five alert categories
 - [x] 26-02-PLAN.md -- Client-side timeout and retry constant tuning across SDK providers and API services
 
+### Phase 28: Code Hygiene & Logging
+
+**Goal**: Production web app uses structured logging instead of raw console.\* calls, unpin failures are visible, type safety gaps are closed, and legacy POC is archived
+**Depends on**: None
+**Requirements**: None (tech debt reduction)
+**Research flag**: Skip -- all items are mechanical find-replace or small wrapper creation
+**Success Criteria** (what must be TRUE):
+
+1. A `lib/logger.ts` module exists with level filtering (debug/info/warn/error) and all 127 console.\* calls in production web code are replaced with logger calls
+2. All `.catch(() => {})` patterns on IPFS unpin calls are replaced with `.catch(logger.warn)` so failures are visible in logs
+3. All `as any` casts in production web code are replaced with typed alternatives (except acceptable polyfill shims)
+4. `00-Preliminary-R&D/poc/` is archived (moved to branch or deleted) and no longer pollutes searches
+
+**Plans**: TBD
+
+### Phase 29: Infrastructure Hardening
+
+**Goal**: Orphaned IPNS records are cleaned up on deletion, test login endpoint is hardened for staging, and IPFS node access is restricted
+**Depends on**: None
+**Requirements**: None (operational hygiene)
+**Research flag**: Skip -- IPNS unenroll endpoint already exists, remaining items are config-level
+**Success Criteria** (what must be TRUE):
+
+1. Deleting a file or folder triggers IPNS unenrollment via the existing `unenrollIpns()` API, preventing orphaned TEE republish records from accumulating
+2. Batch unenrollment works for folder deletes containing multiple files (single API call or batched)
+3. `POST /auth/test-login` is verified to be unreachable when `NODE_ENV=production`, with a monitoring alert for staging usage
+4. Kubo API (port 5001) is behind a reverse proxy with auth or Kubo ACL in staging/production deployments
+
+**Plans**: TBD
+
+### Phase 30: Web App Observability
+
+**Goal**: Errors and performance issues in the deployed web app are captured, tracked, and alertable rather than lost to console.error
+**Depends on**: Phase 28 (logger must exist for the observability layer to build on)
+**Requirements**: None (operational capability)
+**Research flag**: NEEDS `/gsd:discuss-phase` -- service selection (Sentry vs self-hosted vs lightweight), privacy implications for a zero-knowledge product, scope beyond error tracking, integration with Phase 28 logger
+**Success Criteria** (what must be TRUE):
+
+1. Unhandled errors and rejected promises are captured by an error boundary and sent to a tracking service
+2. Error reports include enough context (route, user action, stack trace) to diagnose issues without exposing encrypted content
+3. Performance metrics (page load, time-to-interactive, core web vitals) are captured and visible in a dashboard
+4. No PII or encrypted content is leaked to the error tracking service (privacy audit passes)
+
+**Plans**: TBD
+
+### Phase 31: Structural Decomposition
+
+**Goal**: Monolithic files exceeding 900 lines are split into focused, testable modules without breaking existing functionality
+**Depends on**: Phase 28 (logger available for decomposed modules)
+**Requirements**: None (maintainability improvement)
+**Research flag**: NEEDS `/gsd:discuss-phase` -- decomposition boundaries for useSharedNavigation (navigation vs key management vs write ops), container/presentational split for FileBrowser/SharedFileBrowser, alignment with SDK extraction direction for folder.service.ts
+**Success Criteria** (what must be TRUE):
+
+1. `useSharedNavigation.ts` (1199 lines) is split into 3+ focused hooks (navigation state, key unwrapping, write operations) with each under 400 lines
+2. `FileBrowser.tsx` (964 lines) and `SharedFileBrowser.tsx` (943 lines) are split into container + presentational components
+3. `folder.service.ts` (1089 lines) is decomposed into focused modules (CRUD, metadata, publish coordination)
+4. All existing E2E tests pass after decomposition (sharing-workflow, writable-shares, full-workflow)
+5. No new `any` casts or type regressions introduced
+
+**Plans**: TBD
+
+### Phase 32: FUSE Async FilePointer Resolution
+
+**Goal**: FUSE FilePointer resolution no longer blocks the filesystem thread, eliminating Finder "connection lost" errors during metadata refresh
+**Depends on**: None (can run in parallel with other phases)
+**Requirements**: None (performance improvement)
+**Research flag**: Skip -- channel-based async pattern is well-defined, contained to crates/fuse
+**Success Criteria** (what must be TRUE):
+
+1. FilePointer resolution spawns async tasks via a channel pair instead of blocking the FUSE callback thread
+2. Finder operations (ls, open, copy) do not stall or disconnect during background metadata refresh
+3. Resolution latency is bounded by a timeout rather than O(N \* network_timeout)
+4. Desktop E2E tests pass with the async resolution path
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32
 
-| Phase                                     | Milestone | Plans Complete | Status   | Completed  |
-| ----------------------------------------- | --------- | -------------- | -------- | ---------- |
-| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete | 2026-03-07 |
-| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete | 2026-03-20 |
-| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete | 2026-03-23 |
-| 20. Vault Migration                       | v1.1      | 6/6            | Complete | 2026-03-24 |
-| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete | 2026-03-25 |
-| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete | 2026-03-25 |
-| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete | 2026-03-24 |
-| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete | 2026-03-25 |
-| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete | 2026-03-25 |
-| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete | 2026-03-26 |
-| 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete | 2026-03-26 |
+| Phase                                     | Milestone | Plans Complete | Status      | Completed  |
+| ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
+| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
+| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete    | 2026-03-25 |
+| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete    | 2026-03-25 |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
+| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete    | 2026-03-25 |
+| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete    | 2026-03-25 |
+| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete    | 2026-03-26 |
+| 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete    | 2026-03-26 |
+| 28. Code Hygiene & Logging                | v1.1      | 0/TBD          | Not started | -          |
+| 29. Infrastructure Hardening              | v1.1      | 0/TBD          | Not started | -          |
+| 30. Web App Observability                 | v1.1      | 0/TBD          | Not started | -          |
+| 31. Structural Decomposition              | v1.1      | 0/TBD          | Not started | -          |
+| 32. FUSE Async FilePointer Resolution     | v1.1      | 0/TBD          | Not started | -          |
 
 ### Phase 27: Writable Shares (PoC)
 
@@ -309,4 +395,5 @@ Plans:
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-26_
+_Last updated: 2026-03-28_
+_Total M1.1 phases: 17 (18-27 complete + 28-32 planned) | Concern resolution: 5 phases_
