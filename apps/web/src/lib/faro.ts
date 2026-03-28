@@ -161,9 +161,7 @@ export function setFaroUser(publicKey: string): void {
 export function clearFaroUser(): void {
   const faro = getFaroInstance();
   if (!faro) return;
-  // Faro's setUser types don't accept null directly, but the SDK handles it correctly
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  faro.api.setUser(null as any);
+  faro.api.resetUser();
 }
 
 /**
