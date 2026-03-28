@@ -101,6 +101,7 @@ describe('IpnsService', () => {
           provide: RepublishService,
           useValue: {
             enrollFolder: jest.fn().mockResolvedValue(undefined),
+            unenrollIpns: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -1310,6 +1311,54 @@ describe('IpnsService', () => {
 
       const result = await service.publishRecord('new-user-id', dto);
       expect(result.sequenceNumber).toBe('1');
+    });
+  });
+
+  describe('unenrollBatch', () => {
+    function getRepublishMock() {
+      return (service as unknown as Record<string, unknown>).republishService as {
+        unenrollIpns: jest.Mock;
+      };
+    }
+
+    it('should unenroll all provided IPNS names', async () => {
+      const republishService = getRepublishMock();
+      republishService.unenrollIpns.mockResolvedValue(undefined);
+
+      const result = await service.unenrollBatch('user-1', [
+        'k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz',
+        'k51qzi5uqu5dg12345abcdefghij1234567890abcdefghij12345678',
+      ]);
+
+      expect(result.totalUnenrolled).toBe(2);
+      expect(republishService.unenrollIpns).toHaveBeenCalledTimes(2);
+    });
+
+    it('should continue processing when individual unenroll fails', async () => {
+      const republishService = getRepublishMock();
+      republishService.unenrollIpns
+        .mockResolvedValueOnce(undefined) // first succeeds
+        .mockRejectedValueOnce(new Error('not found')) // second fails
+        .mockResolvedValueOnce(undefined); // third succeeds
+
+      const result = await service.unenrollBatch('user-1', ['name1', 'name2', 'name3']);
+
+      expect(result.totalUnenrolled).toBe(2);
+      expect(republishService.unenrollIpns).toHaveBeenCalledTimes(3);
+    });
+
+    it('should return zero when all unenrolls fail', async () => {
+      const republishService = getRepublishMock();
+      republishService.unenrollIpns.mockRejectedValue(new Error('db error'));
+
+      const result = await service.unenrollBatch('user-1', ['name1', 'name2']);
+
+      expect(result.totalUnenrolled).toBe(0);
+    });
+
+    it('should handle empty array', async () => {
+      const result = await service.unenrollBatch('user-1', []);
+      expect(result.totalUnenrolled).toBe(0);
     });
   });
 });
