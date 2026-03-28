@@ -170,6 +170,8 @@ describe('withConflictRetry', () => {
     };
 
     const promise = withConflictRetry(perform, resync, preRetry);
+    // Catch to prevent unhandled rejection, then re-await
+    promise.catch(() => {});
     await vi.advanceTimersByTimeAsync(500);
     const result = await promise;
 
@@ -182,19 +184,24 @@ describe('withConflictRetry', () => {
     const resync = vi.fn().mockResolvedValue(undefined);
     const perform = () => Promise.reject({ status: 409 });
 
-    const promise = withConflictRetry(perform, resync);
+    const assertion = expect(withConflictRetry(perform, resync)).rejects.toThrow(
+      'Folder was modified by another device'
+    );
     await vi.advanceTimersByTimeAsync(500);
-    await expect(promise).rejects.toThrow('Folder was modified by another device');
+    await assertion;
     expect(resync).toHaveBeenCalledOnce();
   });
 
   it('re-throws non-409 errors without retrying', async () => {
     const resync = vi.fn();
     const originalError = new Error('server down');
-    const perform = () => Promise.reject(originalError);
 
     await expect(withConflictRetry(perform, resync)).rejects.toThrow('server down');
     expect(resync).not.toHaveBeenCalled();
+
+    function perform() {
+      return Promise.reject(originalError);
+    }
   });
 
   it('re-throws non-409 error from retry attempt', async () => {
@@ -206,9 +213,11 @@ describe('withConflictRetry', () => {
       return Promise.reject(new Error('unexpected retry error'));
     };
 
-    const promise = withConflictRetry(perform, resync);
+    const assertion = expect(withConflictRetry(perform, resync)).rejects.toThrow(
+      'unexpected retry error'
+    );
     await vi.advanceTimersByTimeAsync(500);
-    await expect(promise).rejects.toThrow('unexpected retry error');
+    await assertion;
   });
 
   it('works without preRetry callback', async () => {
@@ -221,6 +230,7 @@ describe('withConflictRetry', () => {
     };
 
     const promise = withConflictRetry(perform, resync);
+    promise.catch(() => {});
     await vi.advanceTimersByTimeAsync(500);
     expect(await promise).toBe('ok');
   });
@@ -235,6 +245,7 @@ describe('withConflictRetry', () => {
     };
 
     const promise = withConflictRetry(perform, resync);
+    promise.catch(() => {});
     await vi.advanceTimersByTimeAsync(500);
     expect(await promise).toBe('ok');
     expect(resync).toHaveBeenCalledOnce();
