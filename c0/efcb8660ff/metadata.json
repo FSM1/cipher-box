@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c0efcb8660ff",
+  "strategy": "manual-commit",
+  "branch": "phase-29-infrastructure-hardening",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/c0/efcb8660ff/0/metadata.json",
+      "transcript": "/c0/efcb8660ff/0/full.jsonl",
+      "content_hash": "/c0/efcb8660ff/0/content_hash.txt",
+      "prompt": "/c0/efcb8660ff/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 161,
+    "cache_creation_tokens": 337108,
+    "cache_read_tokens": 12904218,
+    "output_tokens": 42109,
+    "api_call_count": 120
+  }
+}

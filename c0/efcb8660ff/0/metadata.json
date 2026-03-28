@@ -1,0 +1,93 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c0efcb8660ff",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T03:16:02.967068Z",
+  "branch": "phase-29-infrastructure-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3fc13e901cde",
+  "token_usage": {
+    "input_tokens": 161,
+    "cache_creation_tokens": 337108,
+    "cache_read_tokens": 12904218,
+    "output_tokens": 42109,
+    "api_call_count": 120
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Review and update codebase maps, identify E2E testing gaps and technical debt, capture todos, add new roadmap phases for code hygiene and infrastructure hardening, and begin discussing implementation context for phases 28 and 29.",
+    "outcome": "6 new todos captured (E2E teardown, media preview, AES-CTR streaming, batch download, staging metrics baselines, BYO-IPFS load test baselines), 5 new roadmap phases added (28-32), context files created for phases 28 and 29, PRs #380 and #381 merged, and phase 28 planning kicked off as a background agent.",
+    "learnings": {
+      "repo": [
+        "Only recovery.spec.ts deletes test accounts after tests; 11 of 12 E2E specs leave orphaned accounts — deleteTestAccount() helper exists in tests/sdk-e2e/src/fixtures/test-harness.ts but is not universally wired",
+        "AES-CTR streaming is complete with 35 unit tests but zero E2E coverage — Phase 12.1 left a manual verification checklist that was never automated",
+        "CTR mode is selected for media files \u003e256KB, GCM for everything else in streaming-crypto.service.ts",
+        "139 console.* calls exist across 29 web app files (82 error, 27 warn, 18 log, 12 time/timeEnd) with hooks.ts being the biggest offender at 34 calls (Web3Auth debug logging)",
+        "RepublishService.unenrollIpns() exists at apps/api/src/republish/republish.service.ts:255 but has no REST endpoint — TODO comment at folder.service.ts:513 explicitly notes this was deferred to Phase 14",
+        "Test login endpoint on staging is already guarded by NODE_ENV check + timing-safe secret comparison + unit tests; the existing cipherbox_auth_logins_total{method='test'} Prometheus metric enables monitoring",
+        "Kubo port 5001 is already bound to 127.0.0.1 in staging Docker compose — no active exposure risk",
+        "lint-staged runs markdownlint --fix on all *.md files and re-escapes special characters in .planning/ docs, breaking GSD tooling JSON parsing",
+        "pino/browser redaction does NOT work in the browser — pino's redact option is Node.js only, making it unsuitable for a privacy-first app that must strip privateKey/folderKey from logs",
+        "SDK's CipherBoxClient.deleteItem() and permanentDeleteFromBin() are the actual deletion paths used by useFolderMutations — legacy folder.service.ts and delete.service.ts TODO comments are from pre-SDK era"
+      ],
+      "code": [
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "deleteTestAccount() helper sends DELETE /auth/account with { confirmation: 'DELETE' } — exists but not called in most specs"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "line": 255,
+          "finding": "unenrollIpns() method exists but has no REST endpoint exposure"
+        },
+        {
+          "path": "apps/web/src/hooks.ts",
+          "finding": "34 console.* calls — highest count in web app, mostly Web3Auth SDK debug logging that leaks SDK state"
+        },
+        {
+          "path": "apps/web/src/main.tsx",
+          "finding": "Already uses import.meta.env.DEV for gating — good pattern for logger VITE_LOG_LEVEL env var"
+        },
+        {
+          "path": "apps/web/src/services/bin.service.ts",
+          "finding": "4 of the 11 unpin .catch(() =\u003e {}) silencing instances are here"
+        },
+        {
+          "path": ".planning/ROADMAP.md",
+          "finding": "markdown linter escapes asterisks (console.* → console.\\*) which breaks gsd-tools.cjs JSON parsing — workaround is avoiding asterisk notation in phase descriptions"
+        },
+        {
+          "path": "package.json",
+          "finding": "lint-staged glob for markdownlint needs to exclude .planning/ to prevent re-escaping planning docs on commit"
+        }
+      ],
+      "workflow": [
+        "STATE.md pending todo count can become stale between sessions — always verify actual file count rather than incrementing from cached state value",
+        "GSD manager's init command parses ROADMAP.md phase descriptions as JSON — special characters like * must be avoided or the entire dashboard fails to render",
+        "Adding .planning/ exclusion to .markdownlintignore is insufficient when lint-staged passes explicit file paths — the glob pattern in lint-staged config must also exclude .planning/",
+        "Pino/browser is not suitable for browser apps needing log redaction; a custom ~50 LOC wrapper gives full control over sensitive field stripping and Phase 30 Sentry transport hooks",
+        "Phases needing discuss before plan: those with tool/vendor decisions (observability stack), API surface design, or decomposition boundary choices; mechanical find-replace and config changes can go straight to plan"
+      ]
+    },
+    "friction": [
+      "STATE.md todo count was stale (showed 6 when actual was already 10) causing an incorrect 6→14 display instead of 10→14, requiring a correction commit",
+      "markdownlint lint-staged hook repeatedly re-escaped console.* to console.\\* in ROADMAP.md even after adding .planning/ to .markdownlintignore — required 4 fix commits before resolving by changing the lint-staged glob pattern",
+      "GSD manager init JSON parsing broke silently when ROADMAP.md contained escaped characters — error manifested as manager dashboard failing to render rather than a clear parse error"
+    ],
+    "open_items": [
+      "Phase 28 planning is running as a background agent — results not yet available",
+      "Phase 29 CONTEXT.md created but planning not yet started",
+      "Phases 30 (Web App Observability) and 31 (Structural Decomposition) are blocked on Phase 28 completion and still need discuss sessions",
+      "Phase 32 (FUSE Async FilePointer Resolution) ready to plan independently but not yet started",
+      "Kubo ACL production hardening deferred out of Phase 29 scope — documented in 29-CONTEXT.md deferred section",
+      "6 pending todos for E2E improvements not yet scheduled into roadmap phases",
+      "Staging metrics baselines (new instrumentation) and BYO-IPFS load test baselines captured as todos but not yet executed"
+    ]
+  }
+}
