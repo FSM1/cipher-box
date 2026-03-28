@@ -110,6 +110,9 @@ jobs:
           VITE_API_URL: ${{ vars.STAGING_API_URL }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
+          GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
+          GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
 
       - name: Upload web dist as artifact
         uses: actions/upload-artifact@v4
@@ -186,6 +189,9 @@ jobs:
           VITE_API_URL: ${{ vars.STAGING_API_URL }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
+          GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
+          GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
@@ -281,6 +287,9 @@ jobs:
           VITE_API_URL: ${{ vars.STAGING_API_URL }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
+          GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
+          GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
@@ -358,6 +367,9 @@ jobs:
           VITE_API_URL: ${{ vars.STAGING_API_URL }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
+          GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
+          GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri

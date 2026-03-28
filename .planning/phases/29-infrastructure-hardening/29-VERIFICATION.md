@@ -51,22 +51,22 @@ Orphaned IPNS records are cleaned up on deletion, test login endpoint is hardene
 
 ## Automated Checks
 
-| Check | Result |
-|-------|--------|
-| `grep "ArrayMaxSize(200)" apps/api/src/ipns/dto/unenroll.dto.ts` | PASS |
-| `grep "@Post('unenroll')" apps/api/src/ipns/ipns.controller.ts` | PASS |
-| `grep "async unenrollBatch" apps/api/src/ipns/ipns.service.ts` | PASS |
-| `grep "unenroll" packages/api-client/src/generated/ipns/ipns.ts` | PASS |
-| `grep -c "fireAndForgetUnenroll" packages/sdk/src/client.ts` >= 4 | PASS (5) |
-| `grep -c "collectSubtreeIpnsNames" packages/sdk/src/client.ts` >= 2 | PASS (4) |
-| `! grep "TODO: Phase 14" apps/web/src/services/folder.service.ts` | PASS |
-| `! grep "TODO: Phase 14" apps/web/src/services/delete.service.ts` | PASS |
-| `! grep "orphaned after deletion" apps/web/src/services/folder.service.ts` | PASS |
-| `grep "nodeEnv === 'production'" apps/api/src/auth/services/test-auth.service.ts` | PASS |
-| `grep "timingSafeEqual" apps/api/src/auth/services/test-auth.service.ts` | PASS |
-| `grep "127.0.0.1:5001" docker/docker-compose.staging.yml` | PASS |
-| `pnpm --filter @cipherbox/sdk build` | PASS |
-| `docker/grafana/alerts/test-login-rate.json` valid JSON | PASS |
+| Check                                                                             | Result   |
+| --------------------------------------------------------------------------------- | -------- |
+| `grep "ArrayMaxSize(200)" apps/api/src/ipns/dto/unenroll.dto.ts`                  | PASS     |
+| `grep "@Post('unenroll')" apps/api/src/ipns/ipns.controller.ts`                   | PASS     |
+| `grep "async unenrollBatch" apps/api/src/ipns/ipns.service.ts`                    | PASS     |
+| `grep "unenroll" packages/api-client/src/generated/ipns/ipns.ts`                  | PASS     |
+| `grep -c "fireAndForgetUnenroll" packages/sdk/src/client.ts` >= 4                 | PASS (5) |
+| `grep -c "collectSubtreeIpnsNames" packages/sdk/src/client.ts` >= 2               | PASS (4) |
+| `! grep "TODO: Phase 14" apps/web/src/services/folder.service.ts`                 | PASS     |
+| `! grep "TODO: Phase 14" apps/web/src/services/delete.service.ts`                 | PASS     |
+| `! grep "orphaned after deletion" apps/web/src/services/folder.service.ts`        | PASS     |
+| `grep "nodeEnv === 'production'" apps/api/src/auth/services/test-auth.service.ts` | PASS     |
+| `grep "timingSafeEqual" apps/api/src/auth/services/test-auth.service.ts`          | PASS     |
+| `grep "127.0.0.1:5001" docker/docker-compose.staging.yml`                         | PASS     |
+| `pnpm --filter @cipherbox/sdk build`                                              | PASS     |
+| `docker/grafana/alerts/test-login-rate.json` valid JSON                           | PASS     |
 
 ## Human Verification Items
 
