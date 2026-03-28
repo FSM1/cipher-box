@@ -107,6 +107,7 @@ pub mod implementation {
 
         fs.drain_upload_completions();
         fs.drain_content_prefetches();
+        fs.drain_filepointer_completions();
 
         let (ino, _parent_ino) = resolve_path(&fs, &path)
             .ok_or(status_object_name_not_found())?;
@@ -240,6 +241,7 @@ pub mod implementation {
         let mut fs = ctx.inner.lock().unwrap();
         fs.drain_upload_completions();
         fs.drain_content_prefetches();
+        fs.drain_filepointer_completions();
 
         let fh = context.fh;
         let ino = context.ino;

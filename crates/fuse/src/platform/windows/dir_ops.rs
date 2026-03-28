@@ -28,6 +28,7 @@ pub mod implementation {
         let ino = context.ino;
 
         fs.drain_refresh_completions();
+        fs.drain_filepointer_completions();
         fs.drain_upload_completions();
 
         let inode = fs

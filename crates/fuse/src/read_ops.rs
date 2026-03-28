@@ -18,6 +18,12 @@ pub(crate) mod implementation {
     use crate::constants::{
         CONTENT_DOWNLOAD_TIMEOUT, MAX_VERSIONS_PER_FILE, VERSION_COOLDOWN_MS,
     };
+
+    /// Maximum time to wait for an in-flight FilePointer resolution in open/read.
+    /// Finder retries automatically on EIO, so 5s is a reasonable upper bound.
+    const FILEPOINTER_POLL_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Interval between polls when waiting for FilePointer resolution.
+    const FILEPOINTER_POLL_INTERVAL: Duration = Duration::from_millis(100);
     use crate::file_handle::OpenFileHandle;
     use crate::helpers::{is_platform_special, mime_from_extension};
     use crate::inode::{InodeKind, ROOT_INO};
@@ -177,6 +183,7 @@ pub(crate) mod implementation {
         reply: ReplyAttr,
     ) {
         fs.drain_upload_completions();
+        fs.drain_filepointer_completions();
 
         if let Some(inode) = fs.inodes.get(ino) {
             reply.attr(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()));
@@ -208,7 +215,40 @@ pub(crate) mod implementation {
             }
         };
 
-        let (cid, encrypted_file_key, iv, encryption_mode) = file_info.unwrap();
+        // If this is an unresolved FilePointer, poll-wait for async resolution
+        let (cid, encrypted_file_key, iv, encryption_mode) = {
+            let mut info = file_info.unwrap();
+            if info.0.is_empty() {
+                let is_unresolved = fs.inodes.get(ino)
+                    .map(|i| matches!(&i.kind, InodeKind::File { file_meta_resolved: false, .. }))
+                    .unwrap_or(false);
+
+                if is_unresolved {
+                    log::debug!("open: ino={} is unresolved FilePointer, polling for resolution...", ino);
+                    let deadline = std::time::Instant::now() + FILEPOINTER_POLL_TIMEOUT;
+                    while std::time::Instant::now() < deadline {
+                        std::thread::sleep(FILEPOINTER_POLL_INTERVAL);
+                        fs.drain_filepointer_completions();
+                        if let Some(inode) = fs.inodes.get(ino) {
+                            if let InodeKind::File { cid: ref c, encrypted_file_key: ref efk, iv: ref i, encryption_mode: ref em, file_meta_resolved: true, .. } = inode.kind {
+                                if !c.is_empty() {
+                                    log::debug!("open: ino={} resolved during poll-wait", ino);
+                                    info = (c.clone(), efk.clone(), i.clone(), em.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // Re-check after polling
+                    if info.0.is_empty() {
+                        log::warn!("open: ino={} still unresolved after {}s poll-wait, returning EIO", ino, FILEPOINTER_POLL_TIMEOUT.as_secs());
+                        reply.error(libc::EIO);
+                        return;
+                    }
+                }
+            }
+            info
+        };
         let access_mode = flags & libc::O_ACCMODE;
 
         log::debug!(
@@ -384,6 +424,90 @@ pub(crate) mod implementation {
         };
 
         if cid.is_empty() {
+            // If this is an unresolved FilePointer, poll-wait for async resolution
+            let is_unresolved = fs.inodes.get(ino)
+                .map(|i| matches!(&i.kind, InodeKind::File { file_meta_resolved: false, .. }))
+                .unwrap_or(false);
+
+            if is_unresolved {
+                log::debug!("read: ino={} is unresolved FilePointer, polling for resolution...", ino);
+                let deadline = std::time::Instant::now() + FILEPOINTER_POLL_TIMEOUT;
+                while std::time::Instant::now() < deadline {
+                    std::thread::sleep(FILEPOINTER_POLL_INTERVAL);
+                    fs.drain_filepointer_completions();
+                    if let Some(inode) = fs.inodes.get(ino) {
+                        if let InodeKind::File { cid: ref c, file_meta_resolved: true, .. } = inode.kind {
+                            if !c.is_empty() {
+                                log::debug!("read: ino={} resolved during poll-wait", ino);
+                                // Re-extract file info and fall through to normal read path
+                                let (new_cid, new_efk, new_iv, new_em) = match &inode.kind {
+                                    InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } => {
+                                        (cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone())
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                // Check cache first
+                                if let Some(cached) = fs.content_cache.get(&new_cid) {
+                                    let start = offset as usize;
+                                    if start >= cached.len() {
+                                        reply.data(&[]);
+                                        return;
+                                    }
+                                    let end = std::cmp::min(start + size as usize, cached.len());
+                                    let data_slice = cached[start..end].to_vec();
+                                    if let Some(handle) = fs.open_files.get_mut(&fh) {
+                                        handle.cached_content = Some(cached.to_vec());
+                                    }
+                                    reply.data(&data_slice);
+                                    return;
+                                }
+                                // Not cached yet -- trigger prefetch, NFS/SMB will retry
+                                if !fs.prefetching.contains(&new_cid) {
+                                    let api = fs.api.clone();
+                                    let rt = fs.rt.clone();
+                                    let tx = fs.content_tx.clone();
+                                    let cid_clone = new_cid.clone();
+                                    let efk = new_efk;
+                                    let iv_clone = new_iv;
+                                    let enc_mode = new_em;
+                                    let pk = fs.private_key.clone();
+                                    fs.prefetching.insert(new_cid);
+
+                                    rt.spawn(async move {
+                                        let result = tokio::time::timeout(
+                                            CONTENT_DOWNLOAD_TIMEOUT,
+                                            fetch_and_decrypt_content_async(
+                                                &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
+                                            ),
+                                        ).await;
+                                        match result {
+                                            Ok(Ok(plaintext)) => {
+                                                let _ = tx.send(crate::PendingContent::Success { cid: cid_clone, data: plaintext });
+                                            }
+                                            Ok(Err(e)) => {
+                                                log::error!("Read prefetch (post-FP-resolve) failed for CID {}: {}", cid_clone, e);
+                                                let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
+                                            }
+                                            Err(_) => {
+                                                log::error!("Read prefetch (post-FP-resolve) timed out for CID {}", cid_clone);
+                                                let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
+                                            }
+                                        }
+                                    });
+                                }
+                                reply.error(libc::EIO); // NFS/SMB will retry, prefetch will populate cache
+                                return;
+                            }
+                        }
+                    }
+                }
+                // Still unresolved after timeout
+                log::warn!("read: ino={} still unresolved after {}s poll-wait, returning EIO", ino, FILEPOINTER_POLL_TIMEOUT.as_secs());
+                reply.error(libc::EIO);
+                return;
+            }
+
+            // Not an unresolved FilePointer -- fall through to existing empty-CID handling
             if let Some(content) = fs.pending_content.get(&ino) {
                 let start = offset as usize;
                 if start >= content.len() {
