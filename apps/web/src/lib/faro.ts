@@ -5,6 +5,7 @@ import {
   type TransportItem,
   LogLevel,
 } from '@grafana/faro-web-sdk';
+import { TracingInstrumentation } from '@grafana/faro-web-tracing';
 import { ReactIntegration } from '@grafana/faro-react';
 
 /** Field names containing crypto material or PII — scrubbed from all Faro payloads. */
@@ -23,9 +24,19 @@ const SENSITIVE_KEYS = new Set([
 /** 64+ hex chars = 32+ byte key material */
 const HEX_KEY_PATTERN = /^[0-9a-fA-F]{64,}$/;
 
+/** Matches hex key material embedded in URLs (invite links, hash fragments) */
+const URL_HEX_KEY_PATTERN = /[0-9a-fA-F]{64,}/g;
+
 function scrubValue(value: unknown): unknown {
-  if (typeof value === 'string' && value.length >= 64 && HEX_KEY_PATTERN.test(value)) {
-    return '[REDACTED_KEY]';
+  if (typeof value === 'string') {
+    if (value.length >= 64 && HEX_KEY_PATTERN.test(value)) {
+      return '[REDACTED_KEY]';
+    }
+    // Scrub hex keys embedded in URLs (e.g., invite links with key material in hash/query)
+    if (value.length > 64 && URL_HEX_KEY_PATTERN.test(value)) {
+      URL_HEX_KEY_PATTERN.lastIndex = 0; // Reset regex state after test()
+      return value.replace(URL_HEX_KEY_PATTERN, '[REDACTED_KEY]');
+    }
   }
   if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
     return '[REDACTED_BINARY]';
@@ -116,6 +127,14 @@ export function initFaro(): Faro | undefined {
     instrumentations: [
       ...getWebInstrumentations({
         captureConsole: false, // Phase 28 logger handles console capture
+        captureConsoleDisabledLevels: [],
+      }),
+      new TracingInstrumentation({
+        instrumentationOptions: {
+          // Prevent request/response bodies from reaching telemetry — may contain encrypted payloads
+          fetchInstrumentationOptions: { ignoreNetworkEvents: true },
+          xhrInstrumentationOptions: { ignoreNetworkEvents: true },
+        },
       }),
       new ReactIntegration(),
     ],
