@@ -6,6 +6,12 @@ Audit Nyquist validation gaps for a completed phase. Generate missing tests. Upd
 @/Users/michael/Code/cipher-box/.claude/get-shit-done/references/ui-brand.md
 </required_reading>
 
+<available_agent_types>
+Valid GSD subagent types (use exact names — do not fall back to 'general-purpose'):
+
+- gsd-nyquist-auditor — Validates verification coverage
+  </available_agent_types>
+
 <process>
 
 ## 0. Initialize
@@ -13,13 +19,14 @@ Audit Nyquist validation gaps for a completed phase. Generate missing tests. Upd
 ```bash
 INIT=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" init phase-op "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+AGENT_SKILLS_AUDITOR=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" agent-skills gsd-nyquist-auditor 2>/dev/null)
 ```
 
 Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`.
 
 ```bash
 AUDITOR_MODEL=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" resolve-model gsd-nyquist-auditor --raw)
-NYQUIST_CFG=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" config get workflow.nyquist_validation --raw)
+NYQUIST_CFG=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" config-get workflow.nyquist_validation --raw)
 ```
 
 If `NYQUIST_CFG` is `false`: exit with "Nyquist validation is disabled. Enable via /gsd:settings."
@@ -35,7 +42,7 @@ SUMMARY_FILES=$(ls "${PHASE_DIR}"/*-SUMMARY.md 2>/dev/null)
 
 - **State A** (`VALIDATION_FILE` non-empty): Audit existing
 - **State B** (`VALIDATION_FILE` empty, `SUMMARY_FILES` non-empty): Reconstruct from artifacts
-- **State C** (`SUMMARY_FILES` empty): Exit — "Phase {N} not executed. Run /gsd:execute-phase {N} first."
+- **State C** (`SUMMARY_FILES` empty): Exit — "Phase {N} not executed. Run /gsd:execute-phase {N} ${GSD_WS} first."
 
 ## 2. Discovery
 
@@ -91,7 +98,8 @@ Task(
     "<files_to_read>{PLAN, SUMMARY, impl files, VALIDATION.md}</files_to_read>" +
     "<gaps>{gap list}</gaps>" +
     "<test_infrastructure>{framework, config, commands}</test_infrastructure>" +
-    "<constraints>Never modify impl files. Max 3 debug iterations. Escalate impl bugs.</constraints>",
+    "<constraints>Never modify impl files. Max 3 debug iterations. Escalate impl bugs.</constraints>" +
+    "${AGENT_SKILLS_AUDITOR}",
   subagent_type="gsd-nyquist-auditor",
   model="{AUDITOR_MODEL}",
   description="Fill validation gaps for Phase {N}"
@@ -143,7 +151,7 @@ node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" co
 ```
 GSD > PHASE {N} IS NYQUIST-COMPLIANT
 All requirements have automated verification.
-▶ Next: /gsd:audit-milestone
+▶ Next: /gsd:audit-milestone ${GSD_WS}
 ```
 
 **Partial:**
@@ -151,7 +159,7 @@ All requirements have automated verification.
 ```
 GSD > PHASE {N} VALIDATED (PARTIAL)
 {M} automated, {K} manual-only.
-▶ Retry: /gsd:validate-phase {N}
+▶ Retry: /gsd:validate-phase {N} ${GSD_WS}
 ```
 
 Display `/clear` reminder.
