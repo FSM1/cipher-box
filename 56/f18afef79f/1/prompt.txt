@@ -1,0 +1,262 @@
+/gsd:manager
+
+---
+
+can you run me through a comparison of using a thin wrapper vs using pino/browser?
+
+---
+
+<task-notification>
+<task-id>b3mr8gcbs</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/b3mr8gcbs.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit ROADMAP fix" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b8av3870x</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/b8av3870x.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit markdownlintignore update" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6c1a2c15a221e948</task-id>
+<tool-use-id>toolu_01Cjh4Fyvtpd4oofGxy1R2t8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a6c1a2c15a221e948.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 28 code hygiene" completed</summary>
+<result>Plans committed successfully.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PHASE 28 PLANNED ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase 28: Code Hygiene & Logging** -- 4 plan(s) in 2 wave(s)
+
+| Wave | Plans      | What it builds                                              |
+| ---- | ---------- | ----------------------------------------------------------- |
+| 1    | 01         | Logger module with level filtering, redaction, transports   |
+| 2    | 02, 03, 04 | Console replacement, unpin fix, any casts, POC delete, lint |
+
+Research: Skipped (mechanical find-replace per roadmap)
+Verification: Passed
+
+---
+
+## ▶ Next Up
+
+**Execute Phase 28** -- run all 4 plans
+
+`/gsd:execute-phase 28`
+
+<sub>`/clear` first -- fresh context window</sub>
+
+---
+
+**Also available:**
+
+- `cat .planning/phases/28-code-hygiene-logging/*-PLAN.md` -- review plans
+- `/gsd:plan-phase 28 --research` -- re-research first
+- `/gsd:review --phase 28 --all` -- peer review plans with external AIs
+- `/gsd:plan-phase 28 --reviews` -- replan incorporating review feedback
+
+---</result>
+<usage><total_tokens>109704</total_tokens><tool_uses>51</tool_uses><duration_ms>423960</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a53807b30ee3e88d7</task-id>
+<tool-use-id>toolu_011yiZx785x49dcVPNg7xPUZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a53807b30ee3e88d7.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 29 infrastructure" completed</summary>
+<result>The planning is complete. Here's a summary:
+
+---
+
+**Phase 29: Infrastructure Hardening -- Planning Complete**
+
+Created 3 plans in 2 waves:
+
+| Wave | Plan | Title | Estimated |
+|------|------|-------|-----------|
+| 1 | 29-01 | IPNS batch unenroll API endpoint | 8 min |
+| 1 | 29-03 | Test login monitoring alert + Kubo access verification | 5 min |
+| 2 | 29-02 | SDK IPNS unenrollment on delete + legacy TODO cleanup | 10 min |
+
+**Plan details:**
+
+- **29-01-PLAN.md**: Creates `POST /ipns/unenroll` endpoint in `IpnsController` with `BatchUnenrollIpnsDto` (max 200 IPNS names, validated), adds `unenrollBatch()` to `IpnsService` that loops through `RepublishService.unenrollIpns()`, regenerates the API client.
+
+- **29-02-PLAN.md** (depends on 01): Adds `fireAndForgetUnenroll()` and `collectSubtreeIpnsNames()` helpers to `CipherBoxClient`, wires them into `deleteItem()`, `deleteToBin()`, and `permanentDelete()`. Cleans up 3 legacy TODO comments in `folder.service.ts` and `delete.service.ts` that reference deferred unenrollment.
+
+- **29-03-PLAN.md**: Creates `docker/grafana/alerts/test-login-rate.json` with a "Test Login Rate High" alert (threshold: 100/hour, `increase(cipherbox_auth_logins_total{method="test"}[1h])`). Verifies existing production guard (NODE_ENV check + timingSafeEqual) and Kubo 127.0.0.1 binding.
+
+**Key decisions from CONTEXT.md honored:**
+- Kubo port 5001 hardening deferred (D-10) -- already bound to 127.0.0.1 in Docker
+- Test login endpoint NOT removed (D-09) -- E2E tests depend on it
+- SDK layer, not legacy folder.service.ts, is the integration point (D-04)
+- Fire-and-forget pattern for unenrollment (D-05)
+
+**Files committed:** `.planning/phases/29-infrastructure-hardening/29-{01,02,03}-PLAN.md`, `.planning/ROADMAP.md` (updated plan count)</result>
+<usage><total_tokens>112035</total_tokens><tool_uses>68</tool_uses><duration_ms>479347</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2c9d78ab37b73a06</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a2c9d78ab37b73a06.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute phase 28 code hygiene" completed</summary>
+<result>Phase 28 execution is complete. Here is the summary:
+
+---
+
+## Phase 28: Code Hygiene & Logging — Execution Complete
+
+**Waves:** 1 | **Plans:** 4/4 complete
+
+| Plan | Name | Status |
+|------|------|--------|
+| 28-01 | Structured Logger Wrapper & Console Replacement | Complete |
+| 28-02 | Fix Silenced Unpin Failures | Complete |
+| 28-03 | Fix as-any Type Safety Gaps | Complete |
+| 28-04 | Archive Legacy POC | Complete |
+
+### What was done
+
+1. **Structured logger** (`apps/web/src/lib/logger.ts`): Created with LogLevel enum, level filtering (production: WARN+, development: DEBUG+), timestamped structured output. Replaced all 124 raw `console.*` calls across 28 web app source files.
+
+2. **Silenced unpin failures**: All 15 `.catch(() => {})` patterns in production web code replaced with logged warnings. Also fixed the one occurrence in `packages/sdk/src/client.ts`.
+
+3. **Type safety**: All 6 `as any` casts eliminated. Polyfill augmentations use proper `declare global` blocks. Window debug properties typed via interface extensions.
+
+4. **POC archived**: `00-Preliminary-R&D/poc/` removed (8 files, 2527 lines). `ARCHIVED.md` created with provenance information.
+
+### Verification: PASSED
+
+All 4 success criteria verified. Zero console.* calls, zero silenced catches, zero `as any` casts remain in production web code. POC directory removed.
+
+### Commits
+
+- `994ff0d24` — refactor(web): replace console.* calls with structured logger
+- `3c0cb8b07` — fix(web): replace silenced catch-empty-block with logged warnings
+- `0cee81ea9` — refactor(web): eliminate as-any casts with proper type declarations
+- `ee9bcd4e4` — chore: archive legacy POC directory
+- `5388d26f1` — docs(phase-28): complete phase execution and verification
+
+Branch `feat/phase-28-code-hygiene-logging` pushed to origin.</result>
+<usage><total_tokens>108536</total_tokens><tool_uses>126</tool_uses><duration_ms>704866</duration_ms></usage>
+<worktree><worktreePath>/Users/michael/Code/cipher-box/.claude/worktrees/agent-a2c9d78a</worktreePath><worktreeBranch>worktree-agent-a2c9d78a</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a91260183ce46c002</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a91260183ce46c002.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute phase 28 code hygiene" completed</summary>
+<result>These are just English prose matches ("has any"), not actual `as any` casts. The verification is correct -- all actual `as any` casts have been removed.
+
+The phase is fully complete. All execution steps have been performed:
+
+1. **All 4 plans executed** with SUMMARY.md files
+2. **VERIFICATION.md** exists with `status: passed`
+3. **ROADMAP.md** shows Phase 28 as Complete (2026-03-28)
+4. **STATE.md** shows Phase 28 COMPLETE, 4/4 plans
+
+Implementation spot-checks all pass:
+- `apps/web/src/lib/logger.ts` exists with level filtering
+- 0 raw `console.*` calls in production code (4 only inside logger.ts itself)
+- 0 `.catch(() => {})` patterns in production code (1 only in test file)
+- 0 actual `as any` casts in production code
+- `00-Preliminary-R&D/poc/` directory removed
+
+There is nothing remaining to execute for this phase. The previous executor agent in worktree `agent-a2c9d78a` already completed all work, including verification and state updates. No additional commits are needed.</result>
+<usage><total_tokens>54111</total_tokens><tool_uses>22</tool_uses><duration_ms>82091</duration_ms></usage>
+<worktree><worktreePath>/Users/michael/Code/cipher-box/.claude/worktrees/agent-a9126018</worktreePath><worktreeBranch>worktree-agent-a9126018</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+would it not make sense to actually move some of this functionality, especially around state, to the sdk? is this tightly coupled react code, or is there some functionality that could be useful in the sdk and has not yet been migrated?
+
+---
+
+would it not make sense to actually move some of this functionality, especially around state, to the sdk? is this tightly coupled react code, or is there some functionality that could be useful in the sdk and has not yet been migrated?
+
+---
+
+you good there?
+
+---
+
+<task-notification>
+<task-id>a207a2996a6d1c94e</task-id>
+<tool-use-id>toolu_01BmPYjY2WwbrtRVB9FbTFu2</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a207a2996a6d1c94e.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute phase 29 infrastructure" completed</summary>
+<result>## Phase 29: Infrastructure Hardening -- Execution Complete
+
+**Waves:** 2 | **Plans:** 3/3 complete
+
+| Wave | Plans | Status |
+|------|-------|--------|
+| 1 | 29-01, 29-03 | Complete |
+| 2 | 29-02 | Complete |
+
+### Plan Details
+
+1. **29-01**: POST /ipns/unenroll batch endpoint with validation (ArrayMaxSize 200), IpnsService.unenrollBatch, and regenerated API client exposing `ipnsControllerUnenrollBatch`
+2. **29-02**: `fireAndForgetUnenroll()` and `collectSubtreeIpnsNames()` wired into 4 SDK delete methods (deleteItem, deleteToBin, permanentDelete, emptyBin) + legacy TODO cleanup in folder.service.ts and delete.service.ts
+3. **29-03**: Grafana alert rule for test-login rate monitoring (>100/hr threshold on staging) + verified existing production guards (NODE_ENV check, timingSafeEqual, unit tests) and Kubo port binding (127.0.0.1:5001)
+
+### Verification: All 4 success criteria PASSED
+
+### Key Files Modified
+
+- `/Users/michael/Code/cipher-box/.claude/worktrees/agent-a207a299/apps/api/src/ipns/dto/unenroll.dto.ts` (new)
+- `/Users/michael/Code/cipher-box/.claude/worktrees/agent-a207a299/apps/api/src/ipns/ipns.controller.ts`
+- `/Users/michael/Code/cipher-box/.claude/worktrees/agent-a207a299/apps/api/src/ipns/ipns.service.ts`
+- `/Users/michael/Code/cipher-box/.claude/worktrees/agent-a207a299/packages/sdk/src/client.ts`
+- `/Users/michael/Code/cipher-box/.claude/worktrees/agent-a207a299/docker/grafana/alerts/test-login-rate.json` (new)
+
+### Issues Encountered
+
+- Worktree branch contention prevented direct checkout of `feat/phase-28-code-hygiene-logging`; resolved by creating a new branch from main and merging phase-28 changes via fast-forward
+- Pre-existing implicit `any` type in SDK catch callback fixed as part of build verification
+
+Branch `feat/phase-29-infra-hardening` pushed and ready for PR.</result>
+<usage><total_tokens>140168</total_tokens><tool_uses>135</tool_uses><duration_ms>735238</duration_ms></usage>
+<worktree><worktreePath>/Users/michael/Code/cipher-box/.claude/worktrees/agent-a207a299</worktreePath><worktreeBranch>worktree-agent-a207a299</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+asdfasdf
+
+---
+
+test
+
+---
+
+hi
+
+---
+
+/gsd:ship 28
