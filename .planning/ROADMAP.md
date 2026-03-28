@@ -297,7 +297,13 @@ Plans:
 3. `POST /auth/test-login` is verified to be unreachable when `NODE_ENV=production`, with a monitoring alert for staging usage
 4. Kubo API (port 5001) is behind a reverse proxy with auth or Kubo ACL in staging/production deployments
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+
+- [ ] 29-01-PLAN.md -- IPNS batch unenroll API endpoint (POST /ipns/unenroll) + API client regeneration
+- [ ] 29-02-PLAN.md -- SDK IPNS unenrollment on delete (fireAndForgetUnenroll in deleteItem/deleteToBin/permanentDelete) + legacy TODO cleanup
+- [ ] 29-03-PLAN.md -- Test login Grafana monitoring alert + Kubo access verification
 
 ### Phase 30: Web App Observability
 
@@ -365,7 +371,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete    | 2026-03-26 |
 | 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete    | 2026-03-26 |
 | 28. Code Hygiene & Logging                | v1.1      | 0/TBD          | Not started | -          |
-| 29. Infrastructure Hardening              | v1.1      | 0/TBD          | Not started | -          |
+| 29. Infrastructure Hardening              | v1.1      | 0/3            | Not started | -          |
 | 30. Web App Observability                 | v1.1      | 0/TBD          | Not started | -          |
 | 31. Structural Decomposition              | v1.1      | 0/TBD          | Not started | -          |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 0/TBD          | Not started | -          |
