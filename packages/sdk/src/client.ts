@@ -16,9 +16,9 @@
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
 import type { PinningProvider } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
-import { createAxiosInstance } from '@cipherbox/api-client';
+import { createAxiosInstance, ipnsControllerUnenrollBatch } from '@cipherbox/api-client';
 import { clearBytes } from '@cipherbox/crypto';
-import type { FolderChild } from '@cipherbox/core';
+import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
@@ -140,6 +140,46 @@ export class CipherBoxClient {
         failedRecipients,
       } as SdkEvent);
     }
+  }
+
+  /**
+   * Fire-and-forget IPNS unenrollment for deleted items.
+   * Collects IPNS names from removed items and calls the batch unenroll API.
+   * Failures are logged but never block the caller.
+   */
+  private fireAndForgetUnenroll(ipnsNames: string[]): void {
+    if (ipnsNames.length === 0) return;
+
+    const apiOptions = this.ctx.axiosInstance
+      ? { _axiosInstance: this.ctx.axiosInstance }
+      : undefined;
+
+    ipnsControllerUnenrollBatch({ ipnsNames }, apiOptions).catch((err: unknown) => {
+      console.warn(
+        `[CipherBox] IPNS unenroll failed for ${ipnsNames.length} name(s):`,
+        err instanceof Error ? err.message : err
+      );
+    });
+  }
+
+  /**
+   * Recursively collect all IPNS names from a folder subtree.
+   * Walks the in-memory folderTree to find file IPNS names and subfolder IPNS names.
+   * Only collects from loaded folders -- unloaded subtrees are skipped.
+   */
+  private collectSubtreeIpnsNames(folderIpnsName: string): string[] {
+    const names: string[] = [folderIpnsName];
+    const folder = this.folderTree.get(folderIpnsName);
+    if (!folder) return names;
+
+    for (const child of folder.children) {
+      if (child.type === 'file') {
+        names.push((child as FilePointer).fileMetaIpnsName);
+      } else if (child.type === 'folder') {
+        names.push(...this.collectSubtreeIpnsNames((child as FolderEntry).ipnsName));
+      }
+    }
+    return names;
   }
 
   /**
@@ -565,6 +605,17 @@ export class CipherBoxClient {
         sequenceNumber: newSequenceNumber,
       });
 
+      // 5. Fire-and-forget IPNS unenrollment
+      const ipnsNamesToUnenroll: string[] = [];
+      if (removedItem.type === 'file') {
+        ipnsNamesToUnenroll.push((removedItem as FilePointer).fileMetaIpnsName);
+      } else if (removedItem.type === 'folder') {
+        ipnsNamesToUnenroll.push(
+          ...this.collectSubtreeIpnsNames((removedItem as FolderEntry).ipnsName)
+        );
+      }
+      this.fireAndForgetUnenroll(ipnsNamesToUnenroll);
+
       return { removedItem };
     });
   }
@@ -855,7 +906,7 @@ export class CipherBoxClient {
     return this.withOperation('deleteToBin', async () => {
       if (!this.binState) throw new BinNotLoadedError();
 
-      const { updatedBinState } = await binOps.addToBin({
+      const { updatedBinState, removedItem } = await binOps.addToBin({
         folderIpnsName,
         childId,
         parentPath,
@@ -876,6 +927,17 @@ export class CipherBoxClient {
         sequenceNumber: folderState?.sequenceNumber ?? 0n,
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
+
+      // Fire-and-forget IPNS unenrollment for the removed item
+      const ipnsNamesToUnenroll: string[] = [];
+      if (removedItem.type === 'file') {
+        ipnsNamesToUnenroll.push((removedItem as FilePointer).fileMetaIpnsName);
+      } else if (removedItem.type === 'folder') {
+        ipnsNamesToUnenroll.push(
+          ...this.collectSubtreeIpnsNames((removedItem as FolderEntry).ipnsName)
+        );
+      }
+      this.fireAndForgetUnenroll(ipnsNamesToUnenroll);
     });
   }
 
@@ -921,6 +983,9 @@ export class CipherBoxClient {
     return this.withOperation('permanentDelete', async () => {
       if (!this.binState) throw new BinNotLoadedError();
 
+      // Capture entry before deletion for IPNS unenrollment
+      const entry = this.binState.entries.find((e) => e.id === entryId);
+
       const { updatedBinState } = await binOps.permanentDeleteFromBin({
         entryId,
         binState: this.binState,
@@ -929,6 +994,18 @@ export class CipherBoxClient {
 
       this.binState = updatedBinState;
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
+
+      // Fire-and-forget IPNS unenrollment for permanently deleted bin entry
+      if (entry) {
+        const ipnsNamesToUnenroll: string[] = [];
+        if (entry.filePointer?.fileMetaIpnsName) {
+          ipnsNamesToUnenroll.push(entry.filePointer.fileMetaIpnsName);
+        }
+        if (entry.folderEntry?.ipnsName) {
+          ipnsNamesToUnenroll.push(entry.folderEntry.ipnsName);
+        }
+        this.fireAndForgetUnenroll(ipnsNamesToUnenroll);
+      }
     });
   }
 
@@ -939,6 +1016,17 @@ export class CipherBoxClient {
     return this.withOperation('emptyBin', async () => {
       if (!this.binState) throw new BinNotLoadedError();
 
+      // Collect all IPNS names before emptying
+      const ipnsNamesToUnenroll: string[] = [];
+      for (const entry of this.binState.entries) {
+        if (entry.filePointer?.fileMetaIpnsName) {
+          ipnsNamesToUnenroll.push(entry.filePointer.fileMetaIpnsName);
+        }
+        if (entry.folderEntry?.ipnsName) {
+          ipnsNamesToUnenroll.push(entry.folderEntry.ipnsName);
+        }
+      }
+
       const { updatedBinState } = await binOps.emptyBin({
         binState: this.binState,
         binCtx: this.getBinContext(),
@@ -946,6 +1034,9 @@ export class CipherBoxClient {
 
       this.binState = updatedBinState;
       this.emitter.emit({ type: 'bin:updated', entries: [] });
+
+      // Fire-and-forget IPNS unenrollment for all emptied bin entries
+      this.fireAndForgetUnenroll(ipnsNamesToUnenroll);
     });
   }
 
