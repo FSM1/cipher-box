@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 28: Code Hygiene & Logging** - Structured logger wrapper, replace 124 console.\* calls, fix silenced unpin failures, clean any casts, archive legacy POC (completed 2026-03-28)
 - [x] **Phase 29: Infrastructure Hardening** - Wire up IPNS unenrollment on deletion, test login endpoint hardening, IPFS node access control (completed 2026-03-28)
 - [ ] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (NEEDS DISCUSSION)
-- [ ] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (NEEDS DISCUSSION)
+- [x] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (completed 2026-03-28)
 - [ ] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread
 - [ ] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend
 
@@ -340,7 +340,13 @@ Plans:
 4. All existing E2E tests pass after decomposition (sharing-workflow, writable-shares, full-workflow)
 5. No new `any` casts or type regressions introduced
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+
+- [x] 31-01-PLAN.md -- SDK-side module extraction (tree utils, error utils, share context)
+- [x] 31-02-PLAN.md -- Web layer barrel re-exports and SDK adoption
+- [x] 31-03-PLAN.md -- Hook split and component extraction
 
 ### Phase 32: FUSE Async FilePointer Resolution
 
@@ -394,7 +400,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 28. Code Hygiene & Logging                | v1.1      | 4/4            | Complete    | 2026-03-28 |
 | 29. Infrastructure Hardening              | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 30. Web App Observability                 | v1.1      | 0/TBD          | Not started | -          |
-| 31. Structural Decomposition              | v1.1      | 0/TBD          | Not started | -          |
+| 31. Structural Decomposition              | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 0/TBD          | Not started | -          |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 0/TBD          | Not started | -          |
 
@@ -412,7 +418,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 5. SharedFileBrowser shows [RW] badge, write toolbar, and full context menu for write shares
 6. Write operations use withConflictRetry for multi-writer coordination (same as multi-device sync)
 
-**Plans:** 3/3 plans complete
+**Plans:** 0/3 plans executed
 
 Plans:
 
