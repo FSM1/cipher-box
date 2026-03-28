@@ -53,7 +53,7 @@ describe('bin operations', () => {
       vi.mocked(sdkCore.resolveIpnsRecord)
         .mockResolvedValueOnce(null) // initial load attempt
         .mockResolvedValueOnce({ cid: 'bafyempty', sequenceNumber: 1n, signatureVerified: true }); // verify after publish
-      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafyempty' });
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafyempty', size: 3, recorded: true });
       vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
         success: true,
         sequenceNumber: 1n,
@@ -74,7 +74,7 @@ describe('bin operations', () => {
       vi.mocked(sdkCore.resolveIpnsRecord)
         .mockResolvedValueOnce(null) // initial load attempt
         .mockResolvedValueOnce({ cid: 'bafyempty', sequenceNumber: 1n, signatureVerified: true }); // verify after publish
-      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafyempty' });
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafyempty', size: 3, recorded: true });
       vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
         success: true,
         sequenceNumber: 1n,
@@ -152,7 +152,7 @@ describe('bin operations', () => {
         cid: 'bafynew',
         newSequenceNumber: 2n,
       });
-      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin' });
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin', size: 3, recorded: true });
       vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
         success: true,
         sequenceNumber: 1n,
@@ -215,7 +215,7 @@ describe('bin operations', () => {
         cid: 'bafynew',
         newSequenceNumber: 2n,
       });
-      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin' });
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin', size: 3, recorded: true });
       vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
         success: true,
         sequenceNumber: 2n,
@@ -285,7 +285,7 @@ describe('bin operations', () => {
   describe('permanentDeleteFromBin', () => {
     it('removes entry from bin and unpins CID', async () => {
       vi.mocked(sdkCore.unpinFromIpfs).mockResolvedValue(undefined);
-      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin' });
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin', size: 3, recorded: true });
       vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
         success: true,
         sequenceNumber: 2n,
@@ -325,7 +325,7 @@ describe('bin operations', () => {
   describe('emptyBin', () => {
     it('removes all entries and publishes empty bin', async () => {
       vi.mocked(sdkCore.unpinFromIpfs).mockResolvedValue(undefined);
-      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin' });
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin', size: 3, recorded: true });
       vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
         success: true,
         sequenceNumber: 3n,
@@ -375,7 +375,7 @@ describe('bin operations', () => {
       vi.useFakeTimers();
 
       vi.mocked(sdkCore.unpinFromIpfs).mockResolvedValue(undefined);
-      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin' });
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin', size: 3, recorded: true });
       vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
         success: true,
         sequenceNumber: 2n,
