@@ -1,41 +1,326 @@
+ok back to phasee 29 worktree please
+
+---
+
 <task-notification>
-<task-id>aa7ba5f234461e818</task-id>
+<task-id>a40251c64460adef2</task-id>
 <tool-use-id>REDACTED</tool-use-id>
-<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/aa7ba5f234461e818.output</output-file>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a40251c64460adef2.output</output-file>
 <status>completed</status>
-<summary>Agent "Execute phase 32: FUSE async FilePointer" completed</summary>
-<result>These are just version bumps from release-please updates that diverged between branches. Not substantive to our changes. I'll leave it uncommitted since it's a Cargo.lock discrepancy from the branch base.
+<summary>Agent "Execute phase 30: Web App Observability" completed</summary>
+<result>---
 
-Now let me verify the final state of changes with a quick summary.
+## Phase 30: Web App Observability -- Execution Complete
 
-## Phase 32 Execution Complete
+**Waves:** 2 | **Plans:** 4/4 complete
 
-**Phase 32: FUSE Async FilePointer Resolution** -- 3/3 plans complete
+| Wave | Plans | Status |
+|------|-------|--------|
+| 1 | 30-01 | Complete |
+| 2 | 30-02, 30-03, 30-04 | Complete |
 
-### Summary of changes
+### Plan Details
 
-**Plan 32-01 (Wave 1):** Added `PendingFilePointer` enum, `filepointer_tx`/`filepointer_rx` channel pair, `resolving_file_pointers` dedup `HashSet`, and `drain_filepointer_completions()` method to `CipherBoxFS`. Initialized in both macOS and Windows construction sites.
+1. **30-01**: Grafana Faro SDK with beforeSend privacy gate stripping keys, tokens, emails, and hex-encoded secrets from all telemetry
+2. **30-02**: React error boundary with terminal-aesthetic fallback UI that reassures users their encrypted data is safe
+3. **30-03**: Vite source map upload to Grafana Cloud with hidden maps (never served to browser) and staging env vars in all build steps
+4. **30-04**: Faro user identity wired into auth flow (publicKey only) with logger transport ready for Phase 28 integration
 
-**Plan 32-02 (Wave 2):** Replaced the synchronous `block_with_timeout()` loop in `drain_refresh_completions()` with `tokio::spawn()` async tasks. Changed from `get_unresolved_file_pointers()` (global) to `get_unresolved_file_pointers_for_parent(refresh.ino)` (scoped to refreshed folder). Added `drain_filepointer_completions()` calls to `handle_readdir`, `handle_lookup`, and Windows `handle_read_directory`.
+### Key Files Created/Modified
 
-**Plan 32-03 (Wave 2):** Added poll-wait fallback (5s/100ms) to `handle_open()` and `handle_read()` for files that are still unresolved FilePointers when accessed. Added `drain_filepointer_completions()` to `handle_getattr` and Windows `handle_open`/`handle_read`.
+- `apps/web/src/lib/faro.ts` -- Faro initialization, privacy scrubbing, user identity, logger transport
+- `apps/web/src/components/ErrorFallback.tsx` -- Terminal-aesthetic error recovery UI
+- `apps/web/src/App.tsx` -- FaroErrorBoundary wrapping route tree
+- `apps/web/src/App.css` -- Error fallback styles with focus-visible accessibility
+- `apps/web/vite.config.ts` -- Conditional Faro rollup plugin with hidden source maps
+- `apps/web/src/hooks/useAuth.ts` -- setFaroUser on auth, clearFaroUser on logout
+- `.github/workflows/deploy-staging.yml` -- VITE_FARO_URL/GRAFANA_FARO_API_KEY/GRAFANA_STACK_ID in all 4 build steps
 
-### Key files modified
-- `/Users/michael/Code/cipher-box/crates/fuse/src/lib.rs` -- PendingFilePointer enum, struct fields, async spawning in drain_refresh_completions, drain method
-- `/Users/michael/Code/cipher-box/crates/fuse/src/read_ops.rs` -- poll-wait in open/read, drain in getattr/lookup
-- `/Users/michael/Code/cipher-box/crates/fuse/src/dir_ops.rs` -- drain in readdir
-- `/Users/michael/Code/cipher-box/crates/fuse/src/platform/windows/dir_ops.rs` -- drain in readdir
-- `/Users/michael/Code/cipher-box/crates/fuse/src/platform/windows/read_ops.rs` -- drain in open/read
-- `/Users/michael/Code/cipher-box/apps/desktop/src-tauri/src/fuse/mod.rs` -- channel init, import
-- `/Users/michael/Code/cipher-box/apps/desktop/src-tauri/src/fuse/windows/mod.rs` -- channel init, import
+### Issues / Notes
 
-### PR created
-https://github.com/FSM1/cipher-box/pull/388
-
-### Performance impact
-Before: FilePointer resolution blocked the FUSE thread for O(N * 10s) per folder during metadata refresh. With 10 files, a single `drain_refresh_completions()` call could block for up to 100 seconds.
-
-After: All FilePointer resolutions run concurrently as async tasks. The FUSE thread is never blocked by network I/O. Worst-case latency drops from O(N * 10s) to O(10s) regardless of file count.</result>
-<usage><total_tokens>147972</total_tokens><tool_uses>102</tool_uses><duration_ms>568014</duration_ms></usage>
-<worktree><worktreePath>/Users/michael/Code/cipher-box/.claude/worktrees/agent-aa7ba5f2</worktreePath><worktreeBranch>worktree-agent-aa7ba5f2</worktreeBranch></worktree>
+- Phase 28 (logger module) has not been executed yet. The `registerFaroTransport` function is exported and ready but the main.tsx wiring call is deferred until the logger ships.
+- GitHub environment variables `VITE_FARO_URL`, `GRAFANA_FARO_API_KEY`, and `GRAFANA_STACK_ID` need to be configured in the staging environment before Faro activates in staging builds.
+- Branch `phase-30-web-app-observability` pushed to origin, ready for PR.</result>
+<usage><total_tokens>129678</total_tokens><tool_uses>107</tool_uses><duration_ms>650815</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a19048f94687e9f07</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a19048f94687e9f07.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 31: Structural Decomposition" completed</summary>
+<result>All artifacts are in place. Here is the summary:
+
+---
+
+**Phase 31: Structural Decomposition -- Planning Complete**
+
+**Branch:** `phase-31-structural-decomposition` (pushed to origin)
+
+**Artifacts created:**
+- `.planning/phases/31-structural-decomposition/31-RESEARCH.md` -- Code analysis of all 5 target files, SDK structure mapping, dependency chains, risk assessment
+- `.planning/phases/31-structural-decomposition/31-VALIDATION.md` -- Nyquist-compliant validation strategy using vitest + pnpm build + Playwright E2E
+- `.planning/phases/31-structural-decomposition/31-01-PLAN.md` -- Wave 1: SDK-side module extraction (3 tasks)
+- `.planning/phases/31-structural-decomposition/31-02-PLAN.md` -- Wave 2: Web layer barrel re-exports and SDK adoption (3 tasks)
+- `.planning/phases/31-structural-decomposition/31-03-PLAN.md` -- Wave 3: Hook splits and component extraction (4 tasks)
+
+**3 plans across 3 sequential waves:**
+
+| Wave | Plan | What it builds | Est. time |
+|------|------|---------------|-----------|
+| 1 | 31-01 | New SDK modules: tree utils (sdk-core), error/retry utils (sdk), share context builder + key cache (sdk) | 15 min |
+| 2 | 31-02 | Web barrel re-exports: folder.service.ts delegates to SDK-core, folder-helpers.ts re-exports SDK conflict retry, useSharedNavigation adopts SDK utilities | 15 min |
+| 3 | 31-03 | 3-hook split of useSharedNavigation (<400 lines each), FileBrowser handler extraction, SharedFileBrowser handler + sub-component extraction | 30 min |
+
+**Key decisions:**
+- useSharedNavigation splits into 3 hooks (not 2) to meet the "<400 lines each" success criterion: orchestrator + navigation actions + write ops
+- D-09 (bin purgeExpired migration) and D-15 (bin.service.ts retirement) deferred -- bin.service.ts is already deprecated with only 2 consumers, SDK equivalents exist
+- Barrel re-exports preserve all existing import paths -- zero consumer changes needed in Wave 2</result>
+<usage><total_tokens>115692</total_tokens><tool_uses>95</tool_uses><duration_ms>806590</duration_ms></usage>
+<worktree><worktreePath>/Users/michael/Code/cipher-box/.claude/worktrees/agent-a19048f9</worktreePath><worktreeBranch>worktree-agent-a19048f9</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+yeah lets do that
+
+---
+
+ok, first things first, I would like to /simplify the phase 30 code
+
+---
+
+<task-notification>
+<task-id>af7c05924f423f6cb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/af7c05924f423f6cb.output</output-file>
+<status>completed</status>
+<summary>Agent "Code quality review Phase 30" completed</summary>
+<result>Perfect! Now I have all the code I need to review. Let me compile my findings.
+
+## CODE QUALITY REVIEW: Phase 30 (Web App Observability)
+
+Based on my thorough review of the four Phase 30 files, here are my findings:
+
+### ISSUES FOUND
+
+#### 1. **Copy-paste with variation in context object transformation (Lines 192-195 vs 203)**
+**Severity: Medium** - Code duplication with inconsistency
+
+In `faro.ts`, the `registerFaroTransport` function has duplicate context transformation logic:
+
+- **Lines 192-195** (error level): Filters out 'error' key, then maps to strings
+- **Line 203** (warn level): Maps to strings WITHOUT filtering 'error' key
+
+This creates maintenance burden. If context keys need scrubbing (per privacy requirements), both paths must be kept in sync. The error path is more defensive but the warn path isn't.
+
+**Recommendation**: Extract context transformation into a shared helper:
+```typescript
+function normalizeContextForFaro(context?: Record<string, unknown>): Record<string, string> | undefined {
+  if (!context) return undefined;
+  return Object.fromEntries(
+    Object.entries(context)
+      .filter(([k]) => k !== 'error')
+      .map(([k, v]) => [k, String(v)])
+  );
+}
+```
+
+---
+
+#### 2. **Redundant object spread pattern in beforeSend (Lines 84-89, 94-103)**
+**Severity: Low** - Performance and readability issue
+
+The `beforeSend` function creates new objects via spread on every transport item:
+
+```typescript
+item = {
+  ...item,
+  payload: scrubObject(...),
+};
+```
+
+This is called for **every** telemetry item sent to Grafana. The spread creates unnecessary object copies when only the payload changes. Similarly for the email stripping (lines 94-103).
+
+**Recommendation**: Mutate selectively or use a helper that patches only changed fields. Faro's TransportItem likely expects immutability, but consider if payload scrubbing + email stripping could be batched or if the payload is already a new object from Faro's serialization layer.
+
+---
+
+#### 3. **The clearFaroUser type assertion is inelegant (Line 164)**
+**Severity: Low** - Type safety issue
+
+```typescript
+faro.api.setUser(null as unknown as Parameters<typeof faro.api.setUser>[0]);
+```
+
+This is verbose and unclear. The pattern suggests Faro's type signature doesn't accept `null` directly. Better alternatives:
+
+```typescript
+// Option A: Type guard with assertion
+const clearUserParam = null as unknown as Parameters<typeof faro.api.setUser>[0];
+faro.api.setUser(clearUserParam);
+
+// Option B: Check Faro's public API for a dedicated clear method
+// (if one exists)
+
+// Option C: Document why null casting is needed
+```
+
+**Recommendation**: Add a comment explaining why the cast is necessary (e.g., "Faro's TypeScript types are strict but runtime accepts null"), or consider using Faro's type-safe clear API if it exists.
+
+---
+
+#### 4. **Unusual mutable array reference pattern (Line 176)**
+**Severity: Low** - Architecture pattern worth documenting
+
+The `registerFaroTransport` function takes a **mutable array reference** from the logger module:
+
+```typescript
+export function registerFaroTransport(
+  loggerTransports: Array<
+    (level: string, message: string, context?: Record<string, unknown>) => void
+  >
+): void {
+  // ...
+  loggerTransports.push(faroTransport);
+}
+```
+
+This is unusual for library code—it mutates caller's state. It works because Phase 28 logger (presumably) exports a mutable transports array, but this creates tight coupling.
+
+**Recommendation**: Document why this pattern was chosen (e.g., "Transports must be injected at runtime after logger initialization"). Consider an alternative pub-sub pattern if other transports exist, or a registration callback function instead of array mutation. **Confirm** this pattern aligns with how other Phase 28 integrations (monitoring, tracing) inject transports.
+
+---
+
+#### 5. **Stringly-typed log levels (Lines 188, 199)**
+**Severity: Low** - Type safety
+
+The `faroTransport` function checks `level === 'error'` and `level === 'warn'` as strings. No constants or enum exists locally. If the logger module defines level constants (e.g., `LogLevel.ERROR`), they should be imported and reused.
+
+**Recommendation**: Check if `@cipherbox/core` or Phase 28 logger exports a `LogLevel` enum and use it for these comparisons.
+
+---
+
+### CODE QUALITY CHECKS: PASSED
+
+✓ **ErrorFallback.tsx**: Clean, simple, no issues. Proper terminal aesthetic wrapping of `//` text.
+
+✓ **vite.config.ts**: Clean. Proper environment variable checks, conditional plugin array, good comments.
+
+✓ **useAuth.ts integration**: Calls to `setFaroUser` and `clearFaroUser` are appropriately placed (after auth complete, on logout, on session restore).
+
+✓ **No redundant state/caching**: Faro instance is properly cached at module level.
+
+✓ **No leaky abstractions**: Privacy scrubbing is well-encapsulated.
+
+✓ **No unnecessary comments explaining WHAT**: Comments explain WHY (e.g., "Don't persist session across tabs").
+
+✓ **Scrubbing logic**: `scrubValue` and `scrubObject` are correct and safe. Depth limit prevents infinite recursion.
+
+---
+
+### SUMMARY
+
+**3 Medium/Low issues found**, all in `faro.ts`:
+
+1. **Copy-paste context transformation** (lines 192-195 vs 203) — Extract shared helper
+2. **Redundant object spreads** (lines 84-89, 94-103) — Review performance impact or document necessity
+3. **Type assertion inelegance** (line 164) — Add explanatory comment
+4. **Unusual mutable array injection** (line 176) — Document coupling; confirm alignment with Phase 28
+5. **Stringly-typed log levels** (lines 188, 199) — Use constants/enum from logger module
+
+Overall code quality is **solid**. The issues are refinements, not bugs. The privacy scrubbing is well-designed and secure.</result>
+<usage><total_tokens>43348</total_tokens><tool_uses>30</tool_uses><duration_ms>58096</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a245ef924a26443ce</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a245ef924a26443ce.output</output-file>
+<status>completed</status>
+<summary>Agent "Code reuse review Phase 30" completed</summary>
+<result>Excellent! Now I have enough information. Let me compile my final analysis:
+
+## Code Reuse Review - Phase 30 (Web App Observability)
+
+Based on my comprehensive review of the CipherBox codebase, here are my findings:
+
+### CLEAN FINDINGS
+
+**No code reuse issues detected.** The Phase 30 changes introduce new functionality that does not duplicate existing patterns:
+
+#### 1. **Scrubbing/Sanitization (`scrubObject`/`scrubValue` functions)**
+- **Status: UNIQUE** - No existing sanitization utilities in the codebase match this pattern
+- The codebase uses `clearBytes()` from `@cipherbox/crypto` exclusively for wiping sensitive binary data in memory after use
+- The Faro scrubbing is specifically designed for **transport payload privacy** (preventing PII/keys from leaving the browser), which is a distinct use case
+- No existing logger or middleware implements this before-send redaction pattern
+
+#### 2. **ErrorFallback Component**
+- **Status: UNIQUE** - No conflicting error UI components exist
+- The only error-related component found is `MfaEnrollmentPrompt.tsx` (MFA-specific dialog, not a boundary fallback)
+- `FaroErrorBoundary` is a library component; `ErrorFallback.tsx` is purely presentational with no state/hooks, correct for corrupted React state scenarios
+- CSS uses proper design tokens (`var(--color-*)`, `var(--font-*)`, `var(--spacing-*)`), no duplication
+
+#### 3. **CSS Design Tokens**
+- **Status: ALIGNED** - Error fallback CSS properly uses existing design token system
+- Uses `--color-background`, `--color-green-primary`, `--color-error`, `--font-family-mono`, `--spacing-*`
+- Includes proper focus-visible styles for accessibility (matches CLAUDE.md guidelines)
+- No new tokens introduced; fully leverages existing theme
+
+#### 4. **Auth Identity Tracking (`setFaroUser`/`clearFaroUser`)**
+- **Status: CLEAN** - No existing identity tracking that conflicts
+- Auth store only tracks `accessToken`, `userEmail`, `vaultKeypair` (crypto material)
+- Faro identity is separate concern: user attribution for observability (publicKey only, never email)
+- `useAuth.ts` correctly calls `setFaroUser(publicKey)` after backend auth succeeds and `clearFaroUser()` on logout
+- Session restoration also restores Faro identity (line 685: `setFaroUser(bytesToHex(restoredKeypair.publicKey))`)
+
+#### 5. **Logger Transport Integration**
+- **Status: CLEAN** - `registerFaroTransport()` is designed to integrate with Phase 28's logger system
+- Accepts a transports array and pushes a new transport (non-invasive)
+- Filters/converts context properly (error extraction, key removal, string coercion)
+- Only forwards warn/error levels (noise reduction correct)
+
+#### 6. **Environment Variables**
+- **Status: CLEAN** - No conflicts with existing env vars
+- `VITE_FARO_URL`, `VITE_ENVIRONMENT`, `VITE_APP_VERSION` already used consistently across web app
+- `GRAFANA_FARO_API_KEY` properly managed in secrets (deploy-staging.yml)
+- `vite-env.d.ts` correctly updated with type definitions
+
+#### 7. **Vite Config & Build**
+- **Status: CLEAN** - Faro Rollup plugin correctly configured
+- Conditionally enables only when `VITE_FARO_URL` + `GRAFANA_FARO_API_KEY` + production mode
+- Source maps uploaded, not emitted to output (security-correct: `keepSourcemaps: false`)
+
+---
+
+### QUALITY OBSERVATIONS (Not Issues)
+
+1. **Line 164 in useAuth.ts** - `console.log('[Auth] New user -- initializing vault')` uses bracket notation matching CLAUDE.md style
+2. **Privacy-first design** - scrubber validates against CipherBox's cryptography terminology (privateKey, folderKey, fileKey, etc.)
+3. **Depth limiting** - `scrubObject` maxes out at depth 3 to prevent infinite recursion on circular refs
+4. **ArrayBuffer detection** - Uses both `instanceof` and property checks for robustness with TypedArrays
+
+### VERDICT
+
+**All Phase 30 code is clean from a code reuse perspective.** The implementation:
+- Introduces new patterns for observability that don't duplicate existing functionality
+- Properly extends existing systems (auth flow, logger transports, env config)
+- Adheres to design token and accessibility guidelines
+- Maintains security posture (memory-only state, proper key handling, redaction before transmit)
+
+No refactoring required.</result>
+<usage><total_tokens>69804</total_tokens><tool_uses>47</tool_uses><duration_ms>165248</duration_ms></usage>
+</task-notification>
+
+---
+
+ok create the pr for phase 30, and also /simplify phase 31
+
+---
+
+/resolve-pr-reviews pr#386
