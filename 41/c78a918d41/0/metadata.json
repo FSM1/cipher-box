@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "41c78a918d41",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T03:00:01.364764Z",
+  "branch": "phase-28-code-hygiene-logging",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3fc13e901cde",
+  "checkpoint_transcript_start": 213,
+  "transcript_lines_at_start": 213,
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 173524,
+    "cache_read_tokens": 2595121,
+    "output_tokens": 10691,
+    "api_call_count": 21
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Add 5 new phases to the v1.1 milestone roadmap and kick off Phase 28 (Code Hygiene \u0026 Logging) by discussing and capturing implementation decisions via the GSD manager workflow.",
+    "outcome": "PR #381 created with the updated roadmap, merged to main. Phase 28 CONTEXT.md written with locked decisions: thin custom logger wrapper (not pino), full console.* replacement across 139 calls in 29 files, selective .catch() cleanup for unpin failures only, targeted any-cast fixes in hooks.ts, and deletion of the poc/ directory.",
+    "learnings": {
+      "repo": [
+        "139 console.* calls across 29 files in apps/web/src/: 82 error, 27 warn, 18 log, 12 time/timeEnd. Biggest offender is hooks.ts with 34 calls leaking Web3Auth SDK state.",
+        "11 `.catch(() =\u003e {})` calls on unpinFromIpfs spread across bin.service.ts (4), useFileOperations.ts (1), useFileVersions.ts (2), ReplaceFileDialog.tsx (3), useDropUpload.ts (1). Other 3 silent catches (audioContext.close x2, dynamic import) are intentionally silent.",
+        "Only 2 of 8 `any` casts are actionable: coreKit and loginParams in hooks.ts. Web3AuthMPCCoreKit type is already exported from core-kit.ts.",
+        "00-Preliminary-R\u0026D/poc/ contains 89 MB of committed node_modules and deprecated ipfs-http-client@60.0.1 — safe to delete entirely.",
+        "apps/web/src/main.tsx already uses import.meta.env.DEV gating; DEV-only global error capture there should be preserved as-is.",
+        "Pino browser redaction does NOT work in browser mode — redact option is Node.js only, making pino unsuitable for a zero-knowledge app that must never leak privateKey/rootFolderKey."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/lib/logger.ts",
+          "finding": "File does not yet exist — to be created in Phase 28 as a ~50 LOC thin wrapper with level filtering via VITE_LOG_LEVEL, structured (message, context) arg order, redact() interceptor, and transport hook array for Phase 30 Sentry integration."
+        },
+        {
+          "path": "apps/web/src/hooks.ts",
+          "finding": "34 console.* calls — largest single file. Also contains coreKit: any and loginParams: any which can be typed with Web3AuthMPCCoreKit from core-kit.ts."
+        },
+        {
+          "path": "apps/web/src/main.tsx",
+          "finding": "Contains DEV-only global error capture using import.meta.env.DEV — keep as-is, not subject to console replacement."
+        }
+      ],
+      "workflow": [
+        "GSD assumptions mode surfaces codebase evidence before asking the user anything — reduces discussion to ~2-4 corrections vs 15-20 questions.",
+        "Todo cross-referencing via gsd-tools can produce false positives on generic keywords (e.g. 'web') — worth scanning the match reasons before folding.",
+        "Phase dependency structure: 28 unblocks 29, 30, 31. Phase 32 is independent and can run in parallel with 28."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "console.time/timeEnd calls (12 total) need a decision: replace with logger or exclude from scope.",
+      "Phase 30 (Web App Observability) blocked on Phase 28 completing — needs the logger abstraction layer first.",
+      "Phase 31 (Structural Decomposition) also blocked on Phase 28.",
+      "The any-cast fix for coreKit may be cosmetic if Web3Auth SDK forces any at the boundary — needs verification during implementation.",
+      "Phase 30 Sentry integration will wire into the logger.transport hook array created in Phase 28 — design must be compatible."
+    ]
+  }
+}
