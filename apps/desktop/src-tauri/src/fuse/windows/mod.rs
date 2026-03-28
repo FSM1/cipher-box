@@ -13,8 +13,8 @@ mod mount_impl {
     use zeroize::Zeroizing;
 
     use crate::fuse::{
-        cache, inode, CipherBoxFS, PendingContent, PendingRefresh, PublishCoordinator,
-        UploadComplete,
+        cache, inode, CipherBoxFS, PendingContent, PendingFilePointer, PendingRefresh,
+        PublishCoordinator, UploadComplete,
     };
     use crate::state::AppState;
 
@@ -75,6 +75,7 @@ mod mount_impl {
         let (refresh_tx, refresh_rx) = std::sync::mpsc::channel::<PendingRefresh>();
         let (content_tx, content_rx) = std::sync::mpsc::channel::<PendingContent>();
         let (upload_tx, upload_rx) = std::sync::mpsc::channel::<UploadComplete>();
+        let (file_pointer_tx, file_pointer_rx) = std::sync::mpsc::channel::<PendingFilePointer>();
 
         // Pre-populate root folder BEFORE mounting so readdir has data immediately.
         let mut metadata_cache = cache::MetadataCache::new();
@@ -340,6 +341,9 @@ mod mount_impl {
             pending_content: HashMap::new(),
             upload_rx,
             upload_tx,
+            file_pointer_rx,
+            file_pointer_tx,
+            resolving_file_pointers: std::collections::HashSet::new(),
             mutated_folders: HashMap::new(),
             publish_coordinator: Arc::new(PublishCoordinator::new()),
             publish_queue: HashMap::new(),

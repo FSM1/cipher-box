@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Ready to plan
-last_updated: "2026-03-28T03:47:32.722Z"
+status: Ready to execute
+last_updated: "2026-03-28T20:42:16.473Z"
 last_activity: 2026-03-28
 progress:
-  total_phases: 17
+  total_phases: 18
   completed_phases: 14
-  total_plans: 60
+  total_plans: 62
   completed_plans: 60
 ---
 
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 29 — Infrastructure Hardening
+**Current focus:** Phase 33 — windows-async-filepointer-resolution
 
 ## Current Position
 
-Phase: 30
-Plan: Not started
+Phase: 33 (windows-async-filepointer-resolution) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -79,6 +79,7 @@ Plan: Not started
 | 27    | 01   | 6min     | 2     | 23    |
 | 27    | 02   | 5min     | 2     | 4     |
 | 27    | 03   | 25min    | 3     | 15    |
+| Phase 33 P01 | 11min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -157,6 +158,9 @@ Recent for v1.1:
 - addShareKeys API relaxed to allow write-share recipients to add keys to their own share
 - TextEditorDialog has separate shared file save path via onSaveSharedFile callback
 - Shared file download/view falls back to fileKeyEncrypted from metadata when no share_key exists
+- FilePointer resolution uses FileMetadata directly (no separate ResolvedFileMetadata struct)
+- FilePointer resolution scoped to parent folder via get_unresolved_file_pointers_for_parent() to avoid wrong-folder-key decryption
+- FilePointer async resolution: 500ms base * 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
 
 ### Roadmap Evolution
 

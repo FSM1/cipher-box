@@ -84,6 +84,14 @@ pub enum PendingContent {
     Failure { cid: String },
 }
 
+/// Pending FilePointer resolution result sent from background async tasks.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub struct PendingFilePointer {
+    pub ino: u64,
+    pub ipns_name: String,
+    pub result: Result<cipherbox_core::folder::FileMetadata, String>,
+}
+
 /// Notification from a background upload thread that a file upload completed.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct UploadComplete {
@@ -448,6 +456,51 @@ pub fn spawn_bin_entry_publish(
     });
 }
 
+/// Resolve a single FilePointer by IPNS resolve + IPFS fetch + decrypt, with retry.
+///
+/// Retries up to 3 times with exponential backoff (1s, 2s, 4s).
+/// Used by spawned async tasks in `drain_refresh_completions()`.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+async fn resolve_single_file_pointer(
+    api: &cipherbox_api_client::ApiClient,
+    ipns_name: &str,
+    folder_key: &[u8; 32],
+) -> Result<cipherbox_core::folder::FileMetadata, String> {
+    let max_retries = 3u32;
+    let mut attempts = 0u32;
+    loop {
+        let resolve_result = async {
+            let resp = cipherbox_api_client::ipns::resolve_ipns(api, ipns_name)
+                .await
+                .map_err(|e| format!("{}", e))?;
+            let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resp.cid)
+                .await
+                .map_err(|e| format!("{}", e))?;
+            cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, folder_key)
+        }
+        .await;
+
+        match resolve_result {
+            Ok(fm) => return Ok(fm),
+            Err(e) if attempts < max_retries => {
+                attempts += 1;
+                let delay = std::time::Duration::from_millis(500 * (1u64 << attempts));
+                log::warn!(
+                    "FilePointer resolve attempt {}/{} failed for {}: {}",
+                    attempts, max_retries, ipns_name, e
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "FilePointer resolve failed after {} retries for {}: {}",
+                    max_retries, ipns_name, e
+                ));
+            }
+        }
+    }
+}
+
 /// The main filesystem struct.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct CipherBoxFS {
@@ -474,6 +527,9 @@ pub struct CipherBoxFS {
     pub pending_content: HashMap<u64, Vec<u8>>,
     pub upload_rx: std::sync::mpsc::Receiver<UploadComplete>,
     pub upload_tx: std::sync::mpsc::Sender<UploadComplete>,
+    pub file_pointer_rx: std::sync::mpsc::Receiver<PendingFilePointer>,
+    pub file_pointer_tx: std::sync::mpsc::Sender<PendingFilePointer>,
+    pub resolving_file_pointers: std::collections::HashSet<u64>,
     pub publish_coordinator: Arc<PublishCoordinator>,
     pub publish_queue: HashMap<u64, PublishQueueEntry>,
 }
@@ -614,7 +670,8 @@ impl CipherBoxFS {
             if let Err(e) = self.inodes.populate_folder(refresh.ino, &refresh.metadata, &self.private_key, &self.public_key, true) {
                 log::warn!("Drain refresh apply failed for ino {}: {}", refresh.ino, e);
             }
-            let unresolved = self.inodes.get_unresolved_file_pointers();
+            // Spawn async resolution for unresolved FilePointers (non-blocking)
+            let unresolved = self.inodes.get_unresolved_file_pointers_for_parent(refresh.ino);
             if !unresolved.is_empty() {
                 let folder_key = self.inodes.get(refresh.ino).and_then(|i| match &i.kind {
                     inode::InodeKind::Root { .. } => Some(self.root_folder_key.to_vec()),
@@ -622,21 +679,25 @@ impl CipherBoxFS {
                     _ => None,
                 });
                 if let Some(fk) = folder_key {
-                    for (ino, fp_ipns) in &unresolved {
-                        if let Ok(fk_arr) = <[u8; 32]>::try_from(fk.as_slice()) {
-                            let api = self.api.clone();
-                            let resolve_result = block_with_timeout(&self.rt, async {
-                                let resp = cipherbox_api_client::ipns::resolve_ipns(&api, fp_ipns).await.map_err(|e| format!("{}", e))?;
-                                cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid).await.map_err(|e| format!("{}", e))
-                            });
-                            match resolve_result {
-                                Ok(enc_bytes) => {
-                                    match cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr) {
-                                        Ok(fm) => self.inodes.resolve_file_pointer(*ino, fm.cid, fm.file_key_encrypted, fm.file_iv, fm.size, fm.encryption_mode, fm.versions),
-                                        Err(e) => log::warn!("FilePointer decrypt failed for ino {}: {}", ino, e),
-                                    }
-                                }
-                                Err(e) => log::warn!("FilePointer resolve failed for ino {}: {}", ino, e),
+                    if let Ok(fk_arr) = <[u8; 32]>::try_from(fk.as_slice()) {
+                        for (ino, fp_ipns) in &unresolved {
+                            if !self.resolving_file_pointers.contains(ino) {
+                                self.resolving_file_pointers.insert(*ino);
+                                let api = self.api.clone();
+                                let tx = self.file_pointer_tx.clone();
+                                let ipns = fp_ipns.clone();
+                                let fk_copy = fk_arr;
+                                let ino_copy = *ino;
+                                self.rt.spawn(async move {
+                                    let result = resolve_single_file_pointer(
+                                        &api, &ipns, &fk_copy,
+                                    ).await;
+                                    let _ = tx.send(PendingFilePointer {
+                                        ino: ino_copy,
+                                        ipns_name: ipns,
+                                        result,
+                                    });
+                                });
                             }
                         }
                     }
@@ -650,6 +711,29 @@ impl CipherBoxFS {
             match msg {
                 PendingContent::Success { cid, data } => { self.prefetching.remove(&cid); self.content_cache.set(&cid, data); }
                 PendingContent::Failure { cid } => { self.prefetching.remove(&cid); }
+            }
+        }
+    }
+
+    pub fn drain_file_pointer_completions(&mut self) {
+        while let Ok(pending) = self.file_pointer_rx.try_recv() {
+            self.resolving_file_pointers.remove(&pending.ino);
+            match pending.result {
+                Ok(fm) => {
+                    self.inodes.resolve_file_pointer(
+                        pending.ino,
+                        fm.cid,
+                        fm.file_key_encrypted,
+                        fm.file_iv,
+                        fm.size,
+                        fm.encryption_mode,
+                        fm.versions,
+                    );
+                    log::info!("FilePointer resolved async for ino {}", pending.ino);
+                }
+                Err(e) => {
+                    log::warn!("FilePointer resolve failed for ino {}: {}", pending.ino, e);
+                }
             }
         }
     }

@@ -370,11 +370,11 @@ Plans:
 3. Resolution latency bounded by timeout rather than O(N \* network_timeout)
 4. Windows desktop E2E tests pass with the async resolution path
 
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 
-- [ ] 33-01-PLAN.md -- Shared async FilePointer resolution infrastructure (PendingFilePointer, channel pair, drain method, modified drain_refresh_completions)
+- [x] 33-01-PLAN.md -- Shared async FilePointer resolution infrastructure (PendingFilePointer, channel pair, drain method, modified drain_refresh_completions)
 - [ ] 33-02-PLAN.md -- Windows WinFsp callback wiring (drain calls in open/read/readdir, read-while-resolving poll, STATUS_DEVICE_NOT_READY)
 
 ## Progress
@@ -401,7 +401,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 30. Web App Observability                 | v1.1      | 0/TBD          | Not started | -          |
 | 31. Structural Decomposition              | v1.1      | 0/TBD          | Not started | -          |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 0/TBD          | Not started | -          |
-| 33. Windows Async FilePointer Resolution  | v1.1      | 0/2            | Not started | -          |
+| 33. Windows Async FilePointer Resolution  | v1.1      | 1/2            | Executing   | -          |
 
 ### Phase 27: Writable Shares (PoC)
 
