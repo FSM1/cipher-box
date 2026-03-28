@@ -7,7 +7,7 @@ import {
 } from '@grafana/faro-web-sdk';
 import { ReactIntegration } from '@grafana/faro-react';
 
-/** Field names containing crypto material — scrubbed from all Faro payloads. */
+/** Field names containing crypto material or PII — scrubbed from all Faro payloads. */
 const SENSITIVE_KEYS = new Set([
   'privateKey',
   'rootFolderKey',
@@ -17,6 +17,7 @@ const SENSITIVE_KEYS = new Set([
   'ipnsPrivateKey',
   'teePublicKey',
   'userEmail',
+  'email',
 ]);
 
 /** 64+ hex chars = 32+ byte key material */
@@ -35,9 +36,9 @@ function scrubValue(value: unknown): unknown {
   return value;
 }
 
-/** Recursively scrub sensitive keys/values (max 3 levels deep). */
+/** Recursively scrub sensitive keys/values. Beyond max depth, redacts rather than leaks. */
 function scrubObject(obj: Record<string, unknown>, depth = 0): Record<string, unknown> {
-  if (depth > 3) return obj;
+  if (depth > 3) return { _redacted: '[DEPTH_LIMIT]' };
 
   const result: Record<string, unknown> = {};
   for (const key of Object.keys(obj)) {
@@ -54,7 +55,16 @@ function scrubObject(obj: Record<string, unknown>, depth = 0): Record<string, un
       continue;
     }
 
-    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    if (Array.isArray(value)) {
+      result[key] = value.map((item) => {
+        const s = scrubValue(item);
+        if (s !== item) return s;
+        if (typeof item === 'object' && item !== null) {
+          return scrubObject(item as Record<string, unknown>, depth + 1);
+        }
+        return item;
+      });
+    } else if (typeof value === 'object' && value !== null) {
       result[key] = scrubObject(value as Record<string, unknown>, depth + 1);
     } else {
       result[key] = value;
@@ -69,7 +79,6 @@ function beforeSend(item: TransportItem): TransportItem | null {
   let payload = item.payload;
   let meta = item.meta;
 
-  // Deep-scrub payload
   if (payload && typeof payload === 'object') {
     payload = scrubObject(
       payload as unknown as Record<string, unknown>
@@ -77,9 +86,9 @@ function beforeSend(item: TransportItem): TransportItem | null {
     modified = true;
   }
 
-  // Strip email from user meta — only publicKey (as id) is allowed
-  if (meta?.user?.email) {
-    meta = { ...meta, user: { ...meta.user, email: undefined } };
+  // Scrub meta (may contain nested sensitive values beyond just email)
+  if (meta && typeof meta === 'object') {
+    meta = scrubObject(meta as unknown as Record<string, unknown>) as TransportItem['meta'];
     modified = true;
   }
 
@@ -148,12 +157,15 @@ export function registerFaroTransport(
   const faro = getFaroInstance();
   if (!faro) return;
 
-  const toStringContext = (ctx: Record<string, unknown>): Record<string, string> =>
-    Object.fromEntries(
-      Object.entries(ctx)
+  const toStringContext = (ctx: Record<string, unknown>): Record<string, string> => {
+    // Scrub sensitive values before forwarding to Faro
+    const scrubbed = scrubObject(ctx);
+    return Object.fromEntries(
+      Object.entries(scrubbed)
         .filter(([k]) => k !== 'error')
         .map(([k, v]) => [k, typeof v === 'string' ? v : String(v)])
     );
+  };
 
   const faroTransport = (
     level: string,

@@ -6,20 +6,21 @@ import path from 'path';
 export default defineConfig(({ mode }) => {
   const faroUrl = process.env.VITE_FARO_URL;
   const faroApiKey = process.env.GRAFANA_FARO_API_KEY;
+  const faroStackId = process.env.GRAFANA_STACK_ID;
+  const faroEnabled = !!(faroUrl && faroApiKey && faroStackId && mode === 'production');
 
   return {
     plugins: [
       react(),
       // Upload source maps to Grafana Faro in production/staging builds
-      ...(faroUrl && faroApiKey && mode === 'production'
+      ...(faroEnabled
         ? [
             faro({
               appName: 'cipherbox-web',
               appId: 'cipherbox-web',
-              endpoint: faroUrl,
-              apiKey: faroApiKey,
-              stackId: process.env.GRAFANA_STACK_ID ?? '',
-              // Upload source maps but don't emit them in the output
+              endpoint: faroUrl!,
+              apiKey: faroApiKey!,
+              stackId: faroStackId!,
               keepSourcemaps: false,
               gzipContents: true,
             }),
@@ -37,7 +38,8 @@ export default defineConfig(({ mode }) => {
       global: 'globalThis',
     },
     build: {
-      sourcemap: 'hidden', // Generate .map files but don't reference them in output JS
+      // Only generate hidden source maps when Faro upload is active
+      ...(faroEnabled ? { sourcemap: 'hidden' as const } : {}),
     },
     server: {
       port: 5173,

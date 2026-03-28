@@ -3,7 +3,9 @@ export function ErrorFallback() {
   return (
     <div className="error-fallback">
       <div className="error-fallback__container">
-        <div className="error-fallback__icon">{'// ERROR'}</div>
+        <div className="error-fallback__icon" aria-hidden="true">
+          {'// ERROR'}
+        </div>
         <h1 className="error-fallback__title">Something went wrong</h1>
         <p className="error-fallback__message">
           An unexpected error occurred. Your encrypted data is safe — this is a display issue only.
