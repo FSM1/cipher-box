@@ -158,7 +158,6 @@ async function doLoginWithCoreKit(
 
   logger.debug('[CoreKit] loginWithJWT starting...', {
     verifier: loginParams.verifier,
-    verifierId: userId,
   });
   console.time('[CoreKit] loginWithJWT');
   try {
