@@ -282,7 +282,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setSharedItems(items);
       } catch (err) {
         if (cancelled) return;
-        logger.error('Failed to load shared items:', err);
+        logger.error('[SharedNav] Failed to load shared items:', err);
         setError('Failed to load shared items');
       } finally {
         if (!cancelled) {
@@ -377,7 +377,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
                 );
                 ipnsPrivateKeyRef.current = ipnsPrivKey;
               } catch (err) {
-                logger.error('Failed to unwrap IPNS key for write share:', err);
+                logger.error('[SharedNav] Failed to unwrap IPNS key for write share:', err);
                 // Fall back to read-only if IPNS key unwrap fails
               }
             }
@@ -413,7 +413,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
                 );
                 ipnsPrivateKeyRef.current = ipnsPrivKey;
               } catch (err) {
-                logger.error('Failed to unwrap IPNS key for write file share:', err);
+                logger.error('[SharedNav] Failed to unwrap IPNS key for write file share:', err);
               }
             }
 
@@ -430,7 +430,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           }
         }
       } catch (err) {
-        logger.error('Failed to navigate to shared item:', err);
+        logger.error('[SharedNav] Failed to navigate to shared item:', err);
         setError('Failed to open shared item');
       } finally {
         setIsLoading(false);
@@ -543,7 +543,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           if (!subfolderKeyStored) subfolderKey.fill(0);
         }
       } catch (err) {
-        logger.error('Failed to navigate to subfolder:', err);
+        logger.error('[SharedNav] Failed to navigate to subfolder:', err);
         setError('Failed to open subfolder');
       } finally {
         setIsLoading(false);
@@ -758,7 +758,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       } catch (err) {
         const message = (err as Error).message || 'Download failed';
         downloadStore.setError(message);
-        logger.error('Shared file download failed:', err);
+        logger.error('[SharedNav] Shared file download failed:', err);
       }
     },
     [currentShareId, folderKey, getShareKeys]
@@ -773,7 +773,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       useShareStore.getState().removeReceivedShare(shareId);
       setSharedItems((prev) => prev.filter((s) => s.share.shareId !== shareId));
     } catch (err) {
-      logger.error('Failed to hide share:', err);
+      logger.error('[SharedNav] Failed to hide share:', err);
       setError('Failed to hide shared item');
     }
   }, []);
@@ -898,7 +898,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         if (!message.includes('write access revoked')) {
           setError(message);
         }
-        logger.error('Shared folder upload failed:', err);
+        logger.error('[SharedNav] Shared folder upload failed:', err);
       } finally {
         setIsLoading(false);
       }
@@ -946,7 +946,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         if (!message.includes('write access revoked')) {
           setError(message);
         }
-        logger.error('Shared folder create failed:', err);
+        logger.error('[SharedNav] Shared folder create failed:', err);
       } finally {
         setIsLoading(false);
       }
@@ -994,7 +994,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         if (!message.includes('write access revoked')) {
           setError(message);
         }
-        logger.error('Shared folder rename failed:', err);
+        logger.error('[SharedNav] Shared folder rename failed:', err);
       } finally {
         setIsLoading(false);
       }
@@ -1119,7 +1119,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         if (!message.includes('write access revoked')) {
           setError(message);
         }
-        logger.error('Shared folder delete failed:', err);
+        logger.error('[SharedNav] Shared folder delete failed:', err);
       } finally {
         setIsLoading(false);
       }

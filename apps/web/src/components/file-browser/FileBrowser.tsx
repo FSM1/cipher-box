@@ -155,7 +155,7 @@ export function FileBrowser() {
       // Rebuild search index with updated folder data
       triggerSearchIndexRebuild();
     } catch (err) {
-      logger.error('Sync refresh failed:', err);
+      logger.error('[FileBrowser] Sync refresh failed:', err);
       // During initial sync, propagate so useSyncPolling keeps the
       // loading UI visible and retries instead of showing empty state
       if (!useSyncStore.getState().initialSyncComplete) {
@@ -427,7 +427,7 @@ export function FileBrowser() {
           clearSelection();
         }
       } catch (err) {
-        logger.error('Move failed:', err);
+        logger.error('[FileBrowser] Move failed:', err);
       }
     },
     [moveItem, moveItems, clearSelection]
@@ -448,7 +448,7 @@ export function FileBrowser() {
         fileName: item.name,
       });
     } catch (err) {
-      logger.error('Download failed:', err);
+      logger.error('[FileBrowser] Download failed:', err);
     }
   }, [contextMenu.item, downloadFromIpns, currentFolder?.folderKey]);
 
@@ -564,7 +564,7 @@ export function FileBrowser() {
       setBatchDeleteDialog({ open: false, items: [] });
       clearSelection();
     } catch (err) {
-      logger.error('Batch delete failed:', err);
+      logger.error('[FileBrowser] Batch delete failed:', err);
     }
   }, [batchDeleteDialog.items, deleteItems, currentFolderId, clearSelection]);
 
@@ -583,7 +583,7 @@ export function FileBrowser() {
         setBatchMoveDialog({ open: false, items: [] });
         clearSelection();
       } catch (err) {
-        logger.error('Batch move failed:', err);
+        logger.error('[FileBrowser] Batch move failed:', err);
       }
     },
     [batchMoveDialog.items, moveItems, currentFolderId, clearSelection]
@@ -608,7 +608,7 @@ export function FileBrowser() {
         await renameItem(item.id, item.type, newName, currentFolderId);
         closeRenameDialog();
       } catch (err) {
-        logger.error('Rename failed:', err);
+        logger.error('[FileBrowser] Rename failed:', err);
       }
     },
     [renameDialog.item, renameItem, currentFolderId, closeRenameDialog]
@@ -623,7 +623,7 @@ export function FileBrowser() {
       await deleteItem(item.id, item.type, currentFolderId);
       closeConfirmDialog();
     } catch (err) {
-      logger.error('Delete failed:', err);
+      logger.error('[FileBrowser] Delete failed:', err);
     }
   }, [confirmDialog.item, deleteItem, currentFolderId, closeConfirmDialog]);
 
@@ -637,7 +637,7 @@ export function FileBrowser() {
         await moveItem(item.id, item.type, currentFolderId, destinationFolderId);
         closeMoveDialog();
       } catch (err) {
-        logger.error('Move failed:', err);
+        logger.error('[FileBrowser] Move failed:', err);
       }
     },
     [moveDialog.item, moveItem, currentFolderId, closeMoveDialog]
@@ -662,7 +662,7 @@ export function FileBrowser() {
       try {
         await createFolder(name, currentFolderId === 'root' ? null : currentFolderId);
       } catch (err) {
-        logger.error('Create folder failed:', err);
+        logger.error('[FileBrowser] Create folder failed:', err);
       } finally {
         setCreateFolderDialogOpen(false);
       }

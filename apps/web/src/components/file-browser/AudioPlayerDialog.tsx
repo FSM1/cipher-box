@@ -164,7 +164,7 @@ export function AudioPlayerDialog({
       source.connect(analyser);
       analyser.connect(ctx.destination);
     } catch (err) {
-      logger.warn('Web Audio API setup failed:', err);
+      logger.warn('[Audio] Web Audio API setup failed:', err);
     }
 
     return () => {
