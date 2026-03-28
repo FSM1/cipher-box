@@ -10,6 +10,7 @@ import { useVaultStore } from '../stores/vault.store';
 import { useDeviceRegistryStore } from '../stores/device-registry.store';
 import { clearAllUserStores } from '../lib/clear-user-stores';
 import { initSdkClient } from '../lib/sdk-provider';
+import { setFaroUser, clearFaroUser } from '../lib/faro';
 // api-config.ts handles setApiClientConfig at module load time
 import {
   initializeVault,
@@ -423,6 +424,9 @@ export function useAuth() {
       // 6. Now that vault keys are loaded and SDK is initialized,
       // mark the user as authenticated. This triggers Login.tsx → /files redirect.
       setAuthenticated();
+
+      // 7. Bind user identity to Faro for error attribution (publicKey only, never email)
+      setFaroUser(publicKey);
     },
     [getPublicKeyHex, setAccessToken, setAuthenticated, setLastAuthMethod, initializeOrLoadVault]
   );
@@ -628,12 +632,16 @@ export function useAuth() {
       // 3. Clear all user-scoped stores (centralized helper)
       clearAllUserStores();
 
-      // 4. Navigate to login
+      // 4. Clear Faro user identity so post-logout errors aren't attributed
+      clearFaroUser();
+
+      // 5. Navigate to login
       navigate('/');
     } catch (error) {
       console.error('[useAuth] Logout failed:', error);
       // Still clear state even if backend fails
       clearAllUserStores();
+      clearFaroUser();
       navigate('/');
     } finally {
       setIsLoggingOut(false);
@@ -670,6 +678,12 @@ export function useAuth() {
 
           // Mark as authenticated only after vault + SDK are ready
           setAuthenticated();
+
+          // Bind user identity to Faro for restored sessions
+          const restoredKeypair = useAuthStore.getState().vaultKeypair;
+          if (restoredKeypair?.publicKey?.length) {
+            setFaroUser(bytesToHex(restoredKeypair.publicKey));
+          }
         } catch {
           // No valid backend session -- user needs to re-login
           // Core Kit session exists but backend cookie expired
