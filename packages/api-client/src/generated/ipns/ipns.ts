@@ -8,6 +8,8 @@
 import type {
   BatchPublishIpnsDto,
   BatchPublishIpnsResponseDto,
+  BatchUnenrollIpnsDto,
+  BatchUnenrollIpnsResponseDto,
   IpnsControllerResolveRecordParams,
   PublishIpnsDto,
   PublishIpnsResponseDto,
@@ -56,6 +58,24 @@ export const ipnsControllerPublishBatch = (
   );
 };
 /**
+ * Remove IPNS names from the TEE republish schedule. Called after file/folder deletion to prevent orphaned records from accumulating. Accepts up to 200 IPNS names per call.
+ * @summary Batch unenroll IPNS records from TEE republishing
+ */
+export const ipnsControllerUnenrollBatch = (
+  batchUnenrollIpnsDto: BodyType<BatchUnenrollIpnsDto>,
+  options?: SecondParameter<typeof customInstance<BatchUnenrollIpnsResponseDto>>
+) => {
+  return customInstance<BatchUnenrollIpnsResponseDto>(
+    {
+      url: `/ipns/unenroll`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: batchUnenrollIpnsDto,
+    },
+    options
+  );
+};
+/**
  * Resolve an IPNS name to its current CID via delegated routing. Returns the CID and sequence number of the current IPNS record.
  * @summary Resolve IPNS name
  */
@@ -73,6 +93,9 @@ export type IpnsControllerPublishRecordResult = NonNullable<
 >;
 export type IpnsControllerPublishBatchResult = NonNullable<
   Awaited<ReturnType<typeof ipnsControllerPublishBatch>>
+>;
+export type IpnsControllerUnenrollBatchResult = NonNullable<
+  Awaited<ReturnType<typeof ipnsControllerUnenrollBatch>>
 >;
 export type IpnsControllerResolveRecordResult = NonNullable<
   Awaited<ReturnType<typeof ipnsControllerResolveRecord>>

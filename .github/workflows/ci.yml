@@ -156,7 +156,22 @@ jobs:
 
       - name: Verify no uncommitted changes to generated files
         run: |
-          git diff --exit-code packages/api-client/openapi.json packages/api-client/src/generated/ packages/api-client/src/models/ \
+          # Compare openapi.json semantically (ignore formatting differences from prettier versions)
+          if ! node -e "
+            const fs = require('fs');
+            const {execSync} = require('child_process');
+            const committed = JSON.parse(execSync('git show HEAD:packages/api-client/openapi.json', {encoding:'utf8'}));
+            const generated = JSON.parse(fs.readFileSync('packages/api-client/openapi.json', 'utf8'));
+            if (JSON.stringify(committed) !== JSON.stringify(generated)) {
+              console.error('openapi.json schema has changed');
+              process.exit(1);
+            }
+          "; then
+            echo "Generated API client is out of date. Run 'pnpm api:generate' and commit changes."
+            exit 1
+          fi
+          # Compare generated TS files exactly
+          git diff --exit-code packages/api-client/src/generated/ packages/api-client/src/models/ \
             || (echo "Generated API client is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)
 
   migration-check:

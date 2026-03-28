@@ -252,15 +252,17 @@ export class RepublishService {
    * Unenroll an IPNS record from TEE republishing.
    * Called when files are deleted to prevent orphaned TEE enrollments.
    */
-  async unenrollIpns(userId: string, ipnsName: string): Promise<void> {
+  async unenrollIpns(userId: string, ipnsName: string): Promise<number> {
     const result = await this.scheduleRepository.delete({ userId, ipnsName });
-    if (result.affected && result.affected > 0) {
+    const affected = result.affected ?? 0;
+    if (affected > 0) {
       this.logger.log(`Unenrolled ${ipnsName} from TEE republishing for user ${userId}`);
     } else {
       this.logger.debug(
         `No republish enrollment found for ${ipnsName} (user ${userId}) - nothing to unenroll`
       );
     }
+    return affected;
   }
 
   /**
