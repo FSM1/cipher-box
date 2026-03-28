@@ -45,7 +45,7 @@
       "prettier --write"
     ],
     "*.md": [
-      "markdownlint --fix",
+      "markdownlint --fix --ignore .planning",
       "prettier --write"
     ]
   }

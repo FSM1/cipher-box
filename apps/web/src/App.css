@@ -2703,3 +2703,67 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* ==========================================================================
+   Error Boundary Fallback
+   ========================================================================== */
+
+.error-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  padding: 2rem;
+}
+
+.error-fallback__container {
+  text-align: center;
+  max-width: 480px;
+}
+
+.error-fallback__icon {
+  font-size: 1.5rem;
+  color: var(--color-error, #ef4444);
+  margin-bottom: 1.5rem;
+  opacity: 0.7;
+}
+
+.error-fallback__title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: var(--color-text-primary);
+}
+
+.error-fallback__message {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 2rem;
+  line-height: 1.6;
+}
+
+.error-fallback__reload {
+  background: transparent;
+  border: 1px solid var(--color-green-primary);
+  color: var(--color-green-primary);
+  font-family: var(--font-family-mono);
+  font-size: 0.875rem;
+  padding: 0.625rem 1.5rem;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.error-fallback__reload:hover {
+  background: var(--color-green-primary);
+  color: var(--color-background);
+}
+
+.error-fallback__reload:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 2px;
+}

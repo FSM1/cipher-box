@@ -108,7 +108,7 @@ pub mod implementation {
 
         fs.drain_upload_completions();
         fs.drain_content_prefetches();
-        fs.drain_file_pointer_completions();
+        fs.drain_filepointer_completions();
 
         let (ino, _parent_ino) = resolve_path(&fs, &path)
             .ok_or(status_object_name_not_found())?;
@@ -242,7 +242,7 @@ pub mod implementation {
         let mut fs = ctx.inner.lock().unwrap();
         fs.drain_upload_completions();
         fs.drain_content_prefetches();
-        fs.drain_file_pointer_completions();
+        fs.drain_filepointer_completions();
 
         let fh = context.fh;
         let ino = context.ino;
@@ -293,7 +293,7 @@ pub mod implementation {
                 drop(fs);
                 std::thread::sleep(Duration::from_millis(100));
                 fs = ctx.inner.lock().unwrap();
-                fs.drain_file_pointer_completions();
+                fs.drain_filepointer_completions();
 
                 if let Some(inode) = fs.inodes.get(ino) {
                     if let InodeKind::File { file_meta_resolved: true, cid: ref c, encrypted_file_key: ref e, iv: ref i, encryption_mode: ref m, .. } = &inode.kind {

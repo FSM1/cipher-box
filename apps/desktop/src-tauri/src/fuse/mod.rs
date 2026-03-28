@@ -107,8 +107,8 @@ pub async fn mount_filesystem(
 
     let (refresh_tx, refresh_rx) = std::sync::mpsc::channel::<PendingRefresh>();
     let (content_tx, content_rx) = std::sync::mpsc::channel::<PendingContent>();
+    let (filepointer_tx, filepointer_rx) = std::sync::mpsc::channel::<PendingFilePointer>();
     let (upload_tx, upload_rx) = std::sync::mpsc::channel::<UploadComplete>();
-    let (file_pointer_tx, file_pointer_rx) = std::sync::mpsc::channel::<PendingFilePointer>();
 
     // Pre-populate root folder
     let mut metadata_cache = cipherbox_fuse::cache::MetadataCache::new();
@@ -201,10 +201,10 @@ pub async fn mount_filesystem(
         refresh_rx, refresh_tx,
         prefetching: std::collections::HashSet::new(),
         content_rx, content_tx,
+        filepointer_rx, filepointer_tx,
+        resolving_file_pointers: std::collections::HashSet::new(),
         pending_content: HashMap::new(),
         upload_rx, upload_tx,
-        file_pointer_rx, file_pointer_tx,
-        resolving_file_pointers: std::collections::HashSet::new(),
         mutated_folders: HashMap::new(),
         publish_coordinator: Arc::new(PublishCoordinator::new()),
         publish_queue: HashMap::new(),

@@ -26,6 +26,7 @@ pub(crate) mod implementation {
     ) {
         // 1. Drain any pending background refresh results (non-blocking)
         fs.drain_refresh_completions();
+        fs.drain_filepointer_completions();
 
         // 2. Check if metadata is stale -- fire background refresh if so
         let stale_info: Option<(String, zeroize::Zeroizing<Vec<u8>>)> = {
