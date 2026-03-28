@@ -13,8 +13,8 @@ mod mount_impl {
     use zeroize::Zeroizing;
 
     use crate::fuse::{
-        cache, inode, CipherBoxFS, PendingContent, PendingRefresh, PublishCoordinator,
-        UploadComplete,
+        cache, inode, CipherBoxFS, PendingContent, PendingFilePointer, PendingRefresh,
+        PublishCoordinator, UploadComplete,
     };
     use crate::state::AppState;
 

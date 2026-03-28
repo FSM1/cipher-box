@@ -9,7 +9,7 @@
 #[allow(unused_imports)]
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use cipherbox_fuse::{
-    CipherBoxFS, PublishCoordinator, PendingRefresh, PendingContent, UploadComplete,
+    CipherBoxFS, PublishCoordinator, PendingRefresh, PendingContent, PendingFilePointer, UploadComplete,
     encrypt_metadata_to_json, spawn_bin_entry_publish, mount_point,
 };
 
