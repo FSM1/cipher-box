@@ -46,7 +46,7 @@ export function ConnectionTest({ endpoint, authToken, onTestResult }: Connection
         onTestResult?.(result);
       } else {
         // Fallback: browser-side test when TEE keys not available
-        logger.warn('TEE keys not available, falling back to browser-side connection test');
+        logger.warn('[BYO] TEE keys not available, falling back to browser-side connection test');
         const result = await testConnection(endpoint, authToken || undefined);
         setTestResult(result);
         onTestResult?.(result);

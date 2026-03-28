@@ -454,7 +454,10 @@ export function useFileOperations() {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
             })
             .catch((err) => {
-              logger.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+              logger.warn(
+                '[FileOps] Lazy IPNS key migration: folder re-publish failed, will retry:',
+                err
+              );
             });
         }
 

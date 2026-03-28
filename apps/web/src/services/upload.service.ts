@@ -129,7 +129,7 @@ export async function uploadFiles(
     const message = (error as Error).message;
     if (message !== 'Upload cancelled by user') {
       uploadStore.setError(message);
-      logger.error('Upload failed:', error);
+      logger.error('[Upload] Upload failed:', error);
     }
     throw error;
   } finally {

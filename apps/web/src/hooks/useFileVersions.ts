@@ -134,7 +134,10 @@ export function useFileVersions() {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
             })
             .catch((err) => {
-              logger.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+              logger.warn(
+                '[Versions] Lazy IPNS key migration: folder re-publish failed, will retry:',
+                err
+              );
             });
         }
 
@@ -256,7 +259,10 @@ export function useFileVersions() {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
             })
             .catch((err) => {
-              logger.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+              logger.warn(
+                '[Versions] Lazy IPNS key migration: folder re-publish failed, will retry:',
+                err
+              );
             });
         }
 

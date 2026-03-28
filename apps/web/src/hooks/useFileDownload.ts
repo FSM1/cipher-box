@@ -54,7 +54,7 @@ export function useFileDownload() {
       } catch (err) {
         const message = (err as Error).message || 'Download failed';
         setError(message);
-        logger.error('Download failed:', err);
+        logger.error('[Download] Download failed:', err);
         throw err;
       }
     },

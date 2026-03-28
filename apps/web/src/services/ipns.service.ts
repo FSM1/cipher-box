@@ -161,7 +161,7 @@ export async function resolveIpnsRecord(
       }
       signatureVerified = true;
     } else {
-      logger.warn('IPNS resolve returned without signature data, skipping verification');
+      logger.warn('[IPNS] IPNS resolve returned without signature data, skipping verification');
     }
 
     return {

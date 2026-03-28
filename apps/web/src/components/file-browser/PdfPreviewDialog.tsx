@@ -91,7 +91,7 @@ export function PdfPreviewDialog({
         setPdfLoading(false);
       } catch (err) {
         if (cancelled) return;
-        logger.error('Failed to load PDF:', err);
+        logger.error('[PDF] Failed to load PDF:', err);
         setPdfLoading(false);
       }
     })();
@@ -127,7 +127,7 @@ export function PdfPreviewDialog({
           await page.render({ canvas, viewport }).promise;
         }
       } catch (err) {
-        logger.error('Failed to render PDF pages:', err);
+        logger.error('[PDF] Failed to render PDF pages:', err);
       } finally {
         renderingRef.current = false;
         if (pendingRenderRef.current) {
