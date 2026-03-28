@@ -1,0 +1,1 @@
+I think now that BYO is deployed to staging, it would be a good idea to capture some staging baselines during with byo load tests, to determine what number of users can be served with current infra if the IPFS workload is offloaded.
