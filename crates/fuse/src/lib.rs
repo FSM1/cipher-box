@@ -729,7 +729,7 @@ impl CipherBoxFS {
                         fm.encryption_mode,
                         fm.versions,
                     );
-                    log::info!("FilePointer resolved async for ino {} ({})", pending.ino, pending.ipns_name);
+                    log::debug!("FilePointer resolved async for ino {} ({})", pending.ino, pending.ipns_name);
                 }
                 Err(e) => {
                     log::warn!("FilePointer resolve failed for ino {} ({}): {}", pending.ino, pending.ipns_name, e);
