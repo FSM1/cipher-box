@@ -29,7 +29,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 24: Bug Fixes & Test Infrastructure** - Fix known bugs (bin IPNS 404, device registry format error) and strengthen test infrastructure (headless load tests, vault recovery E2E, load test auth refresh) (completed 2026-03-25)
 - [x] **Phase 25: Desktop Enhancements** - Desktop auto-update mechanism and TEE file enrollment for new files (completed 2026-03-25)
 - [x] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX (completed 2026-03-26)
-- [ ] **Phase 28: Code Hygiene & Logging** - Structured logger wrapper, replace 127 console.\* calls, fix silenced unpin failures, clean any casts, archive legacy POC
+- [ ] **Phase 28: Code Hygiene & Logging** - Structured logger wrapper, replace 127 console.\* (log/warn/error) calls, fix silenced unpin failures, clean any casts, archive legacy POC
 - [ ] **Phase 29: Infrastructure Hardening** - Wire up IPNS unenrollment on deletion, test login endpoint hardening, IPFS node access control
 - [ ] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (NEEDS DISCUSSION)
 - [ ] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (NEEDS DISCUSSION)
@@ -271,13 +271,13 @@ Plans:
 
 ### Phase 28: Code Hygiene & Logging
 
-**Goal**: Production web app uses structured logging instead of raw console.\* calls, unpin failures are visible, type safety gaps are closed, and legacy POC is archived
+**Goal**: Production web app uses structured logging instead of raw console.\* (log/warn/error) calls, unpin failures are visible, type safety gaps are closed, and legacy POC is archived
 **Depends on**: None
 **Requirements**: None (tech debt reduction)
 **Research flag**: Skip -- all items are mechanical find-replace or small wrapper creation
 **Success Criteria** (what must be TRUE):
 
-1. A `lib/logger.ts` module exists with level filtering (debug/info/warn/error) and all 127 console.\* calls in production web code are replaced with logger calls
+1. A `lib/logger.ts` module exists with level filtering (debug/info/warn/error) and all 127 console.\* (log/warn/error) calls in production web code are replaced with logger calls
 2. All `.catch(() => {})` patterns on IPFS unpin calls are replaced with `.catch(logger.warn)` so failures are visible in logs
 3. All `as any` casts in production web code are replaced with typed alternatives (except acceptable polyfill shims)
 4. `00-Preliminary-R&D/poc/` is archived (moved to branch or deleted) and no longer pollutes searches
