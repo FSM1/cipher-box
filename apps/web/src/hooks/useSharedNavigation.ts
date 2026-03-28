@@ -1040,11 +1040,17 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           filePointer: item,
           newContent,
           getFileIpnsKeyFn: async (itemId: string) => {
-            // Try share_keys (file-ipns) first, then FilePointer fallback
+            // Try share_keys (file-ipns) by exact itemId match first.
+            // For standalone file shares, the synthetic FilePointer uses shareId as id
+            // (not the real file UUID), so exact match fails. Fall back to the sole
+            // file-ipns key only when this is a standalone file share (itemType === 'file').
             const keys = await fetchShareKeys(currentShareId!);
-            const ipnsKeyRecord = keys.find(
-              (k) => k.keyType === 'file-ipns' && k.itemId === itemId
-            );
+            const exactMatch = keys.find((k) => k.keyType === 'file-ipns' && k.itemId === itemId);
+            const ipnsKeyRecord =
+              exactMatch ??
+              (shareItem.share.itemType === 'file'
+                ? keys.find((k) => k.keyType === 'file-ipns')
+                : undefined);
             if (ipnsKeyRecord) {
               return unwrapKey(
                 hexToBytes(ipnsKeyRecord.encryptedKey),

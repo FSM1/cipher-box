@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.31.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.31.0...cipher-box-v0.31.1) (2026-03-27)
+
+
+### Bug Fixes
+
+* **ci:** use tauri-action@v0 in desktop build workflow ([#377](https://github.com/FSM1/cipher-box/issues/377)) ([dfff93d](https://github.com/FSM1/cipher-box/commit/dfff93d9b0f2d25b31ae539379f35edb8d20b77c))
+
+## [0.31.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.30.1...cipher-box-v0.31.0) (2026-03-27)
+
+
+### Features
+
+* **phase-27:** writable shares ([#372](https://github.com/FSM1/cipher-box/issues/372)) ([65721b4](https://github.com/FSM1/cipher-box/commit/65721b47f7791d908efb78323b27ee8487e9d3a5))
+
+
+### Bug Fixes
+
+* **e2e:** wait for React state before Ctrl+S in writable shares test ([#375](https://github.com/FSM1/cipher-box/issues/375)) ([98ba7d4](https://github.com/FSM1/cipher-box/commit/98ba7d4d034b8a55afce0093b1910f4e845b56ff))
+* **shares:** allow write-share recipients to add subfolder keys ([#374](https://github.com/FSM1/cipher-box/issues/374)) ([eafde2c](https://github.com/FSM1/cipher-box/commit/eafde2c88f82b3a2c5d4de81e8f2037847ab66d9))
+* **shares:** fix file IPNS key lookup for standalone file shares ([#376](https://github.com/FSM1/cipher-box/issues/376)) ([0135d18](https://github.com/FSM1/cipher-box/commit/0135d186f6f878baab6ab7fda5bd0acae9fbf597))
+
 ## [0.30.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.30.0...cipher-box-v0.30.1) (2026-03-26)
 
 
