@@ -31,8 +31,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX (completed 2026-03-26)
 - [x] **Phase 28: Code Hygiene & Logging** - Structured logger wrapper, replace 124 console.\* calls, fix silenced unpin failures, clean any casts, archive legacy POC (completed 2026-03-28)
 - [x] **Phase 29: Infrastructure Hardening** - Wire up IPNS unenrollment on deletion, test login endpoint hardening, IPFS node access control (completed 2026-03-28)
-- [ ] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (NEEDS DISCUSSION)
-- [ ] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (NEEDS DISCUSSION)
+- [x] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (completed 2026-03-28)
+- [x] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (completed 2026-03-28)
 - [x] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread (completed 2026-03-28)
 - [ ] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend
 
@@ -340,7 +340,13 @@ Plans:
 4. All existing E2E tests pass after decomposition (sharing-workflow, writable-shares, full-workflow)
 5. No new `any` casts or type regressions introduced
 
-**Plans**: TBD
+**Plans**: 3/3 plans executed
+
+Plans:
+
+- [x] 31-01-PLAN.md -- SDK-side module extraction (tree utils, error utils, share context)
+- [x] 31-02-PLAN.md -- Web layer barrel re-exports and SDK adoption
+- [x] 31-03-PLAN.md -- Hook split and component extraction
 
 ### Phase 32: FUSE Async FilePointer Resolution
 
