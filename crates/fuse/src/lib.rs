@@ -654,11 +654,18 @@ impl CipherBoxFS {
                             continue;
                         }
                     };
+                    // Cap concurrent resolution tasks to avoid network thrashing in large folders
+                    const MAX_CONCURRENT_FP_RESOLVES: usize = 10;
+                    let mut spawned = 0;
                     for (ino, fp_ipns) in unresolved {
                         if self.resolving_file_pointers.contains(&ino) {
                             continue; // Already in-flight
                         }
+                        if spawned >= MAX_CONCURRENT_FP_RESOLVES {
+                            break; // Remaining will be picked up on next refresh cycle
+                        }
                         self.resolving_file_pointers.insert(ino);
+                        spawned += 1;
                         let api = self.api.clone();
                         let tx = self.filepointer_tx.clone();
                         self.rt.spawn(async move {

@@ -23,12 +23,15 @@ pub(crate) mod implementation {
     const FILEPOINTER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
     /// Poll for an in-flight async FilePointer resolution to complete.
-    /// Returns true if the inode was resolved within the timeout.
+    /// Poll result: why did we stop waiting?
+    enum PollResult { Resolved, TimedOut, NotInFlight }
+
+    /// Poll for an in-flight async FilePointer resolution to complete.
     /// Only blocks if an async resolution task is actually in-flight for this inode.
-    fn poll_filepointer_resolution(fs: &mut CipherBoxFS, ino: u64) -> bool {
+    fn poll_filepointer_resolution(fs: &mut CipherBoxFS, ino: u64) -> PollResult {
         if !fs.resolving_file_pointers.contains(&ino) {
-            log::debug!("poll_filepointer_resolution: ino={} has no in-flight resolution, skipping poll", ino);
-            return false;
+            log::debug!("poll_filepointer_resolution: ino={} has no in-flight resolution", ino);
+            return PollResult::NotInFlight;
         }
         let deadline = std::time::Instant::now() + FILEPOINTER_POLL_TIMEOUT;
         while std::time::Instant::now() < deadline {
@@ -39,24 +42,23 @@ pub(crate) mod implementation {
                 if let Some(inode) = fs.inodes.get(ino) {
                     if let crate::inode::InodeKind::File { file_meta_resolved: true, cid, .. } = &inode.kind {
                         if !cid.is_empty() {
-                            return true;
+                            return PollResult::Resolved;
                         }
                     }
                 }
-                // Task completed but resolution failed — no point continuing to poll
-                log::debug!("poll_filepointer_resolution: ino={} no longer in-flight, stopping poll", ino);
-                return false;
+                log::debug!("poll_filepointer_resolution: ino={} async task finished but resolution failed", ino);
+                return PollResult::NotInFlight;
             }
             // Still in-flight — check if resolved yet
             if let Some(inode) = fs.inodes.get(ino) {
                 if let crate::inode::InodeKind::File { cid, file_meta_resolved: true, .. } = &inode.kind {
                     if !cid.is_empty() {
-                        return true;
+                        return PollResult::Resolved;
                     }
                 }
             }
         }
-        false
+        PollResult::TimedOut
     }
     use crate::file_handle::OpenFileHandle;
     use crate::helpers::{is_platform_special, mime_from_extension};
@@ -258,15 +260,22 @@ pub(crate) mod implementation {
 
                 if is_unresolved {
                     log::debug!("open: ino={} is unresolved FilePointer, polling...", ino);
-                    if poll_filepointer_resolution(fs, ino) {
-                        if let Some(inode) = fs.inodes.get(ino) {
-                            if let InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } = &inode.kind {
-                                info = (cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone());
+                    match poll_filepointer_resolution(fs, ino) {
+                        PollResult::Resolved => {
+                            if let Some(inode) = fs.inodes.get(ino) {
+                                if let InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } = &inode.kind {
+                                    info = (cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone());
+                                }
                             }
+                        }
+                        PollResult::TimedOut => {
+                            log::warn!("open: ino={} timed out after {}s poll-wait, returning EIO", ino, FILEPOINTER_POLL_TIMEOUT.as_secs());
+                        }
+                        PollResult::NotInFlight => {
+                            log::warn!("open: ino={} no in-flight resolution (previously failed?), returning EIO", ino);
                         }
                     }
                     if info.0.is_empty() {
-                        log::warn!("open: ino={} unresolved after poll-wait, returning EIO", ino);
                         reply.error(libc::EIO);
                         return;
                     }
@@ -455,7 +464,8 @@ pub(crate) mod implementation {
 
             if is_unresolved {
                 log::debug!("read: ino={} is unresolved FilePointer, polling...", ino);
-                if poll_filepointer_resolution(fs, ino) {
+                let poll_result = poll_filepointer_resolution(fs, ino);
+                if matches!(poll_result, PollResult::Resolved) {
                     if let Some(inode) = fs.inodes.get(ino) {
                         if let InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, file_meta_resolved: true, .. } = &inode.kind {
                             if !cid.is_empty() {
@@ -519,8 +529,11 @@ pub(crate) mod implementation {
                         }
                     }
                 }
-                // Still unresolved after timeout
-                log::warn!("read: ino={} still unresolved after {}s poll-wait, returning EIO", ino, FILEPOINTER_POLL_TIMEOUT.as_secs());
+                match poll_result {
+                    PollResult::TimedOut => log::warn!("read: ino={} timed out after {}s poll-wait, returning EIO", ino, FILEPOINTER_POLL_TIMEOUT.as_secs()),
+                    PollResult::NotInFlight => log::warn!("read: ino={} no in-flight resolution (previously failed?), returning EIO", ino),
+                    PollResult::Resolved => {} // handled above
+                }
                 reply.error(libc::EIO);
                 return;
             }
