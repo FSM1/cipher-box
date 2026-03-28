@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e480736ac11f",
+  "strategy": "manual-commit",
+  "branch": "docs/milestone-v1.1-completion",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/codebase/CONCERNS.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e4/80736ac11f/0/metadata.json",
+      "transcript": "/e4/80736ac11f/0/full.jsonl",
+      "content_hash": "/e4/80736ac11f/0/content_hash.txt",
+      "prompt": "/e4/80736ac11f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7510,
+    "cache_creation_tokens": 1835264,
+    "cache_read_tokens": 94488916,
+    "output_tokens": 109064,
+    "api_call_count": 428
+  }
+}
