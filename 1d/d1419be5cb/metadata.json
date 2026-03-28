@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "1dd1419be5cb",
+  "strategy": "manual-commit",
+  "branch": "docs/add-concern-resolution-phases",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1d/d1419be5cb/0/metadata.json",
+      "transcript": "/1d/d1419be5cb/0/full.jsonl",
+      "content_hash": "/1d/d1419be5cb/0/content_hash.txt",
+      "prompt": "/1d/d1419be5cb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 46332,
+    "cache_read_tokens": 1868064,
+    "output_tokens": 8485,
+    "api_call_count": 22
+  }
+}

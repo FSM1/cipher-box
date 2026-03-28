@@ -1,0 +1,13 @@
+ok lets get this docs PR up
+
+---
+
+Can you analyze the @.planning/codebase/CONCERNS.md file and come up with a strategy to resolve some of these?
+
+---
+
+I dont think a milestone is needed here, but adding phases for waves 1,2,3 seems like a good idea. also while doing this, please can you list which phases you feel would need a discussion (web app observability comes to mind) vs which can safely just be planned and executed.
+
+---
+
+yeah lets get these added
