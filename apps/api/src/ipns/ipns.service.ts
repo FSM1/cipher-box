@@ -296,14 +296,17 @@ export class IpnsService {
    * Failures for individual names are logged but do not fail the batch.
    */
   async unenrollBatch(userId: string, ipnsNames: string[]): Promise<{ totalUnenrolled: number }> {
+    const results = await Promise.allSettled(
+      ipnsNames.map((ipnsName) => this.republishService.unenrollIpns(userId, ipnsName))
+    );
     let unenrolled = 0;
-    for (const ipnsName of ipnsNames) {
-      try {
-        await this.republishService.unenrollIpns(userId, ipnsName);
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === 'fulfilled') {
         unenrolled++;
-      } catch (err) {
+      } else {
+        const err = (results[i] as PromiseRejectedResult).reason;
         this.logger.warn(
-          `Failed to unenroll ${ipnsName}: ${err instanceof Error ? err.message : err}`
+          `Failed to unenroll ${ipnsNames[i]}: ${err instanceof Error ? err.message : err}`
         );
       }
     }

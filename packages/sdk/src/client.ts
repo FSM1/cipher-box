@@ -154,12 +154,39 @@ export class CipherBoxClient {
       ? { _axiosInstance: this.ctx.axiosInstance }
       : undefined;
 
-    ipnsControllerUnenrollBatch({ ipnsNames }, apiOptions).catch((err: unknown) => {
-      console.warn(
-        `[CipherBox] IPNS unenroll failed for ${ipnsNames.length} name(s):`,
-        err instanceof Error ? err.message : err
-      );
-    });
+    // Chunk to respect API batch limit (max 200 per call)
+    const BATCH_SIZE = 200;
+    for (let i = 0; i < ipnsNames.length; i += BATCH_SIZE) {
+      const chunk = ipnsNames.slice(i, i + BATCH_SIZE);
+      ipnsControllerUnenrollBatch({ ipnsNames: chunk }, apiOptions).catch((err: unknown) => {
+        console.warn(
+          `[CipherBox] IPNS unenroll failed for ${chunk.length} name(s):`,
+          err instanceof Error ? err.message : err
+        );
+      });
+    }
+  }
+
+  /** Extract IPNS names from a removed FolderChild (file or folder subtree). */
+  private collectRemovedItemIpnsNames(item: FolderChild): string[] {
+    if (item.type === 'file') {
+      return [(item as FilePointer).fileMetaIpnsName];
+    } else if (item.type === 'folder') {
+      return this.collectSubtreeIpnsNames((item as FolderEntry).ipnsName);
+    }
+    return [];
+  }
+
+  /** Extract IPNS names from a BinEntry (file pointer and/or folder subtree). */
+  private collectBinEntryIpnsNames(entry: BinEntry): string[] {
+    const names: string[] = [];
+    if (entry.filePointer?.fileMetaIpnsName) {
+      names.push(entry.filePointer.fileMetaIpnsName);
+    }
+    if (entry.folderEntry?.ipnsName) {
+      names.push(...this.collectSubtreeIpnsNames(entry.folderEntry.ipnsName));
+    }
+    return names;
   }
 
   /**
@@ -167,19 +194,19 @@ export class CipherBoxClient {
    * Walks the in-memory folderTree to find file IPNS names and subfolder IPNS names.
    * Only collects from loaded folders -- unloaded subtrees are skipped.
    */
-  private collectSubtreeIpnsNames(folderIpnsName: string): string[] {
-    const names: string[] = [folderIpnsName];
+  private collectSubtreeIpnsNames(folderIpnsName: string, acc: string[] = []): string[] {
+    acc.push(folderIpnsName);
     const folder = this.folderTree.get(folderIpnsName);
-    if (!folder) return names;
+    if (!folder) return acc;
 
     for (const child of folder.children) {
       if (child.type === 'file') {
-        names.push((child as FilePointer).fileMetaIpnsName);
+        acc.push((child as FilePointer).fileMetaIpnsName);
       } else if (child.type === 'folder') {
-        names.push(...this.collectSubtreeIpnsNames((child as FolderEntry).ipnsName));
+        this.collectSubtreeIpnsNames((child as FolderEntry).ipnsName, acc);
       }
     }
-    return names;
+    return acc;
   }
 
   /**
@@ -606,15 +633,7 @@ export class CipherBoxClient {
       });
 
       // 5. Fire-and-forget IPNS unenrollment
-      const ipnsNamesToUnenroll: string[] = [];
-      if (removedItem.type === 'file') {
-        ipnsNamesToUnenroll.push((removedItem as FilePointer).fileMetaIpnsName);
-      } else if (removedItem.type === 'folder') {
-        ipnsNamesToUnenroll.push(
-          ...this.collectSubtreeIpnsNames((removedItem as FolderEntry).ipnsName)
-        );
-      }
-      this.fireAndForgetUnenroll(ipnsNamesToUnenroll);
+      this.fireAndForgetUnenroll(this.collectRemovedItemIpnsNames(removedItem));
 
       return { removedItem };
     });
@@ -929,15 +948,7 @@ export class CipherBoxClient {
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
 
       // Fire-and-forget IPNS unenrollment for the removed item
-      const ipnsNamesToUnenroll: string[] = [];
-      if (removedItem.type === 'file') {
-        ipnsNamesToUnenroll.push((removedItem as FilePointer).fileMetaIpnsName);
-      } else if (removedItem.type === 'folder') {
-        ipnsNamesToUnenroll.push(
-          ...this.collectSubtreeIpnsNames((removedItem as FolderEntry).ipnsName)
-        );
-      }
-      this.fireAndForgetUnenroll(ipnsNamesToUnenroll);
+      this.fireAndForgetUnenroll(this.collectRemovedItemIpnsNames(removedItem));
     });
   }
 
@@ -997,14 +1008,7 @@ export class CipherBoxClient {
 
       // Fire-and-forget IPNS unenrollment for permanently deleted bin entry
       if (entry) {
-        const ipnsNamesToUnenroll: string[] = [];
-        if (entry.filePointer?.fileMetaIpnsName) {
-          ipnsNamesToUnenroll.push(entry.filePointer.fileMetaIpnsName);
-        }
-        if (entry.folderEntry?.ipnsName) {
-          ipnsNamesToUnenroll.push(entry.folderEntry.ipnsName);
-        }
-        this.fireAndForgetUnenroll(ipnsNamesToUnenroll);
+        this.fireAndForgetUnenroll(this.collectBinEntryIpnsNames(entry));
       }
     });
   }
@@ -1016,16 +1020,10 @@ export class CipherBoxClient {
     return this.withOperation('emptyBin', async () => {
       if (!this.binState) throw new BinNotLoadedError();
 
-      // Collect all IPNS names before emptying
-      const ipnsNamesToUnenroll: string[] = [];
-      for (const entry of this.binState.entries) {
-        if (entry.filePointer?.fileMetaIpnsName) {
-          ipnsNamesToUnenroll.push(entry.filePointer.fileMetaIpnsName);
-        }
-        if (entry.folderEntry?.ipnsName) {
-          ipnsNamesToUnenroll.push(entry.folderEntry.ipnsName);
-        }
-      }
+      // Collect all IPNS names before emptying (includes subtree for folders)
+      const ipnsNamesToUnenroll = this.binState.entries.flatMap((entry) =>
+        this.collectBinEntryIpnsNames(entry)
+      );
 
       const { updatedBinState } = await binOps.emptyBin({
         binState: this.binState,
