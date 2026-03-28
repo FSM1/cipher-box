@@ -19,11 +19,26 @@ pub(crate) mod implementation {
         CONTENT_DOWNLOAD_TIMEOUT, MAX_VERSIONS_PER_FILE, VERSION_COOLDOWN_MS,
     };
 
-    /// Maximum time to wait for an in-flight FilePointer resolution in open/read.
-    /// Finder retries automatically on EIO, so 5s is a reasonable upper bound.
     const FILEPOINTER_POLL_TIMEOUT: Duration = Duration::from_secs(5);
-    /// Interval between polls when waiting for FilePointer resolution.
     const FILEPOINTER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+    /// Poll for an in-flight async FilePointer resolution to complete.
+    /// Returns true if the inode was resolved within the timeout.
+    fn poll_filepointer_resolution(fs: &mut CipherBoxFS, ino: u64) -> bool {
+        let deadline = std::time::Instant::now() + FILEPOINTER_POLL_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(FILEPOINTER_POLL_INTERVAL);
+            fs.drain_filepointer_completions();
+            if let Some(inode) = fs.inodes.get(ino) {
+                if let crate::inode::InodeKind::File { cid: ref c, file_meta_resolved: true, .. } = inode.kind {
+                    if !c.is_empty() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
     use crate::file_handle::OpenFileHandle;
     use crate::helpers::{is_platform_special, mime_from_extension};
     use crate::inode::{InodeKind, ROOT_INO};
@@ -215,7 +230,6 @@ pub(crate) mod implementation {
             }
         };
 
-        // If this is an unresolved FilePointer, poll-wait for async resolution
         let (cid, encrypted_file_key, iv, encryption_mode) = {
             let mut info = file_info.unwrap();
             if info.0.is_empty() {
@@ -224,24 +238,16 @@ pub(crate) mod implementation {
                     .unwrap_or(false);
 
                 if is_unresolved {
-                    log::debug!("open: ino={} is unresolved FilePointer, polling for resolution...", ino);
-                    let deadline = std::time::Instant::now() + FILEPOINTER_POLL_TIMEOUT;
-                    while std::time::Instant::now() < deadline {
-                        std::thread::sleep(FILEPOINTER_POLL_INTERVAL);
-                        fs.drain_filepointer_completions();
+                    log::debug!("open: ino={} is unresolved FilePointer, polling...", ino);
+                    if poll_filepointer_resolution(fs, ino) {
                         if let Some(inode) = fs.inodes.get(ino) {
-                            if let InodeKind::File { cid: ref c, encrypted_file_key: ref efk, iv: ref i, encryption_mode: ref em, file_meta_resolved: true, .. } = inode.kind {
-                                if !c.is_empty() {
-                                    log::debug!("open: ino={} resolved during poll-wait", ino);
-                                    info = (c.clone(), efk.clone(), i.clone(), em.clone());
-                                    break;
-                                }
+                            if let InodeKind::File { cid: ref c, encrypted_file_key: ref efk, iv: ref i, encryption_mode: ref em, .. } = inode.kind {
+                                info = (c.clone(), efk.clone(), i.clone(), em.clone());
                             }
                         }
                     }
-                    // Re-check after polling
                     if info.0.is_empty() {
-                        log::warn!("open: ino={} still unresolved after {}s poll-wait, returning EIO", ino, FILEPOINTER_POLL_TIMEOUT.as_secs());
+                        log::warn!("open: ino={} unresolved after poll-wait, returning EIO", ino);
                         reply.error(libc::EIO);
                         return;
                     }
@@ -424,21 +430,16 @@ pub(crate) mod implementation {
         };
 
         if cid.is_empty() {
-            // If this is an unresolved FilePointer, poll-wait for async resolution
             let is_unresolved = fs.inodes.get(ino)
                 .map(|i| matches!(&i.kind, InodeKind::File { file_meta_resolved: false, .. }))
                 .unwrap_or(false);
 
             if is_unresolved {
-                log::debug!("read: ino={} is unresolved FilePointer, polling for resolution...", ino);
-                let deadline = std::time::Instant::now() + FILEPOINTER_POLL_TIMEOUT;
-                while std::time::Instant::now() < deadline {
-                    std::thread::sleep(FILEPOINTER_POLL_INTERVAL);
-                    fs.drain_filepointer_completions();
+                log::debug!("read: ino={} is unresolved FilePointer, polling...", ino);
+                if poll_filepointer_resolution(fs, ino) {
                     if let Some(inode) = fs.inodes.get(ino) {
                         if let InodeKind::File { cid: ref c, file_meta_resolved: true, .. } = inode.kind {
                             if !c.is_empty() {
-                                log::debug!("read: ino={} resolved during poll-wait", ino);
                                 // Re-extract file info and fall through to normal read path
                                 let (new_cid, new_efk, new_iv, new_em) = match &inode.kind {
                                     InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } => {
