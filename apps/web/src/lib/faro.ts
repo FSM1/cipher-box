@@ -7,10 +7,7 @@ import {
 } from '@grafana/faro-web-sdk';
 import { ReactIntegration } from '@grafana/faro-react';
 
-/**
- * Sensitive field names that must be scrubbed from all Faro payloads.
- * Matches the CipherBox terminology standards from CLAUDE.md.
- */
+/** Field names containing crypto material — scrubbed from all Faro payloads. */
 const SENSITIVE_KEYS = new Set([
   'privateKey',
   'rootFolderKey',
@@ -22,16 +19,11 @@ const SENSITIVE_KEYS = new Set([
   'userEmail',
 ]);
 
-/**
- * Detects hex-encoded cryptographic keys (64+ hex chars = 32+ bytes).
- */
+/** 64+ hex chars = 32+ byte key material */
 const HEX_KEY_PATTERN = /^[0-9a-fA-F]{64,}$/;
 
-/**
- * Scrub a single value: redact hex keys and binary data.
- */
 function scrubValue(value: unknown): unknown {
-  if (typeof value === 'string' && HEX_KEY_PATTERN.test(value)) {
+  if (typeof value === 'string' && value.length >= 64 && HEX_KEY_PATTERN.test(value)) {
     return '[REDACTED_KEY]';
   }
   if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
@@ -43,10 +35,7 @@ function scrubValue(value: unknown): unknown {
   return value;
 }
 
-/**
- * Recursively scrub an object: redact sensitive keys and values.
- * Limited to 3 levels of depth to prevent infinite recursion.
- */
+/** Recursively scrub sensitive keys/values (max 3 levels deep). */
 function scrubObject(obj: Record<string, unknown>, depth = 0): Record<string, unknown> {
   if (depth > 3) return obj;
 
@@ -74,51 +63,36 @@ function scrubObject(obj: Record<string, unknown>, depth = 0): Record<string, un
   return result;
 }
 
-/**
- * Privacy gate: scrubs all sensitive data from Faro transport items
- * before they leave the browser.
- */
+/** Privacy gate: scrubs sensitive data before telemetry leaves the browser. */
 function beforeSend(item: TransportItem): TransportItem | null {
+  let modified = false;
+  let payload = item.payload;
+  let meta = item.meta;
+
   // Deep-scrub payload
-  if (item.payload && typeof item.payload === 'object') {
-    item = {
-      ...item,
-      payload: scrubObject(
-        item.payload as unknown as Record<string, unknown>
-      ) as TransportItem['payload'],
-    };
+  if (payload && typeof payload === 'object') {
+    payload = scrubObject(
+      payload as unknown as Record<string, unknown>
+    ) as TransportItem['payload'];
+    modified = true;
   }
 
   // Strip email from user meta — only publicKey (as id) is allowed
-  if (item.meta?.user?.email) {
-    item = {
-      ...item,
-      meta: {
-        ...item.meta,
-        user: {
-          ...item.meta.user,
-          email: undefined,
-        },
-      },
-    };
+  if (meta?.user?.email) {
+    meta = { ...meta, user: { ...meta.user, email: undefined } };
+    modified = true;
   }
 
-  return item;
+  return modified ? { ...item, payload, meta } : item;
 }
 
 let faroInstance: Faro | undefined;
 
-/**
- * Returns the Faro instance, or undefined if not initialized.
- */
 export function getFaroInstance(): Faro | undefined {
   return faroInstance;
 }
 
-/**
- * Initialize Grafana Faro observability SDK.
- * No-op when VITE_FARO_URL is absent (local dev).
- */
+/** Initialize Grafana Faro. No-op when VITE_FARO_URL is absent (local dev). */
 export function initFaro(): Faro | undefined {
   const faroUrl = import.meta.env.VITE_FARO_URL;
   if (!faroUrl) return undefined;
@@ -146,31 +120,25 @@ export function initFaro(): Faro | undefined {
   return faroInstance;
 }
 
-/**
- * Set the current user identity on Faro (publicKey only, never email).
- */
+/** Set current user identity on Faro (publicKey only, never email). */
 export function setFaroUser(publicKey: string): void {
   const faro = getFaroInstance();
   if (!faro) return;
   faro.api.setUser({ id: publicKey });
 }
 
-/**
- * Clear the current user identity from Faro (call on logout).
- */
+/** Clear user identity from Faro (call on logout). */
 export function clearFaroUser(): void {
   const faro = getFaroInstance();
   if (!faro) return;
-  faro.api.setUser(null as unknown as Parameters<typeof faro.api.setUser>[0]);
+  // Faro's setUser types don't accept null directly, but the SDK handles it correctly
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  faro.api.setUser(null as any);
 }
 
 /**
  * Register a Faro transport that forwards warn/error log calls to Grafana.
- * Designed to integrate with Phase 28's logger transports array.
- * No-op if Faro is not initialized.
- *
- * @param loggerTransports - The transports array from the logger module.
- *   Each transport is called as (level, message, context?) for every log call.
+ * Integrates with Phase 28's logger transports array. No-op if Faro is not initialized.
  */
 export function registerFaroTransport(
   loggerTransports: Array<
@@ -180,6 +148,13 @@ export function registerFaroTransport(
   const faro = getFaroInstance();
   if (!faro) return;
 
+  const toStringContext = (ctx: Record<string, unknown>): Record<string, string> =>
+    Object.fromEntries(
+      Object.entries(ctx)
+        .filter(([k]) => k !== 'error')
+        .map(([k, v]) => [k, typeof v === 'string' ? v : String(v)])
+    );
+
   const faroTransport = (
     level: string,
     message: string,
@@ -188,23 +163,14 @@ export function registerFaroTransport(
     if (level === 'error') {
       const error = context?.error instanceof Error ? context.error : new Error(message);
       faro.api.pushError(error, {
-        context: context
-          ? Object.fromEntries(
-              Object.entries(context)
-                .filter(([k]) => k !== 'error')
-                .map(([k, v]) => [k, String(v)])
-            )
-          : undefined,
+        context: context ? toStringContext(context) : undefined,
       });
     } else if (level === 'warn') {
       faro.api.pushLog([message], {
         level: LogLevel.WARN,
-        context: context
-          ? Object.fromEntries(Object.entries(context).map(([k, v]) => [k, String(v)]))
-          : undefined,
+        context: context ? toStringContext(context) : undefined,
       });
     }
-    // debug and info are not forwarded — noise reduction
   };
 
   loggerTransports.push(faroTransport);

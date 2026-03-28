@@ -1,8 +1,4 @@
-/**
- * Error boundary fallback UI — shown when an unhandled React render error occurs.
- * Pure presentational component with no hooks or state, so it works even when
- * React state is corrupted. Follows CipherBox's terminal/cipher aesthetic.
- */
+/** Pure presentational — no hooks/state so it works even when React state is corrupted. */
 export function ErrorFallback() {
   return (
     <div className="error-fallback">
