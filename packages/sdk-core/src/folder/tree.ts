@@ -74,6 +74,7 @@ export function isDescendantOf(
   ancestorId: string,
   folders: Record<string, TreeNode>
 ): boolean {
+  if (childId === ancestorId) return true;
   let current: string | null = childId;
   while (current) {
     const node: TreeNode | undefined = folders[current];

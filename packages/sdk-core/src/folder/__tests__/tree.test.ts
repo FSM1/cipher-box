@@ -119,9 +119,8 @@ describe('tree utilities', () => {
       expect(isDescendantOf('e', 'a', tree)).toBe(false);
     });
 
-    it('returns false when child and ancestor are the same node', () => {
-      // A node is not a descendant of itself (parentId check, not equality)
-      expect(isDescendantOf('a', 'a', tree)).toBe(false);
+    it('returns true when child and ancestor are the same node', () => {
+      expect(isDescendantOf('a', 'a', tree)).toBe(true);
     });
 
     it('returns false when childId is not in the map', () => {

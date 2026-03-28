@@ -37,6 +37,18 @@ describe('isForbiddenError', () => {
   it('returns false for status as string "403"', () => {
     expect(isForbiddenError({ status: '403' })).toBe(false);
   });
+
+  it('returns true for axios-style error with response.status 403', () => {
+    expect(isForbiddenError({ response: { status: 403 } })).toBe(true);
+  });
+
+  it('returns false for response.status !== 403', () => {
+    expect(isForbiddenError({ response: { status: 404 } })).toBe(false);
+  });
+
+  it('returns false for null response', () => {
+    expect(isForbiddenError({ response: null })).toBe(false);
+  });
 });
 
 describe('isConflictError', () => {

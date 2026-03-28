@@ -13,7 +13,11 @@
 export function isForbiddenError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const e = error as Record<string, unknown>;
-  return e.status === 403;
+  if (e.status === 403) return true;
+  if (typeof e.response === 'object' && e.response !== null) {
+    return (e.response as Record<string, unknown>).status === 403;
+  }
+  return false;
 }
 
 /**

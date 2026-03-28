@@ -458,16 +458,19 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
   /**
    * Hide a shared item from the user's view.
    */
-  const hideSharedItem = useCallback(async (shareId: string) => {
-    try {
-      await hideShare(shareId);
-      useShareStore.getState().removeReceivedShare(shareId);
-      p.setSharedItems((prev) => prev.filter((s) => s.share.shareId !== shareId));
-    } catch (err) {
-      logger.error('[SharedNav] Failed to hide share:', err);
-      p.setError('Failed to hide shared item');
-    }
-  }, []);
+  const hideSharedItem = useCallback(
+    async (shareId: string) => {
+      try {
+        await hideShare(shareId);
+        useShareStore.getState().removeReceivedShare(shareId);
+        p.setSharedItems((prev) => prev.filter((s) => s.share.shareId !== shareId));
+      } catch (err) {
+        logger.error('[SharedNav] Failed to hide share:', err);
+        p.setError('Failed to hide shared item');
+      }
+    },
+    [p.setSharedItems, p.setError]
+  );
 
   return {
     navigateToShare,

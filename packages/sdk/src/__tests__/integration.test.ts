@@ -102,6 +102,7 @@ describeIf('SDK Integration (live API)', () => {
         // 4. Rename file
         await client.renameItem(rootIpnsName, fileChild!.id, 'renamed.txt');
         const afterRename = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
+        expect(afterRename).toBeTruthy();
         expect(
           afterRename!.children.find((c: FolderChild) => c.name === 'renamed.txt')
         ).toBeTruthy();
@@ -112,6 +113,7 @@ describeIf('SDK Integration (live API)', () => {
         const afterFolderRename = (client as unknown as ClientInternals).folderTree.get(
           rootIpnsName
         );
+        expect(afterFolderRename).toBeTruthy();
         expect(
           afterFolderRename!.children.find((c: FolderChild) => c.name === 'RenamedFolder')
         ).toBeTruthy();
@@ -129,6 +131,7 @@ describeIf('SDK Integration (live API)', () => {
 
         // Verify root is empty
         const finalRoot = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
+        expect(finalRoot).toBeTruthy();
         expect(finalRoot!.children.length).toBe(0);
         console.log('  ✓ Root folder empty');
       } finally {
@@ -208,6 +211,7 @@ describeIf('SDK Integration (live API)', () => {
 
         // 5. Verify file removed from root
         const rootAfterDelete = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
+        expect(rootAfterDelete).toBeTruthy();
         expect(rootAfterDelete!.children.length).toBe(0);
         console.log('  ✓ File removed from root folder');
 
