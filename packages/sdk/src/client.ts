@@ -16,9 +16,9 @@
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
 import type { PinningProvider } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
-import { createAxiosInstance } from '@cipherbox/api-client';
+import { createAxiosInstance, ipnsControllerUnenrollBatch } from '@cipherbox/api-client';
 import { clearBytes } from '@cipherbox/crypto';
-import type { FolderChild } from '@cipherbox/core';
+import type { FolderChild, FolderEntry, FilePointer, BinEntry } from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
@@ -140,6 +140,73 @@ export class CipherBoxClient {
         failedRecipients,
       } as SdkEvent);
     }
+  }
+
+  /**
+   * Fire-and-forget IPNS unenrollment for deleted items.
+   * Collects IPNS names from removed items and calls the batch unenroll API.
+   * Failures are logged but never block the caller.
+   */
+  private fireAndForgetUnenroll(ipnsNames: string[]): void {
+    if (ipnsNames.length === 0) return;
+
+    const apiOptions = this.ctx.axiosInstance
+      ? { _axiosInstance: this.ctx.axiosInstance }
+      : undefined;
+
+    // Chunk to respect API batch limit (max 200 per call)
+    const BATCH_SIZE = 200;
+    for (let i = 0; i < ipnsNames.length; i += BATCH_SIZE) {
+      const chunk = ipnsNames.slice(i, i + BATCH_SIZE);
+      ipnsControllerUnenrollBatch({ ipnsNames: chunk }, apiOptions).catch((err: unknown) => {
+        console.warn(
+          `[CipherBox] IPNS unenroll failed for ${chunk.length} name(s):`,
+          err instanceof Error ? err.message : err
+        );
+      });
+    }
+  }
+
+  /** Extract IPNS names from a removed FolderChild (file or folder subtree). */
+  private collectRemovedItemIpnsNames(item: FolderChild): string[] {
+    if (item.type === 'file') {
+      return [(item as FilePointer).fileMetaIpnsName];
+    } else if (item.type === 'folder') {
+      return this.collectSubtreeIpnsNames((item as FolderEntry).ipnsName);
+    }
+    return [];
+  }
+
+  /** Extract IPNS names from a BinEntry (file pointer and/or folder subtree). */
+  private collectBinEntryIpnsNames(entry: BinEntry): string[] {
+    const names: string[] = [];
+    if (entry.filePointer?.fileMetaIpnsName) {
+      names.push(entry.filePointer.fileMetaIpnsName);
+    }
+    if (entry.folderEntry?.ipnsName) {
+      names.push(...this.collectSubtreeIpnsNames(entry.folderEntry.ipnsName));
+    }
+    return names;
+  }
+
+  /**
+   * Recursively collect all IPNS names from a folder subtree.
+   * Walks the in-memory folderTree to find file IPNS names and subfolder IPNS names.
+   * Only collects from loaded folders -- unloaded subtrees are skipped.
+   */
+  private collectSubtreeIpnsNames(folderIpnsName: string, acc: string[] = []): string[] {
+    acc.push(folderIpnsName);
+    const folder = this.folderTree.get(folderIpnsName);
+    if (!folder) return acc;
+
+    for (const child of folder.children) {
+      if (child.type === 'file') {
+        acc.push((child as FilePointer).fileMetaIpnsName);
+      } else if (child.type === 'folder') {
+        this.collectSubtreeIpnsNames((child as FolderEntry).ipnsName, acc);
+      }
+    }
+    return acc;
   }
 
   /**
@@ -565,6 +632,9 @@ export class CipherBoxClient {
         sequenceNumber: newSequenceNumber,
       });
 
+      // 5. Fire-and-forget IPNS unenrollment
+      this.fireAndForgetUnenroll(this.collectRemovedItemIpnsNames(removedItem));
+
       return { removedItem };
     });
   }
@@ -876,6 +946,9 @@ export class CipherBoxClient {
         sequenceNumber: folderState?.sequenceNumber ?? 0n,
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
+
+      // No IPNS unenrollment here — soft delete preserves items for restore.
+      // Unenrollment happens on permanentDelete() or emptyBin().
     });
   }
 
@@ -921,6 +994,9 @@ export class CipherBoxClient {
     return this.withOperation('permanentDelete', async () => {
       if (!this.binState) throw new BinNotLoadedError();
 
+      // Capture entry before deletion for IPNS unenrollment
+      const entry = this.binState.entries.find((e) => e.id === entryId);
+
       const { updatedBinState } = await binOps.permanentDeleteFromBin({
         entryId,
         binState: this.binState,
@@ -929,6 +1005,11 @@ export class CipherBoxClient {
 
       this.binState = updatedBinState;
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
+
+      // Fire-and-forget IPNS unenrollment for permanently deleted bin entry
+      if (entry) {
+        this.fireAndForgetUnenroll(this.collectBinEntryIpnsNames(entry));
+      }
     });
   }
 
@@ -939,6 +1020,11 @@ export class CipherBoxClient {
     return this.withOperation('emptyBin', async () => {
       if (!this.binState) throw new BinNotLoadedError();
 
+      // Collect all IPNS names before emptying (includes subtree for folders)
+      const ipnsNamesToUnenroll = this.binState.entries.flatMap((entry) =>
+        this.collectBinEntryIpnsNames(entry)
+      );
+
       const { updatedBinState } = await binOps.emptyBin({
         binState: this.binState,
         binCtx: this.getBinContext(),
@@ -946,6 +1032,9 @@ export class CipherBoxClient {
 
       this.binState = updatedBinState;
       this.emitter.emit({ type: 'bin:updated', entries: [] });
+
+      // Fire-and-forget IPNS unenrollment for all emptied bin entries
+      this.fireAndForgetUnenroll(ipnsNamesToUnenroll);
     });
   }
 
@@ -1071,7 +1160,9 @@ export class CipherBoxClient {
       // PSA accepted the pin request -- unpin from CipherBox (async, best-effort)
       sdkCore
         .unpinFromIpfs(ctx, relayResult.cid)
-        .catch((err) => console.warn('[SDK] Unpin from CipherBox after PSA pin failed:', err));
+        .catch((err: unknown) =>
+          console.warn('[SDK] Unpin from CipherBox after PSA pin failed:', err)
+        );
       // Register CID for advisory tracking (best-effort)
       try {
         await sdkCore.registerCid(ctx, relayResult.cid, relayResult.size);

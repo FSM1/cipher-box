@@ -20,13 +20,7 @@ export async function deleteFile(cid: string, sizeBytes: number): Promise<void> 
   const quotaStore = useQuotaStore.getState();
   quotaStore.removeUsage(sizeBytes);
 
-  // TODO: Phase 14 should add TEE unenrollment for orphaned file IPNS records.
-  // Currently, the file IPNS record and its TEE enrollment are left to expire
-  // naturally (24h IPNS record lifetime, TEE republishing will stop after
-  // the enrollment entry is cleaned up). This is acceptable for v1 because:
-  // - No data leakage (the encrypted metadata CID becomes unreachable)
-  // - Storage cost is minimal (IPNS records are small)
-  // - The republish service has capacity warnings at 1000+ records
+  // TEE unenrollment is handled by SDK's fireAndForgetUnenroll() on delete.
 }
 
 /**

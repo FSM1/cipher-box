@@ -291,6 +291,29 @@ export class IpnsService {
   }
 
   /**
+   * Batch unenroll IPNS names from TEE republishing.
+   * Called when files/folders are deleted to prevent orphaned enrollments.
+   * Failures for individual names are logged but do not fail the batch.
+   */
+  async unenrollBatch(userId: string, ipnsNames: string[]): Promise<{ totalUnenrolled: number }> {
+    const results = await Promise.allSettled(
+      ipnsNames.map((ipnsName) => this.republishService.unenrollIpns(userId, ipnsName))
+    );
+    let unenrolled = 0;
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === 'fulfilled') {
+        unenrolled += (results[i] as PromiseFulfilledResult<number>).value;
+      } else {
+        const err = (results[i] as PromiseRejectedResult).reason;
+        this.logger.warn(
+          `Failed to unenroll ${ipnsNames[i]}: ${err instanceof Error ? err.message : err}`
+        );
+      }
+    }
+    return { totalUnenrolled: unenrolled };
+  }
+
+  /**
    * Get a folder IPNS entry by user and IPNS name
    */
   async getFolderIpns(userId: string, ipnsName: string): Promise<FolderIpns | null> {

@@ -457,9 +457,8 @@ export async function deleteFolder(params: {
     sequenceNumber: params.parentFolderState.sequenceNumber,
   });
 
-  // 5. File CID unpinning and TEE unenrollment deferred to caller
-  // The caller (useFolder hook) resolves fileMetaIpnsName -> CID for unpinning.
-  // TODO: Phase 14 should add batch unenrollment for orphaned file IPNS records.
+  // 5. File CID unpinning deferred to caller.
+  // TEE unenrollment is handled by SDK's fireAndForgetUnenroll() on delete.
 
   return { fileIpnsNames, newSequenceNumber, removedChild };
 }
@@ -510,13 +509,7 @@ export async function deleteFileFromFolder(params: {
     sequenceNumber: params.parentFolderState.sequenceNumber,
   });
 
-  // 5. TEE unenrollment: no API endpoint available yet.
-  // TODO: Phase 14 should expose unenrollIpns via REST API.
-  if (fileMetaIpnsName) {
-    logger.warn(
-      `File IPNS record ${fileMetaIpnsName} orphaned after deletion. TEE unenrollment deferred to Phase 14.`
-    );
-  }
+  // 5. TEE unenrollment is handled by SDK's fireAndForgetUnenroll() on delete.
 
   return { fileMetaIpnsName, newSequenceNumber, removedChild };
 }

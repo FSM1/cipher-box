@@ -11,6 +11,8 @@ export * from './authMethodResponseDto';
 export * from './authMethodResponseDtoType';
 export * from './batchPublishIpnsDto';
 export * from './batchPublishIpnsResponseDto';
+export * from './batchUnenrollIpnsDto';
+export * from './batchUnenrollIpnsResponseDto';
 export * from './childKeyDto';
 export * from './childKeyDtoKeyType';
 export * from './claimChildKeyDto';

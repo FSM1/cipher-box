@@ -546,7 +546,7 @@ export function FileBrowser() {
           fileName: file.name,
         });
       } catch (err) {
-        logger.error(`[FileBrowser] Download failed for ${file.name}:`, err);
+        logger.error('[FileBrowser] Batch download item failed:', err);
       }
     }
   }, [selectedItems, downloadFromIpns, currentFolder?.folderKey]);
