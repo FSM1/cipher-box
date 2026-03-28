@@ -360,3 +360,7 @@ also bunch of pr reviews in for phase 31
 ---
 
 one more comment from coderabbit on pr #386
+
+---
+
+phase 30 https://github.com/FSM1/cipher-box/pull/386#pullrequestreview-4026065453 contains a nitpick comment - please address if valid.
