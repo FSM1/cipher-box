@@ -127,7 +127,6 @@ export function initFaro(): Faro | undefined {
     instrumentations: [
       ...getWebInstrumentations({
         captureConsole: false, // Phase 28 logger handles console capture
-        captureConsoleDisabledLevels: [],
       }),
       new TracingInstrumentation({
         instrumentationOptions: {
