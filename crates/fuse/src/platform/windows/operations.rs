@@ -40,6 +40,7 @@ pub mod implementation {
     pub fn status_directory_not_empty() -> FspError { FspError::NTSTATUS(0xC0000101_u32 as i32) }
     pub fn status_invalid_handle() -> FspError { FspError::NTSTATUS(0xC0000008_u32 as i32) }
     pub fn status_io_device_error() -> FspError { FspError::IO(std::io::ErrorKind::Other) }
+    pub fn status_device_not_ready() -> FspError { FspError::NTSTATUS(0xC00000A3_u32 as i32) }
 
     /// Permissive self-relative security descriptor granting FILE_ALL_ACCESS
     /// to Everyone (S-1-1-0). CipherBox is single-user; encryption is the real
