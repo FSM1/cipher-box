@@ -142,4 +142,4 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 
 ---
 
-Last updated: 2026-03-26 after Phase 26 Observability & UX Tuning completed
+Last updated: 2026-03-28 after Phase 33 Windows Async FilePointer Resolution completed
