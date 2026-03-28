@@ -1,87 +1,81 @@
 #!/usr/bin/env node
-// Claude Code Statusline - GSD Edition
-// Shows: model | current task | directory | context usage
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+const { execSync } = require('child_process');
 
-// Read JSON from stdin
 let input = '';
-process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => (input += chunk));
 process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
-    const model = data.model?.display_name || 'Claude';
-    const dir = data.workspace?.current_dir || process.cwd();
-    const session = data.session_id || '';
-    const remaining = data.context_window?.remaining_percentage;
+    const cwd = data.cwd || process.cwd();
+    const parts = [];
 
-    // Context window display (shows USED percentage)
-    let ctx = '';
-    if (remaining != null) {
-      const rem = Math.round(remaining);
-      const used = Math.max(0, Math.min(100, 100 - rem));
+    // 1. Worktree/Project directory (basename)
+    const dirName = cwd.split('/').pop();
+    parts.push(`\x1b[36m\u{1F4C2} ${dirName}\x1b[0m`);
 
-      // Build progress bar (10 segments)
-      const filled = Math.floor(used / 10);
-      const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+    // 2. Git branch
+    try {
+      const branch = execSync('git rev-parse --abbrev-ref HEAD 2>/dev/null', {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
 
-      // Color based on usage
-      if (used < 50) {
-        ctx = ` \x1b[32m${bar} ${used}%\x1b[0m`;
-      } else if (used < 65) {
-        ctx = ` \x1b[33m${bar} ${used}%\x1b[0m`;
-      } else if (used < 80) {
-        ctx = ` \x1b[38;5;208m${bar} ${used}%\x1b[0m`;
-      } else {
-        ctx = ` \x1b[5;31m💀 ${bar} ${used}%\x1b[0m`;
-      }
+      // Check if we're in a worktree
+      const gitDir = execSync('git rev-parse --git-dir 2>/dev/null', {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
+
+      const isWorktree = gitDir.includes('.git/worktrees');
+      const worktreeIndicator = isWorktree ? ' [wt]' : '';
+
+      // Check for uncommitted changes
+      const status = execSync('git status --porcelain 2>/dev/null', {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
+      const dirty = status.length > 0 ? '*' : '';
+
+      parts.push(`\x1b[33m\u{1F33F} ${branch}${dirty}${worktreeIndicator}\x1b[0m`);
+    } catch (e) {
+      // Not a git repo
     }
 
-    // Current task from todos
-    let task = '';
-    const homeDir = os.homedir();
-    const todosDir = path.join(homeDir, '.claude', 'todos');
-    if (session && fs.existsSync(todosDir)) {
-      const files = fs
-        .readdirSync(todosDir)
-        .filter((f) => f.startsWith(session) && f.includes('-agent-') && f.endsWith('.json'))
-        .map((f) => ({ name: f, mtime: fs.statSync(path.join(todosDir, f)).mtime }))
-        .sort((a, b) => b.mtime - a.mtime);
-
-      if (files.length > 0) {
-        try {
-          const todos = JSON.parse(fs.readFileSync(path.join(todosDir, files[0].name), 'utf8'));
-          const inProgress = todos.find((t) => t.status === 'in_progress');
-          if (inProgress) task = inProgress.activeForm || '';
-        } catch (e) {}
-      }
+    // 3. Model name (short form)
+    const model = data.model?.display_name;
+    if (model) {
+      const shortModel = model
+        .replace('Claude ', '')
+        .replace('Sonnet', 'S')
+        .replace('Opus', 'O')
+        .replace('Haiku', 'H');
+      parts.push(`\x1b[35m\u{1F9E0} ${shortModel}\x1b[0m`);
     }
 
-    // GSD update available?
-    let gsdUpdate = '';
-    const cacheFile = path.join(homeDir, '.claude', 'cache', 'gsd-update-check.json');
-    if (fs.existsSync(cacheFile)) {
-      try {
-        const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-        if (cache.update_available) {
-          gsdUpdate = '\x1b[33m⬆ /gsd:update\x1b[0m │ ';
-        }
-      } catch (e) {}
-    }
+    // 4. Context usage bar (always show, default to 0% used if no data)
+    const remaining = data.context_window?.remaining_percentage ?? 100;
+    const used = 100 - remaining;
+    const barWidth = 10;
+    const filledCount = Math.round((used / 100) * barWidth);
+    const emptyCount = barWidth - filledCount;
 
-    // Output
-    const dirname = path.basename(dir);
-    if (task) {
-      process.stdout.write(
-        `${gsdUpdate}\x1b[2m${model}\x1b[0m │ \x1b[1m${task}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${ctx}`
-      );
-    } else {
-      process.stdout.write(`${gsdUpdate}\x1b[2m${model}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${ctx}`);
-    }
-  } catch (e) {
-    // Silent fail - don't break statusline on parse errors
+    // Color based on usage (green -> yellow -> red as usage increases)
+    let color;
+    if (used < 50)
+      color = '\x1b[32m'; // green
+    else if (used < 75)
+      color = '\x1b[33m'; // yellow
+    else color = '\x1b[31m'; // red
+
+    const bar = '\u2588'.repeat(filledCount) + '\u2591'.repeat(emptyCount);
+    parts.push(`\u{26A1} ${color}${bar}\x1b[0m ${Math.round(used)}%`);
+
+    console.log(parts.join(' | '));
+  } catch (error) {
+    console.log('Claude Code');
   }
 });

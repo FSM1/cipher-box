@@ -109,6 +109,6 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "node .claude/hooks/gsd-statusline.js"
+    "command": "node .claude/hooks/statusline.js"
   }
 }
