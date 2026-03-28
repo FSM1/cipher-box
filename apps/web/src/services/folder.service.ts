@@ -33,6 +33,11 @@ import {
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
 import { batchPublishIpnsRecords } from './ipns.service';
+import {
+  getDepth as sdkGetDepth,
+  calculateSubtreeDepth as sdkCalculateSubtreeDepth,
+  isDescendantOf as sdkIsDescendantOf,
+} from '@cipherbox/sdk-core';
 import { isConflictError } from '../lib/errors';
 import { useAuthStore } from '../stores/auth.store';
 import type { FolderNode } from '../stores/folder.store';
@@ -61,20 +66,11 @@ function uint8ToBase64(bytes: Uint8Array): string {
  * @param folders - Current folder tree
  * @returns Depth from root (0 for root)
  */
-export function getDepth(folderId: string | null, folders: Record<string, FolderNode>): number {
-  if (folderId === null) return 0; // root is depth 0
-
-  let depth = 0;
-  let currentId: string | null = folderId;
-
-  while (currentId !== null) {
-    const folder: FolderNode | undefined = folders[currentId];
-    if (!folder) break;
-    depth++;
-    currentId = folder.parentId;
-  }
-
-  return depth;
+export function getDepth(
+  folderId: string | null,
+  folders: Record<string, { id: string; parentId: string | null }>,
+): number {
+  return sdkGetDepth(folderId, folders);
 }
 
 /**
@@ -704,20 +700,9 @@ export async function replaceFileInFolder(params: {
  */
 export function calculateSubtreeDepth(
   folderId: string,
-  folders: Record<string, FolderNode>
+  folders: Record<string, { id: string; parentId: string | null }>,
 ): number {
-  const folder = folders[folderId];
-  if (!folder) return 0;
-
-  let maxChildDepth = 0;
-  for (const child of folder.children) {
-    if (child.type === 'folder') {
-      const childDepth = 1 + calculateSubtreeDepth(child.id, folders);
-      maxChildDepth = Math.max(maxChildDepth, childDepth);
-    }
-  }
-
-  return maxChildDepth;
+  return sdkCalculateSubtreeDepth(folderId, folders);
 }
 
 /**
@@ -733,18 +718,9 @@ export function calculateSubtreeDepth(
 export function isDescendantOf(
   folderId: string,
   potentialAncestorId: string,
-  folders: Record<string, FolderNode>
+  folders: Record<string, { id: string; parentId: string | null }>,
 ): boolean {
-  let currentId: string | null = folderId;
-
-  while (currentId !== null) {
-    if (currentId === potentialAncestorId) return true;
-    const currentFolder: FolderNode | undefined = folders[currentId];
-    if (!currentFolder) break;
-    currentId = currentFolder.parentId;
-  }
-
-  return false;
+  return sdkIsDescendantOf(folderId, potentialAncestorId, folders);
 }
 
 /**

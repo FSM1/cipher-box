@@ -27,7 +27,6 @@ import {
   type EncryptedFileMetadata,
 } from '@cipherbox/core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
-import type { ShareKeyEntryDtoKeyType } from '@cipherbox/api-client';
 import {
   uploadToSharedFolder,
   createSharedSubfolder,
@@ -35,6 +34,9 @@ import {
   deleteFromSharedFolder,
   updateSharedFile,
   type SharedWriteContext,
+  withRevocationGuard as sdkWithRevocationGuard,
+  ShareKeyCache,
+  buildSharedWriteContext,
 } from '@cipherbox/sdk';
 import { useAuthStore } from '../stores/auth.store';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
@@ -110,15 +112,6 @@ type UseSharedNavigationReturn = {
   updateSharedFile: (item: FilePointer, newContent: Uint8Array) => Promise<void>;
 };
 
-/**
- * Check if an error is a 403 Forbidden (write access revoked).
- */
-function isForbiddenError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const e = error as Record<string, unknown>;
-  return e.status === 403;
-}
-
 /** Parse a 0x-prefixed or bare hex public key string into bytes. */
 function parsePublicKey(keyHex: string): Uint8Array {
   const hex = keyHex.startsWith('0x') ? keyHex.slice(2) : keyHex;
@@ -167,19 +160,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   >([]);
 
   // Cache share keys per shareId with TTL to avoid refetching
-  const shareKeysCache = useRef<
-    Map<
-      string,
-      {
-        keys: Array<{
-          keyType: ShareKeyEntryDtoKeyType;
-          itemId: string;
-          encryptedKey: string;
-        }>;
-        fetchedAt: number;
-      }
-    >
-  >(new Map());
+  const shareKeysCacheRef = useRef(new ShareKeyCache(60_000));
 
   // Polling interval ref for 30s sync
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -305,24 +286,19 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       navStackRef.current = [];
       zeroIpnsKey();
       clearPolling();
-      shareKeysCache.current.clear();
+      shareKeysCacheRef.current.clear();
     };
   }, [zeroIpnsKey, clearPolling]);
-
-  /** Cache TTL for share keys (60 seconds). */
-  const SHARE_KEYS_CACHE_TTL = 60_000;
 
   /**
    * Get share keys for a share, with TTL-based caching.
    */
   const getShareKeys = useCallback(async (shareId: string) => {
-    const cached = shareKeysCache.current.get(shareId);
-    if (cached && Date.now() - cached.fetchedAt < SHARE_KEYS_CACHE_TTL) {
-      return cached.keys;
-    }
+    const cached = shareKeysCacheRef.current.get(shareId);
+    if (cached) return cached;
 
     const keys = await fetchShareKeys(shareId);
-    shareKeysCache.current.set(shareId, { keys, fetchedAt: Date.now() });
+    shareKeysCacheRef.current.set(shareId, keys);
     return keys;
   }, []);
 
@@ -811,7 +787,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     if (!shareItem) return null;
     const ownerPubKey = parsePublicKey(shareItem.share.sharerPublicKey);
 
-    return {
+    return buildSharedWriteContext({
       ctx: {
         apiUrl,
         getAccessToken: async () => useAuthStore.getState().accessToken || '',
@@ -827,9 +803,9 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       shareId: currentShareId!,
       addShareKeysFn: async (sid, keys) => {
         await addShareKeys(sid, keys);
-        shareKeysCache.current.delete(sid);
+        shareKeysCacheRef.current.invalidate(sid);
       },
-    };
+    });
   }, [folderKey, ipnsName, currentSequenceNumber, currentShareId, sharedItems]);
 
   /**
@@ -838,17 +814,9 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
    */
   const withRevocationGuard = useCallback(
     async <T>(operation: () => Promise<T>): Promise<T> => {
-      try {
-        return await operation();
-      } catch (err) {
-        if (isForbiddenError(err)) {
-          handleRevocation(true);
-          throw new Error('> write access revoked -- folder is now read-only');
-        }
-        throw err;
-      }
+      return sdkWithRevocationGuard(operation, () => handleRevocation(true));
     },
-    [handleRevocation]
+    [handleRevocation],
   );
 
   /**
@@ -1036,7 +1004,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           shareId: currentShareId!,
           addShareKeysFn: async (sid, keys) => {
             await addShareKeys(sid, keys);
-            shareKeysCache.current.delete(sid);
+            shareKeysCacheRef.current.invalidate(sid);
           },
           filePointer: item,
           newContent,

@@ -2,7 +2,7 @@ import { useVaultStore } from '../stores/vault.store';
 import { useFolderStore } from '../stores/folder.store';
 import type { FolderNode } from '../stores/folder.store';
 import { useSyncStore } from '../stores/sync.store';
-import { isConflictError } from '../lib/errors';
+import { withConflictRetry as sdkWithConflictRetry } from '@cipherbox/sdk';
 import * as folderService from '../services/folder.service';
 import { resolveIpnsRecord } from '../services/ipns.service';
 
@@ -22,7 +22,7 @@ export async function resyncFolder(folderIpnsName: string, folderId: string): Pr
 
   const remoteMetadata = await folderService.fetchAndDecryptMetadata(
     resolved.cid,
-    folderNode.folderKey
+    folderNode.folderKey,
   );
 
   store.updateFolderChildren(folderId, remoteMetadata.children ?? []);
@@ -32,34 +32,26 @@ export async function resyncFolder(folderIpnsName: string, folderId: string): Pr
 /**
  * Execute an operation with single-retry conflict resolution.
  *
- * On 409 conflict: shows sync banner, runs resync, adds jitter delay,
- * optionally runs pre-retry validation, then retries once.
- * If the retry also returns 409, throws a user-facing error.
+ * Wraps the SDK's framework-agnostic withConflictRetry with web-specific
+ * sync banner UI (shows/clears conflict indicator in the sync store).
  */
 export async function withConflictRetry<T>(
   perform: () => Promise<T>,
   resync: () => Promise<void>,
-  preRetry?: () => void
+  preRetry?: () => void,
 ): Promise<T> {
-  try {
-    return await perform();
-  } catch (err) {
-    if (!isConflictError(err)) throw err;
-    useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-    try {
-      await resync();
-      await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-      if (preRetry) preRetry();
-      return await perform();
-    } catch (retryErr) {
-      if (isConflictError(retryErr)) {
-        throw new Error('Conflict persists after re-sync. Please try again.');
+  return sdkWithConflictRetry(
+    perform,
+    async () => {
+      useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
+      try {
+        await resync();
+      } finally {
+        useSyncStore.getState().clearConflict();
       }
-      throw retryErr;
-    } finally {
-      useSyncStore.getState().clearConflict();
-    }
-  }
+    },
+    preRetry,
+  );
 }
 
 /** Maximum folder nesting depth per FOLD-03 */
