@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import type { FolderChild } from '@cipherbox/core';
 import { createInviteLink, fetchInvitesForItem, revokeInvite } from '../../services/invite.service';
 import type { InviteInfo } from '../../services/invite.service';
+import { logger } from '../../lib/logger';
 
 type InviteLinkTabProps = {
   item: FolderChild;
@@ -55,7 +56,7 @@ export function InviteLinkTab({
       })
       .catch((err) => {
         if (!cancelled) {
-          console.error('Failed to fetch invites:', err);
+          logger.error('[Invite] Failed to fetch invites:', err);
           setError('failed to load invite links');
           setInvites([]);
         }
@@ -109,7 +110,7 @@ export function InviteLinkTab({
         // List refresh failed, but invite was created successfully
       }
     } catch (err) {
-      console.error('Failed to create invite link:', err);
+      logger.error('[Invite] Failed to create invite link:', err);
       const message = err instanceof Error ? err.message : 'failed to create invite link';
       setError(message);
     } finally {
@@ -126,7 +127,7 @@ export function InviteLinkTab({
       await revokeInvite(inviteId);
       setInvites((prev) => prev.filter((inv) => inv.id !== inviteId));
     } catch (err) {
-      console.error('Failed to revoke invite:', err);
+      logger.error('[Invite] Failed to revoke invite:', err);
       setError('revoke failed');
     } finally {
       setRevokingId(null);

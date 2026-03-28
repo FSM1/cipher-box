@@ -19,6 +19,7 @@ import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { getRootFolderState, resyncFolder, withConflictRetry } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
 import { useNotificationStore } from '../stores/notification.store';
+import { logger } from '../lib/logger';
 
 /**
  * React hook for file add/update operations.
@@ -153,7 +154,7 @@ export function useFileOperations() {
               fileKey.fill(0);
             }
           } catch (err) {
-            console.warn('[share] Post-upload file re-wrapping failed:', err);
+            logger.warn('[share] Post-upload file re-wrapping failed:', err);
           }
         })();
 
@@ -303,7 +304,7 @@ export function useFileOperations() {
                 );
             }
           } catch (err) {
-            console.warn('[share] Post-upload batch file re-wrapping failed:', err);
+            logger.warn('[share] Post-upload batch file re-wrapping failed:', err);
           } finally {
             for (const item of newItems) {
               item.plaintextKey.fill(0);
@@ -453,7 +454,10 @@ export function useFileOperations() {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
             })
             .catch((err) => {
-              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+              logger.warn(
+                '[FileOps] Lazy IPNS key migration: folder re-publish failed, will retry:',
+                err
+              );
             });
         }
 
@@ -477,14 +481,16 @@ export function useFileOperations() {
               fileKey.fill(0);
             }
           } catch (err) {
-            console.warn('[share] Post-update re-wrap failed:', err);
+            logger.warn('[share] Post-update re-wrap failed:', err);
           }
         })();
 
         // 9. Only unpin CIDs of pruned versions (excess beyond max 10)
         // Old CIDs stay pinned as version history (VER-01)
         for (const prunedCid of prunedCids) {
-          unpinFromIpfs(prunedCid).catch(() => {});
+          unpinFromIpfs(prunedCid).catch((err) =>
+            logger.warn('[FileOps] Unpin pruned CID failed:', err)
+          );
         }
 
         // Refresh quota

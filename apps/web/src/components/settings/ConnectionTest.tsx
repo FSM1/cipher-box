@@ -3,6 +3,7 @@ import { testConnection, type ConnectionTestResult } from '@cipherbox/sdk-core';
 import { wrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { teeControllerConnectionTest } from '@cipherbox/api-client';
 import { useAuthStore } from '../../stores/auth.store';
+import { logger } from '../../lib/logger';
 
 type ConnectionTestProps = {
   endpoint: string;
@@ -45,7 +46,7 @@ export function ConnectionTest({ endpoint, authToken, onTestResult }: Connection
         onTestResult?.(result);
       } else {
         // Fallback: browser-side test when TEE keys not available
-        console.warn('TEE keys not available, falling back to browser-side connection test');
+        logger.warn('[BYO] TEE keys not available, falling back to browser-side connection test');
         const result = await testConnection(endpoint, authToken || undefined);
         setTestResult(result);
         onTestResult?.(result);

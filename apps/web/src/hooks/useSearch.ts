@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useFolderStore } from '../stores/folder.store';
 import { useAuthStore } from '../stores/auth.store';
 import { searchIndexService, type SearchResult } from '../services/search-index.service';
+import { logger } from '../lib/logger';
 
 // ---------------------------------------------------------------------------
 // Module-level callback for triggering index rebuild from outside React tree
@@ -118,10 +119,10 @@ export function useSearch() {
 
         // Persist encrypted (fire-and-forget)
         searchIndexService.persistEncrypted(vaultKeypair.privateKey).catch((err) => {
-          console.warn('[search] Failed to persist index:', err);
+          logger.warn('[search] Failed to persist index:', err);
         });
       } catch (err) {
-        console.error('[search] Failed to initialize index:', err);
+        logger.error('[search] Failed to initialize index:', err);
         if (cancelledRef.current) return;
         // Still mark ready -- search works in-memory even if persistence fails
         setIsIndexReady(true);
@@ -158,7 +159,7 @@ export function useSearch() {
 
     // Re-persist (fire-and-forget)
     searchIndexService.persistEncrypted(vaultKeypair.privateKey).catch((err) => {
-      console.warn('[search] Failed to persist index after rebuild:', err);
+      logger.warn('[search] Failed to persist index after rebuild:', err);
     });
   }, [vaultKeypair]);
 
@@ -178,7 +179,7 @@ export function useSearch() {
     try {
       await searchIndexService.clear();
     } catch (err) {
-      console.warn('[search] Failed to clear index:', err);
+      logger.warn('[search] Failed to clear index:', err);
     }
     setIsIndexReady(false);
     hasLoadedFromDb.current = false;

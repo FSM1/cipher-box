@@ -20,6 +20,7 @@ import { collectChildKeys, reWrapEncryptedKey } from '../../lib/crypto/key-wrapp
 import { updateSharePermission } from '../../services/share.service';
 import { InviteLinkTab } from './InviteLinkTab';
 import '../../styles/share-dialog.css';
+import { logger } from '../../lib/logger';
 
 type ShareDialogProps = {
   isOpen: boolean;
@@ -156,7 +157,7 @@ export function ShareDialog({
     })()
       .catch((err) => {
         if (cancelled) return;
-        console.error('Failed to fetch sent shares:', err);
+        logger.error('[Share] Failed to fetch sent shares:', err);
       })
       .finally(() => {
         if (!cancelled) {
@@ -362,7 +363,7 @@ export function ShareDialog({
       setPubKeyInput('');
       setProgress(null);
     } catch (err) {
-      console.error('Share creation failed:', err);
+      logger.error('[Share] Share creation failed:', err);
       const message = err instanceof Error ? err.message : 'share creation failed';
       setError(message);
     } finally {
@@ -379,7 +380,7 @@ export function ShareDialog({
       setRecipients((prev) => prev.filter((r) => r.shareId !== shareId));
       useShareStore.getState().removeSentShare(shareId);
     } catch (err) {
-      console.error('Revoke failed:', err);
+      logger.error('[Share] Revoke failed:', err);
       setError('revoke failed');
     } finally {
       setRevokingId(null);
@@ -438,7 +439,7 @@ export function ShareDialog({
         useShareStore.getState().updateSentSharePermission(share.shareId, 'write');
         setSuccess('> upgraded to read-write');
       } catch (err) {
-        console.error('Permission upgrade failed:', err);
+        logger.error('[Share] Permission upgrade failed:', err);
         setError('> permission change failed, please try again');
       } finally {
         setUpgradingId(null);
@@ -463,7 +464,7 @@ export function ShareDialog({
       useShareStore.getState().updateSentSharePermission(share.shareId, 'read');
       setSuccess('> downgraded to read-only');
     } catch (err) {
-      console.error('Permission downgrade failed:', err);
+      logger.error('[Share] Permission downgrade failed:', err);
       setError('> permission change failed, please try again');
     } finally {
       setDowngradingId(null);
