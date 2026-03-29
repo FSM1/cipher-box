@@ -13,6 +13,11 @@ import type { Page } from '@playwright/test';
  */
 export async function deleteAccountViaPage(page: Page): Promise<void> {
   try {
+    if (page.isClosed()) {
+      console.warn('[cleanup] Skipping account deletion: page already closed');
+      return;
+    }
+
     const result = await page.evaluate(async () => {
       // Discover API URL from app runtime config or derive from page origin
       const apiUrl =
