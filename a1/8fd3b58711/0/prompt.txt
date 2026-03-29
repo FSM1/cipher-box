@@ -145,3 +145,7 @@ I think it can safely be removed to be honest.
 ---
 
 ok lets create a PR for all these changes.
+
+---
+
+[Image #1] will the byo-ipfs settings be configurable for the sdk load tests when launching from GH actions?
