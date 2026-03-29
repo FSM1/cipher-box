@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d049802a61cf",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T22:47:22.078708Z",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 4,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "3f9b137d9fc5",
+  "token_usage": {
+    "input_tokens": 308,
+    "cache_creation_tokens": 226855,
+    "cache_read_tokens": 37251069,
+    "output_tokens": 60725,
+    "api_call_count": 274
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Debug BYO-IPFS register-cid 400 errors on staging by tracing the failure through the load test workload and API controller, then fix the root causes.",
+    "outcome": "Added missing PATCH /vault/byo-status endpoint (setByoStatus was a dead service method), fixed the load test's ipns-publish call to use proper signed records via createAndPublishIpnsRecord, fixed createByoClientPool to enable BYO mode on test accounts, and fixed pre-existing TypeScript errors across 9 API test files.",
+    "learnings": {
+      "repo": [
+        "setByoStatus() existed as a VaultService method but had no controller endpoint and was never called — BYO mode could not be toggled via the API at all, making register-cid always return 403 rather than the 400 noted in the todo",
+        "The byo-file-workload ipns-publish step was sending { ipnsName, cid } but PublishIpnsEntryDto requires { ipnsName, record, metadataCid } — the signed IPNS record must come from createAndPublishIpnsRecord",
+        "API test files consistently used jest.Mocked\u003cPartial\u003cT\u003e\u003e with module.get() which loses mock method types — all specs should use mock objects directly instead of re-fetching from the module",
+        "apps/api/openapi.json is NOT the canonical spec location — the real one is packages/api-client/openapi.json; a manual node -e script wrote to the wrong path",
+        "The streaming-crypto.service.ts in the web app and sdk/client.ts both maintained independent copies of the streaming MIME type list — now centralized in sdk-core/encryption-mode.ts",
+        "SDK test files that mock @cipherbox/sdk-core with a bare factory function replace the entire module, dropping any new exports — must use importOriginal + spread pattern"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "finding": "New PATCH /vault/byo-status endpoint added here — previously setByoStatus was unreachable"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 132,
+          "end_line": 138,
+          "finding": "ipns-publish call sent wrong fields; replaced with createAndPublishIpnsRecord from sdk-core"
+        },
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "finding": "New centralized module for STREAMING_MIME_TYPES, CTR_SIZE_THRESHOLD, selectEncryptionMode, and normalizeEncryptionMode — imported by both sdk/client.ts and streaming-crypto.service.ts"
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "Added optional encryptionMode param; when CTR uses encryptAesCtr + generateCtrIv instead of GCM"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "finding": "Now calls selectEncryptionMode() before sdkCore.uploadFile() to determine CTR vs GCM based on MIME type and size"
+        },
+        {
+          "path": "tests/web-e2e/tests/streaming-playback.spec.ts",
+          "finding": "Removed test.skip from CTR encrypted badge test — now passes with the SDK fix in place"
+        }
+      ],
+      "workflow": [
+        "When the todo says '400 error' but the code shows a guard check that would return 403 first, trust the code — the todo description may be inaccurate about the specific error code",
+        "Running api:generate requires the API server to be running; manual orval invocation against a built spec is more reliable in dev",
+        "After centralizing shared logic, always grep for all existing copies to ensure none are missed (FLAC was missing from both copies before centralization)",
+        "Pre-existing TypeScript errors in spec files should be fixed proactively when touching those areas — they accumulate quickly and mask real errors"
+      ]
+    },
+    "friction": [
+      "Accidental openapi.json written to apps/api/ instead of packages/api-client/ by a manual node -e script — caused a spurious 3889-line file addition in the PR",
+      "GraphQL API for fetching review threads timed out repeatedly; had to fall back to REST for PR comment fetching",
+      "api:generate script ran a lint step on unrelated Rust files which failed, blocking the normal generation flow",
+      "The todo listed '400 errors' but the actual first failure was a 403 from the BYO guard check — required tracing the full request path to find the real root cause",
+      "9 API test files had the same jest.Mocked\u003cPartial\u003cT\u003e\u003e anti-pattern causing TypeScript errors — fixing them required reading each file individually"
+    ],
+    "open_items": [
+      "The todo for 'SDK uploadFile hardcodes GCM' landed with both a pending/ and done/ copy in main due to the merge from fix/e2e-test-failures-v2 — the stale pending copy was removed but worth verifying git history is clean",
+      "integration.test.ts in the SDK package hits a live API and fails in CI — pre-existing issue not addressed in this session",
+      "The web app Settings UI path for BYO mode — now that the endpoint exists, the UI should be wired to call PATCH /vault/byo-status",
+      "BYO load test baselines on staging (todo #11) still pending — the fix in this session unblocks it but the actual baseline run hasn't been done",
+      "Run staging metrics baselines with new instrumentation (todo #12) still pending"
+    ]
+  }
+}
