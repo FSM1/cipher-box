@@ -21,7 +21,7 @@ CipherBox requires isolated environments to prevent cross-environment interferen
 | -------------- | -------------- | ---------------- | ---------------------- | ------------------- | -------------------- | -------------------------- |
 | **Local Dev**  | Kubo (offline) | Sapphire Devnet  | Mock service           | Local Postgres      | **Disabled**         | Full                       |
 | **CI E2E**     | Kubo (offline) | Sapphire Devnet  | Mock service (per-run) | Ephemeral Postgres  | **Disabled**         | Full per-run               |
-| **Staging**    | Kubo (online)  | Sapphire Devnet  | Self-hosted Someguy    | Managed Postgres    | **Active** (testnet) | Shared with Local/CI users |
+| **Staging**    | Kubo (online)  | Sapphire Devnet  | Self-hosted Someguy    | Managed Postgres    | **Phala Cloud CVM** (testnet) | Shared with Local/CI users |
 | **Production** | Kubo (managed) | Sapphire Mainnet | delegated-ipfs.dev     | Production Postgres | **Active** (mainnet) | Full                       |
 
 ## Solution: Environment-Aware Key Derivation
@@ -427,7 +427,7 @@ The TEE (Trusted Execution Environment) layer handles IPNS republishing to preve
 | -------------- | ---------------------- | ----------------- | ----------------- | -------------------------- |
 | **Local Dev**  | None                   | Not needed        | None              | User resets to clean slate |
 | **CI E2E**     | None                   | Not needed        | None              | Ephemeral per-run          |
-| **Staging**    | Active (Phala testnet) | Every 3 hours     | Integration tests | Periodic DHT cleanup       |
+| **Staging**    | Phala Cloud CVM (testnet) | Every 3 hours     | Integration tests | Periodic DHT cleanup       |
 | **Production** | Active (Phala mainnet) | Every 3 hours     | Full alerting     | Automated stale detection  |
 
 ### Local Development: No TEE
@@ -476,21 +476,42 @@ env:
 - Each test suite starts with fresh vault state
 - IPNS sequence numbers start at 1 for each test user
 
-### Staging Environment: Active TEE with Testnet
+### Staging Environment: Active TEE with Phala Cloud CVM
 
-**Purpose:** Integration testing of full CipherBox + TEE + public IPFS stack
+**Purpose:** Integration testing of full CipherBox + TEE + public IPFS stack using hardware-backed key derivation
 
 **Infrastructure:**
 
+The staging TEE worker runs as a Phala Cloud CVM (Confidential Virtual Machine) on the Phala testnet, providing hardware-backed key derivation via Intel TDX.
+
+| Property          | Value                                                              |
+| ----------------- | ------------------------------------------------------------------ |
+| CVM Name          | `cipherbox-tee-staging`                                            |
+| Image             | `ghcr.io/{owner}/cipherbox-tee-worker:{tag}` (GHCR)               |
+| Endpoint          | `https://{app-id}-3001.dstack-prod{N}.phala.network`               |
+| Key Derivation    | Hardware-backed via `DstackClient.getKey()` (`@phala/dstack-sdk`)  |
+| Socket            | `/var/run/dstack.sock` (mounted inside CVM)                        |
+| TEE Mode          | `TEE_MODE=cvm` (env var inside CVM)                               |
+| CI/CD             | `deploy-tee-phala` job in `deploy-staging.yml`                     |
+
 ```yaml
-# docker/docker-compose.staging.yml (additions)
+# apps/tee-worker/docker-compose.phala.yml (deployed to Phala Cloud)
 services:
-  # ... existing services ...
+  tee-worker:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/cipherbox-tee-worker:${TAG:-latest}
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    environment:
+      TEE_MODE: cvm
+      PORT: 3001
+    ports:
+      - "3001:3001"
+```
 
-  # Staging uses real Phala Cloud testnet
-  # TEE service is external - no local container
-
-# Backend cron jobs enabled
+```yaml
+# docker/docker-compose.staging.yml (on staging VPS)
+# TEE worker is NOT deployed locally -- it runs externally on Phala Cloud
+# Only API, web, and supporting services are deployed on the staging VPS
 ```
 
 **Configuration:**
@@ -499,6 +520,7 @@ services:
 # apps/api/.env.staging
 TEE_ENABLED=true
 TEE_PROVIDER=phala
+TEE_WORKER_URL=https://{app-id}-3001.dstack-prod{N}.phala.network  # External Phala Cloud CVM endpoint
 PHALA_API_URL=https://testnet.phala.network/api/v1
 PHALA_CONTRACT_ID=${{ secrets.PHALA_CONTRACT_ID_STAGING }}
 PHALA_API_KEY=${{ secrets.PHALA_API_KEY_STAGING }}
@@ -507,6 +529,19 @@ PHALA_API_KEY=${{ secrets.PHALA_API_KEY_STAGING }}
 TEE_REPUBLISH_INTERVAL_HOURS=3
 TEE_KEY_EPOCH_ROTATION_WEEKS=4
 ```
+
+**CVM Identity Preservation:**
+
+> **CRITICAL:** Do NOT delete and recreate the CVM. Each CVM has a unique identity derived from the hardware attestation. Deleting a CVM destroys the TEE keypair, orphaning all IPNS records encrypted with the old public key. Instead, use `phala cvms update` to deploy new image versions to the existing CVM.
+
+**Migration Note (Phase 35):**
+
+Phase 35 migrated the staging TEE from a local Docker container running in simulator mode (HKDF-based deterministic keys from `TEE_SIMULATOR_SEED`) to a real Phala Cloud CVM with hardware-backed key derivation. This means:
+
+- TEE public keys are now derived from hardware attestation (not a seed)
+- All existing `encryptedIpnsPrivateKey` values encrypted with the old simulator key are invalid
+- Users must re-publish from client to re-encrypt IPNS keys with the new CVM public key
+- The staging API's `TEE_WORKER_URL` changed from `http://tee-worker:3001` (local) to an external HTTPS Phala Cloud endpoint
 
 **Staging-Specific Challenges:**
 
