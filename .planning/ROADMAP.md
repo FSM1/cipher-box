@@ -465,7 +465,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete    | 2026-03-28 |
 | 34. E2E Test Expansion & Baselines        | v1.1      | 0/4            | Not Started | -          |
-| 35. Phala Testnet TEE Migration           | v1.1      | 6/6 | Complete   | 2026-03-29 |
+| 35. Phala Testnet TEE Migration           | v1.1      | 6/6 | Complete    | 2026-03-29 |
 
 ### Phase 27: Writable Shares (PoC)
 
