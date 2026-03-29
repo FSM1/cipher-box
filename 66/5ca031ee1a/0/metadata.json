@@ -1,0 +1,125 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "665ca031ee1a",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T12:46:17.740809Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "tests/web-e2e/baselines/staging-load-test.json",
+    "tests/web-e2e/playwright.config.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "87770169498b",
+  "token_usage": {
+    "input_tokens": 450,
+    "cache_creation_tokens": 794549,
+    "cache_read_tokens": 40208804,
+    "output_tokens": 80331,
+    "api_call_count": 257
+  },
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E Test Expansion \u0026 Staging Baselines) using wave-based parallel execution, capturing meaningful load test baselines against staging including BYO-IPFS (Pinata) capacity testing.",
+    "outcome": "All 4 plans completed: shared account cleanup helper wired into 10 specs, media/streaming and batch download E2E suites added (16+ new tests), and staging baselines captured (journey timing, 200-client SDK sustained load). BYO Pinata pin confirmed working (p50=718ms) but CID registration returns 400s — tracked as a todo.",
+    "learnings": {
+      "repo": [
+        "Staging Web3Auth init takes ~22.7s — wallet-login-button timeout in journey-timing.spec.ts needed to be raised from 20s to 45s for staging runs",
+        "BASE_URL env var was not overriding Playwright's baseURL config — playwright.config.ts needed explicit `process.env.BASE_URL` check and conditional webServer block",
+        "SDK load tests use destroyClientPool() → deleteTestAccount() (direct API, headless); browser load test used deleteAccountViaPage() (browser fetch with cookies) — distinct paths",
+        "Running two load test suites simultaneously against the same staging instance causes 429s even with bypass header — throttle bypass works fine when tests run in isolation",
+        "Pinata free tier has storage/pin quota limits that can be exhausted by load testing — a paid plan or fresh account is required for BYO capacity ceiling tests",
+        "BYO-IPFS register-cid and ipns-publish return 400 on staging when using Pinata provider — Pinata pin succeeds but CipherBox API rejects CID registration (likely test account not in BYO mode)",
+        "Vitest does not automatically load .env files — requires explicit shell env sourcing before running tests (e.g. `set -a \u0026\u0026 source .env \u0026\u0026 set +a`)",
+        "cleanup-helpers.ts was making two separate page.evaluate() browser round-trips for token refresh — merged into one call",
+        "Browser load test (load-test.spec.ts) measured Playwright/Chromium overhead rather than API performance — removed in favour of SDK-based harness"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "waitFor timeout of 20s is too short for staging Web3Auth init (~22.7s) — needs 45s+ for staging runs"
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Added BASE_URL env var override for staging and conditional webServer block (skip local dev server when targeting staging)"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "API URL derivation must use page URL to construct API URL for staging (not hardcoded localhost:3000); also merged double page.evaluate into one round-trip"
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Vitest does not load .env automatically — env vars must be sourced in shell before running tests"
+        },
+        {
+          "path": "tests/web-e2e/tests/media-preview.spec.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Dynamic fs/path imports moved to top-level; existsSync+unlinkSync TOCTOU replaced with try/catch; corrupt file test wrapped in try/finally for guaranteed cleanup"
+        },
+        {
+          "path": "tests/web-e2e/tests/load-test.spec.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Removed 40-line inline deleteAccount() and replaced with shared deleteAccountViaPage() helper from cleanup-helpers.ts"
+        },
+        {
+          "path": "tests/load/baselines/staging-sustained-load.json",
+          "line": 1,
+          "end_line": 30,
+          "finding": "200-client baseline: 11,174 total ops, 0.17% error rate, uploadFile p50=8.1s p95=11.6s, createFolder p50=6.5s — meaningful staging capacity data"
+        },
+        {
+          "path": "tests/web-e2e/baselines/staging-journey-timing.json",
+          "line": 1,
+          "end_line": 15,
+          "finding": "Login-to-vault: 22.9s (auth 22.7s + vault 142ms); upload-to-visible: 906ms; share-to-accessible: 1.5s"
+        }
+      ],
+      "workflow": [
+        "When running multiple load test suites against the same staging API, run them sequentially not in parallel to avoid artificial throttle saturation",
+        "Cherry-picking commits from worktree branches to a phase branch requires careful STATE.md conflict resolution (take worktree version, restore stashed local changes after)",
+        "GSD classifyHandoffIfNeeded false failure pattern: agent reports failed but SUMMARY.md exists and commits are present — treat as successful",
+        "GSD worktrees should be cleaned up immediately after cherry-picking to avoid stale git locks that block subsequent agent spawns",
+        "Verifying staging env vars by curling the health endpoint and testing bypass header directly with curl is faster than SSH into the Docker container"
+      ]
+    },
+    "friction": [
+      "Cherry-picking between worktree branches and phase branch caused repeated STATE.md merge conflicts requiring manual resolution",
+      "Stale worktree from 34-03 git lock required force removal before retry",
+      "Vitest does not load .env files — required discovering this via failed tests and adding shell env sourcing workaround",
+      "Running two load tests simultaneously caused spurious 429s that were initially misdiagnosed as a bypass header bug, requiring extensive investigation",
+      "SSH access to staging Docker container failed (timeout/key issue), blocking direct env var verification",
+      "Pinata free tier quota was exhausted by load testing before meaningful BYO ceiling data could be captured",
+      "1Password commit signing failures required retrying commits with direct git commands",
+      "Phase was prematurely marked complete in ROADMAP/STATE before meaningful load test baselines existed — required rollback and re-planning"
+    ],
+    "open_items": [
+      "BYO-IPFS register-cid and ipns-publish return 400 on staging — tracked in .planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md",
+      "BYO Pinata capacity ceiling test needs a paid Pinata plan or clean account with quota headroom to capture meaningful pin-throughput baselines",
+      "New E2E specs (media-preview, streaming-playback, batch-download) use binary stub fixtures that need a live environment run to confirm AES-CTR/GCM code paths are exercised correctly",
+      "throttle bypass header forwarding during createTestAccount should be explicitly tested in CI to prevent future confusion when staging and CI behave differently",
+      "Playwright config BASE_URL override and webServer conditional should be documented in tests/web-e2e/README or CLAUDE.md for future staging test runs"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T12:45:34.927461Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 24,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}

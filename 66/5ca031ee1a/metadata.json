@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "665ca031ee1a",
+  "strategy": "manual-commit",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "tests/web-e2e/baselines/staging-load-test.json",
+    "tests/web-e2e/playwright.config.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/66/5ca031ee1a/0/metadata.json",
+      "transcript": "/66/5ca031ee1a/0/full.jsonl",
+      "content_hash": "/66/5ca031ee1a/0/content_hash.txt",
+      "prompt": "/66/5ca031ee1a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 450,
+    "cache_creation_tokens": 794549,
+    "cache_read_tokens": 40208804,
+    "output_tokens": 80331,
+    "api_call_count": 257
+  }
+}
