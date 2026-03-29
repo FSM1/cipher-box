@@ -1,0 +1,36 @@
+{
+  "captured": "2026-03-29",
+  "environment": "staging",
+  "test_type": "sdk-sustained-load",
+  "requested_clients": 200,
+  "actual_clients": 10,
+  "throttle_limited": true,
+  "throttle_note": "190/200 accounts blocked by 429 ThrottlerException. THROTTLE_BYPASS_SECRET not forwarded during createTestAccount. Fix: propagate bypass header in sdk-e2e test harness.",
+  "duration_s": 300,
+  "results": {
+    "createFolder": {
+      "count": 134,
+      "errors": 127,
+      "error_rate": 0.948,
+      "p50_ms": 5397,
+      "p95_ms": 6057,
+      "p99_ms": 6187,
+      "throughput_ops_sec": 0.445
+    },
+    "uploadFile": {
+      "count": 89,
+      "errors": 16,
+      "error_rate": 0.18,
+      "p50_ms": 5572,
+      "p95_ms": 8252,
+      "p99_ms": 8842,
+      "throughput_ops_sec": 0.295,
+      "bytes_transferred": 91136
+    },
+    "deleteItem": {
+      "count": 0,
+      "errors": 0,
+      "note": "No delete ops reached (createFolder failures cascaded)"
+    }
+  }
+}
