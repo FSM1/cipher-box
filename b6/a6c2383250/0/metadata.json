@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b6a6c2383250",
+  "session_id": "e46def97-0d75-426f-9c5d-65e29924690b",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T01:20:56.611513Z",
+  "branch": "docs/cleanup-deferred-todos",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/DEFERRED.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7278e0952918",
+  "token_usage": {
+    "input_tokens": 3587,
+    "cache_creation_tokens": 127404,
+    "cache_read_tokens": 10165643,
+    "output_tokens": 29031,
+    "api_call_count": 121
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Update the codebase map after phases 28-33 completion, then perform broader planning hygiene: clean up stale docs, resolve deferred items, audit the security backlog, and add a new E2E testing phase to the roadmap.",
+    "outcome": "Updated CONCERNS.md and STRUCTURE.md to reflect phases 28-33, sanitized a private IP address from 15 planning files, audited and updated the security backlog (7 items marked resolved), moved a completed deferred item, added Phase 34 (E2E test expansion) to the roadmap, and opened two PRs (#390, #391) capturing all changes.",
+    "learnings": {
+      "repo": [
+        "Phase 28 resolved console.log pervasiveness (127 calls replaced), but 12 residual console.time/timeEnd calls survive in apps/web/src/lib/web3auth/hooks.ts",
+        "registerFaroTransport() is defined in the Faro integration but never called, meaning logger.error/warn calls do not reach Grafana Faro",
+        "Phase 31 decomposed useSharedNavigation.ts (1199→378 lines) and FileBrowser.tsx (964→362 lines); folder.service.ts (1059) and bin.service.ts (971) remain large but are now considered cohesive enough to not warrant a standalone concern",
+        "Phase 32 resolved async FilePointer on macOS; Phase 33 resolved it on Windows — both crates/fuse/src/read_ops.rs and crates/fuse/src/platform/windows/read_ops.rs now use rt.spawn() channel patterns",
+        "19+ mutex lock().unwrap() sites exist in FUSE production code — a new concern as poisoned mutexes can cause cascading panics",
+        "IPNS unenrollment is fire-and-forget with no persistence across tab closure — known limitation, not a regression",
+        "The legacy POC directory was removed in commit ee9bcd4e4 (Phase 28) but the CONCERNS.md entry was never updated",
+        "The private IP 192.168.133.114 (docker host) was referenced in 15 planning files; all replaced with \u003cdocker-host\u003e",
+        "All 7 Phase 9 security backlog items (#13-19: ThrottlerGuard, URL encoding, eprintln!, key log, key zeroize, error sanitization) were resolved organically across later phases but never marked as such in LOW-SEVERITY-BACKLOG.md",
+        "The Entire CLI injects its own git hooks (.husky/post-commit, pre-push, prepare-commit-msg, commit-msg.pre-entire) alongside project husky hooks — these are local machine artifacts and should be excluded via .git/info/exclude"
+      ],
+      "code": [
+        {
+          "path": ".planning/security/LOW-SEVERITY-BACKLOG.md",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Backlog had 19 items; 7 (all Phase 9 items #13-19) were resolved but not marked — updated to reflect current state leaving 12 open Phase 5 items"
+        },
+        {
+          "path": ".planning/codebase/CONCERNS.md",
+          "line": 42,
+          "end_line": 42,
+          "finding": "Stale entry referencing legacy POC directory that was deleted in Phase 28 (commit ee9bcd4e4)"
+        },
+        {
+          "path": ".planning/codebase/STRUCTURE.md",
+          "line": 535,
+          "end_line": 535,
+          "finding": "Stale reference to docker host IP 192.168.133.114 — removed as unnecessary and now sanitized"
+        },
+        {
+          "path": ".planning/codebase/STRUCTURE.md",
+          "line": 539,
+          "end_line": 561,
+          "finding": "Status column contained unnecessary phase annotations (Phase 28, Phase 30) and 'generated' labels — removed for cleaner docs"
+        }
+      ],
+      "workflow": [
+        "When pulling after a diverged branch, stashing specific files, resetting to origin/main, and restoring is cleaner than merging planning-only docs",
+        "Mapper agents should be re-run against latest main after a pull when the concern being mapped was specifically addressed by the merged phase",
+        "Planning docs accumulate stale state quickly — a post-phase hygiene pass (deferred items, security backlogs, concerns) is worth doing after every few phases",
+        "gsd-codebase-mapper agents write documents directly and return only confirmations — orchestrator context stays minimal",
+        "CodeRabbit review comments on planning doc PRs tend to be minor (stale dates, formatting) and are worth a quick resolve pass before merging"
+      ]
+    },
+    "friction": [
+      "git pull failed due to divergent branches after the initial STRUCTURE.md commit — required stash, hard reset to origin/main, and restore",
+      "PR description update via gh pr edit failed on first attempt (exit code 1) and required a retry",
+      "The initial concerns mapping pass was done against a pre-Phase-33 tree, requiring the agent to be re-run after pulling latest main"
+    ],
+    "open_items": [
+      "Phase 34 planned but not yet executed: AES-CTR streaming playback E2E tests, media preview E2E suite, batch download zip E2E tests, shared deleteAccount teardown, BYO-IPFS load test baselines, staging metrics capture (todos #7-12)",
+      "Mutex unwrap() calls in FUSE production code — 19+ lock().unwrap() sites that can panic on poisoned mutex (new concern in CONCERNS.md)",
+      "registerFaroTransport() never called — logger.error/warn calls do not reach Grafana Faro (new concern in CONCERNS.md)",
+      "12 residual console.time/timeEnd calls in apps/web/src/lib/web3auth/hooks.ts not covered by Phase 28 logger migration",
+      "12 open Phase 5 security backlog items (input validation, defense-in-depth) — all low severity, none addressed in phases 28-33",
+      "PR #390 (codebase map update) and PR #391 (docs cleanup + Phase 34 roadmap) both open and need review/merge"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T01:20:19.909471Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
