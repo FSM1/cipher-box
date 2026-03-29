@@ -57,3 +57,7 @@ can we update all wave numbers to start at 1 - I am worried GSD executor might n
 ---
 
 ok can you have the plan verifier have a look at these updated plans
+
+---
+
+ok all these planning changes pushed?
