@@ -1,0 +1,81 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b95dfd042bfe",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T04:48:08.999732Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "1c1ef1a5cde5",
+  "token_usage": {
+    "input_tokens": 290,
+    "cache_creation_tokens": 329487,
+    "cache_read_tokens": 14463790,
+    "output_tokens": 40288,
+    "api_call_count": 132
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Execute Phase 34 of the cipher-box project, which involved expanding E2E test coverage (media/streaming/batch-download specs + account cleanup helpers) and capturing staging performance baselines (journey timing + load tests).",
+    "outcome": "All 4 plans completed: shared account cleanup helper wired into 10 specs (34-01), 16 new media/streaming/preview E2E tests (34-02), 5 batch download E2E tests (34-03), and staging baselines captured with journey timing JSON saved. Load tests were throttle-limited but documented useful contention data.",
+    "learnings": {
+      "repo": [
+        "playwright.config.ts did not respect BASE_URL env var for overriding baseURL — had to add explicit process.env.BASE_URL override and conditional webServer block to skip localhost startup when targeting staging",
+        "Web3Auth SDK initialization on staging takes \u003e20s, causing wallet button waitFor timeouts — journey-timing.spec.ts needed its timeout increased from 20s to 60s for staging runs",
+        "The cleanup helper (deleteAccountViaPage) was hardcoded to derive the API URL from localhost patterns, failing on staging — needed to derive the API URL dynamically from the page's current hostname",
+        "vitest does not auto-load .env files; the tests/load suite had no dotenv integration — env vars must be sourced via shell before running (e.g., `set -a; source .env; set +a`)",
+        "The SDK load test harness (tests/load) does not forward THROTTLE_BYPASS_SECRET during createTestAccount — only on re-auth — causing staging rate limiter to block 190/200 client creations",
+        "Pinata's default API endpoint is https://api.pinata.cloud; PinataProvider sends auth as Bearer token in Authorization header",
+        "BYO load test plan was committed with DEFERRED status by the 34-04 agent; needed manual update to ACTIVE after Pinata credentials were confirmed available"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "finding": "Added process.env.BASE_URL override for baseURL and conditional webServer block — only starts local dev server when BASE_URL is not set to an external URL"
+        },
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "waitFor timeout was 20_000ms — insufficient for Web3Auth staging initialization; increased to 60_000ms"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "finding": "deleteAccountViaPage hardcoded API URL detection based on localhost patterns; fixed to derive API URL dynamically from the current page URL hostname"
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "finding": "No dotenv loading — vitest does not auto-load .env files; env must be sourced in shell before running tests"
+        }
+      ],
+      "workflow": [
+        "When multiple executor agents run in parallel on worktrees, cherry-picking commits to the phase branch requires careful STATE.md conflict resolution — each agent writes its own STATE.md updates",
+        "Stale git worktrees can leave .git/index.lock files that block subsequent operations — need explicit worktree remove + force-clean before spawning new agents on the same phase branch",
+        "The classifyHandoffIfNeeded Claude Code runtime bug can cause agents to report 'failed' even after successfully completing all work — spot-checking SUMMARY.md existence and git commits is the reliable completion signal",
+        "Browser-based Playwright load tests are fundamentally limited to ~5-10 concurrent clients on a single machine; SDK-level load tests (tests/load) are needed for 200+ concurrent user scenarios"
+      ]
+    },
+    "friction": [
+      "34-04 agent spawned in a worktree; its commits needed manual cherry-picking to the phase branch — STATE.md merge conflicts on each cherry-pick",
+      "34-03 agent hit a git lock conflict because 34-02's worktree had not been cleaned up before 34-03 spawned",
+      "BASE_URL env var silently ignored by playwright.config.ts — tests appeared to target staging but were actually hitting localhost; only caught by noticing blank page in test screenshot",
+      "vitest load tests silently skipped all BYO tests (SKIPPED, not FAILED) when .env wasn't sourced — no error, just zero coverage",
+      "Staging throttle limiter blocked 190/200 SDK load test accounts because the test harness doesn't forward THROTTLE_BYPASS_SECRET during initial account creation — wasted a full test run",
+      "BYO capacity ceiling test and sustained load test ran concurrently against the same staging instance, conflating their throttle pressure",
+      "Background bash task for browser load test timed out at 10 minutes (the tool default) — had to piece together partial results from output file"
+    ],
+    "open_items": [
+      "SDK load test harness (tests/load/src/harness/client-pool.ts) needs to forward THROTTLE_BYPASS_SECRET during createTestAccount calls, not just re-auth — currently blocks high-client-count tests on staging",
+      "BYO capacity ceiling test (50→100→200→500→1000 clients) was never successfully completed — throttle limiter blocked all runs; needs the harness fix above before re-running",
+      "34-04 SUMMARY.md notes staging baselines as partial — sustained load baseline only reflects 10/200 clients due to throttle issue; should be re-run after harness fix",
+      "Pinata BYO load test results (byo-capacity-ceiling scenario) were never captured — the entire point of the BYO load test plan; blocked on throttle bypass fix",
+      "tests/load/.env is gitignored but contains Pinata credentials — team members need a documented onboarding path to populate this file for local/staging load testing",
+      "Web3Auth staging initialization latency (\u003e20s) should be investigated — may indicate a cold-start or SDK version issue on staging that inflates login journey baseline",
+      "Phase 34 verification (gsd-verifier) was not run in the transcript — phase was not formally marked complete in ROADMAP/STATE"
+    ]
+  }
+}
