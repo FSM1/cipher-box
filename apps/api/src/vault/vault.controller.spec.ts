@@ -30,6 +30,7 @@ describe('VaultController', () => {
       getVault: jest.fn(),
       getQuota: jest.fn(),
       getConfig: jest.fn(),
+      setByoStatus: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -151,6 +152,42 @@ describe('VaultController', () => {
       const result = await controller.getQuota(mockRequest);
 
       expect(result).toEqual(mockQuotaResponse);
+    });
+  });
+
+  describe('setByoStatus', () => {
+    const mockRequest = {
+      user: mockUser,
+    } as unknown as RequestWithUser;
+
+    it('should enable BYO mode when vault exists', async () => {
+      vaultService.findVault.mockResolvedValue(mockVaultResponse);
+      vaultService.setByoStatus.mockResolvedValue(undefined);
+
+      const result = await controller.setByoStatus(mockRequest, { isByo: true });
+
+      expect(vaultService.findVault).toHaveBeenCalledWith('user-uuid-123');
+      expect(vaultService.setByoStatus).toHaveBeenCalledWith('user-uuid-123', true);
+      expect(result).toEqual({ success: true });
+    });
+
+    it('should disable BYO mode when vault exists', async () => {
+      vaultService.findVault.mockResolvedValue(mockVaultResponse);
+      vaultService.setByoStatus.mockResolvedValue(undefined);
+
+      const result = await controller.setByoStatus(mockRequest, { isByo: false });
+
+      expect(vaultService.setByoStatus).toHaveBeenCalledWith('user-uuid-123', false);
+      expect(result).toEqual({ success: true });
+    });
+
+    it('should throw NotFoundException when vault does not exist', async () => {
+      vaultService.findVault.mockResolvedValue(null);
+
+      await expect(controller.setByoStatus(mockRequest, { isByo: true })).rejects.toThrow(
+        NotFoundException
+      );
+      expect(vaultService.setByoStatus).not.toHaveBeenCalled();
     });
   });
 
