@@ -1,0 +1,119 @@
+/gsd:map-codebase
+
+---
+
+2
+
+---
+
+7 mainly, but open to updating some of the other documents if you feel these have become out of date based on the phase 28-33 work that has been completed.
+
+---
+
+<task-notification>
+<task-id>aed0ed941ddeace5f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/aed0ed941ddeace5f.output</output-file>
+<status>completed</status>
+<summary>Agent "Map codebase structure" completed</summary>
+<result>## Mapping Complete
+
+**Focus:** arch (structure only)
+**Documents written:**
+- `/Users/michael/Code/cipher-box/.planning/codebase/STRUCTURE.md` (565 lines)
+
+Key updates from previous version (2026-03-27):
+
+- **Phase 31 decomposition** — `useSharedNavigation.ts` (was 1199 lines) is now split into `useSharedNavigation.ts` (378), `useSharedNavigationActions.ts` (484), `useSharedWriteOps.ts` (377), `useFolderNavigation.ts` (312), `useFolderMutations.ts` (445), and `folder-helpers.ts` (107). `FileBrowser.tsx` (was 964 lines) is now 362 lines. Added a full Hook Inventory table.
+- **Phase 28 logger** — `apps/web/src/lib/logger.ts` documented as the structured logger replacing `console.*`.
+- **Phase 30 observability** — `apps/web/src/lib/faro.ts` (Grafana Faro) and `apps/api/src/metrics/` (Prometheus via prom-client) documented.
+- **`apps/web/src/lib/` fully mapped** — all files including `errors.ts` and `clear-user-stores.ts` documented with purpose.
+- **`services/` sizes noted** — `folder.service.ts` (1059 lines) and `bin.service.ts` (971 lines) are still large and candidates for future decomposition.</result>
+<usage><total_tokens>66465</total_tokens><tool_uses>50</tool_uses><duration_ms>288535</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a44f8ec6c70ad8026</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a44f8ec6c70ad8026.output</output-file>
+<status>completed</status>
+<summary>Agent "Map codebase concerns" completed</summary>
+<result>## Mapping Complete
+
+**Focus:** concerns
+**Documents written:**
+- `.planning/codebase/CONCERNS.md` (286 lines)
+
+Ready for orchestrator summary.
+
+**Verification summary for the four checked concerns:**
+
+1. "Pervasive console.log/warn/error in web app" - **RESOLVED.** Only 2 files have console calls: `lib/logger.ts` (the wrapper itself, using console internally by design) and `main.tsx` (console.time/timeEnd in a dev-only block and one remaining `console.error` override). A new minor concern was found: `lib/web3auth/hooks.ts` retains 12 `console.time/timeEnd` calls not covered by Phase 28.
+
+2. "No monitoring/observability (web app)" - **RESOLVED.** Grafana Faro integrated (`lib/faro.ts`), `FaroErrorBoundary` wraps App, `setFaroUser`/`clearFaroUser` called from `useAuth.ts`. A new partial gap found: `registerFaroTransport()` is defined but never called, so `logger.error/warn` calls don't reach Faro.
+
+3. "Large monolithic files in web app" - **PARTIALLY RESOLVED.** Phase 31 reduced the most critical files dramatically (`useSharedNavigation.ts` from 1199 to 378 lines, `FileBrowser.tsx` from 964 to 362 lines). Five files remain over 700 lines (`folder.service.ts` at 1059, `bin.service.ts` at 971, etc.) but are more logically cohesive now.
+
+4. "FUSE FilePointer resolution blocks filesystem thread" - **RESOLVED ON MACOS** (Phase 32). macOS `open()` and `read()` now poll for in-flight async resolutions via `poll_filepointer_resolution()`. **Windows is still pending** (Phase 33 is docs/planning only — not yet implemented).</result>
+<usage><total_tokens>113109</total_tokens><tool_uses>125</tool_uses><duration_ms>481739</duration_ms></usage>
+</task-notification>
+
+---
+
+ok can we stash the structure changes, pull in latest main, and run the concerns analysis again, now that phase 33 has been merged.
+
+---
+
+<task-notification>
+<task-id>ac17890cfb8a73b1e</task-id>
+<tool-use-id>toolu_01JH6SphdueCrVseSPXJRuXS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/ac17890cfb8a73b1e.output</output-file>
+<status>completed</status>
+<summary>Agent "Re-map codebase concerns" completed</summary>
+<result>## Mapping Complete
+
+**Focus:** concerns
+**Documents written:**
+- `/Users/michael/Code/cipher-box/.planning/codebase/CONCERNS.md` (233 lines)
+
+**Resolved concerns (removed):**
+- "Pervasive console.log/warn/error in web app" — Phase 28 replaced all 127 calls with structured `logger` (`apps/web/src/lib/logger.ts`). Only 2 files retain `console.*` calls.
+- "No monitoring/observability (web app)" — Phase 30 added Grafana Faro integration (`apps/web/src/lib/faro.ts`) with sensitive data scrubbing, deployed via `VITE_FARO_URL` in staging CI.
+- "Large monolithic files in web app" — Phase 31 decomposed the largest files. `useSharedNavigation.ts` dropped from 1199 to 378 lines; `FileBrowser.tsx` from 964 to 362 lines. Remaining large files (`folder.service.ts` at 1059, `bin.service.ts` at 971) no longer cross the prior threshold warranting a separate concern entry.
+- "FUSE FilePointer resolution blocks filesystem thread" — Phase 32 (macOS) and Phase 33 (Windows) both converted FilePointer resolution to async via `rt.spawn()` channel patterns. Both `crates/fuse/src/read_ops.rs` and `crates/fuse/src/platform/windows/read_ops.rs` now use async resolution.
+
+**New concerns added:**
+- Residual `console.time` calls in `apps/web/src/lib/web3auth/hooks.ts` (12 unguarded calls surviving Phase 28)
+- Mutex `unwrap()` calls in FUSE production code — 19+ `lock().unwrap()` sites that can cause cascading panics on poisoned mutex
+- Orphaned IPNS unenrollment concern updated to reflect that SDK handles it fire-and-forget but without persistence across tab closure
+- Versioning E2E test gap removed — quick task 018 was completed 2026-02-19
+
+Ready for orchestrator summary.</result>
+<usage><total_tokens>83891</total_tokens><tool_uses>131</tool_uses><duration_ms>414865</duration_ms></usage>
+</task-notification>
+
+---
+
+yeah lets do it
+
+---
+
+on line 42 of the concerns doc, the concern about the legacy poc code being in the repo is still mentioned. I thought that the legacy poc was "archived" to git commit history in phase 28?
+
+---
+
+the mention of docker host ip in structure.md 9on line 535) is unnecessary and is actually stale as of now.
+
+---
+
+while we are at it, could you please check that the 192.168.133.* IP is not committed to the repo anywhere
+
+---
+
+I think these can be sanitized from planning docs as well. no need to keep them there.
+
+---
+
+also some of the changes to @.planning/codebase/STRUCTURE.md in the table on lines 539-561 seem unnecessary - specifically referring to the phases and generated in the `status` column.
