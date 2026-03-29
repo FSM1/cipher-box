@@ -126,4 +126,4 @@ These were deferred but have since been completed:
 | Pagination on shares endpoints (L4)    | Phase 14 security review | Phase 14       |
 | Structured logging wrapper for web app | -                        | Phase 28       |
 
-<!-- Deferred inventory: 2026-03-28 -->
+<!-- Deferred inventory: 2026-03-29 -->
