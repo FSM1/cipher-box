@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d8dd0c8c05c8",
+  "session_id": "e46def97-0d75-426f-9c5d-65e29924690b",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T01:16:41.621507Z",
+  "branch": "docs/cleanup-deferred-todos",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "5485f70ce111",
+  "token_usage": {
+    "input_tokens": 3569,
+    "cache_creation_tokens": 121976,
+    "cache_read_tokens": 8396491,
+    "output_tokens": 26894,
+    "api_call_count": 108
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Update the codebase map documents after phases 28-33, clean up stale planning artifacts, and organize pending todos into a new phase.",
+    "outcome": "CONCERNS.md and STRUCTURE.md were updated to reflect resolved concerns from phases 28-33, stale references (legacy POC, docker host IP, phase annotations) were sanitized across 15+ planning files, DEFERRED.md and the security backlog were audited and updated, and Phase 34 (E2E test expansion) was added to the roadmap covering 6 pending todos.",
+    "learnings": {
+      "repo": [
+        "Phase 28 removed the legacy POC directory (commit ee9bcd4e4) and replaced 127 console.* calls with structured logger at apps/web/src/lib/logger.ts",
+        "Phase 30 added Grafana Faro observability (apps/web/src/lib/faro.ts) but registerFaroTransport() is defined and never called — logger errors don't reach Faro",
+        "Phase 31 decomposed useSharedNavigation.ts (1199→378 lines) and FileBrowser.tsx (964→362 lines) into 6 hooks plus folder-helpers.ts",
+        "Phase 32 resolved macOS FilePointer async blocking; Phase 33 resolved the same for Windows using rt.spawn() channel patterns in crates/fuse/src/platform/windows/read_ops.rs",
+        "19+ mutex lock().unwrap() sites remain in FUSE production code — a new concern post-phase 33",
+        "web3auth/hooks.ts still has 12 console.time/timeEnd calls not covered by the Phase 28 logger migration",
+        "IPNS unenrollment is fire-and-forget with no persistence across tab closure — known architectural gap",
+        "folder.service.ts (1059 lines) and bin.service.ts (971 lines) remain large but are below the prior threshold for a dedicated concern entry",
+        "7 of 19 low-severity security backlog items (all Phase 9 items #13-19) were resolved organically across later phases but never marked as such in LOW-SEVERITY-BACKLOG.md",
+        "The Entire CLI injects git hooks (.husky/post-commit, .husky/pre-push, .husky/prepare-commit-msg, .husky/commit-msg.pre-entire) as local untracked files — not project files"
+      ],
+      "code": [
+        {
+          "path": ".planning/codebase/CONCERNS.md",
+          "line": 42,
+          "end_line": 42,
+          "finding": "Stale entry referencing legacy POC directory — was removed in Phase 28 (commit ee9bcd4e4), directory no longer exists"
+        },
+        {
+          "path": ".planning/codebase/STRUCTURE.md",
+          "line": 535,
+          "end_line": 535,
+          "finding": "Stale reference to Docker host IP 192.168.133.114 — removed as unnecessary and stale"
+        },
+        {
+          "path": ".planning/codebase/STRUCTURE.md",
+          "line": 539,
+          "end_line": 561,
+          "finding": "Status column had unnecessary phase annotations (Phase 28), (Phase 30), (generated) — cleaned up"
+        },
+        {
+          "path": ".planning/security/LOW-SEVERITY-BACKLOG.md",
+          "line": 1,
+          "end_line": 19,
+          "finding": "Items #13-19 (all Phase 9 desktop security review) were resolved but not marked — updated to reflect resolution"
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "finding": "registerFaroTransport() is defined but never called — logger.error/warn calls don't reach Faro despite Phase 30 integration"
+        },
+        {
+          "path": "apps/web/src/lib/web3auth/hooks.ts",
+          "finding": "12 console.time/timeEnd calls survived Phase 28 logger migration — unguarded, outside the structured logger"
+        }
+      ],
+      "workflow": [
+        "When rebasing/pulling with divergent branches after a docs commit, stash the specific files, reset to origin, then restore — avoids complex merge conflicts on planning docs",
+        "The gsd-codebase-mapper agent pattern works well for targeted updates: spawn only the agents whose focus areas were affected by recent phases rather than full refresh",
+        "IP addresses and environment-specific values in planning docs should be sanitized with semantic placeholders (e.g. \u003cdocker-host\u003e) to preserve meaning without leaking infrastructure details",
+        "Security backlogs and deferred items tend to go stale silently — periodic audits against phase summaries are needed to keep them accurate",
+        "The Entire CLI's local git hooks should be added to .git/info/exclude rather than .gitignore to avoid polluting the project's ignore rules"
+      ]
+    },
+    "friction": [
+      "git pull failed on divergent branches after the initial CONCERNS.md + STRUCTURE.md commit because Phase 33 had just been merged to origin/main — required stash, reset, and re-run of the concerns mapper",
+      "The concerns mapper had to be run twice (once before Phase 33 merge, once after) because the branch state wasn't confirmed before starting",
+      "Multiple sequential edits were required to update STRUCTURE.md status column and LOW-SEVERITY-BACKLOG.md due to the granularity of changes needed — no bulk replace was possible"
+    ],
+    "open_items": [
+      "Phase 34: E2E test expansion covering AES-CTR streaming playback, batch download zip, media preview suite, shared deleteAccount teardown, BYO-IPFS load test baselines, and staging metrics baselines — encompassing todos #7-12",
+      "registerFaroTransport() never called — logger errors don't reach Grafana Faro despite Phase 30 integration",
+      "19+ mutex lock().unwrap() sites in FUSE production code — risk of cascading panics on poisoned mutex",
+      "web3auth/hooks.ts has 12 unguarded console.time/timeEnd calls outside the Phase 28 logger",
+      "IPNS unenrollment is fire-and-forget with no persistence across tab closure",
+      "12 low-severity Phase 5 security backlog items (#1-12) remain open — all input validation and defense-in-depth concerns",
+      "folder.service.ts (1059 lines) and bin.service.ts (971 lines) are candidates for future decomposition following Phase 31 pattern",
+      "PR #390 (codebase map updates) and PR #391 (docs cleanup + DEFERRED.md) need review and merge"
+    ]
+  }
+}
