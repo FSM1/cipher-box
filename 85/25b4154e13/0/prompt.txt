@@ -303,3 +303,7 @@ the pr description mentions that a push to main touching only apps/desktop would
 ---
 
 an outside of diff range comment here: https://github.com/FSM1/cipher-box/pull/394#pullrequestreview-4026985336
+
+---
+
+/resolve-pr-reviews
