@@ -417,7 +417,7 @@ Plans:
 
 Plans:
 
-- [ ] 34-01-PLAN.md -- Shared deleteAccountViaPage helper + wiring into all 10 E2E spec afterAll hooks
+- [x] 34-01-PLAN.md -- Shared deleteAccountViaPage helper + wiring into all 10 E2E spec afterAll hooks
 - [ ] 34-02-PLAN.md -- Media fixture generation + streaming-playback.spec.ts + media-preview.spec.ts E2E suites
 - [ ] 34-03-PLAN.md -- Batch download E2E tests (multi-select + individual file downloads)
 - [x] 34-04-PLAN.md -- BYO-IPFS load test plan document + staging journey/load baselines capture
@@ -447,7 +447,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 31. Structural Decomposition              | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete    | 2026-03-28 |
-| 34. E2E Test Expansion & Baselines        | v1.1      | 1/4 | In Progress|  |
+| 34. E2E Test Expansion & Baselines        | v1.1      | 1/4            | In Progress |            |
 
 ### Phase 27: Writable Shares (PoC)
 

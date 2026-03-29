@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: "Phase 34 in progress — 34-04 checkpoint at Task 2"
-last_updated: "2026-03-29T01:55:00.000Z"
-last_activity: 2026-03-29
+status: 'Phase 33 shipped — PR #389'
+last_updated: '2026-03-29T01:58:25.867Z'
+last_activity: 2026-03-28
 progress:
-  total_phases: 18
+  total_phases: 19
   completed_phases: 18
-  total_plans: 72
-  completed_plans: 72
+  total_plans: 76
+  completed_plans: 73
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 34 — E2E Test Expansion & Staging Baselines (in progress)
+**Current focus:** Phase 34 — E2E Test Expansion & Staging Baselines
 
 ## Current Position
 
 Phase: 34 (E2E Test Expansion & Staging Baselines) — IN PROGRESS
-Plan: 04 — checkpoint at Task 2 (human-action: run staging baselines)
+Plan: 1/4 complete
 
 ## Performance Metrics
 
@@ -34,53 +34,54 @@ Plan: 04 — checkpoint at Task 2 (human-action: run staging baselines)
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
-| Phase | Plan | Duration | Tasks | Files |
-| ----- | ---- | -------- | ----- | ----- |
-| 19    | 01   | 2min     | 2     | 3     |
-| 19    | 02   | 5min     | 2     | 5     |
-| 19.1  | 02   | 4min     | 2     | 133   |
-| 19.1  | 01   | 17min    | 2     | 42    |
-| 19.1  | 03   | 12min    | 3     | 18    |
-| 19.1  | 04   | 10min    | 2     | 14    |
-| 19.1  | 06   | 13min    | 3     | 52    |
-| 19.2  | 01   | 6min     | 2     | 4     |
-| 19.2  | 02   | 12min    | 3     | 3     |
-| 19.2  | 03   | 1min     | 1     | 1     |
-| 19.2  | 04   | 71min    | 2     | 1     |
-| 20    | 01   | 4min     | 2     | 5     |
-| 20    | 02   | 17min    | 3     | 16    |
-| 20    | 03   | 25min    | 2     | 6     |
-| 20    | 04   | 45min    | 3     | 15    |
-| 20    | 05   | 6min     | 2     | 13    |
-| 20    | 06   | 6min     | 2     | 4     |
-| 21    | 01   | 5min     | 2     | 9     |
-| 21    | 03   | 10min    | 3     | 13    |
-| 21    | 05   | 9min     | 2     | 13    |
-| 21    | 04   | 8min     | 3     | 9     |
-| 21    | 06   | 3min     | 2     | 4     |
-| 21    | 07   | 5min     | 3     | 5     |
-| 23    | 01   | 13min    | 2     | 26    |
-| 23    | 02   | 10min    | 2     | 33    |
-| 23    | 03   | 11min    | 2     | 23    |
-| 23    | 05   | 12min    | 2     | 24    |
-| 23    | 04   | 22min    | 2     | 17    |
-| 23    | 07   | 7min     | 2     | 5     |
-| 23    | 06   | 23min    | 2     | 7     |
-| 23    | 08   | 20min    | 2     | 7     |
-| 21    | 08   | 5min     | 2     | 6     |
-| 21    | 10   | 5min     | 2     | 7     |
-| 21    | 09   | 9min     | 3     | 17    |
-| 21    | 11   | 12min    | 2     | 3     |
-| 22    | 02   | 4min     | 2     | 2     |
-| 22    | 01   | 8min     | 2     | 7     |
-| 22    | 03   | 8min     | 2     | 8     |
-| 26    | 02   | 4min     | 2     | 5     |
-| 26    | 01   | 5min     | 2     | 6     |
-| 27    | 01   | 6min     | 2     | 23    |
-| 27    | 02   | 5min     | 2     | 4     |
-| 27    | 03   | 25min    | 3     | 15    |
-| Phase 33 P01 | 11min | 2 tasks | 3 files |
-| Phase 33 P02 | 3min | 1 tasks | 3 files |
+| Phase        | Plan  | Duration | Tasks   | Files |
+| ------------ | ----- | -------- | ------- | ----- |
+| 19           | 01    | 2min     | 2       | 3     |
+| 19           | 02    | 5min     | 2       | 5     |
+| 19.1         | 02    | 4min     | 2       | 133   |
+| 19.1         | 01    | 17min    | 2       | 42    |
+| 19.1         | 03    | 12min    | 3       | 18    |
+| 19.1         | 04    | 10min    | 2       | 14    |
+| 19.1         | 06    | 13min    | 3       | 52    |
+| 19.2         | 01    | 6min     | 2       | 4     |
+| 19.2         | 02    | 12min    | 3       | 3     |
+| 19.2         | 03    | 1min     | 1       | 1     |
+| 19.2         | 04    | 71min    | 2       | 1     |
+| 20           | 01    | 4min     | 2       | 5     |
+| 20           | 02    | 17min    | 3       | 16    |
+| 20           | 03    | 25min    | 2       | 6     |
+| 20           | 04    | 45min    | 3       | 15    |
+| 20           | 05    | 6min     | 2       | 13    |
+| 20           | 06    | 6min     | 2       | 4     |
+| 21           | 01    | 5min     | 2       | 9     |
+| 21           | 03    | 10min    | 3       | 13    |
+| 21           | 05    | 9min     | 2       | 13    |
+| 21           | 04    | 8min     | 3       | 9     |
+| 21           | 06    | 3min     | 2       | 4     |
+| 21           | 07    | 5min     | 3       | 5     |
+| 23           | 01    | 13min    | 2       | 26    |
+| 23           | 02    | 10min    | 2       | 33    |
+| 23           | 03    | 11min    | 2       | 23    |
+| 23           | 05    | 12min    | 2       | 24    |
+| 23           | 04    | 22min    | 2       | 17    |
+| 23           | 07    | 7min     | 2       | 5     |
+| 23           | 06    | 23min    | 2       | 7     |
+| 23           | 08    | 20min    | 2       | 7     |
+| 21           | 08    | 5min     | 2       | 6     |
+| 21           | 10    | 5min     | 2       | 7     |
+| 21           | 09    | 9min     | 3       | 17    |
+| 21           | 11    | 12min    | 2       | 3     |
+| 22           | 02    | 4min     | 2       | 2     |
+| 22           | 01    | 8min     | 2       | 7     |
+| 22           | 03    | 8min     | 2       | 8     |
+| 26           | 02    | 4min     | 2       | 5     |
+| 26           | 01    | 5min     | 2       | 6     |
+| 27           | 01    | 6min     | 2       | 23    |
+| 27           | 02    | 5min     | 2       | 4     |
+| 27           | 03    | 25min    | 3       | 15    |
+| Phase 33 P01 | 11min | 2 tasks  | 3 files |
+| Phase 33 P02 | 3min  | 1 tasks  | 3 files |
+| Phase 34 P01 | 3min  | 2 tasks  | 9 files |
 
 ## Accumulated Context
 
@@ -161,7 +162,7 @@ Recent for v1.1:
 - Shared file download/view falls back to fileKeyEncrypted from metadata when no share_key exists
 - FilePointer resolution uses FileMetadata directly (no separate ResolvedFileMetadata struct)
 - FilePointer resolution scoped to parent folder via get_unresolved_file_pointers_for_parent() to avoid wrong-folder-key decryption
-- FilePointer async resolution: 500ms base * 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
+- FilePointer async resolution: 500ms base \* 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
 
 ### Roadmap Evolution
 
