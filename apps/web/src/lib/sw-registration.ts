@@ -18,12 +18,15 @@ export async function registerDecryptSW(): Promise<ServiceWorkerRegistration | n
   }
 
   try {
-    // In dev mode, Vite serves TS directly. In production, the SW
-    // is compiled to /decrypt-sw.js via the Vite build config.
-    const swUrl = import.meta.env.DEV ? '/src/workers/decrypt-sw.ts' : '/decrypt-sw.js';
+    // In dev mode, use the public/ ES module wrapper that imports the Vite-transformed TS.
+    // Serving from public/ means the SW URL is at the root scope, avoiding the
+    // Service-Worker-Allowed header that Vite can't reliably set on transformed files.
+    // Dev uses type: 'module' so the ES import works; prod uses classic IIFE script.
+    const swUrl = import.meta.env.DEV ? '/decrypt-sw-dev.js' : '/decrypt-sw.js';
 
     const registration = await navigator.serviceWorker.register(swUrl, {
       scope: '/',
+      ...(import.meta.env.DEV ? { type: 'module' as const } : {}),
     });
 
     // Wait for the SW to be ready to accept messages

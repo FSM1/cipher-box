@@ -42,27 +42,15 @@ test.describe.serial('Batch Download', () => {
   const file3Name = `batch-dl-3-${timestamp}.txt`;
 
   test.beforeAll(async ({ browser: b }) => {
+    // Extend hook timeout — default 30s is too short for wallet login in CI
+    test.setTimeout(120_000);
     browser = b;
     const account = createTestAccount();
-
-    // Retry login once — the first test suite in the CI run can hit cold-start
-    // issues where the page crashes before the auth flow completes.
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        context = await browser.newContext();
-        page = await context.newPage();
-        await setupMockWallet(page, account);
-        const result = await loginViaWallet(page, { timeout: 90_000 });
-        expect(result.outcome).toBe('success');
-        lastError = undefined;
-        break;
-      } catch (err) {
-        lastError = err;
-        await context?.close().catch(() => {});
-      }
-    }
-    if (lastError) throw lastError;
+    context = await browser.newContext();
+    page = await context.newPage();
+    await setupMockWallet(page, account);
+    const result = await loginViaWallet(page, { timeout: 90_000 });
+    expect(result.outcome).toBe('success');
 
     fileList = new FileListPage(page);
     uploadZone = new UploadZonePage(page);
@@ -133,8 +121,8 @@ test.describe.serial('Batch Download', () => {
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBeTruthy();
 
-    // Deselect all and wait for selection bar to disappear
-    await page.keyboard.press('Escape');
+    // Clear selection via action bar button (Escape key is unreliable after download)
+    await selectionBar.clickClear();
     await selectionBar.waitForHidden();
   });
 
@@ -172,8 +160,8 @@ test.describe.serial('Batch Download', () => {
     // Close menu
     await contextMenu.closeWithEscape();
 
-    // Deselect all and wait for selection bar to disappear
-    await page.keyboard.press('Escape');
+    // Clear selection via action bar button (Escape key is unreliable for deselection)
+    await selectionBar.clickClear();
     await selectionBar.waitForHidden();
   });
 });
