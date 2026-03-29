@@ -413,14 +413,14 @@ Plans:
 - `.planning/todos/pending/2026-03-28-byo-ipfs-load-test-baselines-on-staging.md`
 - `.planning/todos/pending/2026-03-28-run-staging-metrics-baselines-with-new-instrumentation.md`
 
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 
 - [ ] 34-01-PLAN.md -- Shared deleteAccountViaPage helper + wiring into all 10 E2E spec afterAll hooks
 - [ ] 34-02-PLAN.md -- Media fixture generation + streaming-playback.spec.ts + media-preview.spec.ts E2E suites
 - [ ] 34-03-PLAN.md -- Batch download E2E tests (multi-select + individual file downloads)
-- [ ] 34-04-PLAN.md -- BYO-IPFS load test plan document + staging journey/load baselines capture
+- [x] 34-04-PLAN.md -- BYO-IPFS load test plan document + staging journey/load baselines capture
 
 ## Progress
 
@@ -447,7 +447,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 31. Structural Decomposition              | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete    | 2026-03-28 |
-| 34. E2E Test Expansion & Baselines        | v1.1      | 0/4            | Not Started | -          |
+| 34. E2E Test Expansion & Baselines        | v1.1      | 1/4 | In Progress|  |
 
 ### Phase 27: Writable Shares (PoC)
 
