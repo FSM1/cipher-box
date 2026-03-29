@@ -2,7 +2,7 @@
 phase: 35
 slug: phala-testnet-tee-migration
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-03-29
 ---
@@ -15,13 +15,13 @@ created: 2026-03-29
 
 ## Test Infrastructure
 
-| Property               | Value                                               |
-| ---------------------- | --------------------------------------------------- |
-| **Framework**          | Jest (API-side TEE tests) + manual staging verify   |
-| **Config file**        | `apps/api/jest.config.ts`                           |
-| **Quick run command**  | `pnpm --filter api test -- --testPathPattern tee`   |
-| **Full suite command** | `pnpm --filter api test`                            |
-| **Estimated runtime**  | ~30 seconds                                         |
+| Property               | Value                                             |
+| ---------------------- | ------------------------------------------------- |
+| **Framework**          | Jest (API-side TEE tests) + manual staging verify |
+| **Config file**        | `apps/api/jest.config.ts`                         |
+| **Quick run command**  | `pnpm --filter api test -- --testPathPattern tee` |
+| **Full suite command** | `pnpm --filter api test`                          |
+| **Estimated runtime**  | ~30 seconds                                       |
 
 ---
 
@@ -36,13 +36,13 @@ created: 2026-03-29
 
 ## Per-Task Verification Map
 
-| Task ID   | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status     |
-| --------- | ---- | ---- | ----------- | --------- | ----------------- | ----------- | ---------- |
-| TBD       | TBD  | TBD  | SC-1        | smoke     | `curl https://{endpoint}/health` | N/A (infra) | ⬜ pending |
-| TBD       | TBD  | TBD  | SC-2        | e2e       | Manual staging republish verify | N/A (manual) | ⬜ pending |
-| TBD       | TBD  | TBD  | SC-3        | integration | `pnpm --filter api test -- tee` | ❌ W0 | ⬜ pending |
-| TBD       | TBD  | TBD  | SC-4        | perf      | Manual Grafana histogram comparison | N/A (manual) | ⬜ pending |
-| TBD       | TBD  | TBD  | SC-5        | unit      | `grep -c tee-worker docker/docker-compose.staging.yml` | N/A (verify) | ⬜ pending |
+| Task ID | Plan | Wave | Requirement | Test Type   | Automated Command                                      | File Exists  | Status     |
+| ------- | ---- | ---- | ----------- | ----------- | ------------------------------------------------------ | ------------ | ---------- |
+| TBD     | TBD  | TBD  | SC-1        | smoke       | `curl https://{endpoint}/health`                       | N/A (infra)  | ⬜ pending |
+| TBD     | TBD  | TBD  | SC-2        | e2e         | Manual staging republish verify                        | N/A (manual) | ⬜ pending |
+| TBD     | TBD  | TBD  | SC-3        | integration | `pnpm --filter api test -- tee`                        | ❌ W0        | ⬜ pending |
+| TBD     | TBD  | TBD  | SC-4        | perf        | Manual Grafana histogram comparison                    | N/A (manual) | ⬜ pending |
+| TBD     | TBD  | TBD  | SC-5        | unit        | `grep -c tee-worker docker/docker-compose.staging.yml` | N/A (verify) | ⬜ pending |
 
 _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
@@ -59,11 +59,11 @@ _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ## Manual-Only Verifications
 
-| Behavior   | Requirement | Why Manual | Test Instructions |
-| ---------- | ----------- | ---------- | ----------------- |
-| CVM deployment + health | SC-1 | Requires Phala Cloud infrastructure | `curl https://{endpoint}/health` returns `{ healthy: true, epoch: N }` |
-| End-to-end republish | SC-2 | Requires running staging + Phala CVM | Trigger republish job, verify IPNS records resolve |
-| Republish latency | SC-4 | Requires Grafana + staging baselines | Compare histogram before/after in Grafana |
+| Behavior                | Requirement | Why Manual                           | Test Instructions                                                      |
+| ----------------------- | ----------- | ------------------------------------ | ---------------------------------------------------------------------- |
+| CVM deployment + health | SC-1        | Requires Phala Cloud infrastructure  | `curl https://{endpoint}/health` returns `{ healthy: true, epoch: N }` |
+| End-to-end republish    | SC-2        | Requires running staging + Phala CVM | Trigger republish job, verify IPNS records resolve                     |
+| Republish latency       | SC-4        | Requires Grafana + staging baselines | Compare histogram before/after in Grafana                              |
 
 ---
 
