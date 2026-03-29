@@ -121,3 +121,7 @@ continue please
 ---
 
 ok i have cleaned up the pinata account. can you try and run one byo client against this.
+
+---
+
+ok, can you please create /gsd:add-todo to make sure this debuggung task is tracked.
