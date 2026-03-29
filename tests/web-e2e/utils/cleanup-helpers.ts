@@ -13,13 +13,18 @@ import type { Page } from '@playwright/test';
  */
 export async function deleteAccountViaPage(page: Page): Promise<void> {
   try {
-    // Discover the API base URL from the app's runtime config
+    // Discover the API base URL from the app's runtime config or page URL
     const apiBase = await page.evaluate(() => {
-      return (
-        (window as unknown as Record<string, string>).__VITE_API_URL ||
-        document.querySelector('meta[name="api-url"]')?.getAttribute('content') ||
-        'http://localhost:3000'
-      );
+      // Check if the app exposes the API URL at runtime
+      const fromWindow = (window as unknown as Record<string, string>).__VITE_API_URL;
+      if (fromWindow) return fromWindow;
+      const fromMeta = document.querySelector('meta[name="api-url"]')?.getAttribute('content');
+      if (fromMeta) return fromMeta;
+      // Derive from page URL: app-staging.cipherbox.cc -> api-staging.cipherbox.cc
+      const origin = window.location.origin;
+      if (origin.includes('app-staging.')) return origin.replace('app-staging.', 'api-staging.');
+      if (origin.includes('app.')) return origin.replace('app.', 'api.');
+      return 'http://localhost:3000';
     });
 
     const result = await page.evaluate(async (apiUrl: string) => {
@@ -45,9 +50,7 @@ export async function deleteAccountViaPage(page: Page): Promise<void> {
     }, apiBase);
 
     if (!result.ok) {
-      console.warn(
-        `[cleanup] Account deletion failed at ${result.step}: HTTP ${result.status}`
-      );
+      console.warn(`[cleanup] Account deletion failed at ${result.step}: HTTP ${result.status}`);
     }
   } catch (err) {
     console.warn('[cleanup] Account deletion error (best-effort):', err);

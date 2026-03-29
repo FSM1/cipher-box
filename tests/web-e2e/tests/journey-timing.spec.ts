@@ -107,8 +107,10 @@ test.describe.serial('Journey Timing', () => {
     await page.goto('/');
 
     // Wait for Core Kit to initialize (wallet button becomes enabled)
+    // Staging Web3Auth init can take 30-40s (remote CDN + Sapphire Devnet)
+    const initTimeout = 45_000;
     const walletButton = page.locator('[data-testid="wallet-login-button"]');
-    await walletButton.waitFor({ state: 'visible', timeout: 20_000 });
+    await walletButton.waitFor({ state: 'visible', timeout: initTimeout });
     await page.waitForFunction(
       () => {
         const btn = document.querySelector(
@@ -116,7 +118,7 @@ test.describe.serial('Journey Timing', () => {
         ) as HTMLButtonElement;
         return btn && !btn.disabled;
       },
-      { timeout: 20_000 }
+      { timeout: initTimeout }
     );
 
     // Click wallet button and select Mock Wallet
