@@ -6,7 +6,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
-import { getKeypair } from '../services/tee-keys.js';
+import { getPublicKey } from '../services/tee-keys.js';
 import { logger } from '../services/logger.js';
 
 const router = Router();
@@ -22,9 +22,7 @@ router.get('/public-key', async (req: Request, res: Response) => {
   const epoch = parseInt(epochStr, 10);
 
   try {
-    const { publicKey } = await getKeypair(epoch);
-
-    // Return hex-encoded uncompressed public key (65 bytes = 130 hex chars)
+    const publicKey = await getPublicKey(epoch);
     const publicKeyHex = Buffer.from(publicKey).toString('hex');
 
     res.json({

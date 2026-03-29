@@ -24,7 +24,6 @@ const router = Router();
 /** Shape of each entry in the republish request */
 interface RepublishEntry {
   encryptedIpnsKey: string; // base64-encoded ECIES ciphertext
-  keyEpoch: number;
   ipnsName: string;
   latestCid: string;
   sequenceNumber: string; // bigint as string
@@ -51,9 +50,13 @@ router.post('/republish', async (req: Request, res: Response) => {
     return;
   }
 
+  const MAX_BATCH_SIZE = 100;
+  if (entries.length > MAX_BATCH_SIZE) {
+    res.status(400).json({ error: `Batch too large: ${entries.length} entries (max ${MAX_BATCH_SIZE})` });
+    return;
+  }
+
   const results: RepublishResult[] = [];
-  let successes = 0;
-  let failures = 0;
 
   for (const entry of entries) {
     let ipnsPrivateKey: Uint8Array | null = null;
@@ -102,7 +105,6 @@ router.post('/republish', async (req: Request, res: Response) => {
       }
 
       results.push(result);
-      successes++;
       republishEntries.inc({ result: 'success' });
     } catch (error) {
       // Ensure key is zeroed even on error
@@ -117,16 +119,16 @@ router.post('/republish', async (req: Request, res: Response) => {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
-      failures++;
       republishEntries.inc({ result: 'failure' });
     }
   }
 
-  // Log processing summary (NEVER log key material)
+  const successes = results.filter(r => r.success).length;
+
   logger.info('Republish batch complete', {
     total: entries.length,
     succeeded: successes,
-    failed: failures,
+    failed: entries.length - successes,
   });
 
   res.json({ results });
