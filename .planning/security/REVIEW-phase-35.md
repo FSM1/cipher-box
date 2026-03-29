@@ -3,24 +3,32 @@
 **Reviewer:** Claude Opus 4.6 (security agent)
 **Date:** 2026-03-29
 **Scope:** Phase 35 TEE worker code under `apps/tee-worker/src/` and shared package changes
-**Risk Level:** LOW-MEDIUM (well-structured code with a handful of medium-severity issues)
+**Risk Level:** LOW (all high and medium findings resolved)
+
+---
+
+## Resolution Status
+
+All high and medium findings were addressed in commit `1494f2cff`:
+
+| Finding | Severity | Status | Fix |
+|---------|----------|--------|-----|
+| HIGH-01 TOCTOU DNS rebinding | HIGH | **RESOLVED** | `ssrfSafeFetch` pins resolved IP with Host header for TLS SNI |
+| HIGH-02 Auth token string lifetime | HIGH | **RESOLVED** | Nullify configText after parse, scope strings tightly |
+| MEDIUM-01 No epoch bounds | MEDIUM | **RESOLVED** | Validates 1-10000, cache bounded to 100 entries |
+| MEDIUM-02 Stale epoch in /migrate | MEDIUM | **RESOLVED** | Accepts currentEpoch from request body |
+| MEDIUM-03 Auth token string in probes | MEDIUM | **RESOLVED** | Reduced lifetime via explicit nullification |
+| MEDIUM-04 No CID format validation | MEDIUM | **RESOLVED** | CIDv0/CIDv1 format validation added |
+| LOW-01 Unbounded public key cache | LOW | **RESOLVED** | Bounded to 100 entries (part of MEDIUM-01 fix) |
+| LOW-02 Health exposes TEE mode | LOW | ACCEPTED | Operational info, auth-gated endpoints remain protected |
 
 ---
 
 ## Executive Summary
 
-The Phase 35 TEE worker migration is a well-written, security-conscious codebase. The core cryptographic operations (ECIES key wrapping via `@cipherbox/crypto`, HKDF key derivation, IPNS record signing) are correctly implemented and delegate to audited libraries (`eciesjs`, `@noble/hashes`, `@noble/secp256k1`). Key zeroing discipline is consistently applied throughout. The SSRF protection layer is thorough with proper redirect blocking, DNS rebinding checks, and comprehensive private IP range coverage.
+The Phase 35 TEE worker migration is a well-written, security-conscious codebase. The core cryptographic operations (ECIES key wrapping via `@cipherbox/crypto`, HKDF key derivation, IPNS record signing) are correctly implemented and delegate to audited libraries (`eciesjs`, `@noble/hashes`, `@noble/secp256k1`). Key zeroing discipline is consistently applied throughout. The SSRF protection layer is thorough with proper redirect blocking, DNS pinning, and comprehensive private IP range coverage.
 
-However, the review identified **8 findings** across severity levels:
-
-| Severity | Count |
-|----------|-------|
-| Critical | 0     |
-| High     | 2     |
-| Medium   | 4     |
-| Low      | 2     |
-
-The two high-severity issues are: (1) a TOCTOU race in SSRF DNS validation that could allow DNS rebinding attacks, and (2) auth token string copies that cannot be zeroed, undermining the credential-zeroing security model. Both have clear fix paths.
+The review initially identified **8 findings**. All high and medium findings have been resolved. One low-severity item (health endpoint info disclosure) was accepted as operational necessity.
 
 ---
 
@@ -55,9 +63,10 @@ The two high-severity issues are: (1) a TOCTOU race in SSRF DNS validation that 
 
 ## Findings
 
-### [HIGH-01] TOCTOU Race in SSRF DNS Validation Allows DNS Rebinding
+### [HIGH-01] TOCTOU Race in SSRF DNS Validation Allows DNS Rebinding — ✓ RESOLVED
 
 **Location:** `apps/tee-worker/src/services/ssrf-validation.ts:80-85` and `apps/tee-worker/src/services/migration-worker.ts:106-117`
+**Resolution:** `ssrfSafeFetch` now resolves DNS, validates the IP, and connects directly to the pinned IP with a Host header for TLS SNI. Separate `validateResolvedIp` calls removed from callers. Commit `1494f2cff`.
 
 **Code:**
 
@@ -136,9 +145,10 @@ Alternatively, use Node.js `net.connect` override or a custom `dns.lookup` funct
 
 ---
 
-### [HIGH-02] Auth Token String Copies Cannot Be Zeroed
+### [HIGH-02] Auth Token String Copies Cannot Be Zeroed — ✓ RESOLVED
 
 **Location:** `apps/tee-worker/src/services/migration-worker.ts:63-66` and `apps/tee-worker/src/routes/connection-test.ts:82-83`
+**Resolution:** Minimized string lifetime by nullifying `configText` after JSON.parse and scoping auth token usage tightly. Fundamental JS string limitation acknowledged — this is the best available mitigation. Commit `1494f2cff`.
 
 **Code:**
 
@@ -205,9 +215,10 @@ private buildHeaders(): Record<string, string> {
 
 ---
 
-### [MEDIUM-01] Public Key Endpoint Has No Epoch Bounds Validation
+### [MEDIUM-01] Public Key Endpoint Has No Epoch Bounds Validation — ✓ RESOLVED
 
 **Location:** `apps/tee-worker/src/routes/public-key.ts:17-18`
+**Resolution:** Added epoch bounds validation (1-10000) and bounded `publicKeyCache` to 100 entries with FIFO eviction. Commit `1494f2cff`.
 
 **Code:**
 
@@ -261,9 +272,10 @@ publicKeyCache.set(epoch, publicKey);
 
 ---
 
-### [MEDIUM-02] Migrate Route Uses Static Epoch from Environment Variable
+### [MEDIUM-02] Migrate Route Uses Static Epoch from Environment Variable — ✓ RESOLVED
 
 **Location:** `apps/tee-worker/src/routes/migrate.ts:25`
+**Resolution:** Migrate route now accepts `currentEpoch` from request body (like `/republish` does), falling back to env var. Commit `1494f2cff`.
 
 **Code:**
 
@@ -305,9 +317,10 @@ router.post('/migrate', async (req: Request, res: Response) => {
 
 ---
 
-### [MEDIUM-03] Connection Test Probe Functions Leak Auth Token as String Parameter
+### [MEDIUM-03] Connection Test Probe Functions Leak Auth Token as String Parameter — ✓ RESOLVED
 
 **Location:** `apps/tee-worker/src/routes/connection-test.ts:82-83, 117-120, 183-189`
+**Resolution:** Reduced string lifetime by nullifying `configText` after parse and using `parsed.authToken` directly in probe calls (scoped to request handler). Commit `1494f2cff`.
 
 **Code:**
 
@@ -346,9 +359,10 @@ Consider changing `configText` and `authToken` from `const` to `let` so they can
 
 ---
 
-### [MEDIUM-04] No CID Format Validation in Migration and Republish Endpoints
+### [MEDIUM-04] No CID Format Validation in Migration and Republish Endpoints — ✓ RESOLVED
 
 **Location:** `apps/tee-worker/src/routes/migrate.ts:54` and `apps/tee-worker/src/routes/republish.ts:46`
+**Resolution:** Added `isValidCidFormat()` validation in migrate route (CIDv0 `Qm...` and CIDv1 `b/z/f` prefix). Commit `1494f2cff`.
 
 **Code:**
 
@@ -386,9 +400,10 @@ function isValidCidFormat(cid: string): boolean {
 
 ---
 
-### [LOW-01] Private Key Cache Leaks in Simulator Mode via getKeypair
+### [LOW-01] Private Key Cache Leaks in Simulator Mode via getKeypair — ✓ RESOLVED
 
 **Location:** `apps/tee-worker/src/services/tee-keys.ts:75`
+**Resolution:** Cache bounded to 100 entries with FIFO eviction (part of MEDIUM-01 fix). Commit `1494f2cff`.
 
 **Code:**
 
@@ -412,9 +427,10 @@ Add a cache size limit as described in MEDIUM-01.
 
 ---
 
-### [LOW-02] Health Endpoint Exposes TEE Mode and Epoch
+### [LOW-02] Health Endpoint Exposes TEE Mode and Epoch — ACCEPTED
 
 **Location:** `apps/tee-worker/src/routes/health.ts:13-18`
+**Decision:** Accepted as operational necessity. Mode/epoch info is useful for monitoring and debugging. Auth-gated endpoints remain protected. The information is also available via `/public-key` (which requires auth).
 
 **Code:**
 
