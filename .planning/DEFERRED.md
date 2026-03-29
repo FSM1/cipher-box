@@ -1,6 +1,6 @@
 # Deferred Items Inventory
 
-**Last updated:** 2026-03-28
+**Last updated:** 2026-03-29
 
 Items deferred across milestones v1.0 (phases 11-17.1) and v1.1 (phases 18-27).
 Cross-referenced with `.planning/todos/pending/` and security review findings.
@@ -101,11 +101,10 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 
 ### Code Quality
 
-| Item                                            | Source Phase | Notes                                          |
-| ----------------------------------------------- | ------------ | ---------------------------------------------- |
-| DTS circular build dependency (crypto <-> core) | 19.1         | Workaround in place; not fixed                 |
-| Structured logging wrapper for web app          | -            | 50+ direct `console.*` calls (see CONCERNS.md) |
-| Desktop FUSE automated tests                    | -            | Manual testing only (see CONCERNS.md)          |
+| Item                                            | Source Phase | Notes                                 |
+| ----------------------------------------------- | ------------ | ------------------------------------- |
+| DTS circular build dependency (crypto <-> core) | 19.1         | Workaround in place; not fixed        |
+| Desktop FUSE automated tests                    | -            | Manual testing only (see CONCERNS.md) |
 
 ## Items Implemented in Later Phases
 
@@ -125,5 +124,6 @@ These were deferred but have since been completed:
 | Performance baselines                  | Phase 18                 | Phase 22       |
 | Link sharing                           | Phase 14                 | Phase 15       |
 | Pagination on shares endpoints (L4)    | Phase 14 security review | Phase 14       |
+| Structured logging wrapper for web app | -                        | Phase 28       |
 
 <!-- Deferred inventory: 2026-03-28 -->
