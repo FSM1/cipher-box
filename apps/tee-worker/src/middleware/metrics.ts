@@ -45,7 +45,7 @@ export function metricsMiddleware(req: Request, res: Response, next: NextFunctio
 
   res.on('finish', () => {
     const durationNs = Number(process.hrtime.bigint() - start);
-    const route = req.route?.path ?? 'unmatched';
+    const route = req.route?.path ?? '/:unmatched';
     httpDuration.observe(
       { method: req.method, route, status_code: res.statusCode },
       durationNs / 1e9
