@@ -1,6 +1,6 @@
 # Technology Stack
 
-**Analysis Date:** 2026-03-27
+**Analysis Date:** 2026-03-29
 
 ## Languages
 
@@ -27,7 +27,7 @@
 
 - pnpm 10+ (CI uses `version: 10`)
 - Lockfile: `pnpm-lock.yaml` (present, CI uses `--frozen-lockfile`)
-- npm (tee-worker only -- standalone, not in pnpm workspace; uses `package-lock.json`)
+- pnpm (tee-worker uses workspace dependencies since Phase 35 migration to `apps/tee-worker/`)
 - Cargo (Rust workspace; `Cargo.lock` present)
 
 ## Monorepo Layout
@@ -93,13 +93,13 @@ defineConfig({
 | `apps/web`     | `@cipherbox/web`     | React 18 + Vite 7 | Web frontend SPA            |
 | `apps/desktop` | `@cipherbox/desktop` | Tauri 2 + Vite 6  | Desktop app with FUSE mount |
 
-### TEE Worker (`tee-worker/`)
+### TEE Worker (`apps/tee-worker/`)
 
-| Component    | Framework | Purpose                                                        |
-| ------------ | --------- | -------------------------------------------------------------- |
-| `tee-worker` | Express 4 | Standalone TEE worker for Phala Cloud CVM -- IPNS republishing |
+| Component          | Framework | Purpose                                                                    |
+| ------------------ | --------- | -------------------------------------------------------------------------- |
+| `apps/tee-worker`  | Express 4 | Standalone TEE worker deployed as Phala Cloud CVM -- IPNS republishing     |
 
-The tee-worker is NOT in the pnpm workspace. It uses npm with its own `package-lock.json` and is deployed independently via Docker (node:20-alpine).
+The tee-worker is part of the pnpm workspace (since Phase 35 migration to `apps/`). It uses workspace dependencies for shared packages (`@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/sdk-core`) and is deployed independently as a Phala Cloud CVM via Docker (node:20-alpine).
 
 ### Test Suites (`tests/`)
 
@@ -129,7 +129,7 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 - NestJS ^11.0.0 - Backend API framework (`apps/api`)
 - React ^18.3.1 - Web frontend UI (`apps/web`)
 - Tauri 2 - Desktop app shell with native Rust backend (`apps/desktop`)
-- Express ^4.21.0 - TEE worker HTTP server (`tee-worker`)
+- Express ^4.21.0 - TEE worker HTTP server (`apps/tee-worker`)
 
 **State Management:**
 
@@ -161,6 +161,10 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 - NestJS CLI ^11.0.0 - API build and dev (`apps/api`)
 - tsx ^4.21.0 - TypeScript execution for scripts, tee-worker dev, mock-ipns-routing dev
 - Cargo / rustc 1.93+ - Rust compilation (all `crates/*`, `apps/desktop/src-tauri`)
+
+**Deployment:**
+
+- phala CLI 1.1.13+ - Phala Cloud CVM deployment and management (CI/CD only, `npm install -g phala`)
 
 **Code Quality:**
 
@@ -298,14 +302,29 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 - `clap` 4 (derive) - CLI argument parsing
 - `env_logger` 0.11 - Log output configuration
 
-### TEE Worker (`tee-worker/package.json`)
+### TEE Worker (`apps/tee-worker/package.json`)
+
+**Shared workspace packages:**
+
+- `@cipherbox/crypto` workspace:* - Cryptographic primitives (ECIES, Ed25519, HKDF, IPNS)
+- `@cipherbox/core` workspace:* - Domain types, metadata schemas, IPNS record creation
+- `@cipherbox/sdk-core` workspace:* - Stateless orchestration (pinning providers, IPFS operations)
+
+**TEE-specific dependencies:**
 
 - `express` ^4.21.0 - HTTP server
-- `eciesjs` ^0.4.16 - ECIES decryption of IPNS keys
-- `@noble/secp256k1` ^2.2.3 + `@noble/ed25519` ^2.2.3 - Key operations
-- `@noble/hashes` ^1.7.0 - Hash functions
-- `@libp2p/crypto` ^5.1.13 + `ipns` ^10.1.3 - IPNS record signing
-- `multiformats` ^13.3.0 - CID encoding
+- `@phala/dstack-sdk` ^0.5.7 - Hardware-backed key derivation inside Phala Cloud CVM
+- `@noble/secp256k1` ^2.2.3 - secp256k1 key operations (simulator mode fallback)
+- `@noble/hashes` ^1.7.0 - HKDF hash functions (simulator mode fallback)
+- `prom-client` ^15.1.3 - Prometheus metrics (GET /metrics endpoint)
+
+**Removed (now provided by shared packages):**
+
+- ~~`eciesjs`~~ - replaced by `@cipherbox/crypto` ECIES
+- ~~`@noble/ed25519`~~ - replaced by `@cipherbox/crypto` Ed25519
+- ~~`ipns`~~ - replaced by `@cipherbox/core` IPNS
+- ~~`@libp2p/crypto`~~ - replaced by `@cipherbox/crypto`
+- ~~`multiformats`~~ - replaced by `@cipherbox/core`
 
 ## Configuration
 
@@ -324,7 +343,7 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 
 - Extends base; overrides: ES2020 target, react-jsx, noEmit
 
-**TEE Worker TypeScript:** `tee-worker/tsconfig.json`
+**TEE Worker TypeScript:** `apps/tee-worker/tsconfig.json`
 
 - Standalone (does not extend base): ES2022 target, ES2022 module, bundler resolution
 
@@ -462,7 +481,8 @@ pnpm --filter @cipherbox/api migration:generate   # Generate migration from enti
 **Staging:**
 
 - VPS at 76.13.151.200 (Hostinger)
-- Docker Compose: API (node:22-alpine), TEE worker (node:20-alpine)
+- Docker Compose: API (node:22-alpine) + supporting services
+- TEE Worker: External Phala Cloud CVM (node:20-alpine Docker image on GHCR)
 - Caddy reverse proxy for HTTPS
 - Domains: `api-staging.cipherbox.cc`, `app-staging.cipherbox.cc`
 - Container registry: `ghcr.io`
@@ -470,7 +490,7 @@ pnpm --filter @cipherbox/api migration:generate   # Generate migration from enti
 **Production Docker Images:**
 
 - API: `node:22-alpine` multi-stage build (`apps/api/Dockerfile`)
-- TEE Worker: `node:20-alpine` multi-stage build (`tee-worker/Dockerfile`)
+- TEE Worker: `node:20-alpine` multi-stage build (`apps/tee-worker/Dockerfile`)
 
 ## Release and Versioning
 
@@ -490,7 +510,7 @@ pnpm --filter @cipherbox/api migration:generate   # Generate migration from enti
 | `ci.yml`             | PR to main                           | Lint, typecheck, test, build, API spec verify, migration drift check, Cargo check/test on 3 platforms, vector parity |
 | `e2e.yml`            | Push to main, dispatch               | Web E2E tests with Playwright                                                                                        |
 | `release-please.yml` | Push to main                         | Create/update release PR, publish GitHub Releases                                                                    |
-| `deploy-staging.yml` | Push `staging-v*` tag, workflow_call | Build Docker images, deploy to staging VPS                                                                           |
+| `deploy-staging.yml` | Push `staging-v*` tag, workflow_call | Build Docker images, deploy API/web to staging VPS, deploy TEE worker to Phala Cloud CVM                             |
 | `build-desktop.yml`  | -                                    | Desktop app build                                                                                                    |
 | `desktop-e2e.yml`    | -                                    | Desktop E2E tests                                                                                                    |
 | `load-test.yml`      | -                                    | Load test runs                                                                                                       |
@@ -524,4 +544,4 @@ pnpm --filter @cipherbox/api migration:generate   # Generate migration from enti
 
 ---
 
-<!-- Stack analysis: 2026-03-27 -->
+<!-- Stack analysis: 2026-03-29 -->

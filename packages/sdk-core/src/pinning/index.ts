@@ -5,6 +5,8 @@ export type {
   PinningMode,
   ExternalProviderConfig,
   ConnectionTestResult,
+  ProviderOptions,
+  FetchFn,
 } from './types';
 export { KuboProvider } from './kubo-provider';
 export { PsaProvider } from './psa-provider';

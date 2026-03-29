@@ -22,7 +22,6 @@ jobs:
             src:
               - 'apps/**'
               - 'packages/**'
-              - 'tee-worker/**'
               - 'tests/**'
               - '.github/**'
               - 'pnpm-lock.yaml'

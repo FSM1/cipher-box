@@ -87,23 +87,9 @@ services:
           memory: 2G
           cpus: '1.0'
 
-  tee-worker:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-OWNER}/cipherbox-tee-worker:${TAG:-latest}
-    restart: unless-stopped
-    environment:
-      NODE_ENV: production
-      PORT: 3001
-      TEE_MODE: simulator
-      CIPHERBOX_ENVIRONMENT: staging
-      TEE_WORKER_SECRET: ${TEE_WORKER_SECRET}
-    ports:
-      - '127.0.0.1:3001:3001'
-    logging: *default-logging
-    healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:3001/health || exit 1']
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # TEE worker runs on Phala Cloud CVM (not in this compose stack)
+  # Endpoint configured via TEE_WORKER_URL in .env.staging
+  # Deploy separately: phala deploy -c apps/tee-worker/docker-compose.phala.yml -n cipherbox-tee-staging
 
   someguy:
     image: ghcr.io/ipfs/someguy:v0.11.1

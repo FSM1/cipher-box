@@ -58,6 +58,7 @@ export {
   type PinningMode,
   type ExternalProviderConfig,
   type ConnectionTestResult,
+  type ProviderOptions,
   KuboProvider,
   PsaProvider,
   PinataProvider,

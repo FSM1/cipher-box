@@ -1,7 +1,7 @@
-import type { PinningProvider, PinResult, PinStatus } from './types';
+import type { PinningProvider, PinResult, PinStatus, ProviderOptions, FetchFn } from './types';
 
-/** Timeout for all PSA requests — external service */
-const REQUEST_TIMEOUT_MS = 15_000;
+/** Default timeout for all PSA requests — external service */
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 /** PSA pin object from the Pinning Service API response */
 interface PsaPinObject {
@@ -31,11 +31,15 @@ interface PsaListResponse {
 export class PsaProvider implements PinningProvider {
   private readonly endpoint: string;
   private readonly authToken: string;
+  private readonly fetchFn: FetchFn;
+  private readonly timeoutMs: number;
 
-  constructor(endpoint: string, authToken: string) {
+  constructor(endpoint: string, authToken: string, options?: ProviderOptions) {
     // Normalize: strip trailing slash
     this.endpoint = endpoint.replace(/\/+$/, '');
     this.authToken = authToken;
+    this.fetchFn = options?.fetchFn ?? globalThis.fetch;
+    this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
   /**
@@ -62,11 +66,11 @@ export class PsaProvider implements PinningProvider {
       name: name ?? `cipherbox-${Date.now()}`,
     };
 
-    const response = await fetch(url, {
+    const response = await this.fetchFn(url, {
       method: 'POST',
       headers: this.buildHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {
@@ -90,10 +94,10 @@ export class PsaProvider implements PinningProvider {
     // First, find the pin request(s) for this CID
     const listUrl = `${this.endpoint}/pins?cid=${encodeURIComponent(cid)}&status=pinned,pinning,queued`;
 
-    const listResponse = await fetch(listUrl, {
+    const listResponse = await this.fetchFn(listUrl, {
       method: 'GET',
       headers: this.buildHeaders(),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!listResponse.ok) {
@@ -107,10 +111,10 @@ export class PsaProvider implements PinningProvider {
     for (const pin of listResult.results) {
       const deleteUrl = `${this.endpoint}/pins/${encodeURIComponent(pin.requestid)}`;
 
-      const deleteResponse = await fetch(deleteUrl, {
+      const deleteResponse = await this.fetchFn(deleteUrl, {
         method: 'DELETE',
         headers: this.buildHeaders(),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
 
       if (!deleteResponse.ok) {
@@ -129,10 +133,10 @@ export class PsaProvider implements PinningProvider {
   async status(cid: string): Promise<PinStatus> {
     const url = `${this.endpoint}/pins?cid=${encodeURIComponent(cid)}&limit=1`;
 
-    const response = await fetch(url, {
+    const response = await this.fetchFn(url, {
       method: 'GET',
       headers: this.buildHeaders(),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {

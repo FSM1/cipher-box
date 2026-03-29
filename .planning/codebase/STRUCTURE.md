@@ -53,6 +53,14 @@ cipher-box/
 │   │       │   └── updater.rs     # Auto-updater
 │   │       ├── vendor/fuser/      # Vendored fuser crate (socket-read patch for FUSE-T)
 │   │       └── Cargo.toml         # Desktop crate dependencies
+│   ├── tee-worker/                # TEE IPNS republishing worker (Phala Cloud CVM)
+│   │   └── src/
+│   │       ├── __tests__/         # Unit tests (Vitest)
+│   │       ├── middleware/        # Auth middleware (auth.ts)
+│   │       ├── routes/            # health, public-key, republish, migrate, connection-test
+│   │       ├── services/          # ipns-signer, key-manager, migration-worker, ssrf-validation, tee-keys
+│   │       ├── types/             # dstack-sdk type declarations
+│   │       └── index.ts           # Express entry point with Prometheus metrics
 │   └── web/                       # React web application
 │       └── src/
 │           ├── components/        # UI components
@@ -190,13 +198,6 @@ cipher-box/
 │           ├── operations.rs      # FUSE callbacks
 │           ├── read_ops.rs, write_ops.rs, dir_ops.rs  # Operation split by type
 │           └── lib.rs             # Crate root
-├── tee-worker/                    # TEE IPNS republishing worker (Phala Cloud)
-│   └── src/
-│       ├── middleware/            # Auth middleware (auth.ts)
-│       ├── routes/                # health, public-key, republish, migrate, connection-test
-│       ├── services/              # ipns-signer, key-manager, migration-worker, ssrf-validation, tee-keys
-│       ├── types/                 # dstack-sdk type declarations
-│       └── index.ts               # Express entry point
 ├── tests/                         # Test suites
 │   ├── web-e2e/                   # Playwright browser E2E tests
 │   │   ├── tests/                 # Test specs (*.spec.ts)
@@ -306,11 +307,14 @@ cipher-box/
 - Key files: Each crate's `src/lib.rs`, `Cargo.toml` (workspace root)
 - Build: `cargo build` (workspace root)
 
-**`tee-worker/`:**
+**`apps/tee-worker/`:**
 
-- Purpose: Standalone TEE worker for automatic IPNS republishing every 3 hours (Phala Cloud primary, AWS Nitro fallback)
-- Contains: Express routes, IPNS signer, key manager, SSRF validation, migration worker
-- Key files: `src/index.ts` (entry), `src/routes/republish.ts`, `src/services/ipns-signer.ts`
+- Purpose: Standalone TEE worker deployed as Phala Cloud CVM for automatic IPNS republishing every 3 hours
+- Contains: Express routes, IPNS signer, key manager, SSRF validation, migration worker, Prometheus metrics
+- Uses shared workspace packages: `@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/sdk-core`
+- Uses `@phala/dstack-sdk` for hardware-backed key derivation inside CVM
+- Exposes Prometheus metrics via `prom-client` at `GET /metrics`
+- Key files: `src/index.ts` (entry), `src/routes/republish.ts`, `src/services/ipns-signer.ts`, `src/services/tee-keys.ts`
 - Build: `tsc` → `dist/`
 
 **`tests/`:**
@@ -327,7 +331,7 @@ cipher-box/
 - `apps/web/src/main.tsx`: Web app React root
 - `apps/desktop/src/main.ts`: Desktop webview entry
 - `apps/desktop/src-tauri/src/main.rs`: Desktop Rust entry
-- `tee-worker/src/index.ts`: TEE worker Express entry
+- `apps/tee-worker/src/index.ts`: TEE worker Express entry
 
 **Configuration:**
 
@@ -456,7 +460,7 @@ Phase 31 decomposed the original monolithic `useSharedNavigation.ts` (1199 lines
 
 **New API Integration (external service):**
 
-1. TEE key material: `tee-worker/src/services/`
+1. TEE key material: `apps/tee-worker/src/services/`
 2. IPFS provider: `packages/sdk-core/src/pinning/` (implement provider interface in `types.ts`)
 3. Auth provider: `apps/api/src/auth/services/` + `apps/api/src/auth/strategies/`
 
@@ -544,7 +548,7 @@ Phase 31 decomposed the original monolithic `useSharedNavigation.ts` (1199 lines
 | Web Logger            | `apps/web/src/lib/logger.ts` | Implemented |
 | Web Observability     | `apps/web/src/lib/faro.ts`   | Implemented |
 | Desktop App           | `apps/desktop/`              | Implemented |
-| TEE Worker            | `tee-worker/`                | Implemented |
+| TEE Worker            | `apps/tee-worker/`           | Implemented |
 | @cipherbox/crypto     | `packages/crypto/`           | Implemented |
 | @cipherbox/core       | `packages/core/`             | Implemented |
 | @cipherbox/api-client | `packages/api-client/`       | Implemented |
