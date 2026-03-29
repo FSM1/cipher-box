@@ -259,3 +259,13 @@
 ---
 
 https://github.com/FSM1/cipher-box/actions/runs/23697472039/job/69035052597?pr=384 the latest web e2e test results are not in, but it seems like the release gate is not requiring any e2e test run for these latest changes. most likely its because nothing in the web app changed, but the updated tests should have set the flag to require release gate checks.
+
+---
+
+the e2e run was correctly kicked off after the pr to main was merged https://github.com/FSM1/cipher-box/actions/runs/23712125460
+
+the issue here is that the release please release gate did not block merging until the web e2e test run was finished.
+
+---
+
+I think that the reason the release gate was not required is that the PR was the `test:` commit message when the PR was merged. I had to manually kick off the `Release gate job` to see that the e2e tests were failing.
