@@ -1,0 +1,111 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "43f2e854c74c",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T23:16:14.755383Z",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "3ade0cc54410",
+  "token_usage": {
+    "input_tokens": 412,
+    "cache_creation_tokens": 268878,
+    "cache_read_tokens": 57972662,
+    "output_tokens": 75623,
+    "api_call_count": 355
+  },
+  "session_metrics": {
+    "turn_count": 28
+  },
+  "summary": {
+    "intent": "Fix the SDK's uploadFile() hardcoding AES-GCM for all files instead of selecting AES-CTR for large media files, and debug BYO-IPFS register-cid 400 errors on staging.",
+    "outcome": "Both features were implemented and merged: CTR encryption mode selection in the SDK (PR #399) and a new PATCH /vault/byo-status endpoint plus load test fixes (PR #400), along with centralizing MIME type logic, fixing pre-existing test type errors across the API, and resolving ESLint scanning Rust build artifacts.",
+    "learnings": {
+      "repo": [
+        "selectEncryptionMode() existed only in the web app's streaming-crypto.service.ts and was duplicated in the SDK client — centralized into packages/sdk-core/src/encryption-mode.ts",
+        "setByoStatus() was a dead service method with no controller endpoint — BYO mode could never be toggled via API, which was the real root cause of register-cid 400/403 errors",
+        "The load test's ipns-publish call sent { ipnsName, cid } but PublishIpnsEntryDto requires { ipnsName, record, metadataCid } — the signed IPNS record was missing entirely",
+        "API test files systematically used jest.Mocked\u003cPartial\u003cT\u003e\u003e then re-fetched via module.get(), losing mock method types — the pattern should use the mock object directly without re-fetching",
+        "The root target/ directory (Rust build artifacts) was not in ESLint ignores, causing 261 of 262 lint errors to be from Rust-generated JS files",
+        "FLAC files (audio/flac) were missing from STREAMING_MIME_TYPES in both the SDK client and web app streaming service",
+        "The todo pending/ copy was not cleaned up after the PR merged — both pending and done copies existed in main after the merge",
+        ".husky/commit-msg and .husky/commit-msg.pre-entire are managed by the Entire CLI tool locally and should be in .git/info/exclude, not committed to the repo"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "end_line": 48,
+          "finding": "New centralized module for CTR/GCM mode selection — selectEncryptionMode(mimeType, size) and normalizeEncryptionMode(mode) exported from sdk-core"
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "uploadFile() now accepts optional encryptionMode param, uses encryptAesCtr + generateCtrIv when 'CTR', falls back to GCM"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "end_line": 691,
+          "finding": "uploadFile() now calls selectEncryptionMode() from sdk-core before uploading, imported rather than duplicating the MIME set"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "New PATCH /vault/byo-status endpoint added — was previously a dead service method with no controller route"
+        },
+        {
+          "path": "apps/api/src/vault/dto/byo-status.dto.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "SetByoStatusDto (request) and SetByoStatusResponseDto (response) added for the new endpoint"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "createByoClientPool now enables BYO mode on each account via the new endpoint and filters out accounts where enableByo fails"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "ipns-publish step replaced with createAndPublishIpnsRecord from sdk-core; createSdkContext hoisted outside iteration loop"
+        },
+        {
+          "path": "eslint.config.js",
+          "line": 1,
+          "end_line": 1,
+          "finding": "Added 'target/**' to ESLint ignores — was previously only ignoring src-tauri/target/, causing 261 errors from Rust doc/build JS"
+        }
+      ],
+      "workflow": [
+        "When vi.mock('@cipherbox/sdk-core', () =\u003e ({ ... })) replaces the entire module, new exports added to sdk-core break all tests using that pattern — use importActual + spread instead",
+        "After merging a branch, check that todo pending/ files are cleaned up — the merge brought both pending/ and done/ copies into main",
+        "orval API client regeneration creates new model files and directories that must all be staged, not just specific files — use git add packages/api-client/src/ to catch everything",
+        "When manually generating OpenAPI spec, write to the correct output path (packages/api-client/openapi.json) not cwd — a stray apps/api/openapi.json was accidentally committed",
+        "Entire CLI modifies .husky/commit-msg locally — add it to .git/info/exclude to prevent it showing in git status; the pre-existing commitlint hook should stay in the repo"
+      ]
+    },
+    "friction": [
+      "GraphQL API timed out when fetching review threads — had to fall back to REST API for PR comment fetching",
+      "orval generation during api:generate ran against the already-running API server (old build), so the new endpoint wasn't included until rebuilt",
+      "Manually-run OpenAPI generation script wrote to cwd (apps/api/openapi.json) instead of the correct packages/api-client/openapi.json, requiring a revert commit",
+      "api-client changes from api:generate weren't committed, causing a drift check CI failure — required a separate commit",
+      "Pre-existing TypeScript errors across 9 API spec files (jest.Mocked\u003cPartial\u003cT\u003e\u003e pattern) had to be fixed before typecheck passed, expanding scope significantly",
+      "Push commands appeared to hang/not complete — required multiple retries and status checks",
+      ".husky/commit-msg.pre-entire was in .git/info/exclude locally, making it invisible to git add without --force, causing confusion about the Entire CLI hook chain"
+    ],
+    "open_items": [
+      "The one remaining ESLint warning: @typescript-eslint/no-explicit-any in apps/api/src/ipns/delegated-routing.client.spec.ts:60",
+      "integration.test.ts in packages/sdk fails with live API errors — pre-existing, not addressed",
+      "13 other pending todos remain including: Web Worker for large file encryption, ERC-1271 contract wallet auth, CRDT-based IPNS inbox, async search index build, alternative MFA factors, mock-ipns-routing removal",
+      "BYO load test baselines on staging still need to be run now that the register-cid 400 bug is fixed",
+      "The PATCH /vault/byo-status endpoint is not yet wired into the web app Settings UI — the UI still can't toggle BYO mode for end users"
+    ]
+  }
+}
