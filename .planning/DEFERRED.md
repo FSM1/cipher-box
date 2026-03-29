@@ -77,7 +77,7 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 | Async/incremental search index       | 15.1         | `buildFromFolderTree()` blocks UI for large vaults |
 | BYO IPFS provider benchmarks         | 21           | Requires external provider infrastructure          |
 | Automated CI timing gates            | 26           | Flaky due to runner variance                       |
-| Remove mock-ipns-routing             | 19           | Someguy at 192.168.133.114:8190 may replace it     |
+| Remove mock-ipns-routing             | 19           | Someguy at <docker-host>:8190 may replace it       |
 | Push notifications (WebSocket sync)  | 16           | Currently polling-only; requires backend infra     |
 
 ### Sync & Conflict Resolution (Deferred to Milestone 4)

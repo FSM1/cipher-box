@@ -5,7 +5,7 @@
 | Field            | Value                                                              |
 | ---------------- | ------------------------------------------------------------------ |
 | **Capture Date** | 2026-03-23                                                         |
-| **Environment**  | Staging (api-staging.cipherbox.cc) + Local (192.168.133.114)       |
+| **Environment**  | Staging (api-staging.cipherbox.cc) + Local (<docker-host>)         |
 | **Kubo Version** | v0.40.0                                                            |
 | **Someguy**      | v0.11.1 (ghcr.io/ipfs/someguy)                                     |
 | **API Image**    | cipher-box-v0.26.5                                                 |

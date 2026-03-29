@@ -1,15 +1,15 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-03-27
+**Analysis Date:** 2026-03-29
 
 ## Tech Debt
 
 **Orphaned IPNS records on file/folder deletion:**
 
-- Issue: When files or folders are deleted, their IPNS records and TEE republish enrollments are not cleaned up. The code logs warnings and defers to "Phase 14" via TODO comments.
-- Files: `apps/web/src/services/folder.service.ts:461`, `apps/web/src/services/folder.service.ts:513`, `apps/web/src/services/delete.service.ts:22`
+- Issue: When files or folders are deleted, their IPNS records and TEE republish enrollments are handled by `fireAndForgetUnenroll()` in `packages/sdk/src/client.ts`. The web app services correctly delegate to the SDK. However, SDK-based unenrollment is fire-and-forget with no persistence — if the browser tab closes before the API call completes, unenrollments are silently dropped.
+- Files: `packages/sdk/src/client.ts:150-163`, `apps/web/src/services/delete.service.ts:23`, `apps/web/src/services/folder.service.ts:457`
 - Impact: Orphaned IPNS records accumulate in the TEE republish schedule. Each orphan wastes TEE compute and delegated routing bandwidth every 6 hours. Capacity warnings trigger at 1000+ records.
-- Fix approach: The API already has `unenrollIpns()` at `apps/api/src/republish/republish.service.ts`. Expose it via a REST endpoint and call it from the web client during file/folder deletion. Batch unenrollment needed for folder deletes containing multiple files.
+- Fix approach: Persist a local unenrollment queue to IndexedDB. Flush on next session start before loading folders.
 
 **Desktop device approval polling not implemented:**
 
@@ -25,48 +25,19 @@
 - Impact: Concurrent mkdir operations from different clients could produce conflicting IPNS metadata. Current behavior silently drops one operation.
 - Fix approach: Implement retry with CAS-style re-fetch, merge children, re-publish pattern (same as web client's folder mutation flow).
 
-**Large monolithic files in web app:**
+**Residual `console.time` calls in Web3Auth hooks:**
 
-- Issue: Several web app files exceed 900 lines, concentrating multiple responsibilities.
-- Files:
-  - `apps/web/src/hooks/useSharedNavigation.ts` (1199 lines)
-  - `apps/web/src/services/folder.service.ts` (1089 lines)
-  - `apps/web/src/components/file-browser/FileBrowser.tsx` (964 lines)
-  - `apps/web/src/services/bin.service.ts` (962 lines)
-  - `apps/web/src/components/file-browser/SharedFileBrowser.tsx` (943 lines)
-  - `apps/web/src/components/file-browser/ShareDialog.tsx` (768 lines)
-  - `apps/web/src/hooks/useAuth.ts` (711 lines)
-  - `apps/web/src/components/file-browser/DetailsDialog.tsx` (664 lines)
-- Impact: Difficult to test individual behaviors in isolation. Cognitive load for code review. Higher risk of merge conflicts.
-- Fix approach: In progress -- Phase 27 quick task `260327-2ab-extract-shared-write-operations-from-web` is extracting shared write operations into `@cipherbox/sdk`. Continue extracting folder CRUD operations from `folder.service.ts` into focused modules. Split `FileBrowser.tsx` and `SharedFileBrowser.tsx` into container + presentational components.
+- Issue: 12 `console.time`/`console.timeEnd` calls remain in `apps/web/src/lib/web3auth/hooks.ts` (lines 82–194) outside any `import.meta.env.DEV` guard. Phase 28 replaced `console.log/warn/error` with the structured logger but missed these timing calls.
+- Files: `apps/web/src/lib/web3auth/hooks.ts:82`, `:84`, `:92`, `:162`, `:165`, `:168`, `:176`, `:179`, `:182`, `:188`, `:191`, `:194`
+- Impact: Console timing output appears in production builds. Minor noise; no security risk.
+- Fix approach: Wrap in `if (import.meta.env.DEV)` guards or replace with `logger.debug` calls with manual timestamps.
 
-**Pervasive console.log/warn/error in web app:**
+**`any` type usage in Web3Auth integration:**
 
-- Issue: 127 `console.error`/`console.warn`/`console.log` calls across 29 files in production web code instead of a structured logging abstraction.
-- Files: Top offenders: `apps/web/src/lib/web3auth/hooks.ts` (22 calls), `apps/web/src/services/bin.service.ts` (16 calls), `apps/web/src/hooks/useSharedNavigation.ts` (11 calls), `apps/web/src/components/file-browser/FileBrowser.tsx` (10 calls), `apps/web/src/hooks/useAuth.ts` (9 calls)
-- Impact: No log level filtering, no structured output, no ability to ship logs to an observability service. Debug logs leak into staging.
-- Fix approach: Introduce a lightweight logging wrapper (e.g., `lib/logger.ts`) with level filtering. Replace all direct `console.*` calls.
-
-**Silenced unpin failures across the codebase:**
-
-- Issue: All IPFS unpin calls use `.catch(() => {})` pattern, silently swallowing failures.
-- Files: `apps/web/src/components/file-browser/ReplaceFileDialog.tsx`, `apps/web/src/hooks/useDropUpload.ts`, `apps/web/src/hooks/useFileVersions.ts`, `apps/web/src/hooks/useFileOperations.ts`, `apps/web/src/services/bin.service.ts`
-- Impact: Failed unpins mean orphaned data on IPFS that consumes storage quota without the user knowing. Over time this could exhaust quota with unreachable data.
-- Fix approach: Log unpin failures and consider a periodic background reconciliation that retries failed unpins. Track unpin failures in a local queue.
-
-**Legacy POC directory still in repo:**
-
-- Issue: `00-Preliminary-R&D/poc/` remains alongside production code. Uses deprecated `ipfs-http-client@60.0.1`, has no tests, and uses patterns explicitly superseded by the production implementation.
-- Files: `00-Preliminary-R&D/poc/src/index.ts`, `00-Preliminary-R&D/poc/package.json`
-- Impact: Adds noise to searches and dependency audits. New contributors may confuse PoC with current implementation.
-- Fix approach: Already marked as historical reference per CLAUDE.md. Consider moving to a separate branch or archive tag.
-
-**`any` type usage in web app:**
-
-- Issue: Several `as any` casts remain, primarily around Web3Auth SDK integration and Node.js polyfills.
-- Files: `apps/web/src/main.tsx:10`, `apps/web/src/polyfills.ts:6-9`, `apps/web/src/stores/folder.store.ts:236`
-- Impact: Type safety gaps around authentication flow. The polyfill `any` casts are acceptable (Node.js globals on `window`). The folder store debug export is dev-only.
-- Fix approach: Create typed wrappers for Web3Auth SDK interactions. The polyfill and debug `any` casts are acceptable.
+- Issue: Two `any` casts remain in the Web3Auth login function due to poor SDK TypeScript types.
+- Files: `apps/web/src/lib/web3auth/hooks.ts:147` (`coreKit: any`), `:153` (`loginParams: any`)
+- Impact: Type safety gap around the authentication flow. Could mask breaking SDK changes.
+- Fix approach: Create typed wrappers for Web3Auth SDK interactions using `unknown` + type guards.
 
 ## Known Bugs
 
@@ -106,13 +77,6 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 ## Performance Bottlenecks
 
-**FUSE FilePointer resolution blocks filesystem thread:**
-
-- Problem: After background metadata refresh, unresolved FilePointers are resolved synchronously on the FUSE thread with `O(N * timeout)` latency.
-- Files: `crates/fuse/src/read_ops.rs`, `crates/fuse/src/lib.rs`
-- Cause: Each FilePointer resolution requires an IPNS resolve network call.
-- Improvement path: Spawn async tasks via a channel pair to avoid stalling the FUSE thread on network I/O.
-
 **Full file content buffering for AES-GCM encryption:**
 
 - Problem: Files encrypted with GCM mode are fully loaded into memory. The 100 MB file size limit means up to 100 MB memory per concurrent upload.
@@ -138,22 +102,29 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 **FUSE-T SMB backend on macOS:**
 
-- Files: `crates/fuse/src/lib.rs` (667 lines), `crates/fuse/src/write_ops.rs` (976 lines), `crates/fuse/src/read_ops.rs` (772 lines), `apps/desktop/src-tauri/vendor/fuser/src/channel.rs`
+- Files: `crates/fuse/src/lib.rs` (766 lines), `crates/fuse/src/write_ops.rs` (976 lines), `crates/fuse/src/read_ops.rs` (928 lines), `apps/desktop/src-tauri/vendor/fuser/src/channel.rs`
 - Why fragile: FUSE-T is a userspace NFS/SMB translation layer, not kernel FUSE. Numerous workarounds for macOS-specific issues (SMB opendir requires non-zero fh, rename truncates filenames by 8 bytes, UID mismatch under SMB proxy). Each macOS update could introduce new kernel-side behavior changes.
 - Safe modification: Always test with Finder, Terminal `ls`/`mv`/`cp`, and multi-file operations.
 - Test coverage: Desktop E2E shell scripts exercise basic operations. Rust inline tests cover inode table and cache. No unit tests for filesystem callback implementations.
 
 **Windows FUSE implementation (WinFSP):**
 
-- Files: `crates/fuse/src/platform/windows/write_ops.rs` (1008 lines), `crates/fuse/src/platform/windows/operations.rs` (601 lines), `crates/fuse/src/platform/windows/read_ops.rs` (430 lines), `crates/fuse/src/platform/windows/dir_ops.rs` (205 lines)
-- Why fragile: 2244 lines of platform-specific FUSE code. Uses WinFSP which has different semantics from macOS FUSE-T.
+- Files: `crates/fuse/src/platform/windows/write_ops.rs` (1008 lines), `crates/fuse/src/platform/windows/operations.rs` (602 lines), `crates/fuse/src/platform/windows/read_ops.rs` (464 lines), `crates/fuse/src/platform/windows/dir_ops.rs` (206 lines)
+- Why fragile: 2280 lines of platform-specific FUSE code. Uses WinFSP which has different semantics from macOS FUSE-T.
 - Safe modification: Test on actual Windows with Explorer, cmd, and PowerShell.
 - Test coverage: Desktop E2E runs on Windows in CI. No unit tests for Windows FUSE operations.
+
+**Mutex `unwrap()` calls in FUSE production code:**
+
+- Files: `crates/fuse/src/lib.rs:141`, `:179`, `:183`, `crates/fuse/src/platform/windows/read_ops.rs`, `crates/fuse/src/platform/windows/write_ops.rs`
+- Why fragile: 19+ `lock().unwrap()` calls on `Mutex` objects in FUSE production code (not tests). If any background thread panics while holding a lock, subsequent lock attempts will panic with "poisoned mutex", crashing the filesystem thread and unmounting the drive.
+- Safe modification: Replace with `lock().unwrap_or_else(|p| p.into_inner())` for poison recovery, or propagate errors via `EIO`.
+- Test coverage: No tests exercise panic-during-lock scenarios.
 
 **Vendored fuser crate:**
 
 - Files: `apps/desktop/src-tauri/vendor/fuser/` (~5000 lines), critical patch in `channel.rs`
-- Why fragile: Vendored fork of fuser 0.16 with socket-read patch for FUSE-T compatibility. Upstream updates cannot be trivially merged. The patch is load-bearing -- without it, large file writes crash.
+- Why fragile: Vendored fork of fuser 0.16 with socket-read patch for FUSE-T compatibility. Upstream updates cannot be trivially merged. The patch is load-bearing — without it, large file writes crash.
 - Safe modification: Never update without re-applying the `channel.rs` receive() patch.
 - Test coverage: No tests for the patched receive() function.
 
@@ -166,17 +137,10 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 **Web3Auth MPC Core Kit integration:**
 
-- Files: `apps/web/src/lib/web3auth/core-kit.ts`, `apps/web/src/lib/web3auth/hooks.ts` (22 console calls), `apps/web/src/hooks/useAuth.ts` (711 lines)
+- Files: `apps/web/src/lib/web3auth/core-kit.ts`, `apps/web/src/lib/web3auth/hooks.ts`, `apps/web/src/hooks/useAuth.ts` (723 lines)
 - Why fragile: Web3Auth SDK has poor TypeScript definitions. SDK version upgrades frequently change behavior. The REQUIRED_SHARE state handling works around an SDK bug.
 - Safe modification: Test all auth flows (email, Google, wallet) end-to-end after any Web3Auth dependency update.
 - Test coverage: Auth flow tested via E2E. Web3Auth unit mocking is complex.
-
-**Shared navigation hook:**
-
-- Files: `apps/web/src/hooks/useSharedNavigation.ts` (1199 lines)
-- Why fragile: Largest single hook in the codebase. Manages navigation state, key unwrapping, folder loading, and write operations for shared folders. Any change can break shared folder access.
-- Safe modification: Run writable shares E2E test (`tests/web-e2e/tests/writable-shares.spec.ts`) and sharing workflow test after changes.
-- Test coverage: Zero unit tests. Covered only by E2E tests.
 
 ## Scaling Limits
 
@@ -184,7 +148,7 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 - Current capacity: TEE republishes all enrolled IPNS records every 6 hours via batch endpoint.
 - Limit: At 1000+ enrolled records per user, republish cycles may exceed the 3-hour window.
-- Scaling path: Implement IPNS unenrollment on deletion (see Tech Debt). Consider per-user republish prioritization.
+- Scaling path: Implement IPNS unenrollment persistence on deletion (see Tech Debt). Consider per-user republish prioritization.
 
 **Folder metadata size (1000 files per folder):**
 
@@ -234,32 +198,27 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 **No offline support (web or desktop):**
 
-- Problem: No service worker for offline caching in web app. Desktop FUSE mount requires continuous API connectivity.
+- Problem: No service worker for offline caching in web app (existing SW handles only media decryption proxying, not caching). Desktop FUSE mount requires continuous API connectivity.
 - Blocks: Users cannot access files when offline. Desktop mount becomes unresponsive without network.
-
-**No monitoring/observability (web app):**
-
-- Problem: Web app has no error tracking service (Sentry, etc.). Errors are logged to `console.error` and lost (127 occurrences across 29 files).
-- Blocks: Cannot detect or diagnose issues in staging or any future deployed environment. API has Prometheus metrics (`apps/api/src/metrics/`) but web has nothing.
 
 ## Test Coverage Gaps
 
-**Web app has minimal unit tests (3 test files for 157 source files):**
+**Web app has minimal unit tests (3 test files for 165 source files):**
 
 - What's not tested: All React components, most hooks, all services except sync store.
 - Files: Only 3 test files exist:
   - `apps/web/src/stores/__tests__/sync-store.test.ts`
   - `apps/web/src/stores/__tests__/upload-error-recovery.test.ts`
   - `apps/web/src/stores/__tests__/logout-security.test.ts`
-- Risk: Regressions in folder operations, file uploads, auth flows, sharing, and bin operations go undetected until E2E tests or manual testing. The 964-line `FileBrowser.tsx`, 1199-line `useSharedNavigation.ts`, and 1089-line `folder.service.ts` have zero unit test coverage.
-- Priority: High. Focus first on services (`folder.service.ts`, `bin.service.ts`, `share.service.ts`) and critical hooks (`useAuth.ts`, `useSharedNavigation.ts`, `useFolderMutations.ts`).
+- Risk: Regressions in folder operations, file uploads, auth flows, sharing, and bin operations go undetected until E2E tests or manual testing. The 1059-line `folder.service.ts`, 971-line `bin.service.ts`, and 791-line `SharedFileBrowser.tsx` have zero unit test coverage.
+- Priority: High. Focus first on services (`folder.service.ts`, `bin.service.ts`, `share.service.ts`) and critical hooks (`useAuth.ts`, `useFolderMutations.ts`, `useFileOperations.ts`).
 
 **TEE worker has minimal tests (1 test file for 13 source files):**
 
 - What's not tested: IPNS signing, key management, epoch rotation, auth middleware, republish route handler. Only SSRF validation is tested.
 - Files: `tee-worker/src/__tests__/ssrf-validation.test.ts` (single test file)
 - Risk: Security-critical code (TEE key derivation, IPNS record signing) is largely untested. Regressions in epoch rotation or key decryption would silently break republishing.
-- Priority: High. The TEE worker handles decrypted IPNS private keys -- correctness is security-critical.
+- Priority: High. The TEE worker handles decrypted IPNS private keys — correctness is security-critical.
 
 **Desktop app has no TypeScript unit tests:**
 
@@ -279,16 +238,9 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 - What's not tested: Generated API client functions, interceptors, error handling.
 - Files: Only `packages/api-client/src/__tests__/instance.test.ts` exists. Coverage thresholds set to 0%.
-- Risk: Low -- mostly generated code. The real validation happens through SDK E2E tests that exercise the client.
+- Risk: Low — mostly generated code. The real validation happens through SDK E2E tests that exercise the client.
 - Priority: Low.
-
-**No versioning-specific E2E tests:**
-
-- What's not tested: File versioning is implemented (Phase 13) in `apps/web/src/hooks/useFileVersions.ts`, `apps/web/src/services/file-metadata.service.ts`, and `packages/sdk-core/src/file/index.ts`, but no dedicated E2E test exercises the version history UI (create version, restore version, delete version).
-- Files: `apps/web/src/hooks/useFileVersions.ts`, `tests/web-e2e/tests/` (no versioning spec)
-- Risk: Regression in version creation, restoration, or deletion would go unnoticed. The full-workflow E2E test overwrites files but does not verify version history.
-- Priority: Medium. Quick task `018-e2e-versioning-tests` exists in `.planning/quick/` but has not been executed.
 
 ---
 
-<!-- Concerns audit: 2026-03-27 -->
+<!-- Concerns audit: 2026-03-29 -->

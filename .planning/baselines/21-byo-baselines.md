@@ -3,7 +3,7 @@
 **Captured:** 2026-03-25
 **Provider:** Pinata (free tier)
 **Protocol:** pinata (v3 native API)
-**Environment:** Local (macOS, API on localhost:3000, Docker services on 192.168.133.114)
+**Environment:** Local (macOS, API on localhost:3000, Docker services on <docker-host>)
 **Upload endpoint:** <https://uploads.pinata.cloud/v3/files>
 **Management endpoint:** <https://api.pinata.cloud>
 
