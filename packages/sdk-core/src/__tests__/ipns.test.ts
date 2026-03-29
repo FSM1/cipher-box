@@ -41,7 +41,6 @@ describe('IPNS operations', () => {
       vi.mocked(ipnsControllerPublishRecord).mockResolvedValue({
         success: true,
         sequenceNumber: '2',
-        cid: 'QmTest',
         ipnsName: 'k51testname',
       });
 
@@ -68,7 +67,6 @@ describe('IPNS operations', () => {
       vi.mocked(ipnsControllerPublishRecord).mockResolvedValue({
         success: true,
         sequenceNumber: '1',
-        cid: 'QmTest',
         ipnsName: 'k51test',
       });
 
@@ -98,7 +96,6 @@ describe('IPNS operations', () => {
         success: true,
         cid: 'QmResolvedCid',
         sequenceNumber: '5',
-        source: 'network',
       });
 
       const result = await resolveIpnsRecord('k51resolve');
@@ -114,7 +111,6 @@ describe('IPNS operations', () => {
         success: false,
         cid: '',
         sequenceNumber: '0',
-        source: 'none',
       });
 
       const result = await resolveIpnsRecord('k51notfound');

@@ -72,10 +72,7 @@ test.describe.serial('AES-CTR Streaming Playback', () => {
     await page.locator('.video-player-modal').waitFor({ state: 'hidden', timeout: 5_000 });
   });
 
-  // BUG: SDK uploadFile() hardcodes GCM — CTR mode selection is never called
-  // for new uploads. The badge test will pass once the SDK upload pipeline
-  // supports CTR encryption. See .planning/todos/pending/2026-03-29-sdk-uploadfile-hardcodes-gcm-wire-ctr-encryption-for-media-uploads.md
-  test.skip('CTR encrypted badge visible for large video', async () => {
+  test('CTR encrypted badge visible for large video', async () => {
     // Re-open preview
     await fileList.rightClickItem(videoName);
     await contextMenu.waitForOpen();

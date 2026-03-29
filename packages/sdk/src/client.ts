@@ -688,6 +688,7 @@ export class CipherBoxClient {
             };
 
       // 1. Encrypt and upload file, create file metadata
+      const encryptionMode = selectEncryptionMode(mimeType, data.length);
       const uploadResult = await sdkCore.uploadFile({
         data,
         fileId,
@@ -698,6 +699,7 @@ export class CipherBoxClient {
         onProgress,
         teeKeys: this.config.teeKeys,
         pinFn,
+        encryptionMode,
       });
 
       try {
@@ -1243,4 +1245,31 @@ export class CipherBoxClient {
       console.warn('[SDK] Lifecycle callback threw:', err);
     }
   }
+}
+
+// ---- Encryption mode selection ----
+
+/** MIME types eligible for CTR streaming encryption */
+const STREAMING_MIME_TYPES = new Set([
+  'video/mp4',
+  'video/webm',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/webm',
+  'audio/ogg',
+  'audio/aac',
+]);
+
+/** Minimum file size (bytes) to use CTR mode: 256KB */
+const CTR_SIZE_THRESHOLD = 256 * 1024;
+
+/**
+ * Select encryption mode based on MIME type and size.
+ * Media files above 256KB use CTR for random-access streaming decryption.
+ */
+function selectEncryptionMode(mimeType: string, size: number): 'GCM' | 'CTR' {
+  if (STREAMING_MIME_TYPES.has(mimeType) && size > CTR_SIZE_THRESHOLD) {
+    return 'CTR';
+  }
+  return 'GCM';
 }

@@ -52,7 +52,7 @@ describe('vault key blob operations', () => {
 
   describe('publishVaultKeyBlob', () => {
     it('publishes vault key blob and returns IPNS name', async () => {
-      vi.mocked(addToIpfs).mockResolvedValue({ cid: 'bafyvaultblob' });
+      vi.mocked(addToIpfs).mockResolvedValue({ cid: 'bafyvaultblob', size: 64, recorded: true });
       vi.mocked(createAndPublishIpnsRecord).mockResolvedValue({
         success: true,
         sequenceNumber: 0n,
@@ -77,7 +77,7 @@ describe('vault key blob operations', () => {
     });
 
     it('throws when IPNS publish fails', async () => {
-      vi.mocked(addToIpfs).mockResolvedValue({ cid: 'bafyvaultblob' });
+      vi.mocked(addToIpfs).mockResolvedValue({ cid: 'bafyvaultblob', size: 64, recorded: true });
       vi.mocked(createAndPublishIpnsRecord).mockResolvedValue({
         success: false,
         sequenceNumber: 0n,
