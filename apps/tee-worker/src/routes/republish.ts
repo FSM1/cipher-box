@@ -52,7 +52,9 @@ router.post('/republish', async (req: Request, res: Response) => {
 
   const MAX_BATCH_SIZE = 100;
   if (entries.length > MAX_BATCH_SIZE) {
-    res.status(400).json({ error: `Batch too large: ${entries.length} entries (max ${MAX_BATCH_SIZE})` });
+    res
+      .status(400)
+      .json({ error: `Batch too large: ${entries.length} entries (max ${MAX_BATCH_SIZE})` });
     return;
   }
 
@@ -123,7 +125,7 @@ router.post('/republish', async (req: Request, res: Response) => {
     }
   }
 
-  const successes = results.filter(r => r.success).length;
+  const successes = results.filter((r) => r.success).length;
 
   logger.info('Republish batch complete', {
     total: entries.length,

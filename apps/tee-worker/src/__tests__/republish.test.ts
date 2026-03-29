@@ -23,7 +23,11 @@ vi.mock('../services/ipns-signer.js', () => ({
 }));
 
 /** Helper: make a POST request to a route using raw http */
-async function postJson(app: Express, path: string, body: unknown): Promise<{
+async function postJson(
+  app: Express,
+  path: string,
+  body: unknown
+): Promise<{
   status: number;
   body: Record<string, unknown>;
 }> {
@@ -38,6 +42,7 @@ async function postJson(app: Express, path: string, body: unknown): Promise<{
       }
 
       const payload = JSON.stringify(body);
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const http = require('node:http');
       const req = http.request(
         {

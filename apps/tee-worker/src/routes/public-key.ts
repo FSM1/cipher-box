@@ -22,7 +22,9 @@ router.get('/public-key', async (req: Request, res: Response) => {
   const epoch = parseInt(epochStr, 10);
 
   if (!Number.isInteger(epoch) || epoch < MIN_EPOCH || epoch > MAX_EPOCH) {
-    res.status(400).json({ error: `Epoch must be an integer between ${MIN_EPOCH} and ${MAX_EPOCH}` });
+    res
+      .status(400)
+      .json({ error: `Epoch must be an integer between ${MIN_EPOCH} and ${MAX_EPOCH}` });
     return;
   }
 

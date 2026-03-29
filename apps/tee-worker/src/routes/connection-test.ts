@@ -19,10 +19,7 @@ import { Router, type Request, type Response } from 'express';
 import { unwrapKey } from '@cipherbox/crypto';
 import { getKeypair } from '../services/tee-keys.js';
 import { logger } from '../services/logger.js';
-import {
-  validateEndpointUrl,
-  ssrfSafeFetch,
-} from '../services/ssrf-validation.js';
+import { validateEndpointUrl, ssrfSafeFetch } from '../services/ssrf-validation.js';
 
 /** Timeout for each connection probe (10 seconds) */
 const PROBE_TIMEOUT_MS = 10_000;

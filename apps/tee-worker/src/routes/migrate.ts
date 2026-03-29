@@ -53,10 +53,17 @@ router.post('/migrate', async (req: Request, res: Response) => {
       .json({ error: `Batch size ${cids.length} exceeds maximum of ${MAX_BATCH_SIZE}` });
     return;
   }
-  if (!cids.every((c: unknown) => {
-    if (typeof c !== 'string' || c.length === 0 || c.length > 200) return false;
-    try { CID.parse(c); return true; } catch { return false; }
-  })) {
+  if (
+    !cids.every((c: unknown) => {
+      if (typeof c !== 'string' || c.length === 0 || c.length > 200) return false;
+      try {
+        CID.parse(c);
+        return true;
+      } catch {
+        return false;
+      }
+    })
+  ) {
     res.status(400).json({ error: 'Each CID must be a valid IPFS CID (CIDv0 or CIDv1)' });
     return;
   }

@@ -83,9 +83,7 @@ describe('tee-keys', () => {
       const kp = await getKeypair(epoch);
       const pubKey = await getPublicKey(epoch);
 
-      expect(Buffer.from(pubKey).toString('hex')).toBe(
-        Buffer.from(kp.publicKey).toString('hex')
-      );
+      expect(Buffer.from(pubKey).toString('hex')).toBe(Buffer.from(kp.publicKey).toString('hex'));
     });
 
     it('returns cached value on subsequent calls', async () => {
@@ -95,18 +93,14 @@ describe('tee-keys', () => {
       // Second call should use cache
       const pk2 = await getPublicKey(epoch);
 
-      expect(Buffer.from(pk1).toString('hex')).toBe(
-        Buffer.from(pk2).toString('hex')
-      );
+      expect(Buffer.from(pk1).toString('hex')).toBe(Buffer.from(pk2).toString('hex'));
     });
 
     it('returns different public keys for different epochs', async () => {
       const pk1 = await getPublicKey(10);
       const pk2 = await getPublicKey(20);
 
-      expect(Buffer.from(pk1).toString('hex')).not.toBe(
-        Buffer.from(pk2).toString('hex')
-      );
+      expect(Buffer.from(pk1).toString('hex')).not.toBe(Buffer.from(pk2).toString('hex'));
     });
   });
 });

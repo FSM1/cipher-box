@@ -12,11 +12,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { wrapKey, unwrapKey } from '@cipherbox/crypto';
 import { getKeypair } from '../services/tee-keys.js';
-import {
-  decryptIpnsKey,
-  decryptWithFallback,
-  reEncryptForEpoch,
-} from '../services/key-manager.js';
+import { decryptIpnsKey, decryptWithFallback, reEncryptForEpoch } from '../services/key-manager.js';
 
 /** Generate a random 32-byte test key */
 function randomTestKey(): Uint8Array {
@@ -45,9 +41,7 @@ describe('key-manager', () => {
       // Decrypt via decryptIpnsKey
       const decrypted = await decryptIpnsKey(encrypted, epoch);
 
-      expect(Buffer.from(decrypted).toString('hex')).toBe(
-        Buffer.from(testKey).toString('hex')
-      );
+      expect(Buffer.from(decrypted).toString('hex')).toBe(Buffer.from(testKey).toString('hex'));
     });
 
     it('fails to decrypt with wrong epoch', async () => {
@@ -119,9 +113,9 @@ describe('key-manager', () => {
       const kpOther = await getKeypair(100);
       const encrypted = await wrapKey(testKey, kpOther.publicKey);
 
-      await expect(
-        decryptWithFallback(encrypted, 10, 9)
-      ).rejects.toThrow('ECIES decryption failed for all available epochs');
+      await expect(decryptWithFallback(encrypted, 10, 9)).rejects.toThrow(
+        'ECIES decryption failed for all available epochs'
+      );
     });
 
     it('throws immediately when previousEpoch is null and current fails', async () => {
@@ -131,9 +125,9 @@ describe('key-manager', () => {
       const kpOther = await getKeypair(100);
       const encrypted = await wrapKey(testKey, kpOther.publicKey);
 
-      await expect(
-        decryptWithFallback(encrypted, 10, null)
-      ).rejects.toThrow('ECIES decryption failed for all available epochs');
+      await expect(decryptWithFallback(encrypted, 10, null)).rejects.toThrow(
+        'ECIES decryption failed for all available epochs'
+      );
     });
 
     it('succeeds with null previousEpoch when current epoch matches', async () => {
@@ -171,9 +165,7 @@ describe('key-manager', () => {
       const kpTarget = await getKeypair(targetEpoch);
       const roundTripped = await unwrapKey(reEncrypted, kpTarget.privateKey);
 
-      expect(Buffer.from(roundTripped).toString('hex')).toBe(
-        Buffer.from(testKey).toString('hex')
-      );
+      expect(Buffer.from(roundTripped).toString('hex')).toBe(Buffer.from(testKey).toString('hex'));
     });
 
     it('produces different ciphertext each time (ECIES is randomized)', async () => {
@@ -184,9 +176,7 @@ describe('key-manager', () => {
       const enc2 = await reEncryptForEpoch(testKey, targetEpoch);
 
       // ECIES produces different ciphertexts for same plaintext
-      expect(Buffer.from(enc1).toString('hex')).not.toBe(
-        Buffer.from(enc2).toString('hex')
-      );
+      expect(Buffer.from(enc1).toString('hex')).not.toBe(Buffer.from(enc2).toString('hex'));
     });
 
     it('full epoch migration round-trip: decrypt old, re-encrypt new, decrypt new', async () => {
@@ -212,9 +202,7 @@ describe('key-manager', () => {
       // 4. Decrypt with new epoch (direct)
       const decryptedNew = await decryptIpnsKey(encryptedNew, newEpoch);
 
-      expect(Buffer.from(decryptedNew).toString('hex')).toBe(
-        Buffer.from(testKey).toString('hex')
-      );
+      expect(Buffer.from(decryptedNew).toString('hex')).toBe(Buffer.from(testKey).toString('hex'));
     });
   });
 });
