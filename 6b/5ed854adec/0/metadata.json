@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6b5ed854adec",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T14:01:48.501756Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "c980bf7ab68b",
+  "token_usage": {
+    "input_tokens": 533,
+    "cache_creation_tokens": 849299,
+    "cache_read_tokens": 61708121,
+    "output_tokens": 100258,
+    "api_call_count": 327
+  },
+  "session_metrics": {
+    "turn_count": 30
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E test expansion and staging baselines) including cleanup helpers, media/streaming tests, batch download tests, and capturing live staging performance baselines with SDK load testing.",
+    "outcome": "Phase 34 completed with all 4 plans executed, PR #392 created and all 13 review threads resolved. Real 200-client sustained load baselines captured (11,174 ops, 0.17% error rate). BYO Pinata capacity ceiling test run but limited by free tier quota exhaustion.",
+    "learnings": {
+      "repo": [
+        "Staging Web3Auth init takes ~22.7s — the wallet button timeout in journey-timing.spec.ts needed to be raised from 20s to 45s for staging runs",
+        "Playwright config BASE_URL env var was not being respected — playwright.config.ts needed explicit process.env.BASE_URL override and conditional webServer block to skip local server startup when targeting staging",
+        "The staging API throttle bypass (X-Throttle-Bypass-Secret header) works correctly — the initial 429s during load testing were caused by running two load tests simultaneously against the same staging instance, not a bypass failure",
+        "SDK load test harness (tests/load/) does not load .env files by default — vitest requires explicit env sourcing (source .env before running) since vitest has no built-in dotenv loading",
+        "Pinata free tier storage limits are hit quickly when running capacity ceiling tests across 50→100→200→500→1000 client tiers; a paid plan is needed for meaningful BYO pin baselines",
+        "BYO register-cid and ipns-publish endpoints return 400 on staging — likely test accounts not configured with BYO mode or endpoint expects different params; pinning to Pinata itself works (p50=718ms)",
+        "The browser load test (load-test.spec.ts) measures Playwright/Chromium overhead more than API performance and was removed in favor of the SDK harness which can drive 200 headless clients",
+        "cleanup-helpers.ts deleteAccountViaPage derives API URL from page URL hostname, but on staging the app is at app-staging.cipherbox.cc while API is at api-staging.cipherbox.cc — required URL rewriting logic",
+        "GitHub Actions load-test workflow needed BYO scenario inputs added and BYO env vars scoped to byo-* scenarios only"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "deleteAccountViaPage derives API URL from page URL — on staging app hostname differs from API hostname, requiring explicit URL rewriting. Also had two page.evaluate() calls that were merged into one for fewer round-trips."
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "BASE_URL env var support added — config now uses process.env.BASE_URL for baseURL and conditionally skips webServer when not targeting localhost/127.0.0.1"
+        },
+        {
+          "path": "tests/web-e2e/utils/test-files.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "createTestMediaFile needs path.basename() sanitization on filename param to prevent path traversal"
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Vitest does not auto-load .env files — env vars must be sourced in the shell before running vitest"
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "line": 1,
+          "end_line": 80,
+          "finding": "BYO IPFS inputs (endpoint, protocol, provider label) added as workflow_dispatch inputs with defaults so different providers can be compared per-run; auth token remains as environment secret LOAD_TEST_BYO_AUTH_TOKEN"
+        }
+      ],
+      "workflow": [
+        "Running multiple load tests simultaneously against the same staging instance saturates it and produces misleading 429 errors — always run load tests serially against staging",
+        "When cherry-picking commits from worktrees, STATE.md conflicts are expected and should be resolved by taking the worktree version",
+        "The classifyHandoffIfNeeded Claude Code bug fires after all tool calls complete — spot-check via SUMMARY.md existence and git commits to determine real success/failure",
+        "Vitest workers inherit env vars from the shell process normally — if env vars appear missing, suspect concurrent resource contention rather than env isolation issues",
+        "GSD worktrees commit to their own branch; cherry-pick is needed to bring changes to the phase branch when worktrees are used for parallel plan execution"
+      ]
+    },
+    "friction": [
+      "Worktree cherry-pick process was manual and conflict-prone — STATE.md conflicts required multiple stash/resolve cycles",
+      "Two load tests running simultaneously caused misleading 429 errors that looked like a throttle bypass bug, requiring significant debugging time",
+      "Vitest not loading .env required shell-level workaround (source .env before running) instead of a clean config solution",
+      "Pinata free tier was exhausted during BYO capacity ceiling testing, making the 50→1000 tier results meaningless",
+      "1Password SSH signing failures blocked Docker env var inspection during throttle bypass investigation",
+      "Git lock file left by a failed worktree caused 34-03 agent to fail on first attempt, requiring manual cleanup",
+      "Load test output file was large enough that reading results required targeted grep rather than full file reads",
+      "Phase was prematurely marked complete in ROADMAP/STATE before meaningful load baselines were captured, requiring manual reversion"
+    ],
+    "open_items": [
+      "BYO register-cid and ipns-publish return 400 on staging — todo created at .planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md",
+      "Pinata paid plan needed to get meaningful BYO pin capacity ceiling baselines (free tier exhausted during testing)",
+      "New E2E specs (streaming-playback, media-preview) use binary stub fixtures — need a live environment run to confirm stubs actually trigger AES-CTR/GCM code paths",
+      "staging-byo-capacity-ceiling.json baselines are unreliable due to Pinata quota exhaustion — needs re-run with paid/clean account",
+      "SDK test harness createTestAccount does not forward throttle bypass header — was not the root cause here but noted as pre-existing gap"
+    ]
+  }
+}
