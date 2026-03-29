@@ -13,7 +13,7 @@ const TEE_WORKER_SECRET = 'test-secret-token';
 describe('TeeService', () => {
   let service: TeeService;
   let configService: jest.Mocked<Partial<ConfigService>>;
-  let teeKeyStateService: jest.Mocked<Partial<TeeKeyStateService>>;
+  let teeKeyStateService: { getCurrentState: jest.Mock; initializeEpoch: jest.Mock };
   let fetchMock: jest.Mock;
 
   beforeEach(async () => {
@@ -45,7 +45,7 @@ describe('TeeService', () => {
 
     service = module.get<TeeService>(TeeService);
     configService = module.get(ConfigService);
-    teeKeyStateService = module.get(TeeKeyStateService);
+    teeKeyStateService = module.get(TeeKeyStateService) as unknown as typeof teeKeyStateService;
   });
 
   afterEach(() => {
@@ -296,8 +296,8 @@ describe('TeeService', () => {
       // getPublicKey fetch
       fetchMock.mockResolvedValueOnce(mockResponse({ publicKey: VALID_PUBLIC_KEY_HEX }));
 
-      teeKeyStateService.getCurrentState!.mockResolvedValue(null);
-      teeKeyStateService.initializeEpoch!.mockResolvedValue({} as TeeKeyState);
+      teeKeyStateService.getCurrentState.mockResolvedValue(null);
+      teeKeyStateService.initializeEpoch.mockResolvedValue({} as TeeKeyState);
 
       await service.initializeFromTee();
 
@@ -313,7 +313,7 @@ describe('TeeService', () => {
         currentEpoch: 3,
         currentPublicKey: Buffer.from('abc'),
       } as unknown as TeeKeyState;
-      teeKeyStateService.getCurrentState!.mockResolvedValue(existingState);
+      teeKeyStateService.getCurrentState.mockResolvedValue(existingState);
 
       await service.initializeFromTee();
 
@@ -329,7 +329,7 @@ describe('TeeService', () => {
         currentEpoch: 3,
         currentPublicKey: Buffer.from('abc'),
       } as unknown as TeeKeyState;
-      teeKeyStateService.getCurrentState!.mockResolvedValue(existingState);
+      teeKeyStateService.getCurrentState.mockResolvedValue(existingState);
 
       // Should not throw
       await expect(service.initializeFromTee()).resolves.toBeUndefined();
@@ -371,7 +371,7 @@ describe('TeeService', () => {
         currentEpoch: 2,
         currentPublicKey: Buffer.from('abc'),
       } as unknown as TeeKeyState;
-      teeKeyStateService.getCurrentState!.mockResolvedValue(existingState);
+      teeKeyStateService.getCurrentState.mockResolvedValue(existingState);
 
       await service.initializeFromTee();
 
@@ -475,7 +475,7 @@ describe('TeeService', () => {
           {
             provide: ConfigService,
             useValue: {
-              get: jest.fn((key: string, defaultValue?: string) => defaultValue),
+              get: jest.fn((_key: string, defaultValue?: string) => defaultValue),
             },
           },
           {

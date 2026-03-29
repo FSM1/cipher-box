@@ -11,7 +11,8 @@
  */
 
 import type { ByoPoolClient } from '../harness/client-pool';
-import { PsaProvider } from '@cipherbox/sdk-core';
+import { createSdkContext } from '../harness/client-pool';
+import { PsaProvider, createAndPublishIpnsRecord } from '@cipherbox/sdk-core';
 
 export interface ByoFileWorkloadOptions {
   /** Number of files to upload */
@@ -55,6 +56,7 @@ export async function runByoFileWorkload(
 
   const isPsa = pc.provider instanceof PsaProvider;
   const { client, rootIpnsName, metrics } = pc;
+  const sdkCtx = createSdkContext(pc);
 
   for (let i = 0; i < fileCount; i++) {
     const size = minSize + Math.floor(Math.random() * (maxSize - minSize + 1));
@@ -112,30 +114,27 @@ export async function runByoFileWorkload(
       }
 
       // Register CID with CipherBox API (both modes)
-      // Note: register-cid requires isByoUser flag on vault. If the account
-      // is not BYO-enabled, this returns 403. We catch and continue so that
-      // ipns-publish and cleanup still run.
+      // BYO mode is enabled in createByoClientPool, so 403 is unexpected.
       try {
         await metrics.measure('register-cid', async () => {
           const axiosInstance = client.getContext().axiosInstance!;
           await axiosInstance.post('/ipfs/register-cid', { cid, sizeBytes: pinSize });
         });
-      } catch {
-        // 403 expected for non-BYO accounts -- continue to ipns-publish
+      } catch (err) {
+        const status = (err as { response?: { status?: number } }).response?.status;
+        console.warn(
+          `[Client ${pc.id}] register-cid failed (HTTP ${status ?? 'unknown'}): ${(err as Error).message?.slice(0, 100)}`
+        );
       }
 
-      // Publish IPNS record via CipherBox API (measure raw IPNS API latency)
+      // Publish IPNS record via CipherBox API (includes local record creation + signing + HTTP publish)
       await metrics.measure('ipns-publish', async () => {
-        const axiosInstance = client.getContext().axiosInstance!;
-        // Use publish-batch endpoint with a single record to measure IPNS publish latency
-        // without coupling to the full upload flow's folder update
-        await axiosInstance.post('/ipns/publish-batch', {
-          records: [
-            {
-              ipnsName: rootIpnsName,
-              cid,
-            },
-          ],
+        await createAndPublishIpnsRecord({
+          ipnsPrivateKey: pc.rootIpnsKeypair.privateKey,
+          ipnsName: rootIpnsName,
+          metadataCid: cid!,
+          sequenceNumber: BigInt(i),
+          ctx: sdkCtx,
         });
       });
 

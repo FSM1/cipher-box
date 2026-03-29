@@ -52,7 +52,13 @@ describe('DelegatedRoutingClient', () => {
     client = new DelegatedRoutingClient(configService, metricsService);
 
     // Eliminate real delays by making delay() resolve instantly
-    delaySpy = jest.spyOn(client as never, 'delay' as never).mockResolvedValue(undefined as never);
+    delaySpy = jest
+      .spyOn(client as never, 'delay' as never)
+      .mockResolvedValue(undefined as never) as unknown as jest.SpyInstance<
+      Promise<void>,
+      [ms: number],
+      any
+    >;
   });
 
   describe('constructor', () => {

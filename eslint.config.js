@@ -14,6 +14,7 @@ export default [
       '**/Preliminary/**',
       '**/.learnings/**',
       '**/src-tauri/target/**',
+      'target/**',
     ],
   },
   { files: ['**/*.{js,mjs,cjs,ts,tsx}'] },

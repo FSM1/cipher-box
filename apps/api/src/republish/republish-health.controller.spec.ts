@@ -5,10 +5,10 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 describe('RepublishHealthController', () => {
   let controller: RepublishHealthController;
-  let republishService: jest.Mocked<Partial<RepublishService>>;
+  let mockRepublishService: { getHealthStats: jest.Mock };
 
   beforeEach(async () => {
-    const mockRepublishService = {
+    mockRepublishService = {
       getHealthStats: jest.fn(),
     };
 
@@ -21,7 +21,6 @@ describe('RepublishHealthController', () => {
       .compile();
 
     controller = module.get<RepublishHealthController>(RepublishHealthController);
-    republishService = module.get(RepublishService);
   });
 
   afterEach(() => {
@@ -31,7 +30,7 @@ describe('RepublishHealthController', () => {
   describe('getHealth', () => {
     it('should return health stats from the service', async () => {
       const lastRunDate = new Date('2026-01-15T12:00:00Z');
-      republishService.getHealthStats!.mockResolvedValue({
+      mockRepublishService.getHealthStats.mockResolvedValue({
         pending: 42,
         failed: 3,
         stale: 1,
@@ -50,11 +49,11 @@ describe('RepublishHealthController', () => {
         currentEpoch: 5,
         teeHealthy: true,
       });
-      expect(republishService.getHealthStats).toHaveBeenCalledTimes(1);
+      expect(mockRepublishService.getHealthStats).toHaveBeenCalledTimes(1);
     });
 
     it('should return null lastRunAt when no republish has ever run', async () => {
-      republishService.getHealthStats!.mockResolvedValue({
+      mockRepublishService.getHealthStats.mockResolvedValue({
         pending: 0,
         failed: 0,
         stale: 0,
@@ -76,7 +75,7 @@ describe('RepublishHealthController', () => {
     });
 
     it('should return teeHealthy=false when TEE is unreachable', async () => {
-      republishService.getHealthStats!.mockResolvedValue({
+      mockRepublishService.getHealthStats.mockResolvedValue({
         pending: 10,
         failed: 5,
         stale: 2,
@@ -93,7 +92,7 @@ describe('RepublishHealthController', () => {
     });
 
     it('should return all zero counts when system is fresh', async () => {
-      republishService.getHealthStats!.mockResolvedValue({
+      mockRepublishService.getHealthStats.mockResolvedValue({
         pending: 0,
         failed: 0,
         stale: 0,
@@ -113,7 +112,9 @@ describe('RepublishHealthController', () => {
     });
 
     it('should propagate errors from the service', async () => {
-      republishService.getHealthStats!.mockRejectedValue(new Error('Database connection failed'));
+      mockRepublishService.getHealthStats.mockRejectedValue(
+        new Error('Database connection failed')
+      );
 
       await expect(controller.getHealth()).rejects.toThrow('Database connection failed');
     });

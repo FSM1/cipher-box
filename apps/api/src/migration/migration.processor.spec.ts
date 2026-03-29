@@ -6,6 +6,7 @@ import { MigrationProcessor } from './migration.processor';
 import { PinMigration } from './migration.entity';
 import { PinnedCid } from '../vault/entities/pinned-cid.entity';
 import { MigrationService } from './migration.service';
+import { User } from '../auth/entities/user.entity';
 
 // Mock global fetch
 const mockFetch = jest.fn();
@@ -55,7 +56,7 @@ describe('MigrationProcessor', () => {
       cid: `bafkrei${i}`,
       sizeBytes: '1024',
       pinnedAt: new Date(),
-      user: {} as unknown,
+      user: {} as User,
     }));
 
   beforeEach(async () => {

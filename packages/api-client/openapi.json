@@ -819,6 +819,48 @@
         "tags": ["Vault"]
       }
     },
+    "/vault/byo-status": {
+      "patch": {
+        "description": "Toggle BYO (Bring Your Own) IPFS mode for the authenticated user. When enabled, quota tracking becomes advisory only.",
+        "operationId": "VaultController_setByoStatus",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetByoStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "BYO status updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetByoStatusResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "404": {
+            "description": "Not Found - Vault does not exist"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Set BYO IPFS mode",
+        "tags": ["Vault"]
+      }
+    },
     "/ipns/publish": {
       "post": {
         "description": "Relay a pre-signed IPNS record to the IPFS network via delegated routing. The client signs the record locally; backend relays to the delegated routing service and tracks the folder for TEE republishing.",
@@ -2708,6 +2750,26 @@
           }
         },
         "required": ["usedBytes", "limitBytes", "remainingBytes", "advisory"]
+      },
+      "SetByoStatusDto": {
+        "type": "object",
+        "properties": {
+          "isByo": {
+            "type": "boolean",
+            "description": "Whether to enable BYO (Bring Your Own) IPFS mode"
+          }
+        },
+        "required": ["isByo"]
+      },
+      "SetByoStatusResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded"
+          }
+        },
+        "required": ["success"]
       },
       "PublishIpnsDto": {
         "type": "object",

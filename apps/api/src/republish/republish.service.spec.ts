@@ -14,8 +14,8 @@ describe('RepublishService', () => {
   let service: RepublishService;
   let scheduleRepository: jest.Mocked<Record<string, jest.Mock>>;
   let folderIpnsRepository: jest.Mocked<Record<string, jest.Mock>>;
-  let teeService: jest.Mocked<Partial<TeeService>>;
-  let teeKeyStateService: jest.Mocked<Partial<TeeKeyStateService>>;
+  let teeService: { republish: jest.Mock; getHealth: jest.Mock };
+  let teeKeyStateService: { getCurrentState: jest.Mock };
   let mockDelegatedRoutingClient: { publish: jest.Mock; resolve: jest.Mock };
 
   function createMockEntry(overrides: Partial<IpnsRepublishSchedule> = {}): IpnsRepublishSchedule {
@@ -94,8 +94,8 @@ describe('RepublishService', () => {
     service = module.get<RepublishService>(RepublishService);
     scheduleRepository = module.get(getRepositoryToken(IpnsRepublishSchedule));
     folderIpnsRepository = module.get(getRepositoryToken(FolderIpns));
-    teeService = module.get(TeeService);
-    teeKeyStateService = module.get(TeeKeyStateService);
+    teeService = module.get(TeeService) as unknown as typeof teeService;
+    teeKeyStateService = module.get(TeeKeyStateService) as unknown as typeof teeKeyStateService;
   });
 
   afterEach(() => {
@@ -150,7 +150,7 @@ describe('RepublishService', () => {
     it('should return all-failed when TEE key state is not initialized', async () => {
       const entries = [createMockEntry(), createMockEntry({ id: 'entry-uuid-2' })];
       scheduleRepository.find.mockResolvedValue(entries);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(null);
+      teeKeyStateService.getCurrentState.mockResolvedValue(null);
 
       const result = await service.processRepublishBatch();
 
@@ -161,7 +161,7 @@ describe('RepublishService', () => {
     it('should process a successful batch with republish and publish', async () => {
       const entry = createMockEntry();
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       const teeResult: RepublishResult = {
         ipnsName: 'k51test123',
@@ -169,7 +169,7 @@ describe('RepublishService', () => {
         signedRecord: Buffer.from('signed-record-bytes').toString('base64'),
         newSequenceNumber: '6',
       };
-      teeService.republish!.mockResolvedValue([teeResult]);
+      teeService.republish.mockResolvedValue([teeResult]);
 
       // publishSignedRecord -- delegated routing succeeds
       mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
@@ -214,9 +214,9 @@ describe('RepublishService', () => {
         createMockEntry({ id: 'entry-uuid-2', ipnsName: 'k51test456' }),
       ];
       scheduleRepository.find.mockResolvedValue(entries);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
-      teeService.republish!.mockRejectedValue(new Error('Connection refused'));
+      teeService.republish.mockRejectedValue(new Error('Connection refused'));
       scheduleRepository.save.mockResolvedValue({});
 
       const result = await service.processRepublishBatch();
@@ -236,14 +236,14 @@ describe('RepublishService', () => {
     it('should handle TEE signing failure (result.success = false)', async () => {
       const entry = createMockEntry();
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       const teeResult: RepublishResult = {
         ipnsName: 'k51test123',
         success: false,
         error: 'Decryption failed: wrong epoch',
       };
-      teeService.republish!.mockResolvedValue([teeResult]);
+      teeService.republish.mockResolvedValue([teeResult]);
       scheduleRepository.save.mockResolvedValue({});
 
       const result = await service.processRepublishBatch();
@@ -261,7 +261,7 @@ describe('RepublishService', () => {
     it('should handle publish failure after successful TEE signing', async () => {
       const entry = createMockEntry();
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       const teeResult: RepublishResult = {
         ipnsName: 'k51test123',
@@ -269,7 +269,7 @@ describe('RepublishService', () => {
         signedRecord: Buffer.from('signed-record').toString('base64'),
         newSequenceNumber: '6',
       };
-      teeService.republish!.mockResolvedValue([teeResult]);
+      teeService.republish.mockResolvedValue([teeResult]);
 
       // publishSignedRecord fails -- delegated routing throws
       mockDelegatedRoutingClient.publish.mockRejectedValue(new Error('Network error'));
@@ -289,7 +289,7 @@ describe('RepublishService', () => {
     it('should handle epoch upgrade from TEE result', async () => {
       const entry = createMockEntry({ keyEpoch: 1 });
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       const upgradedKeyBase64 = Buffer.from('new-encrypted-key-data').toString('base64');
       const teeResult: RepublishResult = {
@@ -300,7 +300,7 @@ describe('RepublishService', () => {
         upgradedEncryptedKey: upgradedKeyBase64,
         upgradedKeyEpoch: 2,
       };
-      teeService.republish!.mockResolvedValue([teeResult]);
+      teeService.republish.mockResolvedValue([teeResult]);
 
       mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
       scheduleRepository.save.mockResolvedValue(entry);
@@ -320,10 +320,10 @@ describe('RepublishService', () => {
     it('should handle no result from TEE for an entry (undefined result)', async () => {
       const entry = createMockEntry();
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       // TEE returns empty results array (fewer results than entries)
-      teeService.republish!.mockResolvedValue([]);
+      teeService.republish.mockResolvedValue([]);
       scheduleRepository.save.mockResolvedValue({});
 
       const result = await service.processRepublishBatch();
@@ -339,14 +339,14 @@ describe('RepublishService', () => {
     it('should handle TEE result with success=false and no error message', async () => {
       const entry = createMockEntry();
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       const teeResult: RepublishResult = {
         ipnsName: 'k51test123',
         success: false,
         // no error field
       };
-      teeService.republish!.mockResolvedValue([teeResult]);
+      teeService.republish.mockResolvedValue([teeResult]);
       scheduleRepository.save.mockResolvedValue({});
 
       const result = await service.processRepublishBatch();
@@ -366,7 +366,7 @@ describe('RepublishService', () => {
         entries.push(createMockEntry({ id: `entry-${i}`, ipnsName: `k51test${i}` }));
       }
       scheduleRepository.find.mockResolvedValue(entries);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       // First batch of 100 entries
       const firstBatchResults: RepublishResult[] = Array.from({ length: 100 }, (_, i) => ({
@@ -529,10 +529,8 @@ describe('RepublishService', () => {
         lastRepublishAt: lastRunDate,
       });
 
-      teeKeyStateService.getCurrentState!.mockResolvedValue(
-        createMockTeeState({ currentEpoch: 5 })
-      );
-      teeService.getHealth!.mockResolvedValue({ healthy: true, epoch: 5 });
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState({ currentEpoch: 5 }));
+      teeService.getHealth.mockResolvedValue({ healthy: true, epoch: 5 });
 
       const result = await service.getHealthStats();
 
@@ -549,8 +547,8 @@ describe('RepublishService', () => {
     it('should return null lastRunAt when no active entries with lastRepublishAt', async () => {
       scheduleRepository.count.mockResolvedValue(0);
       scheduleRepository.findOne.mockResolvedValue(null);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(null);
-      teeService.getHealth!.mockResolvedValue({ healthy: true, epoch: 1 });
+      teeKeyStateService.getCurrentState.mockResolvedValue(null);
+      teeService.getHealth.mockResolvedValue({ healthy: true, epoch: 1 });
 
       const result = await service.getHealthStats();
 
@@ -561,8 +559,8 @@ describe('RepublishService', () => {
     it('should return teeHealthy=false when TEE health check throws', async () => {
       scheduleRepository.count.mockResolvedValue(0);
       scheduleRepository.findOne.mockResolvedValue(null);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
-      teeService.getHealth!.mockRejectedValue(new Error('Connection refused'));
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
+      teeService.getHealth.mockRejectedValue(new Error('Connection refused'));
 
       const result = await service.getHealthStats();
 
@@ -572,8 +570,8 @@ describe('RepublishService', () => {
     it('should return teeHealthy=false when TEE reports unhealthy', async () => {
       scheduleRepository.count.mockResolvedValue(0);
       scheduleRepository.findOne.mockResolvedValue(null);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
-      teeService.getHealth!.mockResolvedValue({ healthy: false, epoch: 1 });
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
+      teeService.getHealth.mockResolvedValue({ healthy: false, epoch: 1 });
 
       const result = await service.getHealthStats();
 
@@ -583,10 +581,8 @@ describe('RepublishService', () => {
     it('should return currentEpoch from tee state when available', async () => {
       scheduleRepository.count.mockResolvedValue(0);
       scheduleRepository.findOne.mockResolvedValue(null);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(
-        createMockTeeState({ currentEpoch: 7 })
-      );
-      teeService.getHealth!.mockResolvedValue({ healthy: true, epoch: 7 });
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState({ currentEpoch: 7 }));
+      teeService.getHealth.mockResolvedValue({ healthy: true, epoch: 7 });
 
       const result = await service.getHealthStats();
 
@@ -638,14 +634,14 @@ describe('RepublishService', () => {
     it('should increment consecutiveFailures and set retrying status', async () => {
       const entry = createMockEntry({ consecutiveFailures: 3 });
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       const teeResult: RepublishResult = {
         ipnsName: 'k51test123',
         success: false,
         error: 'Some error',
       };
-      teeService.republish!.mockResolvedValue([teeResult]);
+      teeService.republish.mockResolvedValue([teeResult]);
       scheduleRepository.save.mockResolvedValue({});
 
       await service.processRepublishBatch();
@@ -662,14 +658,14 @@ describe('RepublishService', () => {
     it('should mark entry as stale after MAX_CONSECUTIVE_FAILURES (10)', async () => {
       const entry = createMockEntry({ consecutiveFailures: 9 });
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       const teeResult: RepublishResult = {
         ipnsName: 'k51test123',
         success: false,
         error: 'Persistent failure',
       };
-      teeService.republish!.mockResolvedValue([teeResult]);
+      teeService.republish.mockResolvedValue([teeResult]);
       scheduleRepository.save.mockResolvedValue({});
 
       await service.processRepublishBatch();
@@ -685,7 +681,7 @@ describe('RepublishService', () => {
     it('should truncate error messages longer than 500 characters', async () => {
       const entry = createMockEntry();
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       const longError = 'x'.repeat(1000);
       const teeResult: RepublishResult = {
@@ -693,7 +689,7 @@ describe('RepublishService', () => {
         success: false,
         error: longError,
       };
-      teeService.republish!.mockResolvedValue([teeResult]);
+      teeService.republish.mockResolvedValue([teeResult]);
       scheduleRepository.save.mockResolvedValue({});
 
       await service.processRepublishBatch();
@@ -705,14 +701,14 @@ describe('RepublishService', () => {
     it('should apply exponential backoff for retrying entries', async () => {
       const entry = createMockEntry({ consecutiveFailures: 2 });
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       const teeResult: RepublishResult = {
         ipnsName: 'k51test123',
         success: false,
         error: 'Temporary error',
       };
-      teeService.republish!.mockResolvedValue([teeResult]);
+      teeService.republish.mockResolvedValue([teeResult]);
       scheduleRepository.save.mockResolvedValue({});
 
       const beforeTime = Date.now();
@@ -733,7 +729,7 @@ describe('RepublishService', () => {
     it('should not break processing if folderIpns update fails', async () => {
       const entry = createMockEntry();
       scheduleRepository.find.mockResolvedValue([entry]);
-      teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
+      teeKeyStateService.getCurrentState.mockResolvedValue(createMockTeeState());
 
       const teeResult: RepublishResult = {
         ipnsName: 'k51test123',
@@ -741,7 +737,7 @@ describe('RepublishService', () => {
         signedRecord: Buffer.from('signed').toString('base64'),
         newSequenceNumber: '6',
       };
-      teeService.republish!.mockResolvedValue([teeResult]);
+      teeService.republish.mockResolvedValue([teeResult]);
       mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
       scheduleRepository.save.mockResolvedValue(entry);
 
