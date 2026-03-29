@@ -125,3 +125,7 @@ ok i have cleaned up the pinata account. can you try and run one byo client agai
 ---
 
 ok, can you please create /gsd:add-todo to make sure this debuggung task is tracked.
+
+---
+
+/simplify phase 34 changes
