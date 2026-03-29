@@ -9,7 +9,7 @@
  * SECURITY: Caller is responsible for zeroing returned IPNS private keys after use.
  */
 
-import { decrypt, encrypt } from 'eciesjs';
+import { unwrapKey, wrapKey } from '@cipherbox/crypto';
 import { getKeypair, getPublicKey } from './tee-keys.js';
 
 /**
@@ -26,7 +26,7 @@ export async function decryptIpnsKey(
 ): Promise<Uint8Array> {
   const keypair = await getKeypair(epoch);
   try {
-    return new Uint8Array(decrypt(keypair.privateKey, encryptedIpnsKey));
+    return await unwrapKey(encryptedIpnsKey, keypair.privateKey);
   } finally {
     keypair.privateKey.fill(0);
   }
@@ -86,6 +86,5 @@ export async function reEncryptForEpoch(
   targetEpoch: number
 ): Promise<Uint8Array> {
   const targetPublicKey = await getPublicKey(targetEpoch);
-  const reEncrypted = new Uint8Array(encrypt(targetPublicKey, ipnsPrivateKey));
-  return reEncrypted;
+  return await wrapKey(ipnsPrivateKey, targetPublicKey);
 }
