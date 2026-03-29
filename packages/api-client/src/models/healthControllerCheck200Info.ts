@@ -5,13 +5,8 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
+import type { HealthControllerCheck200InfoDatabase } from './healthControllerCheck200InfoDatabase';
 
-/**
- * @nullable
- */
 export type HealthControllerCheck200Info = {
-  [key: string]: {
-    status: string;
-    [key: string]: unknown;
-  };
-} | null;
+  database?: HealthControllerCheck200InfoDatabase;
+};
