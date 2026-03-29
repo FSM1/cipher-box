@@ -1,4 +1,4 @@
-import type { PinningProvider, PinResult, PinStatus, ProviderOptions } from './types';
+import type { PinningProvider, PinResult, PinStatus, ProviderOptions, FetchFn } from './types';
 
 /** Default timeout for all PSA requests — external service */
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -31,7 +31,7 @@ interface PsaListResponse {
 export class PsaProvider implements PinningProvider {
   private readonly endpoint: string;
   private readonly authToken: string;
-  private readonly fetchFn: typeof globalThis.fetch;
+  private readonly fetchFn: FetchFn;
   private readonly timeoutMs: number;
 
   constructor(endpoint: string, authToken: string, options?: ProviderOptions) {

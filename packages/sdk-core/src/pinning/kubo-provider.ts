@@ -1,4 +1,4 @@
-import type { PinningProvider, PinResult, PinStatus, ProviderOptions } from './types';
+import type { PinningProvider, PinResult, PinStatus, ProviderOptions, FetchFn } from './types';
 
 /** Default timeout for all Kubo RPC requests — generous for large file pins */
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -12,7 +12,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 export class KuboProvider implements PinningProvider {
   private readonly endpoint: string;
   private readonly authToken?: string;
-  private readonly fetchFn: typeof globalThis.fetch;
+  private readonly fetchFn: FetchFn;
   private readonly timeoutMs: number;
 
   constructor(endpoint: string, authToken?: string, options?: ProviderOptions) {

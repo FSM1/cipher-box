@@ -269,6 +269,9 @@ importers:
       '@types/express':
         specifier: ^5.0.0
         version: 5.0.6
+      '@types/express-serve-static-core':
+        specifier: ^5.0.0
+        version: 5.1.1
       '@types/node':
         specifier: ^20.19.0
         version: 20.19.37

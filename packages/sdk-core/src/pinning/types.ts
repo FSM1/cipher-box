@@ -22,10 +22,13 @@ export interface PinningProvider {
   get(cid: string): Promise<Uint8Array>;
 }
 
+/** Fetch function signature used by providers (string URL + optional init) */
+export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
+
 /** Optional constructor parameters for KuboProvider and PsaProvider */
 export type ProviderOptions = {
   /** Custom fetch function (e.g., SSRF-safe fetch in TEE) */
-  fetchFn?: typeof globalThis.fetch;
+  fetchFn?: FetchFn;
   /** Request timeout in milliseconds */
   timeoutMs?: number;
 };
