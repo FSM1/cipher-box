@@ -151,6 +151,9 @@ test.describe.serial('Batch Download', () => {
     const headerText = await contextMenu.getHeaderText();
     expect(headerText.toLowerCase()).toContain('selected');
 
+    // Assert download option is present in the batch menu
+    await expect(page.locator('[role="menuitem"]', { hasText: /download/i })).toBeVisible();
+
     // Close menu
     await contextMenu.closeWithEscape();
 

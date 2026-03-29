@@ -1,5 +1,5 @@
 import { writeFileSync, copyFileSync, unlinkSync, existsSync, statSync } from 'fs';
-import { resolve, dirname } from 'path';
+import { resolve, dirname, basename, extname } from 'path';
 import { fileURLToPath } from 'url';
 
 // ESM compatibility - __dirname is not available in ESM
@@ -145,13 +145,14 @@ export function getTestFilePath(name: string): string {
  */
 export function createTestMediaFile(sourceFixture: string, name?: string): TestBinaryFile {
   const timestamp = Date.now();
-  const ext = sourceFixture.split('.').pop() ?? 'bin';
-  const fileName = name || `test-media-${timestamp}.${ext}`;
+  const safeSource = basename(sourceFixture);
+  const ext = extname(safeSource).replace('.', '') || 'bin';
+  const fileName = basename(name || `test-media-${timestamp}.${ext}`);
+  const fixturePath = resolve(FIXTURES_DIR, safeSource);
   const filePath = resolve(FIXTURES_DIR, fileName);
-  const fixturePath = resolve(FIXTURES_DIR, sourceFixture);
+  const stats = statSync(fixturePath);
   copyFileSync(fixturePath, filePath);
   createdFiles.push(filePath);
-  const stats = statSync(filePath);
   return { name: fileName, path: filePath, sizeKb: Math.ceil(stats.size / 1024) };
 }
 

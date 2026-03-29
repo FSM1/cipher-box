@@ -1,8 +1,7 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { writeFileSync, unlinkSync } from 'fs';
-import { resolve } from 'path';
 import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
-import { createTestMediaFile, cleanupTestFiles } from '../utils/test-files';
+import { createTestMediaFile, cleanupTestFiles, getTestFilePath } from '../utils/test-files';
 import { deleteAccountViaPage } from '../utils/cleanup-helpers';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
@@ -120,7 +119,7 @@ test.describe.serial('Media Preview', () => {
 
   test('preview error state for corrupt file', async () => {
     const corruptName = `corrupt-${timestamp}.mp4`;
-    const corruptPath = resolve(process.cwd(), 'tests/web-e2e/fixtures/files', corruptName);
+    const corruptPath = getTestFilePath(corruptName);
 
     try {
       // Create a text file with .mp4 extension to trigger an error state

@@ -199,12 +199,13 @@ jobs:
             echo "LOAD_TEST_SECRET=e2e-test-secret-ci-only" >> $GITHUB_ENV
             echo "THROTTLE_BYPASS_SECRET=ci-throttle-bypass-secret" >> $GITHUB_ENV
           fi
-          # BYO-IPFS provider config — set from inputs so different providers
-          # can be evaluated against each other without changing secrets
-          echo "BYO_IPFS_ENDPOINT=${{ inputs.load_test_byo_endpoint }}" >> $GITHUB_ENV
-          echo "BYO_IPFS_AUTH_TOKEN=${{ secrets.LOAD_TEST_BYO_AUTH_TOKEN }}" >> $GITHUB_ENV
-          echo "BYO_IPFS_PROTOCOL=${{ inputs.load_test_byo_protocol }}" >> $GITHUB_ENV
-          echo "BYO_IPFS_PROVIDER_NAME=${{ inputs.load_test_byo_provider_name }}" >> $GITHUB_ENV
+          # BYO-IPFS provider config — only exported for byo-* scenarios
+          if [[ "${{ inputs.scenario }}" == byo-* ]]; then
+            echo "BYO_IPFS_ENDPOINT=${{ inputs.load_test_byo_endpoint }}" >> $GITHUB_ENV
+            echo "BYO_IPFS_AUTH_TOKEN=${{ secrets.LOAD_TEST_BYO_AUTH_TOKEN }}" >> $GITHUB_ENV
+            echo "BYO_IPFS_PROTOCOL=${{ inputs.load_test_byo_protocol }}" >> $GITHUB_ENV
+            echo "BYO_IPFS_PROVIDER_NAME=${{ inputs.load_test_byo_provider_name }}" >> $GITHUB_ENV
+          fi
           CLIENT_COUNT="${{ inputs.client_count }}"
           if ! [[ "$CLIENT_COUNT" =~ ^[1-9][0-9]*$ ]]; then
             echo "Invalid client_count: '$CLIENT_COUNT' (must be a positive integer)" >&2

@@ -1,15 +1,16 @@
 # BYO-IPFS Load Test Baselines Plan
 
-## Status: ACTIVE -- Pinata Provider Configured (2026-03-29)
+## Status: PARTIAL -- Pinata pin works, register-cid returns 400 (2026-03-29)
 
-Phase 21 BYO benchmarks were previously deferred. Pinata account is now configured
-in `tests/load/.env` with JWT auth token.
+Pinata provider configured and pin operations succeed (p50=718ms). However,
+the CipherBox API rejects `register-cid` and `ipns-publish` calls with HTTP 400.
+See todo: `debug-byo-ipfs-register-cid-400-errors-on-staging`.
 
-## Prerequisites (Completed)
+## Prerequisites
 
 1. **External IPFS Provider Account** -- Pinata (configured, PinataProvider implementation in sdk-core)
 2. **Provider API Key** -- JWT stored in `tests/load/.env` as `BYO_IPFS_AUTH_TOKEN`
-3. **BYO Config Seeding** -- Test harness creates accounts with BYO provider config automatically
+3. **BYO Config Seeding** -- Pending: load harness creates `byoConfig` objects but does not persist BYO provider config to account metadata. Needs fix before register-cid will accept external CIDs.
 
 ## Test Scenarios (Ready to Execute)
 
