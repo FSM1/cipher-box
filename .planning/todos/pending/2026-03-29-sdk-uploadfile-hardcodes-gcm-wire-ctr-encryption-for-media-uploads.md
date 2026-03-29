@@ -26,5 +26,4 @@ Discovered during E2E test debugging — the streaming-playback CTR badge test c
 2. When mode is `'CTR'`: use `encryptAesCtr` (already exported from `@cipherbox/crypto`) instead of `encryptAesGcm`, generate CTR IV via `generateCtrIv()`
 3. Pass `encryptionMode` through `client.uploadFile()` → `sdkCore.uploadFile()` → `createFileMetadata()`
 4. Caller determines mode: either SDK client checks MIME type + size internally, or the web app's `useDropUpload` passes the mode explicitly
-5. Remove the `.planning/TODO.md` entry added as a stopgap
-6. Un-skip the `streaming-playback.spec.ts` CTR badge test after fix
+5. Un-skip the `streaming-playback.spec.ts` CTR badge test after fix
