@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d02d7a1042be",
+  "strategy": "manual-commit",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/security/REVIEW-phase-35.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d0/2d7a1042be/0/metadata.json",
+      "transcript": "/d0/2d7a1042be/0/full.jsonl",
+      "content_hash": "/d0/2d7a1042be/0/content_hash.txt",
+      "prompt": "/d0/2d7a1042be/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 182,
+    "cache_creation_tokens": 481622,
+    "cache_read_tokens": 15722898,
+    "output_tokens": 45305,
+    "api_call_count": 148
+  }
+}
