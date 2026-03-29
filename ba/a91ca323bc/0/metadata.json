@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "baa91ca323bc",
+  "session_id": "c330798c-ab40-490c-8805-6ed8f1747898",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T16:24:09.499992Z",
+  "branch": "fix/release-gate-retrigger-on-main-push",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "91781bf95c03",
+  "token_usage": {
+    "input_tokens": 251,
+    "cache_creation_tokens": 206452,
+    "cache_read_tokens": 13015093,
+    "output_tokens": 62413,
+    "api_call_count": 178
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Resolve final round of automated PR reviews from Copilot and CodeRabbit on PR #392, then fix a CI gap where the release gate was not requiring E2E tests to pass before release-please PRs could merge.",
+    "outcome": "All 3 review comments on PR #392 were fixed and resolved. PR #394 was created to fix the release gate by: (1) adding a retrigger mechanism so the release gate re-runs on open release-please PRs after E2E completes on main, and (2) consolidating web and desktop E2E change detection into a single ci-e2e.yml orchestrator workflow.",
+    "learnings": {
+      "repo": [
+        "The release gate (release-gate.yml) only enforced E2E checks for release-please branches, auto-passing all other PRs with 'Not a release PR — E2E gate not applicable' — making the required check meaningless for feature PRs.",
+        "E2E tests run on push to main (not on PRs), so the release gate can see a stale green pass from before a test: commit landed, allowing release PRs to merge without re-verifying the latest E2E.",
+        "desktop-e2e.yml already used dorny/paths-filter for change detection; web e2e.yml did not, running on every push to main regardless of what changed.",
+        "test: commits do not trigger release-please to update the release PR, so the release gate never re-ran after test(34): merged.",
+        "Committed fixture files (test-audio.mp3, test-document.pdf, test-video-small.mp4, test-video.mp4) live in tests/web-e2e/fixtures/files/ — createTestMediaFile and similar helpers could overwrite/delete these if given matching names.",
+        "The ci-e2e.yml orchestrator now drives both web and desktop E2E; release-gate.yml polls ci-e2e.yml instead of e2e.yml or desktop-e2e.yml."
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/test-files.ts",
+          "line": 156,
+          "end_line": 156,
+          "finding": "Added COMMITTED_FIXTURES guard to createTestMediaFile, createTestImageFile, createTestTextFile, and createTestBinaryFile to throw if the requested name matches a committed fixture, preventing accidental overwrite/deletion during cleanup."
+        },
+        {
+          "path": "tests/web-e2e/baselines/staging-journey-timing.json",
+          "line": 1,
+          "end_line": 19,
+          "finding": "Missing faro_enabled: true metadata field — required by the schema used in plan verification."
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 14,
+          "end_line": 16,
+          "finding": "page.evaluate() in teardown could throw on a closed page; added page.isClosed() guard before calling it."
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "line": 193,
+          "end_line": 214,
+          "finding": "retrigger-release-gate job needed pull-requests: read permission and a status == 'completed' filter before gh run rerun to avoid re-triggering in-progress runs."
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "finding": "On a re-triggered run, HEAD is the stale release-please merge commit, not current main. Desktop detect-changes diff was changed from HEAD to origin/main to ensure it compares against latest main after a retrigger."
+        }
+      ],
+      "workflow": [
+        "When gh run rerun is used to retrigger a workflow, the checkout SHA is preserved from the original run — path filters using HEAD..PREV_TAG will diff against stale code unless explicitly fetching and diffing against origin/main.",
+        "dorny/paths-filter requires fetch-depth: 0 in actions/checkout to correctly compute diffs on push events.",
+        "A required status check that always passes (via early exit) provides no actual gate — the check must fail or block for non-applicable cases if the intent is enforcement.",
+        "Polling for review comments via gh api graphql reviewThreads with isResolved filter is reliable for detecting new automated review comments.",
+        "CodeRabbit enforces per-hour rate limits; when re-requesting a review, expect ~20-30 minute delay before comments appear."
+      ]
+    },
+    "friction": [
+      "CodeRabbit was rate-limited for ~23 minutes after being re-requested, requiring extensive polling (20+ background poll tasks) before its review arrived.",
+      "The original problem diagnosis was wrong twice: first proposed gating feature PRs directly (unneeded), then proposed re-triggering after E2E for feature PRs (also unneeded) — the actual issue was that stale release gate passes allowed release PRs to merge.",
+      "Finding the correct REST comment IDs to reply to CodeRabbit/Copilot threads required multiple gh api calls since GraphQL thread IDs differ from REST comment IDs.",
+      "Background polling created a large number of task notifications that cluttered the session after the reviews arrived and the workflow was complete."
+    ],
+    "open_items": [
+      "PR #394 (ci-e2e.yml orchestrator + release gate retrigger) still needs to be merged and validated — the release gate retrigger logic has not been exercised in production yet.",
+      "The paths covered by ci-e2e.yml for web E2E (apps/web, apps/api, packages/crypto, packages/core, packages/api-client, packages/sdk, packages/sdk-core, tests/web-e2e) should be audited against actual package dependency graph to ensure no shared dependency is missed.",
+      "Pending todo: debug BYO IPFS register-cid 400 errors on staging (2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md).",
+      "The release gate still polls ci-e2e.yml by workflow file name — if desktop-e2e or e2e jobs are renamed within the orchestrator, the release gate polling logic will silently break."
+    ]
+  }
+}
