@@ -114,21 +114,20 @@ export async function runByoFileWorkload(
       }
 
       // Register CID with CipherBox API (both modes)
-      // Note: register-cid requires isByoUser flag on vault. If the account
-      // is not BYO-enabled, this returns 403. We catch and continue so that
-      // ipns-publish and cleanup still run.
+      // BYO mode is enabled in createByoClientPool, so 403 is unexpected.
       try {
         await metrics.measure('register-cid', async () => {
           const axiosInstance = client.getContext().axiosInstance!;
           await axiosInstance.post('/ipfs/register-cid', { cid, sizeBytes: pinSize });
         });
-      } catch {
-        // 403 expected for non-BYO accounts -- continue to ipns-publish
+      } catch (err) {
+        const status = (err as { response?: { status?: number } }).response?.status;
+        console.warn(
+          `[Client ${pc.id}] register-cid failed (HTTP ${status ?? 'unknown'}): ${(err as Error).message?.slice(0, 100)}`
+        );
       }
 
-      // Publish IPNS record via CipherBox API (measure raw IPNS API latency)
-      // Uses sdk-core's createAndPublishIpnsRecord which creates a properly
-      // signed IPNS record before sending to the publish endpoint.
+      // Publish IPNS record via CipherBox API (includes local record creation + signing + HTTP publish)
       await metrics.measure('ipns-publish', async () => {
         await createAndPublishIpnsRecord({
           ipnsPrivateKey: pc.rootIpnsKeypair.privateKey,
