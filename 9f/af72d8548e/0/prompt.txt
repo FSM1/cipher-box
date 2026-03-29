@@ -125,3 +125,11 @@ why are there uncommitted husky changes on main?
 ---
 
 yeah sounds like a plan
+
+---
+
+can you cehck the @.planning/DEFERRED.md file and confirm whether any items identified there have been implemented in phases 28-33 and can be removed?
+
+---
+
+yeah lets create another docs cleanup branch, remove that deferred item, and also check the todo's for any stale items that can be marked as `done` or `resolved`
