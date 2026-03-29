@@ -212,16 +212,17 @@ jobs:
           echo "Desktop changes detected since ${PREV_TAG} — verifying Desktop E2E"
 
           # Helper: check if a workflow run actually executed desktop-e2e jobs
-          # (not skipped due to change detection). Returns 0 if tests ran, 1 if skipped, 2 on API error.
+          # (not skipped due to change detection).
+          # Returns 0 if tests ran (any conclusion), 1 if skipped/not present, 2 on API error.
           run_executed_tests() {
             local run_id=$1
-            local executed
-            if ! executed=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}/jobs" \
-              --jq '[.jobs[] | select(.name | startswith("Desktop E2E")) | select(.conclusion == "success")] | length'); then
+            local total
+            if ! total=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}/jobs" \
+              --jq '[.jobs[] | select(.name | startswith("Desktop E2E")) | select(.conclusion != "skipped" and .conclusion != null)] | length'); then
               echo "::error::Failed to query jobs for run ${run_id} (API error or rate limit)"
               return 2
             fi
-            [ "${executed:-0}" -gt 0 ]
+            [ "${total:-0}" -gt 0 ]
           }
 
           # First check if there's a desktop E2E run for HEAD (may still be running)
@@ -244,19 +245,21 @@ jobs:
                 --jq '.conclusion // empty')
 
               if [ -n "$CONCLUSION" ]; then
-                if [ "$CONCLUSION" != "success" ]; then
-                  echo "::error::Desktop E2E Tests did not pass on main (conclusion: ${CONCLUSION})"
-                  exit 1
-                fi
-                # Verify the desktop-e2e jobs actually ran (not skipped)
+                # Check if desktop tests actually ran in this run
                 run_executed_tests "$HEAD_RUN_ID" && rc=0 || rc=$?
                 if [ "$rc" -eq 2 ]; then
                   exit 1
                 elif [ "$rc" -eq 0 ]; then
-                  echo "Desktop E2E: passed (at HEAD, tests executed)"
-                  exit 0
+                  # Tests ran — now check overall conclusion
+                  if [ "$CONCLUSION" == "success" ]; then
+                    echo "Desktop E2E: passed (at HEAD, tests executed)"
+                    exit 0
+                  else
+                    echo "::error::Desktop E2E tests ran at HEAD but run failed (conclusion: ${CONCLUSION})"
+                    exit 1
+                  fi
                 else
-                  echo "Desktop E2E run at HEAD succeeded but tests were skipped (no desktop changes detected by workflow)."
+                  echo "Desktop E2E run at HEAD completed but desktop tests were skipped."
                   echo "Falling through to search for a run that actually executed tests..."
                   break
                 fi
@@ -306,24 +309,19 @@ jobs:
               continue
             fi
             if echo "$RANGE_COMMITS" | grep -Fq "$sha"; then
-              if [ "$conclusion" != "success" ]; then
-                # Found a failed run in range — report it immediately
-                LATEST_IN_RANGE_SHA="$sha"
-                LATEST_IN_RANGE_CONCLUSION="$conclusion"
-                break
-              fi
-              # Success run — verify tests actually executed
+              # Check if desktop tests actually executed in this run
               run_executed_tests "$run_id" && rc=0 || rc=$?
               if [ "$rc" -eq 2 ]; then
                 exit 1
-              elif [ "$rc" -eq 0 ]; then
-                LATEST_IN_RANGE_SHA="$sha"
-                LATEST_IN_RANGE_CONCLUSION="$conclusion"
-                LATEST_IN_RANGE_RUN_ID="$run_id"
-                break
-              else
-                echo "Skipping run ${run_id} at ${sha} — tests were skipped (no desktop changes detected by workflow)"
+              elif [ "$rc" -eq 1 ]; then
+                echo "Skipping run ${run_id} at ${sha} (conclusion: ${conclusion}) — desktop tests were skipped"
+                continue
               fi
+              # Tests executed — use this run's conclusion
+              LATEST_IN_RANGE_SHA="$sha"
+              LATEST_IN_RANGE_CONCLUSION="$conclusion"
+              LATEST_IN_RANGE_RUN_ID="$run_id"
+              break
             fi
           done <<EOF
           $RUNS
