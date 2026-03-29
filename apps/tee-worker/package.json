@@ -6,21 +6,24 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "@cipherbox/crypto": "workspace:*",
     "@cipherbox/core": "workspace:*",
+    "@cipherbox/crypto": "workspace:*",
     "@cipherbox/sdk-core": "workspace:*",
-    "express": "^4.21.0",
+    "@noble/hashes": "^1.7.0",
     "@noble/secp256k1": "^2.2.3",
-    "@noble/hashes": "^1.7.0"
+    "express": "^4.21.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/express-serve-static-core": "^5.0.0",
     "@types/node": "^20.19.0",
     "tsx": "^4.7.1",
-    "typescript": "^5.4.2"
+    "typescript": "^5.4.2",
+    "vitest": "^4.1.2"
   }
 }
