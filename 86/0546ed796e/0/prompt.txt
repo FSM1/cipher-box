@@ -1,0 +1,59 @@
+ok switch to the phase 35 branch please
+
+---
+
+/gsd:resume-work
+
+---
+
+1 - this is now running on the docker host, so dockerhub image can be built
+
+---
+
+why are you asking me to do these steps when you're jsut as capable?
+
+---
+
+<task-notification>
+<task-id>b37w1rf3d</task-id>
+<tool-use-id>toolu_01UeCrmA1eB1q8eSkiu4rQz2</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/5dd5fba1-4664-4333-84d2-4bd20d4114c4/tasks/b37w1rf3d.output</output-file>
+<status>completed</status>
+<summary>Background command "Install Phala CLI globally" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>be7fngcw1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/5dd5fba1-4664-4333-84d2-4bd20d4114c4/tasks/be7fngcw1.output</output-file>
+<status>failed</status>
+<summary>Background command "Build TEE worker Docker image" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br99qg8zi</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/5dd5fba1-4664-4333-84d2-4bd20d4114c4/tasks/br99qg8zi.output</output-file>
+<status>completed</status>
+<summary>Background command "Rebuild TEE worker Docker image with api-client dependency" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+which password am I meant to use for ghcr login? my standard github login?
+
+---
+
+ok login succeeded - you can continue
+
+---
+
+ok but is there not a testnet that does not require actual funds?
+
+---
+
+ok credit card added and $20 credit allocated.
