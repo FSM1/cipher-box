@@ -137,3 +137,7 @@ one thing I wanted to ask about the account cleanup in sdk based load tests - yo
 ---
 
 ok makes sense - though I am struggling to see the point of keeping the browser load test around at the moment. it does not load the api, and realistically does not provide any additional info to the operator.
+
+---
+
+I think it can safely be removed to be honest.
