@@ -58,9 +58,13 @@ jobs:
 
           echo "Previous release tag: ${PREV_TAG}"
           echo "prev_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
-          echo "Diffing ${PREV_TAG}..HEAD"
+          # Use origin/main (not HEAD) so that gh-run-rerun'd workflows
+          # compare against the current main, not a stale GITHUB_SHA.
+          git fetch origin main
+          MAIN_REF="origin/main"
+          echo "Diffing ${PREV_TAG}..${MAIN_REF}"
 
-          # Desktop-related path patterns (mirrored from desktop-e2e.yml)
+          # Desktop-related path patterns (mirrored from ci-e2e.yml)
           DESKTOP_PATTERNS=(
             'apps/desktop/src/'
             'apps/desktop/src-tauri/src/'
@@ -79,7 +83,7 @@ jobs:
             '.github/workflows/desktop-e2e.yml'
           )
 
-          CHANGED_FILES=$(git diff --name-only "${PREV_TAG}..HEAD")
+          CHANGED_FILES=$(git diff --name-only "${PREV_TAG}..${MAIN_REF}")
           DESKTOP_CHANGED=false
 
           for pattern in "${DESKTOP_PATTERNS[@]}"; do
