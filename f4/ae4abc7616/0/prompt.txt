@@ -307,3 +307,7 @@ an outside of diff range comment here: https://github.com/FSM1/cipher-box/pull/3
 ---
 
 /resolve-pr-reviews
+
+---
+
+It seems like the web-e2e test execution time is regularly exceeding the 10 minute timeout and being cancelled. can we increase the timeout on that workflow?
