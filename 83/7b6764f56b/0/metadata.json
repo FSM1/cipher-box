@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "837b6764f56b",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T16:38:21.182319Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/HANDOFF.json",
+    ".planning/phases/35-phala-testnet-tee-migration/.continue-here.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f4ac390446ae",
+  "checkpoint_transcript_start": 355,
+  "transcript_lines_at_start": 355,
+  "token_usage": {
+    "input_tokens": 1,
+    "cache_creation_tokens": 210,
+    "cache_read_tokens": 134380,
+    "output_tokens": 207,
+    "api_call_count": 1
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Clean up handoff files and remove the continue-here marker after completing a development phase.",
+    "outcome": "Handoff files and the continue-here marker were removed and committed, signaling completion of the Phala testnet TEE migration phase.",
+    "learnings": {
+      "repo": [
+        "Project uses a .planning/ directory with HANDOFF.json and per-phase subdirectories containing .continue-here.md markers to track in-progress work across sessions."
+      ],
+      "code": [],
+      "workflow": [
+        "Removing .continue-here.md markers is the convention for marking a planning phase as complete.",
+        "Cleanup of handoff artifacts is committed as a discrete step at phase completion."
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T16:38:14.147169Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
