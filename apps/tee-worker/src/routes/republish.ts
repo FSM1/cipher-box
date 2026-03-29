@@ -16,6 +16,7 @@
 import { Router, type Request, type Response } from 'express';
 import { decryptWithFallback, reEncryptForEpoch } from '../services/key-manager.js';
 import { signIpnsRecord } from '../services/ipns-signer.js';
+import { republishEntries } from '../middleware/metrics.js';
 
 const router = Router();
 
@@ -101,6 +102,7 @@ router.post('/republish', async (req: Request, res: Response) => {
 
       results.push(result);
       successes++;
+      republishEntries.inc({ result: 'success' });
     } catch (error) {
       // Ensure key is zeroed even on error
       if (ipnsPrivateKey) {
@@ -115,6 +117,7 @@ router.post('/republish', async (req: Request, res: Response) => {
         error: error instanceof Error ? error.message : 'Unknown error',
       });
       failures++;
+      republishEntries.inc({ result: 'failure' });
     }
   }
 

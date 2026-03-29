@@ -7,6 +7,7 @@
  *
  * Routes:
  *   GET  /health           - Public health check
+ *   GET  /metrics          - Prometheus metrics (public, no auth)
  *   GET  /public-key       - TEE public key per epoch (auth required)
  *   POST /republish        - Batch IPNS signing (auth required)
  *   POST /migrate          - Batch CID migration between providers (auth required)
@@ -15,7 +16,9 @@
 
 import express from 'express';
 import { authMiddleware } from './middleware/auth.js';
+import { metricsMiddleware } from './middleware/metrics.js';
 import healthRouter from './routes/health.js';
+import metricsRouter from './routes/metrics.js';
 import publicKeyRouter from './routes/public-key.js';
 import republishRouter from './routes/republish.js';
 import migrateRouter from './routes/migrate.js';
@@ -28,8 +31,12 @@ const mode = process.env.TEE_MODE || 'simulator';
 // JSON body parsing with 10mb limit for batch requests
 app.use(express.json({ limit: '10mb' }));
 
+// Prometheus HTTP metrics (before route handlers, after JSON parsing)
+app.use(metricsMiddleware);
+
 // Public routes (no auth)
 app.use(healthRouter);
+app.use(metricsRouter);
 
 // Protected routes (auth required)
 app.use(authMiddleware, publicKeyRouter);

@@ -16,6 +16,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { migrateBatch } from '../services/migration-worker.js';
+import { migrationCids } from '../middleware/metrics.js';
 
 const router = Router();
 
@@ -65,6 +66,10 @@ router.post('/migrate', async (req: Request, res: Response) => {
 
   try {
     const result = await migrateBatch(cids, sourceConfigEncrypted, destConfigEncrypted, TEE_EPOCH);
+
+    // Increment Prometheus counters per CID result
+    migrationCids.inc({ result: 'success' }, result.succeeded.length);
+    migrationCids.inc({ result: 'failure' }, result.failed.length);
 
     // Log migration summary (NEVER log credentials or config contents)
     console.log(
