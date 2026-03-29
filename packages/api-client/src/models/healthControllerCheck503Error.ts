@@ -9,7 +9,7 @@
 /**
  * @nullable
  */
-export type HealthControllerCheck200Info = {
+export type HealthControllerCheck503Error = {
   [key: string]: {
     status: string;
     [key: string]: unknown;

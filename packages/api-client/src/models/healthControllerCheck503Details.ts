@@ -6,12 +6,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
-/**
- * @nullable
- */
-export type HealthControllerCheck200Info = {
+export type HealthControllerCheck503Details = {
   [key: string]: {
     status: string;
     [key: string]: unknown;
   };
-} | null;
+};

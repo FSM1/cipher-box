@@ -9,9 +9,4 @@
 /**
  * @nullable
  */
-export type HealthControllerCheck200Info = {
-  [key: string]: {
-    status: string;
-    [key: string]: unknown;
-  };
-} | null;
+export type MigrationStatusDtoCompletedAt = { [key: string]: unknown } | null;
