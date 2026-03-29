@@ -95,51 +95,56 @@ export async function migrateBatch(
   const keypair = await getKeypair(currentEpoch);
   const teePrivateKey = keypair.privateKey;
 
-  // 2. Decrypt provider configs in-enclave (returns Uint8Array)
-  const sourceConfigBytes = await decryptEcies(sourceConfigEncrypted, teePrivateKey);
-  const destConfigBytes = await decryptEcies(destConfigEncrypted, teePrivateKey);
-
-  // Zero TEE private key immediately after decryption
-  teePrivateKey.fill(0);
-
-  const sourceConfig = parseProviderConfig(sourceConfigBytes);
-  const destConfig = parseProviderConfig(destConfigBytes);
-
-  // 2b. SSRF validation on both endpoints
-  // DNS rebinding protection is handled by ssrfSafeFetch (DNS pinning in CVM mode)
-  if (sourceConfig.protocol !== 'cipherbox') {
-    validateEndpointUrl(sourceConfig.endpoint);
-  }
-  if (destConfig.protocol !== 'cipherbox') {
-    validateEndpointUrl(destConfig.endpoint);
-  }
-
-  // 3. Instantiate providers with SSRF-safe fetch injection
-  const providerOptions = { fetchFn: ssrfSafeFetch, timeoutMs: MIGRATION_TIMEOUT_MS };
-  const sourceToken = authTokenString(sourceConfig);
-  const destToken = authTokenString(destConfig);
-
-  const sourceKubo =
-    sourceConfig.protocol === 'kubo'
-      ? new KuboProvider(sourceConfig.endpoint, sourceToken, providerOptions)
-      : null;
-  const destKubo =
-    destConfig.protocol === 'kubo'
-      ? new KuboProvider(destConfig.endpoint, destToken, providerOptions)
-      : null;
-  const destPsa =
-    destConfig.protocol === 'psa'
-      ? new PsaProvider(destConfig.endpoint, destToken, providerOptions)
-      : null;
-  const sourcePsa =
-    sourceConfig.protocol === 'psa'
-      ? new PsaProvider(sourceConfig.endpoint, sourceToken, providerOptions)
-      : null;
-
-  const succeeded: string[] = [];
-  const failed: string[] = [];
+  let sourceConfigBytes: Uint8Array | null = null;
+  let destConfigBytes: Uint8Array | null = null;
+  let sourceConfig: ProviderConfig | null = null;
+  let destConfig: ProviderConfig | null = null;
 
   try {
+    // 2. Decrypt provider configs in-enclave (returns Uint8Array)
+    sourceConfigBytes = await decryptEcies(sourceConfigEncrypted, teePrivateKey);
+    destConfigBytes = await decryptEcies(destConfigEncrypted, teePrivateKey);
+
+    // Zero TEE private key immediately after decryption
+    teePrivateKey.fill(0);
+
+    sourceConfig = parseProviderConfig(sourceConfigBytes);
+    destConfig = parseProviderConfig(destConfigBytes);
+
+    // 2b. SSRF validation on both endpoints
+    // DNS rebinding protection is handled by ssrfSafeFetch (DNS pinning in CVM mode)
+    if (sourceConfig.protocol !== 'cipherbox') {
+      validateEndpointUrl(sourceConfig.endpoint);
+    }
+    if (destConfig.protocol !== 'cipherbox') {
+      validateEndpointUrl(destConfig.endpoint);
+    }
+
+    // 3. Instantiate providers with SSRF-safe fetch injection
+    const providerOptions = { fetchFn: ssrfSafeFetch, timeoutMs: MIGRATION_TIMEOUT_MS };
+    const sourceToken = authTokenString(sourceConfig);
+    const destToken = authTokenString(destConfig);
+
+    const sourceKubo =
+      sourceConfig.protocol === 'kubo'
+        ? new KuboProvider(sourceConfig.endpoint, sourceToken, providerOptions)
+        : null;
+    const destKubo =
+      destConfig.protocol === 'kubo'
+        ? new KuboProvider(destConfig.endpoint, destToken, providerOptions)
+        : null;
+    const destPsa =
+      destConfig.protocol === 'psa'
+        ? new PsaProvider(destConfig.endpoint, destToken, providerOptions)
+        : null;
+    const sourcePsa =
+      sourceConfig.protocol === 'psa'
+        ? new PsaProvider(sourceConfig.endpoint, sourceToken, providerOptions)
+        : null;
+
+    const succeeded: string[] = [];
+    const failed: string[] = [];
+
     for (const cid of cids) {
       try {
         // 4. Fetch encrypted blob from source
@@ -186,15 +191,16 @@ export async function migrateBatch(
         failed.push(cid);
       }
     }
-  } finally {
-    // 7. Zero credentials from memory (Uint8Array.fill(0) -- same pattern as republish.ts)
-    sourceConfig.authTokenBytes.fill(0);
-    destConfig.authTokenBytes.fill(0);
-    sourceConfigBytes.fill(0);
-    destConfigBytes.fill(0);
-  }
 
-  return { succeeded, failed };
+    return { succeeded, failed };
+  } finally {
+    // Zero ALL sensitive buffers — covers both success and error paths
+    teePrivateKey.fill(0);
+    if (sourceConfigBytes) sourceConfigBytes.fill(0);
+    if (destConfigBytes) destConfigBytes.fill(0);
+    if (sourceConfig) sourceConfig.authTokenBytes.fill(0);
+    if (destConfig) destConfig.authTokenBytes.fill(0);
+  }
 }
 
 // NOTE: No zeroString function -- JS strings are immutable and cannot be zeroed.
