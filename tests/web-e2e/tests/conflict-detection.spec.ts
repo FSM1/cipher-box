@@ -2,6 +2,7 @@ import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import type { PrivateKeyAccount } from 'viem/accounts';
 import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
+import { deleteAccountViaPage } from '../utils/cleanup-helpers';
 import {
   createConflictDevice,
   bumpSequenceViaSecondDevice,
@@ -124,6 +125,13 @@ test.describe.serial('Conflict Detection', () => {
     }
 
     cleanupTestFiles();
+
+    // Delete test account before closing context (page must still be navigable)
+    // Both primary and deviceB share the same wallet identity, so deleting once suffices.
+    if (page) {
+      await deleteAccountViaPage(page);
+    }
+
     if (context) {
       await context.close();
     }

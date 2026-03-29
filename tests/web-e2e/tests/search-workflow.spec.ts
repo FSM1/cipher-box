@@ -2,6 +2,7 @@ import { test, expect, Page, Browser, BrowserContext } from '@playwright/test';
 import type { PrivateKeyAccount } from 'viem/accounts';
 import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
+import { deleteAccountViaPage } from '../utils/cleanup-helpers';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
 import { SearchPalettePage } from '../page-objects/dialogs/search-palette.page';
@@ -66,6 +67,9 @@ test.describe.serial('Search Workflow', () => {
 
   test.afterAll(async () => {
     cleanupTestFiles();
+    if (page) {
+      await deleteAccountViaPage(page);
+    }
     if (context) {
       await context.close();
     }

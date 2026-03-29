@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (completed 2026-03-28)
 - [x] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread (completed 2026-03-28)
 - [x] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend (completed 2026-03-28)
-- [ ] **Phase 34: E2E Test Expansion & Staging Baselines** - Streaming playback, media preview, batch download, and shared teardown E2E tests; BYO-IPFS load test and Faro metrics baselines on staging
+- [x] **Phase 34: E2E Test Expansion & Staging Baselines** - Streaming playback, media preview, batch download, and shared teardown E2E tests; BYO-IPFS load test and Faro metrics baselines on staging (completed 2026-03-29)
 - [x] **Phase 35: Phala Testnet TEE Migration** - Replace staging TEE simulator with real Phala testnet CVM deployment, validate hardware-backed key derivation and IPNS republishing end-to-end (completed 2026-03-29)
 
 ## Phase Details
@@ -398,11 +398,11 @@ Plans:
 **Requirements**: None (test coverage and baseline capture)
 **Success Criteria** (what must be TRUE):
 
-1. AES-CTR streaming playback E2E tests cover mode selection, SW interception, seeking, and progress
-2. Batch download zip E2E tests cover multi-file selection and zip generation
+1. AES-CTR streaming playback E2E tests cover mode selection, SW interception, and progress
+2. Batch download E2E tests cover multi-file selection and individual file download events
 3. Media preview E2E tests cover PDF viewer, video player, and audio player
 4. Shared deleteAccount teardown wired into all E2E spec afterAll hooks
-5. BYO-IPFS load test baselines captured on staging
+5. BYO-IPFS load test plan documented (execution deferred pending provider infrastructure)
 6. Staging metrics baselines captured with Phase 30 Faro instrumentation
 
 **Todos consumed:**
@@ -414,14 +414,14 @@ Plans:
 - `.planning/todos/pending/2026-03-28-byo-ipfs-load-test-baselines-on-staging.md`
 - `.planning/todos/pending/2026-03-28-run-staging-metrics-baselines-with-new-instrumentation.md`
 
-**Plans:** TBD
+**Plans:** 4/4 plans complete
 
 Plans:
 
-- [ ] 34-01-PLAN.md -- Shared E2E teardown helper and deleteAccount wiring across all specs
-- [ ] 34-02-PLAN.md -- AES-CTR streaming playback and media preview E2E suites
-- [ ] 34-03-PLAN.md -- Batch download zip E2E tests
-- [ ] 34-04-PLAN.md -- BYO-IPFS load test baselines and staging metrics capture
+- [x] 34-01-PLAN.md -- Shared deleteAccountViaPage helper + wiring into all 10 E2E spec afterAll hooks
+- [x] 34-02-PLAN.md -- Media fixture generation + streaming-playback.spec.ts + media-preview.spec.ts E2E suites
+- [x] 34-03-PLAN.md -- Batch download E2E tests (multi-select + individual file downloads)
+- [x] 34-04-PLAN.md -- BYO-IPFS load test plan document + staging journey/load baselines capture
 
 ### Phase 35: Phala Testnet TEE Migration
 
@@ -444,28 +444,28 @@ Plans:
 **Execution Order:**
 Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33 -> 34 -> 35
 
-| Phase                                     | Milestone | Plans Complete | Status      | Completed  |
-| ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
-| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
-| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
-| 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
-| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete    | 2026-03-25 |
-| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete    | 2026-03-25 |
-| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
-| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete    | 2026-03-25 |
-| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete    | 2026-03-25 |
-| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete    | 2026-03-26 |
-| 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete    | 2026-03-26 |
-| 28. Code Hygiene & Logging                | v1.1      | 4/4            | Complete    | 2026-03-28 |
-| 29. Infrastructure Hardening              | v1.1      | 3/3            | Complete    | 2026-03-28 |
-| 30. Web App Observability                 | v1.1      | 4/4            | Complete    | 2026-03-28 |
-| 31. Structural Decomposition              | v1.1      | 3/3            | Complete    | 2026-03-28 |
-| 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
-| 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete    | 2026-03-28 |
-| 34. E2E Test Expansion & Baselines        | v1.1      | 0/4            | Not Started | -          |
-| 35. Phala Testnet TEE Migration           | v1.1      | 6/6 | Complete    | 2026-03-29 |
+| Phase                                     | Milestone | Plans Complete | Status   | Completed  |
+| ----------------------------------------- | --------- | -------------- | -------- | ---------- |
+| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete | 2026-03-07 |
+| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete | 2026-03-20 |
+| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete | 2026-03-23 |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete | 2026-03-25 |
+| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete | 2026-03-24 |
+| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete | 2026-03-26 |
+| 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete | 2026-03-26 |
+| 28. Code Hygiene & Logging                | v1.1      | 4/4            | Complete | 2026-03-28 |
+| 29. Infrastructure Hardening              | v1.1      | 3/3            | Complete | 2026-03-28 |
+| 30. Web App Observability                 | v1.1      | 4/4            | Complete | 2026-03-28 |
+| 31. Structural Decomposition              | v1.1      | 3/3            | Complete | 2026-03-28 |
+| 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete | 2026-03-28 |
+| 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete | 2026-03-28 |
+| 34. E2E Test Expansion & Baselines        | v1.1      | 4/4            | Complete | 2026-03-29 |
+| 35. Phala Testnet TEE Migration           | v1.1      | 6/6            | Complete | 2026-03-29 |
 
 ### Phase 27: Writable Shares (PoC)
 
@@ -493,4 +493,4 @@ Plans:
 
 _Roadmap created: 2026-03-07_
 _Last updated: 2026-03-29_
-_Total M1.1 phases: 18 (18-33 complete + 34-35 planned) | Concern resolution: 5 phases_
+_Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases_

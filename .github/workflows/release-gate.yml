@@ -58,9 +58,13 @@ jobs:
 
           echo "Previous release tag: ${PREV_TAG}"
           echo "prev_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
-          echo "Diffing ${PREV_TAG}..HEAD"
+          # Use origin/main (not HEAD) so that gh-run-rerun'd workflows
+          # compare against the current main, not a stale GITHUB_SHA.
+          git fetch origin main
+          MAIN_REF="origin/main"
+          echo "Diffing ${PREV_TAG}..${MAIN_REF}"
 
-          # Desktop-related path patterns (mirrored from desktop-e2e.yml)
+          # Desktop-related path patterns (mirrored from ci-e2e.yml)
           DESKTOP_PATTERNS=(
             'apps/desktop/src/'
             'apps/desktop/src-tauri/src/'
@@ -68,18 +72,22 @@ jobs:
             'apps/desktop/src-tauri/capabilities/'
             'apps/desktop/src-tauri/resources/'
             'apps/desktop/src-tauri/Cargo.toml'
-            'apps/desktop/src-tauri/Cargo.lock'
             'apps/desktop/src-tauri/build.rs'
             'apps/desktop/src-tauri/rust-toolchain.toml'
             'apps/desktop/index.html'
             'apps/desktop/vite.config.'
             'apps/desktop/tsconfig'
+            'crates/'
+            'Cargo.toml'
+            'Cargo.lock'
+            'tests/vectors/'
             'packages/crypto/src/'
             'packages/crypto/tsconfig'
             '.github/workflows/desktop-e2e.yml'
+            '.github/workflows/ci-e2e.yml'
           )
 
-          CHANGED_FILES=$(git diff --name-only "${PREV_TAG}..HEAD")
+          CHANGED_FILES=$(git diff --name-only "${PREV_TAG}..${MAIN_REF}")
           DESKTOP_CHANGED=false
 
           for pattern in "${DESKTOP_PATTERNS[@]}"; do
@@ -119,36 +127,79 @@ jobs:
           MAIN_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
           echo "Latest main commit: ${MAIN_SHA}"
 
-          # Poll for the Web E2E run to complete (it triggers on the same push)
+          # Poll for the CI E2E orchestrator run to complete (it triggers on the same push)
           MAX_ATTEMPTS=30
           POLL_INTERVAL=30
-          echo "Waiting for Web E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
+          echo "Waiting for CI E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
 
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             E2E_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
-              --workflow=e2e.yml --branch=main --limit=10 \
-              --json headSha,conclusion,status \
+              --workflow=ci-e2e.yml --branch=main --limit=10 \
+              --json headSha,conclusion,status,databaseId \
               --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion // empty")
 
             if [ -n "$E2E_CONCLUSION" ]; then
-              echo "Web E2E completed with conclusion: ${E2E_CONCLUSION}"
+              echo "CI E2E completed with conclusion: ${E2E_CONCLUSION}"
+
+              # Grab the run ID for job-level checks below
+              E2E_RUN_ID=$(gh run list --repo ${{ github.repository }} \
+                --workflow=ci-e2e.yml --branch=main --limit=10 \
+                --json headSha,databaseId \
+                --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].databaseId")
               break
             fi
 
             if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
-              echo "::error::Web E2E run did not complete within $(( MAX_ATTEMPTS * POLL_INTERVAL / 60 )) minutes for main (${MAIN_SHA})."
+              echo "::error::CI E2E run did not complete within $(( MAX_ATTEMPTS * POLL_INTERVAL / 60 )) minutes for main (${MAIN_SHA})."
               exit 1
             fi
 
-            echo "Attempt ${attempt}/${MAX_ATTEMPTS}: E2E still running, waiting ${POLL_INTERVAL}s..."
+            echo "Attempt ${attempt}/${MAX_ATTEMPTS}: CI E2E still running, waiting ${POLL_INTERVAL}s..."
             sleep $POLL_INTERVAL
           done
 
           if [ "$E2E_CONCLUSION" != "success" ]; then
-            echo "::error::E2E Tests did not pass on main (conclusion: ${E2E_CONCLUSION})"
+            echo "::error::CI E2E orchestrator did not pass on main (conclusion: ${E2E_CONCLUSION})"
             exit 1
           fi
-          echo "Web E2E: passed"
+
+          # Verify the Web E2E job actually ran (not skipped due to no web changes).
+          # When ci-e2e.yml calls e2e.yml via workflow_call, the job name is
+          # composed as "Web E2E / Web E2E Tests" — contains("Web E2E") matches both.
+          if ! WEB_E2E_RAN=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
+            --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length'); then
+            echo "::error::Failed to query jobs for CI E2E run ${E2E_RUN_ID} (API error)"
+            exit 1
+          fi
+
+          if [ "${WEB_E2E_RAN:-0}" -eq 0 ]; then
+            echo "CI E2E passed but Web E2E was skipped (no web changes in latest push)."
+            echo "Searching for most recent CI E2E run where Web E2E actually executed..."
+
+            RECENT_RUN_ID=$(gh run list --repo ${{ github.repository }} \
+              --workflow=ci-e2e.yml --branch=main --limit=20 \
+              --json databaseId,conclusion,status \
+              --jq '[.[] | select(.status == "completed" and .conclusion == "success")] | .[].databaseId' \
+              | while read -r rid; do
+                  if ! WEB_COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/${rid}/jobs" \
+                    --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length'); then
+                    echo "::warning::Failed to query jobs for run ${rid}, skipping" >&2
+                    continue
+                  fi
+                  if [ "${WEB_COUNT:-0}" -gt 0 ]; then
+                    echo "$rid"
+                    break
+                  fi
+                done)
+
+            if [ -z "$RECENT_RUN_ID" ]; then
+              echo "::error::No recent CI E2E run found where Web E2E tests actually executed."
+              exit 1
+            fi
+            echo "Web E2E: passed (in CI E2E run ${RECENT_RUN_ID})"
+          else
+            echo "Web E2E: passed (at HEAD)"
+          fi
 
       - name: Verify Desktop E2E (if desktop changed)
         if: startsWith(github.head_ref, 'release-please--') && needs.detect-changes.outputs.desktop == 'true'
@@ -174,7 +225,7 @@ jobs:
 
           # First check if there's a desktop E2E run for HEAD (may still be running)
           HEAD_RUN=$(gh run list --repo ${{ github.repository }} \
-            --workflow=desktop-e2e.yml --branch=main --limit=50 \
+            --workflow=ci-e2e.yml --branch=main --limit=50 \
             --json headSha,conclusion,status,databaseId \
             --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0]")
 
@@ -238,11 +289,11 @@ jobs:
             exit 1
           fi
 
-          # Get recent completed desktop E2E runs (newest first) and find the
-          # most recent one whose commit is within the release range AND whose
-          # desktop-e2e jobs actually ran (not skipped)
+          # Get recent completed CI E2E orchestrator runs (newest first) and find
+          # the most recent one whose commit is within the release range AND whose
+          # Desktop E2E jobs actually ran (not skipped due to no desktop changes)
           RUNS=$(gh run list --repo ${{ github.repository }} \
-            --workflow=desktop-e2e.yml --branch=main --limit=50 \
+            --workflow=ci-e2e.yml --branch=main --limit=50 \
             --json headSha,conclusion,status,databaseId \
             --jq '.[] | select(.status == "completed") | "\(.headSha) \(.conclusion) \(.databaseId)"')
 

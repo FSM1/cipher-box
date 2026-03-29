@@ -2,6 +2,7 @@ import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import type { PrivateKeyAccount } from 'viem/accounts';
 import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
+import { deleteAccountViaPage } from '../utils/cleanup-helpers';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
 import { ContextMenuPage } from '../page-objects/file-browser/context-menu.page';
@@ -78,6 +79,9 @@ test.describe.serial('Recycle Bin', () => {
 
   test.afterAll(async () => {
     cleanupTestFiles();
+    if (page) {
+      await deleteAccountViaPage(page);
+    }
     if (context) {
       await context.close();
     }
