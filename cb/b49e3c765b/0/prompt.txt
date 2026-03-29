@@ -1,0 +1,59 @@
+/gsd:execute-phase 35
+
+---
+
+I think I jsut discovered a major glaring gap in the tee worker architecture. the tee worker is rolling a lot of functionality that is exposed in the sdk/sdk-core/api-client itself. this should also be fixed, and likly done as a plan 0, before any unit testing work
+
+---
+
+I think I jsut discovered a major glaring gap in the tee worker architecture. the tee worker is rolling a lot of functionality that is exposed in the sdk/sdk-core/api-client itself. this should also be fixed, and likly done as a plan 0, before any unit testing work
+
+---
+
+<task-notification>
+<task-id>aa26470990a8cd5b2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/aa26470990a8cd5b2.output</output-file>
+<status>killed</status>
+<summary>Agent "Explore TEE worker architecture" was stopped</summary>
+<result>Let me examine the crypto package to understand what shared functionality exists:</result>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab82d967dc323bc46</task-id>
+<tool-use-id>toolu_01WZAZsi6JgqnJeqqYJtCbfX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/ab82d967dc323bc46.output</output-file>
+<status>killed</status>
+<summary>Agent "Explore SDK/sdk-core/api-client packages" was stopped</summary>
+<result>Now let me explore the pinning providers:</result>
+</task-notification>
+
+---
+
+yeah go ahead and start that investigation
+
+---
+
+yes, I also dont know how well gsd executor will handle a plan 0, so all subsequent plans will need to be renumbered. On the bright side, there should be a lot less testing necessary now that package code is being reused.
+
+---
+
+in terms of bringing the tee layer up to speed, would there be any benefit from going with a more fully featured framework approach like nestjs for the tee worker? this would keep it consistent with the api and some of the instrumentation and other layers could be reused.
+
+---
+
+also, what are your thoughts on moving the tee-worker to the `/apps` filder?
+
+---
+
+ok so lets include the instrumentation changes in plan 3 and also include the above changes of moving the tee worker into the apps folder.
+
+---
+
+can we update all wave numbers to start at 1 - I am worried GSD executor might not like wave 0 either.
+
+---
+
+ok can you have the plan verifier have a look at these updated plans

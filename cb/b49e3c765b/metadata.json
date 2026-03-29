@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cbb49e3c765b",
+  "strategy": "manual-commit",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 9,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/35-phala-testnet-tee-migration/35-01-PLAN.md",
+    ".planning/phases/35-phala-testnet-tee-migration/35-02-PLAN.md",
+    ".planning/phases/35-phala-testnet-tee-migration/35-03-PLAN.md",
+    ".planning/phases/35-phala-testnet-tee-migration/35-04-PLAN.md",
+    ".planning/phases/35-phala-testnet-tee-migration/35-05-PLAN.md",
+    ".planning/phases/35-phala-testnet-tee-migration/35-06-PLAN.md",
+    ".planning/phases/35-phala-testnet-tee-migration/35-VALIDATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cb/b49e3c765b/0/metadata.json",
+      "transcript": "/cb/b49e3c765b/0/full.jsonl",
+      "content_hash": "/cb/b49e3c765b/0/content_hash.txt",
+      "prompt": "/cb/b49e3c765b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10669,
+    "cache_creation_tokens": 398549,
+    "cache_read_tokens": 13840360,
+    "output_tokens": 84374,
+    "api_call_count": 113
+  }
+}
