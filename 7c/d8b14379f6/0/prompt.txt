@@ -167,3 +167,7 @@ please commit the api-client changes to resolve the api-client drift check in ci
 ---
 
 the log outputs from `pnpm api:generate` show that there are 262 typescript issues in the codebase. please take a look at these logs, and create a gsd:todo to resolve some of these issues and get that number of errors down.
+
+---
+
+/resolve-pr-reviews
