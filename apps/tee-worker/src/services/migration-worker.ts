@@ -38,6 +38,9 @@ export type MigrationBatchResult = {
  * Returns raw bytes for parsing.
  */
 async function decryptEcies(encryptedHex: string, teePrivateKey: Uint8Array): Promise<Uint8Array> {
+  if (!encryptedHex || encryptedHex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(encryptedHex)) {
+    throw new Error('Invalid encrypted config: not a valid hex string');
+  }
   const ciphertext = new Uint8Array(Buffer.from(encryptedHex, 'hex'));
   return await unwrapKey(ciphertext, teePrivateKey);
 }
