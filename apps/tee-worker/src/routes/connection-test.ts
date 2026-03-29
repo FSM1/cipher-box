@@ -16,7 +16,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
-import { decrypt } from 'eciesjs';
+import { unwrapKey } from '@cipherbox/crypto';
 import { getKeypair } from '../services/tee-keys.js';
 import {
   validateEndpointUrl,
@@ -53,7 +53,7 @@ router.post('/connection-test', async (req: Request, res: Response) => {
 
     // 2. Decrypt ECIES-encrypted config in-enclave
     const ciphertext = new Uint8Array(Buffer.from(encryptedConfig, 'hex'));
-    configBytes = new Uint8Array(decrypt(keypair.privateKey, ciphertext));
+    configBytes = await unwrapKey(ciphertext, keypair.privateKey);
 
     // 3. Zero TEE private key immediately
     keypair.privateKey.fill(0);
