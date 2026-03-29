@@ -15,7 +15,6 @@ const isExternalTarget = process.env.BASE_URL && !process.env.BASE_URL.includes(
 
 export default defineConfig({
   testDir: './tests',
-  testIgnore: ['**/load-test.spec.ts'],
 
   // No global setup needed - tests handle their own authentication
   // (Removed globalSetup: './global-setup.ts')
