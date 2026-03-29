@@ -128,7 +128,8 @@ jobs:
           echo "Latest main commit: ${MAIN_SHA}"
 
           # Poll for the CI E2E orchestrator run to complete (it triggers on the same push)
-          MAX_ATTEMPTS=30
+          # 40 * 30s = 20 min — matches the web-e2e.yml job timeout
+          MAX_ATTEMPTS=40
           POLL_INTERVAL=30
           echo "Waiting for CI E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
 
