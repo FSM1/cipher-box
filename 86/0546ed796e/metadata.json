@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "860546ed796e",
+  "strategy": "manual-commit",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "apps/tee-worker/Dockerfile"
+  ],
+  "sessions": [
+    {
+      "metadata": "/86/0546ed796e/0/metadata.json",
+      "transcript": "/86/0546ed796e/0/full.jsonl",
+      "content_hash": "/86/0546ed796e/0/content_hash.txt",
+      "prompt": "/86/0546ed796e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2128,
+    "cache_creation_tokens": 91282,
+    "cache_read_tokens": 4725992,
+    "output_tokens": 19172,
+    "api_call_count": 80
+  }
+}
