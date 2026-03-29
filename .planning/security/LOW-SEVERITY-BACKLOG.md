@@ -1,11 +1,11 @@
 # Security Review - LOW Severity Issues Backlog
 
 **Date:** 2026-01-21
-**Source:** Phase 5 Security Review (REVIEW-2026-01-21-phase5.md)
-**Status:** Deferred for future work
+**Source:** Phase 5 Security Review + Phase 9 Desktop Security Review
+**Last audited:** 2026-03-29
+**Status:** 12 open, 7 resolved
 
-These issues were identified during the Phase 5 security review but have low severity
-and are deferred for future implementation.
+Items 1-12 from Phase 5, items 13-19 from Phase 9. Resolved items are struck through.
 
 ---
 
@@ -259,10 +259,11 @@ Consider addressing these when:
 
 ---
 
-## 13. Auth Controller Missing Explicit ThrottlerGuard
+## ~~13. Auth Controller Missing Explicit ThrottlerGuard~~ — RESOLVED
 
 **Location:** `apps/api/src/auth/auth.controller.ts:42`
 **Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-1)
+**Resolved:** ThrottlerGuard now applied with `@Throttle({ default: { limit: 10, ttl: 60000 } })` on login endpoint.
 
 **Issue:** The auth controller does not have `@UseGuards(ThrottlerGuard)`, unlike the IPNS controller. While global ThrottlerModule exists, NestJS requires the guard to be applied per-controller.
 
@@ -270,10 +271,11 @@ Consider addressing these when:
 
 ---
 
-## 14. IPNS Name in Query Parameter Not URL-Encoded
+## ~~14. IPNS Name in Query Parameter Not URL-Encoded~~ — RESOLVED
 
-**Location:** `apps/desktop/src-tauri/src/api/ipns.rs:29`
+**Location:** `crates/api-client/src/ipns.rs` (moved from `apps/desktop/src-tauri/src/api/ipns.rs`)
 **Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-2)
+**Resolved:** Phase 23 (Rust SDK extraction) — `urlencoding::encode()` now used.
 
 **Issue:** `format!("/ipns/resolve?ipnsName={}", ipns_name)` -- no URL encoding. Currently safe (IPNS names are `[a-z0-9]`) but establishes a fragile pattern.
 
@@ -281,10 +283,11 @@ Consider addressing these when:
 
 ---
 
-## 15. Debug eprintln! Statements Leak Filenames to stderr
+## ~~15. Debug eprintln! Statements Leak Filenames to stderr~~ — RESOLVED
 
-**Location:** `apps/desktop/src-tauri/src/fuse/operations.rs:1638-1641` and others
+**Location:** `crates/fuse/src/` (moved from `apps/desktop/src-tauri/src/fuse/`)
 **Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-3)
+**Resolved:** Removed before Phase 9 merge. Confirmed in `.planning/todos/done/2026-02-10-remove-debug-eprintln-statements.md`.
 
 **Issue:** Multiple `eprintln!(">>>` statements bypass log-level filtering and leak filenames (sensitive in a privacy-focused app). Already noted in project memory as pre-merge cleanup.
 
@@ -292,10 +295,11 @@ Consider addressing these when:
 
 ---
 
-## 16. Private Key Logged by Length in auth.ts
+## ~~16. Private Key Logged by Length in auth.ts~~ — RESOLVED
 
-**Location:** `apps/desktop/src/auth.ts:167`
+**Location:** `apps/desktop/src/auth.ts`
 **Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-4)
+**Resolved:** Phase 28 (Code Hygiene & Logging) — console.log removed.
 
 **Issue:** `console.log('Got private key, length:', privateKey.length)` -- logs the length (always 64 hex chars), not the key itself. Not a secret leak, but establishes a risky log-adjacent pattern.
 
@@ -303,10 +307,11 @@ Consider addressing these when:
 
 ---
 
-## 17. Ed25519 Stack Key Copy Not Zeroized
+## ~~17. Ed25519 Stack Key Copy Not Zeroized~~ — RESOLVED
 
-**Location:** `apps/desktop/src-tauri/src/crypto/ed25519.rs:50-56`
+**Location:** `crates/crypto/src/ed25519.rs` (moved from `apps/desktop/src-tauri/src/crypto/`)
 **Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-5)
+**Resolved:** Phase 23 (Rust SDK extraction) — `key_bytes.zeroize()` called after `SigningKey::from_bytes()`.
 
 **Issue:** `key_bytes: [u8; 32]` stack copy of Ed25519 private key is not zeroized (the `SigningKey` itself IS auto-zeroized via the `zeroize` feature).
 
@@ -328,10 +333,11 @@ Consider addressing these when:
 
 ---
 
-## 19. Sync Daemon Error Messages Exposed Raw in Tray Status
+## ~~19. Sync Daemon Error Messages Exposed Raw in Tray Status~~ — RESOLVED
 
-**Location:** `apps/desktop/src-tauri/src/sync/mod.rs:158-161`
+**Location:** `apps/desktop/src-tauri/src/sync/mod.rs`, `crates/sdk/src/sync.rs`
 **Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-7)
+**Resolved:** `sanitize_error()` in `crates/sdk/src/sync.rs` strips paths, tokens, and truncates to 80 chars.
 
 **Issue:** Raw error strings (potentially containing API URLs, CIDs, internal info) passed to tray status display.
 
@@ -340,3 +346,4 @@ Consider addressing these when:
 ---
 
 _Generated from security:review command - Phase 5, Phase 9_
+_Last audited: 2026-03-29 — 7 items resolved (#13-19), 12 items open (#1-12)_
