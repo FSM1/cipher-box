@@ -67,8 +67,8 @@ jobs:
 
       - uses: docker/build-push-action@v5
         with:
-          context: ./tee-worker
-          file: tee-worker/Dockerfile
+          context: .
+          file: apps/tee-worker/Dockerfile
           push: true
           tags: |
             ${{ env.TEE_IMAGE }}:${{ env.DEPLOY_TAG }}
