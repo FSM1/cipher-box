@@ -10,9 +10,14 @@ const __dirname = dirname(__filename);
 // Load environment variables from .env file
 config({ path: resolve(__dirname, '.env') });
 
+// When BASE_URL points to an external environment (staging/prod), skip local webServer startup
+const isExternalTarget =
+  process.env.BASE_URL &&
+  !process.env.BASE_URL.includes('localhost') &&
+  !process.env.BASE_URL.includes('127.0.0.1');
+
 export default defineConfig({
   testDir: './tests',
-  testIgnore: ['**/load-test.spec.ts'],
 
   // No global setup needed - tests handle their own authentication
   // (Removed globalSetup: './global-setup.ts')
@@ -31,8 +36,8 @@ export default defineConfig({
   reporter: process.env.CI ? [['html', { open: 'never' }]] : 'list',
 
   use: {
-    // Base URL for app under test
-    baseURL: 'http://localhost:5173',
+    // Base URL for app under test (override with BASE_URL env var for staging)
+    baseURL: process.env.BASE_URL || 'http://localhost:5173',
 
     // Capture artifacts on failure only
     screenshot: 'only-on-failure',
@@ -52,34 +57,39 @@ export default defineConfig({
   ],
 
   // Web server configuration - start API, web app, and mock IPNS routing service
+  // Skipped when BASE_URL points to an external environment (staging/prod)
   // Note: Commands run from the workspace root (two levels up from tests/web-e2e)
-  webServer: [
-    {
-      // Mock IPNS routing service - must start first as API depends on it
-      // Uses MOCK_IPNS_URL env var to allow external server (e.g., Docker)
-      command: 'node tools/mock-ipns-routing/dist/index.js',
-      url: process.env.MOCK_IPNS_URL || 'http://localhost:3001/health',
-      reuseExistingServer: true, // Always reuse if available
-      timeout: 30000,
-      cwd: resolve(__dirname, '../..'),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    },
-    {
-      command: 'pnpm --filter @cipherbox/api dev',
-      url: 'http://localhost:3000/health',
-      reuseExistingServer: !process.env.CI,
-      timeout: 120000,
-      cwd: resolve(__dirname, '../..'),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    },
-    {
-      command: 'pnpm --filter @cipherbox/web dev',
-      url: 'http://localhost:5173',
-      reuseExistingServer: !process.env.CI,
-      timeout: 120000,
-      cwd: resolve(__dirname, '../..'),
-    },
-  ],
+  ...(isExternalTarget
+    ? {}
+    : {
+        webServer: [
+          {
+            // Mock IPNS routing service - must start first as API depends on it
+            // Uses MOCK_IPNS_URL env var to allow external server (e.g., Docker)
+            command: 'node tools/mock-ipns-routing/dist/index.js',
+            url: process.env.MOCK_IPNS_URL || 'http://localhost:3001/health',
+            reuseExistingServer: true, // Always reuse if available
+            timeout: 30000,
+            cwd: resolve(__dirname, '../..'),
+            stdout: 'pipe',
+            stderr: 'pipe',
+          },
+          {
+            command: 'pnpm --filter @cipherbox/api dev',
+            url: 'http://localhost:3000/health',
+            reuseExistingServer: !process.env.CI,
+            timeout: 120000,
+            cwd: resolve(__dirname, '../..'),
+            stdout: 'pipe',
+            stderr: 'pipe',
+          },
+          {
+            command: 'pnpm --filter @cipherbox/web dev',
+            url: 'http://localhost:5173',
+            reuseExistingServer: !process.env.CI,
+            timeout: 120000,
+            cwd: resolve(__dirname, '../..'),
+          },
+        ],
+      }),
 });

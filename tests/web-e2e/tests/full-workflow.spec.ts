@@ -2,6 +2,7 @@ import { test, expect, Page, Browser, BrowserContext } from '@playwright/test';
 import type { PrivateKeyAccount } from 'viem/accounts';
 import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
+import { deleteAccountViaPage } from '../utils/cleanup-helpers';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
 import { ContextMenuPage } from '../page-objects/file-browser/context-menu.page';
@@ -147,6 +148,11 @@ test.describe.serial('Full Workflow', () => {
   test.afterAll(async () => {
     // Cleanup test files from filesystem
     cleanupTestFiles();
+
+    // Delete test account before closing context (page must still be navigable)
+    if (page) {
+      await deleteAccountViaPage(page);
+    }
 
     // Close context
     if (context) {

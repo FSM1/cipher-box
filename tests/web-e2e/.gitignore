@@ -7,3 +7,7 @@ node_modules/
 /fixtures/files/*
 !/fixtures/files/.gitkeep
 !/fixtures/files/test-image.png
+!/fixtures/files/test-video.mp4
+!/fixtures/files/test-video-small.mp4
+!/fixtures/files/test-audio.mp3
+!/fixtures/files/test-document.pdf

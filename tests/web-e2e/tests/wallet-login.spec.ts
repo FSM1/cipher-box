@@ -4,6 +4,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { mainnet } from 'viem/chains';
 import { custom } from 'viem';
 import { LoginPage } from '../page-objects/login.page';
+import { deleteAccountViaPage } from '../utils/cleanup-helpers';
 
 /**
  * Local-only transport for the mock wallet.
@@ -62,6 +63,11 @@ test.describe('TC09: Wallet login happy path (with mock wallet)', () => {
 
     loginPage = new LoginPage(page);
     await loginPage.goto();
+  });
+
+  test.afterEach(async ({ page }) => {
+    // Best-effort account cleanup (SIWE flow may or may not have created an account)
+    await deleteAccountViaPage(page);
   });
 
   test('wallet button is visible and enabled', async () => {
