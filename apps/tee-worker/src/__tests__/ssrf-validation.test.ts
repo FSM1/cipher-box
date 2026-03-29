@@ -134,7 +134,7 @@ describe('ssrf-validation', () => {
   });
 
   describe('ssrfSafeFetch', () => {
-    it('pins DNS and sets redirect to error in CVM mode', async () => {
+    it('pins DNS via custom Agent lookup in CVM mode', async () => {
       const dns = await import('node:dns/promises');
       vi.mocked(dns.lookup).mockResolvedValue({ address: '93.184.216.34', family: 4 });
 
@@ -143,12 +143,15 @@ describe('ssrf-validation', () => {
 
       await ssrfSafeFetch('https://example.com/test', { method: 'GET' });
 
-      // URL should have pinned IP, with Host header for TLS SNI
-      expect(mockFetch).toHaveBeenCalledWith('https://93.184.216.34/test', {
-        method: 'GET',
-        redirect: 'error',
-        headers: { host: 'example.com' },
-      });
+      // URL should be unchanged (hostname preserved for TLS SNI)
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/test',
+        expect.objectContaining({
+          method: 'GET',
+          redirect: 'error',
+          dispatcher: expect.any(Object),
+        })
+      );
     });
 
     it('rejects DNS resolving to private IP', async () => {
@@ -165,14 +168,14 @@ describe('ssrf-validation', () => {
 
       await ssrfSafeFetch('https://example.com/test', { method: 'GET' });
 
-      // In simulator mode, URL is passed through unchanged
+      // In simulator mode, no dispatcher (no DNS pinning)
       expect(mockFetch).toHaveBeenCalledWith('https://example.com/test', {
         method: 'GET',
         redirect: 'error',
       });
     });
 
-    it('preserves request options and adds Host header in CVM mode', async () => {
+    it('preserves request options in CVM mode', async () => {
       const dns = await import('node:dns/promises');
       vi.mocked(dns.lookup).mockResolvedValue({ address: '93.184.216.34', family: 4 });
 
@@ -186,9 +189,9 @@ describe('ssrf-validation', () => {
 
       const callArgs = mockFetch.mock.calls[0][1];
       expect(callArgs.method).toBe('POST');
-      expect(callArgs.headers).toHaveProperty('authorization', 'Bearer token');
-      expect(callArgs.headers).toHaveProperty('host', 'example.com');
+      expect(callArgs.headers).toEqual({ Authorization: 'Bearer token' });
       expect(callArgs.redirect).toBe('error');
+      expect(callArgs.dispatcher).toBeDefined();
     });
   });
 

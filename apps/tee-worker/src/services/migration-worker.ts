@@ -104,10 +104,10 @@ export async function migrateBatch(
 
   // 2b. SSRF validation on both endpoints
   // DNS rebinding protection is handled by ssrfSafeFetch (DNS pinning in CVM mode)
-  if (sourceConfig.endpoint !== 'cipherbox') {
+  if (sourceConfig.protocol !== 'cipherbox') {
     validateEndpointUrl(sourceConfig.endpoint);
   }
-  if (destConfig.endpoint !== 'cipherbox') {
+  if (destConfig.protocol !== 'cipherbox') {
     validateEndpointUrl(destConfig.endpoint);
   }
 

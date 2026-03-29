@@ -7,7 +7,9 @@
  * Extracted from migration-worker.ts for reuse across TEE routes.
  */
 
-import { lookup } from 'node:dns/promises';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import type { LookupAddress } from 'node:dns';
+import { Agent } from 'undici';
 
 /**
  * Check if an address (hostname or resolved IP) is in a private/internal range.
@@ -78,7 +80,7 @@ export function validateEndpointUrl(endpoint: string): void {
  * Prevents attacker.com -> 169.254.169.254 attacks.
  */
 export async function validateResolvedIp(hostname: string): Promise<void> {
-  const result = await lookup(hostname);
+  const result = await dnsLookup(hostname);
   if (isPrivateAddress(result.address)) {
     throw new Error('Endpoint DNS resolves to private address');
   }
@@ -88,8 +90,9 @@ export async function validateResolvedIp(hostname: string): Promise<void> {
  * SSRF-safe fetch with DNS pinning to prevent TOCTOU rebinding attacks.
  *
  * In CVM mode: resolves hostname, validates the IP is not private, then
- * connects directly to the resolved IP with Host header for TLS SNI.
- * This eliminates the gap between DNS validation and HTTP connection.
+ * uses an undici Agent with a custom lookup that returns the pinned IP.
+ * This keeps the original hostname in the URL for TLS SNI/certificate
+ * validation while forcing the TCP connection to the validated address.
  *
  * In simulator mode: skips DNS pinning (no SSRF risk in dev).
  */
@@ -99,22 +102,30 @@ export async function ssrfSafeFetch(url: string, init?: RequestInit): Promise<Re
   }
 
   const parsed = new URL(url);
-  const { address } = await lookup(parsed.hostname);
+  const { address, family } = await dnsLookup(parsed.hostname);
 
   if (isPrivateAddress(address)) {
     throw new Error('Endpoint DNS resolves to private address');
   }
 
-  // Pin the resolved IP: replace hostname with IP, set Host header for TLS SNI
-  const pinnedUrl = new URL(url);
-  pinnedUrl.hostname = address;
+  // Pin the resolved IP via custom Agent lookup — preserves hostname for TLS SNI.
+  const pinnedLookup: LookupAddress = { address, family };
+  const agent = new Agent({
+    connect: {
+      lookup: (
+        _hostname: string,
+        _options: unknown,
+        callback: (err: Error | null, result: LookupAddress[]) => void
+      ) => {
+        callback(null, [pinnedLookup]);
+      },
+    },
+  });
 
-  const mergedHeaders = new Headers(init?.headers);
-  mergedHeaders.set('host', parsed.hostname);
-
-  return fetch(pinnedUrl.toString(), {
+  return fetch(url, {
     ...init,
     redirect: 'error',
-    headers: Object.fromEntries(mergedHeaders.entries()),
+    // @ts-expect-error -- Node.js fetch accepts undici dispatcher
+    dispatcher: agent,
   });
 }
