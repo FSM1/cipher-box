@@ -31,7 +31,8 @@ router.post('/migrate', async (req: Request, res: Response) => {
   };
 
   // Use request-provided epoch, falling back to env var
-  const epoch = currentEpoch ?? parseInt(process.env.TEE_CURRENT_EPOCH || '1', 10);
+  const parsedEnvEpoch = parseInt(process.env.TEE_CURRENT_EPOCH || '1', 10);
+  const epoch = currentEpoch ?? (Number.isFinite(parsedEnvEpoch) ? parsedEnvEpoch : 1);
 
   if (!cids || !Array.isArray(cids) || !sourceConfigEncrypted || !destConfigEncrypted) {
     res.status(400).json({
