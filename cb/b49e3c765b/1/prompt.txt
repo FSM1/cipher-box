@@ -1,0 +1,72 @@
+could you go through the @.planning/research/m4/ docs and identify if any items listed/planned for m4 phases could be moved to the current milestone. Any billing/teams/productivity suite/signing features should remain in milestone 4, but if there are any features or phases that are more directly related to the existing core components that this milestone has been dealing with, it might make sense to incorporate these in to M3
+
+---
+
+I think before moving the AWS Nitro TEE bit in to M3, it would likely be wise to create a phase as part of M3, to migrate the staging environment off the current TEE implementation running on the same docker host, to some phala testnet infra.
+
+---
+
+yeah that seems like a great scope for phase 35.
+
+---
+
+ok, do you think this phase 35 requires discussion or are things clear enough that you can jump in to research and planning?
+
+---
+
+ok switch to a phase 35 branch, and lets kick off phase planning, which will include research.
+
+---
+
+<task-notification>
+<task-id>a58468ae08d2664fe</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/a58468ae08d2664fe.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 35 TEE migration" completed</summary>
+<result>## RESEARCH COMPLETE
+
+**Phase:** 35 - Phala Testnet TEE Migration
+**Confidence:** MEDIUM
+
+### Key Findings
+
+- **Minimal code changes required.** The TEE worker already has a `TEE_MODE=cvm` code path at `tee-worker/src/services/tee-keys.ts` that dynamically imports `@phala/dstack-sdk` and calls `DstackClient.getKey()`. The primary work is infrastructure deployment and CI/CD pipeline changes.
+
+- **Critical socket path change.** The existing `tee-worker/docker-compose.yml` mounts `/var/run/tappd.sock` (dstack OS 0.3.x legacy). Current dstack OS 0.5.x uses `/var/run/dstack.sock`. The Phala CVM docker-compose must use the new path.
+
+- **SDK return type may have changed.** The existing type stubs declare `getKey()` returns `{ asUint8Array(): Uint8Array }`, but current SDK v0.5.7 documentation shows `{ key: Uint8Array }`. Code at `tee-keys.ts:48` uses `keyResult.asUint8Array().slice(0, 32)` which needs verification and defensive handling.
+
+- **Key epoch transition is the hardest problem.** Switching from simulator to CVM produces entirely different keys for the same epoch, since simulator uses HKDF with a fixed seed while CVM uses hardware-backed derivation from `app_id`. All existing IPNS entries encrypted with simulator public keys become undecryptable. For staging, the simplest path is wiping the `ipns_republish_schedule` table and re-enrolling.
+
+- **CI/CD integration is well-documented.** Phala Cloud provides `phala deploy` CLI that auto-detects existing CVMs by name and updates them. A GitHub Actions step using `PHALA_CLOUD_API_KEY` secret can be added to `deploy-staging.yml` to replace the `build-tee` job's VPS deployment with Phala Cloud CVM deployment.
+
+### File Created
+
+`/Users/michael/Code/cipher-box-worktree-general/.planning/phases/35-phala-testnet-tee-migration/35-RESEARCH.md`
+
+### Confidence Assessment
+
+| Area | Level | Reason |
+| --- | --- | --- |
+| Standard Stack | HIGH | Existing code, well-documented SDK, verified npm versions |
+| Architecture | MEDIUM | CVM deployment process clear; SDK return type and key persistence need runtime verification |
+| Pitfalls | HIGH | Socket path change, key drift, epoch transition risks well-documented with mitigations |
+| CI/CD | HIGH | Official Phala Cloud GitHub Actions docs match the project's existing workflow pattern |
+
+### Open Questions
+
+1. **SDK v0.5.7 `getKey()` return type** -- need to install and inspect actual types (asUint8Array vs key property)
+2. **Phala Cloud free tier adequacy** -- should suffice for a lightweight Express server but needs verification
+3. **Key persistence across CVM updates** -- `phala deploy` with same name should preserve app_id but must be verified
+4. **Epoch transition strategy** -- staging can wipe + re-enroll; production migration path needs future design
+
+### Ready for Planning
+
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><total_tokens>120320</total_tokens><tool_uses>98</tool_uses><duration_ms>560212</duration_ms></usage>
+</task-notification>
+
+---
+
+continue please

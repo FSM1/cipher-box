@@ -3,7 +3,7 @@
   "checkpoint_id": "cbb49e3c765b",
   "strategy": "manual-commit",
   "branch": "phase-35-phala-testnet-tee-migration",
-  "checkpoints_count": 9,
+  "checkpoints_count": 10,
   "files_touched": [
     ".planning/ROADMAP.md",
     ".planning/phases/35-phala-testnet-tee-migration/35-01-PLAN.md",
@@ -20,13 +20,19 @@
       "transcript": "/cb/b49e3c765b/0/full.jsonl",
       "content_hash": "/cb/b49e3c765b/0/content_hash.txt",
       "prompt": "/cb/b49e3c765b/0/prompt.txt"
+    },
+    {
+      "metadata": "/cb/b49e3c765b/1/metadata.json",
+      "transcript": "/cb/b49e3c765b/1/full.jsonl",
+      "content_hash": "/cb/b49e3c765b/1/content_hash.txt",
+      "prompt": "/cb/b49e3c765b/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 10669,
-    "cache_creation_tokens": 398549,
-    "cache_read_tokens": 13840360,
-    "output_tokens": 84374,
-    "api_call_count": 113
+    "input_tokens": 10745,
+    "cache_creation_tokens": 710344,
+    "cache_read_tokens": 18911503,
+    "output_tokens": 101916,
+    "api_call_count": 172
   }
 }
