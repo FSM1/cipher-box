@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "bd28f7731561",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-ctr-upload",
+  "checkpoints_count": 6,
+  "files_touched": [
+    ".planning/todos/done/2026-03-29-sdk-uploadfile-hardcodes-gcm-wire-ctr-encryption-for-media-uploads.md",
+    ".planning/todos/pending/2026-03-29-sdk-uploadfile-hardcodes-gcm-wire-ctr-encryption-for-media-uploads.md",
+    "packages/sdk-core/src/__tests__/ipns.test.ts",
+    "packages/sdk-core/src/__tests__/vault.test.ts",
+    "packages/sdk-core/src/upload/index.ts",
+    "packages/sdk/src/client.ts",
+    "tests/web-e2e/tests/streaming-playback.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bd/28f7731561/0/metadata.json",
+      "transcript": "/bd/28f7731561/0/full.jsonl",
+      "content_hash": "/bd/28f7731561/0/content_hash.txt",
+      "prompt": "/bd/28f7731561/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 73,
+    "cache_creation_tokens": 67491,
+    "cache_read_tokens": 3351281,
+    "output_tokens": 13237,
+    "api_call_count": 58
+  }
+}
