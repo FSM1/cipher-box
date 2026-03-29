@@ -3,7 +3,7 @@ services:
   tee-worker:
     build: .
     volumes:
-      - /var/run/tappd.sock:/var/run/tappd.sock
+      - /var/run/dstack.sock:/var/run/dstack.sock
     ports:
       - '3001:3001'
     restart: unless-stopped
