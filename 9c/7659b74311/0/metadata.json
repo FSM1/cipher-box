@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "9c7659b74311",
+  "session_id": "c330798c-ab40-490c-8805-6ed8f1747898",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T16:18:14.054127Z",
+  "branch": "fix/release-gate-retrigger-on-main-push",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "68e7a1bcc785",
+  "token_usage": {
+    "input_tokens": 241,
+    "cache_creation_tokens": 198514,
+    "cache_read_tokens": 11620671,
+    "output_tokens": 58262,
+    "api_call_count": 169
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Monitor PR #392 for incoming automated reviews from Copilot and CodeRabbit, resolve all review comments, then fix a release gate bug where test: commits were not requiring E2E verification before release-please PRs could merge.",
+    "outcome": "All 3 review comments (1 Copilot, 2 CodeRabbit) were fixed, committed, and resolved. A new ci-e2e.yml orchestrator workflow was created to unify change detection and conditionally run web/desktop E2E, with the release gate updated to poll the orchestrator. The retrigger mechanism ensures stale release-please gate passes are invalidated when new commits land on main.",
+    "learnings": {
+      "repo": [
+        "Release gate only enforced E2E for release-please--* branches; non-release PRs auto-passed with 'Not a release PR — E2E gate not applicable', creating a silent merge gap",
+        "test: and chore: commits don't trigger release-please to update the release PR, meaning the gate could pass green and then never re-run when those commits landed",
+        "desktop-e2e.yml already used dorny/paths-filter + conditional job pattern; web e2e.yml did not — the two were inconsistent",
+        "E2E runs were unconditionally triggered on every push to main regardless of what changed, wasting CI minutes",
+        "Committed fixture files (test-audio.mp3, test-document.pdf, test-video*.mp4) live in tests/web-e2e/fixtures/files/ and must not be overwritten by test helper functions",
+        "The createTestMediaFile/createTestImageFile/createTestTextFile/createTestBinaryFile helpers lacked guards against overwriting committed fixtures during cleanup"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/test-files.ts",
+          "line": 156,
+          "end_line": 156,
+          "finding": "Added COMMITTED_FIXTURES guard to all createTest*File helpers to prevent cleanup from deleting committed fixture files when test-generated file name matches a fixture"
+        },
+        {
+          "path": "tests/web-e2e/baselines/staging-journey-timing.json",
+          "line": 1,
+          "end_line": 19,
+          "finding": "Missing faro_enabled: true metadata field in baseline JSON — CodeRabbit caught this as a schema gap"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 14,
+          "end_line": 16,
+          "finding": "page.evaluate() called without page.isClosed() guard in teardown, which would throw if the page was already closed"
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "line": 214,
+          "end_line": 214,
+          "finding": "gh run rerun needed to filter for status == completed before retrying, otherwise it may attempt to rerun an in-progress run"
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "line": 193,
+          "end_line": 193,
+          "finding": "retrigger-release-gate job was missing pull-requests: read permission needed to list open release-please PRs"
+        }
+      ],
+      "workflow": [
+        "Polling for bot reviews with background bash tasks (sleep + gh api) is fragile — CodeRabbit has quota cooldowns (~23 min) that require adaptive polling intervals",
+        "When a required check auto-passes for certain PR types, it becomes a false safety net — required checks must fail loudly or not run at all, never silently pass",
+        "Using workflow_call to invoke reusable workflows from an orchestrator keeps individual workflow files clean and avoids duplicating push triggers and path filters",
+        "After resolving review comments, REST API requires integer comment ID for in_reply_to (--field not -f), while GraphQL thread IDs use string node IDs — these are different identifiers"
+      ]
+    },
+    "friction": [
+      "CodeRabbit rate-limited for ~23 minutes after initial review request, requiring ~40 minutes of polling before its review arrived",
+      "Confusion between REST comment IDs (integers) and GraphQL thread node IDs (strings) required extra API calls to look up correct IDs for reply vs resolve operations",
+      "First fix attempt (PR #393) solved the wrong problem — tried to run E2E on feature PRs instead of addressing the stale gate on release PRs; PR had to be closed and redone",
+      "Second fix attempt (PR #394) also initially missed the root cause, then required a user correction to understand the real issue was the gate not re-running after test: commits landed",
+      "Background poll tasks proliferated (20+ tasks) making it hard to track which polls were still relevant vs stale"
+    ],
+    "open_items": [
+      "ci-e2e.yml orchestrator was committed but the session ended before the PR was created for the orchestrator refactor — unclear if that branch was pushed and PR opened",
+      "release-gate.yml was updated to poll ci-e2e.yml but the full verification of the new orchestrator flow in production hasn't happened yet",
+      "Pending todo: debug BYO IPFS register-cid 400 errors on staging (seen in .planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md)",
+      "The retrigger-release-gate job re-runs the gate workflow but doesn't verify that the re-run actually sees the new MAIN_SHA — worth validating this end-to-end once the orchestrator PR merges"
+    ]
+  }
+}
