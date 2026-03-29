@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: "Phase 33 shipped — PR #389"
-last_updated: "2026-03-29T00:00:00.000Z"
+status: "Phase 35 in progress — plan 01/06 complete"
+last_updated: "2026-03-29T05:21:33.000Z"
 last_activity: 2026-03-29
 progress:
-  total_phases: 18
+  total_phases: 19
   completed_phases: 18
-  total_plans: 72
-  completed_plans: 72
+  total_plans: 78
+  completed_plans: 73
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 33 — Windows Async FilePointer Resolution (shipped, PR #389)
+**Current focus:** Phase 35 — Phala Testnet TEE Migration
 
 ## Current Position
 
-Phase: 33 (Windows Async FilePointer Resolution) — COMPLETE
-Plan: 2/2 complete
+Phase: 35 (Phala Testnet TEE Migration)
+Plan: 1/6 complete
 
 ## Performance Metrics
 
@@ -81,6 +81,7 @@ Plan: 2/2 complete
 | 27    | 03   | 25min    | 3     | 15    |
 | Phase 33 P01 | 11min | 2 tasks | 3 files |
 | Phase 33 P02 | 3min | 1 tasks | 3 files |
+| 35    | 01   | 10min    | 8     | 31    |
 
 ## Accumulated Context
 
@@ -162,6 +163,9 @@ Recent for v1.1:
 - FilePointer resolution uses FileMetadata directly (no separate ResolvedFileMetadata struct)
 - FilePointer resolution scoped to parent folder via get_unresolved_file_pointers_for_parent() to avoid wrong-folder-key decryption
 - FilePointer async resolution: 500ms base * 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
+- TEE worker moved to apps/tee-worker/ consistent with monorepo apps/ convention
+- ProviderOptions uses FetchFn type alias (not typeof globalThis.fetch) for ssrfSafeFetch compatibility
+- TEE worker Dockerfile uses pnpm workspace build chain with deploy --prod --legacy
 
 ### Roadmap Evolution
 
@@ -194,4 +198,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-03-28
+Last activity: 2026-03-29
