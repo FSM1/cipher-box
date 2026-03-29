@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread (completed 2026-03-28)
 - [x] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend (completed 2026-03-28)
 - [ ] **Phase 34: E2E Test Expansion & Staging Baselines** - Streaming playback, media preview, batch download, and shared teardown E2E tests; BYO-IPFS load test and Faro metrics baselines on staging
-- [ ] **Phase 35: Phala Testnet TEE Migration** - Replace staging TEE simulator with real Phala testnet CVM deployment, validate hardware-backed key derivation and IPNS republishing end-to-end
+- [x] **Phase 35: Phala Testnet TEE Migration** - Replace staging TEE simulator with real Phala testnet CVM deployment, validate hardware-backed key derivation and IPNS republishing end-to-end (completed 2026-03-29)
 
 ## Phase Details
 
@@ -437,7 +437,7 @@ Plans:
 4. Republish latency on Phala testnet is within acceptable bounds (< 2x simulator latency per batch) and captured as new staging baselines
 5. Staging docker-compose no longer runs a local `tee-worker` container -- the TEE is fully external on Phala testnet
 
-**Plans:** 4/6 plans executed
+**Plans:** 6/6 plans complete
 
 ## Progress
 
@@ -465,7 +465,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete    | 2026-03-28 |
 | 34. E2E Test Expansion & Baselines        | v1.1      | 0/4            | Not Started | -          |
-| 35. Phala Testnet TEE Migration           | v1.1      | 4/6 | In Progress|  |
+| 35. Phala Testnet TEE Migration           | v1.1      | 6/6 | Complete   | 2026-03-29 |
 
 ### Phase 27: Writable Shares (PoC)
 
