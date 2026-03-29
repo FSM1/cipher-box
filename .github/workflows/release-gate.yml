@@ -72,15 +72,19 @@ jobs:
             'apps/desktop/src-tauri/capabilities/'
             'apps/desktop/src-tauri/resources/'
             'apps/desktop/src-tauri/Cargo.toml'
-            'apps/desktop/src-tauri/Cargo.lock'
             'apps/desktop/src-tauri/build.rs'
             'apps/desktop/src-tauri/rust-toolchain.toml'
             'apps/desktop/index.html'
             'apps/desktop/vite.config.'
             'apps/desktop/tsconfig'
+            'crates/'
+            'Cargo.toml'
+            'Cargo.lock'
+            'tests/vectors/'
             'packages/crypto/src/'
             'packages/crypto/tsconfig'
             '.github/workflows/desktop-e2e.yml'
+            '.github/workflows/ci-e2e.yml'
           )
 
           CHANGED_FILES=$(git diff --name-only "${PREV_TAG}..${MAIN_REF}")
@@ -159,7 +163,9 @@ jobs:
             exit 1
           fi
 
-          # Verify the Web E2E job actually ran (not skipped due to no web changes)
+          # Verify the Web E2E job actually ran (not skipped due to no web changes).
+          # When ci-e2e.yml calls e2e.yml via workflow_call, the job name is
+          # composed as "Web E2E / Web E2E Tests" — contains("Web E2E") matches both.
           WEB_E2E_RAN=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
             --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length')
 
