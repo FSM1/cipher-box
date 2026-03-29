@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5d89428fe42f",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T11:08:13.078245Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "e6b5d5b7f6c0",
+  "token_usage": {
+    "input_tokens": 393,
+    "cache_creation_tokens": 517503,
+    "cache_read_tokens": 30504767,
+    "output_tokens": 67546,
+    "api_call_count": 216
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E Test Expansion \u0026 Staging Baselines) using GSD wave-based parallel execution, including creating shared cleanup helpers, media/streaming tests, batch download tests, and capturing staging performance baselines.",
+    "outcome": "All 4 plans completed and verified (13/13 must-haves passed). Real 200-client sustained load baselines captured (0.17% error rate, 11,174 ops). BYO Pinata baselines documented with note that free tier limits were exhausted during testing.",
+    "learnings": {
+      "repo": [
+        "Staging Web3Auth SDK initialization takes ~22.7s — wallet button timeout in journey-timing.spec.ts needed to be increased from 20s to 45s for staging runs",
+        "Playwright config BASE_URL env var was not respected — playwright.config.ts needed explicit `process.env.BASE_URL` override with webServer conditional startup disabled when targeting staging",
+        "deleteAccountViaPage cleanup helper used hardcoded localhost:3000 API URL — needs to derive API URL from the current page URL (app-staging maps to api-staging)",
+        "vitest does not auto-load .env files — requires explicit env sourcing via shell before running (e.g., `set -a \u0026\u0026 source .env \u0026\u0026 set +a`)",
+        "Running two load test suites simultaneously against staging causes 429s even with throttle bypass — the bypass works correctly but concurrent test runs saturate the instance",
+        "Pinata free tier storage/pin limits were exhausted during BYO capacity ceiling testing — all pin operations failed with 'Plan limits exceeded', not an auth or code issue",
+        "The sdk-level load test harness (tests/load/) uses vitest with a client-pool pattern supporting stepped client escalation (50→100→200→500→1000) for capacity ceiling tests",
+        "CI throttle bypass works because NODE_ENV=test sets limits to 200/sec; staging keeps production limits — bypass header is the only mechanism to override on staging"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "walletButton.waitFor timeout of 20000ms too short for staging — Web3Auth init takes ~22.7s on staging vs local"
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "finding": "baseURL was not reading process.env.BASE_URL and webServer block needed to be conditionally disabled when BASE_URL is set to an external staging URL"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "finding": "API URL detection needed to derive staging API URL from page URL (replace app-staging with api-staging) rather than using hardcoded localhost"
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "finding": "vitest does not load .env files — loadEnv is a Vite export not available in vitest context; solution is shell-level env sourcing before test runs"
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/pinata-provider.ts",
+          "finding": "PinataProvider code is correct — pin failures during load test were Pinata plan quota exhaustion, not a code bug"
+        }
+      ],
+      "workflow": [
+        "Cherry-picking commits from worktree branches to the phase branch requires careful conflict resolution on STATE.md (always take worktree version for STATE.md conflicts)",
+        "Git worktree cleanup requires `git worktree remove --force` and sometimes manual `rm -rf` when the worktree has uncommitted changes or lock files",
+        "When debugging 'bypass header not working', eliminate concurrent test interference before suspecting env/code issues — the actual root cause here was two simultaneous load test runs",
+        "GSD decimal phases (34.1) are for work inserted mid-milestone; gap closure plans are the right mechanism when work belongs within an existing phase",
+        "Load test vitest threshold failures (exit code 1) do not mean the test produced no data — check output file directly for ops/error rates before concluding failure"
+      ]
+    },
+    "friction": [
+      "Cherry-picking commits from multiple worktree branches to the phase branch caused repeated STATE.md merge conflicts requiring manual resolution",
+      "Git lock files from the 34-03 retry required force-removing the stale worktree before the agent could proceed",
+      "vitest .env loading required workaround (shell sourcing) because vitest has no built-in dotenv support unlike Vite",
+      "Running BYO and sustained load tests simultaneously caused apparent throttle bypass failures — wasted significant debugging time before identifying concurrent execution as root cause",
+      "SSH access to VPS failed (exit code 255/1) blocking direct Docker env inspection — required curl-based verification instead",
+      "Pinata free tier limits exhausted during testing — BYO capacity ceiling baselines only document failure behavior, not successful pin throughput",
+      "Phase 34 was prematurely marked complete (update_roadmap ran) before load test baselines were meaningful — required discussion about whether to insert 34.1 or treat as gap closure"
+    ],
+    "open_items": [
+      "BYO Pinata baselines need to be recaptured with a paid/quota-reset Pinata account — current baselines only show client-side failure behavior",
+      "Sustained load test p95 thresholds (tuned for small client counts) need updating to reflect realistic 200-client expectations",
+      "Human verification item: new media test specs (streaming-playback, media-preview) need a live environment run to confirm binary stub fixtures trigger AES-CTR/GCM code paths correctly",
+      "34-04 HUMAN-UAT.md persists with status: partial and will surface in /gsd:audit-uat until the media fixture verification is completed",
+      "Add note to load test docs: always run one load test suite at a time against staging to avoid false throttle failures",
+      "The BYO load test plan doc notes Pinata quota exhaustion — someone should upgrade the Pinata test account or create a dedicated load-test account before running BYO baselines again"
+    ]
+  }
+}
