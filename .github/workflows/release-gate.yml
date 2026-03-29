@@ -13,6 +13,7 @@ jobs:
       desktop: ${{ steps.check.outputs.desktop || steps.release-check.outputs.desktop }}
       prev_tag: ${{ steps.check.outputs.prev_tag || steps.release-check.outputs.prev_tag }}
       is_release: ${{ steps.release-check.outputs.is_release }}
+      web_changed: ${{ steps.web-check.outputs.changed }}
     steps:
       - name: Check if release PR
         id: release-check
@@ -25,8 +26,26 @@ jobs:
             echo "is_release=false" >> "$GITHUB_OUTPUT"
             echo "desktop=false" >> "$GITHUB_OUTPUT"
             echo "prev_tag=" >> "$GITHUB_OUTPUT"
-            echo "Not a release PR — skipping change detection"
           fi
+
+      - name: Check for web-relevant changes (all PRs)
+        id: web-check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CHANGED_FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[].filename')
+          WEB_CHANGED=false
+          WEB_PATTERNS=("apps/web/" "apps/api/" "packages/" "tests/web-e2e/")
+          for pattern in "${WEB_PATTERNS[@]}"; do
+            if echo "$CHANGED_FILES" | grep -Fq "$pattern"; then
+              echo "Web-relevant change detected matching: ${pattern}"
+              WEB_CHANGED=true
+              break
+            fi
+          done
+          echo "changed=${WEB_CHANGED}" >> "$GITHUB_OUTPUT"
+          echo "Web-relevant changes: ${WEB_CHANGED}"
 
       - uses: actions/checkout@v4
         if: steps.release-check.outputs.is_release == 'true'
@@ -93,9 +112,18 @@ jobs:
           echo "desktop=${DESKTOP_CHANGED}" >> "$GITHUB_OUTPUT"
           echo "Desktop changes detected: ${DESKTOP_CHANGED}"
 
+  run-web-e2e:
+    name: Run Web E2E (Feature PR)
+    needs: detect-changes
+    if: |
+      !startsWith(github.head_ref, 'release-please--') &&
+      needs.detect-changes.outputs.web_changed == 'true'
+    uses: ./.github/workflows/e2e.yml
+    secrets: inherit
+
   verify-e2e:
     name: Verify E2E Passed
-    needs: detect-changes
+    needs: [detect-changes, run-web-e2e]
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -106,9 +134,22 @@ jobs:
           echo "::error::detect-changes must succeed before E2E verification."
           exit 1
 
-      - name: Skip (not a release PR)
-        if: "!startsWith(github.head_ref, 'release-please--')"
-        run: echo "Not a release PR — E2E gate not applicable"
+      - name: Verify Web E2E (feature PR with web changes)
+        if: |
+          !startsWith(github.head_ref, 'release-please--') &&
+          needs.detect-changes.outputs.web_changed == 'true'
+        run: |
+          if [ "${{ needs.run-web-e2e.result }}" != "success" ]; then
+            echo "::error::Web E2E Tests did not pass (result: ${{ needs.run-web-e2e.result }})"
+            exit 1
+          fi
+          echo "Web E2E: passed on feature PR"
+
+      - name: Skip (no web changes)
+        if: |
+          !startsWith(github.head_ref, 'release-please--') &&
+          needs.detect-changes.outputs.web_changed != 'true'
+        run: echo "No web-relevant changes — E2E not required"
 
       - name: Wait for Web E2E and verify it passed
         if: startsWith(github.head_ref, 'release-please--')
