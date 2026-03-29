@@ -201,6 +201,10 @@ jobs:
           fi
           # BYO-IPFS provider config — only exported for byo-* scenarios
           if [[ "${{ inputs.scenario }}" == byo-* ]]; then
+            if [ -z "${{ secrets.LOAD_TEST_BYO_AUTH_TOKEN }}" ]; then
+              echo "::error::LOAD_TEST_BYO_AUTH_TOKEN secret is not set. Required for byo-* scenarios."
+              exit 1
+            fi
             echo "BYO_IPFS_ENDPOINT=${{ inputs.load_test_byo_endpoint }}" >> $GITHUB_ENV
             echo "BYO_IPFS_AUTH_TOKEN=${{ secrets.LOAD_TEST_BYO_AUTH_TOKEN }}" >> $GITHUB_ENV
             echo "BYO_IPFS_PROTOCOL=${{ inputs.load_test_byo_protocol }}" >> $GITHUB_ENV

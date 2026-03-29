@@ -2,8 +2,10 @@
 
 ## Status: PARTIAL -- Pinata pin works, register-cid returns 400 (2026-03-29)
 
-Pinata provider configured and pin operations succeed (p50=718ms). However,
-the CipherBox API rejects `register-cid` and `ipns-publish` calls with HTTP 400.
+Pinata provider configured. Single-client test confirms pin works (p50=718ms),
+but `register-cid` and `ipns-publish` return HTTP 400. The capacity ceiling
+baselines (50-1000 clients) were captured while Pinata free tier was exhausted
+(403 on all pins) -- those measure rejection latency, not pin performance.
 See todo: `debug-byo-ipfs-register-cid-400-errors-on-staging`.
 
 ## Prerequisites
@@ -50,7 +52,7 @@ Three existing load test scenarios in `tests/load/src/scenarios/`:
 | ------------------------ | -------- | ------- | ----------------------------------- |
 | `BYO_IPFS_ENDPOINT`      | Yes      | --      | External provider endpoint URL      |
 | `BYO_IPFS_AUTH_TOKEN`    | Yes      | --      | Auth token for external provider    |
-| `BYO_IPFS_PROTOCOL`      | No       | `kubo`  | `kubo` or `psa`                     |
+| `BYO_IPFS_PROTOCOL`      | No       | `kubo`  | `kubo`, `psa`, or `pinata`          |
 | `BYO_IPFS_PROVIDER_NAME` | No       | --      | Provider label for reports          |
 | `LOAD_TEST_CLIENTS`      | No       | `10`    | Number of BYO clients (upload test) |
 | `LOAD_TEST_CB_CLIENTS`   | No       | `50`    | CB-only clients (mixed workload)    |

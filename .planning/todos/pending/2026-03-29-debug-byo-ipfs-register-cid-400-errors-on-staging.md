@@ -20,7 +20,12 @@ Likely causes:
 - Staging API's BYO endpoint may expect parameters the load test workload doesn't send
 - register-cid endpoint validation may reject CIDs from external providers
 
-Discovered during Phase 34 load testing. Pinata JWT auth confirmed working (direct upload test returned 200 with valid CID).
+Discovered during Phase 34 load testing. Pinata JWT auth confirmed working
+(direct upload test returned 200 with valid CID). Note: the capacity ceiling
+baselines in `staging-byo-capacity-ceiling.json` show all pins failing with
+403 -- those were captured while the Pinata free tier was exhausted. After
+account cleanup, single-client pin succeeded (p50=718ms) but register-cid
+still returned 400.
 
 ## Solution
 
