@@ -45,7 +45,19 @@ export async function getKeypair(
     const { DstackClient } = await import('@phala/dstack-sdk');
     const client = new DstackClient();
     const keyResult = await client.getKey('cipherbox/ipns-republish', `epoch-${epoch}`);
-    privateKey = keyResult.asUint8Array().slice(0, 32);
+
+    // Defensive handling: SDK v0.5+ returns { key: Uint8Array },
+    // older versions returned { asUint8Array(): Uint8Array }
+    const keyAny = keyResult as unknown as Record<string, unknown>;
+    const rawKey =
+      'key' in keyResult && keyResult.key instanceof Uint8Array
+        ? keyResult.key
+        : typeof keyAny.asUint8Array === 'function'
+          ? (keyAny.asUint8Array as () => Uint8Array)()
+          : (() => {
+              throw new Error('Unexpected DstackClient.getKey() return type');
+            })();
+    privateKey = new Uint8Array(rawKey.slice(0, 32));
   } else {
     // Simulator: deterministic HKDF derivation from fixed seed
     const seed = new TextEncoder().encode('cipherbox-tee-simulator-seed');
