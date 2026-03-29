@@ -131,3 +131,7 @@ https://github.com/FSM1/cipher-box/actions/runs/23721040526/job/69096022983?pr=4
 ---
 
 please commit all the staged files - these should all be on remote
+
+---
+
+I would like both the entire hook and commitlint working together. the gitignore change is necessary since worktale contents should not be pushed to remote.
