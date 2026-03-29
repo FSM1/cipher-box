@@ -1,0 +1,110 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d2aece93b5bb",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T13:27:45.058947Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/load/baselines/byo-load-test-plan.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d80367452b6c",
+  "token_usage": {
+    "input_tokens": 492,
+    "cache_creation_tokens": 821798,
+    "cache_read_tokens": 50441083,
+    "output_tokens": 90292,
+    "api_call_count": 292
+  },
+  "session_metrics": {
+    "turn_count": 26
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E Test Expansion \u0026 Staging Baselines) covering account cleanup helpers, media/streaming tests, batch download tests, and capturing staging performance baselines including BYO-IPFS load tests with Pinata.",
+    "outcome": "All 4 plans completed and verified (13/13 must-haves passed). Staging baselines captured (journey timing, 200-client sustained load). PR #392 created with additional workflow improvements for configurable BYO load testing from GitHub Actions.",
+    "learnings": {
+      "repo": [
+        "Staging Web3Auth (Core Kit) initialization takes ~22.7s — wallet button timeout in E2E tests must exceed this; vault load after auth is only 142ms",
+        "Playwright config BASE_URL env var was not being respected — required explicit `process.env.BASE_URL || 'http://localhost:5173'` in playwright.config.ts and conditional webServer block",
+        "The cleanup helper deleteAccountViaPage derives API URL from the current page URL (app.cipherbox.cc → api.cipherbox.cc) because VITE_API_URL is not accessible from Playwright test context",
+        "SDK load tests in tests/load/ use destroyClientPool() for account cleanup (direct API calls, no browser); browser E2E load tests use deleteAccountViaPage (requires Playwright page context) — these are distinct paths",
+        "Vitest does not auto-load .env files — must source the .env manually before running vitest, e.g. `set -a \u0026\u0026 source .env \u0026\u0026 set +a \u0026\u0026 vitest run`",
+        "Running two SDK load test suites simultaneously against staging saturates the API even with throttle bypass — the 429 errors in the initial load tests were caused by concurrent test runs, not a bypass header bug",
+        "THROTTLE_BYPASS_SECRET works correctly when verified in isolation; the staging throttle guard is at NestJS level, not Caddy",
+        "Pinata free tier quota exhausts quickly under load testing — BYO capacity ceiling test consumed all available pins; paid plan needed for real BYO pin baselines",
+        "BYO register-cid and ipns-publish return 400 on staging when called from SDK load tests — pin to Pinata succeeds but CipherBox API rejects CID registration, likely test account not configured for BYO mode",
+        "The browser-based load test (load-test.spec.ts) measures Playwright/Chromium overhead not API performance — removed in favor of SDK harness which drives 200 headless clients with real API metrics"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "deleteAccountViaPage uses page.evaluate to fire fetch calls with credentials:include for cookie-based auth; derives API base URL from page.url() hostname substitution (app. → api.)"
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "Added BASE_URL env var support with conditional webServer block — when BASE_URL is set, webServer is skipped and baseURL points to remote; without it, local dev server starts on port 5173"
+        },
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "Wallet button visibility timeout increased from 20s to 45s to accommodate Web3Auth staging init time (~22.7s)"
+        },
+        {
+          "path": "tests/load/src/scenarios/byo-capacity-ceiling.test.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Steps through 50→100→200→500→1000 clients to find BYO contention ceiling; uses vitest with manual .env sourcing"
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "line": 1,
+          "end_line": 80,
+          "finding": "BYO scenarios added to scenario dropdown; BYO config (endpoint, protocol, label) as workflow_dispatch inputs with defaults so different providers can be compared per-run; only auth token remains as secret (LOAD_TEST_BYO_AUTH_TOKEN); BYO env vars scoped to byo-* scenarios only"
+        }
+      ],
+      "workflow": [
+        "Cherry-picking from worktree branches to phase branch requires careful STATE.md conflict resolution — worktree agents update STATE independently and conflicts are common",
+        "classifyHandoffIfNeeded errors in Claude Code are runtime bugs not GSD failures — spot-check SUMMARY.md existence and git commits to verify actual completion",
+        "Running parallel load tests against the same staging instance invalidates results — always run load tests sequentially and solo against staging",
+        "GSD worktrees can leave git index locks (.git/index.lock) that block subsequent worktrees — clean with `git worktree prune` and manual lock removal before retrying",
+        "Phase verification should happen after all checkpoint tasks complete including human-action items; marking phase complete prematurely requires reverting roadmap/state commits",
+        "When a load test 'fails' due to threshold violations (p95 latency) but ops completed with low error rate, the data is still valid baseline — exit code 1 doesn't mean unusable results"
+      ]
+    },
+    "friction": [
+      "Cherry-picking commits from multiple worktrees to phase branch caused repeated STATE.md merge conflicts requiring manual resolution",
+      "Stale worktrees left git index locks that blocked the 34-03 agent on first attempt — required force cleanup before retry",
+      "Running two load tests simultaneously invalidated initial results, requiring re-investigation and re-runs",
+      "SSH to staging VPS failed (timeout/key issue) during throttle bypass diagnostics — had to use curl-based verification instead",
+      "Phase was prematurely marked complete in ROADMAP.md before meaningful load test baselines were captured — required reverting the completion commit",
+      "Pinata free tier exhausted during BYO capacity ceiling test, making all byo-pin operations fail 100% — required account cleanup before any valid BYO data could be captured",
+      "Vitest doesn't load .env files by default — the attempted fix via vitest config loadEnv (Vite export, not vitest) failed; workaround was shell env sourcing",
+      "The 1Password git signing was unavailable during commit, causing a commit to fail and require retry with different approach",
+      "34-04 partial SUMMARY.md from checkpoint needed manual finalization after the human-action checkpoint workflow completed"
+    ],
+    "open_items": [
+      "BYO register-cid and ipns-publish return 400 on staging — tracked as todo in .planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md; likely test account not configured with BYO mode",
+      "Pinata paid plan needed to capture meaningful BYO capacity ceiling baselines (free tier exhausted during testing)",
+      "New E2E specs (streaming-playback, media-preview) use binary stub fixtures — need live environment run to confirm they trigger correct AES-CTR/GCM code paths",
+      "GitHub staging environment needs secrets/vars configured: LOAD_TEST_BYO_AUTH_TOKEN (secret), optionally BYO_IPFS_ENDPOINT/PROTOCOL/PROVIDER_NAME as defaults",
+      "createTestAccount in SDK harness doesn't batch-rate-limit account creation — 200 simultaneous account creations still saturate staging; throttle bypass works but concurrency ceiling needs investigation",
+      "HUMAN-UAT.md for Phase 34 has status: partial — will surface in /gsd:progress and /gsd:audit-uat until manually verified"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T13:26:52.962157Z",
+    "agent_lines": 0,
+    "human_added": 19,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 19,
+    "agent_percentage": 0
+  }
+}
