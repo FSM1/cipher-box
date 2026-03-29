@@ -175,3 +175,7 @@ can you go through the `test plan` items outlined in the PR description and mark
 <status>completed</status>
 <summary>Background command "Commit and push from correct directory" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+/resolve-pr-reviews
