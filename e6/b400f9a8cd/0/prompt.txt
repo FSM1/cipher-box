@@ -139,3 +139,17 @@ I would like both the entire hook and commitlint working together. the gitignore
 ---
 
 ahhh ok, maybe the husky hook should jsut have been added ti `exclude` to prevent it popping up in git diffs
+
+---
+
+<task-notification>
+<task-id>bh7gocp8q</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/bh7gocp8q.output</output-file>
+<status>completed</status>
+<summary>Background command "Force-add and commit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+please commit the api-client changes to resolve the api-client drift check in ci
