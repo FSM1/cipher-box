@@ -119,8 +119,9 @@ test.describe.serial('Batch Download', () => {
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBeTruthy();
 
-    // Deselect all
+    // Deselect all and wait for selection bar to disappear
     await page.keyboard.press('Escape');
+    await selectionBar.waitForHidden();
   });
 
   test('select three files shows correct count', async () => {
@@ -157,7 +158,8 @@ test.describe.serial('Batch Download', () => {
     // Close menu
     await contextMenu.closeWithEscape();
 
-    // Deselect all
+    // Deselect all and wait for selection bar to disappear
     await page.keyboard.press('Escape');
+    await selectionBar.waitForHidden();
   });
 });
