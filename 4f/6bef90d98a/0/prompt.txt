@@ -29,3 +29,7 @@ also please run the streaming e2e test against the local api and ui to make sure
 ---
 
 ok lets get a pr for this up
+
+---
+
+one thing I noticed is that flac files are not in the STREAMING_MIME_TYPES set in @packages/sdk/src/client.ts
