@@ -1,4 +1,13 @@
-import { Controller, Post, Get, Body, UseGuards, Request, NotFoundException } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Patch,
+  Body,
+  UseGuards,
+  Request,
+  NotFoundException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { VaultService } from './vault.service';
@@ -6,6 +15,7 @@ import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
 import { VaultExportDto } from './dto/vault-export.dto';
 import { QuotaResponseDto } from './dto/quota.dto';
 import { VaultConfigResponseDto } from './dto/vault-config.dto';
+import { SetByoStatusDto } from './dto/byo-status.dto';
 import { RequestWithUser } from '../common/types';
 
 @ApiTags('Vault')
@@ -125,5 +135,27 @@ export class VaultController {
   })
   async getQuota(@Request() req: RequestWithUser): Promise<QuotaResponseDto> {
     return this.vaultService.getQuota(req.user.id);
+  }
+
+  @Patch('byo-status')
+  @ApiOperation({
+    summary: 'Set BYO IPFS mode',
+    description:
+      'Toggle BYO (Bring Your Own) IPFS mode for the authenticated user. ' +
+      'When enabled, quota tracking becomes advisory only.',
+  })
+  @ApiResponse({ status: 200, description: 'BYO status updated' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - JWT token required' })
+  @ApiResponse({ status: 404, description: 'Not Found - Vault does not exist' })
+  async setByoStatus(
+    @Request() req: RequestWithUser,
+    @Body() dto: SetByoStatusDto
+  ): Promise<{ success: boolean }> {
+    const vault = await this.vaultService.findVault(req.user.id);
+    if (!vault) {
+      throw new NotFoundException('Vault not found');
+    }
+    await this.vaultService.setByoStatus(req.user.id, dto.isByo);
+    return { success: true };
   }
 }

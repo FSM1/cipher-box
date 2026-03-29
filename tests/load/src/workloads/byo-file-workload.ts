@@ -11,7 +11,8 @@
  */
 
 import type { ByoPoolClient } from '../harness/client-pool';
-import { PsaProvider } from '@cipherbox/sdk-core';
+import { createSdkContext } from '../harness/client-pool';
+import { PsaProvider, createAndPublishIpnsRecord } from '@cipherbox/sdk-core';
 
 export interface ByoFileWorkloadOptions {
   /** Number of files to upload */
@@ -125,17 +126,15 @@ export async function runByoFileWorkload(
       }
 
       // Publish IPNS record via CipherBox API (measure raw IPNS API latency)
+      // Uses sdk-core's createAndPublishIpnsRecord which creates a properly
+      // signed IPNS record before sending to the publish endpoint.
       await metrics.measure('ipns-publish', async () => {
-        const axiosInstance = client.getContext().axiosInstance!;
-        // Use publish-batch endpoint with a single record to measure IPNS publish latency
-        // without coupling to the full upload flow's folder update
-        await axiosInstance.post('/ipns/publish-batch', {
-          records: [
-            {
-              ipnsName: rootIpnsName,
-              cid,
-            },
-          ],
+        await createAndPublishIpnsRecord({
+          ipnsPrivateKey: pc.rootIpnsKeypair.privateKey,
+          ipnsName: rootIpnsName,
+          metadataCid: cid!,
+          sequenceNumber: BigInt(i),
+          ctx: createSdkContext(pc),
         });
       });
 

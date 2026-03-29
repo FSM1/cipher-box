@@ -176,6 +176,18 @@ export async function createByoClientPool(opts: ByoPoolOptions): Promise<ByoPool
     };
   });
 
+  // Enable BYO mode on each account's vault so register-cid is authorized
+  await Promise.all(
+    byoPool.map(async (pc) => {
+      try {
+        const ctx = createSdkContext(pc);
+        await ctx.axiosInstance!.patch('/vault/byo-status', { isByo: true });
+      } catch (err) {
+        console.warn(`[Client ${pc.id}] Failed to enable BYO mode: ${(err as Error).message}`);
+      }
+    })
+  );
+
   console.log(
     `BYO pool: ${byoPool.length} clients with ${opts.externalProvider.protocol} provider ` +
       `(mode: ${opts.pinningMode}, endpoint: ${opts.externalProvider.endpoint})`

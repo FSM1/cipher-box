@@ -90,6 +90,7 @@ export * from './sendOtpResponseDto';
 export * from './sentShareResponseDto';
 export * from './sentShareResponseDtoItemType';
 export * from './sentShareResponseDtoPermission';
+export * from './setByoStatusDto';
 export * from './shareInvitesControllerListInvitesParams';
 export * from './shareKeyEntryDto';
 export * from './shareKeyEntryDtoKeyType';

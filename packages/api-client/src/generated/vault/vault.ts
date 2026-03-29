@@ -8,6 +8,7 @@
 import type {
   InitVaultDto,
   QuotaResponseDto,
+  SetByoStatusDto,
   VaultConfigResponseDto,
   VaultExportDto,
   VaultResponseDto,
@@ -72,6 +73,24 @@ export const vaultControllerGetQuota = (
 ) => {
   return customInstance<QuotaResponseDto>({ url: `/vault/quota`, method: 'GET' }, options);
 };
+/**
+ * Toggle BYO (Bring Your Own) IPFS mode for the authenticated user. When enabled, quota tracking becomes advisory only.
+ * @summary Set BYO IPFS mode
+ */
+export const vaultControllerSetByoStatus = (
+  setByoStatusDto: BodyType<SetByoStatusDto>,
+  options?: SecondParameter<typeof customInstance<void>>
+) => {
+  return customInstance<void>(
+    {
+      url: `/vault/byo-status`,
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      data: setByoStatusDto,
+    },
+    options
+  );
+};
 export type VaultControllerInitializeVaultResult = NonNullable<
   Awaited<ReturnType<typeof vaultControllerInitializeVault>>
 >;
@@ -86,4 +105,7 @@ export type VaultControllerGetVaultResult = NonNullable<
 >;
 export type VaultControllerGetQuotaResult = NonNullable<
   Awaited<ReturnType<typeof vaultControllerGetQuota>>
+>;
+export type VaultControllerSetByoStatusResult = NonNullable<
+  Awaited<ReturnType<typeof vaultControllerSetByoStatus>>
 >;

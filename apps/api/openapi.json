@@ -14,6 +14,161 @@
         "tags": ["Root"]
       }
     },
+    "/health": {
+      "get": {
+        "operationId": "HealthController_check",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "The Health Check is successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "info": {
+                      "type": "object",
+                      "example": {
+                        "database": {
+                          "status": "up"
+                        }
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "required": ["status"],
+                        "properties": {
+                          "status": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": true
+                      },
+                      "nullable": true
+                    },
+                    "error": {
+                      "type": "object",
+                      "example": {},
+                      "additionalProperties": {
+                        "type": "object",
+                        "required": ["status"],
+                        "properties": {
+                          "status": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": true
+                      },
+                      "nullable": true
+                    },
+                    "details": {
+                      "type": "object",
+                      "example": {
+                        "database": {
+                          "status": "up"
+                        }
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "required": ["status"],
+                        "properties": {
+                          "status": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The Health Check is not successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "error"
+                    },
+                    "info": {
+                      "type": "object",
+                      "example": {
+                        "database": {
+                          "status": "up"
+                        }
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "required": ["status"],
+                        "properties": {
+                          "status": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": true
+                      },
+                      "nullable": true
+                    },
+                    "error": {
+                      "type": "object",
+                      "example": {
+                        "redis": {
+                          "status": "down",
+                          "message": "Could not connect"
+                        }
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "required": ["status"],
+                        "properties": {
+                          "status": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": true
+                      },
+                      "nullable": true
+                    },
+                    "details": {
+                      "type": "object",
+                      "example": {
+                        "database": {
+                          "status": "up"
+                        },
+                        "redis": {
+                          "status": "down",
+                          "message": "Could not connect"
+                        }
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "required": ["status"],
+                        "properties": {
+                          "status": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Check API and database health",
+        "tags": ["Health"]
+      }
+    },
     "/auth/login": {
       "post": {
         "operationId": "AuthController_login",
@@ -854,6 +1009,42 @@
         "tags": ["Vault"]
       }
     },
+    "/tee/connection-test": {
+      "post": {
+        "description": "Forwards ECIES-encrypted provider config to TEE worker for server-side connection testing. Avoids browser CORS issues and keeps credentials encrypted until decrypted in-enclave.",
+        "operationId": "TeeController_connectionTest",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectionTestRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionTestResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Test connection to an external IPFS provider via TEE",
+        "tags": ["tee"]
+      }
+    },
     "/ipns/publish": {
       "post": {
         "description": "Relay a pre-signed IPNS record to the IPFS network via delegated routing. The client signs the record locally; backend relays to the delegated routing service and tracks the folder for TEE republishing.",
@@ -1039,236 +1230,6 @@
         ],
         "summary": "Resolve IPNS name",
         "tags": ["IPNS"]
-      }
-    },
-    "/device-approval/request": {
-      "post": {
-        "description": "New device creates an approval request with an ephemeral public key for ECIES key exchange. Request expires after 5 minutes.",
-        "operationId": "DeviceApprovalController_createRequest",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateApprovalDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Approval request created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Create device approval request",
-        "tags": ["device-approval"]
-      }
-    },
-    "/device-approval/{requestId}/status": {
-      "get": {
-        "description": "New device polls this endpoint to check if the request has been approved, denied, or expired. Returns the encrypted factor key on approval.",
-        "operationId": "DeviceApprovalController_getStatus",
-        "parameters": [
-          {
-            "name": "requestId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Approval status",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "status": {
-                      "type": "string",
-                      "enum": ["pending", "approved", "denied", "expired"]
-                    },
-                    "encryptedFactorKey": {
-                      "type": "string",
-                      "nullable": true,
-                      "description": "ECIES-encrypted factor key (hex)"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Request not found"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Poll approval request status",
-        "tags": ["device-approval"]
-      }
-    },
-    "/device-approval/pending": {
-      "get": {
-        "description": "Existing device fetches all non-expired pending approval requests for the authenticated user.",
-        "operationId": "DeviceApprovalController_getPending",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "List of pending approval requests",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "properties": {
-                      "requestId": {
-                        "type": "string",
-                        "format": "uuid"
-                      },
-                      "deviceId": {
-                        "type": "string"
-                      },
-                      "deviceName": {
-                        "type": "string"
-                      },
-                      "ephemeralPublicKey": {
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "type": "string",
-                        "format": "date-time"
-                      },
-                      "expiresAt": {
-                        "type": "string",
-                        "format": "date-time"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "List pending approval requests",
-        "tags": ["device-approval"]
-      }
-    },
-    "/device-approval/{requestId}/respond": {
-      "post": {
-        "description": "Existing device approves or denies an approval request. On approve, includes the ECIES-encrypted factor key.",
-        "operationId": "DeviceApprovalController_respond",
-        "parameters": [
-          {
-            "name": "requestId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RespondApprovalDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Response recorded"
-          },
-          "400": {
-            "description": "Already responded or expired"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Request not found"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Respond to approval request",
-        "tags": ["device-approval"]
-      }
-    },
-    "/device-approval/{requestId}": {
-      "delete": {
-        "description": "New device cancels its own pending approval request (cleanup on navigation away or recovery phrase used).",
-        "operationId": "DeviceApprovalController_cancel",
-        "parameters": [
-          {
-            "name": "requestId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Request cancelled"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Request not found or not pending"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Cancel approval request",
-        "tags": ["device-approval"]
       }
     },
     "/shares": {
@@ -2049,28 +2010,336 @@
         "tags": ["share-invites"]
       }
     },
-    "/tee/connection-test": {
+    "/admin/republish-health": {
+      "get": {
+        "description": "Returns aggregate counts of pending, failed, and stale republish jobs, plus TEE connectivity status. Requires JWT authentication.",
+        "operationId": "RepublishHealthController_getHealth",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Republish health statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pending": {
+                      "type": "number",
+                      "description": "Active entries awaiting next republish cycle"
+                    },
+                    "failed": {
+                      "type": "number",
+                      "description": "Entries currently in retry with exponential backoff"
+                    },
+                    "stale": {
+                      "type": "number",
+                      "description": "Entries that exceeded max retries and need TEE recovery"
+                    },
+                    "lastRunAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true,
+                      "description": "Timestamp of most recent successful republish"
+                    },
+                    "currentEpoch": {
+                      "type": "number",
+                      "nullable": true,
+                      "description": "Current TEE key epoch number"
+                    },
+                    "teeHealthy": {
+                      "type": "boolean",
+                      "description": "Whether the TEE worker is reachable and healthy"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get IPNS republish health stats",
+        "tags": ["Admin"]
+      }
+    },
+    "/device-approval/request": {
       "post": {
-        "description": "Forwards ECIES-encrypted provider config to TEE worker for server-side connection testing. Avoids browser CORS issues and keeps credentials encrypted until decrypted in-enclave.",
-        "operationId": "TeeController_connectionTest",
+        "description": "New device creates an approval request with an ephemeral public key for ECIES key exchange. Request expires after 5 minutes.",
+        "operationId": "DeviceApprovalController_createRequest",
         "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ConnectionTestRequestDto"
+                "$ref": "#/components/schemas/CreateApprovalDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Approval request created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create device approval request",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/{requestId}/status": {
+      "get": {
+        "description": "New device polls this endpoint to check if the request has been approved, denied, or expired. Returns the encrypted factor key on approval.",
+        "operationId": "DeviceApprovalController_getStatus",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approval status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["pending", "approved", "denied", "expired"]
+                    },
+                    "encryptedFactorKey": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "ECIES-encrypted factor key (hex)"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Request not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Poll approval request status",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/pending": {
+      "get": {
+        "description": "Existing device fetches all non-expired pending approval requests for the authenticated user.",
+        "operationId": "DeviceApprovalController_getPending",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of pending approval requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "properties": {
+                      "requestId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "deviceId": {
+                        "type": "string"
+                      },
+                      "deviceName": {
+                        "type": "string"
+                      },
+                      "ephemeralPublicKey": {
+                        "type": "string"
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "expiresAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List pending approval requests",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/{requestId}/respond": {
+      "post": {
+        "description": "Existing device approves or denies an approval request. On approve, includes the ECIES-encrypted factor key.",
+        "operationId": "DeviceApprovalController_respond",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RespondApprovalDto"
               }
             }
           }
         },
         "responses": {
           "200": {
+            "description": "Response recorded"
+          },
+          "400": {
+            "description": "Already responded or expired"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Request not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Respond to approval request",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/{requestId}": {
+      "delete": {
+        "description": "New device cancels its own pending approval request (cleanup on navigation away or recovery phrase used).",
+        "operationId": "DeviceApprovalController_cancel",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Request cancelled"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Request not found or not pending"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel approval request",
+        "tags": ["device-approval"]
+      }
+    },
+    "/migration/start": {
+      "post": {
+        "operationId": "MigrationController_startMigration",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartMigrationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Migration started"
+          },
+          "409": {
+            "description": "Active migration already exists"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Start a pin migration between providers",
+        "tags": ["migration"]
+      }
+    },
+    "/migration/status": {
+      "get": {
+        "operationId": "MigrationController_getStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ConnectionTestResponseDto"
+                  "$ref": "#/components/schemas/MigrationStatusDto"
                 }
               }
             }
@@ -2081,50 +2350,89 @@
             "bearer": []
           }
         ],
-        "summary": "Test connection to an external IPFS provider via TEE",
-        "tags": ["tee"]
+        "summary": "Get latest migration status",
+        "tags": ["migration"]
       }
     },
-    "/health": {
-      "get": {
-        "operationId": "HealthController_check",
-        "summary": "Check API and database health",
-        "tags": ["Health"],
+    "/migration/{id}/pause": {
+      "post": {
+        "operationId": "MigrationController_pauseMigration",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Health check passed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": {
-                      "type": "string",
-                      "example": "ok"
-                    },
-                    "info": {
-                      "type": "object",
-                      "properties": {
-                        "database": {
-                          "type": "object",
-                          "properties": {
-                            "status": {
-                              "type": "string",
-                              "example": "up"
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Health check failed"
+            "description": "Migration paused"
           }
-        }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pause an active migration",
+        "tags": ["migration"]
+      }
+    },
+    "/migration/{id}/resume": {
+      "post": {
+        "operationId": "MigrationController_resumeMigration",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Migration resumed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Resume a paused migration",
+        "tags": ["migration"]
+      }
+    },
+    "/migration/{id}/cancel": {
+      "post": {
+        "operationId": "MigrationController_cancelMigration",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Migration cancelled"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel a migration",
+        "tags": ["migration"]
       }
     }
   },
@@ -2134,69 +2442,9 @@
     "version": "0.1.0",
     "contact": {}
   },
-  "tags": [
-    {
-      "name": "Health",
-      "description": "Health check endpoints"
-    },
-    {
-      "name": "Root",
-      "description": "API root endpoints"
-    },
-    {
-      "name": "Auth",
-      "description": "Authentication endpoints"
-    },
-    {
-      "name": "Identity",
-      "description": "CipherBox identity provider endpoints"
-    },
-    {
-      "name": "Vault",
-      "description": "Vault management endpoints"
-    },
-    {
-      "name": "Files",
-      "description": "File operations endpoints"
-    },
-    {
-      "name": "IPFS",
-      "description": "IPFS relay endpoints"
-    },
-    {
-      "name": "IPNS",
-      "description": "IPNS relay endpoints"
-    },
-    {
-      "name": "device-approval",
-      "description": "Cross-device approval endpoints"
-    },
-    {
-      "name": "shares",
-      "description": "User-to-user sharing endpoints"
-    },
-    {
-      "name": "invites",
-      "description": "Public invite link endpoints"
-    },
-    {
-      "name": "share-invites",
-      "description": "Authenticated invite management endpoints"
-    },
-    {
-      "name": "tee",
-      "description": "TEE worker proxy endpoints"
-    }
-  ],
+  "tags": [],
   "servers": [],
   "components": {
-    "securitySchemes": {
-      "bearer": {
-        "scheme": "bearer",
-        "bearerFormat": "JWT",
-        "type": "http"
-      }
-    },
     "schemas": {
       "LoginDto": {
         "type": "object",
@@ -2754,6 +3002,47 @@
         },
         "required": ["isByo"]
       },
+      "ConnectionTestRequestDto": {
+        "type": "object",
+        "properties": {
+          "encryptedConfig": {
+            "type": "string",
+            "description": "ECIES-encrypted provider config (hex-encoded)"
+          },
+          "epoch": {
+            "type": "number",
+            "description": "TEE epoch for key selection"
+          }
+        },
+        "required": ["encryptedConfig", "epoch"]
+      },
+      "ConnectionTestResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the connection test succeeded"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": ["kubo", "psa"],
+            "description": "Detected protocol"
+          },
+          "version": {
+            "type": "string",
+            "description": "Provider version string"
+          },
+          "latencyMs": {
+            "type": "number",
+            "description": "Probe latency in milliseconds"
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message on failure"
+          }
+        },
+        "required": ["success", "latencyMs"]
+      },
       "PublishIpnsDto": {
         "type": "object",
         "properties": {
@@ -2952,49 +3241,6 @@
           }
         },
         "required": ["success", "cid", "sequenceNumber"]
-      },
-      "CreateApprovalDto": {
-        "type": "object",
-        "properties": {
-          "deviceId": {
-            "type": "string",
-            "description": "Device ID (SHA-256 hash of device Ed25519 public key)",
-            "example": "a1b2c3d4e5f6..."
-          },
-          "deviceName": {
-            "type": "string",
-            "description": "Human-readable device name (e.g., \"Chrome on macOS\")",
-            "example": "Chrome on macOS"
-          },
-          "ephemeralPublicKey": {
-            "type": "string",
-            "description": "Ephemeral secp256k1 public key in hex (uncompressed) for ECIES key exchange",
-            "example": "04abc123..."
-          }
-        },
-        "required": ["deviceId", "deviceName", "ephemeralPublicKey"]
-      },
-      "RespondApprovalDto": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "type": "string",
-            "description": "Approval action",
-            "enum": ["approve", "deny"],
-            "example": "approve"
-          },
-          "encryptedFactorKey": {
-            "type": "string",
-            "description": "ECIES-encrypted factor key in hex (required when action is approve)",
-            "example": "04abc123..."
-          },
-          "respondedByDeviceId": {
-            "type": "string",
-            "description": "Device ID of the responding (approving/denying) device",
-            "example": "a1b2c3d4e5f6..."
-          }
-        },
-        "required": ["action", "respondedByDeviceId"]
       },
       "ChildKeyDto": {
         "type": "object",
@@ -3545,46 +3791,98 @@
           "createdAt"
         ]
       },
-      "ConnectionTestRequestDto": {
+      "CreateApprovalDto": {
         "type": "object",
         "properties": {
-          "encryptedConfig": {
+          "deviceId": {
             "type": "string",
-            "description": "ECIES-encrypted provider config (hex-encoded)"
+            "description": "Device ID (SHA-256 hash of device Ed25519 public key)",
+            "example": "a1b2c3d4e5f6..."
           },
-          "epoch": {
-            "type": "number",
-            "description": "TEE epoch for key selection"
+          "deviceName": {
+            "type": "string",
+            "description": "Human-readable device name (e.g., \"Chrome on macOS\")",
+            "example": "Chrome on macOS"
+          },
+          "ephemeralPublicKey": {
+            "type": "string",
+            "description": "Ephemeral secp256k1 public key in hex (uncompressed) for ECIES key exchange",
+            "example": "04abc123..."
           }
         },
-        "required": ["encryptedConfig", "epoch"]
+        "required": ["deviceId", "deviceName", "ephemeralPublicKey"]
       },
-      "ConnectionTestResponseDto": {
+      "RespondApprovalDto": {
         "type": "object",
         "properties": {
-          "success": {
-            "type": "boolean",
-            "description": "Whether the connection test succeeded"
-          },
-          "protocol": {
+          "action": {
             "type": "string",
-            "enum": ["kubo", "psa"],
-            "description": "Detected protocol"
+            "description": "Approval action",
+            "enum": ["approve", "deny"],
+            "example": "approve"
           },
-          "version": {
+          "encryptedFactorKey": {
             "type": "string",
-            "description": "Provider version string"
+            "description": "ECIES-encrypted factor key in hex (required when action is approve)",
+            "example": "04abc123..."
           },
-          "latencyMs": {
-            "type": "number",
-            "description": "Probe latency in milliseconds"
-          },
-          "error": {
+          "respondedByDeviceId": {
             "type": "string",
-            "description": "Error message on failure"
+            "description": "Device ID of the responding (approving/denying) device",
+            "example": "a1b2c3d4e5f6..."
           }
         },
-        "required": ["success", "latencyMs"]
+        "required": ["action", "respondedByDeviceId"]
+      },
+      "StartMigrationDto": {
+        "type": "object",
+        "properties": {
+          "sourceConfigEncrypted": {
+            "type": "string",
+            "description": "Source provider config encrypted with TEE public key (ECIES)"
+          },
+          "destConfigEncrypted": {
+            "type": "string",
+            "description": "Destination provider config encrypted with TEE public key (ECIES)"
+          }
+        },
+        "required": ["sourceConfigEncrypted", "destConfigEncrypted"]
+      },
+      "MigrationStatusDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "totalCids": {
+            "type": "number"
+          },
+          "migratedCids": {
+            "type": "number"
+          },
+          "failedCids": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "object",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "totalCids",
+          "migratedCids",
+          "failedCids",
+          "createdAt",
+          "completedAt"
+        ]
       }
     }
   }
