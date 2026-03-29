@@ -25,3 +25,7 @@ also please run the streaming e2e test against the local api and ui to make sure
 <status>completed</status>
 <summary>Background command "Run streaming playback E2E test" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+ok lets get a pr for this up
