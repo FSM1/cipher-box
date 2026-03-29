@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c6e17a344aa0",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T05:09:45.033296Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "2830dec4e061",
+  "token_usage": {
+    "input_tokens": 363,
+    "cache_creation_tokens": 376978,
+    "cache_read_tokens": 26699547,
+    "output_tokens": 61536,
+    "api_call_count": 193
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E Test Expansion \u0026 Staging Baselines) — create account cleanup helpers, media/streaming tests, batch download tests, and capture staging performance baselines including load test data.",
+    "outcome": "All 4 plans executed and verified (13/13 must-haves passed), but the session ended in a disputed state: the phase was prematurely marked complete before meaningful 200-client load test baselines were captured. A 34.1 insertion was created then reverted. The 200-client load test was re-run solo (after diagnosing that simultaneous test runs caused the original 429 failures) but results weren't saved before the session ended.",
+    "learnings": {
+      "repo": [
+        "Staging Web3Auth init takes ~22.7s — the wallet button timeout must be at least 45s for staging runs (was 20s, causing test failures)",
+        "playwright.config.ts BASE_URL env var wasn't being used — config needed explicit `process.env.BASE_URL` override to target staging instead of localhost",
+        "cleanup-helpers.ts deleteAccountViaPage calls a hardcoded localhost:3000 URL — needs to derive API URL from the page's current URL for staging runs",
+        "vitest does NOT auto-load .env files — must source them via shell before running tests (e.g., `set -a \u0026\u0026 source .env \u0026\u0026 set +a \u0026\u0026 vitest run`)",
+        "The THROTTLE_BYPASS_SECRET mechanism works correctly end-to-end (verified via curl and Node.js) — 429s during load tests were caused by running two test suites simultaneously against the same staging instance, not a bypass bug",
+        "Load test client pool uses batched account creation (5 at a time) — running two suites concurrently saturates the staging API even with bypass header",
+        "BYO (Pinata) load tests use default endpoint https://api.pinata.cloud — PinataProvider sends Authorization: Bearer \u003ctoken\u003e"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "walletButton.waitFor timeout was 20_000ms — too short for staging Web3Auth init (~22.7s), increased to 45_000ms"
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "finding": "Added BASE_URL env var support and conditional webServer startup — skips local dev server when BASE_URL points to staging"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "finding": "Fixed API URL detection to derive from page.url() rather than hardcoded localhost:3000"
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "finding": "No dotenv loading — must source .env via shell before running vitest, or use envFile config option"
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "finding": "Guard logic is correct — reads X-Throttle-Bypass header and skips throttling when it matches THROTTLE_BYPASS_SECRET"
+        }
+      ],
+      "workflow": [
+        "GSD worktree agents commit on their own branches — cherry-pick to phase branch manually after completion, watching for STATE.md conflicts",
+        "When two background load tests run simultaneously against the same staging instance they interfere even with throttle bypass — run load tests sequentially",
+        "Verify staging availability before running E2E tests (curl health endpoint), and check that Web3Auth has fully initialized before asserting on wallet button",
+        "The classifyHandoffIfNeeded Claude Code bug can make agents report 'failed' despite completing all work — spot-check SUMMARY.md and git log before treating as real failure",
+        "Don't mark a phase complete in ROADMAP/STATE until all blocking acceptance criteria (like load test baselines) are captured"
+      ]
+    },
+    "friction": [
+      "Cherry-picking worktree commits caused repeated STATE.md merge conflicts requiring manual resolution on each cherry-pick",
+      "Git lock files from failed worktrees blocked subsequent agent spawning — required force-removing worktree remnants",
+      "Simultaneous load test runs produced misleading 429 errors that looked like a bypass-header bug, triggering a lengthy (false) investigation",
+      "SSH to VPS failed (timeout/key issue) during diagnostic investigation of Docker env vars",
+      "Phase was prematurely marked complete before the load test baseline issue was resolved, then had to be partially reverted",
+      "insert-phase was invoked unnecessarily (and then reverted) before the user clarified Phase 34 was still open",
+      "vitest doesn't load .env files automatically — required discovering this and implementing a shell-sourcing workaround"
+    ],
+    "open_items": [
+      "200-client sustained load test results need to be saved to baselines/staging-sustained-load.json and committed — the re-run was started but the session ended before results were captured",
+      "BYO capacity ceiling test (50→100→200→500→1000 clients with Pinata) still needs to be run solo and baselines saved",
+      "Phase 34 should not be marked complete in ROADMAP/STATE until load test baselines are committed — the premature completion commit may need reverting",
+      "New media test specs (streaming-playback, media-preview) use binary stub fixtures — need a live environment run to confirm AES-CTR/GCM code paths are actually triggered (human verification item from verifier)",
+      "HUMAN-UAT.md created for Phase 34 with status: partial — needs human testing sign-off to close",
+      "cleanup-helpers.ts API URL fix should be tested against staging to confirm deleteAccountViaPage works (was returning 401 on cleanup during journey timing run)"
+    ]
+  }
+}
