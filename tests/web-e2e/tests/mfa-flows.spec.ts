@@ -6,6 +6,7 @@ import {
   createWalletContext,
   loginViaWallet,
 } from '../utils/wallet-login-helpers';
+import { deleteAccountViaPage } from '../utils/cleanup-helpers';
 import {
   navigateToSecurityTab,
   getMfaStatusText,
@@ -59,6 +60,9 @@ test.describe.serial('MFA flows @mfa', () => {
   });
 
   test.afterAll(async () => {
+    if (primaryPage) {
+      await deleteAccountViaPage(primaryPage);
+    }
     await primaryContext.close();
   });
 

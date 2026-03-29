@@ -7,6 +7,7 @@ import {
   type WalletTestAccount,
 } from '../utils/multi-account-wallet';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
+import { deleteAccountViaPage } from '../utils/cleanup-helpers';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
 import { ContextMenuPage } from '../page-objects/file-browser/context-menu.page';
@@ -73,6 +74,11 @@ test.describe.serial('Journey Timing', () => {
     // Close Bob's context if created
     if (bob) {
       await closeWalletTestAccounts([bob]);
+    }
+
+    // Delete Alice's account before closing context (page must still be navigable)
+    if (page) {
+      await deleteAccountViaPage(page);
     }
 
     // Close Alice's context
