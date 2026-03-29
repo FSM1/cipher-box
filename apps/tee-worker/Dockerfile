@@ -10,13 +10,15 @@ COPY apps/tee-worker/package.json apps/tee-worker/
 COPY packages/crypto/package.json packages/crypto/
 COPY packages/core/package.json packages/core/
 COPY packages/sdk-core/package.json packages/sdk-core/
+COPY packages/api-client/package.json packages/api-client/
 RUN pnpm install --frozen-lockfile --filter cipherbox-tee-worker...
 COPY apps/tee-worker/ apps/tee-worker/
 COPY packages/crypto/ packages/crypto/
 COPY packages/core/ packages/core/
 COPY packages/sdk-core/ packages/sdk-core/
+COPY packages/api-client/ packages/api-client/
 COPY tsconfig.base.json ./
-RUN pnpm --filter @cipherbox/crypto build && pnpm --filter @cipherbox/core build && pnpm --filter @cipherbox/sdk-core build
+RUN pnpm --filter @cipherbox/crypto build && pnpm --filter @cipherbox/core build && pnpm --filter @cipherbox/api-client build && pnpm --filter @cipherbox/sdk-core build
 RUN pnpm --filter cipherbox-tee-worker build
 
 # Create standalone deployment (flat node_modules, no symlinks)
