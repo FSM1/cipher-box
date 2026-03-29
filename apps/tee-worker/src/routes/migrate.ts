@@ -15,6 +15,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
+import { CID } from 'multiformats/cid';
 import { migrateBatch } from '../services/migration-worker.js';
 import { migrationCids } from '../middleware/metrics.js';
 import { logger } from '../services/logger.js';
@@ -52,7 +53,10 @@ router.post('/migrate', async (req: Request, res: Response) => {
       .json({ error: `Batch size ${cids.length} exceeds maximum of ${MAX_BATCH_SIZE}` });
     return;
   }
-  if (!cids.every((c: unknown) => typeof c === 'string' && isValidCidFormat(c as string))) {
+  if (!cids.every((c: unknown) => {
+    if (typeof c !== 'string' || c.length === 0 || c.length > 200) return false;
+    try { CID.parse(c); return true; } catch { return false; }
+  })) {
     res.status(400).json({ error: 'Each CID must be a valid IPFS CID (CIDv0 or CIDv1)' });
     return;
   }
@@ -90,15 +94,5 @@ router.post('/migrate', async (req: Request, res: Response) => {
     });
   }
 });
-
-/** Basic CID format validation (CIDv0 or CIDv1, max 200 chars) */
-function isValidCidFormat(cid: string): boolean {
-  if (cid.length === 0 || cid.length > 200) return false;
-  // CIDv0: starts with Qm, base58btc, 46 chars
-  if (/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(cid)) return true;
-  // CIDv1: starts with b (base32) or z (base58btc) or f (base16)
-  if (/^[bBzf][a-zA-Z2-7+=]+$/.test(cid)) return true;
-  return false;
-}
 
 export default router;
