@@ -10,7 +10,9 @@
 import {
   generateFileKey,
   generateIv,
+  generateCtrIv,
   encryptAesGcm,
+  encryptAesCtr,
   wrapKey,
   clearBytes,
   bytesToHex,
@@ -18,6 +20,7 @@ import {
 import type { SdkContext, TeeKeys, ProgressCallback } from '../types';
 import { addToIpfs } from '../ipfs';
 import { createFileMetadata, type FileIpnsRecordPayload } from '../file';
+import { normalizeEncryptionMode } from '../encryption-mode';
 import { withPerf } from '../perf';
 
 /**
@@ -77,15 +80,22 @@ export async function uploadFile(params: {
     data: Uint8Array,
     onProgress?: ProgressCallback
   ) => Promise<{ cid: string; size: number }>;
+  /** Encryption mode: GCM (default, authenticated) or CTR (streaming media). */
+  encryptionMode?: 'GCM' | 'CTR';
 }): Promise<UploadResult> {
   return withPerf('upload:full', async () => {
-    // 1. Generate unique file key and IV
+    const mode = normalizeEncryptionMode(params.encryptionMode);
+
+    // 1. Generate unique file key and IV (CTR uses 16-byte nonce+counter, GCM uses 12-byte random)
     const fileKey = generateFileKey();
-    const iv = generateIv();
+    const iv = mode === 'CTR' ? generateCtrIv() : generateIv();
 
     try {
-      // 2. Encrypt with AES-256-GCM
-      const ciphertext = await encryptAesGcm(params.data, fileKey, iv);
+      // 2. Encrypt file content
+      const ciphertext =
+        mode === 'CTR'
+          ? await encryptAesCtr(params.data, fileKey, iv)
+          : await encryptAesGcm(params.data, fileKey, iv);
 
       // 3. Wrap file key with user's public key (ECIES)
       const wrappedKey = await wrapKey(fileKey, params.userPublicKey);
@@ -110,7 +120,7 @@ export async function uploadFile(params: {
         userPublicKey: params.userPublicKey,
         ctx: params.ctx,
         teeKeys: params.teeKeys,
-        encryptionMode: 'GCM',
+        encryptionMode: mode,
       });
 
       // Return a defensive copy of the file key for re-wrapping.

@@ -4,15 +4,19 @@ import type { BinOperationContext, BinState } from '../bin';
 import { FolderTree } from '../state/folder-tree';
 
 // Mock sdk-core
-vi.mock('@cipherbox/sdk-core', () => ({
-  deleteFromFolder: vi.fn(),
-  updateFolderMetadataAndPublish: vi.fn(),
-  addToIpfs: vi.fn(),
-  unpinFromIpfs: vi.fn(),
-  createAndPublishIpnsRecord: vi.fn(),
-  resolveIpnsRecord: vi.fn(),
-  fetchFromIpfs: vi.fn(),
-}));
+vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
+  return {
+    ...actual,
+    deleteFromFolder: vi.fn(),
+    updateFolderMetadataAndPublish: vi.fn(),
+    addToIpfs: vi.fn(),
+    unpinFromIpfs: vi.fn(),
+    createAndPublishIpnsRecord: vi.fn(),
+    resolveIpnsRecord: vi.fn(),
+    fetchFromIpfs: vi.fn(),
+  };
+});
 
 // Mock @cipherbox/core
 vi.mock('@cipherbox/core', () => ({

@@ -16,6 +16,7 @@
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
 import type { PinningProvider } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
+import { selectEncryptionMode } from '@cipherbox/sdk-core';
 import { createAxiosInstance, ipnsControllerUnenrollBatch } from '@cipherbox/api-client';
 import { clearBytes } from '@cipherbox/crypto';
 import type { FolderChild, FolderEntry, FilePointer, BinEntry } from '@cipherbox/core';
@@ -688,6 +689,7 @@ export class CipherBoxClient {
             };
 
       // 1. Encrypt and upload file, create file metadata
+      const encryptionMode = selectEncryptionMode(mimeType, data.length);
       const uploadResult = await sdkCore.uploadFile({
         data,
         fileId,
@@ -698,6 +700,7 @@ export class CipherBoxClient {
         onProgress,
         teeKeys: this.config.teeKeys,
         pinFn,
+        encryptionMode,
       });
 
       try {
