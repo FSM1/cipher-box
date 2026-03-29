@@ -89,3 +89,7 @@ ok lets log a todo to fix the ctr upload, and then we can get this PR updated wi
 ---
 
 please use the /gsd:add-todo skill rather than just documenting randomly.
+
+---
+
+/resolve-pr-reviews
