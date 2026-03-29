@@ -35,6 +35,7 @@ jobs:
               - 'apps/desktop/src-tauri/capabilities/**'
               - 'apps/desktop/src-tauri/resources/**'
               - 'apps/desktop/src-tauri/Cargo.toml'
+              - 'apps/desktop/src-tauri/Cargo.lock'
               - 'apps/desktop/src-tauri/build.rs'
               - 'apps/desktop/src-tauri/rust-toolchain.toml'
               - 'apps/desktop/index.html'

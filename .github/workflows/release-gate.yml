@@ -129,23 +129,28 @@ jobs:
           echo "Waiting for CI E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
 
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
-            E2E_RUN=$(gh run list --repo ${{ github.repository }} \
+            E2E_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
               --workflow=ci-e2e.yml --branch=main --limit=10 \
               --json headSha,conclusion,status,databaseId \
-              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0] // empty")
-            E2E_CONCLUSION=$(echo "$E2E_RUN" | jq -r '.conclusion // empty')
+              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion // empty")
 
             if [ -n "$E2E_CONCLUSION" ]; then
-              echo "Web E2E completed with conclusion: ${E2E_CONCLUSION}"
+              echo "CI E2E completed with conclusion: ${E2E_CONCLUSION}"
+
+              # Grab the run ID for job-level checks below
+              E2E_RUN_ID=$(gh run list --repo ${{ github.repository }} \
+                --workflow=ci-e2e.yml --branch=main --limit=10 \
+                --json headSha,databaseId \
+                --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].databaseId")
               break
             fi
 
             if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
-              echo "::error::Web E2E run did not complete within $(( MAX_ATTEMPTS * POLL_INTERVAL / 60 )) minutes for main (${MAIN_SHA})."
+              echo "::error::CI E2E run did not complete within $(( MAX_ATTEMPTS * POLL_INTERVAL / 60 )) minutes for main (${MAIN_SHA})."
               exit 1
             fi
 
-            echo "Attempt ${attempt}/${MAX_ATTEMPTS}: E2E still running, waiting ${POLL_INTERVAL}s..."
+            echo "Attempt ${attempt}/${MAX_ATTEMPTS}: CI E2E still running, waiting ${POLL_INTERVAL}s..."
             sleep $POLL_INTERVAL
           done
 
@@ -155,7 +160,6 @@ jobs:
           fi
 
           # Verify the Web E2E job actually ran (not skipped due to no web changes)
-          E2E_RUN_ID=$(echo "$E2E_RUN" | jq -r '.databaseId')
           WEB_E2E_RAN=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
             --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length')
 
