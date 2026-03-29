@@ -97,3 +97,7 @@ please use the /gsd:add-todo skill rather than just documenting randomly.
 ---
 
 can you clean up stale worktrees
+
+---
+
+/resolve-pr-reviews
