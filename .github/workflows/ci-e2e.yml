@@ -28,7 +28,7 @@ jobs:
               - 'packages/**'
               - 'tests/web-e2e/**'
               - 'tools/mock-ipns-routing/**'
-              - '.github/workflows/e2e.yml'
+              - '.github/workflows/web-e2e.yml'
               - '.github/workflows/ci-e2e.yml'
             desktop:
               - 'apps/desktop/src/**'
@@ -60,7 +60,7 @@ jobs:
     name: Web E2E
     needs: detect-changes
     if: needs.detect-changes.outputs.web == 'true' || github.event_name == 'workflow_dispatch'
-    uses: ./.github/workflows/e2e.yml
+    uses: ./.github/workflows/web-e2e.yml
     secrets: inherit
 
   desktop-e2e:
