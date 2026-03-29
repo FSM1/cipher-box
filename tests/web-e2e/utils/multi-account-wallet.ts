@@ -1,6 +1,7 @@
 import { Browser, BrowserContext, Page } from '@playwright/test';
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import { setupMockWallet, loginViaWallet } from './wallet-login-helpers';
+import { deleteAccountViaPage } from './cleanup-helpers';
 
 /**
  * A fully authenticated test account using wallet-based login.
@@ -119,9 +120,23 @@ export async function createWalletTestAccounts(
 }
 
 /**
- * Close all wallet test account contexts.
+ * Delete accounts and close all wallet test account contexts.
+ *
+ * Calls deleteAccountViaPage for each account BEFORE closing the browser
+ * context (the page must still be navigable to send API requests).
+ * Each deletion is wrapped individually so one failure doesn't block others.
  */
 export async function closeWalletTestAccounts(accounts: WalletTestAccount[]): Promise<void> {
+  // Step 1: Delete accounts while pages are still open
+  for (const account of accounts) {
+    try {
+      await deleteAccountViaPage(account.page);
+    } catch (err) {
+      console.warn(`[cleanup] Failed to delete account "${account.name}":`, err);
+    }
+  }
+
+  // Step 2: Close browser contexts
   for (const account of accounts) {
     await account.context.close();
   }
