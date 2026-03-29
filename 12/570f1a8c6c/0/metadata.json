@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "12570f1a8c6c",
+  "session_id": "e46def97-0d75-426f-9c5d-65e29924690b",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T00:40:36.319377Z",
+  "branch": "docs/update-codebase-map",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "33f3859906c0",
+  "token_usage": {
+    "input_tokens": 71,
+    "cache_creation_tokens": 51980,
+    "cache_read_tokens": 2290399,
+    "output_tokens": 9744,
+    "api_call_count": 46
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Update the codebase map documents (primarily CONCERNS.md) to reflect work completed in phases 28-33, then clean up stale references discovered during the review.",
+    "outcome": "CONCERNS.md and STRUCTURE.md were updated on a dedicated docs branch, a PR was created (FSM1/cipher-box#390), legacy POC concern removed, stale Docker host IP reference removed from STRUCTURE.md, and 192.168.133.114 sanitized from all planning docs.",
+    "learnings": {
+      "repo": [
+        "Phase 28 replaced all console.log/warn/error calls with a structured logger at apps/web/src/lib/logger.ts, but web3auth/hooks.ts retains 12 unguarded console.time/timeEnd calls",
+        "Phase 30 added Grafana Faro (apps/web/src/lib/faro.ts) and Prometheus metrics (apps/api/src/metrics/), but registerFaroTransport() is defined and never called — logger errors don't reach Faro",
+        "Phase 31 decomposed useSharedNavigation.ts (1199→378 lines) and FileBrowser.tsx (964→362 lines); folder.service.ts (1059 lines) and bin.service.ts (971 lines) remain large but are now considered cohesive",
+        "Phase 32 resolved the macOS FUSE FilePointer blocking concern; Phase 33 completed the Windows equivalent using rt.spawn() channel patterns in crates/fuse/src/platform/windows/read_ops.rs",
+        "The legacy POC directory was removed in commit ee9bcd4e4 during Phase 28 — it no longer exists in the working tree",
+        "FUSE production code has 19+ mutex lock().unwrap() call sites that can cause cascading panics on mutex poisoning",
+        "IPNS unenrollment is fire-and-forget with no persistence across tab closure"
+      ],
+      "code": [
+        {
+          "path": ".planning/codebase/CONCERNS.md",
+          "line": 42,
+          "end_line": 42,
+          "finding": "Legacy POC concern was stale — POC was removed in Phase 28 (ee9bcd4e4) and the directory no longer exists"
+        },
+        {
+          "path": ".planning/codebase/STRUCTURE.md",
+          "line": 535,
+          "end_line": 535,
+          "finding": "Docker host IP reference was stale and unnecessary"
+        },
+        {
+          "path": "apps/web/src/lib/web3auth/hooks.ts",
+          "finding": "12 console.time/timeEnd calls not covered by Phase 28 logger migration"
+        },
+        {
+          "path": "crates/fuse/src/read_ops.rs",
+          "finding": "Now uses async FilePointer resolution via poll_filepointer_resolution() — blocking concern resolved"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/read_ops.rs",
+          "finding": "Phase 33 converted to async via rt.spawn() channel pattern — Windows blocking concern resolved"
+        }
+      ],
+      "workflow": [
+        "When updating codebase maps after a git pull collision, stash doc changes, reset to origin/main, then restore — avoids a merge commit in the planning docs branch",
+        "Running the concerns mapper twice (before and after Phase 33 merge) produced a more accurate result; worthwhile to pull latest before running analysis",
+        "Committing planning doc updates to a dedicated docs/ branch keeps them out of feature branch history and makes PR review easier",
+        "Scanning planning docs for sensitive values (IPs, tokens) as part of the map-codebase workflow caught a dev IP that had propagated to 15 planning files"
+      ]
+    },
+    "friction": [
+      "git pull failed due to divergent branches after the initial commit — required manual stash/reset/restore dance to get onto latest main before re-running the concerns mapper",
+      "The concerns mapper had to be run twice because Phase 33 wasn't merged when the first run executed",
+      "CONCERNS.md still had a stale legacy POC entry even after the mapper re-ran with Phase 33 — mapper missed it, required manual correction",
+      "STRUCTURE.md had a stale Docker host IP on line 535 that the mapper did not flag"
+    ],
+    "open_items": [
+      "Windows FilePointer async concern is now resolved but worth verifying in integration tests — Phase 33 was docs/planning only per first mapper run, then shown implemented; confirm test coverage exists",
+      "registerFaroTransport() is defined but never called — logger.error/warn calls don't reach Faro (new concern added to CONCERNS.md)",
+      "web3auth/hooks.ts console.time/timeEnd calls should be cleaned up to complete Phase 28 logger migration",
+      "19+ mutex lock().unwrap() sites in FUSE production code are a reliability risk — candidates for a future hardening phase",
+      "folder.service.ts (1059 lines) and bin.service.ts (971 lines) remain large — deferred decomposition candidates",
+      "IPNS unenrollment has no persistence across tab closure — fire-and-forget gap in the SDK integration",
+      "PR FSM1/cipher-box#390 needs review and merge"
+    ]
+  }
+}
