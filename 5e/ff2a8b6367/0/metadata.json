@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5eff2a8b6367",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T11:09:50.295571Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/34-e2e-test-expansion-staging-baselines/34-04-SUMMARY.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e6b5d5b7f6c0",
+  "token_usage": {
+    "input_tokens": 399,
+    "cache_creation_tokens": 521368,
+    "cache_read_tokens": 31399519,
+    "output_tokens": 69686,
+    "api_call_count": 222
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E Test Expansion \u0026 Staging Baselines) including account cleanup helpers, media/streaming tests, batch download tests, and staging performance baselines with BYO-IPFS load testing.",
+    "outcome": "All 4 plans completed with 13/13 must-haves verified. Real 200-client sustained load baselines captured (0.17% error rate, 11,174 ops). BYO capacity ceiling test ran but Pinata free tier limits were exhausted, so pin success baselines remain uncaptured.",
+    "learnings": {
+      "repo": [
+        "Playwright config's baseURL was hardcoded to localhost:5173 and did not respect BASE_URL env var — required explicit fix to support staging runs",
+        "Web3Auth SDK initialization on staging takes ~22.7s (vs fast local), causing 20s timeout failures in journey-timing.spec.ts",
+        "Cleanup helpers used hardcoded localhost:3000 API URL — needed to derive API URL from page context for staging compatibility",
+        "Vitest does not load .env files by default — must source them via shell before running or use explicit env forwarding",
+        "The staging throttle bypass (X-Throttle-Bypass header) works correctly end-to-end; failures were caused by running two load tests simultaneously against the same staging instance, not a code bug",
+        "Pinata free tier storage/pin limits can be exhausted quickly by load tests (50→1000 client escalation), invalidating BYO baseline results",
+        "BYO capacity ceiling test: all pin operations failed at 100% error rate due to Pinata plan limits being exceeded — not a provider code issue"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "waitFor timeout of 20000ms too short for staging Web3Auth init (~22.7s); increased to accommodate staging cold start"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "finding": "deleteAccountViaPage helper derived API URL from hardcoded localhost — fixed to detect API URL from current page URL for staging compatibility"
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "finding": "baseURL was hardcoded; fixed to read BASE_URL env var and skip local webServer when targeting external environments"
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "finding": "Vitest does not auto-load .env files; env must be sourced via shell before test runner invocation"
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/pinata-provider.ts",
+          "finding": "PinataProvider implementation is correct; pin failures in load tests were due to Pinata free tier quota exhaustion, not code issues"
+        }
+      ],
+      "workflow": [
+        "Running two load test suites simultaneously against the same staging instance saturates it regardless of throttle bypass — always run load tests sequentially against staging",
+        "Cherry-picking commits from worktree branches to the phase branch requires careful STATE.md conflict resolution — take the worktree version as it has the most current state",
+        "Git lock files from parallel agent worktrees need cleanup before spawning new agents against the same repo",
+        "BYO load testing requires a paid Pinata plan or a fresh account per test run to avoid quota exhaustion invalidating results",
+        "The classifyHandoffIfNeeded Claude Code runtime bug can cause agents to report 'failed' when they actually completed — always verify via SUMMARY.md and git commits"
+      ]
+    },
+    "friction": [
+      "Cherry-picking from multiple worktree branches caused repeated STATE.md merge conflicts requiring manual resolution",
+      "Git index locks from parallel worktrees blocked subsequent agent spawning — required manual cleanup",
+      "BASE_URL env var not respected by Playwright config caused the first staging test run to silently test localhost instead of staging",
+      "Vitest's lack of .env auto-loading caused the first two load test runs to skip all BYO tests silently with 'BYO_IPFS_ENDPOINT not set'",
+      "Running two load tests simultaneously caused both to fail with 429s, incorrectly suggesting a throttle bypass bug that required significant debugging time",
+      "Pinata free tier quota exhausted during BYO capacity ceiling escalation (50→1000 clients), invalidating all BYO pin baseline data",
+      "SSH access to staging Docker containers for env var inspection failed (timeout/key issue), blocking direct diagnosis",
+      "Phase was prematurely marked complete in ROADMAP.md before load test baselines were meaningful, requiring manual revert"
+    ],
+    "open_items": [
+      "BYO pin baselines (successful Pinata pins) uncaptured — requires paid Pinata plan or fresh free account with sufficient quota",
+      "Staging throttle bypass header not forwarded during createTestAccount in SDK test harness — confirmed working via bypass but needs documentation in harness comments",
+      "Browser load test (5 Chromium clients) hit 10-minute timeout — C4/C5 clients showed context exhaustion under contention; not investigated",
+      "Human verification item: new media test specs (streaming-playback, media-preview) need live environment run to confirm binary stub fixtures trigger expected AES-CTR/GCM code paths",
+      "Sustained load test threshold values need tuning for 200-client runs — current thresholds trigger false failure at p95 latencies that are actually acceptable at this scale",
+      "Learnings file created at .learnings/2026-03-29-staging-load-test-throttle-bypass.md documenting root cause of load test failures"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T11:09:13.893248Z",
+    "agent_lines": 0,
+    "human_added": 12,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 12,
+    "agent_percentage": 0
+  }
+}
