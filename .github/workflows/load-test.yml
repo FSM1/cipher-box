@@ -26,6 +26,9 @@ on:
           - mixed-workload
           - sustained-load
           - spike-test
+          - byo-upload-throughput
+          - byo-mixed-workload
+          - byo-capacity-ceiling
 
 concurrency:
   group: load-test-${{ inputs.environment }}
@@ -174,6 +177,11 @@ jobs:
             echo "LOAD_TEST_API_URL=${{ vars.STAGING_API_URL }}" >> $GITHUB_ENV
             echo "LOAD_TEST_SECRET=${{ secrets.STAGING_TEST_LOGIN_SECRET }}" >> $GITHUB_ENV
             echo "THROTTLE_BYPASS_SECRET=${{ secrets.STAGING_THROTTLE_BYPASS_SECRET }}" >> $GITHUB_ENV
+            # BYO-IPFS provider config (Pinata) — only needed for byo-* scenarios
+            echo "BYO_IPFS_ENDPOINT=${{ vars.BYO_IPFS_ENDPOINT }}" >> $GITHUB_ENV
+            echo "BYO_IPFS_AUTH_TOKEN=${{ secrets.BYO_IPFS_AUTH_TOKEN }}" >> $GITHUB_ENV
+            echo "BYO_IPFS_PROTOCOL=${{ vars.BYO_IPFS_PROTOCOL }}" >> $GITHUB_ENV
+            echo "BYO_IPFS_PROVIDER_NAME=${{ vars.BYO_IPFS_PROVIDER_NAME }}" >> $GITHUB_ENV
           else
             echo "LOAD_TEST_API_URL=http://localhost:3000" >> $GITHUB_ENV
             echo "LOAD_TEST_SECRET=e2e-test-secret-ci-only" >> $GITHUB_ENV
