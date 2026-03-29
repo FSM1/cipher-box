@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "422df895c42c",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T04:52:55.694848Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/34-e2e-test-expansion-staging-baselines/34-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1c1ef1a5cde5",
+  "token_usage": {
+    "input_tokens": 294,
+    "cache_creation_tokens": 332004,
+    "cache_read_tokens": 15188873,
+    "output_tokens": 41174,
+    "api_call_count": 136
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Execute Phase 34 of the cipher-box project, which covers E2E test expansion (account cleanup helpers, media/streaming tests, batch download tests) and staging environment baselines (journey timing, load tests, BYO-IPFS/Pinata integration).",
+    "outcome": "All 4 plans completed and phase verified (13/13 must-haves). New E2E test suites (streaming-playback, media-preview, batch-download) committed, deleteAccountViaPage helper wired into all 10 specs, staging journey timing baselines captured, and BYO load test plan activated with Pinata. SDK load tests were throttle-limited but produced useful baseline data.",
+    "learnings": {
+      "repo": [
+        "Playwright config does not respect BASE_URL env var by default — baseURL must explicitly read process.env.BASE_URL and webServer must be conditionally omitted when targeting staging.",
+        "Web3Auth SDK initialization on staging takes \u003e20s, causing tests with 20s timeouts to fail; staging needs a longer timeout (45s+) for wallet button initialization.",
+        "The deleteAccountViaPage cleanup helper hardcodes localhost:3000 for the API URL; on staging it must derive the API base from the current page URL (replace app subdomain with api subdomain).",
+        "Vitest does not automatically load .env files — dotenv or shell-level env sourcing is required for test environment variables.",
+        "The SDK load test harness does not forward THROTTLE_BYPASS_SECRET during createTestAccount, so staging rate-limits bulk account creation to ~10/200 clients before blocking with 429s.",
+        "Worktree-based parallel executor agents each commit to their own branch; cherry-picking to the phase branch causes STATE.md merge conflicts that must be resolved manually."
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "finding": "Added BASE_URL env var support and conditional webServer skip when targeting non-local environments."
+        },
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "waitFor timeout increased from 20s to 45s for wallet-login-button to accommodate Web3Auth cold-start on staging."
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "finding": "Fixed API URL derivation to use page URL (replace app. with api.) rather than hardcoded localhost:3000."
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "finding": "Vitest does not load .env automatically; env vars must be sourced in shell before running tests."
+        },
+        {
+          "path": "tests/load/baselines/byo-load-test-plan.md",
+          "finding": "Plan was initially committed with DEFERRED status; updated to ACTIVE once Pinata credentials were available."
+        }
+      ],
+      "workflow": [
+        "GSD parallel executor agents use --no-verify on commits to avoid pre-commit hook contention; orchestrator validates hooks once after wave completes.",
+        "When Task() agents complete in worktrees, their commits must be cherry-picked to the phase branch — STATE.md always conflicts and must be taken from the worktree version.",
+        "Staging load tests should be run sequentially, not in parallel, to avoid competing for the same throttle budget on the same staging instance.",
+        "Browser-based Playwright load tests timeout at 10m when simulating 5 concurrent full-browser clients; they produce useful throughput/error-rate data even when incomplete.",
+        "The classifyHandoffIfNeeded Claude Code runtime bug can cause agents to report 'failed' even after successful completion — spot-check via SUMMARY.md existence and git commits."
+      ]
+    },
+    "friction": [
+      "BASE_URL env var not respected by Playwright config — tests silently hit localhost instead of staging, causing misleading timeout failures.",
+      "Web3Auth 20s init timeout caused initial journey-timing test failure on staging; required code change to unblock.",
+      "Git lock contention when 34-03 agent tried to operate after 34-02 — required manual worktree cleanup and agent retry.",
+      "Cherry-picking parallel worktree commits to phase branch consistently produces STATE.md merge conflicts requiring manual resolution.",
+      "Vitest does not auto-load .env files; BYO tests silently skipped with 'env not set' rather than failing with a clear error.",
+      "SDK load test harness does not pass THROTTLE_BYPASS_SECRET during account creation, causing staging to 429-block 190/200 test accounts.",
+      "BYO capacity ceiling test and sustained load test competed on the same staging instance, contaminating both result sets."
+    ],
+    "open_items": [
+      "SDK load test harness (createTestAccount) needs to forward THROTTLE_BYPASS_SECRET so bulk account creation is not rate-limited on staging.",
+      "BYO capacity ceiling test (50→100→200→500→1000 clients) was never successfully completed due to throttle blocking — needs a re-run once harness fix is in place.",
+      "Sustained load baseline at 200 clients is not representative (only 10 clients actually ran) — needs re-run after throttle bypass fix.",
+      "Faro/Grafana trace verification (Step 3 of staging baselines) was not completed — requires visual inspection of Grafana dashboard.",
+      "Prometheus metrics check (curl metrics endpoint, grep ipfs_operation_duration) was not recorded in baselines.",
+      "The browser-based 5-client load test timed out at 10m with partial results (305/395 ops) — a longer timeout or fewer ops per client would give cleaner data.",
+      "deleteAccountViaPage cleanup helper logs '401 at refresh' errors during staging runs for accounts that were already cleaned up or expired — may need idempotency check."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T04:52:15.514627Z",
+    "agent_lines": 92,
+    "human_added": 30,
+    "human_modified": 50,
+    "human_removed": 0,
+    "total_committed": 172,
+    "agent_percentage": 53.48837209302325
+  }
+}
