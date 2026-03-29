@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e6b400f9a8cd",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T23:12:07.778811Z",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "324d518f23d2",
+  "token_usage": {
+    "input_tokens": 392,
+    "cache_creation_tokens": 262561,
+    "cache_read_tokens": 54139127,
+    "output_tokens": 72897,
+    "api_call_count": 341
+  },
+  "session_metrics": {
+    "turn_count": 26
+  },
+  "summary": {
+    "intent": "Fix two bugs: (1) SDK uploadFile hardcodes AES-GCM and never activates the CTR streaming pipeline for large media files, and (2) BYO-IPFS load tests returning 400/403 errors on staging due to missing BYO mode setup and incorrect IPNS publish payload.",
+    "outcome": "Both bugs fixed and merged. PR #399 wired CTR encryption through the SDK with centralized MIME type detection. PR #400 added a PATCH /vault/byo-status endpoint (setByoStatus was dead code), fixed the load test IPNS publish payload, and fixed ~9 API test files with systemic mock typing issues.",
+    "learnings": {
+      "repo": [
+        "setByoStatus() existed as a VaultService method but had no controller endpoint — BYO mode could never be toggled via API, making all register-cid calls return 403 regardless of user intent",
+        "SDK selectEncryptionMode() was only called on the duplicate-file re-encrypt path, never for new uploads — the CTR streaming pipeline was completely unreachable for new uploads",
+        "The load test's ipns-publish step was sending { ipnsName, cid } but PublishIpnsEntryDto requires { ipnsName, record, metadataCid } with a signed IPNS record — the fields were entirely wrong",
+        "STREAMING_MIME_TYPES was duplicated between packages/sdk/src/client.ts and apps/web/src/services/streaming-crypto.service.ts — centralized to packages/sdk-core/src/encryption-mode.ts",
+        "audio/flac was missing from STREAMING_MIME_TYPES in both locations",
+        "The pnpm api:generate script's lint:fix step lints the entire repo including target/ (Rust build artifacts) causing spurious failures unrelated to TypeScript changes",
+        "orval generation creates model files that must all be staged — partial staging of api-client/src/ causes CI drift check failures",
+        "A duplicate todo file (both pending/ and done/) was introduced during the merge because the branch added the done/ copy while main already had the pending/ copy",
+        ".husky/commit-msg and .husky/commit-msg.pre-entire are managed by the Entire CLI tool locally and should be in .git/info/exclude to avoid polluting git diffs"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "end_line": 48,
+          "finding": "New centralized module for selectEncryptionMode(mimeType, size) and normalizeEncryptionMode() — single source of truth for CTR vs GCM selection"
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "Added optional encryptionMode param; uses encryptAesCtr + generateCtrIv when mode is CTR, falls back to GCM"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "end_line": 691,
+          "finding": "uploadFile now calls selectEncryptionMode from sdk-core before delegating to sdkCore.uploadFile"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "finding": "New PATCH /vault/byo-status endpoint added; VaultService.setByoStatus() was previously unreachable dead code"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "createByoClientPool now enables BYO mode on each account after creation via the new endpoint; filters out failed accounts and throws if zero succeed"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "finding": "Fixed ipns-publish step to use createAndPublishIpnsRecord from sdk-core instead of sending raw incorrect fields; hoisted createSdkContext outside the per-iteration loop"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-upload-concurrency.test.ts",
+          "finding": "vi.mock('@cipherbox/sdk-core', () =\u003e ({ ... })) bare factory pattern drops all real exports when new ones are added — must use importOriginal + spread pattern"
+        }
+      ],
+      "workflow": [
+        "Using importOriginal + spread in vitest mocks (vi.mock with async factory) prevents fragility when new exports are added to a module — bare factory factories drop everything not explicitly listed",
+        "jest.Mocked\u003cPartial\u003cT\u003e\u003e loses mock method types after module.get() in NestJS test modules — use the mock object directly instead of getting from module to retain typed mock methods",
+        "When adding a new export to a shared package, all test files that use a bare vi.mock factory for that package need updating simultaneously — CI will catch missed files",
+        "git add of specific files during api-client regeneration is fragile — always stage the entire src/ directory of generated packages to avoid drift",
+        "When orval generates new model files for new API endpoints, they must all be committed together with the openapi.json; partial commits cause barrel file (models/index.ts) import errors in CI"
+      ]
+    },
+    "friction": [
+      "The accidental openapi.json written to apps/api/ (wrong location) instead of packages/api-client/ required a cleanup commit",
+      "sdk-core build output being stale caused sdk typecheck to fail until a rebuild was done — the types are from compiled output not source",
+      "GraphQL API for fetching PR review threads timed out, requiring a fallback to REST API",
+      "Five SDK test files all needed the same vi.mock fix, discovered one at a time via CI rather than all at once",
+      "pnpm api:generate lint:fix step lints Rust target/ build artifacts causing noisy errors unrelated to the changes being made",
+      "Partial git staging of api-client changes caused a CI drift check failure requiring a follow-up commit",
+      "The .husky/commit-msg file managed by Entire CLI kept appearing in git diffs; required investigation to understand the pre-entire chain and ultimately needed .git/info/exclude entries"
+    ],
+    "open_items": [
+      "The BYO-IPFS load test ipns-publish step now uses createAndPublishIpnsRecord but staging load test baselines (todo #11) still pending",
+      "Todo #6: Investigate removal of mock-ipns-routing layer (api area) still pending",
+      "Todo #13 (Debug BYO-IPFS register-cid 400 errors) was worked in this session but actual staging validation/baselines not run — the fix addresses root causes but staging confirmation deferred",
+      "The delegated-routing.client.spec.ts has a lingering @typescript-eslint/no-explicit-any warning from the SpyInstance cast fix",
+      "integration.test.ts in packages/sdk hits a live API endpoint and fails in CI — pre-existing issue not addressed",
+      "The web app Settings UI path for enabling BYO mode should be validated end-to-end now that the PATCH /vault/byo-status endpoint exists"
+    ]
+  }
+}
