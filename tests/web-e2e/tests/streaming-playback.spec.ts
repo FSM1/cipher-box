@@ -29,8 +29,8 @@ test.describe.serial('AES-CTR Streaming Playback', () => {
   test.setTimeout(180_000);
 
   test.beforeAll(async ({ browser: b }) => {
-    // Extend hook timeout — default 30s is too short for wallet login in CI
-    test.setTimeout(120_000);
+    // Extend hook timeout — match suite timeout (default 30s is too short for wallet login)
+    test.setTimeout(180_000);
     browser = b;
     const account = createTestAccount();
     context = await browser.newContext();
@@ -72,27 +72,33 @@ test.describe.serial('AES-CTR Streaming Playback', () => {
     await page.locator('.video-player-modal').waitFor({ state: 'hidden', timeout: 5_000 });
   });
 
-  test('CTR encrypted badge visible for large video', async () => {
+  test('CTR encrypted badge shown when streaming pipeline is active', async () => {
     // Re-open preview
     await fileList.rightClickItem(videoName);
     await contextMenu.waitForOpen();
     await contextMenu.clickPreview();
     await page.locator('.video-player-modal').waitFor({ state: 'visible', timeout: 30_000 });
 
-    // The CTR encrypted badge depends on the full streaming pipeline:
+    // The CTR encrypted badge requires the full streaming pipeline:
     // SW active + file encrypted with CTR + metadata resolution succeeds.
-    // This may not work in all environments (staging deploys, Vite dev mode).
-    // Use a soft assertion — verify if present, don't fail if absent.
+    // Skip when the pipeline isn't available (e.g. staging behind HEAD,
+    // Vite dev mode SW quirks) rather than silently passing.
     const badgeVisible = await page
       .locator('.video-cipher-badge')
       .waitFor({ state: 'visible', timeout: 15_000 })
       .then(() => true)
       .catch(() => false);
 
-    if (badgeVisible) {
-      const badgeText = await page.locator('.video-cipher-badge').textContent();
-      expect(badgeText?.toUpperCase()).toContain('ENCRYPTED');
+    if (!badgeVisible) {
+      // Close modal before skipping so the serial suite can continue
+      await page.keyboard.press('Escape');
+      await page.locator('.video-player-modal').waitFor({ state: 'hidden', timeout: 5_000 });
+      test.skip(true, 'CTR streaming pipeline not active — badge not rendered');
+      return;
     }
+
+    const badgeText = await page.locator('.video-cipher-badge').textContent();
+    expect(badgeText?.toUpperCase()).toContain('ENCRYPTED');
 
     // Close modal
     await page.keyboard.press('Escape');

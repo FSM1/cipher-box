@@ -39,6 +39,7 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'tests/vectors/**'
+              - '.github/workflows/ci.yml'
 
   lint:
     name: Lint
