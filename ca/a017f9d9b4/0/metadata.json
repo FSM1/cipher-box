@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "caa017f9d9b4",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T03:10:07.06613Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/api-client/openapi.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7352b4a79b37",
+  "checkpoint_transcript_start": 141,
+  "transcript_lines_at_start": 141,
+  "token_usage": {
+    "input_tokens": 15,
+    "cache_creation_tokens": 24020,
+    "cache_read_tokens": 703497,
+    "output_tokens": 3718,
+    "api_call_count": 12
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (Vault Migration) gap-closure plans using wave-based parallel execution, cleaning up dead migration code from both API and client layers.",
+    "outcome": "Wave 1 (plan 20-05: API dead migration code removal) was spawned and partially executed; the transcript ends mid-execution with openapi.json modified but no confirmation of Wave 1 completion or Wave 2 initiation.",
+    "learnings": {
+      "repo": [
+        "Phase 20 'Vault Migration' has 6 total plans but only 2 incomplete gap-closure plans (20-05 and 20-06), indicating prior plans were already completed",
+        "The vault migration moves crypto material exclusively to IPFS v2 blobs, making the server zero-knowledge — DB columns that stored crypto material are being dropped",
+        "Plan 20-05 covers server-side cleanup: drop DB crypto columns, remove POST /vault/migrate endpoint, remove migrateVault() service method, simplify entity/DTOs, regenerate API client",
+        "Plan 20-06 covers client-side cleanup: IPFS-only web login, new user v2 blob publish, desktop Rust simplification, recovery tool cleanup",
+        "Gap closure plans were already committed by the planner agent (bd236c59a) before the execute-phase workflow ran — orchestrator double-commit attempt was a no-op"
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/openapi.json",
+          "finding": "File was modified as part of Wave 1 API cleanup (regenerating API client after removing migrate endpoint and simplifying DTOs)"
+        }
+      ],
+      "workflow": [
+        "The GSD orchestrator checks for stale auto-chain flags at init time to prevent unwanted auto-advance from previous interrupted --auto runs",
+        "Plan index (`phase-plan-index`) returns wave groupings and filters out plans with existing SUMMARY.md automatically — no manual filtering needed",
+        "Planner agents commit plans themselves; orchestrator should check recent commits before attempting a redundant commit after planning completes"
+      ]
+    },
+    "friction": [
+      "Orchestrator attempted to commit gap-closure plans that had already been committed by the planner agent (bd236c59a), requiring extra bash commands to detect the redundant commit"
+    ],
+    "open_items": [
+      "Wave 1 (20-05) execution was in-flight at transcript end — completion status and spot-checks not confirmed",
+      "Wave 2 (20-06: client cleanup — IPFS-only web login, new user v2 blob, desktop Rust simplification, recovery tool) not yet executed",
+      "Phase verification (gsd-verifier) not yet run for Phase 20",
+      "ROADMAP.md and STATE.md phase-complete updates pending Wave 2 and verification completion"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T03:09:50.97875Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 158,
+    "human_removed": 401,
+    "total_committed": 76,
+    "agent_percentage": 0
+  }
+}

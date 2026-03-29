@@ -1,0 +1,119 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "702da977d914",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T12:28:25.784797Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/web-e2e/utils/cleanup-helpers.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "47bf188cbafc",
+  "token_usage": {
+    "input_tokens": 436,
+    "cache_creation_tokens": 791655,
+    "cache_read_tokens": 37998053,
+    "output_tokens": 78785,
+    "api_call_count": 249
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E Test Expansion \u0026 Staging Baselines) including cleanup helpers, media/streaming test suites, batch download tests, and capturing meaningful load test baselines against staging with BYO-IPFS (Pinata) support.",
+    "outcome": "All 4 plans completed: deleteAccountViaPage helper wired into 10 specs, media/streaming and batch download E2E suites created (16 new tests), staging journey timing and 200-client sustained load baselines captured. BYO Pinata pin latency confirmed (p50=718ms) but register-cid/ipns-publish return 400s on staging — tracked as a todo.",
+    "learnings": {
+      "repo": [
+        "Playwright config (tests/web-e2e/playwright.config.ts) did not respect BASE_URL env var for overriding baseURL — required explicit env check and conditional webServer disabling to target staging",
+        "Staging Web3Auth SDK initialization takes ~22.7s; wallet button timeout of 20s in journey-timing.spec.ts was too short for staging environments",
+        "Cleanup helper deleteAccountViaPage derived API URL from localhost:3000 hardcode — needed to derive from page URL to work on staging",
+        "vitest in tests/load/ does not auto-load .env files — must source manually via shell before running tests",
+        "Running two load test suites simultaneously against the same staging instance causes them to compete and saturate the API, producing misleading throttle failures — bypass header was working correctly all along",
+        "Pinata free tier is exhausted quickly under load testing; 100% pin failure after running multiple capacity ceiling tests against a free account",
+        "BYO register-cid and ipns-publish endpoints return 400 on staging when using Pinata provider — likely test accounts not configured in BYO mode or endpoint expects different params",
+        "The staging API throttle bypass guard works correctly when tested via curl or direct Node fetch; the issue was concurrent test load exhausting staging, not missing headers"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "deleteAccountViaPage used two separate page.evaluate calls; merged into one. API URL was hardcoded to localhost:3000; now derives from page URL to support staging."
+        },
+        {
+          "path": "tests/web-e2e/tests/media-preview.spec.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Dynamic imports for fs/path were inside test body; moved to top-level. Used existsSync before unlink (TOCTOU); replaced with try/catch. Corrupt file fixture was untracked and leaked between tests; now tracked for cleanup."
+        },
+        {
+          "path": "tests/web-e2e/tests/load-test.spec.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Inline account deletion logic duplicated deleteAccountViaPage from cleanup-helpers.ts; replaced with shared helper."
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "baseURL was hardcoded; now reads BASE_URL env var with localhost fallback. webServer block conditionally skipped when BASE_URL points to non-localhost."
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "No dotenv support in vitest config; .env must be sourced in shell before running tests since dotenv package is not available in this workspace."
+        },
+        {
+          "path": "tests/load/baselines/staging-sustained-load.json",
+          "line": 1,
+          "end_line": 30,
+          "finding": "200-client baseline: 11,174 total ops, 0.17% error rate, uploadFile p50=8.1s p95=11.6s, createFolder p50=6.5s p95=11.9s, deleteItem p50=3.2s p95=5.2s over 5 minutes."
+        },
+        {
+          "path": "tests/web-e2e/baselines/staging-journey-timing.json",
+          "line": 1,
+          "end_line": 15,
+          "finding": "Login-to-vault: 22,889ms (auth 22,747ms + vault load 142ms); upload-to-visible: 906ms; share-to-accessible: 1,483ms."
+        }
+      ],
+      "workflow": [
+        "When running multiple load test suites against a shared staging environment, always run them serially to avoid false throttle failures",
+        "Playwright MCP browser tool is useful for diagnosing blank page failures — navigate to staging, check console messages, and evaluate DOM before assuming a test timeout is a code issue",
+        "Cherry-picking commits from parallel worktree agents to the phase branch requires careful conflict resolution on STATE.md; use the worktree's version since it has the most recent plan state",
+        "classifyHandoffIfNeeded errors from Claude Code Task() are runtime bugs, not agent failures — spot-check SUMMARY.md and git commits to determine actual success",
+        "Git lock files from failed worktree agents must be cleaned up before retrying; use git worktree remove --force followed by manual .git/worktrees cleanup"
+      ]
+    },
+    "friction": [
+      "Wave 1 agents ran in separate worktrees; cherry-picking commits to the phase branch caused STATE.md conflicts on every agent merge",
+      "34-03 agent hit a git lock from the 34-02 worktree — had to force-remove stale worktree before retrying",
+      "Playwright BASE_URL override didn't work because playwright.config.ts ignored it — wasted multiple test runs debugging a blank staging page before finding the root cause",
+      "Running BYO capacity ceiling and sustained load tests simultaneously caused both to fail with throttle errors, misleading investigation toward a code bug that didn't exist",
+      "vitest doesn't auto-load .env files; required manual shell sourcing workaround since dotenv isn't in the load test workspace",
+      "Pinata free tier quota was exhausted during BYO capacity ceiling tests, making all pin operations fail and preventing meaningful BYO baselines",
+      "1Password SSH signing failed during todo commit, requiring a fallback commit approach",
+      "Background load test process exceeded the 10-minute bash timeout for the browser load test",
+      "34-04 SUMMARY.md had to be updated three times: initial partial, post-journey-timing, and post-load-test"
+    ],
+    "open_items": [
+      "BYO register-cid and ipns-publish return 400 on staging with Pinata provider — tracked in .planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md",
+      "New E2E specs (streaming-playback, media-preview) use binary stub fixtures that need a live environment run to confirm they trigger correct AES-CTR/GCM code paths",
+      "BYO capacity ceiling baselines are incomplete — Pinata free tier was exhausted; need a paid account or clean free account to capture real BYO pin throughput at 50-1000 client tiers",
+      "SDK load test harness createTestAccount does not throttle-batch account creation; running 200+ clients creates a burst that relies entirely on the bypass header being present",
+      "Browser load test baselines (5 clients, 305/395 ops) show C4/C5 context exhaustion under contention — Playwright browser-based load testing doesn't scale beyond ~3 concurrent sessions reliably",
+      "HUMAN-UAT.md created for Phase 34 with status:partial — media/streaming spec validation against live environment still pending"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T12:27:32.443067Z",
+    "agent_lines": 0,
+    "human_added": 32,
+    "human_modified": 17,
+    "human_removed": 0,
+    "total_committed": 32,
+    "agent_percentage": 0
+  }
+}

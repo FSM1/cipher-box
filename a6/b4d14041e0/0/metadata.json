@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a6b4d14041e0",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T02:35:53.142974Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "3ece86a92257",
+  "token_usage": {
+    "input_tokens": 6838,
+    "cache_creation_tokens": 505050,
+    "cache_read_tokens": 67111502,
+    "output_tokens": 100179,
+    "api_call_count": 344
+  },
+  "session_metrics": {
+    "turn_count": 32
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) of the cipher-box project, implementing a v2 binary vault blob format across the TypeScript core, API, Rust desktop, and web client, with lazy migration for existing users.",
+    "outcome": "Phase 20 completed successfully — all 4 plans executed, 6/6 VAULT requirements verified, PR #344 created and all CodeRabbit/Copilot review comments resolved. Several bugs discovered during UAT were fixed, including v2 blob handling in folder sync, recovery tool IPNS resolution, and two HIGH security issues.",
+    "learnings": {
+      "repo": [
+        "The vault migration worked silently — NestJS does not auto-log incoming request routes, so POST /vault/migrate appeared to never be called when it actually succeeded at 00:12:38 UTC",
+        "orval v7.18.0 generates `{ [key: string]: unknown } | null` for nullable string fields even when the OpenAPI spec correctly has `type: string, nullable: true` — requires `as unknown as string` casts in useAuth.ts as workaround",
+        "The IPFS gateway at 192.168.133.114:8080 supports CORS (`Access-Control-Allow-Origin: *`) but the Kubo API on port 5001 does not, making browser-side IPNS resolution via the API port impossible",
+        "The IPFS gateway supports `/ipns/{name}` path resolution directly and returns `X-Ipfs-Roots` header with the resolved CID — this is more reliable for recovery tool use than delegated routing APIs",
+        "Subfolder IPNS records are only stored in the CipherBox API's DB cache and are not propagated to the public DHT, so recovery tool subfolder traversal fails on public infra",
+        "The Rust desktop code predates the SDK extraction (phase 19.1) and duplicates crypto/IPNS/metadata logic that now lives in @cipherbox/core and @cipherbox/sdk-core",
+        "The NestJS IPNS controller requires JWT auth — the recovery tool cannot use it as a fallback without credentials"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parsed IPFS blobs without detecting v2 binary format — caused `SyntaxError: Unexpected token` when migration wrote a v2 blob to IPNS"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same v2 blob detection bug as folder.service.ts — also needed the detectBlobVersion + deserialize guard"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1265,
+          "end_line": 1277,
+          "finding": "fetchFromIpfs returned undefined on non-200/non-404 status (e.g., 502/503), causing detectBlobVersion to crash with `Cannot read properties of undefined (reading 'length')`"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 originally returned Vec\u003cu8\u003e without bounds checking — changed to Result to surface u16 key length overflow (HIGH security issue H-1)"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse derived Debug, leaking encrypted key material in logs — fixed with custom Debug impls that redact sensitive fields (HIGH security issue H-2)"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 181,
+          "end_line": 233,
+          "finding": "Migration IIFE called deriveVaultIpnsKeypair() twice with identical inputs and had redundant object wrapper for ipnsKeypair — fixed by hoisting derivation and passing directly"
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.spec.ts",
+          "finding": "Test for getVault missing migratedAt: null in expected DTO shape — caused CI failure after VaultResponseDto was updated"
+        }
+      ],
+      "workflow": [
+        "The classifyHandoffIfNeeded Claude Code runtime bug fires in the completion handler after all tool calls finish — spot-checking SUMMARY.md existence and git commits is the correct way to determine actual success",
+        "When debugging 'silent failures', check the database directly before assuming an operation never ran — API logs without request logging middleware are insufficient evidence",
+        "The security:review skill is effective for catching issues before verification — running it during the checkpoint pause rather than after saved a verification cycle",
+        "Playwright browser_evaluate can extract sensitive in-memory values (like private keys) from running dev sessions for testing purposes",
+        "Recovery tool testing requires a non-trivial setup: the private key must be extracted from the Zustand store via Playwright, and IPNS resolution requires the local IPFS gateway path rather than delegated routing APIs"
+      ]
+    },
+    "friction": [
+      "API error 'ConnectionRefused' during the security review caused the first invocation to fail silently, requiring a second attempt",
+      "NestJS does not log incoming requests by default, making the POST /vault/migrate call invisible in server logs — caused a lengthy debug session to confirm the migration had already succeeded",
+      "The Kubo API (port 5001) lacks CORS headers, blocking browser-side IPNS resolution and forcing a workaround through the IPFS gateway /ipns/ path",
+      "orval v7.18.0 generates incorrect TypeScript types for nullable string fields despite a correct OpenAPI spec — the `as unknown as string` casts are a permanent workaround with no clean upstream fix to reference",
+      "The recovery tool went through 6 iterations of IPNS resolution approaches (delegated routing → ipfs.io fallback → Kubo API → CipherBox API proxy → CipherBox API 401 → gateway /ipns/ path) before finding one that worked",
+      "PR merge conflicts in ROADMAP.md and STATE.md required manual resolution",
+      "pnpm dev was backgrounded by the user rather than by Claude, causing task ID tracking to be slightly awkward"
+    ],
+    "open_items": [
+      "Phase 23 added: Rust SDK Extraction — extract cipherbox-core Rust crate mirroring @cipherbox/core and @cipherbox/sdk-core, with platform-specific plans for macOS (FUSE-T SMB), Linux (kernel FUSE), Windows (WinFSP)",
+      "Todo: add e2e tests that exercise vault v2 recovery tool (.planning/todos/pending/2026-03-24-add-e2e-tests-for-vault-v2-recovery-tool.md)",
+      "Todo: fix device registry sync fails with 'CryptoError: Invalid registry format' — schema mismatch between current device registry format and IPFS-stored data",
+      "Todo: fix bin IPNS name 404 resolution failure",
+      "Security medium issues documented but not fixed: M-1 recovery tool private key not zeroed after use, M-2 no dedup guard for concurrent migration from multiple tabs, M-3 unnecessary ECIES re-wrap on every root folder publish",
+      "Security low issues documented but not fixed: L-1 zero-length key accepted by deserializers, L-2 no SRI hashes on CDN scripts in recovery.html",
+      "Subfolder IPNS records are not propagated to the public DHT — recovery tool subfolder traversal fails for records only in CipherBox API DB cache",
+      "Rust commands/vault.rs (41 lines), fuse/mod.rs (25 lines), api/types.rs (17 lines), fuse/decrypt.rs (7 lines) remain at 0% test coverage — requires a Rust integration test framework with running API + IPFS + FUSE"
+    ]
+  }
+}

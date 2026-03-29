@@ -1,0 +1,79 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "2bfacfc945f8",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T23:45:48.609603Z",
+  "branch": "feat/phase-24-bug-fixes-test-infrastructure",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "e4a608047bfa",
+  "token_usage": {
+    "input_tokens": 133,
+    "cache_creation_tokens": 193366,
+    "cache_read_tokens": 12272451,
+    "output_tokens": 29331,
+    "api_call_count": 113
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Execute Phase 24 (Bug Fixes \u0026 Test Infrastructure) for cipher-box, then review and clean up the code, create a PR, and resolve all CI failures and review comments.",
+    "outcome": "All 3 plans executed successfully in parallel, PR #361 created, CI build fixed, CodeRabbit review comments resolved, and an E2E test assertion updated to match new auto-repair behavior.",
+    "learnings": {
+      "repo": [
+        "Device registry has a v1/v2 schema migration path — new registries created as v2, old v1 registries read leniently via migration in schema.ts",
+        "resolveIpnsRecord throws on transient HTTP errors (5xx, network) but returns null on explicit 404 or !response.success — auto-repair in loadBin only triggers on true 'not found' responses",
+        "computeIpHash() exists in apps/web/src/lib/device/info.ts and should be used instead of inline SHA-256 computation",
+        "Stale package builds (.d.ts files) can cause spurious TypeScript errors in dependent packages — crypto and api-client packages need rebuilding after changes",
+        "The load test client pool uses a 401 interceptor with token refresh coalescing via createSdkContext()",
+        "recovery.html previously had a dead export-file recovery mode for v1 vaults; all vaults are now v2 so it was safely removed (322 lines)"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 202,
+          "end_line": 202,
+          "finding": "publishWithVerify should publish once then retry only the verification step — not re-publish on every retry attempt"
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 80,
+          "end_line": 96,
+          "finding": "validateRegistryShape() narrows obj.devices inside its own scope but TypeScript doesn't propagate that narrowing to callers — requires 'as unknown[]' cast after the call; also ipHash auto-heal should only apply to empty string, not other malformed values"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 69,
+          "end_line": 69,
+          "finding": "Variables declared with let inside a try block are out of scope in the finally block — must hoist declarations above the try"
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/bin-operations.test.ts",
+          "line": 32,
+          "end_line": 32,
+          "finding": "After auto-repair change, a fresh bin load returns sequenceNumber: 1 (published once during repair) not 0 — E2E assertion must match new behavior"
+        }
+      ],
+      "workflow": [
+        "TypeScript narrowing from helper validation functions does not propagate to callers — use type assertions or assertion function signatures when the caller needs the narrowed type",
+        "GSD wave execution: all 3 parallel agents completed independently with minor auto-fixes for type signature mismatches; spot-checks (SUMMARY.md + git log grep) confirm correctness",
+        "CI failures caught a TS18046 error ('unknown' type) that local builds missed — pnpm build for individual packages generates DTS, catching cross-package type errors before push",
+        "CodeRabbit review threads can be replied to via REST (in_reply_to comment ID) and resolved via GraphQL resolveReviewThread mutation"
+      ]
+    },
+    "friction": [
+      "CI caught a TypeScript error (TS18046 on schema.ts:96) that local builds didn't surface — required an extra commit/push cycle",
+      "sdk-core-workload.ts try/catch/finally structure was broken during initial simplification fix, requiring a second read-and-fix pass",
+      "The auto-repair change to loadBin broke an E2E test assertion (sequenceNumber 0→1) that wasn't caught until CI ran the sdk-e2e suite",
+      "Web app had 6 pre-existing type errors caused by stale package builds, not actual code issues — required rebuilding crypto and api-client packages to resolve"
+    ],
+    "open_items": [
+      "2 SDK integration tests are skipped because the API is not running locally — these are never validated in the local dev loop",
+      "byo-file-workload.ts had pre-existing type errors beyond the cid/pinSize fix — only the out-of-scope variable errors were addressed",
+      "The resolveIpnsRecord !response.success path (API says not found but DB cache may exist) could trigger auto-repair incorrectly in some edge cases — not investigated"
+    ]
+  }
+}

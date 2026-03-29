@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6676331950b6",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/phases/27-writable-shares-poc/27-CONTEXT.md",
+    "apps/api/src/shares/dto/share-key.dto.ts",
+    "apps/api/src/shares/dto/share-response.dto.ts",
+    "apps/api/src/shares/entities/share-key.entity.ts",
+    "apps/api/src/shares/shares.controller.ts",
+    "apps/web/src/hooks/useSharedNavigation.ts",
+    "apps/web/src/services/share.service.ts",
+    "packages/api-client/openapi.json",
+    "packages/api-client/src/models/shareKeyEntryDto.ts",
+    "packages/api-client/src/models/shareKeyEntryDtoKeyType.ts",
+    "packages/api-client/src/models/shareKeyResponseDtoKeyType.ts",
+    "tests/web-e2e/tests/writable-shares.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/66/76331950b6/0/metadata.json",
+      "transcript": "/66/76331950b6/0/full.jsonl",
+      "content_hash": "/66/76331950b6/0/content_hash.txt",
+      "prompt": "/66/76331950b6/0/prompt.txt"
+    },
+    {
+      "metadata": "/66/76331950b6/1/metadata.json",
+      "transcript": "/66/76331950b6/1/full.jsonl",
+      "content_hash": "/66/76331950b6/1/content_hash.txt",
+      "prompt": "/66/76331950b6/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 964,
+    "cache_creation_tokens": 2015977,
+    "cache_read_tokens": 199666145,
+    "output_tokens": 222579,
+    "api_call_count": 848
+  }
+}

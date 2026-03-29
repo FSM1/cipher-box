@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "92e9c7769bd7",
+  "session_id": "c330798c-ab40-490c-8805-6ed8f1747898",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T16:25:50.937627Z",
+  "branch": "fix/release-gate-retrigger-on-main-push",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "91781bf95c03",
+  "token_usage": {
+    "input_tokens": 260,
+    "cache_creation_tokens": 212763,
+    "cache_read_tokens": 14479205,
+    "output_tokens": 65051,
+    "api_call_count": 187
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Resolve automated PR review comments from Copilot and CodeRabbit on PR #392, then fix the release gate so it blocks merging until E2E tests pass on main (not just for release-please PRs).",
+    "outcome": "All 3 review comments on PR #392 were fixed, committed, and resolved. PR #394 was created to fix the release gate by adding a ci-e2e.yml orchestrator with unified change detection and a retrigger job that re-runs the release gate on open release-please PRs after every main merge.",
+    "learnings": {
+      "repo": [
+        "The release gate only enforced E2E checks for release-please branches; non-release PRs auto-passed with 'Not a release PR — E2E gate not applicable', making the required check meaningless for feature branches.",
+        "E2E workflow (e2e.yml) previously triggered on every push to main regardless of what changed, unlike desktop-e2e.yml which already used dorny/paths-filter for conditional execution.",
+        "Committed fixture files live in tests/web-e2e/fixtures/files/ and test helper functions could overwrite/delete them if the requested filename matched a fixture name — no guard existed.",
+        "The project uses a .planning/ directory with per-phase PLAN.md, SUMMARY.md, RESEARCH.md, and VERIFICATION.md files, plus a .learnings/ directory for dated markdown files.",
+        "desktop-e2e.yml already had the dorny/paths-filter + conditional job pattern that e2e.yml lacked.",
+        "The project is FSM1/cipher-box, a monorepo with apps/web, apps/api, packages/crypto, packages/core, packages/api-client, packages/sdk, packages/sdk-core."
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/test-files.ts",
+          "line": 156,
+          "end_line": 156,
+          "finding": "createTestMediaFile, createTestImageFile, createTestTextFile, and createTestBinaryFile all lacked a COMMITTED_FIXTURES guard — cleanup would delete committed fixture files if a test used the same filename."
+        },
+        {
+          "path": "tests/web-e2e/baselines/staging-journey-timing.json",
+          "line": 1,
+          "end_line": 19,
+          "finding": "Missing faro_enabled: true metadata field that was required by the schema/plan."
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 14,
+          "end_line": 16,
+          "finding": "page.evaluate() called in teardown without page.isClosed() guard, causing errors when the page was already closed."
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "line": 132,
+          "end_line": 135,
+          "finding": "jq // empty pattern returns empty string which causes gh CLI to error; also log message said 'Web E2E' while polling ci-e2e.yml. Fixed to use // \"\" and updated log message."
+        },
+        {
+          "path": ".github/workflows/ci-e2e.yml",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Desktop paths-filter was missing Cargo.lock, which would cause desktop E2E to not trigger on Rust dependency updates."
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "line": 214,
+          "end_line": 214,
+          "finding": "gh run rerun on a stale release-please SHA means detect-changes diff against HEAD would use stale checkout; fixed to diff against origin/main instead."
+        }
+      ],
+      "workflow": [
+        "When gh run rerun is used to retrigger a workflow, the checkout SHA is the original trigger SHA — path filters using HEAD..PREV_TAG produce stale diffs; always diff against origin/main when re-run semantics matter.",
+        "dorny/paths-filter is the established pattern in this repo for conditional job execution based on changed paths.",
+        "The resolve-pr-reviews skill follows a strict workflow: fetch unresolved GraphQL threads → read code → triage → fix → typecheck → commit → reply via REST (--field for integer in_reply_to) → resolve via GraphQL mutation.",
+        "Multiple parallel background polling tasks with sleep loops is noisy and hard to track; the approach worked but generated many orphaned task notifications.",
+        "CodeRabbit has per-PR quota limits that can impose ~23 minute cooldowns between review runs.",
+        "workflow_call reusable workflows inherit vars context from the calling repository automatically — no special handling needed."
+      ]
+    },
+    "friction": [
+      "CodeRabbit was rate-limited for ~23 minutes, requiring ~40 minutes of polling before its review arrived.",
+      "Initial diagnosis of the release gate problem was wrong twice — first proposed adding E2E to feature PRs, then proposed retriggering after merge, before understanding the actual issue was stale green checks on release-please PRs.",
+      "Background polling with many parallel sleep tasks created a flood of task completion notifications that cluttered the session.",
+      "Finding the correct REST comment IDs for replying to review threads required multiple gh API calls and trial/error.",
+      "gh run rerun with the stale SHA issue was subtle — only caught by CodeRabbit, not during implementation."
+    ],
+    "open_items": [
+      "PR #394 (ci-e2e.yml orchestrator + retrigger-release-gate) needs to be reviewed and merged.",
+      "The retrigger logic uses gh run rerun which re-runs the entire previous workflow run — if the release gate run was triggered by a different event context, this may have unexpected side effects worth monitoring.",
+      "Pending TODO in .planning/todos/pending/: 2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md — BYO IPFS register-cid 400 errors on staging.",
+      "The web E2E path filter in ci-e2e.yml should be verified against actual monorepo dependency graph to ensure no shared packages are missed."
+    ]
+  }
+}

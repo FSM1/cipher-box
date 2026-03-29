@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f48b5c08831f",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-26-observability-ux-tuning",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "apps/api/src/metrics/http-metrics.interceptor.ts",
+    "apps/web/src/services/upload.service.ts",
+    "docker/alloy-config.river",
+    "docker/grafana/scripts/provision-alerts.sh",
+    "packages/sdk-core/src/pinning/kubo-provider.ts",
+    "packages/sdk-core/src/pinning/pinata-provider.ts",
+    "packages/sdk-core/src/pinning/psa-provider.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f4/8b5c08831f/0/metadata.json",
+      "transcript": "/f4/8b5c08831f/0/full.jsonl",
+      "content_hash": "/f4/8b5c08831f/0/content_hash.txt",
+      "prompt": "/f4/8b5c08831f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5623,
+    "cache_creation_tokens": 183253,
+    "cache_read_tokens": 9787417,
+    "output_tokens": 31643,
+    "api_call_count": 102
+  }
+}

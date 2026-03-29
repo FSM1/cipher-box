@@ -1,0 +1,1 @@
+ok, then for the next gsd todo, there was a recent metrics phase that added a bunch of metrics to all layers of the application - Some of the timings and metrics needed to be updated once this was deplyoed to staging, and since this is now done, we need to actually run the testing scripts against staging, and records baselines and metrics with all the new data.

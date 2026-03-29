@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b0a8b6b36d59",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T04:37:50.33823Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "426c9485de48",
+  "checkpoint_transcript_start": 322,
+  "transcript_lines_at_start": 322,
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 8175,
+    "cache_read_tokens": 1880890,
+    "output_tokens": 3590,
+    "api_call_count": 13
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Complete Phase 34 E2E test implementation across 4 plans covering media/streaming, batch downloads, and load testing for cipher-box.",
+    "outcome": "Wave 2 fully complete with 16 new E2E tests across 3 spec files; load test baselines captured despite timeout; 34-04 partially complete pending Pinata JWT token for sustained/BYO capacity tests.",
+    "learnings": {
+      "repo": [
+        "Batch downloads use individual sequential downloads rather than zip — tests verify this pattern in batch-download.spec.ts",
+        "Load tests live in tests/load/ and require a Pinata JWT in tests/load/.env for BYO capacity testing",
+        "E2E baselines are stored in tests/web-e2e/baselines/ as JSON files",
+        "Phase 34 test suites: streaming-playback.spec.ts, media-preview.spec.ts, batch-download.spec.ts"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/baselines/staging-load-test.json",
+          "finding": "Staging load test baselines committed here after 5-client browser load test (hit 10m timeout but yielded usable data)"
+        },
+        {
+          "path": "tests/web-e2e/streaming-playback.spec.ts",
+          "finding": "6 tests: CTR mode upload, video preview, encrypted badge, decrypt progress, GCM fallback, blob URL verification"
+        },
+        {
+          "path": "tests/web-e2e/media-preview.spec.ts",
+          "finding": "5 tests: PDF canvas viewer, video/audio player modals, corrupt file error state"
+        },
+        {
+          "path": "tests/web-e2e/batch-download.spec.ts",
+          "finding": "5 tests: upload, multi-select, selection bar download trigger, 3-file count, batch context menu"
+        }
+      ],
+      "workflow": [
+        "Git lock files and stale worktrees required manual cleanup before retrying plan execution",
+        "Wave-based parallel plan execution (34-02 + 34-03 as Wave 2) then cherry-pick merge into main branch",
+        "Background load tests with TaskOutput/TaskStop can timeout at 10m — capture partial results before timeout"
+      ]
+    },
+    "friction": [
+      "Git lock file blocked 34-03 execution, requiring multiple cleanup steps (prune, force remove, force clean remnants)",
+      "5-client browser load test hit the 10m background task timeout, preventing clean completion"
+    ],
+    "open_items": [
+      "34-04 sustained-load test (200 clients) against staging API — requires Pinata JWT in tests/load/.env",
+      "34-04 byo-capacity-ceiling test (50→100→200→500→1000 clients) to find BYO contention point — requires same Pinata JWT",
+      "34-04 Task 2 checkpoint was noted as 'in progress' at Wave 1 completion"
+    ]
+  }
+}

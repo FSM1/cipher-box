@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "bfa867b7bfda",
+  "strategy": "manual-commit",
+  "branch": "chore/remove-build-desktop-workflow",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/bf/a867b7bfda/0/metadata.json",
+      "transcript": "/bf/a867b7bfda/0/full.jsonl",
+      "content_hash": "/bf/a867b7bfda/0/content_hash.txt",
+      "prompt": "/bf/a867b7bfda/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7480,
+    "cache_creation_tokens": 1274541,
+    "cache_read_tokens": 88910091,
+    "output_tokens": 103119,
+    "api_call_count": 410
+  }
+}

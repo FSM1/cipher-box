@@ -1,0 +1,88 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6a6fe06da5a9",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T23:22:11.44487Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/security/REVIEW-2026-03-24-phase20.md",
+    "apps/desktop/src-tauri/src/api/types.rs",
+    "apps/desktop/src-tauri/src/commands/vault.rs",
+    "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+    "apps/desktop/src-tauri/src/fuse/mod.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "56e4c200a645",
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 110913,
+    "cache_read_tokens": 1994620,
+    "output_tokens": 13697,
+    "api_call_count": 35
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute GSD phase 20 (vault-migration) with 4 plans implementing vault blob v2 binary format across TypeScript core, API server, Rust desktop, and web client. After execution, run a security review of all phase 20 code and fix any critical/high findings.",
+    "outcome": "All 4 plans executed successfully across 3 waves. Security review found 0 critical, 2 high issues; both high issues were fixed (input bounds validation on serializers, sensitive field redaction in Debug impls). All 165 TS tests and 10 Rust unit tests pass post-fix.",
+    "learnings": {
+      "repo": [
+        "Phase 20 work lives in a separate worktree/directory `cipher-box-phase-20`, not in the main `cipher-box` repo — gsd-tools init must be run from the correct working directory",
+        "The vault blob v2 format is implemented in three separate packages: @cipherbox/core (TS), the NestJS API server, and the Rust desktop FUSE app — all must be kept in sync",
+        "useAuth.ts implements a two-path login: PATH A for migrated users (IPFS v2 blob via IPNS) and PATH B for non-migrated users (lazy migration after normal login)",
+        "The API exposes POST /vault/migrate for server-side migration tracking; desktop Rust publishes v2 blobs to IPNS directly",
+        "Rust vault_blob.rs serialize_vault_blob_v2 originally returned bare bytes; after security fix it returns Result to surface bounds violations"
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 was changed from returning Vec\u003cu8\u003e to Result\u003cVec\u003cu8\u003e, Error\u003e to enforce key length bounds checks — all callers in commands/vault.rs and fuse/mod.rs required updating to propagate the error"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse had #[derive(Debug)] which would expose sensitive key material in logs; replaced with custom Debug impls that redact those fields"
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "finding": "TypeScript serializer for v2 blob needed explicit key length bounds validation mirroring the Rust implementation"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Call site for serialize_vault_blob_v2 needed ? operator or explicit error propagation after function signature change to Result"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "finding": "Second call site for serialize_vault_blob_v2 in FUSE module also required error propagation update"
+        }
+      ],
+      "workflow": [
+        "GSD orchestrator must be initialized from the correct working directory — if gsd-tools init returns phase_found: false, check for separate phase worktrees",
+        "The security:review skill integrates naturally as a checkpoint step between wave execution and final verification; scope can be passed via ARGUMENTS",
+        "When Rust functions change return types to Result, test calls in the same file need .unwrap() — a quick grep for all call sites prevents missed updates",
+        "Spot-checking after each wave (SUMMARY.md exists + git commits present + no Self-Check: FAILED) is critical before proceeding to dependent waves"
+      ]
+    },
+    "friction": [
+      "API connection error (ConnectionRefused) on the first security:review invocation required a full retry",
+      "gsd-tools init defaulted to wrong directory (cipher-box instead of cipher-box-phase-20), requiring manual detection and re-run",
+      "Changing serialize_vault_blob_v2 to return Result required cascading updates across 3 files (commands/vault.rs, fuse/mod.rs, test calls in vault_blob.rs) — not all were immediately obvious from a single grep"
+    ],
+    "open_items": [
+      "3 medium and 2 low security findings from the review were documented but not fixed — see .planning/security/REVIEW-2026-03-24-phase20.md",
+      "Human verification of the web client checkpoint (login with non-migrated account, re-login after migration, recovery.html testing) was requested but user approval was not captured in the transcript before the security review was triggered",
+      "Phase 20 verification (gsd-verifier) and roadmap update were not reached — the session ended mid-checkpoint after the security fix commit"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T23:21:41.131817Z",
+    "agent_lines": 1007,
+    "human_added": 1636,
+    "human_modified": 56,
+    "human_removed": 0,
+    "total_committed": 2699,
+    "agent_percentage": 37.31011485735458
+  }
+}

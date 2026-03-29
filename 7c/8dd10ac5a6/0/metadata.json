@@ -1,0 +1,124 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "7c8dd10ac5a6",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T11:29:14.480586Z",
+  "branch": "fix/session-restore-race-conditions",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/perf/staging-baseline-2026-03-24.md",
+    ".planning/todos/done/2026-03-24-session-restore-race-conditions.md",
+    "tests/web-e2e/staging-perf-wallet.mjs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "6a1c392029b7",
+  "token_usage": {
+    "input_tokens": 349,
+    "cache_creation_tokens": 522815,
+    "cache_read_tokens": 40844775,
+    "output_tokens": 86734,
+    "api_call_count": 257
+  },
+  "session_metrics": {
+    "turn_count": 31
+  },
+  "summary": {
+    "intent": "Monitor PR #349 for automated bot reviews (CodeRabbit, Copilot), auto-resolve them as they arrive, then collect staging performance baselines for the vault login path, and fix a session restore race condition that was breaking E2E tests.",
+    "outcome": "All 23 review threads on PR #349 resolved across 4 rounds with real bug fixes committed; staging perf baselines captured and documented; session restore race condition diagnosed, fixed in PR #350, and merged with nitpick cleanup.",
+    "learnings": {
+      "repo": [
+        "The cron/loop skill can be used to poll GitHub for bot review comments every 5 minutes and auto-trigger /resolve-pr-reviews — effective PR automation pattern for this repo.",
+        "Web3Auth Core Kit DKG on Sapphire Devnet dominates login time (~9-45s); the repo's own vault-critical path is only ~722ms serial.",
+        "Staging DB was wiped so no existing vaults exist there — IPNS resolve returns 404 for all vault lookups on staging.",
+        "The E2E test suite uses @johanneskares/wallet-mock with installMockWallet() for secp256k1 ECDSA wallet signing — required for real Web3Auth SIWE flow.",
+        "CI runs tests in parallel workers; log correlation requires careful timestamp matching to avoid attributing parallel test output to the wrong test.",
+        "The Axios 401 interceptor in packages/api-client/src/instance.ts already deduplicates 401-triggered refreshes via a shared refreshPromise, but direct calls to authApi.refresh() from React effects are NOT covered.",
+        "markdownlint runs in CI and enforces formatting rules on .planning/ docs — prettier-formatted .mjs files also linted by CI even if lint-staged skips them locally.",
+        "TEE republishes IPNS records every 3 hours, so IPNS record expiry for key blobs is handled without frontend intervention."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 102,
+          "end_line": 146,
+          "finding": "Broad try/catch around getVault() + all subsequent IPFS operations meant a 404 from fetchFromIpfs (missing CID) would incorrectly trigger vault re-initialization for an existing user. Fixed by giving getVault() its own isolated try/catch."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 124,
+          "end_line": 125,
+          "finding": "After PR #349, existing vault login path resolves vault key IPNS name via deriveVaultKeyIpnsKeypair. If the IPNS record is missing (pre-migration vault), this throws 'Vault key IPNS name not found', session restore catches it, logs out Core Kit, and the user is stuck."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 580,
+          "end_line": 594,
+          "finding": "Session restore effect calls authApi.refresh() directly — multiple React effect cycles on page reload fire this concurrently (6 concurrent calls observed in CI). Each successful refresh proceeds to initializeOrLoadVault(), causing concurrent vault init attempts."
+        },
+        {
+          "path": "apps/web/src/lib/api/auth.ts",
+          "finding": "Fixed by adding a module-level refreshPromise deduplication variable so concurrent direct calls to authApi.refresh() share a single in-flight Promise."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "Fixed by adding a module-level vaultInitPromise deduplication variable wrapping initializeOrLoadVault — concurrent callers share the same Promise, preventing the duplicate key constraint on UQ_folder_ipns_user_ipns."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1312,
+          "finding": "directRootIpnsName was the vault key IPNS name but was being used as the root folder IPNS name for folder traversal — real bug requiring separate derivation of both IPNS names."
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 99,
+          "finding": "slice() was used where subarray() should be used for zero-copy typed array views — Copilot caught this."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 72,
+          "finding": "Sequence-0 conflict on IPNS publish during vault init was logging a warning and continuing — changed to return an error to abort, preventing silent partial-init states."
+        },
+        {
+          "path": "tests/web-e2e/staging-perf-wallet.mjs",
+          "finding": "Playwright's native page.on('request'/'response') events are more reliable than injecting fetch monitoring via evaluate() — the injected monitor doesn't survive navigation."
+        }
+      ],
+      "workflow": [
+        "The /loop skill with CronCreate enables automated PR review monitoring — effective pattern for letting bots review while doing other work.",
+        "Outside-diff-range review comments from Copilot/CodeRabbit don't appear as resolvable GraphQL review threads — must be addressed via PR-level comment replies.",
+        "1Password SSH agent can become temporarily unavailable to subprocess commits — retrying after a pause usually resolves it.",
+        "Playwright MCP sandbox doesn't support Node module imports (dynamic import() fails) — use Bash with a standalone .mjs script for complex browser automation.",
+        "Correlating CI logs across parallel test workers requires timestamp matching; the test worker dots (···) in log output indicate a different parallel test.",
+        "GSD todos should cover all layers of a root cause (not just the surface symptom) — the auth/refresh race was the root, vault init race was downstream."
+      ]
+    },
+    "friction": [
+      "GitHub API GraphQL endpoint timed out once during monitoring — required waiting for next cron tick.",
+      "Copilot outside-diff-range comments don't surface as unresolved GraphQL review threads, requiring manual URL intervention from user to discover them.",
+      "Web3Auth OTP on staging is real (not test-bypassable) — wallet login via injected mock provider required secp256k1 signing not available in Playwright MCP evaluate() context.",
+      "Playwright MCP browser_run_code doesn't support Node module imports — had to fall back to a Bash-executed standalone script.",
+      "1Password SSH agent was temporarily unavailable during a commit attempt, requiring a retry.",
+      "prettier CI check caught formatting issues in staging-perf-wallet.mjs that lint-staged missed locally (lint-staged only checks staged files).",
+      "markdownlint enforced formatting rules on .planning/ markdown docs, requiring additional fixup commits.",
+      "Staging DB was wiped so no live vault existed for baseline measurement — had to create one via wallet login, but Core Kit DKG took 19-47s making the baseline noisy."
+    ],
+    "open_items": [
+      "Post-deploy re-measurement needed: run tests/web-e2e/staging-perf-wallet.mjs against staging after PR #349 deploys to capture real IPNS resolve + IPFS fetch latencies for a live v2 vault blob.",
+      "Session restore for existing vaults that pre-date PR #349 (no vault key IPNS record published) will throw 'Vault key IPNS name not found' — a migration or fallback path is needed.",
+      "The E2E test 3.7 (Page reload preserves session) was broken by the race condition — verify it passes after PR #350 merges.",
+      "Auth/refresh 401 race: even with the direct-call deduplication fixed, the Axios interceptor's 401-triggered refresh and the session restore direct call could still race — worth a follow-up audit.",
+      "Consider whether VaultBlobV2 type removal should be reflected in any external API documentation beyond METADATA_SCHEMAS.md.",
+      "The staging-perf-wallet.mjs script is in tests/web-e2e/ — decide whether to keep it long-term or move to .planning/perf/ alongside the baseline doc."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T11:28:18.171081Z",
+    "agent_lines": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 100
+  }
+}

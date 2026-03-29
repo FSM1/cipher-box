@@ -1,0 +1,74 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d450dbbb7dc3",
+  "session_id": "307145be-5d6b-4c58-9faa-418cafde1db6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T00:01:57.202358Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/migration/migration.processor.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "4d28e6ed07c9",
+  "checkpoint_transcript_start": 1249,
+  "transcript_lines_at_start": 1249,
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 15321,
+    "cache_read_tokens": 3564236,
+    "output_tokens": 3889,
+    "api_call_count": 18
+  },
+  "session_metrics": {
+    "turn_count": 53
+  },
+  "summary": {
+    "intent": "Verify the end-to-end migration pipeline from CipherBox storage to an external IPFS node (and back), plus validate dual-write capability in the BYO IPFS node feature.",
+    "outcome": "A bug was found and fixed in the migration processor (wrong env var name), two plan SUMMARYs (21-06, 21-07) were completed, but the full end-to-end migration data transfer through the TEE worker remained unverified — the actual pin transfer to the 2nd Kubo node was never confirmed.",
+    "learnings": {
+      "repo": [
+        "The migration processor uses TEE_AUTH_SECRET but TeeService uses TEE_WORKER_SECRET — these env var names were inconsistent, causing silent processor failures.",
+        "BullMQ migration jobs that fail do not auto-retry; a new migration must be triggered manually.",
+        "The migration trigger logic checks previousMode === mode — switching external→cipherbox→external won't re-trigger migration on the second external save because savedConfig is already 'external'.",
+        "Phase 21 (BYO IPFS Node Support) is complete at 7/7 plans; benchmark execution against a real external provider (21-07 Task 4) is deferred pending provider infrastructure."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/migration/migration.processor.ts",
+          "line": 46,
+          "end_line": 46,
+          "finding": "Used TEE_AUTH_SECRET instead of TEE_WORKER_SECRET, mismatching the env var name used by TeeService elsewhere in the codebase."
+        }
+      ],
+      "workflow": [
+        "NestJS hot-reload (watch mode) recompiles changed files but does not re-queue already-failed BullMQ jobs — failed jobs require a manual retrigger.",
+        "When debugging multi-service pipelines (UI → API → BullMQ → TEE worker → IPFS), it's worth confirming each layer independently before running end-to-end.",
+        "Playwright browser automation was used for UAT of the storage settings UI flow alongside API-level log inspection."
+      ]
+    },
+    "friction": [
+      "Env var name mismatch (TEE_AUTH_SECRET vs TEE_WORKER_SECRET) caused the migration processor to fail silently with no obvious error until logs were checked.",
+      "Failed BullMQ jobs don't retry, requiring a workaround of toggling mode cipherbox→external to trigger a fresh migration — but this also failed because savedConfig was already 'external'.",
+      "The MigrationProgress component continued showing the stale '0/38 pins' state from the failed job, making it hard to confirm whether a new migration had started.",
+      "The TEE worker's /migrate endpoint integration (decrypt ECIES config, fetch CIDs, pin to destination) was never actually exercised during this session."
+    ],
+    "open_items": [
+      "Verify full end-to-end migration: pins actually landing on 2nd Kubo node after TEE worker processes the job.",
+      "Fix the migration retrigger UX — UI should detect a previously failed migration and offer a retry button rather than requiring a mode toggle.",
+      "Test reverse migration (external → cipherbox) end-to-end.",
+      "Test dual-write capability (writes going to both CipherBox and external node simultaneously).",
+      "Run 21-07 benchmark scenarios against a real external IPFS provider (deferred pending BYO_IPFS_ENDPOINT infrastructure).",
+      "Commit the TEE_AUTH_SECRET → TEE_WORKER_SECRET processor fix (was applied but commit was pending at end of transcript)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-25T00:01:36.359461Z",
+    "agent_lines": 2,
+    "human_added": 291,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 293,
+    "agent_percentage": 0.6825938566552902
+  }
+}

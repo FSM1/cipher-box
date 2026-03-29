@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c007126f03a6",
+  "session_id": "1986a6a4-e18b-403e-a50f-9f54ae3d2e8c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T17:08:43.666678Z",
+  "branch": "chore/remove-build-desktop-workflow",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "439e481e4a48",
+  "token_usage": {
+    "input_tokens": 7471,
+    "cache_creation_tokens": 1270196,
+    "cache_read_tokens": 86030922,
+    "output_tokens": 101259,
+    "api_call_count": 402
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Fix a failing vault recovery E2E test in CI, then address a series of CI/deployment issues (Grafana provisioning, desktop signing, writable shares test failures) and perform maintenance cleanup (codebase docs, worktrees, milestone artifacts).",
+    "outcome": "Fixed the vault recovery E2E via a protobuf field number bug (field 2 → field 1) and resolution order swap; fixed writable shares E2E via an IPNS key ID mismatch in standalone file shares; wired Tauri signing keys into the staging workflow and removed the redundant build-desktop.yml; updated all 7 codebase analysis docs to reflect the multi-package/crate architecture.",
+    "learnings": {
+      "repo": [
+        "IPNS records encode the value (CID path) at protobuf field 1, not field 2 — field 2 is signatureV1. The extractCidFromIpnsRecord function in recovery.html had this wrong.",
+        "The resolveIpns function tried the Kubo IPFS gateway HEAD first (15s timeout) before delegated routing — in CI, Kubo can't resolve mock-ipns-routing names so this wasted 15s per call. Delegated routing should always be tried first.",
+        "Standalone file shares create a synthetic FilePointer with id=shareId, but share_keys stores the file-ipns key with itemId=fileId (the real file UUID). These IDs don't match, causing getFileIpnsKeyFn to return null.",
+        "The ThrottlerModule in app.module.ts uses hardcoded limits regardless of NODE_ENV — the full web-e2e suite was hitting 429s locally because of this. ThrottlerModule needs forRootAsync with env-based limits for test environments.",
+        "tauri-apps/tauri-action@v1 does not exist — only @v0 (current v0.6.2). The build-desktop.yml was referencing a non-existent major version causing startup_failure on every release event.",
+        "The staging deploy workflow had prerelease: true on desktop builds and was missing includeUpdaterJson: true — this meant the Tauri auto-updater's /releases/latest/download/latest.json endpoint could never resolve staging builds.",
+        "The Grafana dashboard provisioning uses a Grafana service account token (not the Loki/Prometheus data source keys). The GRAFANA_API_KEY secret stores this token and it had expired.",
+        "The BypassableThrottlerGuard reads X-Throttle-Bypass header from requests, but browser-based E2E tests can't inject headers — making the NODE_ENV=test path the only reliable way to relax throttling for full suite runs."
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 791,
+          "end_line": 795,
+          "finding": "extractCidFromIpnsRecord checked fieldNumber === 2 (signatureV1) instead of fieldNumber === 1 (value). Root cause of all IPNS resolution failures in recovery flow."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 660,
+          "end_line": 700,
+          "finding": "resolveIpns tried IPFS gateway HEAD first. After fix: delegated routing tried first, gateway as fallback. Also fixed double-consume bug where resp.json() was called then resp.arrayBuffer() on the same response."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 349,
+          "end_line": 360,
+          "finding": "Standalone file shares build a fake FilePointer with id: shareItem.share.shareId but the file-ipns key was stored with itemId = actual file UUID. Fallback added: if itemId match fails and shareItem.share.itemType === 'file', use first file-ipns key."
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "ThrottlerModule converted to forRootAsync to read NODE_ENV — when NODE_ENV=test, limits are 200/sec and 2000/min instead of 10/sec and 100/min."
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 270,
+          "end_line": 310,
+          "finding": "All 3 tauri-action invocations (macOS/Windows/Linux) now include TAURI_SIGNING_PRIVATE_KEY + TAURI_SIGNING_PRIVATE_KEY_PASSWORD env vars, includeUpdaterJson: true, and prerelease: false."
+        }
+      ],
+      "workflow": [
+        "Running the full web-e2e suite locally requires the API to be started with NODE_ENV=test explicitly — dotenv does not override a process env var that is already set, so this must precede the npm start command.",
+        "When parallel Playwright test suites share the same API and database, account creation steps interfere with each other causing cascading 429s and login failures — suites should not be run in parallel locally.",
+        "CI uses NODE_ENV=test automatically, making its test results more reliable than naive local runs. Local full-suite runs need to match CI's environment config exactly before being considered authoritative.",
+        "The /gsd:progress workflow reliably identifies active debug sessions and can be used to triage stale ones — debug sessions tied to deleted worktrees should be resolved immediately.",
+        "Subagent parallelism (3 mapper agents in parallel) significantly speeds up broad codebase analysis tasks like updating all documentation files simultaneously."
+      ]
+    },
+    "friction": [
+      "Round-tripping to CI to get writable shares E2E passing — multiple pushes before the root cause (IPNS key ID mismatch) was found. User explicitly asked to stop this pattern and run full suite locally first.",
+      "NODE_ENV=test throttle issue was discovered late — the full local suite was producing 429 failures that masked real test results for most of the session.",
+      "1Password SSH agent not accessible from subprocess contexts, causing commit signing failures that required manual git commands.",
+      "Stale worktrees left over from previous phases needed cleanup before work could continue cleanly.",
+      "Docker Hub authentication errors on GitHub Actions caused transient CI failures unrelated to code changes (required re-running jobs).",
+      "Two parallel background test runs interfering with each other mid-session, producing confusing failure signals.",
+      "The debug session for vault-migration-iife-silent-failure was tied to a worktree that no longer existed, making it impossible to continue — earlier cleanup of stale sessions would have been better."
+    ],
+    "open_items": [
+      "docs/milestone-v1.1-completion branch has 2 commits (debug session resolution + codebase docs rewrite) but has not been PRed or merged yet.",
+      "The /gsd:complete-milestone command has not been run — milestone v1.1 is fully executed but not archived. 6 pending todos and planning artifacts need archiving.",
+      "The 3 locally-failing web-e2e tests (recycle-bin TC01, mfa-flows TC-MFA-01, full-workflow 6.5.4) were identified as environment-specific but not investigated — may indicate real issues with local dev setup or be genuine flaky tests.",
+      "The Tauri updater endpoint in tauri.conf.json points to /releases/latest/download/latest.json — now that prerelease: false is set, this should work, but needs verification on the next staging release cut.",
+      "CLAUDE.md additions recommended by the /insights report (branch checking before commits, PR review verification, project-local file editing) have not been implemented."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-27T17:07:51.903956Z",
+    "agent_lines": 0,
+    "human_added": 3,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 3,
+    "agent_percentage": 0
+  }
+}

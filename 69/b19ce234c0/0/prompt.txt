@@ -1,0 +1,75 @@
+/gsd:execute-phase 21
+
+---
+
+<task-notification>
+<task-id>ae27a95e52685a0d4</task-id>
+<tool-use-id>toolu_01TwoTTSHkpnaLGYpwQyTj4g</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ae27a95e52685a0d4.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-01" completed</summary>
+<result>No untracked files. Plan execution is complete.
+
+## PLAN COMPLETE
+
+**Plan:** 21-01
+**Tasks:** 2/2
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-01-SUMMARY.md`
+
+**Commits:**
+
+- `0113ef24a`: feat(21-01): add PinningProvider interface with KuboProvider, PsaProvider, and connection test
+- `f831f66c3`: test(21-01): add unit tests for KuboProvider, PsaProvider, and connection test
+- `9a2bb03af`: docs(21-01): complete SDK pinning interface plan
+
+**Duration:** 5 min
+
+**Key files created:**
+
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/types.ts` -- PinningProvider interface, PinningMode, ExternalProviderConfig, ConnectionTestResult types
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/kubo-provider.ts` -- KuboProvider for Kubo RPC /api/v0/* endpoints
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/psa-provider.ts` -- PsaProvider for PSA /pins endpoints with pinByCid
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/connection-test.ts` -- testConnection with protocol auto-detection and CORS validation
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/index.ts` -- barrel export
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/__tests__/pinning/kubo-provider.test.ts` -- 12 unit tests
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/__tests__/pinning/psa-provider.test.ts` -- 11 unit tests
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/__tests__/pinning/connection-test.test.ts` -- 9 unit tests</result>
+<usage><total_tokens>95406</total_tokens><tool_uses>89</tool_uses><duration_ms>614497</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ae27a95e52685a0d4.output
+
+---
+
+<task-notification>
+<task-id>ab6a7447ea25e83c2</task-id>
+<tool-use-id>toolu_01DV6HGrj3fg72g1JXQjxjXH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ab6a7447ea25e83c2.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-02" completed</summary>
+<result>All done. Let me provide the completion format.
+
+## PLAN COMPLETE
+
+**Plan:** 21-02
+**Tasks:** 2/2
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-02-SUMMARY.md`
+
+**Commits:**
+
+- `4ed75b6d0`: feat(21-02): add register-cid endpoint and advisory quota mode for BYO users
+- `3d328749d`: test(21-02): add unit tests for CID registration and advisory quota mode
+- `ea0912006`: docs(21-02): complete CID registration and advisory quota plan
+
+**Duration:** 6 min
+
+**Key files created/modified:**
+
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/ipfs/dto/register-cid.dto.ts` -- RegisterCidDto with CID format validation
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/ipfs/ipfs.controller.ts` -- POST /ipfs/register-cid endpoint
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/vault/vault.service.ts` -- isUserByo(), setByoStatus(), advisory quota
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/vault/dto/quota.dto.ts` -- advisory boolean field
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/vault/entities/vault.entity.ts` -- isByoUser column
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/migrations/1740600000000-AddByoUserFlag.ts` -- IF NOT EXISTS migration</result>
+<usage><total_tokens>110666</total_tokens><tool_uses>113</tool_uses><duration_ms>650133</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ab6a7447ea25e83c2.output

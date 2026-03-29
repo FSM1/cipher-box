@@ -1,0 +1,139 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f50165db950e",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T22:57:58.485287Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/shares/shares.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "43c99cc8b29e",
+  "token_usage": {
+    "input_tokens": 750,
+    "cache_creation_tokens": 1389047,
+    "cache_read_tokens": 168255729,
+    "output_tokens": 175547,
+    "api_call_count": 648
+  },
+  "session_metrics": {
+    "turn_count": 46
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) end-to-end: implement write-enabled file sharing with proper IPNS key management, permission upgrade/downgrade, and recipient write actions in SharedFileBrowser.",
+    "outcome": "Phase 27 fully completed: 3 plans executed, 5 UAT bugs found and fixed during checkpoint verification, a full security review performed with all 8 findings remediated using TDD, 21 E2E tests written and passing, PR #372 created and all 20 review threads resolved across 3 review rounds.",
+    "learnings": {
+      "repo": [
+        "Writable shares use dual-key IPNS wrapping: owner's public key in FilePointer.ipnsPrivateKeyEncrypted, recipient's wrapped copy stored in share_keys with keyType='file-ipns'. Both needed or either party can't update files.",
+        "File uploads through shared folders must call createFileMetadata + batchPublishIpnsRecords inline — skipping this (original PoC code set fileMetaIpnsName='') makes uploaded files permanently inaccessible.",
+        "withConflictRetry closures capture React state at render time; all four write operations (upload, mkdir, rename, delete) and all navigation functions (navigateToSubfolder, navigateUp, navigateToBreadcrumb) must read from refs (folderChildrenRef, sequenceNumberRef) to avoid stale data bugs.",
+        "Owner file updates (useFileOperations.handleUpdateFile) must call reWrapForRecipients after updating file content; without this, recipient share_keys hold the old file key while the file is encrypted with a new key.",
+        "TextEditorDialog save path calls updateFile from the owner's useFolder hook — for shared files a separate onSaveSharedFile callback prop is required, wired through SharedFileBrowser from useSharedNavigation.updateSharedFile.",
+        "Permission downgrade must delete file-ipns share_keys (or recipients retain IPNS private keys and can continue modifying file metadata after revocation). Wrapped in a manager.transaction for atomicity.",
+        "The API client (packages/api-client) must be regenerated after any DTO enum change — OpenAPI spec reflects runtime DTOs, not TypeScript types, so @ApiProperty enum arrays must be kept in sync manually.",
+        "IpnsModule importing SharesModule (for findActiveWriteShare) adds SharesService as a dependency of IpnsService, which must be mocked in ipns.service.spec.ts.",
+        "Codecov enforces 80% patch coverage and 78% global branch coverage as CI gates.",
+        "Dev stack package build order: core → sdk-core → sdk → web. Missing builds cause 'cannot resolve @cipherbox/sdk' errors at Vite startup.",
+        "Background bash tasks in Claude Code get killed when conversation context shifts — use nohup/detached process spawning for long-running dev servers."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Original PoC set fileMetaIpnsName: '' for shared uploads, making uploaded files inaccessible. Fixed by inlining full IPNS keypair generation and calling batchPublishIpnsRecords."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 921,
+          "end_line": 921,
+          "finding": "withConflictRetry in upload handler captured stale React state; all 4 write operations needed to read from folderChildrenRef/sequenceNumberRef instead."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 1120,
+          "end_line": 1130,
+          "finding": "createFolderHandler wrapped subfolder keys with recipient's key (C-02); fix wraps with owner's key in FilePointer and adds separate share_key for recipient. Keys must be zeroed in finally block, not just happy path."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 98,
+          "end_line": 101,
+          "finding": "Shared file save path threw 'Parent folder not found' because it called owner-only updateFile. Required new onSaveSharedFile prop and updateSharedFile hook function."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "finding": "handleUpdateFile did not re-wrap new file key for share recipients after content update. Added reWrapForRecipients call matching post-upload behavior."
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 78,
+          "end_line": 86,
+          "finding": "createShare lacked permission/IPNS-key invariant validation: write shares without encryptedIpnsKey and read shares with one could be created. Added guard throwing BadRequestException."
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 200,
+          "end_line": 200,
+          "finding": "Write-share publish authorization checked share.permission === 'write' but not that encryptedIpnsKey is non-null, allowing auth bypass on corrupted share records."
+        },
+        {
+          "path": "apps/api/src/shares/dto/update-permission.dto.ts",
+          "finding": "MinLength(2) on encryptedIpnsKey was too low for ECIES ciphertext; changed to MinLength(64). Also lacked even-length hex validation (@Matches(/^([0-9a-f]{2})+$/i))."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 223,
+          "end_line": 233,
+          "finding": "Added guard blocking write-share recipients from creating new FolderIpns rows (H-01). Later a too-aggressive version blocked owners from editing recipient-uploaded files and had to be narrowed."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/ShareDialog.tsx",
+          "line": 367,
+          "end_line": 380,
+          "finding": "setUpgradingId was set before early-return branches, leaving UI stuck in disabled state if share lookup failed. Fixed with try/finally. Also introduced isBusy(shareId) helper to cross-lock upgrade/downgrade/revoke buttons."
+        }
+      ],
+      "workflow": [
+        "TDD red-green cycle for security fixes: stash backend agent changes, write failing tests first against unfixed code, verify they fail, pop stash, verify tests now pass.",
+        "Security review should be run after implementing crypto features — found 8 issues (2 critical, 3 high, 4 medium, 3 low) that were all worth fixing before merge.",
+        "Simplify (code review) pass caught a critical missing ref-sync bug in navigation functions that the security review missed.",
+        "E2E tests against real UI require exact CSS class names — must grep the component source; assumptions about class names caused multiple test failures (e.g. .share-recipient-permission vs .recipient-perm-write, modal dialog vs inline input for mkdir).",
+        "When background tasks are killed by Claude Code conversation management, check the output file before assuming failure — many appeared as 'killed' but had already committed successfully.",
+        "PR review comments marked 'outside of diff range' on GitHub don't appear in normal review thread queries — check the review body directly via gh api repos/.../pulls/.../reviews.",
+        "Unused imports after test deletions cause CI lint failures — always clean up imports when removing tests that use specific exception types."
+      ]
+    },
+    "friction": [
+      "Background tasks killed repeatedly (4+ times) when conversation context shifted — required switching to nohup/detached process spawning, adding significant back-and-forth.",
+      "PostgreSQL host IP changed mid-session (192.168.133.114 → 192.168.133.12), requiring .env recreation from scratch since no .env existed in the CI debug checkout.",
+      "Web server failed to start due to unbuilt SDK packages — required discovering and executing the correct build chain (core → sdk-core → sdk) before Vite could resolve imports.",
+      "API client regeneration (pnpm api:generate) required after every DTO enum change, and the OpenAPI spec only updates when the API server restarts with the new code — multiple iteration cycles needed.",
+      "Git lock file conflict blocked commit mid-session, requiring manual removal of .git/index.lock.",
+      "withConflictRetry stale closure bug required multiple passes (security review missed it, simplify agent caught it, then navigation functions were also discovered to be missing the same fix).",
+      "IPNS dual-key wrapping required 3 iterations to get right: initial fix (recipient key only) → owner couldn't edit → add owner key in FilePointer → recipient key in share_keys → needed new 'file-ipns' keyType and DTO changes.",
+      "CI lint failed post-merge due to unused ForbiddenException import left behind when a test was removed — required an extra commit/push cycle.",
+      "'Outside of diff range' review comment on createShare invariant validation was not surfaced in normal review thread queries and required the user to manually point to it."
+    ],
+    "open_items": [
+      "Polling endpoint fetches all received shares on every 30s tick (M-04 partial fix) — a targeted single-share endpoint would be more efficient but was deferred as PoC scope.",
+      "reWrapForRecipients in handleUpdateFile does not re-wrap file-ipns keys (only file keys) — recipients who uploaded a file will lose update access if the owner edits it and a new IPNS keypair is generated. Noted as design gap, deferred.",
+      "E2E tests require page.reload() before Alice sees Bob's uploaded file due to IPNS propagation delay — a proper fix would poll until the IPNS record propagates rather than relying on reload timing.",
+      "Pre-existing auth.controller.ts used a local RequestWithUser interface instead of the shared common/types.ts one — partially fixed but device-approval controller has the same pattern.",
+      "Pre-existing lint errors in tests/sdk-e2e/src/suites/error-cases.test.ts were not addressed (out of scope for Phase 27).",
+      "Writable shares PoC has a 100-received-share polling limit — acceptable for PoC but needs pagination for production.",
+      "Security review finding L-02 (BigInt sequence number coercion) was addressed with BigInt() cast but the underlying API returning string vs number inconsistency in sequence numbers was not formally fixed in the schema."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T22:56:34.640141Z",
+    "agent_lines": 0,
+    "human_added": 13,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 13,
+    "agent_percentage": 0
+  }
+}

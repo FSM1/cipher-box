@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "2fc8ea0ce5dc",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T19:46:09.783592Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/19.2-ipfs-upload-performance-optimization/19.2-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ffe08830e72d",
+  "token_usage": {
+    "input_tokens": 54,
+    "cache_creation_tokens": 88128,
+    "cache_read_tokens": 2737053,
+    "output_tokens": 16336,
+    "api_call_count": 41
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Execute phase 19.2 (IPFS upload performance optimization) gap closure — fix two verification failures: missing PERF-09 requirement registration and non-definitive post-optimization baselines.",
+    "outcome": "Gap closure plans were created and partially executed. PERF-09 registration (plan 03) and three-point local baseline collection (plan 04) were spawned in parallel, with plan 04 having a checkpoint for user to run load tests. The session ended mid-execution.",
+    "learnings": {
+      "repo": [
+        "Phase 19.2 optimizes IPFS upload performance via two layers: SDK-level concurrent pin orchestration (Promise.allSettled for IPNS publish + folder metadata update) and Kubo-level pebbleds datastore replacing flatfs.",
+        "Load test harness is at tests/load/src/ with scenarios in tests/load/src/scenarios/upload-throughput.test.ts — collects p50/p95/p99/min/max/avg latencies plus throughput ops/s, runs N clients × 20 files each (1KB–500KB).",
+        "REQUIREMENTS.md tracks PERF-01 through PERF-08; PERF-09 was referenced in plans but never formally registered — a traceability gap.",
+        "Docker Compose for IPFS infrastructure is at docker/docker-compose.yml; deployed to host 192.168.133.114. Switching to pebbleds requires deleting the ipfs_data volume (destructive).",
+        "Pre/post baselines are stored in .planning/baselines/ (e.g., 19.2-pre-optimization-baselines.md and 19.2-post-optimization-baselines.md).",
+        "Git commits for the three optimization stages: before optimizations = parent of 4087fa2b6, SDK-only = 565dccd5d, SDK+Kubo = HEAD."
+      ],
+      "code": [
+        {
+          "path": "tests/load/src/scenarios/upload-throughput.test.ts",
+          "finding": "Upload throughput load test scenario — runs N clients × 20 files each with file sizes 1KB–500KB."
+        },
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "Metrics harness collects per-operation p50/p95/p99/min/max/avg latencies and throughput ops/s."
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "Client pool harness manages concurrent test clients for load tests."
+        },
+        {
+          "path": ".planning/phases/19.2-ipfs-upload-performance-optimization/19.2-04-PLAN.md",
+          "finding": "Replanned from staging-based validation to three-point local baseline approach (no-opt → SDK-only → SDK+Kubo) to avoid destructive staging deployments and eliminate environment confounding variables."
+        }
+      ],
+      "workflow": [
+        "Initial verification failure was caused by comparing baselines from different environments (staging vs localhost) with different client counts (10 vs 5) — environment consistency is critical for performance benchmarks.",
+        "Three-point local baseline strategy (before all opts, after SDK layer, after all opts) isolates each optimization's contribution more cleanly than a single before/after comparison.",
+        "The GSD --gaps-only flag filters to only plans with gap_closure: true in frontmatter, allowing targeted re-execution without re-running completed plans.",
+        "Pushing branch to remote before requesting infrastructure changes on remote host is the correct flow — host can pull updated configs directly."
+      ]
+    },
+    "friction": [
+      "Post-optimization baselines were captured in a different environment (staging) than pre-optimization baselines (localhost) with different client counts, making the comparison non-definitive and requiring gap closure.",
+      "PERF-09 requirement was referenced in implementation plans but never formally added to REQUIREMENTS.md, causing a traceability gap caught only at verification.",
+      "Switching to pebbleds datastore requires deleting the IPFS data volume — destructive operation that means previously pinned content needs re-pinning."
+    ],
+    "open_items": [
+      "Three-point local baseline collection (plan 19.2-04) is in progress — user needs to run load tests at each of the three git checkout points and provide results.",
+      "PERF-09 formal registration in REQUIREMENTS.md (plan 19.2-03) was spawned but completion not confirmed in transcript.",
+      "Final phase 19.2 verification has not been re-run after gap closure — needed to confirm all 6 must-haves pass.",
+      "Phase transition to 19.3 (or whatever comes next) has not occurred."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T19:45:40.234649Z",
+    "agent_lines": 99,
+    "human_added": 108,
+    "human_modified": 49,
+    "human_removed": 0,
+    "total_committed": 256,
+    "agent_percentage": 38.671875
+  }
+}

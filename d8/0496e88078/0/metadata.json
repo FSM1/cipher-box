@@ -1,0 +1,93 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d80496e88078",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T14:12:14.985917Z",
+  "branch": "docs/phase-19-baselines",
+  "checkpoints_count": 4,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "1cf3f361d04b",
+  "token_usage": {
+    "input_tokens": 609,
+    "cache_creation_tokens": 676403,
+    "cache_read_tokens": 107008442,
+    "output_tokens": 105389,
+    "api_call_count": 490
+  },
+  "session_metrics": {
+    "turn_count": 53
+  },
+  "summary": {
+    "intent": "Investigate and fix someguy v0.11.1 IPNS routing failures on staging (where IPNS endpoints hung indefinitely), then deploy a working someguy sidecar with delegated-ipfs.dev fallback and Prometheus metrics.",
+    "outcome": "Someguy sidecar fixed via corrected Docker config (libp2p port, accelerated DHT, proper memory), fallback routing with metrics implemented, and all 83 SDK E2E tests passing on staging with 15.28 ops/s throughput — 12x improvement over Phase 18 baseline. Release-please was also unblocked after extensive debugging by switching to `include-component-in-tag: true`.",
+    "learnings": {
+      "repo": [
+        "Someguy image ships `curl` but NOT `wget` — confirmed via `docker exec cipherbox-someguy which wget/curl`; healthchecks using `wget` fail inside the container.",
+        "`SOMEGUY_LIBP2P_MAX_MEMORY` expects a raw uint64 byte count, not human-readable strings like '1GB' — silently causes crash-loop on startup.",
+        "The `DelegatedRoutingClient.publishRecord()` is fire-and-forget (detached promise). DB is always written synchronously first, so the DB always has a higher sequence number and wins every resolve comparison — 100% of IPNS resolves are served from DB.",
+        "Phase 18 baselines show 74% DB fallback rate even then; someguy doesn't change this architecture. Full throughput comparison: Phase 18 had 1.25 ops/s with 4.6% error rate; staging someguy achieves 15.28 ops/s with 0% errors.",
+        "`THROTTLE_BYPASS_SECRET` was not configured on staging — all initial E2E test runs against staging returned 429s. Secret must be passed as `x-throttle-bypass` header per `ThrottlerBypassGuard`.",
+        "Vitest does NOT auto-load `.env` files into `process.env` — env vars must be passed explicitly on the CLI (e.g. `THROTTLE_BYPASS_SECRET=x vitest run`).",
+        "Release-please multi-package Merge plugin always generates `chore: release main` as the PR title regardless of `pull-request-title-pattern` — the pattern config was irrelevant.",
+        "`include-component-in-tag: false` is functionally broken in release-please multi-package mode: release-please creates `v{version}` tags but its own release scanner cannot match them back to the root package path. Switch to `include-component-in-tag: true` with explicit component name.",
+        "Staging pre-release GitHub Releases with `v*-staging*` tags were being parsed by release-please as component `staging` with version `rc-1`, polluting the release scanner — 30+ such releases needed to be deleted.",
+        "`autorelease: pending` label must be manually corrected on merged release PRs whenever release-please fails to tag them; without this, all subsequent runs abort with 'untagged merged release PRs outstanding'.",
+        "`packages/crypto` was missing from both `release-please-config.json` and `.release-please-manifest.json` despite being an independently versioned package."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 320,
+          "end_line": 373,
+          "finding": "resolveRecord() tries delegated routing first, then ALWAYS queries DB regardless. When both return results, it picks the higher sequence number — DB always wins because publishRecord() writes to DB synchronously before the fire-and-forget DHT publish completes."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 1,
+          "finding": "Rewritten to support primary/fallback routing: DELEGATED_ROUTING_URL is primary (someguy), DELEGATED_ROUTING_FALLBACK_URL is fallback (delegated-ipfs.dev). Primary exhausts all retries before fallback is attempted. Backend type constrained to 'primary' | 'fallback' union."
+        },
+        {
+          "path": "apps/api/src/metrics/metrics.service.ts",
+          "finding": "Two new Prometheus counters added: cipherbox_delegated_routing_requests_total{operation, backend, outcome} and cipherbox_delegated_routing_fallbacks_total{operation}. Alert on rate(fallbacks[5m]) \u003e 0 to surface frequent someguy failures."
+        },
+        {
+          "path": "tests/sdk-e2e/vitest.config.ts",
+          "finding": "No dotenv/envFile configuration — vitest does not load .env automatically. This caused throttle bypass secret to not be picked up even after creating tests/sdk-e2e/.env."
+        },
+        {
+          "path": "docker/docker-compose.yml",
+          "finding": "Someguy working config: expose port 4004/tcp+udp for libp2p inbound, DHT_ACCELERATED_DHT=true, SOMEGUY_LIBP2P_MAX_MEMORY=1073741824 (bytes), 2GB container memory, 1.0 CPU, connection limits 100/3000."
+        }
+      ],
+      "workflow": [
+        "Vitest env vars must be passed explicitly on the CLI or via vitest config `env` block — creating a .env file in the test directory is not sufficient.",
+        "When release-please fails to tag a merged release PR, the fix sequence is: (1) manually create the missing git tag and GitHub release, (2) flip the PR label from autorelease:pending to autorelease:tagged, (3) re-run the release-please workflow.",
+        "In multi-package release-please with the Merge plugin, `include-component-in-tag: true` with an explicit component name is required for the root package — bare `v{version}` tags are not reliably matched back to the root path by the scanner.",
+        "Staging pre-release GitHub Releases should not use a tag format that matches `{component}-v{version}` — they pollute release-please's scanner. Format `staging-{component}-v{version}-rc-{n}` (e.g. `staging-cipher-box-v0.26.5-rc-1`) is safe because `staging-cipher-box` is not a configured component.",
+        "When comparing load test results for a new IPFS routing backend, ensure the sidecar has been running for hours first — a cold DHT routing table (freshly started) gives 40-50% worse latency than a warm one, which skewed the initial local vs delegated-ipfs.dev comparison.",
+        "Docker healthchecks using CMD-SHELL run inside the container, not on the host — tools available on the Docker host are irrelevant. Always verify with `docker exec \u003ccontainer\u003e which \u003ctool\u003e`."
+      ]
+    },
+    "friction": [
+      "Release-please deadlocked repeatedly across the session due to: staging tag format collision (v*-staging* matched root package pattern), missing tags on manually-labeled PRs, and the fundamental `include-component-in-tag: false` scanner bug — required ~15 investigative iterations to fully resolve.",
+      "`SOMEGUY_LIBP2P_MAX_MEMORY=1GB` caused silent crash-loop on staging — no validation error at config parse time, just an indefinite restart loop discovered only by SSHing into the VPS after deploy.",
+      "SSH to staging VPS required 1Password agent approval which was not auto-granted, blocking several automation steps until the user confirmed the approach.",
+      "`THROTTLE_BYPASS_SECRET` not configured on staging caused all initial SDK E2E test runs to fail with 429s before the root cause was identified.",
+      "30+ old-format staging releases (`v*-staging-rc-*`) had to be individually deleted after being identified as a red herring in the release-please investigation.",
+      "Several release-please PRs (#331 in particular) generated changelogs covering the entire 600+ commit history due to missing anchor releases, requiring manual cleanup.",
+      "The `component: ''` config attempted in PR #330 did not fix the release scanner issue — it was a dead end that still needed the `include-component-in-tag: true` change in PR #333.",
+      "Background bash tasks in the session created race conditions where stale task notifications required reading output files to determine if they were already handled."
+    ],
+    "open_items": [
+      "Mock IPNS routing service still present in local docker-compose even though someguy now covers all local dev routing needs — potential cleanup candidate.",
+      "DB-first IPNS resolution means someguy is never used for resolves in normal operation; a future optimization would return network results when sequence numbers match DB, reducing DB load.",
+      "No Grafana dashboards yet for the new delegated_routing_requests_total and delegated_routing_fallbacks_total metrics — need panels and an alert rule for fallback rate.",
+      "PR #335 (wiring THROTTLE_BYPASS_SECRET into staging deploy workflow) needs to merge and deploy — until then, a future staging deploy will overwrite .env.staging and break E2E tests again.",
+      "`packages/crypto` version jumped to 0.26.0 by absorbing all historical commits in a single release-please run — the CHANGELOG for that package contains fabricated history rather than actual changes per release.",
+      "Phase 18 vs Phase 19 performance baselines use different measurement methodologies (server-side Prometheus histogram vs full client round-trip SDK latency) — a direct apples-to-apples comparison would require adding the same Prometheus histogram instrumentation to the new someguy path.",
+      "Someguy `SOMEGUY_IPNS_ENDPOINTS` fanout-to-delegated-ipfs.dev option was evaluated but rejected (concurrent fanout not fallback, no per-source metrics) — worth revisiting if the API-level fallback proves insufficient."
+    ]
+  }
+}

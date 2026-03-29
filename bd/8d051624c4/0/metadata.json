@@ -1,0 +1,120 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "bd8d051624c4",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T02:15:29.819715Z",
+  "branch": "feat/sdk-vault-key-blob-publish",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/todos/pending/2026-03-26-extract-vault-key-blob-ipns-publish-into-sdk.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "567e02d9d4d6",
+  "token_usage": {
+    "input_tokens": 500,
+    "cache_creation_tokens": 699879,
+    "cache_read_tokens": 92809862,
+    "output_tokens": 89177,
+    "api_call_count": 416
+  },
+  "session_metrics": {
+    "turn_count": 41
+  },
+  "summary": {
+    "intent": "Execute Phase 24 (bug fixes and test infrastructure), review the code for quality, get a PR merged, and fix a flaky recovery E2E test that was failing in CI.",
+    "outcome": "Phase 24 was executed and merged (PR #361). Multiple CI failures were debugged and resolved. A root cause was discovered: the vault key blob IPNS publish was missing from the SDK, causing recovery E2E test failures. A new SDK function `publishVaultKeyBlob` was extracted from `useAuth.ts` and wired into `createTestAccount` (PR #368).",
+    "learnings": {
+      "repo": [
+        "The vault key blob IPNS publish (deriveVaultKeyIpnsKeypair → serializeVaultBlobV2 → addToIpfs → createAndPublishIpnsRecord) only existed in the web app's useAuth.ts hook, not in the SDK — meaning createTestAccount and CipherBoxClient silently skipped it.",
+        "In CI, IPNS records are published through mock-ipns-routing (port 3001) via delegated routing, NOT through Kubo's DHT. Kubo's gateway (/ipns/ path) cannot resolve these records.",
+        "The CipherBox API's /ipns/resolve endpoint requires JWT authentication, making it unusable from recovery.html which is a standalone unauthenticated tool.",
+        "The device registry was upgraded from v1 to v2 schema: SHA-256 ipHash replaces empty string, v1→v2 migration is lenient on read but strict on write.",
+        "publishWithVerify in bin/index.ts was refactored to publish once then retry only verification — the prior implementation re-published on every retry attempt.",
+        "Kubo CORS headers must be explicitly configured for browser-based tools to make cross-origin requests to the Kubo API or gateway ports.",
+        "The byo-file-workload.ts cid/pinSize variables must be declared outside the try block so the finally block can access them — TypeScript does not propagate try-block narrowing to sibling finally blocks."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/vault/index.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "New module created: publishVaultKeyBlob and loadVaultKeyBlob extracted from useAuth.ts into sdk-core so any SDK consumer gets vault key blob IPNS publishing."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 176,
+          "end_line": 185,
+          "finding": "createAndPublishIpnsRecord for vault key blob is called here — this was the only place in the codebase doing it, which is why createTestAccount never published the vault key blob."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 725,
+          "end_line": 725,
+          "finding": "API base is derived from window.location.origin replacing port with 3000. The /ipns/resolve fallback requires JWT auth (JwtAuthGuard on IpnsController) so it always 401s from recovery.html."
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 80,
+          "end_line": 96,
+          "finding": "After extracting validateRegistryShape helper, the obj.devices narrowing doesn't propagate to callers — requires explicit 'as unknown[]' cast. Also auto-heal should only fix empty string ipHash, not other malformed values."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 202,
+          "end_line": 202,
+          "finding": "loadBin auto-repair: resolveIpnsRecord returns null on explicit 404 but throws on transient errors — so auto-repair only triggers on confirmed missing records, not network blips."
+        },
+        {
+          "path": "tools/mock-ipns-routing/src/index.ts",
+          "line": 33,
+          "end_line": 40,
+          "finding": "CORS headers added to allow browser access. Restricted to GET and OPTIONS only since the browser only reads IPNS records."
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "line": 86,
+          "end_line": 115,
+          "finding": "createTestAccount was missing vault key blob IPNS publish step — added publishVaultKeyBlob call after vault registration."
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 22,
+          "end_line": 28,
+          "finding": "IPNS_GATEWAY env var should default to DELEGATED_ROUTING_URL (mock-ipns-routing port) not the CipherBox API, since the API requires auth for IPNS resolution."
+        }
+      ],
+      "workflow": [
+        "When a browser-based tool needs to resolve IPNS names in CI, the mock-ipns-routing service is the correct target — not the CipherBox API (auth required) or Kubo gateway (records not in DHT).",
+        "Stale package .d.ts files can cause cascading TypeScript errors across packages — rebuilding crypto and api-client packages resolved 6 phantom web app type errors.",
+        "The classifyHandoffIfNeeded error in Claude Code is a runtime bug that fires after agent tool calls complete — spot-check SUMMARY.md + git commits to determine true success.",
+        "When merging planning-file conflicts between two completed phases, both sets of changes must be preserved — ROADMAP, STATE, REQUIREMENTS, and PROJECT all need merged content from both phases.",
+        "Pre-checking resource existence before operating (TOCTOU) is an anti-pattern — operate directly and handle errors."
+      ]
+    },
+    "friction": [
+      "Multiple CI iterations (5+ PRs) needed to fix the recovery E2E test due to layered root causes: missing SDK_E2E_SECRET → Kubo CORS not configured → API /ipns/resolve requires auth → mock-ipns-routing missing CORS → vault key blob never published by createTestAccount.",
+      "GitHub API timeouts made it difficult to fetch CI logs directly, requiring workarounds.",
+      "Background bash tasks failing silently (exit 128) due to race conditions with the main thread doing the same push — required manual verification.",
+      "The TypeScript narrowing issue with validateRegistryShape required an 'as unknown[]' cast because control-flow narrowing doesn't cross function call boundaries.",
+      "Kubo CORS is not configured by default and requires ipfs config commands + restart, which is non-obvious for local dev and must be explicitly added to CI workflows.",
+      "The try/finally scoping issue with cid/pinSize in byo-file-workload.ts required multiple edit attempts to get right."
+    ],
+    "open_items": [
+      "Todo filed: simplify useAuth.ts to call the new SDK publishVaultKeyBlob function instead of duplicating the logic inline (currently both exist).",
+      "PR #367 (test.skip for recovery E2E in CI) should be closed without merging once PR #368 lands and CI confirms the recovery test passes.",
+      "Recovery E2E test cannot run locally without CORS configured on Kubo — needs documentation or a docker-compose override for the dev environment.",
+      "The recovery.html base64 private key fallback was removed as dead code for v2, but this removes any future flexibility for alternative key formats.",
+      "SDK integration tests for bin operations have 2 persistent failures due to API not running locally — these are silently skipped in the unit test suite but would be caught in SDK E2E."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T02:14:42.270588Z",
+    "agent_lines": 0,
+    "human_added": 31,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 31,
+    "agent_percentage": 0
+  }
+}

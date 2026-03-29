@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ec6764a1f8c2",
+  "session_id": "6f20edb1-052e-41e1-8432-daacda478b82",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T01:24:13.676609Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/shares/shares.service.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "207de0ad1e6c",
+  "checkpoint_transcript_start": 166,
+  "transcript_lines_at_start": 166,
+  "token_usage": {
+    "input_tokens": 23,
+    "cache_creation_tokens": 22048,
+    "cache_read_tokens": 1252101,
+    "output_tokens": 4411,
+    "api_call_count": 21
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Resolve 5 PR review threads for PR #372 in cipher-box, then fix a CI test failure caused by one of those fixes.",
+    "outcome": "All 5 review threads were addressed and resolved, 4 code fixes committed. A failing CI test was identified, fixed, and a new test added to cover the expanded behavior; 56 tests pass.",
+    "learnings": {
+      "repo": [
+        "ShareKeyEntryDtoKeyType already includes 'folder-ipns' — no enum addition needed when adding new key types if they're pre-existing.",
+        "Permission downgrade logic must explicitly delete both 'file-ipns' and 'folder-ipns' keys, not just one variant.",
+        "addShareKeys blocks write recipients from adding folder keys — this now covers both 'folder' and 'folder-ipns' key types."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/SharedFileBrowser.tsx",
+          "line": 354,
+          "end_line": 354,
+          "finding": "TextEditorDialog needs fallback file key lookup for standalone file shares where item.id equals shareId"
+        },
+        {
+          "path": "apps/api/src/shares/TextEditorDialog.tsx",
+          "line": 106,
+          "end_line": 106,
+          "finding": "Had a misleading comment about 'fallback to fileKeyEncrypted' that was removed for clarity"
+        },
+        {
+          "path": "apps/api/src/shares/share.service.ts",
+          "line": 178,
+          "end_line": 178,
+          "finding": "ShareKeyEntryDtoKeyType already includes 'folder-ipns'; review comment was not applicable"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 223,
+          "end_line": 223,
+          "finding": "addShareKeys must block both 'folder' and 'folder-ipns' key types for write recipients"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 405,
+          "end_line": 405,
+          "finding": "Permission downgrade must delete both 'file-ipns' and 'folder-ipns' keys"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.spec.ts",
+          "line": 797,
+          "end_line": 797,
+          "finding": "Test expected exact keyType 'file-ipns' but implementation now uses In(['file-ipns', 'folder-ipns']); test must use TypeORM In() matcher. Also required adding In to imports."
+        }
+      ],
+      "workflow": [
+        "When changing a query from exact match to In() with TypeORM, corresponding specs must switch from literal value assertion to In() matcher.",
+        "After fixing a behavior to cover additional enum variants, check all existing tests for that behavior — they may assert the old single-value form."
+      ]
+    },
+    "friction": [
+      "CI failure was not immediately obvious from the PR — required fetching job-level logs to identify the specific failing test and assertion mismatch.",
+      "The In() import was missing from the spec file and had to be added as a separate step after the test edit."
+    ],
+    "open_items": [
+      "The existing 'should reject write-share recipient adding folder' test only covered keyType 'folder' — a gap that existed before this session; the new 'folder-ipns' test was added here but prior coverage was incomplete."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-27T01:23:56.777154Z",
+    "agent_lines": 24,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 24,
+    "agent_percentage": 100
+  }
+}

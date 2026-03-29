@@ -1,0 +1,113 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "18d127586f12",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T15:57:20.150338Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/PROJECT.md",
+    "packages/sdk-core/src/ipfs/index.ts",
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/REQUIREMENTS.md",
+    "packages/sdk-core/src/upload/index.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "266c20c72ff4",
+  "token_usage": {
+    "input_tokens": 255,
+    "cache_creation_tokens": 348549,
+    "cache_read_tokens": 25639426,
+    "output_tokens": 48485,
+    "api_call_count": 210
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Execute Phase 22 (performance baselines completion) end-to-end: plan execution, code review/cleanup, PR creation, review resolution, staging baseline population, and merge into main.",
+    "outcome": "Phase 22 fully executed with 3 plans (SDK perf instrumentation, E2E journey timing, load test thresholds), PR #355 created and cleaned up through 4 rounds of automated review resolution, real baselines captured from staging after a DB reset fixed a vault init bug, and the branch successfully merged with latest main.",
+    "learnings": {
+      "repo": [
+        "Phase 22 planning commits were accidentally made directly to main before the feature branch existed — GSD branching strategy should be set before any commits land.",
+        "Staging DB was never reset after Phase 20 removed encrypted_root_folder_key/encrypted_root_ipns_private_key columns, causing NOT NULL constraint violations on wallet login for new accounts.",
+        "Phase 23 was completed out of order before Phase 21; the `phase complete` tool uses roadmap order to suggest next phase, not completion state — always verify actual completion status.",
+        "The mock wallet injected via Playwright's addInitScript is a real EIP-1193 provider; multiple accounts can be tested by creating separate browser contexts with independent wallets, not a special mock adapter.",
+        "upload/index.ts gained a `pinFn` parameter in Phase 21 for BYO-IPFS support, which conflicted with Phase 22's withPerf wrapping of the same function.",
+        "GitHub Actions 'lint-pr-title' workflow suddenly required manual approval where it previously ran automatically — likely a GitHub platform settings change, not a repo config change."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 23,
+          "end_line": 23,
+          "finding": "Concurrent withPerf calls with the same operation name collide on mark names — fixed by adding a per-invocation counter to make mark names unique."
+        },
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 21,
+          "end_line": 21,
+          "finding": "PerformanceMeasure entries accumulate unboundedly in long sessions — clear them immediately after creation with performance.clearMeasures()."
+        },
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 5,
+          "end_line": 5,
+          "finding": "PERF_ENABLED check via process.env can evaluate true in browser prod builds due to webpack process polyfill — guard with typeof process.env?.NODE_ENV === 'string'."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 205,
+          "end_line": 205,
+          "finding": "404 detection used error.status but Axios puts HTTP status on error.response.status — fixed to use AxiosError-compatible access pattern."
+        },
+        {
+          "path": "tests/load/src/harness/thresholds.ts",
+          "line": 41,
+          "end_line": 41,
+          "finding": "expectThresholdsPassed helper silently skips missing metrics by design — intentional, documented in JSDoc. The JSDoc incorrectly mentioned 'expect' (vitest) when the impl uses throw."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/perf.test.ts",
+          "line": 20,
+          "end_line": 20,
+          "finding": "Using 'as any' on globalThis.performance — replaced with proper 'declare global' TypeScript declaration."
+        }
+      ],
+      "workflow": [
+        "GSD executor agents spawn background tasks that send completion notifications after the phase is already done — these can be safely ignored.",
+        "Playwright journey timing tests must be run via the test runner (not Playwright MCP) because wallet injection requires page.addInitScript which only works in the test runner context.",
+        "CodeRabbit and Copilot generated 16 review threads across 4 rounds; automated reviewers sometimes re-raise the same 'not applicable' comments across rounds after new commits.",
+        "When resolving merge conflicts between two phase completions in planning docs (ROADMAP, STATE, PROJECT), both phases' data must be preserved — neither side is entirely correct.",
+        "The GSD `phase complete` CLI tool returns next_phase based on roadmap order, not actual completion state — always check the roadmap directly when phases are completed out of order."
+      ]
+    },
+    "friction": [
+      "GSD phase 22 commits landed on main instead of the feature branch — required git reset and branch recreation before execution could start.",
+      "Staging DB had stale schema from Phase 20 migration that was never applied, causing 500 errors on wallet login that blocked journey timing baseline collection.",
+      "Playwright temp config file approach failed due to relative testDir paths when config is in /tmp — required passing absolute paths.",
+      "GitHub Actions lint-pr-title workflow unexpectedly required manual approval, adding friction to the CI cycle with no clear explanation.",
+      "pnpm lockfile conflicts during merge required removing the lock file to commit — indicates lockfile management across feature branches can be fragile.",
+      "CodeRabbit re-raised the CAPACITY.md table caption comment in round 4 even though it had been marked not-applicable in round 3, requiring a second reply/resolve cycle."
+    ],
+    "open_items": [
+      "Journey timing baselines use PENDING markers for login-to-vault sub-phases (walletAuth, vaultLoad) — need to be populated from real staging runs once Web3Auth Core Kit MPC init time is acceptable (~23.5s is very high).",
+      "Two human verification items from phase verification: (1) run journey tests against live services to populate baselines with real data, (2) confirm Performance API marks appear in browser DevTools.",
+      "The PERF_ENABLED/__CIPHERBOX_PERF__ opt-in flag needs to be wired into the web app entrypoint to enable performance instrumentation in browser dev builds — out of scope for this PR.",
+      "Phase 21 is still actively being worked on — phases were completed out of order (22, 23 before 21).",
+      "GitHub Actions approval requirement for lint-pr-title needs investigation to understand what changed and whether it can be reverted to auto-run.",
+      "PR #355 merge commit was created locally but the transcript ends before confirming the push to remote."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-25T15:56:28.451155Z",
+    "agent_lines": 0,
+    "human_added": 19512,
+    "human_modified": 40,
+    "human_removed": 0,
+    "total_committed": 19512,
+    "agent_percentage": 0
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "7c8dd10ac5a6",
+  "strategy": "manual-commit",
+  "branch": "fix/session-restore-race-conditions",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/perf/staging-baseline-2026-03-24.md",
+    ".planning/todos/done/2026-03-24-session-restore-race-conditions.md",
+    "tests/web-e2e/staging-perf-wallet.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7c/8dd10ac5a6/0/metadata.json",
+      "transcript": "/7c/8dd10ac5a6/0/full.jsonl",
+      "content_hash": "/7c/8dd10ac5a6/0/content_hash.txt",
+      "prompt": "/7c/8dd10ac5a6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 349,
+    "cache_creation_tokens": 522815,
+    "cache_read_tokens": 40844775,
+    "output_tokens": 86734,
+    "api_call_count": 257
+  }
+}

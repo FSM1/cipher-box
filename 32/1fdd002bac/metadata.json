@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "321fdd002bac",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-24-bug-fixes-test-infrastructure",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/32/1fdd002bac/0/metadata.json",
+      "transcript": "/32/1fdd002bac/0/full.jsonl",
+      "content_hash": "/32/1fdd002bac/0/content_hash.txt",
+      "prompt": "/32/1fdd002bac/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 11709,
+    "cache_read_tokens": 4546989,
+    "output_tokens": 4982,
+    "api_call_count": 26
+  }
+}

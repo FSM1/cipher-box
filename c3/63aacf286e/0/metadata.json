@@ -1,0 +1,118 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c363aacf286e",
+  "session_id": "1986a6a4-e18b-403e-a50f-9f54ae3d2e8c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T14:24:40.17207Z",
+  "branch": "fix/writable-file-share-id-mismatch",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/api/src/app.module.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a5ac78fdae54",
+  "token_usage": {
+    "input_tokens": 7395,
+    "cache_creation_tokens": 906394,
+    "cache_read_tokens": 66775471,
+    "output_tokens": 92370,
+    "api_call_count": 345
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Fix the vault recovery E2E test failing in CI, resolve Grafana dashboard provisioning errors in staging deployments, fix writable-shares E2E test failures, and update codebase documentation to reflect the current multi-package/crate architecture.",
+    "outcome": "All issues resolved: vault recovery E2E fixed (protobuf field bug + resolution order), Grafana API key regenerated, desktop build signing keys wired into CI, writable-shares E2E fixed (IPNS key lookup fallback), codebase docs rewritten across all 7 files, and throttle limits relaxed in test mode to enable full local E2E runs.",
+    "learnings": {
+      "repo": [
+        "IPNS record protobuf field layout: value is field 1, signatureV1 is field 2 — recovery.html previously used fieldNumber === 2 when it should have been fieldNumber === 1",
+        "resolveIpns() tried IPFS gateway HEAD first (15s timeout) before delegated routing — in CI, Kubo can't resolve mock-published IPNS names, causing every resolution to waste 15s",
+        "Standalone file shares store the file-ipns key with itemId = fileId (real UUID), but SharedFileBrowser creates a synthetic FilePointer with id = shareId, causing IPNS key lookup mismatch",
+        "ThrottlerModule limits are hardcoded (100/min) — NODE_ENV=test alone didn't relax them; required forRootAsync with environment check to get 200/sec + 2000/min in test",
+        "The BypassableThrottlerGuard supports X-Throttle-Bypass header for SDK tests but browser E2E tests can't use it",
+        "Tauri updater pubkey was added to tauri.conf.json but TAURI_SIGNING_PRIVATE_KEY was never wired into any of the 3 desktop build jobs in deploy-staging.yml",
+        "Grafana Cloud /api/health returns 404 (not 401/403) when the Bearer token is invalid or expired — can be mistaken for URL misconfiguration",
+        "mock-ipns-routing stores IPNS records in memory; after worktree cleanup the phase-20 debug session context was invalidated"
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 791,
+          "end_line": 795,
+          "finding": "extractCidFromIpnsRecord() was checking fieldNumber === 2 (signatureV1) instead of fieldNumber === 1 (value) when parsing IPNS protobuf response"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 682,
+          "end_line": 686,
+          "finding": "Fetch retry backoff only triggered on thrown errors, not on non-OK HTTP responses (429/5xx) — added !resp.ok check"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 695,
+          "end_line": 700,
+          "finding": "resp.json() was called first then resp.arrayBuffer() in fallthrough — double body consumption bug; fixed by wrapping protobuf parse in else branch"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 1050,
+          "end_line": 1055,
+          "finding": "getFileIpnsKeyFn fallback added: if exact itemId match fails AND shareItem.share.itemType === 'file', use first file-ipns key — safe for standalone file shares with single file"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "ThrottlerModule converted to forRootAsync to support environment-based limit override: 200/sec + 2000/min when NODE_ENV=test"
+        },
+        {
+          "path": "tests/web-e2e/tests/writable-shares.spec.ts",
+          "line": 844,
+          "end_line": 850,
+          "finding": "Test 10.3 failed because textarea.fill() triggers React onChange asynchronously — Ctrl+S fired before isDirty was true; fix was to wait for modified status indicator before keypress"
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 31,
+          "end_line": 35,
+          "finding": "Shared RECOVERY_TIMEOUT_MS constant added so test timeout and assertion timeout stay in sync"
+        }
+      ],
+      "workflow": [
+        "Run web E2E tests locally with API in NODE_ENV=test before pushing — prevents throttle interference and round-tripping to CI",
+        "When IPFS/IPNS is involved, delegated routing should always be tried before direct IPFS gateway — gateway can hang 15-30s when Kubo can't resolve names",
+        "Grafana dashboard provisioning needs a Service Account token (Editor role), not a Loki/Prometheus data source API key",
+        "Killing Playwright processes also kills the web dev server on port 5173 — need to restart after forceful cleanup",
+        "Running multiple Playwright suites in parallel against shared API/DB/mock-ipns causes test interference — always run in isolation or full sequential suite",
+        "Codebase docs in .planning/codebase/ can be regenerated in parallel using 3 specialized mapper agents to cover tech stack, architecture/structure, and testing/concerns"
+      ]
+    },
+    "friction": [
+      "Multiple CI round-trips before discovering the root cause of writable-shares failure was IPNS key ID mismatch — test should have been run locally first",
+      "Parallel E2E test runs (background task + foreground run) caused test interference and confusing results before root cause was identified",
+      "NODE_ENV=test didn't actually relax throttle limits — required a code change; this caused 6 test failures in the first full suite run that looked like account creation bugs",
+      "Worktree cleanup invalidated a debug session (vault-migration-iife-silent-failure) that was waiting for human verification in a now-deleted worktree",
+      "Grafana Cloud returns 404 instead of 401/403 for invalid API tokens, making it look like a URL configuration issue rather than an auth issue",
+      "The fix for stale closure in test 10.3 (waiting for modified indicator) turned out not to be the root cause — the real issue was the IPNS key lookup mismatch in app code",
+      "Markdownlint failures blocked codebase doc commit — underscore emphasis footers and bare code fences across multiple generated files required additional cleanup pass"
+    ],
+    "open_items": [
+      "docs/milestone-v1.1-completion branch has codebase doc updates committed but not yet PRed or merged",
+      "Full web E2E suite has 3 local-only failures: recycle-bin TC01 (login timing), mfa-flows TC-MFA-01 (Web3Auth MFA infrastructure), full-workflow 6.5.4 (CID refresh timing) — these pass in CI but should be investigated",
+      "PR #376 (writable-shares IPNS key fix) not yet merged — waiting on CI confirmation",
+      "6 pending todos flagged in progress check — not reviewed",
+      "/gsd:complete-milestone not yet run — milestone v1.1 is complete but not archived",
+      "The fallback in getFileIpnsKeyFn (itemType === 'file' guard) is a workaround — proper fix would be to include the real fileId in the share response DTO so the synthetic FilePointer uses the correct ID"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-27T14:23:53.244062Z",
+    "agent_lines": 20,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 20,
+    "agent_percentage": 100
+  }
+}

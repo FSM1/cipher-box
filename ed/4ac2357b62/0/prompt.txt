@@ -1,0 +1,61 @@
+ok please monitor the pr for incoming rabbit and copilot reviews and /resolve-pr-reviews when these come in.
+
+---
+
+Check PR #349 for new unresolved review comments from coderabbitai[bot] or copilot-pull-request-reviewer[bot]. Run: gh api graphql -f query='query { repository(owner:"FSM1", name:"cipher-box") { pullRequest(number:349) { reviewThreads(first:50) { nodes { isResolved id comments(first:1) { nodes { author { login } createdAt } } } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' — if the count is > 0, report "New unresolved reviews found on PR #349" and run /resolve-pr-reviews. If 0, report "No new reviews on PR #349".
+
+---
+
+Check PR #349 for new unresolved review comments from coderabbitai[bot] or copilot-pull-request-reviewer[bot]. Run: gh api graphql -f query='query { repository(owner:"FSM1", name:"cipher-box") { pullRequest(number:349) { reviewThreads(first:50) { nodes { isResolved id comments(first:1) { nodes { author { login } createdAt } } } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' — if the count is > 0, report "New unresolved reviews found on PR #349" and run /resolve-pr-reviews. If 0, report "No new reviews on PR #349".
+
+---
+
+Check PR #349 for new unresolved review comments from coderabbitai[bot] or copilot-pull-request-reviewer[bot]. Run: gh api graphql -f query='query { repository(owner:"FSM1", name:"cipher-box") { pullRequest(number:349) { reviewThreads(first:50) { nodes { isResolved id comments(first:1) { nodes { author { login } createdAt } } } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' — if the count is > 0, report "New unresolved reviews found on PR #349" and run /resolve-pr-reviews. If 0, report "No new reviews on PR #349".
+
+---
+
+2 `outside of diff range` comments in https://github.com/FSM1/cipher-box/pull/349#pullrequestreview-3996563546
+
+---
+
+Check PR #349 for new unresolved review comments from coderabbitai[bot] or copilot-pull-request-reviewer[bot]. Run: gh api graphql -f query='query { repository(owner:"FSM1", name:"cipher-box") { pullRequest(number:349) { reviewThreads(first:50) { nodes { isResolved id comments(first:1) { nodes { author { login } createdAt } } } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' — if the count is > 0, report "New unresolved reviews found on PR #349" and run /resolve-pr-reviews. If 0, report "No new reviews on PR #349".
+
+---
+
+theres 7 new review comments from copilot
+
+---
+
+Check PR #349 for new unresolved review comments from coderabbitai[bot] or copilot-pull-request-reviewer[bot]. Run: gh api graphql -f query='query { repository(owner:"FSM1", name:"cipher-box") { pullRequest(number:349) { reviewThreads(first:50) { nodes { isResolved id comments(first:1) { nodes { author { login } createdAt } } } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' — if the count is > 0, report "New unresolved reviews found on PR #349" and run /resolve-pr-reviews. If 0, report "No new reviews on PR #349".
+
+---
+
+are you still monitoring for new comments?
+
+---
+
+Check PR #349 for new unresolved review comments from coderabbitai[bot] or copilot-pull-request-reviewer[bot]. Run: gh api graphql -f query='query { repository(owner:"FSM1", name:"cipher-box") { pullRequest(number:349) { reviewThreads(first:50) { nodes { isResolved id comments(first:1) { nodes { author { login } createdAt } } } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' — if the count is > 0, report "New unresolved reviews found on PR #349" and run /resolve-pr-reviews. If 0, report "No new reviews on PR #349".
+
+---
+
+keep going for one more round
+
+---
+
+I meant one more round of comments
+
+---
+
+both copilot and rabbit are currently reviewing
+
+---
+
+perfect, this cron job mode is baws
+
+---
+
+Check PR #349 for new unresolved review comments from coderabbitai[bot] or copilot-pull-request-reviewer[bot]. Run: gh api graphql -f query='query { repository(owner:"FSM1", name:"cipher-box") { pullRequest(number:349) { reviewThreads(first:50) { nodes { isResolved id comments(first:1) { nodes { author { login } createdAt } } } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' — if the count is > 0, report "New unresolved reviews found on PR #349" and run /resolve-pr-reviews. If 0, report "No new reviews on PR #349".
+
+---
+
+ok new copilot comments are in. this is definitely the last round. coderabbit gave up already.

@@ -1,0 +1,17 @@
+could you go through the @.planning/research/m4/ docs and identify if any items listed/planned for m4 phases could be moved to the current milestone. Any billing/teams/productivity suite/signing features should remain in milestone 4, but if there are any features or phases that are more directly related to the existing core components that this milestone has been dealing with, it might make sense to incorporate these in to M3
+
+---
+
+I think before moving the AWS Nitro TEE bit in to M3, it would likely be wise to create a phase as part of M3, to migrate the staging environment off the current TEE implementation running on the same docker host, to some phala testnet infra.
+
+---
+
+yeah that seems like a great scope for phase 35.
+
+---
+
+ok, do you think this phase 35 requires discussion or are things clear enough that you can jump in to research and planning?
+
+---
+
+ok switch to a phase 35 branch, and lets kick off phase planning, which will include research.

@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6b320374259a",
+  "session_id": "cb579ef8-9fb2-4907-977d-d9e976235cda",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T02:02:34.972878Z",
+  "branch": "docs/milestone-v1.1-completion",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".claude/settings.json"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "9503cff484b1",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 51279,
+    "cache_read_tokens": 709912,
+    "output_tokens": 3790,
+    "api_call_count": 18
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Run a health check and stats review on the cipher-box GSD planning system, then commit a GSD framework update (v1.30.0) to GitHub.",
+    "outcome": "Health check passed cleanly, all 12 phases and 53 plans confirmed complete at 94% requirements. GSD v1.30.0 was committed and pushed, then statusline.js (nuked by the update) was restored from a prior commit and pushed as a follow-up fix.",
+    "learnings": {
+      "repo": [
+        "GSD framework updates repeatedly nuke .claude/hooks/statusline.js — this has happened at least twice (first fixed in commit 96a50cb37, again in this session).",
+        "The project is on branch docs/milestone-v1.1-completion with 375 commits over 72 days (started 2026-01-15).",
+        "Milestone v1.1 is fully complete: 12/12 phases, 53/53 plans, 62/66 requirements (4 requirements still outstanding)."
+      ],
+      "code": [
+        {
+          "path": ".claude/hooks/statusline.js",
+          "finding": "File is not tracked/protected by GSD framework updates and gets deleted each time GSD is updated. Must be manually restored."
+        },
+        {
+          "path": ".claude/settings.json",
+          "finding": "Still correctly references statusline.js after the GSD update — only the hook file itself was lost, not the settings reference."
+        }
+      ],
+      "workflow": [
+        "When applying GSD framework updates, always verify .claude/hooks/statusline.js still exists afterward.",
+        "git log --all -- \u003cpath\u003e is the right approach to find a deleted file's history for restoration."
+      ]
+    },
+    "friction": [
+      ".claude/hooks/statusline.js was silently deleted by the GSD framework update with no warning — required manual detection and restoration from git history.",
+      "This is a recurring issue (second occurrence), suggesting no structural fix has been applied to prevent it."
+    ],
+    "open_items": [
+      "4 requirements remain outstanding out of 66 — not addressed in this session.",
+      "The GSD update process should be patched to preserve or re-apply statusline.js so it isn't nuked on every update.",
+      "PR for docs/milestone-v1.1-completion branch has not been created yet."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-28T02:02:20.522982Z",
+    "agent_lines": 1,
+    "human_added": 62,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 63,
+    "agent_percentage": 1.5873015873015872
+  }
+}

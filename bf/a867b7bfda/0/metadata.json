@@ -1,0 +1,106 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "bfa867b7bfda",
+  "session_id": "1986a6a4-e18b-403e-a50f-9f54ae3d2e8c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T17:24:19.147163Z",
+  "branch": "chore/remove-build-desktop-workflow",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "99b44e31f353",
+  "token_usage": {
+    "input_tokens": 7480,
+    "cache_creation_tokens": 1274541,
+    "cache_read_tokens": 88910091,
+    "output_tokens": 103119,
+    "api_call_count": 410
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Fix a failing vault recovery E2E test in CI, then handle several follow-on issues discovered during deployment: Grafana provisioning failures, missing Tauri signing key wiring, outdated codebase docs, and writable shares E2E failures.",
+    "outcome": "All five issues were resolved: vault recovery E2E fixed (PR #369), Grafana API key identified as expired, Tauri signing keys wired into staging workflow (PR #370), codebase docs fully rewritten for multi-package architecture, and writable shares E2E fixed locally and in CI (PR #376), plus desktop build workflow consolidated into staging (PR #379).",
+    "learnings": {
+      "repo": [
+        "IPNS records use protobuf field 1 for the CID value ('value') and field 2 for signatureV1 — recovery.html had these reversed in extractCidFromIpnsRecord",
+        "resolveIpns tried the slow IPFS gateway HEAD first (15s timeout) before delegated routing; order should be swapped for CI compatibility with mock-ipns-routing",
+        "Standalone file shares create a synthetic FilePointer with id=shareId, but share_keys stores file-ipns keys with itemId=fileId — a UUID mismatch that silently breaks write operations",
+        "ThrottlerModule in app.module.ts uses hardcoded limits; NODE_ENV=test does not bypass throttling by default — limits must be made config-aware explicitly",
+        "TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD were in GitHub repo secrets but not passed as env vars to any tauri-action steps in deploy-staging.yml",
+        "tauri-apps/tauri-action@v1 does not exist; the latest major version tag is @v0 (currently v0.6.2)",
+        "Grafana Cloud returns HTTP 404 (not 401/403) when a Bearer token is invalid or expired — health endpoint behavior differs from REST API endpoints",
+        "Staging releases were marked prerelease: true, which prevents /releases/latest/ from resolving — breaks Tauri auto-updater which uses that URL for latest.json",
+        "includeUpdaterJson was never passed to tauri-action in deploy-staging.yml, so latest.json was never generated for the auto-updater",
+        "The create-desktop-release job created the GitHub release with --prerelease while tauri-action steps set prerelease: false — inconsistent state"
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1139,
+          "end_line": 1147,
+          "finding": "Vault key blob fetch tried direct IPFS gateway /ipns/ path first with 30s timeout before delegated routing fallback — inverted order caused 30s hang in CI where Kubo can't resolve mock-published IPNS names"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 768,
+          "end_line": 800,
+          "finding": "extractCidFromIpnsRecord checked fieldNumber === 2 (signatureV1) instead of fieldNumber === 1 (value) when parsing protobuf IPNS records from delegated routing responses"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 682,
+          "end_line": 700,
+          "finding": "Backoff retry only triggered on thrown errors, not on non-OK HTTP responses (429/5xx) — needed explicit !resp.ok check before retry sleep"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 1045,
+          "end_line": 1055,
+          "finding": "getFileIpnsKeyFn for standalone file shares searched for keys by itemId using the shareId, but keys were stored with the actual fileId — fallback added for itemType === 'file' shares to use first available file-ipns key"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "ThrottlerModule used hardcoded limits (100/min); converted to forRootAsync to read NODE_ENV and apply 200/sec + 2000/min limits in test mode"
+        },
+        {
+          "path": "tests/web-e2e/tests/writable-shares.spec.ts",
+          "line": 844,
+          "end_line": 860,
+          "finding": "Stale closure race: textarea.fill() triggers React onChange async but keyboard.press fires immediately after — isDirty was still false so Ctrl+S handler skipped save; fix was to wait for 'modified' status indicator before sending keypress"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 270,
+          "end_line": 310,
+          "finding": "Three tauri-action invocations (macOS/Windows/Linux) were all missing TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD env vars despite secrets existing in the repo"
+        }
+      ],
+      "workflow": [
+        "Run web-e2e tests locally before committing to avoid CI round-trip cycles — requires services running with NODE_ENV=test to disable throttle limits",
+        "Grafana Cloud service account tokens (for dashboard CRUD via HTTP API) are separate from Grafana Loki/Prometheus API keys (for data source push) — they live under Administration \u003e Service Accounts",
+        "GitHub Actions /releases/latest/ resolves only to non-prerelease releases; prerelease: true on staging builds breaks any tooling that uses that URL",
+        "Parallel agent spawning for codebase documentation rewrites is effective — 3 agents covering 6 of 7 files completed in ~7 minutes with minimal orchestrator context usage",
+        "When web E2E tests fail with different errors locally vs CI, check NODE_ENV first — throttle differences cause cascading failures that mask the real root cause"
+      ]
+    },
+    "friction": [
+      "Multiple CI round-trips (3+ PRs) before getting writable-shares E2E passing — root cause was not reproducible locally until NODE_ENV=test throttle fix was applied",
+      "1Password SSH agent inaccessible from subprocesses, blocking git commit signing in background bash tasks",
+      "Docker Hub authentication failures (transient GitHub Actions infrastructure issue) caused spurious CI failures on PR #377",
+      "Stale git index.lock left by a crashed process required manual removal before git operations could resume",
+      "Parallel writable-shares test runs (background full suite + isolation run) interfered with each other via shared database/API state, producing misleading results",
+      "tauri-apps/tauri-action@v1 doesn't exist but was referenced in build-desktop.yml — caused startup_failure with no actionable error message from GitHub"
+    ],
+    "open_items": [
+      "docs/milestone-v1.1-completion branch has codebase doc updates committed but not yet PR'd or merged",
+      "Milestone v1.1 completion workflow (/gsd:complete-milestone) still pending — all 12 phases done but milestone not archived",
+      "6 pending todos in .planning — /gsd:check-todos to review",
+      "Full web-e2e suite has 3 locally-failing tests (recycle-bin TC01, mfa-flows TC-MFA-01, full-workflow 6.5.4) that pass in CI — not investigated, likely local environment differences with Web3Auth MFA infra and IPFS node behavior",
+      "Tauri auto-updater endpoint in tauri.conf.json points to /releases/latest/download/latest.json — needs verification that latest.json is actually uploaded and accessible after first non-prerelease staging build"
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c086fd460e0b",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 6,
+  "files_touched": [
+    ".planning/phases/27-writable-shares-poc/27-VERIFICATION.md",
+    "tee-worker/package-lock.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c0/86fd460e0b/0/metadata.json",
+      "transcript": "/c0/86fd460e0b/0/full.jsonl",
+      "content_hash": "/c0/86fd460e0b/0/content_hash.txt",
+      "prompt": "/c0/86fd460e0b/0/prompt.txt"
+    },
+    {
+      "metadata": "/c0/86fd460e0b/1/metadata.json",
+      "transcript": "/c0/86fd460e0b/1/full.jsonl",
+      "content_hash": "/c0/86fd460e0b/1/content_hash.txt",
+      "prompt": "/c0/86fd460e0b/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6241,
+    "cache_creation_tokens": 910789,
+    "cache_read_tokens": 114650284,
+    "output_tokens": 179259,
+    "api_call_count": 632
+  }
+}

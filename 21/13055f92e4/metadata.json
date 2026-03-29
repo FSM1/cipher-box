@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "2113055f92e4",
+  "strategy": "manual-commit",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/21/13055f92e4/0/metadata.json",
+      "transcript": "/21/13055f92e4/0/full.jsonl",
+      "content_hash": "/21/13055f92e4/0/content_hash.txt",
+      "prompt": "/21/13055f92e4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 16671,
+    "cache_read_tokens": 4108627,
+    "output_tokens": 6189,
+    "api_call_count": 26
+  }
+}

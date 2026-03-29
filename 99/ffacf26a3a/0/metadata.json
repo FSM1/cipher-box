@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "99ffacf26a3a",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T23:21:23.011851Z",
+  "branch": "feat/phase-24-bug-fixes-test-infrastructure",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "ec93b40489e9",
+  "checkpoint_transcript_start": 598,
+  "transcript_lines_at_start": 598,
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 9882,
+    "cache_read_tokens": 2786768,
+    "output_tokens": 3322,
+    "api_call_count": 22
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Fix pre-existing TypeScript type errors across the web app and load test packages in the cipher-box monorepo.",
+    "outcome": "All type errors resolved: web app errors were caused by stale package builds (fixed by rebuilding @cipherbox/crypto and @cipherbox/api-client), and the load test error was a scoping issue with `cid` declared inside a `try` block but referenced in `finally`.",
+    "learnings": {
+      "repo": [
+        "Type errors in web app imports (missing exports like deriveVaultKeyIpnsKeypair, deriveByoConfigIpnsKeypair, teeControllerConnectionTest) can be caused by stale package builds rather than missing source code — always rebuild dependent packages before diagnosing missing export errors.",
+        "The monorepo has at least two buildable packages that web depends on: @cipherbox/crypto and @cipherbox/api-client, both requiring explicit rebuilds to regenerate declaration files."
+      ],
+      "code": [
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 69,
+          "end_line": 168,
+          "finding": "`cid` was declared with `let` inside the `try` block but referenced in the `finally` block. TypeScript treats `finally` as a sibling scope to `try`, not nested within it, so the variable must be declared before the `try` block to be accessible in `finally`."
+        }
+      ],
+      "workflow": [
+        "In a pnpm monorepo, type errors in consuming packages after adding or renaming exports in a library package are often resolved by rebuilding the library (`pnpm --filter \u003cpackage\u003e build`) rather than modifying source code.",
+        "TypeScript scoping: variables declared with `let` inside a `try` block are not accessible in the corresponding `finally` block — declare them before the `try` if they need to be used in `finally`."
+      ]
+    },
+    "friction": [
+      "The root cause of web app type errors (stale builds) was non-obvious and required multiple grep/read steps before the rebuild hypothesis was tested.",
+      "The `cid` scoping issue required several re-reads of the same file (4+ times) to correctly identify the try/finally scope boundary."
+    ],
+    "open_items": []
+  }
+}

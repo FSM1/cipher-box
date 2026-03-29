@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "2004db778750",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T23:26:05.589984Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 7,
+  "files_touched": [
+    ".planning/phases/19.2-ipfs-upload-performance-optimization/19.2-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "372c1f3a0f17",
+  "checkpoint_transcript_start": 1445,
+  "transcript_lines_at_start": 1445,
+  "token_usage": {
+    "input_tokens": 33,
+    "cache_creation_tokens": 163452,
+    "cache_read_tokens": 2677955,
+    "output_tokens": 5268,
+    "api_call_count": 18
+  },
+  "session_metrics": {
+    "turn_count": 34
+  },
+  "summary": {
+    "intent": "Complete phase 19.2 (IPFS upload performance optimization) by closing remaining gaps, getting verification, and creating a PR. Also plan the staging migration from flatfs to pebbleds datastore.",
+    "outcome": "Phase 19.2 gaps closed (PERF-09 registered, three-point baselines with 75-client bonus documented), PR #342 created and pushed. Staging migration strategy agreed upon as a manual SSH procedure with volume swap approach.",
+    "learnings": {
+      "repo": [
+        "Active CIDs tracked in two DB tables: `pinned_cids` (file content, presence = active) and `folder_ipns` (metadata blobs where `latest_cid IS NOT NULL`). Anything pinned on Kubo not in these tables is stale.",
+        "Staging deploy workflow SSHes into VPS at 76.13.151.200, copies files, and runs `docker compose up -d` — no built-in migration hooks.",
+        "pebbleds combined with concurrent pins: p95 -13%, p99 -15%, throughput +7% at 50 clients; at 75 clients eliminates failure mode (0 errors vs 10, throughput +44%, p95 -53%).",
+        "Concurrent pins alone (without pebbleds) regress throughput by 26% — the two optimizations must ship together."
+      ],
+      "code": [],
+      "workflow": [
+        "Docker volumes cannot be renamed; data migration between named volumes requires an alpine container with cp -a to copy contents.",
+        "For one-off datastore migrations, a manual SSH procedure is more pragmatic than over-engineering the deploy workflow.",
+        "Parallel cutover strategy for datastore migration: run old and new IPFS nodes simultaneously on same Docker network, use bitswap for content transfer, switch API env var, then clean up.",
+        "Before migrating pins to a new node, cross-reference pinned CIDs against the database to avoid carrying over stale pins from failed e2e test runs."
+      ]
+    },
+    "friction": [
+      "Two background processes (web frontend, API server) were killed unexpectedly during the session, requiring cleanup acknowledgment.",
+      "Docker volume naming constraint complicates the staging migration — deploy creates a blank `ipfs_staging` volume that must be replaced post-deploy rather than reusing the migrated volume directly."
+    ],
+    "open_items": [
+      "Manual staging migration not yet executed: SSH in, disable API, diff stale CIDs against DB, spin up temp pebbleds container, pin valid CIDs only, deploy via PR, then swap volumes.",
+      "Three staging validations pending: live pebbleds deploy, SC1 benchmark on staging, Prometheus histogram verification in Grafana.",
+      "Stale CIDs from failed e2e runs still present on current staging IPFS node — will be pruned during migration but not yet addressed.",
+      "If datastore migrations become a pattern in future, formalize the migration script into the deploy workflow."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T23:25:46.346911Z",
+    "agent_lines": 65,
+    "human_added": 0,
+    "human_modified": 33,
+    "human_removed": 0,
+    "total_committed": 98,
+    "agent_percentage": 66.3265306122449
+  }
+}

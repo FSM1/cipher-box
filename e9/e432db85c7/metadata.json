@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e9e432db85c7",
+  "strategy": "manual-commit",
+  "branch": "phase-31-structural-decomposition",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e9/e432db85c7/0/metadata.json",
+      "transcript": "/e9/e432db85c7/0/full.jsonl",
+      "content_hash": "/e9/e432db85c7/0/content_hash.txt",
+      "prompt": "/e9/e432db85c7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 195,
+    "cache_creation_tokens": 381799,
+    "cache_read_tokens": 18342364,
+    "output_tokens": 60502,
+    "api_call_count": 148
+  }
+}

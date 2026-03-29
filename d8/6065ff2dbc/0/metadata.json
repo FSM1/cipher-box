@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d86065ff2dbc",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T02:33:16.044508Z",
+  "branch": "feat/sdk-vault-key-blob-publish",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "08231028a317",
+  "checkpoint_transcript_start": 2667,
+  "transcript_lines_at_start": 2667,
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 4533,
+    "cache_read_tokens": 2862802,
+    "output_tokens": 3186,
+    "api_call_count": 8
+  },
+  "session_metrics": {
+    "turn_count": 47
+  },
+  "summary": {
+    "intent": "Fix a failing test harness for vault key blob publishing and respond to code review feedback by adding unit tests.",
+    "outcome": "Fixed the axiosInstance configuration issue in the test harness, added 5 new vault unit tests (93 total passing), and pushed both fixes to CI.",
+    "learnings": {
+      "repo": [
+        "publishVaultKeyBlob calls createAndPublishIpnsRecord which uses orval-generated API clients requiring an axiosInstance on SdkContext — not just apiUrl + getAccessToken.",
+        "Orval-generated functions fall back to a global singleton axios instance if no axiosInstance is provided on the context, which breaks in test harnesses that don't configure the singleton."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/__tests__/vault.test.ts",
+          "finding": "New file created with 5 vault unit tests covering publishVaultKeyBlob behavior."
+        }
+      ],
+      "workflow": [
+        "Copilot and CodeRabbit reviews arrive shortly after push and are worth triaging immediately.",
+        "When a reviewer flags non-idempotent sequence numbers, document the call-site constraints (e.g., initial-creation-only) in a reply rather than over-engineering a fix."
+      ]
+    },
+    "friction": [
+      "Test harness misconfiguration (missing axiosInstance on SdkContext) caused failures that required root-cause analysis before the fix was clear.",
+      "Had to wait ~2 minutes after push before code review comments were available to triage."
+    ],
+    "open_items": [
+      "Re-publish/repair flow for IPNS records needs a different implementation that reads the current sequence number first rather than hardcoding 0n — deferred because initial publish is the only current use case."
+    ]
+  }
+}

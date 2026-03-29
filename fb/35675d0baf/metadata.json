@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fb35675d0baf",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fb/35675d0baf/0/metadata.json",
+      "transcript": "/fb/35675d0baf/0/full.jsonl",
+      "content_hash": "/fb/35675d0baf/0/content_hash.txt",
+      "prompt": "/fb/35675d0baf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 61,
+    "cache_creation_tokens": 118374,
+    "cache_read_tokens": 3128641,
+    "output_tokens": 14833,
+    "api_call_count": 48
+  }
+}

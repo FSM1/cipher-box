@@ -1,0 +1,116 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "558aadead671",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T07:42:30.677796Z",
+  "branch": "fix/session-restore-race-conditions",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useAuth.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1863ff9f180f",
+  "token_usage": {
+    "input_tokens": 309,
+    "cache_creation_tokens": 251363,
+    "cache_read_tokens": 33910685,
+    "output_tokens": 81976,
+    "api_call_count": 229
+  },
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "summary": {
+    "intent": "Monitor PR #349 for automated bot reviews (CodeRabbit, Copilot), auto-resolve them as they arrive, then collect staging performance baselines for the vault login path before a vault migration deploys.",
+    "outcome": "All 23 review threads across 4 rounds were resolved with real fixes (recovery IPNS name bug, getVault 404 scope, vault init conflict handling, zero-copy blob optimization). Staging perf baselines were captured. A session restore race condition was discovered, documented, and fixed with shared-Promise deduplication at two layers (auth/refresh and vault init).",
+    "learnings": {
+      "repo": [
+        "The cron/loop skill can be used to set up automated PR monitoring that fires /resolve-pr-reviews when new unresolved threads appear.",
+        "Outside-diff-range review comments don't surface as unresolved GraphQL reviewThreads — they must be fetched via the review body directly.",
+        "The vault key IPNS name and root folder IPNS name were previously conflated in recovery.html; PR #349 separated them.",
+        "VaultBlobV2 type was removed — functions now return Uint8Array directly.",
+        "E2E wallet login uses @johanneskares/wallet-mock with installMockWallet() for real secp256k1 signing via viem.",
+        "Core Kit DKG on Sapphire Devnet dominates login time (~9-45s); the vault-critical path is only ~700ms-1.4s.",
+        "Staging DB was wiped, so no existing vaults were present for baseline — the perf script had to create one first.",
+        "The Axios 401 interceptor in packages/api-client/src/instance.ts already deduplicates 401-triggered refreshes via refreshPromise, but direct authApi.refresh() calls (from session restore) are NOT covered."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 102,
+          "end_line": 146,
+          "finding": "Broad try/catch around getVault() and all subsequent IPFS calls — a 404 from fetchFromIpfs (missing CID for existing vault) would incorrectly trigger vault re-initialization. Fixed by isolating getVault() in its own try/catch."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 124,
+          "end_line": 125,
+          "finding": "Session restore calls resolveIpnsRecord for vault key IPNS name; if record not found, throws 'Vault key IPNS name not found', which is caught at line 594 and triggers Core Kit logout."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 580,
+          "end_line": 594,
+          "finding": "Session restore effect calls authApi.refresh() directly — multiple React effect cycles can call this concurrently, bypassing the Axios interceptor deduplication. Root cause of the 6-concurrent-refresh-calls race."
+        },
+        {
+          "path": "apps/web/src/lib/api/auth.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "Added module-level refreshPromise deduplication for direct authApi.refresh() calls to prevent concurrent session restore effects from each triggering a token refresh."
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 99,
+          "end_line": 99,
+          "finding": "slice() was used instead of subarray() — slice copies the buffer, subarray returns a zero-copy view. Fixed to subarray()."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 72,
+          "end_line": 80,
+          "finding": "sequence=0 conflict on IPNS publish was warn-and-continue; changed to abort with error to prevent partial vault state."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 52,
+          "end_line": 76,
+          "finding": "Axios 401 interceptor already deduplicates refresh via shared refreshPromise, but only for 401-triggered retries, not direct calls."
+        }
+      ],
+      "workflow": [
+        "Playwright MCP browser_run_code runs in an ESM sandbox without Node module resolution — can't import local packages directly; use standalone .mjs scripts via Bash instead.",
+        "window.ethereum injection for Web3Auth wallet login must happen via addInitScript before page navigation, not via browser_evaluate after load.",
+        "Playwright native request/response events are more reliable for network monitoring across navigations than injected fetch monkey-patching.",
+        "The /loop skill creates a CronCreate job with recurring:true that auto-expires after 7 days.",
+        "GSD todos follow a specific markdown format with frontmatter; markdownlint enforces heading style and list formatting in CI."
+      ]
+    },
+    "friction": [
+      "GitHub GraphQL API timed out once during the monitoring loop — transient network issue, no retry logic in the cron prompt.",
+      "Outside-diff-range comments don't surface as unresolved reviewThreads in the GraphQL query — required manual user intervention to notice them.",
+      "Playwright MCP browser_run_code can't resolve Node/npm modules, requiring a fallback to standalone scripts via Bash.",
+      "Web3Auth OTP on staging is real (not a test bypass), blocking direct MCP browser login flow.",
+      "The staging DB was wiped, meaning no live vaults existed for baseline measurement — had to create one first, adding an extra pass.",
+      "fetch monitoring injected via browser_evaluate didn't survive page navigation, requiring a rewrite to use Playwright's native request events.",
+      "Auth/refresh race condition caused 6 concurrent refresh calls on page reload, which fed into the vault init race — took significant log archaeology to trace the root cause."
+    ],
+    "open_items": [
+      "Post-deploy re-measurement: run tests/web-e2e/staging-perf-wallet.mjs against staging after PR #349 deploys to get real IPNS resolve + IPFS fetch numbers for a v2 vault key blob.",
+      "The vault init deduplication guard added to useAuth.ts resets vaultInitPromise to null after completion — verify this handles the case where a second caller arrives while the first is in-flight vs after it completes.",
+      "No existing vaults on staging means the 'existing vault login' baseline (~1,379ms with two IPNS 404s) reflects the old code's double-resolve behavior; re-baseline after deploy to confirm the new single-resolve path.",
+      "The session restore test (scenario 3) couldn't be fully measured because Core Kit tKey shares don't persist across Playwright browser contexts — a proper session restore baseline requires a persistent browser profile or a Core Kit session mock.",
+      "The auth/refresh race fix and vault init fix are on fix/session-restore-race-conditions but not yet merged or PR'd."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T07:41:46.703811Z",
+    "agent_lines": 0,
+    "human_added": 35,
+    "human_modified": 182,
+    "human_removed": 0,
+    "total_committed": 35,
+    "agent_percentage": 0
+  }
+}

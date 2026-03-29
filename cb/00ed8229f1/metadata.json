@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cb00ed8229f1",
+  "strategy": "manual-commit",
+  "branch": "docs/milestone-v1.1-completion",
+  "checkpoints_count": 8,
+  "files_touched": [
+    ".planning/debug/vault-migration-iife-silent-failure-resolved.md",
+    ".planning/debug/vault-migration-iife-silent-failure.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cb/00ed8229f1/0/metadata.json",
+      "transcript": "/cb/00ed8229f1/0/full.jsonl",
+      "content_hash": "/cb/00ed8229f1/0/content_hash.txt",
+      "prompt": "/cb/00ed8229f1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 203,
+    "cache_creation_tokens": 419596,
+    "cache_read_tokens": 19730389,
+    "output_tokens": 44208,
+    "api_call_count": 168
+  }
+}

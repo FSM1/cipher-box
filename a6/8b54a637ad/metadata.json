@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a68b54a637ad",
+  "strategy": "manual-commit",
+  "branch": "docs/19.2-staging-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/baselines/19.2-post-optimization-baselines.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a6/8b54a637ad/0/metadata.json",
+      "transcript": "/a6/8b54a637ad/0/full.jsonl",
+      "content_hash": "/a6/8b54a637ad/0/content_hash.txt",
+      "prompt": "/a6/8b54a637ad/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1609,
+    "cache_creation_tokens": 537324,
+    "cache_read_tokens": 68284349,
+    "output_tokens": 92359,
+    "api_call_count": 353
+  }
+}

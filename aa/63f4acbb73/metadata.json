@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "aa63f4acbb73",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/21-byo-ipfs-node-support/21-RESEARCH.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/aa/63f4acbb73/0/metadata.json",
+      "transcript": "/aa/63f4acbb73/0/full.jsonl",
+      "content_hash": "/aa/63f4acbb73/0/content_hash.txt",
+      "prompt": "/aa/63f4acbb73/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 17863,
+    "cache_read_tokens": 809685,
+    "output_tokens": 2499,
+    "api_call_count": 8
+  }
+}

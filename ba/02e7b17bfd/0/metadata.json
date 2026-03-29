@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ba02e7b17bfd",
+  "session_id": "b40e1bf6-b0a9-4f65-abea-691c4d692f4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T04:06:28.41763Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "b571263ae68e",
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 113446,
+    "cache_read_tokens": 4840523,
+    "output_tokens": 19970,
+    "api_call_count": 53
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Run the GSD discuss-phase, plan-phase, and ui-phase workflows for Phase 21 (BYO-IPFS Node Support) to capture implementation decisions, conduct technical research, and generate a UI design contract.",
+    "outcome": "CONTEXT.md was created with locked decisions (three-mode pinning, client-direct architecture, TEE-based migration, zero-knowledge auth), RESEARCH.md and VALIDATION.md were generated, and the ui-phase workflow was initiated to produce a UI-SPEC.md.",
+    "learnings": {
+      "repo": [
+        "The original PROJECT.md planned a server-relay approach for BYO-IPFS v1.1 with client-direct deferred to v1.2, but the discussion revised this to client-direct in v1.1 since the SDK already exists.",
+        "BYO-IPFS auth token storage was an open concern in STATE.md — resolved to zero-knowledge: credentials stored in vault metadata on IPFS, encrypted with user key, decrypted client-side only.",
+        "The TEE (Phala Cloud) is already used for IPNS republishing background jobs, making it a natural fit for pin migration — encrypted blobs can be moved without the TEE ever seeing plaintext content.",
+        "The existing IpfsService has a provider interface (ipfs-provider.interface.ts) with a local provider implementation — BYO-IPFS adds a RemotePinningProvider at the SDK layer.",
+        "Quota tracking is advisory (no enforcement) for BYO-IPFS — CipherBox API only registers CIDs for bookkeeping, not to gate uploads.",
+        "PSA (Pinning Service API) and Kubo RPC both need to be supported with auto-detection during connection test due to different provider offerings."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipfs/providers/ipfs-provider.interface.ts",
+          "finding": "Provider interface that BYO-IPFS RemotePinningProvider will implement"
+        },
+        {
+          "path": "apps/api/src/ipfs/providers/local.provider.ts",
+          "finding": "Existing local provider — pattern reference for new remote provider implementation"
+        },
+        {
+          "path": "apps/web/src/routes/SettingsPage.tsx",
+          "finding": "Existing settings page — Phase 21 adds a new STORAGE tab here with BYO-IPFS configuration"
+        },
+        {
+          "path": "apps/api/src/vault/entities/pinned-cid.entity.ts",
+          "finding": "Pinned CID entity — will need fields for tracking pin provider and migration status"
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-CONTEXT.md",
+          "finding": "Phase 21 context file capturing all locked decisions for downstream agents"
+        }
+      ],
+      "workflow": [
+        "The GSD auto-advance chain (discuss → plan → execute) was not used here; each phase was invoked manually.",
+        "The ui-phase gate in plan-phase requires a UI-SPEC.md before planning for frontend phases — user must run /gsd:ui-phase first when this gate triggers.",
+        "ROADMAP.md success criteria (SC#2, BYO-02) will need manual updating to reflect scope changes made during discussion — the workflow doesn't automatically update the roadmap.",
+        "The discuss-phase workflow correctly identified a scope change mid-discussion (server-relay → client-direct) and surfaced it before locking decisions."
+      ]
+    },
+    "friction": [
+      "The plan-phase workflow stopped at the UI design contract gate and required a separate /gsd:ui-phase invocation, breaking the flow — user had to start over with a new command.",
+      "Original PROJECT.md architectural decisions (server-relay for v1.1) were stale and conflicted with the emerging design — required explicit acknowledgment during discussion to override."
+    ],
+    "open_items": [
+      "ROADMAP.md success criteria SC#2 and BYO-02 need updating to reflect three-mode pinning model and client-direct architecture instead of server-relay dual-pin.",
+      "S3-compatible storage backend support — deferred to a future phase.",
+      "Provider marketplace / curated list of compatible IPFS pinning services — deferred as a future UX enhancement.",
+      "UI-SPEC.md generation was in progress at end of transcript — plan-phase has not yet been re-run after ui-phase completes.",
+      "CORS validation approach for browser-based client-direct pinning needs to be validated during research/planning — mentioned as a compatibility concern for the connection test."
+    ]
+  }
+}

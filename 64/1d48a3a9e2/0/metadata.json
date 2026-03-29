@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "641d48a3a9e2",
+  "session_id": "1986a6a4-e18b-403e-a50f-9f54ae3d2e8c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T12:45:44.845863Z",
+  "branch": "fix/writable-shares-e2e-save-race",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/web-e2e/tests/writable-shares.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1a3cf4bbdccb",
+  "token_usage": {
+    "input_tokens": 7235,
+    "cache_creation_tokens": 587774,
+    "cache_read_tokens": 25539860,
+    "output_tokens": 55285,
+    "api_call_count": 200
+  },
+  "summary": {
+    "intent": "Fix a failing vault recovery E2E test in CI, resolve multiple deployment pipeline issues (Grafana provisioning, desktop app signing), update outdated codebase documentation, and clean up stale debug sessions and worktrees.",
+    "outcome": "Fixed vault recovery E2E test via protobuf field bug + IPNS resolution order fix (PR #369), resolved Grafana API key expiry and desktop build signing key wiring (PR #370), updated all 7 codebase docs for multi-package architecture, cleaned up worktrees and stale debug session. A new writable-shares E2E flakiness fix was started but the transcript ends mid-commit.",
+    "learnings": {
+      "repo": [
+        "IPNS protobuf records store the value (CID path) at field number 1, not field 2 — field 2 is signatureV1. Any protobuf parsing of IPNS records must check fieldNumber === 1.",
+        "resolveIpns() tried IPFS gateway HEAD first (15s timeout) before delegated routing — in CI, Kubo can't resolve mock-published IPNS names, so every resolution wasted 15s. Delegated routing should always be tried first.",
+        "recovery.html's vault key blob fetch used a direct /ipns/ gateway path (30s timeout) before resolveIpns() — in CI this caused the full 30s hang before fallback, matching the test timeout and causing failures.",
+        "mock-ipns-routing stores IPNS records correctly; the failure was in the parsing layer in recovery.html, not in the routing service.",
+        "Desktop Tauri builds require TAURI_SIGNING_PRIVATE_KEY env var wired into the tauri-action step — the pubkey was added to tauri.conf.json but the workflow wasn't updated to pass the private key.",
+        "Grafana Cloud's /api/health returns 404 (not 401/403) when an expired/invalid service account token is used — misleading error that looks like a URL problem.",
+        "TextEditorDialog.tsx handleSave has a stale closure issue: if isDirty is false in the closure when Ctrl+S fires, the save is silently skipped. The writable-shares E2E test needs to wait for a 'modified' indicator before pressing Ctrl+S.",
+        "The codebase has evolved to a multi-package TypeScript monorepo (packages/sdk, packages/sdk-core, packages/core, packages/crypto, packages/api-client) plus Rust crates — the .planning/codebase docs were still describing the early PoC architecture."
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 768,
+          "end_line": 800,
+          "finding": "extractCidFromIpnsRecord() was checking fieldNumber === 2 for the IPNS value, but protobuf field 1 is the value and field 2 is signatureV1. All IPNS resolution silently failed because the CID was never extracted."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 682,
+          "end_line": 686,
+          "finding": "Delegated routing fetch retry logic only caught thrown errors, not non-OK HTTP responses (429/5xx). Fixed by adding !resp.ok check before the retry sleep."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 695,
+          "end_line": 700,
+          "finding": "After resp.json() consumed the response body, the code fell through to resp.arrayBuffer() which would always fail. Fixed by wrapping protobuf parse in an else branch."
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 31,
+          "end_line": 31,
+          "finding": "Test timeout was 90s but assertion timeout defaulted to 60s — assertion could time out before the test timeout. Fixed with a shared RECOVERY_TIMEOUT_MS constant."
+        },
+        {
+          "path": "tests/web-e2e/tests/writable-shares.spec.ts",
+          "line": 844,
+          "end_line": 844,
+          "finding": "Test 10.3 fails in CI because textarea.fill() doesn't wait for React to update isDirty state before Ctrl+S fires — need to wait for modified indicator after fill before pressing save."
+        }
+      ],
+      "workflow": [
+        "When a CI test times out at exactly the timeout threshold, the root cause is often a slow path being tried first rather than a code logic error — check for ordering of fallbacks with long timeouts.",
+        "Grafana Cloud dashboard provisioning needs a service account token (not a data source API key like Loki/Prometheus keys) — these are fundamentally different credentials for different API surfaces.",
+        "GitHub secrets at repo level vs environment level: repo secrets are accessible to all environments, environment secrets are scoped. Choosing repo-level for cross-environment keys like signing keys is correct.",
+        "For React state flakiness in E2E tests, waiting for a visible DOM indicator of state change (e.g., 'modified' badge) is more reliable than arbitrary waits after user input.",
+        "When cleaning up worktrees before marking a debug session as resolved, verify the debug session's reproduction environment still exists — stale worktree debug sessions should be resolved as 'fixed or stale' rather than continued."
+      ]
+    },
+    "friction": [
+      "The Grafana 404 error is misleading — it looks like a wrong URL but is actually an auth failure. The error message in the workflow should distinguish auth failures from routing failures.",
+      "TAURI_SIGNING_PRIVATE_KEY was already configured as a repo secret but wasn't documented anywhere as needing to be wired into the workflow — discovered only when a build failed.",
+      "Worktree cleanup required force-removal because one had already been deleted from disk but its reference was still registered — `git worktree prune` was needed as a separate step.",
+      "markdownlint hook blocked the codebase docs commit due to bare code fences and emphasis-as-heading issues in agent-generated content — required manual sed fixups across multiple files.",
+      "The writable-shares E2E flakiness is a React stale closure issue that only manifests in CI (timing sensitive) — hard to reproduce locally and required reading the TextEditorDialog source to understand."
+    ],
+    "open_items": [
+      "Writable-shares E2E fix (stale closure / Ctrl+S timing) was committed mid-transcript — CI still needs to confirm it passes.",
+      "PR #370 (Tauri signing keys) was created but not merged — needs review and merge before next staging deploy.",
+      "Milestone v1.1 completion (`/gsd:complete-milestone`) was identified as the next step but not yet executed.",
+      "6 pending todos flagged in the GSD system — not reviewed or addressed during this session.",
+      "docs/milestone-v1.1-completion branch has 2 commits but no PR was created — needs to be pushed and merged.",
+      "The `isDirty` stale closure in TextEditorDialog.tsx may affect more than just the E2E test — could silently drop saves in the real app under rapid interaction."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-27T12:45:00.05563Z",
+    "agent_lines": 6,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 6,
+    "agent_percentage": 100
+  }
+}

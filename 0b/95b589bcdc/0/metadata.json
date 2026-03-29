@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0b95b589bcdc",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T00:25:02.328225Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 5,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "57f5367411bf",
+  "token_usage": {
+    "input_tokens": 6550,
+    "cache_creation_tokens": 198252,
+    "cache_read_tokens": 13038741,
+    "output_tokens": 41819,
+    "api_call_count": 117
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) end-to-end, then run a security review and code simplification pass on all phase 20 work, and manually verify the web client checkpoint with a live dev environment.",
+    "outcome": "All 4 plans executed successfully. Security review found 2 HIGH issues (both fixed). Simplify pass eliminated duplicate HKDF derivation and double ECIES wrap. A critical bug was discovered and fixed during checkpoint verification: `fetchAndDecryptMetadata` in both `folder.service.ts` and `sdk-core` blindly JSON-parsed v2 binary blobs, causing sync failures for migrated users.",
+    "learnings": {
+      "repo": [
+        "The project root is `cipher-box` but phase 20 work lives in a separate `cipher-box-phase-20` directory — gsd-tools init must run from the phase directory, not the main repo.",
+        "orval codegen generates `{ [key: string]: unknown } | null` for nullable string fields in OpenAPI spec despite `type: string, nullable: true` being correct — `as unknown as string` casts are the intentional workaround, not a bug.",
+        "The recovery tool (`recovery.html`) uses intentional inline functions because it must be self-contained as an offline tool.",
+        "OTPs from Web3Auth are logged in cleartext to the API dev server stdout.",
+        "IPNS resolution produces 'Unsupported wire type 4' errors that fall back to DB cache — this is a pre-existing issue unrelated to phase 20.",
+        "Device registry format errors and bin IPNS 404s in the browser console are pre-existing noise, not phase 20 regressions."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parsed IPFS blob bytes without checking for v2 binary format header — caused SyntaxError crash on sync for any migrated user whose vault had a v2 blob written to IPFS."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same v2 blob handling bug as folder.service.ts — SDK fetchAndDecryptMetadata also lacked v2 format detection before JSON.parse."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "Migrated-user login path (PATH A) called deriveVaultIpnsKeypair() twice with identical inputs. Also had a redundant destructure/re-wrap of ipnsKeypair into rootIpnsKeypair."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop vault init ECIES-wrapped rootFolderKey twice with the same public key — once for DB storage and once for v2 blob. Reusing the first wrap eliminates the redundant operation."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 originally returned Vec\u003cu8\u003e with no bounds validation — changed to return Result\u003cVec\u003cu8\u003e, VaultBlobError\u003e with key length checks to prevent silent u16 truncation."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse derived Debug, which would expose encrypted key material in logs. Custom Debug impls added to redact sensitive fields."
+        }
+      ],
+      "workflow": [
+        "The classifyHandoffIfNeeded Claude Code runtime bug can fire after agent tool calls complete successfully — spot-check SUMMARY.md + git commits to determine real success vs false failure.",
+        "When orval codegen doesn't change after modifying a NestJS DTO, check whether the OpenAPI spec actually changed — the spec may already be correct and the issue is in orval's handling of nullable types.",
+        "Security review and simplify passes are valuable to run in parallel during a checkpoint verification pause — they can be completed while waiting for user testing.",
+        "Playwright MCP can be used to drive browser login and capture console messages during manual checkpoint verification, avoiding the need to manually check the browser."
+      ]
+    },
+    "friction": [
+      "gsd-tools init failed when run from the main cipher-box directory — had to detect that phase 20 lived in a sibling directory and re-run from there.",
+      "First security review attempt hit a ConnectionRefused API error and had to be re-invoked.",
+      "orval regeneration did not fix the nullable string type issue — investigation required to confirm it was a pre-existing orval bug, not a DTO problem.",
+      "Playwright MCP browser_console_messages and browser_fill_form tools required multiple ToolSearch calls to discover and use — not pre-loaded.",
+      "The v2 blob sync bug was not caught by automated tests during plan execution — it only surfaced during live manual checkpoint verification, requiring a mid-checkpoint hotfix."
+    ],
+    "open_items": [
+      "M-1: Recovery tool private key not zeroed from memory after use.",
+      "M-2: No deduplication guard against concurrent lazy migration from multiple browser tabs — race condition possible.",
+      "M-3: Desktop FUSE root folder publish ECIES re-wraps the key on every publish instead of caching — optimization deferred as architectural change.",
+      "L-1: Zero-length keys are accepted by v2 blob deserializers without error.",
+      "L-2: No SRI (Subresource Integrity) hashes on CDN scripts in recovery.html.",
+      "Plan 20-04 checkpoint verification (task 3 — recovery.html manual test) was in progress at end of transcript — outcome not confirmed."
+    ]
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cb00ed8229f1",
+  "session_id": "1986a6a4-e18b-403e-a50f-9f54ae3d2e8c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T01:48:35.319701Z",
+  "branch": "docs/milestone-v1.1-completion",
+  "checkpoints_count": 8,
+  "files_touched": [
+    ".planning/debug/vault-migration-iife-silent-failure-resolved.md",
+    ".planning/debug/vault-migration-iife-silent-failure.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "63293e94c6c2",
+  "token_usage": {
+    "input_tokens": 203,
+    "cache_creation_tokens": 419596,
+    "cache_read_tokens": 19730389,
+    "output_tokens": 44208,
+    "api_call_count": 168
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Fix a failing vault recovery E2E test in CI, resolve subsequent PR review comments, fix Grafana dashboard provisioning errors and Tauri desktop signing key issues in the staging deployment pipeline, then close out the current milestone by cleaning up worktrees and archiving a stale debug session.",
+    "outcome": "Recovery E2E test fixed and merged (PR #369) with protobuf field number bug fix and resolution order swap; Grafana API key and Tauri signing keys wired into CI; worktrees cleaned up; stale debug session resolved; docs branch created for milestone completion prep.",
+    "learnings": {
+      "repo": [
+        "IPNS record protobuf field layout: value is field 1, signatureV1 is field 2 — extractCidFromIpnsRecord was incorrectly reading field 2",
+        "mock-ipns-routing is used in CI for IPNS resolution; Kubo cannot resolve IPNS names published via mock-ipns-routing, so delegated routing must be tried first",
+        "Grafana Cloud /api/health returns 404 (not 401/403) when an API key is invalid or the service account token has expired",
+        "TAURI_SIGNING_PRIVATE_KEY is required by tauri-action whenever a pubkey is present in tauri.conf.json — all three desktop build jobs (macOS, Windows, Linux) need it",
+        "Grafana data source keys (Loki, Prometheus) are separate from the Grafana instance service account token used for dashboard provisioning via the HTTP API",
+        "Worktrees from prior phase branches (e.g., cipher-box-phase-20) can become stale after merges and need periodic cleanup"
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 768,
+          "end_line": 800,
+          "finding": "extractCidFromIpnsRecord was checking fieldNumber === 2 (signatureV1) instead of fieldNumber === 1 (value) when parsing the IPNS protobuf record"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1136,
+          "end_line": 1147,
+          "finding": "Vault key blob resolution was trying direct IPFS gateway /ipns/ path (30s timeout) before delegated routing — swapped to try resolveIpns() first"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 682,
+          "end_line": 686,
+          "finding": "fetchWithRetry backoff only triggered on thrown errors, not non-OK HTTP responses (429/5xx) — fixed by adding !resp.ok check before the retry sleep"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 695,
+          "end_line": 700,
+          "finding": "resp.json() consumed the response body, making the fallthrough resp.arrayBuffer() call fail — fixed by wrapping protobuf parse in an else branch"
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 31,
+          "end_line": 31,
+          "finding": "Added shared RECOVERY_TIMEOUT_MS constant to sync test timeout (90s) with assertion timeout, preventing assertion timeout firing before test timeout"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "finding": "All three tauri-action jobs (macOS, Windows, Linux) were missing TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD env vars despite the pubkey being present in tauri.conf.json"
+        }
+      ],
+      "workflow": [
+        "When a CI job fails with SSH i/o timeout, always verify VPS reachability before assuming a code issue — transient network blips between GitHub Actions runners and the VPS are common",
+        "Grafana Cloud service account tokens should be stored as repo secrets (not environment secrets) so all environments can access them",
+        "Before dismissing a reviewer comment as not applicable, trace through the actual source code to verify the claim — don't assume delegation without proof",
+        "Running the E2E test locally before committing catches issues that would otherwise require a full CI round-trip"
+      ]
+    },
+    "friction": [
+      "Multiple rounds of PR review resolution needed (3 separate /resolve-pr-reviews invocations) due to CodeRabbit adding new comments after each push",
+      "One outside-of-diff-range CodeRabbit review comment couldn't be resolved via the thread API — required a separate PR comment reply",
+      "VPS SSH timeout caused a false-alarm CI failure during the staging deploy, requiring manual health check before determining it was transient",
+      "Stale worktree from phase-20 branch was left behind after merge, requiring cleanup"
+    ],
+    "open_items": [
+      "Milestone v1.1 completion not yet done — docs branch created but /gsd:complete-milestone not yet run",
+      "6 pending todos flagged by gsd-tools — not reviewed this session",
+      "PR #370 (Tauri signing keys) needs merge before the next staging deploy will succeed for desktop builds"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-27T01:47:54.905666Z",
+    "agent_lines": 62,
+    "human_added": 8971,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 9033,
+    "agent_percentage": 0.6863721908557511
+  }
+}

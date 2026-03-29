@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4578123e8d3f",
+  "strategy": "manual-commit",
+  "branch": "fix/recovery-e2e-ci",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/45/78123e8d3f/0/metadata.json",
+      "transcript": "/45/78123e8d3f/0/full.jsonl",
+      "content_hash": "/45/78123e8d3f/0/content_hash.txt",
+      "prompt": "/45/78123e8d3f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 277,
+    "cache_creation_tokens": 277875,
+    "cache_read_tokens": 37677000,
+    "output_tokens": 52693,
+    "api_call_count": 233
+  }
+}

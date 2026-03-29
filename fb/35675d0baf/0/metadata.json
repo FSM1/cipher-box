@@ -1,0 +1,121 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fb35675d0baf",
+  "session_id": "2c89ddf4-4e09-4a48-8d9f-d3abc435dfff",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T03:28:15.153094Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ee1262e9b465",
+  "token_usage": {
+    "input_tokens": 61,
+    "cache_creation_tokens": 118374,
+    "cache_read_tokens": 3128641,
+    "output_tokens": 14833,
+    "api_call_count": 48
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Add Phase 27 (Writable Shares PoC) to the CipherBox roadmap and capture implementation decisions via a structured discuss-phase session, building on the insight that CipherBox's server-relayed IPNS architecture already solves the multi-writer coordination problem.",
+    "outcome": "Phase 27 was added to the roadmap with a cleaned-up slug, a CONTEXT.md was created capturing decisions across four gray areas (IPNS key delivery, write scope, share dialog changes, conflict \u0026 attribution), and STATE.md was updated with session info.",
+    "learnings": {
+      "repo": [
+        "CipherBox's conflict detection works because ALL IPNS publishes go through the API server, which acts as coordination point — sidesteps the general 'unsolved multi-writer IPNS' problem entirely",
+        "Optimistic concurrency via expectedSequenceNumber is checked server-side before every publish; two writers hitting a conflict get a 409, re-sync, and retry — same as multi-device sync today",
+        "Phase 14 established read-only sharing using secp256k1 public keys, share_keys table, and lazy key rotation on revoke — Phase 27 extends this pattern",
+        "The planning docs conservatively label multi-writer IPNS as 'unsolved' but this applies to the DHT/network layer, not CipherBox's server-coordinated architecture",
+        "Milestone 4 (TEAM-11) plans a formal cryptographic read/write key hierarchy; Phase 27 is a PoC that intentionally uses a simpler approach (ECIES-wrap the IPNS signing key alongside folderKey)"
+      ],
+      "code": [
+        {
+          "path": "ipns.service.ts",
+          "line": 181,
+          "end_line": 192,
+          "finding": "expectedSequenceNumber check enforced server-side before every publish — the authorization point for sequence-based conflict detection"
+        },
+        {
+          "path": "sdk-core/src/folder/index.ts",
+          "line": 196,
+          "end_line": 224,
+          "finding": "409 Conflict handling with automatic single-retry and re-sync logic"
+        },
+        {
+          "path": "folder-helpers.ts",
+          "line": 39,
+          "end_line": 63,
+          "finding": "UI conflict banner with jitter-delayed retry"
+        },
+        {
+          "path": "ipns.service.ts",
+          "line": 344,
+          "end_line": 355,
+          "finding": "Sequence number comparison across network vs DB cache — highest wins"
+        },
+        {
+          "path": ".planning/milestones/m2/phases/14-user-to-user-sharing/14-CONTEXT.md",
+          "line": 9,
+          "end_line": 9,
+          "finding": "Phase 14 explicitly scopes to read-only sharing only; read-write sharing deferred as future phase"
+        },
+        {
+          "path": ".planning/milestones/m2/phases/14-user-to-user-sharing/14-CONTEXT.md",
+          "line": 76,
+          "end_line": 76,
+          "finding": "Access model design: readers get decryption keys only, writers (future) would get IPNS signing keys"
+        },
+        {
+          "path": ".planning/milestones/m2/phases/14-user-to-user-sharing/14-CONTEXT.md",
+          "line": 149,
+          "end_line": 149,
+          "finding": "Read-write sharing deferred because giving recipients IPNS private key enables re-sharing; multi-writer IPNS noted as unsolved"
+        },
+        {
+          "path": ".planning/milestones/m4/REQUIREMENTS.md",
+          "line": 66,
+          "end_line": 66,
+          "finding": "TEAM-11: cryptographic role enforcement via separate read/write key hierarchies so viewers literally cannot write"
+        },
+        {
+          "path": ".planning/research/FEATURES.md",
+          "line": 46,
+          "end_line": 46,
+          "finding": "CRDTs require all writers to have the IPNS private key — only owner and write-sharing recipients should publish folder metadata"
+        }
+      ],
+      "workflow": [
+        "gsd-tools auto-generates slugs from full phase descriptions, which can produce absurdly long directory names — manual slug cleanup was needed after add-phase ran",
+        "The depends-on field in ROADMAP.md defaults to the previous phase number; for Phase 27 it needed manual correction to Phase 14 (the actual dependency)",
+        "discuss-phase workflow follows a structured four-area pattern: IPNS key delivery → write scope → share dialog changes → conflict \u0026 attribution",
+        "The branch was created before running /gsd:add-phase to isolate the work properly"
+      ]
+    },
+    "friction": [
+      "gsd-tools generated an absurdly long slug from the full phase description, requiring manual directory rename and ROADMAP.md edits after the fact",
+      "The auto-generated depends-on in ROADMAP.md pointed to Phase 26 instead of Phase 14 (the actual dependency), requiring a manual fix",
+      "STATE.md required two separate edits — one to add the Roadmap Evolution section and one to update content — suggesting the section didn't exist yet"
+    ],
+    "open_items": [
+      "Metadata-embedded IPNS key delivery (embedding wrapped signing key in folder metadata for decentralized key distribution) deferred to a future decentralization phase",
+      "Cryptographic read/write key hierarchy (Milestone 4 TEAM-11) is the proper long-term solution; Phase 27 is intentionally a PoC using ECIES-wrap approach",
+      "Re-sharing prevention (ensuring read-write recipients cannot reshare access) not addressed in this PoC — future phase concern",
+      "Conflict attribution in UI (showing who last modified when a conflict occurs) was discussed but exact implementation left to planner discretion",
+      "30s polling sync and tab-focus triggers already exist but behavior for read-write shared folders specifically may need validation",
+      "The general multi-writer IPNS problem at the DHT/network layer remains unsolved — Phase 27 works only because CipherBox routes all publishes through its own API"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T03:27:41.388754Z",
+    "agent_lines": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 100
+  }
+}

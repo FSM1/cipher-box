@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cfaa84c37d6f",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T01:43:12.758269Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "a59d33362dc1",
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 35635,
+    "cache_read_tokens": 431424,
+    "output_tokens": 3510,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute Phase 22 (performance baselines completion) after first fixing an issue where planning commits were made directly to main instead of a feature branch.",
+    "outcome": "The 5 phase 22 planning commits were moved from main to feat/phase-22-performance-baselines-completion, and phase execution was initiated with 3 agents spawned in parallel for plans 22-01, 22-02, and 22-03.",
+    "learnings": {
+      "repo": [
+        "Phase 22 is named 'performance-baselines-completion' — slug derived from directory name under .planning/phases/",
+        "GSD branching strategy for this project uses 'phase' strategy, producing branches like feat/phase-{N}-{slug}",
+        "Phase 22 contains 3 plans in a single wave: SDK perf instrumentation (22-01), E2E journey timing (22-02), load test thresholds/capacity model (22-03)"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD planning commits should go to feat/phase-{N}-{slug} branches, not directly to main",
+        "To rescue commits accidentally made to main before pushing: create feature branch at current HEAD, then git reset --hard origin/main, then checkout feature branch",
+        "GSD execute-phase workflow detects existing feature branch and reuses it rather than creating a new one with the branching_strategy name"
+      ]
+    },
+    "friction": [
+      "Phase 22 research and planning commits were accidentally made directly to main instead of the correct feature branch — required manual branch surgery to fix before execution could proceed"
+    ],
+    "open_items": [
+      "3 executor agents spawned in parallel for plans 22-01, 22-02, 22-03 — execution outcome not yet confirmed in transcript",
+      "Verification step (gsd-verifier) not yet run — phase completion and VERIFICATION.md creation pending",
+      "Feature branch feat/phase-22-performance-baselines-completion has not been pushed or merged to main yet"
+    ]
+  }
+}

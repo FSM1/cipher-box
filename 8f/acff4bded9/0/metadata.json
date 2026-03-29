@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8facff4bded9",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T01:46:45.816493Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/22-performance-baselines-completion/22-03-SUMMARY.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a59d33362dc1",
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 35635,
+    "cache_read_tokens": 431424,
+    "output_tokens": 3510,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute phase 22 (performance-baselines-completion) plans using the GSD wave-based parallel execution workflow, after first correcting the branch setup (research/planning commits had landed on main instead of a feature branch).",
+    "outcome": "Phase 22 commits were moved from main to feat/phase-22-performance-baselines-completion, STATE.md was updated, and 3 executor subagents were spawned in parallel for plans 22-01, 22-02, and 22-03. The transcript ends mid-execution with only 22-03 SUMMARY.md confirmed written.",
+    "learnings": {
+      "repo": [
+        "Phase 22 is named 'performance-baselines-completion' — slug used for branch naming as feat/phase-22-performance-baselines-completion",
+        "GSD branching strategy for this project is 'phase', producing branches like feat/phase-{N}-{slug}",
+        "All 3 plans in phase 22 fall in wave 1 (no inter-plan dependencies), enabling full parallelization",
+        "Phase 22 plans cover: SDK Performance API instrumentation (22-01), Playwright E2E journey timing tests (22-02), and load test thresholds + capacity model doc (22-03)"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD execute-phase init outputs executor_model, verifier_model, parallelization, branching_strategy, branch_name, and plan inventory in one CLI call",
+        "When a pre-existing feature branch matches the GSD-computed branch name, the workflow should reuse it rather than attempt checkout -b",
+        "The stale auto-chain flag must be cleared at execute-phase init when --auto is not passed, to prevent previous interrupted runs from triggering unwanted auto-advance",
+        "Executor subagents receive paths only and load all context themselves, keeping orchestrator context at ~10-15%"
+      ]
+    },
+    "friction": [
+      "Phase 22 research/planning commits were made directly to main instead of the intended feature branch, requiring a manual recovery step before execution could proceed",
+      "The transcript ends mid-execution — it's unclear whether all 3 executor agents completed successfully; only 22-03 SUMMARY.md is confirmed written"
+    ],
+    "open_items": [
+      "Verify that 22-01 and 22-02 SUMMARY.md files were created and spot-checks pass (commits present, no Self-Check: FAILED markers)",
+      "Wave 1 completion reporting, regression gate, and gsd-verifier phase verification still need to run",
+      "STATE.md and ROADMAP.md updates post-verification not yet done",
+      "feat/phase-22-performance-baselines-completion has not been pushed to origin yet"
+    ]
+  }
+}

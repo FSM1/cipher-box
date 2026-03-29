@@ -1,0 +1,57 @@
+/resolve-pr-reviews
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23471900073/job/68296323552?pr=344 sdk e2e tests are failing
+
+---
+
+/resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
+
+---
+
+https://github.com/FSM1/cipher-box/pull/344#pullrequestreview-3996079661 a critical `outside of diff range` comment here and next round of /resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
+
+---
+
+also, since we will be resetting the database once more, is there any reason for the unnecessary migrations with the vault migratedat column, if these are not actually utilized. should we not jsut update the initial migration to be the current known db structure, and get rid of all the unnecessary migrations?
+
+---
+
+ok monitor for the coderabbit review that is going to come in shortly. if there are any comments /resolve-pr-reviews to handle the responses.
+
+---
+
+ok do you feel that this PR is ready to merge? the last few comments seem to be highly petty.
+
+---
+
+ok auto merge is set up. just waiting on the windows cargo check.
+
+---
+
+One thing I think is increasingly clear is the need to update the documentation to distinguish between the root metadata (vault v2) and folder metadata which really confused GH copilot in the reviews.
+
+---
+
+is there a reason for the root folders ipns pointer to start as v2? this should be a standard v1 folder metadata if I understand it correctly.
+
+---
+
+yeah definitely the former is a win from me. the PR has already been merged, so I think this iwll need to be done on a fresh branch off main - whether this will need an entire phase is up to you. alternatively just a gsd:todo is sufficient.
+
+---
+
+reminder, the branch has already been merged.
+
+---
+
+reminder, the branch has already been merged.

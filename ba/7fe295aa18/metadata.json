@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ba7fe295aa18",
+  "strategy": "manual-commit",
+  "branch": "chore/perf-baseline-auth-refresh-race",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/perf/staging-baseline-2026-03-24.md",
+    "tests/web-e2e/staging-perf-wallet.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ba/7fe295aa18/0/metadata.json",
+      "transcript": "/ba/7fe295aa18/0/full.jsonl",
+      "content_hash": "/ba/7fe295aa18/0/content_hash.txt",
+      "prompt": "/ba/7fe295aa18/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 239,
+    "cache_creation_tokens": 196423,
+    "cache_read_tokens": 20075745,
+    "output_tokens": 66129,
+    "api_call_count": 171
+  }
+}

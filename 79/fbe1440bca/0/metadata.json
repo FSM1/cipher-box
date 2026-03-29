@@ -1,0 +1,73 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "79fbe1440bca",
+  "session_id": "dd7925a2-c290-4aa9-9b23-1e2a36c54591",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T10:56:30.050975Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/fuse/Cargo.toml",
+    "crates/fuse/src/error.rs",
+    "crates/fuse/src/inode.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "5a360a09b187",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 99449,
+    "cache_read_tokens": 552611,
+    "output_tokens": 9041,
+    "api_call_count": 14
+  },
+  "summary": {
+    "intent": "Execute Phase 23 (rust-sdk-extraction) of the cipher-box project, extracting crypto, core, api-client, fuse, and sdk functionality into a Cargo workspace with separate crates.",
+    "outcome": "Waves 1 and 2 completed successfully (cipherbox-crypto, cipherbox-core, cipherbox-api-client + test vectors). Wave 3 (cipherbox-fuse, cipherbox-sdk) was interrupted mid-execution by a usage limit reset, leaving partial uncommitted work in both crate directories. A retry was initiated but the transcript ends before confirming completion.",
+    "learnings": {
+      "repo": [
+        "Phase 23 lives on branch feat/phase-23-rust-sdk-extraction and follows a 4-wave dependency order: crypto → core+api-client → fuse+sdk → desktop-shell+CI",
+        "Cargo workspace root was introduced in this phase; prior to Phase 23 all crypto lived in desktop app local modules",
+        "162 existing desktop tests survived the cipherbox-core extraction, indicating the desktop app maintained backward compatibility",
+        "Cross-language test vectors (9 JSON files, 5 parity tests) were added in plan 23-03 to validate Rust/TypeScript parity"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/Cargo.toml",
+          "finding": "Partially created by Wave 3 agent before usage limit; no lib.rs present at interruption"
+        },
+        {
+          "path": "crates/fuse/src/error.rs",
+          "finding": "Created during partial Wave 3 execution before usage limit hit"
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "finding": "Created during partial Wave 3 execution before usage limit hit"
+        }
+      ],
+      "workflow": [
+        "GSD wave-based execution resumes gracefully: re-running execute-phase re-spawns only incomplete plans (those without SUMMARY.md)",
+        "Usage limit interruptions mid-agent leave uncommitted partial work in the working tree — spot-checks (SUMMARY.md + git log) are the right way to detect this state",
+        "Pre-wave dependency checks (gsd-tools verify key-links) returned no key-links for Wave 3 plans, so no blocking cross-plan wiring gaps were detected"
+      ]
+    },
+    "friction": [
+      "Usage limit hit mid-Wave 3, interrupting both parallel agents before they could commit or create SUMMARY.md files",
+      "Partial uncommitted crate directories left in working tree after interruption required manual spot-checking before retry"
+    ],
+    "open_items": [
+      "Wave 3 retry (23-04 cipherbox-fuse, 23-05 cipherbox-sdk) was in progress at transcript end — completion unconfirmed",
+      "Wave 4 (23-06 desktop thin shell cleanup, 23-07 CI/release-please) not yet started",
+      "Phase verification and ROADMAP.md update not yet run",
+      "crates/fuse/src/ is missing most modules and lib.rs; crates/sdk/ missing lib.rs and client.rs as of the interruption"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T10:56:08.27427Z",
+    "agent_lines": 999,
+    "human_added": 1564,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2563,
+    "agent_percentage": 38.97776043698791
+  }
+}

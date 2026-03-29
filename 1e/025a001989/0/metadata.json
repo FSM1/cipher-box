@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "1e025a001989",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T13:22:04.26543Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7275741a1d15",
+  "token_usage": {
+    "input_tokens": 472,
+    "cache_creation_tokens": 809309,
+    "cache_read_tokens": 44744265,
+    "output_tokens": 85717,
+    "api_call_count": 273
+  },
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E test expansion and staging baselines) for the cipher-box project, including account cleanup helpers, media/streaming test suites, batch download tests, and capturing staging performance baselines.",
+    "outcome": "All 4 plans completed successfully: shared deleteAccountViaPage helper wired into 10 specs, media/streaming and batch download test suites created (21 new tests), staging journey timing and 200-client SDK load baselines captured. PR #392 created with BYO-IPFS load test workflow support added to GitHub Actions.",
+    "learnings": {
+      "repo": [
+        "Playwright config's baseURL doesn't respect BASE_URL env var by default — needs explicit process.env.BASE_URL override in playwright.config.ts, plus webServer must be conditionally omitted when targeting staging",
+        "Staging Web3Auth (Core Kit) initialization takes 22-23 seconds before the wallet button becomes interactive — test timeouts must account for this",
+        "SDK load tests use destroyClientPool() -\u003e deleteTestAccount() (direct API call, no browser); browser load tests use deleteAccountViaPage(page) (fetch via browser cookies) — these are distinct paths",
+        "Running two SDK load test suites simultaneously against staging saturates the instance even with throttle bypass header — tests must run solo",
+        "The throttle bypass header (X-Throttle-Bypass) works correctly in all environments; what appeared as a bypass failure was actually resource contention from concurrent test runs",
+        "Pinata free tier gets exhausted quickly when used for load testing — byo-capacity-ceiling ran 50+100+200+500+1000 client tiers and exhausted the quota",
+        "Vitest does not automatically load .env files — requires explicit shell env sourcing (set -a; source .env; set +a) before running vitest",
+        "BYO register-cid and ipns-publish return 400 on staging when using Pinata provider — pinning succeeds but CipherBox API rejects CID registration (test account likely not configured for BYO mode)"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "finding": "API URL for account deletion must be derived from the page URL, not hardcoded to localhost:3000 — staging pages would call localhost otherwise"
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "finding": "Added BASE_URL env var support and conditional webServer skip — required for running E2E tests against staging environments"
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "finding": "No built-in dotenv loading — must source .env before invoking vitest via shell"
+        },
+        {
+          "path": "tests/web-e2e/tests/media-preview.spec.ts",
+          "finding": "Used existsSync + unlinkSync (TOCTOU anti-pattern) for corrupt file cleanup — replaced with try/catch and try/finally to ensure cleanup"
+        }
+      ],
+      "workflow": [
+        "GSD wave execution with worktrees can cause STATE.md merge conflicts when cherry-picking — expect and resolve these during wave merges",
+        "classifyHandoffIfNeeded error from Claude Code is a runtime bug, not a plan failure — spot-check SUMMARY.md and git commits to confirm actual success",
+        "Running load tests in parallel against the same staging instance causes false throttle failures — always run load tests sequentially against shared environments",
+        "Browser-based Playwright load tests (5 Chromium tabs) provide inferior signal compared to headless SDK client tests (200 clients) — the former measures browser overhead, not API capacity"
+      ]
+    },
+    "friction": [
+      "Cherry-picking worktree commits to phase branch caused repeated STATE.md merge conflicts requiring manual resolution",
+      "Git lock files from failed/killed worktree agents required force-removing stale worktrees before retrying plans",
+      "Pinata free tier exhausted during BYO capacity ceiling test — all pin operations returned 402 after initial runs",
+      "SSH to VPS for staging secret inspection timed out (1Password SSH key issue), requiring alternative diagnostic approach",
+      "Sustained load test ran concurrently with BYO ceiling test, causing apparent throttle bypass failures that were actually resource exhaustion — root cause diagnosis took several investigation cycles",
+      "34-03 agent hit a git lock from 34-02's worktree and had to be retried",
+      "Phase was prematurely marked complete in ROADMAP.md before meaningful load test baselines were captured — required manually reverting the completion commit"
+    ],
+    "open_items": [
+      "BYO register-cid and ipns-publish return 400 on staging — tracked in .planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md",
+      "New media/streaming E2E specs use binary stub fixtures — need live environment run to confirm stubs correctly trigger AES-CTR vs GCM code paths",
+      "Pinata paid plan needed to capture successful BYO pin baselines (byo-capacity-ceiling.json currently shows 100% byo-pin error rate due to free tier exhaustion)",
+      "GitHub Actions staging environment needs LOAD_TEST_BYO_IPFS_AUTH_TOKEN secret configured and LOAD_TEST_BYO_IPFS_ENDPOINT/PROTOCOL vars set for BYO scenarios to run in CI",
+      "SDK load test throttle bypass header not forwarded during createTestAccount in parallel batch creation — only evident at high client counts, needs investigation in sdk-e2e harness"
+    ]
+  }
+}

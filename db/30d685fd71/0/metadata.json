@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "db30d685fd71",
+  "session_id": "2c89ddf4-4e09-4a48-8d9f-d3abc435dfff",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T03:27:29.218955Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "ee1262e9b465",
+  "token_usage": {
+    "input_tokens": 59,
+    "cache_creation_tokens": 118019,
+    "cache_read_tokens": 2937702,
+    "output_tokens": 14563,
+    "api_call_count": 46
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Add Phase 27 (Writable Shares PoC) to the roadmap and capture implementation decisions via the discuss-phase workflow, building on Phase 14's read-only sharing infrastructure.",
+    "outcome": "Phase 27 was added to the roadmap with a cleaned-up slug, STATE.md updated, and a full CONTEXT.md was written capturing decisions across four gray areas: IPNS key delivery, write scope, share dialog changes, and conflict/attribution.",
+    "learnings": {
+      "repo": [
+        "CipherBox sidesteps the general 'unsolved multi-writer IPNS' problem because all IPNS publishes go through the API server, which acts as a coordination point — the PITFALLS.md doc explicitly states this.",
+        "The existing optimistic concurrency system (expectedSequenceNumber + 409 conflict detection) already handles multi-writer scenarios identically to multi-device sync — the server checks sequence numbers regardless of which user publishes.",
+        "Phase 14 deferred writable shares explicitly: read-write sharing requires giving recipients the IPNS signing key, and multi-writer IPNS was labeled 'unsolved' — but the server-relayed architecture resolves this without protocol-level changes.",
+        "Milestone 4 (TEAM-11) plans a cryptographic read/write key hierarchy so viewers literally cannot write — Phase 27 PoC precedes this and may need alignment with that future design.",
+        "share_keys table already exists from Phase 14; Phase 27 extends it with a permission level field (read-only vs read-write)."
+      ],
+      "code": [
+        {
+          "path": "ipns.service.ts",
+          "line": 181,
+          "end_line": 192,
+          "finding": "expectedSequenceNumber is checked server-side before every IPNS publish — works regardless of which user submits, making multi-writer coordination already functional."
+        },
+        {
+          "path": "ipns.service.ts",
+          "line": 344,
+          "end_line": 355,
+          "finding": "Sequence comparison logic: network vs DB cache, highest wins — handles concurrent publisher scenarios."
+        },
+        {
+          "path": "sdk-core/src/folder/index.ts",
+          "line": 196,
+          "end_line": 224,
+          "finding": "409 Conflict detection with automatic single-retry + re-sync — the same flow that would handle two write-share recipients colliding."
+        },
+        {
+          "path": "folder-helpers.ts",
+          "line": 39,
+          "end_line": 63,
+          "finding": "UI conflict banner with jitter-delayed retry — already built for multi-device, reusable for multi-writer share conflicts."
+        }
+      ],
+      "workflow": [
+        "The gsd-tools CLI generates slugs from full phase descriptions, which can produce absurdly long directory names — manual slug cleanup was needed after add-phase ran.",
+        "The depends-on field in the roadmap entry defaulted to the previous phase (26) rather than the logically correct dependency (Phase 14) — required manual correction.",
+        "discuss-phase workflow structured four gray areas: IPNS key delivery, write scope for recipients, share dialog changes, and conflict/attribution — all explored interactively before writing CONTEXT.md."
+      ]
+    },
+    "friction": [
+      "gsd-tools generated an excessively long slug from the full phase description; required manual directory rename and roadmap entry correction.",
+      "Roadmap 'Depends on' was auto-set to Phase 26 (sequential neighbor) rather than Phase 14 (the actual logical dependency) — required a manual edit.",
+      "STATE.md needed multiple read/edit cycles to find and update the Roadmap Evolution section correctly."
+    ],
+    "open_items": [
+      "IPNS signing key delivery via metadata embedding (in IPNS record itself) is deferred to a future decentralization phase — current PoC wraps key alongside folderKey via ECIES.",
+      "Milestone 4 TEAM-11 cryptographic read/write key hierarchy needs to be reconciled with Phase 27's PoC approach before M4 planning.",
+      "Multi-writer CRDTs for IPNS (requiring all writers to have the IPNS private key for folder metadata) noted as a future consideration once write-sharing is established.",
+      "Re-sharing permissions (whether read-write recipients can share further) deferred — Phase 27 PoC does not address re-sharing.",
+      "Attribution/audit trail for writes by share recipients deferred beyond PoC scope."
+    ]
+  }
+}

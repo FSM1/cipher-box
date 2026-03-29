@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a8718dc252a1",
+  "session_id": "307145be-5d6b-4c58-9faa-418cafde1db6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T00:13:55.037563Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "883cc72ed486",
+  "token_usage": {
+    "input_tokens": 419,
+    "cache_creation_tokens": 399819,
+    "cache_read_tokens": 41049995,
+    "output_tokens": 62893,
+    "api_call_count": 274
+  },
+  "session_metrics": {
+    "turn_count": 54
+  },
+  "summary": {
+    "intent": "Execute Phase 21 (BYO IPFS Node Support) end-to-end — building SDK pinning abstractions, API CID registration, Settings UI, TEE-based pin migration backend, migration progress UI, and performance benchmarks across 7 plans in 4 waves.",
+    "outcome": "All 7 plans executed and committed. Full BYO-IPFS pipeline verified end-to-end including 44/44 CIDs migrated to an external Kubo node via TEE worker. Several bugs found and fixed during UAT before phase verification was reached.",
+    "learnings": {
+      "repo": [
+        "TEE worker does not load .env files — env vars must be passed inline or via the shell environment when starting the process",
+        "TEE worker SSRF protection blocks 192.168.* private ranges, which blocks local Kubo nodes in dev/simulator mode",
+        "Migration processor used TEE_AUTH_SECRET but TeeService used TEE_WORKER_SECRET — inconsistent env var naming between modules",
+        "StorageTab encrypts provider configs with bytesToHex but migration-worker.ts decoded them as base64 — hex/base64 mismatch caused 'bad point' ECIES decryption errors",
+        "Migrating FROM 'cipherbox' mode requires the TEE worker to know the CipherBox IPFS gateway URL — this was not implemented and needed to be added (CIPHERBOX_IPFS_GATEWAY env var)",
+        "MigrationProgress component polls /migration/status which returns the latest migration record — stale failed records persist in the UI until page reload",
+        "pnpm hot-reload (Nest watch mode) does not work when the port is still held by the old process — full kill + restart is needed for env var changes to take effect",
+        "The tee-worker package is not in the pnpm workspace (pnpm-workspace.yaml) — deps must be installed with npm directly inside the package",
+        "Filebase deprecated their standard PSA endpoint (/psa) and Pinata's PSA endpoint no longer exists at the documented URL — only Kubo RPC via rpc.filebase.io works but uses non-standard auth",
+        "BullMQ persists failed jobs in Redis — on API restart, the processor picks up stale failed jobs from the previous instance before new migrations are triggered"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/settings/StorageTab.tsx",
+          "line": 227,
+          "end_line": 230,
+          "finding": "Migration trigger required savedConfig to be non-null, so first-time users switching from default 'cipherbox' never triggered migration. Fix: treat null savedConfig as implicit 'cipherbox' mode."
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/connection-test.ts",
+          "finding": "Kubo and PSA probes treated 401/403/422 responses as 'endpoint not found' instead of 'authentication failed', causing misleading 'could not detect protocol' errors when credentials were wrong."
+        },
+        {
+          "path": "apps/api/src/migration/migration.processor.ts",
+          "line": 46,
+          "end_line": 46,
+          "finding": "Used TEE_AUTH_SECRET env var name instead of TEE_WORKER_SECRET (used everywhere else) — processor always threw 'not configured' error."
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "decryptEcies decoded ciphertext as base64 but StorageTab encrypted with bytesToHex — caused 'bad point' secp256k1 deserialization error on every migration attempt."
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "SSRF validation blocked 192.168.* ranges unconditionally — needs bypass in simulator/dev mode for local Kubo node testing."
+        },
+        {
+          "path": "tee-worker/src/services/migration-worker.ts",
+          "finding": "parseProviderConfig only handled 'psa' and 'kubo' protocols — 'cipherbox' source protocol caused a parse error; needed explicit handler that uses CIPHERBOX_IPFS_GATEWAY env var."
+        }
+      ],
+      "workflow": [
+        "QEMU VM running inside macOS host — network bridge IP can change on Docker stack restart (DHCP reassignment); .env files referencing host IP need updating after restarts",
+        "When debugging cross-environment issues, checking nc/curl directly from the VM is faster than relying on app-level error messages",
+        "For local Kubo nodes, CORS must be explicitly configured before browser-based connection tests will work — ipfs config API.HTTPHeaders is the fix",
+        "Running the same migration twice (cipherbox→external, external→cipherbox, cipherbox→external) is the reliable way to trigger a fresh migration when the previous one is 'completed' in the DB",
+        "OTP codes are logged to the pnpm dev output file — check the background task output file rather than asking the user or using the database"
+      ]
+    },
+    "friction": [
+      "Docker host IP changed from .114 to .12 after stack restart (DHCP), causing all service connections to fail until .env was manually updated",
+      "TEE worker does not support dotenv, requiring env vars to be passed inline — not documented, discovered by runtime failure",
+      "Pinata PSA endpoint (https://api.pinata.cloud/psa) returns 404 — deprecated without clear migration path; Filebase PSA endpoint also unreachable",
+      "pnpm hot-reload held the old port after env var changes — required manual kill + restart; wasted several debugging cycles",
+      "BullMQ persisted stale failed jobs survived API restarts and were processed immediately by new instances, masking whether fixes took effect",
+      "Playwright browser session crashed uploading 100MB of files at once — required single-file-at-a-time uploads",
+      "Auth store is memory-only with no localStorage persistence — losing a Playwright browser page requires full re-login via OTP flow",
+      "test-login API endpoint creates auth methods that conflict with subsequent email OTP logins for the same identity (duplicate key constraint)",
+      "MigrationProgress UI cached the old 'failed' migration and required a page reload to show the successful new one — made it hard to confirm success visually during testing"
+    ],
+    "open_items": [
+      "Plan 21-07 Task 4 deferred: benchmark execution against a real external IPFS provider — scenarios are implemented but baselines not captured; requires .planning/baselines/21-byo-baselines.md",
+      "TEE worker SSRF bypass is currently hardcoded for simulator mode — needs a proper dev/prod toggle rather than checking IS_SIMULATOR",
+      "Pinata and Filebase require provider-specific adapters (non-standard auth formats) — current KuboProvider/PsaProvider only work with self-hosted nodes and standard-compliant services",
+      "Connection test runs in the browser (client-side) — SaaS pinning services with no CORS headers will always fail; a server-side proxy endpoint (POST /ipfs/test-connection) is needed for production use",
+      "MigrationProgress component does not differentiate between a stale failed migration and an in-progress one — UI should offer a 'retry' button when status is 'failed'",
+      "Phase 21 verification (gsd-verifier) not yet run — session ended before reaching verify_phase_goal step",
+      "TEE worker migration fixes (hex decoding, SSRF bypass, cipherbox protocol handler) need unit tests added to the test suite"
+    ]
+  }
+}

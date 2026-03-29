@@ -1,0 +1,119 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "509d6f1f680a",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T14:28:35.755815Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/security/REVIEW-phase-27.md",
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/api/src/shares/dto/create-share.dto.ts",
+    "apps/api/src/shares/dto/share-key.dto.ts",
+    "apps/api/src/shares/shares.service.ts",
+    "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+    "apps/web/src/hooks/useSharedNavigation.ts",
+    "tests/web-e2e/tests/writable-shares.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "5a4f439749b8",
+  "token_usage": {
+    "input_tokens": 481,
+    "cache_creation_tokens": 622928,
+    "cache_read_tokens": 81766795,
+    "output_tokens": 118758,
+    "api_call_count": 418
+  },
+  "session_metrics": {
+    "turn_count": 28
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) end-to-end: implement API backend, owner UI, and recipient write UI for IPFS/IPNS-based writable folder sharing, then conduct UAT, security review, and fix all identified issues.",
+    "outcome": "All 3 plans executed and verified. Four UAT bugs and 8 security issues were identified and fixed, 18 E2E tests written and passing, security review report created, and all changes pushed to remote.",
+    "learnings": {
+      "repo": [
+        "cipher-box-ci-debug is a separate checkout from cipher-box and does not share .env files — they must be copied manually or created from .env.example",
+        "The web app falls back to `window.location.origin + '/api'` when VITE_API_URL is unset, causing it to call port 5173 instead of 3000",
+        "SDK packages (core, sdk-core, sdk) must be built before the web dev server can start — missing builds cause unresolvable import errors",
+        "SharedFileBrowser uses an inline mkdir input (.shared-inline-input-field) rather than a modal dialog, unlike the owner FileBrowser",
+        "Recipient permission label CSS class is .recipient-perm-write/.recipient-perm-read, not .share-recipient-permission",
+        "Rename in SharedFileBrowser uses .shared-inline-rename-field for the inline input",
+        "There are two incompatible RequestWithUser types: one in common/types.ts (extends Express Request) and a local one in auth.controller.ts (extends NestJS Fetch API Request) — the auth controller should use the shared common type",
+        "NestJS watch mode does not always pick up DTO enum changes for OpenAPI spec generation — API restart + client regeneration is required",
+        "The @Request() decorator import from @nestjs/common must be preserved even when switching to a shared RequestWithUser type"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Shared uploads were setting fileMetaIpnsName: '' — no per-file IPNS record was created, making files unreadable after upload"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 71,
+          "end_line": 71,
+          "finding": "TextEditorDialog throws 'File metadata IPNS name not available (legacy v1 file?)' when fileMetaIpnsName is empty — manifests for shared-uploaded files"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "withConflictRetry closures captured stale React state for currentSequenceNumber and folderChildren — fixed by using refs synced on every state update (C-01)"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "createFileMetadata zeroes out the IPNS private key internally, so dual-key wrapping (owner + recipient) requires inlining keypair generation rather than calling createFileMetadata"
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "finding": "addShareKeys DTO originally constrained keyType to 'file' | 'folder' only — needed 'file-ipns' added to store recipient-wrapped IPNS private keys separately"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "finding": "Owner's handleUpdateFile did not re-wrap the new file key for share recipients after editing — reWrapForRecipients must be called after every file content update, not just initial uploads"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "Permission downgrade did not delete file-ipns share_keys, allowing recipients to retain IPNS write access after being downgraded (H-03)"
+        },
+        {
+          "path": "apps/api/src/auth/auth.controller.ts",
+          "finding": "auth.controller.ts defined a local RequestWithUser extending @nestjs/common Request (Fetch API) instead of using common/types.ts RequestWithUser (Express) — caused type incompatibility across specs"
+        }
+      ],
+      "workflow": [
+        "Background tasks in Claude Code get killed when conversation context shifts — use detached processes (nohup or disown) for dev servers that need to persist",
+        "TDD flow for security fixes: stash partial fixes, write failing tests, restore stash, verify green — confirms tests actually catch the vulnerability",
+        "NestJS API client regeneration (openapi-generator) requires the API to be running with updated DTOs before the spec reflects enum changes",
+        "When a background agent completes but the orchestrator never receives the signal (classifyHandoffIfNeeded bug), spot-check SUMMARY.md + git commits to determine real success"
+      ]
+    },
+    "friction": [
+      "Background API and web dev server tasks were repeatedly killed by conversation context shifts, requiring 4+ restart cycles",
+      "PostgreSQL host IP changed mid-session (192.168.133.114 → 192.168.133.12), requiring .env update before API could connect",
+      "cipher-box-ci-debug had no .env files and no documented setup process — had to discover missing files through runtime errors",
+      "Git lock file blocked commit after conflict retry work, required manual removal",
+      "NestJS watch mode did not hot-reload DTO enum changes — wasted time debugging why OpenAPI spec still showed old enum values",
+      "Two incompatible RequestWithUser types caused a cascade of type errors during the pre-existing auth controller fix",
+      "E2E test selectors required 5 iteration cycles to get right — actual CSS class names differed from expected in 3 places"
+    ],
+    "open_items": [
+      "E2E security tests for C-02 (owner access to recipient-created subfolders) depend on folder navigation not yet implemented for nested shared folders",
+      "Silent revocation (403 handling → [RW] to [RO] transition with key zeroing) was listed as a UAT item but not confirmed tested",
+      "30-second polling detection of permission changes was added to E2E suite but relies on real IPNS propagation timing — may be flaky in CI",
+      "Pre-existing TypeScript errors in device-approval.controller.spec.ts were not fixed (out of scope)",
+      "The dual-IPNS-key wrapping approach (owner in FilePointer, recipient in share_keys) is a PoC design — a production implementation should unify the key storage model",
+      "Re-wrapping share_keys after owner file edits (reWrapForRecipients) fetches all share recipients on every save — should be optimized for folders with many shares",
+      "Security finding H-01 (write-share recipient can overwrite TEE enrollment) fix was applied to API but no automated test covers the TEE publish path specifically"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T14:27:21.580713Z",
+    "agent_lines": 735,
+    "human_added": 352,
+    "human_modified": 58,
+    "human_removed": 0,
+    "total_committed": 1145,
+    "agent_percentage": 64.19213973799127
+  }
+}

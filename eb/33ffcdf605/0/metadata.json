@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "eb33ffcdf605",
+  "session_id": "7b31620d-c2e8-46d6-a947-69565d923f68",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T02:09:06.770922Z",
+  "branch": "feat/phase-26-observability-ux-tuning",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7a6b91176bb3",
+  "token_usage": {
+    "input_tokens": 5676,
+    "cache_creation_tokens": 208409,
+    "cache_read_tokens": 16973623,
+    "output_tokens": 39925,
+    "api_call_count": 148
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Execute Phase 26 (Observability \u0026 UX Tuning) of the cipher-box project, including Grafana alert rules and client timeout/retry tuning, then clean up the code and get a PR merged.",
+    "outcome": "Phase 26 was planned and executed successfully (2/2 plans, 14/14 must-haves verified). A PR was opened, CI failures were fixed, and Grafana free-tier cardinality limits were addressed by filtering Kubo/Someguy metrics and capping HTTP route label cardinality.",
+    "learnings": {
+      "repo": [
+        "GSD tools must be run from the correct working directory (cipher-box-ci-debug, not cipher-box) — running from wrong dir causes phase directory not found errors",
+        "Phase 26 branch (feat/phase-26-observability-ux-tuning) was created from main before PRs #360, #361, #363 landed, causing apparent 'unrelated removals' in diff that were actually main advancing",
+        "Grafana Cloud Free tier has a 10,000 active series limit — Kubo and Someguy nodes were the primary culprits exporting thousands of unused metrics",
+        "Dashboard only uses 6 external metrics from Kubo/Someguy: go_goroutines, go_memstats_alloc_bytes, libp2p_swarm_connections_opened/closed_total, libp2p_network_in/out_bytes_total",
+        "Alerts only reference cipherbox_* metrics — Kubo/Someguy scrapes had zero alert coverage",
+        "After merge conflict resolution on planning docs, Phase 24 and 25 completion marks were lost from ROADMAP.md and needed manual restoration",
+        "PR #365 branch (fix/recovery-e2e-kubo-ipns) is checked out in a separate worktree at /Users/michael/Code/cipher-box"
+      ],
+      "code": [
+        {
+          "path": "docker/alloy-config.river",
+          "finding": "Added prometheus.relabel filter stage for Kubo and Someguy scrapes to only forward the 6 metrics actually used in dashboards, dropping thousands of unused series"
+        },
+        {
+          "path": "apps/api/src/metrics/http-metrics.interceptor.ts",
+          "finding": "Removed normalizeRoute method; unmatched routes (bot scanners, /.env, /wp-admin) now collapse to '/:unmatched' to cap HTTP histogram cardinality. Matched routes already use NestJS parameterized templates."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.spec.ts",
+          "finding": "Tests hardcoded old baseDelayMs of 1000 — after tuning to 500, assertions needed updating: 1000→500 (first delay) and 2000→1000 (second backoff). 3 assertions total across 3 tests."
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/kubo-provider.ts",
+          "finding": "Timeout comments referenced ephemeral benchmark data ('~44x client-side pin p99 of 227ms') — removed in cleanup; comments should describe intent not one-time measurements"
+        },
+        {
+          "path": "docker/grafana/scripts/provision-alerts.sh",
+          "finding": "Two separate sed calls consolidated into one with -e flags; delimiter changed from / to | to avoid breakage if UIDs contain slashes. Also fixed --dry-run flag parsing to only scan ${@:4} (args after 3 positional params)."
+        }
+      ],
+      "workflow": [
+        "When merging a long-lived feature branch into main, planning doc conflicts (ROADMAP.md, STATE.md) require careful manual verification that prior phase completion marks survive the resolution",
+        "GSD tool 'carry forward: uncommitted session files' commits can pollute the branch with pre-existing changes that are unrelated to the current phase",
+        "Grafana metric cardinality should be audited before shipping any scrape configuration — filter at the Alloy/agent layer rather than at the source",
+        "CI test failures from timeout/constant tuning are easy to miss if tests hardcode expected values rather than reading from the source constant"
+      ]
+    },
+    "friction": [
+      "GSD execute-phase initially failed with 'no plans found' because plans hadn't been created yet — required a detour through plan-phase first",
+      "GSD tools running against wrong working directory (cipher-box vs cipher-box-ci-debug) caused confusing initialization failures",
+      "Merge conflict resolution on planning docs silently dropped Phase 24 and 25 completion marks — not caught until CodeRabbit flagged it in PR review",
+      "PR #365 branch was in a separate worktree, blocking inline fix of the review comment there",
+      "CI caught 3 test failures in delegated-routing.client.spec.ts after timeout tuning — hardcoded expected values in tests not updated alongside the constants"
+    ],
+    "open_items": [
+      "PR #365 review comment (fix/recovery-e2e-kubo-ipns worktree) was interrupted and not resolved",
+      "7 unresolved CodeRabbit review threads on PR #366 for planning doc inconsistencies — fix was committed but thread replies/resolutions were cut off",
+      "Alert JSON (~877 lines) has high structural duplication across 5 files — a config table + template approach would cut this significantly but was deferred",
+      "5s delegated routing timeout (tuned from 10s) flagged as potentially aggressive under load for delegated-ipfs.dev DHT-backed service — worth monitoring post-deploy",
+      "ipHash: '' empty string fails strict 64-char hex validation — bug noted but outside Phase 26 scope"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T02:08:25.175977Z",
+    "agent_lines": 0,
+    "human_added": 43,
+    "human_modified": 7,
+    "human_removed": 0,
+    "total_committed": 43,
+    "agent_percentage": 0
+  }
+}

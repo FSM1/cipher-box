@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6e43032c9a7f",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T23:03:54.036182Z",
+  "branch": "feat/phase-24-bug-fixes-test-infrastructure",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "69e36eac8944",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 68326,
+    "cache_read_tokens": 237095,
+    "output_tokens": 3059,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute Phase 24 (Bug Fixes \u0026 Test Infrastructure) using wave-based parallel subagent execution across 3 plans: bin IPNS 404 fix, SDK load tests, and recovery page cleanup.",
+    "outcome": "Phase 24 execution was initiated with all 3 plans spawned in parallel. Plan 24-02 (SDK Core Load Tests + 401 Interceptor) completed successfully with 3 commits; plans 24-01 and 24-03 were still in progress when the transcript ended.",
+    "learnings": {
+      "repo": [
+        "Phase 24 branch is `feat/phase-24-bug-fixes-test-infrastructure` — pre-created and already checked out at execution time.",
+        "Load tests live under `tests/load/src/` with separate `harness/`, `workloads/`, and `scenarios/` subdirectories.",
+        "SDK core load tests use a client-pool pattern with `createSdkContext()` for headless Node.js execution rather than browser-based testing.",
+        "The 401 interceptor in client-pool uses a `reAuthenticate()` helper for automatic token refresh during load test runs.",
+        "All vaults are v2 — the export file recovery mode (v1 path) was considered dead code scheduled for removal in plan 24-03."
+      ],
+      "code": [
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "Added `createSdkContext()` helper and 401 interceptor with `reAuthenticate()` for automatic token refresh in load test client pool."
+        },
+        {
+          "path": "tests/load/src/workloads/sdk-core-workload.ts",
+          "finding": "Shared headless workload module for sdk-core load tests — centralizes workload logic reused across scenarios."
+        },
+        {
+          "path": "tests/load/src/scenarios/sdk-upload-pipeline.test.ts",
+          "finding": "Upload pipeline isolation load test targeting sdk-core directly."
+        },
+        {
+          "path": "tests/load/src/scenarios/sdk-ipns-contention.test.ts",
+          "finding": "IPNS contention load test — relevant given the bin IPNS 404 bug being fixed in 24-01."
+        },
+        {
+          "path": "tests/load/src/scenarios/sdk-folder-read.test.ts",
+          "finding": "Folder read path load test for sdk-core isolation."
+        }
+      ],
+      "workflow": [
+        "GSD executor auto-corrected 3 sdk-core function signatures that differed from the plan's proposed code — Rule 1 auto-fixes for type-checking correctness are applied without requiring human intervention.",
+        "The `gsd-tools init execute-phase` command returns full phase context including branch name, plan inventory, and parallelization config in a single JSON call.",
+        "Wave 1 plans with no inter-dependencies can all be spawned in parallel immediately without a pre-wave dependency check (that check only applies to waves 2+)."
+      ]
+    },
+    "friction": [
+      "Transcript ends mid-execution with 24-01 and 24-03 still in flight — no final verification or STATE.md completion recorded.",
+      "Executor auto-fixed 3 function signature mismatches between the plan's proposed code and actual sdk-core API — plan was written with incorrect signatures, requiring runtime correction."
+    ],
+    "open_items": [
+      "Plans 24-01 (Bin IPNS 404 + Device Registry bug fixes) and 24-03 (Recovery Page Cleanup + E2E Tests) completion status unknown — transcript ends before they finish.",
+      "Phase verification (gsd-verifier) not yet run — VERIFICATION.md not created.",
+      "STATE.md and ROADMAP.md not yet updated with phase completion.",
+      "Playwright E2E tests for IPFS-direct v2 blob recovery path (24-03) not yet confirmed implemented."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-25T23:03:35.044726Z",
+    "agent_lines": 0,
+    "human_added": 1139,
+    "human_modified": 45,
+    "human_removed": 0,
+    "total_committed": 1145,
+    "agent_percentage": 0
+  }
+}

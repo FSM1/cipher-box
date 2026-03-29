@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "790b9ad36fe6",
+  "session_id": "e46def97-0d75-426f-9c5d-65e29924690b",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T00:37:52.695444Z",
+  "branch": "docs/update-codebase-map",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "ad0f9c1995e6",
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 46471,
+    "cache_read_tokens": 1869973,
+    "output_tokens": 8377,
+    "api_call_count": 39
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Update the codebase map documents (primarily CONCERNS.md) to reflect work completed in phases 28-33, then publish the changes as a PR.",
+    "outcome": "CONCERNS.md and STRUCTURE.md were updated on a new branch `docs/update-codebase-map`, with 4 concerns marked resolved and 3 new concerns surfaced, then merged into a PR (FSM1/cipher-box#390) with two follow-up stale-content fixes.",
+    "learnings": {
+      "repo": [
+        "Phase 28 removed the legacy POC directory (commit ee9bcd4e4) and replaced 127 console.* calls with a structured logger at apps/web/src/lib/logger.ts",
+        "Phase 30 added Grafana Faro observability (apps/web/src/lib/faro.ts) and Prometheus metrics (apps/api/src/metrics/), deployed via VITE_FARO_URL in staging CI",
+        "Phase 31 decomposed useSharedNavigation.ts (1199→378 lines) and FileBrowser.tsx (964→362 lines) into 6 focused hooks/helpers",
+        "Phase 32 resolved async FilePointer on macOS; Phase 33 completed the Windows counterpart in crates/fuse/src/platform/windows/read_ops.rs using rt.spawn() channel patterns",
+        "registerFaroTransport() is defined but never called, so logger.error/warn calls do not reach Faro",
+        "apps/web/src/lib/web3auth/hooks.ts retains 12 console.time/timeEnd calls not covered by Phase 28 logging migration",
+        "19+ mutex lock().unwrap() sites exist in FUSE production code, risking cascading panics on mutex poisoning",
+        "IPNS unenrollment is fire-and-forget via SDK with no persistence across tab closure",
+        "folder.service.ts (1059 lines) and bin.service.ts (971 lines) remain large but are considered logically cohesive enough to not warrant immediate decomposition"
+      ],
+      "code": [
+        {
+          "path": ".planning/codebase/CONCERNS.md",
+          "line": 42,
+          "end_line": 42,
+          "finding": "Legacy POC concern was stale — POC directory was removed in Phase 28 (commit ee9bcd4e4) and no longer exists"
+        },
+        {
+          "path": ".planning/codebase/STRUCTURE.md",
+          "line": 535,
+          "end_line": 535,
+          "finding": "Docker host IP reference was stale and unnecessary as of the current codebase state"
+        }
+      ],
+      "workflow": [
+        "The GSD map-codebase workflow supports selective document updates — useful when only specific concerns or structure has changed rather than a full remap",
+        "Mapper agents return only confirmations and line counts to the orchestrator, keeping orchestrator context minimal",
+        "When diverged from origin mid-session, the pattern used was: stash the new file to /tmp, hard-reset to origin/main, restore the stash — preserving agent-written work without an orphaned commit",
+        "Running concerns mapping twice (before and after pulling Phase 33) was necessary to get accurate resolution status for the Windows FilePointer fix"
+      ]
+    },
+    "friction": [
+      "Initial git pull failed with 'divergent branches' because the local commit (from the first concerns pass) had not been pushed before origin advanced with Phase 33",
+      "The first CONCERNS.md pass was rendered partially stale immediately after completion because Phase 33 merged while the agent was running",
+      "The mapper agent did not catch the stale legacy POC concern or the stale Docker host IP reference — required manual review and correction after the PR was created"
+    ],
+    "open_items": [
+      "12 residual console.time/timeEnd calls in apps/web/src/lib/web3auth/hooks.ts need to be migrated to the structured logger",
+      "registerFaroTransport() needs to be wired up so logger.error/warn calls are forwarded to Grafana Faro",
+      "19+ mutex lock().unwrap() sites in FUSE production code should be replaced with proper error handling to avoid cascading panics",
+      "IPNS unenrollment fire-and-forget pattern has no persistence across tab closure — needs a persistence or retry strategy",
+      "folder.service.ts (1059 lines) and bin.service.ts (971 lines) are candidates for future decomposition analogous to Phase 31"
+    ]
+  }
+}

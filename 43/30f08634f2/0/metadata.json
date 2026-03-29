@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4330f08634f2",
+  "session_id": "0efa9fff-3002-4b6b-a039-4843c3c6162e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T17:14:01.789519Z",
+  "branch": "docs/phase-19-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7a25d798e78d",
+  "token_usage": {
+    "input_tokens": 165,
+    "cache_creation_tokens": 173284,
+    "cache_read_tokens": 11952324,
+    "output_tokens": 29430,
+    "api_call_count": 114
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Run load tests with 10, 20, and 30 concurrent clients against the staging API, then scale up to find the throughput ceiling of a single staging instance, with detailed upload flow analysis via Prometheus metrics.",
+    "outcome": "Successfully established staging baselines for 10, 20, 30, 50, 75, and 100 concurrent clients (all zero errors), identified Kubo IPFS pinning as the dominant bottleneck (~95% of uploadFile latency), fixed two workflow bugs (Jest flag in Vitest config, missing GitHub environment declaration), and documented everything in the phase-19 baselines doc.",
+    "learnings": {
+      "repo": [
+        "The load test workflow at .github/workflows/load-test.yml triggers via workflow_dispatch with inputs: clients (int), scenario (string), environment (string).",
+        "Staging secrets (STAGING_TEST_LOGIN_SECRET, STAGING_THROTTLE_BYPASS_SECRET) and vars (STAGING_API_URL) are scoped to the 'staging' GitHub environment — the job must declare `environment: staging` to access them.",
+        "The `environment: staging` field causes GitHub Actions to label the job as 'Deploying to staging' in the UI — purely cosmetic, no actual deployment.",
+        "The load test suite has 5 scenarios: mixed-workload, upload-throughput, ipns-publish-storm, sustained-load, spike-test.",
+        "A single SDK uploadFile call makes 5 API calls: POST /ipfs/upload (ciphertext), POST /ipfs/upload (file metadata), POST /ipns/publish-batch, POST /ipfs/upload (folder metadata), POST /ipns/publish.",
+        "Baselines are documented in .planning/baselines/ following the format established in 18-performance-baselines.md, on a branch named docs/phase-19-baselines.",
+        "Release-please is active on this repo and triggers on non-chore commits; CI workflow changes should use chore(ci): prefix to avoid version bumps.",
+        "Prometheus metrics available on staging: cipherbox_ipfs_ipns_duration_seconds{operation='pin'}, cipherbox_http_request_duration_seconds{route='/ipfs/upload'}, cipherbox_ipns_publish_duration_seconds, plus IPNS publish batch counters."
+      ],
+      "code": [
+        {
+          "path": "tests/load/package.json",
+          "finding": "The test:single script used --testPathPattern which is a Jest CLI flag; Vitest uses positional args for file filtering. Fixed by removing the flag."
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "job.environment was missing, preventing staging-scoped secrets from being injected. Added `environment: staging`. Also had a 30-minute timeout that caused cancellations when all 5 scenarios ran at high client counts."
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "Using `pnpm test:single -- \u003cscenario\u003e` does not pass the scenario as a Vitest file filter (CAC puts args after -- into a separate bucket). Fixed by calling `pnpm exec vitest run --no-coverage \u003cscenario\u003e` directly."
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "Added concurrency group `load-test-\u003cenvironment\u003e` so parallel workflow dispatches queue rather than run simultaneously against the same staging API, which would corrupt results."
+        }
+      ],
+      "workflow": [
+        "Running multiple `gh run watch` instances simultaneously (6 watchers at 3s poll interval = ~120 req/min) will exhaust the GitHub API rate limit (5000 req/hour) within minutes.",
+        "gh run watch can exit early when a deployment environment approval step is encountered, giving a false 'completed' signal before the job finishes.",
+        "Triggering multiple workflow runs simultaneously against the same API endpoint produces unreliable load test results; use a concurrency group to serialize them.",
+        "When a GitHub Actions job timeout is too low, runs are silently cancelled rather than failing with a clear error — check timeout-minutes when runs disappear."
+      ]
+    },
+    "friction": [
+      "Initial load test runs failed due to two bugs: Jest flag in Vitest config and missing `environment: staging` on the job — required a PR fix before any valid data was collected.",
+      "gh run watch polling exhausted GitHub API rate limit when 6 watchers ran simultaneously, blocking status checks for ~1 hour.",
+      "gh run watch exits early on deployment environment steps, giving false completion signals and requiring re-watching.",
+      "All three 50/75/100-client runs were cancelled due to the 30-minute job timeout — all scenarios ran instead of just the selected one, taking 30+ minutes.",
+      "The rate limit hit during the cancellation investigation made it impossible to check run status, adding significant dead time.",
+      "The PR branch needed to be recreated with a chore(ci): prefix after the fact to prevent release-please from triggering."
+    ],
+    "open_items": [
+      "The scenario filter fix (PR #340) resolves the 'all scenarios run' bug, but the 10/20/30-client baseline results in the doc were captured with all 5 scenarios running — only mixed-workload numbers were extracted, other scenario results were not documented.",
+      "Prometheus analysis of upload flow bottleneck is complete; next steps (faster Kubo storage backend, pin batching, concurrent pins) are identified but not acted on.",
+      "50 and 75-client Prometheus metrics were scraped and results committed but the exact numbers from those runs were not shown in the transcript — verify the baselines doc has complete data.",
+      "The 0.26% async DHT propagation error rate (324 errors) is fire-and-forget and doesn't affect clients, but warrants monitoring to ensure it doesn't grow.",
+      "Throughput scaling becomes sub-linear at 100 clients (5.4x at 10x clients) — the saturation point of a single staging instance has not been fully characterized; higher client counts could be tested."
+    ]
+  }
+}

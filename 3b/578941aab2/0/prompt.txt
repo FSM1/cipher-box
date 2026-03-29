@@ -1,0 +1,13 @@
+/gsd:discuss-phase 21
+
+---
+
+so ideally I think this phase should include ability to test this out at the sdk layer, so that usage with external ipfs providers can be properly benchmarked to make informed decisions regarding possible paths forward. if we find performance to be satisfactory, I would like to enable user-confgurable configuration where either cipherbox, external or both in dual-pin mode are used.
+
+---
+
+I think that utilizing the TEE here could make sense, since this is a background job that can be handled without revealing the actual content to the TEE
+
+---
+
+I am guessing that the client would need to provide the TEE with a list of all the CIDs that need to be migrated, as well as the source and destination configs.

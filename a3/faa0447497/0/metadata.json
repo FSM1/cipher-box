@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a3faa0447497",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T12:02:31.915303Z",
+  "branch": "fix/vault-init-folder-ipns-duplicate",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7a54635c0559",
+  "token_usage": {
+    "input_tokens": 381,
+    "cache_creation_tokens": 544223,
+    "cache_read_tokens": 48853046,
+    "output_tokens": 92553,
+    "api_call_count": 285
+  },
+  "session_metrics": {
+    "turn_count": 33
+  },
+  "summary": {
+    "intent": "Monitor PR #349 for incoming bot reviews and automatically resolve them as they arrive, then investigate and fix a session restore race condition discovered during E2E CI failures.",
+    "outcome": "All 23 review threads across 4 rounds (Copilot + CodeRabbit) resolved on PR #349, including real bug fixes. PR #350 created and merged fixing session restore race conditions. A follow-up fix branch created for a backend vault init duplicate-key bug introduced by PR #349's IPNS separation.",
+    "learnings": {
+      "repo": [
+        "The IPNS publish endpoint (ipns.service.ts) creates a folder_ipns row on first publish. vault.service.ts:initializeVault also inserts a folder_ipns row — these two code paths race and cause a duplicate key constraint violation when the client publishes before calling /vault/init.",
+        "Desktop E2E and Web E2E CI jobs run on separate DBs but the desktop E2E can still hit the vault init duplicate bug because the IPNS publish step creates the folder_ipns row before POST /vault/init tries to create it again.",
+        "The Axios 401 interceptor in packages/api-client/src/instance.ts already deduplicates 401-triggered refresh calls, but direct calls to authApi.refresh() in the session restore effect are NOT deduplicated.",
+        "E2E tests use @johanneskares/wallet-mock with installMockWallet() for wallet injection — provides real secp256k1 signing via viem/secp256k1.",
+        "The /loop skill uses CronCreate with recurring:true and auto-expires after 7 days. The cron fires the full prompt verbatim, including complex gh api graphql commands.",
+        "staging-perf-wallet.mjs must be committed to tests/web-e2e/ and is linted by CI — prettier formatting required.",
+        "Core Kit DKG on Sapphire Devnet dominates login time (~9-45s). Our vault-critical path is ~722ms serial post-auth.",
+        "PR #349 merged vault key IPNS separation: two IPNS names are now derived — vault key blob IPNS and root folder IPNS — replacing the previous single IPNS name."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "line": 74,
+          "end_line": 87,
+          "finding": "vault row insert and folder_ipns row insert are NOT in a transaction and NOT idempotent. Two concurrent requests can both pass the existingVault check and race; the second fails on UQ_folder_ipns_user_ipns. Also, the IPNS publish endpoint creates folder_ipns before initializeVault runs, causing a duplicate on the folder_ipns insert."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 45,
+          "end_line": 45,
+          "finding": "Module-level vaultInitPromise variable added for deduplication. Multiple React effect cycles can concurrently call initializeOrLoadVault(); the shared Promise collapses them to one execution."
+        },
+        {
+          "path": "apps/web/src/lib/api/auth.ts",
+          "line": 53,
+          "end_line": 55,
+          "finding": "authApi.refresh() now uses a module-level refreshPromise for deduplication. Previously, page reload caused 6 concurrent direct refresh calls (not triggered by 401, so not caught by Axios interceptor deduplication)."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 124,
+          "end_line": 125,
+          "finding": "Existing vault login path resolves vault key IPNS name. Returns null and throws 'Vault key IPNS name not found' if the vault was created before PR #349 (no vault key IPNS record published). Session restore catch block then logs out Core Kit."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1312,
+          "end_line": 1312,
+          "finding": "Bug: directRootIpnsName was the vault key IPNS name but was being used as the root folder IPNS name for folder traversal. Fixed by deriving both separately."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 231,
+          "end_line": 246,
+          "finding": "IPNS publish endpoint creates a folder_ipns row on first publish for any IPNS name. This conflicts with vault.service.ts:87 which also tries to insert folder_ipns for the root IPNS name during /vault/init."
+        }
+      ],
+      "workflow": [
+        "The /loop + CronCreate pattern enables fully automated PR review monitoring — cron fires the check prompt every 5 minutes and triggers /resolve-pr-reviews automatically when unresolved threads appear.",
+        "Outside-diff-range review comments (e.g. GitHub review body comments not attached to code lines) don't appear as unresolved threads in the GraphQL reviewThreads query — must be fetched separately via the review endpoint.",
+        "Playwright MCP browser_run_code sandbox doesn't support Node imports (dynamic import fails). For complex Playwright scripts needing npm packages, write a .mjs file and run via Bash from the correct package directory.",
+        "page.on('response', ...) listeners don't survive page navigation in Playwright — use page.on('request'/'response') set up BEFORE navigation, or use native Playwright request tracking.",
+        "Markdownlint enforces specific rules (no-trailing-spaces, fenced-code-language, etc.) that must be satisfied before commit hooks pass.",
+        "1Password SSH agent for commit signing can be temporarily unavailable during long sessions — retry after a few seconds resolves it.",
+        "CI desktop E2E jobs are skipped when no desktop-relevant files change, making it appear passing when it's actually untested."
+      ]
+    },
+    "friction": [
+      "GitHub API GraphQL endpoint timed out on one cron poll — treated as transient, retried on next tick.",
+      "Outside-diff-range Copilot/CodeRabbit comments don't appear in GraphQL reviewThreads query, requiring manual intervention by the user to surface them.",
+      "Playwright MCP browser_run_code cannot import Node modules — required falling back to a Bash-executed .mjs script for wallet login simulation.",
+      "window.ethereum injection via browser_evaluate runs after page load; Web3Auth had already initialized without seeing the wallet provider. Required browser_run_code addInitScript workaround.",
+      "Real secp256k1 signing required for staging SIWE — mock signature rejected by ecrecover on backend, blocking browser-based wallet login measurement.",
+      "Staging DB was wiped, so no existing vaults were present to measure real IPNS resolve + IPFS fetch latencies on the vault load path.",
+      "prettier CI lint failure on staging-perf-wallet.mjs after initial commit — lint-staged only checked staged files locally.",
+      "1Password SSH agent unavailable mid-session required user to retry commit."
+    ],
+    "open_items": [
+      "Backend vault init race: vault.service.ts:initializeVault inserts folder_ipns non-transactionally and without checking if the IPNS publish step already created the row — fix branch created (fix/vault-init-duplicate-key) but not yet merged.",
+      "Post-migration perf re-measurement: staging-baseline-2026-03-24.md has a checklist to re-run staging-perf-wallet.mjs after PR #349 deploys to staging to compare IPNS resolve latencies with real vault key blobs.",
+      "Session restore with Core Kit: true session restore (tab close/reopen within session lifetime) couldn't be measured because mock wallet context doesn't persist Core Kit tKey shares across Playwright page reloads — needs a different approach (e.g. localStorage seeding).",
+      "Auth/refresh race on reload: 6 concurrent auth/refresh calls observed — fixed at the direct-call layer in auth.ts, but the root cause (multiple React effects firing on reload) was not addressed structurally.",
+      "vaultInitPromise scoping: Copilot flagged that the module-level vaultInitPromise isn't reset on logout — low risk currently but noted as a potential issue if multiple auth sessions occur in the same page lifetime."
+    ]
+  }
+}

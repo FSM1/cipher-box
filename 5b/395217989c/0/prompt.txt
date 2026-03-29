@@ -1,0 +1,5 @@
+/gsd:manager
+
+---
+
+can you run me through a comparison of using a thin wrapper vs using pino/browser?

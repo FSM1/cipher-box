@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "16f507cff30c",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T04:04:39.890848Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "01aef33d4768",
+  "token_usage": {
+    "input_tokens": 146,
+    "cache_creation_tokens": 177910,
+    "cache_read_tokens": 15827750,
+    "output_tokens": 37508,
+    "api_call_count": 135
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Complete Phase 20 (Vault Migration) gap closure by removing dead migration code, then resolve all PR review comments from automated reviewers (CodeRabbit, Copilot).",
+    "outcome": "Phase 20 fully completed with 9/9 verification truths passing and GAP-01 resolved. All 13 PR review threads resolved across 4 review rounds, with 6 real fixes implemented and pushed.",
+    "learnings": {
+      "repo": [
+        "Phase 20 vault migration made the server fully zero-knowledge: DB columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) dropped, POST /vault/migrate endpoint removed, all crypto material now exclusively in IPFS v2 blobs",
+        "The web client correctly publishes the v2 blob to IPFS before calling POST /vault/init; the desktop Rust client had the order reversed (registered with API first, then uploaded to IPFS) — a critical atomicity bug",
+        "SDK E2E test harness (tests/sdk-e2e/src/fixtures/test-harness.ts) still sent old crypto fields on vault init after the DTO was simplified — NestJS whitelist validation rejected the extra properties",
+        "VaultExportDto was simplified in sync with the entity — the test assertion for encryptedRootFolderKey was correctly removed",
+        "recovery.html contains a standalone inline implementation of deserializeVaultBlobV2 that is separate from the packages/core blob.ts implementation and must be kept in sync manually",
+        "rootIpnsName in useAuth.ts is always HKDF-derived and therefore always identical to the stored value — CodeRabbit flagged this twice across two review rounds"
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 56,
+          "end_line": 58,
+          "finding": "Zero-length key_len rejection added in deserializeVaultBlobV2; matching check also needed in serializeVaultBlobV2 (added in second Copilot review round)"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "line": 69,
+          "end_line": 69,
+          "finding": "Rust serialize and deserialize both needed zero-length key_len rejection to mirror TypeScript behavior; test_zero_length_key updated to expect errors"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 36,
+          "end_line": 46,
+          "finding": "Critical ordering bug: /vault/init API call was before IPFS upload and IPNS publish. Must be after successful IPFS/IPNS operations to avoid orphaned backend vault rows with no blob"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 816,
+          "end_line": 816,
+          "finding": "All fetch() calls in IPNS resolution and IPFS fetch functions needed AbortController timeout wrapper (fetchWithTimeout helper added, 15s/30s)"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1369,
+          "end_line": 1369,
+          "finding": "rootIpnsName flowed into innerHTML unsanitized; format validation (^k[0-9a-z]{20,}$) and escapeHtml helper added; encryptedRootIpnsPrivateKey handling made optional"
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "encryptVaultKeys import and crypto fields (encryptedRootFolderKey, encryptedRootIpnsPrivateKey) removed from vault init request body after DTO simplification"
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/vault-lifecycle.test.ts",
+          "finding": "GET /vault assertions for crypto fields and GET /vault/export assertion for encryptedRootFolderKey removed to match simplified DTOs"
+        }
+      ],
+      "workflow": [
+        "GSD gap closure mode (--gaps-only) skips research and reads VERIFICATION.md directly to scope plans to only unresolved gaps",
+        "Planner agents commit plans themselves — the orchestrator should check git log before attempting a duplicate commit",
+        "CodeRabbit reviews plan files and migration files that are already executed/superseded — these should be marked 'not applicable' with explanation of the execution state",
+        "GitHub Actions SDK E2E failures surface DTO validation errors immediately when test fixtures aren't updated alongside API changes",
+        "Outside-diff review comments appear in the review body text, not as inline thread objects — must be fetched via review body, not reviewThreads GraphQL query"
+      ]
+    },
+    "friction": [
+      "Outside-diff critical comment (vault.rs init ordering) was not surfaced by the standard reviewThreads GraphQL query — required fetching the review body directly",
+      "Verifier agent wrote VERIFICATION.md to an unexpected path, requiring multiple bash spot-checks to locate the file",
+      "recovery.html has an inline duplicate of deserializeVaultBlobV2 that diverged from the canonical packages/core implementation — required a separate fix pass",
+      "CodeRabbit re-flagged the same useAuth.ts rootIpnsName concern across two separate review rounds despite being resolved as not-applicable the first time",
+      "SDK E2E tests were not updated as part of the gap closure plans — the CI failure was the first signal that test fixtures were out of sync with the simplified API"
+    ],
+    "open_items": [
+      "2 items need live environment human verification: (1) new user init publishes v2 blob to IPFS before API registration, (2) recovery tool IPFS-direct path with a real vault and live IPFS gateway",
+      "recovery.html inline deserializeVaultBlobV2 is a maintenance hazard — it duplicates packages/core blob.ts logic and will diverge again on future blob format changes; consider importing from core or adding a shared build step",
+      "Next phase is Phase 23 — /gsd:discuss-phase 23 or /gsd:plan-phase 23 is the suggested next step"
+    ]
+  }
+}

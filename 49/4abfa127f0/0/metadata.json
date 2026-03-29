@@ -1,0 +1,112 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "494abfa127f0",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T12:34:11.051238Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "apps/web/src/services/share.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "eca28b0b091b",
+  "token_usage": {
+    "input_tokens": 290,
+    "cache_creation_tokens": 290374,
+    "cache_read_tokens": 31698795,
+    "output_tokens": 71503,
+    "api_call_count": 243
+  },
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) which adds write permission support to shared folders, allowing recipients to upload, edit, rename, and delete files in shared folders.",
+    "outcome": "All 3 plans executed and verified with UAT. Multiple critical bugs discovered and fixed during checkpoint verification: per-file IPNS record creation for shared uploads, dual-key IPNS wrapping for owner+recipient access, shared file save path in TextEditorDialog, and re-wrapping share keys when owner edits shared files.",
+    "learnings": {
+      "repo": [
+        "cipher-box-ci-debug is a separate checkout that requires .env files copied from the main cipher-box repo — env files are not committed and the IP address of the DB host changes (was 192.168.133.114, changed to 192.168.133.12)",
+        "The web app falls back to window.location.origin + '/api' when VITE_API_URL is not set, causing connection failures when API runs on a different port (3000) than web (5173)",
+        "@cipherbox/sdk and its dependency chain (core, sdk-core) must be built before the web dev server can start",
+        "NestJS watch mode does not always pick up DTO changes — @ApiProperty enum changes require a full API restart to appear in the OpenAPI spec",
+        "The api-client package must be regenerated after any DTO changes affecting the OpenAPI spec before TypeScript will compile cleanly",
+        "OTPs for login can be retrieved from the running API server logs",
+        "createFileMetadata() internally zeros the IPNS private key after use, so it cannot be called when you need to wrap the key for multiple parties — must inline the keypair generation",
+        "The owner's handleUpdateFile flow does not re-wrap the new file key for share recipients, meaning any owner edit breaks recipient decryption — pre-existing gap exposed by phase 27"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Shared upload previously set fileMetaIpnsName: '' and skipped creating per-file IPNS records, making uploaded files unreadable after upload"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 71,
+          "end_line": 71,
+          "finding": "Error 'File metadata IPNS name not available (legacy v1 file?)' thrown when fileMetaIpnsName is empty — originally a legacy check but triggered for all shared uploads"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 98,
+          "end_line": 101,
+          "finding": "TextEditorDialog save handler used owner's updateFile path (useFolder hook) for all saves, failing for shared files with 'Parent folder not found or vault not initialized'"
+        },
+        {
+          "path": "apps/web/src/lib/api-config.ts",
+          "finding": "API URL defaults to window.location.origin + '/api' when VITE_API_URL is not set — requires apps/web/.env with VITE_API_URL=http://localhost:3000 for local dev"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "Permission downgrade clears encryptedIpnsKey but does not touch share_keys — file key share_keys remain valid after downgrade"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "finding": "handleUpdateFile does not re-wrap the new file key for existing share recipients after owner edits a file, breaking recipient decryption on next open"
+        },
+        {
+          "path": "apps/api/src/shares/dto/share-key.dto.ts",
+          "finding": "ShareKeyEntryDto keyType enum was constrained to 'file' | 'folder' — extended to 'file-ipns' to store recipient-wrapped IPNS private keys separately"
+        },
+        {
+          "path": "apps/api/src/shares/entities/share-key.entity.ts",
+          "finding": "ShareKey entity keyType enum needed updating alongside DTO and @ApiProperty to reflect in OpenAPI spec"
+        }
+      ],
+      "workflow": [
+        "Background bash tasks in Claude Code are killed when tool call context shifts — use detached processes (nohup or \u0026disown) for dev servers that need to persist across conversation turns",
+        "NestJS OpenAPI spec requires both the entity enum AND @ApiProperty enum to be updated for changes to appear in generated clients",
+        "When createFileMetadata() internally destroys the IPNS private key, multi-party key wrapping requires inlining the keypair generation manually",
+        "Git lock files (.git/index.lock) can accumulate from killed background tasks and need manual removal before committing"
+      ]
+    },
+    "friction": [
+      "Dev servers repeatedly killed by Claude Code background task cleanup — required switching to detached processes",
+      "DB host IP changed mid-session (192.168.133.114 → 192.168.133.12), requiring manual .env creation",
+      "No .env files committed to cipher-box-ci-debug checkout — had to copy from sibling cipher-box directory",
+      "@cipherbox/sdk dependency chain (core → sdk-core → sdk) must be built in order before web server starts — not documented",
+      "NestJS watch mode did not pick up DTO changes, requiring full API restart and client regeneration to resolve TypeScript errors",
+      "Git lock file (.git/index.lock) blocked commits after background task kills",
+      "createFileMetadata() destroys IPNS private key internally, preventing dual-party wrapping without inlining its logic",
+      "Four separate UAT-discovered bugs required mid-checkpoint fixes before approval could be given"
+    ],
+    "open_items": [
+      "Files uploaded to shared folders before the IPNS fix (with empty fileMetaIpnsName) cannot be retroactively fixed — must be deleted and re-uploaded",
+      "The owner's handleUpdateFile does not re-wrap file keys for all share recipients generically — the fix added in this session covers the immediate case but a broader audit of owner file operations (rename, move) may be needed",
+      "Silent revocation (403 handling, [RW]→[RO] key zeroing, 30s polling) was listed as a human verification item but not confirmed tested by the user before session end",
+      "The 'file-ipns' share_key type was added as a PoC workaround — the share_keys table schema and API may benefit from a more formal key hierarchy design",
+      "Re-wrapping share keys on owner file edit currently fetches all share_keys and re-wraps synchronously — could be slow for files with many recipients"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T12:33:29.457913Z",
+    "agent_lines": 0,
+    "human_added": 25,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 25,
+    "agent_percentage": 0
+  }
+}

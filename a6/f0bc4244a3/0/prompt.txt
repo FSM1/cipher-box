@@ -1,0 +1,5 @@
+ok so in your opinion it makes sense to use the someguy sidecar?
+
+---
+
+ok I am running it on a hostinger kvm2 vps, so it should handle the load since the rest of the stack should not be loading the system too much.

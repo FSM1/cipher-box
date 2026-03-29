@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3989b0a5592b",
+  "session_id": "dd7925a2-c290-4aa9-9b23-1e2a36c54591",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T11:15:56.246352Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "5a360a09b187",
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 103958,
+    "cache_read_tokens": 732673,
+    "output_tokens": 11107,
+    "api_call_count": 17
+  },
+  "summary": {
+    "intent": "Execute Phase 23 (rust-sdk-extraction) which extracts the CipherBox Tauri desktop app's core logic into a Cargo workspace with separate crates: cipherbox-crypto, cipherbox-core, cipherbox-api-client, cipherbox-fuse, and cipherbox-sdk.",
+    "outcome": "Waves 1-3 completed successfully across 5 plans (23-01 through 23-05). Wave 4 (plans 23-06 and 23-07) was spawned but the transcript ends before confirmation of completion.",
+    "learnings": {
+      "repo": [
+        "Project uses a GSD (get-shit-done) workflow system with wave-based parallel plan execution via subagents",
+        "Phase 23 is on branch feat/phase-23-rust-sdk-extraction",
+        "The Tauri desktop app had all crypto, domain types, HTTP client, FUSE filesystem, and SDK orchestration colocated before this phase",
+        "Rust crates live under crates/ directory: crates/crypto/, crates/core/, crates/fuse/, crates/sdk/",
+        "162 desktop tests existed pre-extraction and continued passing after cipherbox-core extraction",
+        "Cross-language parity testing between Rust and TypeScript is enforced via shared JSON test vector files",
+        "cipherbox-sdk uses zeroize for secure key material zeroing in KeyState"
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/",
+          "finding": "Contains AES-GCM, AES-CTR, ECIES, Ed25519, HKDF, and IPNS name derivation primitives"
+        },
+        {
+          "path": "crates/core/",
+          "finding": "Contains FolderMetadata, FileMetadata, RecycleBinMetadata, DeviceRegistry, vault blob v2, IPNS records, and decrypt_metadata_from_ipfs_public bridge function"
+        },
+        {
+          "path": "crates/fuse/",
+          "finding": "Contains InodeTable, MetadataCache, ContentCache, FileHandle; platform code behind feature flags (macOS SMB backend, Linux FUSE, Windows)"
+        },
+        {
+          "path": "crates/sdk/",
+          "finding": "Contains SyncDaemon (IPNS polling loop), WriteQueue (offline write queue), KeyState (with zeroize), device registry operations, CipherBoxSdkClient"
+        }
+      ],
+      "workflow": [
+        "GSD subagents can be interrupted mid-execution by usage limits, leaving uncommitted partial work in the working tree",
+        "Re-spawning agents after a usage limit interruption is safe — agents detect existing partial state and complete the work",
+        "The GSD pre-wave dependency check (verify key-links) is a no-op when plans don't declare key-links; not an error",
+        "Spot-checking requires: SUMMARY.md exists, git commits present matching phase-plan pattern, no Self-Check: FAILED marker, and key files exist on disk"
+      ]
+    },
+    "friction": [
+      "Usage limit hit mid-Wave 3 while both 23-04 and 23-05 agents were running, interrupting execution before either agent could commit or create SUMMARY.md",
+      "Wave 3 had to be fully retried after the usage limit interruption — no partial commit recovery, both agents re-ran from scratch"
+    ],
+    "open_items": [
+      "Wave 4 completion unconfirmed — plans 23-06 (desktop thin shell cleanup, removing crypto/ directory and dead code) and 23-07 (CI workflows + Release Please for new Rust crates) were spawned but transcript ends before spot-check results",
+      "Phase 23 verification (gsd-verifier creating VERIFICATION.md) has not yet run",
+      "ROADMAP.md and STATE.md phase-complete update not yet executed",
+      "Release Please configuration for the 5 new Rust crates needs to be validated once CI runs"
+    ]
+  }
+}

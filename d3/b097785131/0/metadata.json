@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d3b097785131",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T23:12:28.62502Z",
+  "branch": "feat/phase-24-bug-fixes-test-infrastructure",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/24-bug-fixes-test-infrastructure/24-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "080b2cece772",
+  "checkpoint_transcript_start": 69,
+  "transcript_lines_at_start": 69,
+  "token_usage": {
+    "input_tokens": 15,
+    "cache_creation_tokens": 9222,
+    "cache_read_tokens": 681331,
+    "output_tokens": 3417,
+    "api_call_count": 13
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute Wave 1 of phase 24 bug fixes and test infrastructure improvements across three parallel plans (24-01, 24-02, 24-03), then run regression gate and verify phase completion.",
+    "outcome": "All 3 plans completed successfully with 9 commits, 466+ passing unit tests across core/crypto/sdk-core/sdk packages, 5/5 must-haves verified, and phase 24 marked complete in roadmap.",
+    "learnings": {
+      "repo": [
+        "Bin IPNS 404 errors are auto-repaired via a publishWithVerify helper in loadBin — the pattern is repair-on-read rather than fail-fast.",
+        "Device registry uses a v1/v2 schema versioning strategy with lenient v1 reads during migration, not a hard cutover.",
+        "ipHash was previously stored as an empty string; SHA-256 is now the correct implementation in useAuth.ts and device-registry.service.ts.",
+        "Export file recovery mode was dead code (322 lines removed in 24-03), suggesting prior cleanup passes may have left stubs.",
+        "Integration tests that hit a live API are expected to fail with ECONNREFUSED in local dev — these are excluded from the regression gate."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "publishWithVerify helper added; loadBin now auto-repairs on IPNS 404 rather than propagating the error."
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "finding": "v1-\u003ev2 migration logic lives here alongside validateV2Registry and validateDeviceEntryBase validators."
+        },
+        {
+          "path": "packages/core/src/registry/types.ts",
+          "finding": "DeviceRegistryVersion is a union type ('v1' | 'v2'), not an enum."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "ipHash computation changed from empty string to SHA-256."
+        },
+        {
+          "path": "apps/web/src/services/device-registry.service.ts",
+          "finding": "New registries are created as v2; existing v1 registries are read leniently."
+        }
+      ],
+      "workflow": [
+        "Three plans were executed in parallel as a 'wave' then merged before running the regression gate — wave-then-gate sequencing.",
+        "Regression gate checks prior-phase test files explicitly, not just the current phase's new tests.",
+        "Phase completion requires a VERIFICATION.md with must-haves checked, a SUMMARY.md, and a roadmap/state commit — all three are gated steps.",
+        "pnpm exec is needed to run tests within individual packages in this monorepo (plain pnpm test did not work)."
+      ]
+    },
+    "friction": [
+      "Integration tests fail with ECONNREFUSED when the API server isn't running locally — requires manual exclusion from the regression gate each time.",
+      "Extracting prior-phase test file references required multiple bash commands and retries (find prior phase verification files → extract references → extract all paths) before a working approach was found."
+    ],
+    "open_items": [
+      "Playwright E2E test added in 24-03 seeds a real vault via SDK — unclear if it runs in CI or only locally.",
+      "IPNS 401 interceptor with auto token refresh (24-02) added to client pool — token refresh edge cases under contention not explicitly validated in the transcript.",
+      "METADATA_SCHEMAS.md updated with v1/v2 version history — may need further updates if v3 migration is planned."
+    ]
+  }
+}

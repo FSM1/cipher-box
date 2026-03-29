@@ -1,0 +1,103 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0c5d305f81eb",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T15:02:12.637553Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "1d8f5b425a3b",
+  "token_usage": {
+    "input_tokens": 190,
+    "cache_creation_tokens": 220374,
+    "cache_read_tokens": 19528955,
+    "output_tokens": 30979,
+    "api_call_count": 161
+  },
+  "session_metrics": {
+    "turn_count": 13
+  },
+  "summary": {
+    "intent": "Complete Phase 23 gap closure execution (plan 23-08: WinFsp extraction to crate), run a security review on the Rust SDK extraction, fix identified security issues, add unit test coverage across Rust crates, and get PR #352 merged-ready.",
+    "outcome": "Phase 23 fully completed with all 8 plans executed and verified. Security review identified 2 HIGH + 4 MEDIUM issues; both HIGH issues fixed. 163 new unit tests added across 3 crates (168 total). PR #352 created and iteratively fixed through CI failures and code review comments.",
+    "learnings": {
+      "repo": [
+        "Workspace-level [patch.crates-io] causes Cargo to resolve and compile patched crates on ALL platforms even when the dependency is optional and feature-gated — moving to [target.'cfg(unix)'.dependencies] is required for Unix-only crates like fuser.",
+        "The vendored fuser crate (apps/desktop/src-tauri/vendor/fuser/) has a build.rs that panics on non-Linux/non-libfuse targets; its Rust source also uses std::os::unix and libc which don't exist on Windows.",
+        "CI runs `cargo check --workspace --no-default-features --features winfsp` for Windows checks — all Unix-only dependencies must be target-gated to pass.",
+        "Ed25519 private keys returned from generate_ed25519_keypair were bare Vec\u003cu8\u003e; callers were already wrapping in Zeroizing::new() redundantly — fixing the return type to Zeroizing\u003cVec\u003cu8\u003e\u003e simplifies callers.",
+        "ed25519-dalek SigningKey does NOT zero on drop without the `zeroize` feature flag explicitly enabled in workspace Cargo.toml.",
+        "Codecov coverage is collected via `cargo llvm-cov --workspace` on Linux in CI — new tests automatically appear in coverage reports.",
+        "The cross-language vector parity CI job was missing `version: 10` on pnpm/action-setup@v4, causing it to fail."
+      ],
+      "code": [
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 102,
+          "end_line": 103,
+          "finding": "Copy-paste bug: app_version field was being set to device_info.device_id instead of the already-moved device_info.app_version — required extracting app_version before the partial move."
+        },
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "line": 1,
+          "end_line": 50,
+          "finding": "generate_ed25519_keypair returned bare Vec\u003cu8\u003e for private key; changed to Zeroizing\u003cVec\u003cu8\u003e\u003e to ensure zeroing on drop."
+        },
+        {
+          "path": "crates/fuse/src/operations.rs",
+          "line": 51,
+          "end_line": 130,
+          "finding": "fetch_and_populate_folder and resolve_file_pointers_blocking were dead code — fetch_and_populate_folder had no callers outside itself; both removed from macOS/Linux and Windows platform paths."
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/build.rs",
+          "line": 1,
+          "end_line": 15,
+          "finding": "Build script had #[cfg(all(not(feature = 'libfuse'), not(target_os = 'linux')))] calling unimplemented!() — added early return on Windows since fuser is Unix-only."
+        },
+        {
+          "path": "crates/fuse/Cargo.toml",
+          "line": 1,
+          "end_line": 30,
+          "finding": "fuser dependency moved from top-level optional to [target.'cfg(unix)'.dependencies] optional to prevent Cargo from compiling it during Windows checks."
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 1,
+          "end_line": 50,
+          "finding": "ed25519-dalek entry in workspace Cargo.toml needed features = ['zeroize'] added to enable SigningKey zeroing on drop."
+        },
+        {
+          "path": ".release-please-manifest.json",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Merge conflict during main merge: needed to keep main's v0.27.0 versions AND add 5 new Rust crate entries (crates/core, crates/crypto, crates/fuse, crates/sdk, crates/ipns-client)."
+        }
+      ],
+      "workflow": [
+        "After a subagent disconnects mid-execution, spot-checking git log and file state is the correct recovery path — committed work survives disconnection and only bookkeeping (SUMMARY.md, STATE.md, ROADMAP.md) needs to be completed manually.",
+        "1Password SSH agent can fail intermittently on signed commits — retrying 2-3 times before asking the user is appropriate; bypassing signing (--no-verify) should not be done.",
+        "Parallel subagent execution for independent tasks (writing tests for 3 separate crates) significantly reduces wall-clock time with no coordination overhead.",
+        "Security review findings should be committed into the PR as a .planning/security/REVIEW-*.md file, not left as uncommitted artifacts.",
+        "GSD gsd-tools CLI handles STATE.md, ROADMAP.md, and commit operations atomically — use it rather than manual file edits where possible."
+      ]
+    },
+    "friction": [
+      "1Password SSH agent failed 3 consecutive times mid-session requiring user intervention to retry.",
+      "Subagent API connection refused mid-wave (ConnectionRefused error) requiring manual resume and state reconstruction.",
+      "Workspace-level [patch.crates-io] for fuser caused Windows CI failures that required two iterations to fully fix — build.rs fix alone was insufficient, Rust source compilation still failed.",
+      "CI job logs were difficult to retrieve via gh CLI — required multiple attempts with different filtering approaches to get actual compiler errors.",
+      "The cross-language parity CI failure (missing pnpm version) was a pre-existing issue unrelated to this branch's changes but still required fixing."
+    ],
+    "open_items": [
+      "AES-CTR ciphertext integrity: client doesn't verify IPFS CID after fetching bytes, leaving it vulnerable to bit-flip attacks from a malicious relay — identified as HIGH in security review but not fixed in this session.",
+      "file_ipns_private_key in write_ops.rs uses ed25519_dalek SigningKey::to_bytes().to_vec() directly (not through generate_ed25519_keypair) — this secondary key path was noted as out of scope but also lacks Zeroizing.",
+      "cipherbox-fuse crate has no unit tests added in this session (operations, read_ops, write_ops, lib) — only crypto, core, and sdk were covered.",
+      "Remaining MEDIUM security review findings (4 items) from REVIEW-2026-03-24-phase23.md not addressed in this session.",
+      "Dead code warnings from vendored fuser crate remain (not our code, but still present in cargo check output)."
+    ]
+  }
+}

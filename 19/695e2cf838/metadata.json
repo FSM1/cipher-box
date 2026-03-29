@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "19695e2cf838",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 11,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    "apps/api/src/migration/migration.service.ts",
+    "apps/api/src/vault/vault.service.ts",
+    "apps/web/src/components/layout/StorageQuota.tsx",
+    "apps/web/src/components/settings/MigrationProgress.tsx",
+    "apps/web/src/components/settings/StorageTab.tsx",
+    "apps/web/src/hooks/useAuth.ts",
+    "packages/core/src/vault/types.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/19/695e2cf838/0/metadata.json",
+      "transcript": "/19/695e2cf838/0/full.jsonl",
+      "content_hash": "/19/695e2cf838/0/content_hash.txt",
+      "prompt": "/19/695e2cf838/0/prompt.txt"
+    },
+    {
+      "metadata": "/19/695e2cf838/1/metadata.json",
+      "transcript": "/19/695e2cf838/1/full.jsonl",
+      "content_hash": "/19/695e2cf838/1/content_hash.txt",
+      "prompt": "/19/695e2cf838/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 651,
+    "cache_creation_tokens": 656579,
+    "cache_read_tokens": 70766727,
+    "output_tokens": 121269,
+    "api_call_count": 442
+  }
+}

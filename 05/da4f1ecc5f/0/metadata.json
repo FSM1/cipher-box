@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "05da4f1ecc5f",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T14:17:20.368601Z",
+  "branch": "docs/phase-19-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "560a33a67a29",
+  "token_usage": {
+    "input_tokens": 619,
+    "cache_creation_tokens": 681673,
+    "cache_read_tokens": 109856982,
+    "output_tokens": 106445,
+    "api_call_count": 498
+  },
+  "session_metrics": {
+    "turn_count": 54
+  },
+  "summary": {
+    "intent": "Investigate and fix the someguy v0.11.1 IPNS routing sidecar that was hanging indefinitely on staging, then validate the fix with E2E and load tests and deploy to staging.",
+    "outcome": "Someguy was fixed (wrong resource limits, missing libp2p port, wrong DHT mode), an API-level fallback to delegated-ipfs.dev with Prometheus metrics was implemented, staging deploy succeeded with all 83 SDK E2E tests passing and 15.28 ops/s throughput (12x improvement over Phase 18 baseline). A months-long release-please deadlock was also resolved as a side effect.",
+    "learnings": {
+      "repo": [
+        "someguy LIBP2P_MAX_MEMORY env var expects raw uint64 bytes, not human-readable strings like '1GB' — the container silently crash-loops with 'could not parse 1GB as uint64'",
+        "release-please multi-package mode with include-component-in-tag:false is broken — it creates bare v{version} tags but its own scanner cannot re-match them to path '.'; fix is include-component-in-tag:true with an explicit component name",
+        "Staging pre-release tags in v{version}-staging-rc-N format polluted release-please's release scanner, causing it to match staging releases as root package releases and deadlock",
+        "The THROTTLE_BYPASS_SECRET was not wired into the staging deploy workflow, so it was lost on each deploy and rate-limiting blocked test runs",
+        "vitest does not auto-load .env files into process.env — env vars must be passed explicitly via CLI or a setup file",
+        "The delegated routing client resolve flow always prefers the DB over the network because publishes are fire-and-forget and the DB is written synchronously first, meaning ~100% of resolves are DB-sourced by design",
+        "packages/crypto existed as an independent package but was missing from release-please-config.json and .release-please-manifest.json, causing it to be versioned out of band",
+        "Someguy with a cold DHT is slower than delegated-ipfs.dev at median, but after 8 hours of warm-up it outperforms delegated-ipfs.dev on all metrics (15.28 vs 10.75 ops/s)"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 100,
+          "end_line": 100,
+          "finding": "backend parameter typed as string; should be 'primary' | 'fallback' literal union for type safety"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 320,
+          "end_line": 358,
+          "finding": "resolveRecord() always queries DB after network and prefers whichever has higher sequence number. Since DB is written synchronously before fire-and-forget DHT publish, DB always wins — 100% of resolves are DB-sourced"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 75,
+          "end_line": 75,
+          "finding": "publishRecord() publishes to delegated routing as fire-and-forget (detached promise) with comment 'DB is the reliable source' — this is intentional architecture, not a bug"
+        }
+      ],
+      "workflow": [
+        "release-please PR label autorelease:pending must be flipped to autorelease:tagged when manually creating a release tag, or future runs deadlock with 'untagged merged release PRs outstanding - aborting'",
+        "When release-please can't find a release for a package path, it walks the entire commit history (600+ commits) and may major-bump the version based on historical feat: commits",
+        "Creating an anchor GitHub Release with the correct tag format unblocks release-please without needing to modify the config — it just needs one matchable release to anchor to",
+        "Docker healthchecks run inside the container, not on the host — a healthcheck using wget may pass on the host while failing inside a minimal Go container that only ships curl",
+        "Staging Tauri desktop builds create GitHub Releases with the tag format, which pollutes release-please's release scanner if the tag format overlaps with the root package pattern",
+        "The deploy-staging workflow triggers on tag push independently of tag-staging-release — pushing a tag directly bypasses the E2E gate"
+      ]
+    },
+    "friction": [
+      "release-please include-component-in-tag:false is fundamentally broken in multi-package repos — creates tags it then cannot re-find, requiring multiple debug cycles spanning the entire session",
+      "Old staging release tags (v*-staging-rc-N) accumulated over months and polluted the release-please scanner, requiring manual bulk deletion of 29 releases before the root issue became clear",
+      "SSH to the staging VPS requires 1Password agent approval interactively, making unattended VPS checks impossible without user intervention",
+      "Vitest not auto-loading .env files caused confusing 429 rate limit failures that looked like throttler config issues until the root cause was found",
+      "Release-please labeling race condition: the PR is created before GitHub's internal graph resolves the node ID, causing the label-add step to fail with 'Could not resolve node global id'",
+      "The release-please 'untagged merged release PRs outstanding - aborting' error masked the real root cause (component matching failure) for most of the debugging session",
+      "1Password SSH agent repeatedly prompted for approval during the session, blocking automated VPS operations"
+    ],
+    "open_items": [
+      "mock-ipns-routing service is still in docker-compose.yml alongside someguy — intentionally kept for CI compatibility but adds clutter to local dev setup",
+      "DB-first IPNS resolution means 100% of resolves hit the database; shifting to network-first when sequence numbers match is a future optimization if DB load becomes a concern",
+      "someguy's SOMEGUY_IPNS_ENDPOINTS fanout feature (race to delegated-ipfs.dev in parallel) was evaluated but skipped — could provide best-of-both-worlds latency at the cost of complexity",
+      "Grafana alerting on cipherbox_delegated_routing_fallbacks_total needs to be configured to surface frequent fallbacks to public infra",
+      "PR #335 (throttle bypass in deploy workflow) needs merge and inclusion in a release",
+      "PR #336 (Phase 19 someguy baselines doc) needs merge",
+      "The load test metrics JSON files were being committed accidentally — gitignore was added but existing committed files (if any) may need cleanup"
+    ]
+  }
+}

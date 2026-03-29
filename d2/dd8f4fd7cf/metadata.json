@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d2dd8f4fd7cf",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-19-baselines",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d2/dd8f4fd7cf/0/metadata.json",
+      "transcript": "/d2/dd8f4fd7cf/0/full.jsonl",
+      "content_hash": "/d2/dd8f4fd7cf/0/content_hash.txt",
+      "prompt": "/d2/dd8f4fd7cf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 57,
+    "cache_creation_tokens": 55773,
+    "cache_read_tokens": 2361951,
+    "output_tokens": 9499,
+    "api_call_count": 37
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fff06dbc5c58",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-25-desktop-enhancements",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ff/f06dbc5c58/0/metadata.json",
+      "transcript": "/ff/f06dbc5c58/0/full.jsonl",
+      "content_hash": "/ff/f06dbc5c58/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 50573,
+    "cache_read_tokens": 130369,
+    "output_tokens": 3622,
+    "api_call_count": 4
+  }
+}

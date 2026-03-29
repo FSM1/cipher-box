@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "53b2c175ad85",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T01:28:18.370815Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "247fba61d1e8",
+  "token_usage": {
+    "input_tokens": 6666,
+    "cache_creation_tokens": 417846,
+    "cache_read_tokens": 30641033,
+    "output_tokens": 69090,
+    "api_call_count": 206
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) of cipher-box, implementing v2 vault blob format across the API, Rust desktop app, and web client, then perform security review, code simplification, and human checkpoint verification.",
+    "outcome": "All 4 plans executed successfully; 2 high-severity security issues fixed; 3 bugs found during UAT and fixed (v2 blob sync parsing, recovery tool error handling, IPNS resolution); checkpoint verification partially complete with CORS blocking full recovery tool IPNS resolution in local dev.",
+    "learnings": {
+      "repo": [
+        "orval generates `{ [key: string]: unknown } | null` for nullable string fields instead of `string | null` — `as unknown as string` casts are the correct workaround, not a code smell",
+        "NestJS does not auto-log incoming request routes — POST /vault/migrate succeeded silently, making it appear the migration never ran when inspecting server output",
+        "Vault migration state is tracked via `migrated_at` and `has_key` columns in the vault entity; `has_key = false` after migration means crypto columns are NULLed",
+        "IPFS gateway at 192.168.133.114:8080 is exposed and serves content, but Kubo API port 5001 does not send CORS headers, blocking browser access",
+        "The delegated routing API (`/routing/v1/ipns/{name}`) returns CBOR-wrapped records, not raw protobuf — `extractCidFromIpnsRecord` must not attempt raw protobuf parsing on this response",
+        "IPNS records published to a local Kubo node do not propagate to the public DHT — public gateways cannot resolve them"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parsed IPFS blob bytes without detecting v2 binary format — crashes with SyntaxError on migrated users whose IPFS record holds a v2 blob"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same v2 blob detection bug as folder.service.ts — SDK fetch path also tried to JSON.parse raw binary"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 181,
+          "end_line": 233,
+          "finding": "Migration IIFE called deriveVaultIpnsKeypair() twice with identical inputs; hoisting the call above try/catch eliminated the redundant derivation"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "finding": "fetchFromIpfs could return undefined on non-2xx/non-404 responses (loop fell through without returning), causing detectBlobVersion to crash with `Cannot read properties of undefined (reading 'length')`"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop vault init ECIES-wrapped rootFolderKey twice with the same public key — once for DB storage and once for v2 blob — wasting a full ECIES operation"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse used derived Debug — printed encrypted key material in plaintext to logs; replaced with custom Debug impls that redact sensitive fields"
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "finding": "serializeVaultBlobV2 accepted any-length key arrays; u16 truncation on key length \u003e 65535 was silent — added explicit bounds check returning an error"
+        }
+      ],
+      "workflow": [
+        "GSD wave-based execution: Wave 1 (foundation module) must complete before Wave 2 (API + Rust) can run in parallel; Wave 3 (web client) depends on both",
+        "Security review during checkpoint pause (while awaiting human verification) is an efficient use of wall time — no blocking",
+        "Playwright browser automation is useful for UAT during checkpoints: can retrieve OTPs from server logs, inspect console messages, and navigate the app",
+        "When NestJS API calls appear to not execute, query the database directly to verify state before assuming failure",
+        "gsd-debugger with console instrumentation + Playwright session replay is an effective pattern for diagnosing silent IIFE failures in browser code"
+      ]
+    },
+    "friction": [
+      "API connection error (ConnectionRefused) aborted the first security review attempt, requiring a full retry",
+      "NestJS silent request logging caused significant wasted investigation time — migration appeared to fail when it had actually succeeded",
+      "orval codegen bug with nullable string fields forced `as unknown as string` casts that look like bugs but are required",
+      "Kubo API port 5001 has no CORS headers, making browser-based IPNS resolution impossible without a proxy",
+      "Local IPNS records don't propagate to public DHT, so public gateways (ipfs.io, delegated-ipfs.dev) cannot resolve them in local dev",
+      "Recovery tool IPNS resolution required multiple fix iterations: raw protobuf parsing of CBOR response, missing null guard on fetchFromIpfs, CORS blocking Kubo fallback"
+    ],
+    "open_items": [
+      "Recovery tool private key not zeroed from memory after use (M-1 from security review)",
+      "No deduplication guard on concurrent vault migration from multiple browser tabs (M-2 from security review)",
+      "ECIES re-wrap on every root folder FUSE publish — should cache wrapped key in AppState (M-3 from security review)",
+      "Zero-length key accepted by v2 blob deserializers without error (L-1 from security review)",
+      "No SRI hashes on CDN scripts in recovery.html (L-2 from security review)",
+      "Device registry sync fails with CryptoError: Invalid registry format — schema mismatch between current format and IPFS-stored records (todo: fix-device-registry-cryptoerror-invalid-registry-format.md)",
+      "Bin IPNS name 404 resolution failure — pre-existing issue (todo: fix-bin-ipns-name-404-resolution-failure.md)",
+      "Recovery tool CipherBox API IPNS fallback added but not fully verified end-to-end",
+      "Phase 20 checkpoint approved and verification not yet run — phase completion, ROADMAP/STATE update, and PROJECT.md evolution still pending"
+    ]
+  }
+}

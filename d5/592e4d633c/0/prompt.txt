@@ -1,0 +1,257 @@
+ok can you switch to main and pull in the latest
+
+---
+
+/gsd:progress
+
+---
+
+phases 24 and 25 are currently being reviewed, there are PRs up for both of these. whats next in line?
+
+---
+
+lets discuss phase 26
+
+---
+
+<task-notification>
+<task-id>a9d4c3c79a7762e8d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-ci-debug/c0abe932-15e1-4254-8a98-20c8096f009c/tasks/a9d4c3c79a7762e8d.output</output-file>
+<status>completed</status>
+<summary>Agent "Scout observability and timeout code" completed</summary>
+<result>Perfect! Now I have a comprehensive understanding. Let me create a final summary document:
+
+## Summary: Observability and Timeout/Retry Patterns
+
+Based on my thorough exploration of the codebase, here's a structured report of existing observability infrastructure, timeout/retry patterns, and performance baselines:
+
+---
+
+### 1. **PROMETHEUS METRICS & GRAFANA DASHBOARD**
+
+**Existing Infrastructure:**
+
+- **Metrics Service:** `/Users/michael/Code/cipher-box-ci-debug/apps/api/src/metrics/metrics.service.ts`
+  - 5 **Gauges** (DB-polled every 30s): `cipherbox_users_total`, `cipherbox_files_total`, `cipherbox_storage_bytes_total`, `cipherbox_ipns_entries_total`, `cipherbox_republish_schedule_total`
+  - 8 **Counters** (event-driven): fileUploads, fileUploadBytes, fileDownloads, fileUnpins, ipnsPublishes, ipnsResolves, republishRuns, republishEntriesProcessed, authLogins, delegatedRoutingRequests, delegatedRoutingFallbacks
+  - 5 **Histograms** (operation timing):
+    - `cipherbox_http_request_duration_seconds` — HTTP endpoints (buckets: 0.01–10s)
+    - `cipherbox_ipfs_ipns_duration_seconds` — IPFS/IPNS operations (buckets: 0.001–30s, labels: operation/result/source)
+    - `cipherbox_republish_batch_duration_seconds` — TEE batch processing (buckets: 1–120s, label: tee_provider)
+    - `cipherbox_ipns_resolve_duration_seconds` — IPNS resolve end-to-end (buckets: 0.05–30s, labels: source/outcome)
+    - `cipherbox_ipns_publish_duration_seconds` — IPNS publish to routing (buckets: 0.1–60s, label: outcome)
+
+- **HTTP Metrics Interceptor:** `/Users/michael/Code/cipher-box-ci-debug/apps/api/src/metrics/http-metrics.interceptor.ts`
+  - Records all HTTP requests (per-route, per-method, per-status) using `process.hrtime.bigint()`
+  - Excludes `/metrics` endpoint to avoid self-referential noise
+  - Normalizes UUID/CID paths to keep cardinality low
+
+- **Grafana Dashboard:** `/Users/michael/Code/cipher-box-ci-debug/docker/grafana/dashboards/cipherbox-staging.json`
+  - Manually maintained Grafana JSON dashboard for staging environment
+  - Panels for: Total Users, Total Files, Storage Used, IPNS Entries, HTTP latency, Upload/Download throughput
+
+- **Metrics Collection:** `/Users/michael/Code/cipher-box-ci-debug/apps/api/src/metrics/metrics.controller.ts`
+  - Exposes `GET /metrics` endpoint (Prometheus format)
+
+- **Alloy Configuration:** `/Users/michael/Code/cipher-box-ci-debug/docker/alloy-config.river`
+  - Scrapes CipherBox API `/metrics` every 30s
+  - Scrapes Kubo `/debug/metrics/prometheus` every 30s (node health: peer count, bandwidth, datastore)
+  - Ships logs to Grafana Cloud Loki (Docker container logs)
+  - Metrics shipped to Grafana Cloud Mimir
+
+---
+
+### 2. **TIMEOUT CONFIGURATIONS**
+
+**SDK (Pinning Providers):**
+
+- **Kubo Provider:** `REQUEST_TIMEOUT_MS = 30_000` (30s)
+  - All fetch calls use `AbortSignal.timeout(REQUEST_TIMEOUT_MS)`
+  - Covers: pin, unpin, status, get operations
+  - File: `/Users/michael/Code/cipher-box-ci-debug/packages/sdk-core/src/pinning/kubo-provider.ts`
+
+- **Pinata Provider:** `REQUEST_TIMEOUT_MS = 60_000` (60s)
+  - File: `/Users/michael/Code/cipher-box-ci-debug/packages/sdk-core/src/pinning/pinata-provider.ts`
+
+- **PSA Provider:** `REQUEST_TIMEOUT_MS = 30_000` (30s)
+  - File: `/Users/michael/Code/cipher-box-ci-debug/packages/sdk-core/src/pinning/psa-provider.ts`
+
+- **Connection Test:** `PROBE_TIMEOUT_MS = 5_000` (5s)
+  - File: `/Users/michael/Code/cipher-box-ci-debug/packages/sdk-core/src/pinning/connection-test.ts`
+
+**API (Server-Side):**
+
+- **TEE Service:** `TEE_REQUEST_TIMEOUT_MS = 30_000` (30s)
+  - File: `/Users/michael/Code/cipher-box-ci-debug/apps/api/src/tee/tee.service.ts`
+
+- **Delegated Routing Client:** `requestTimeoutMs = 10_000` (10s)
+  - File: `/Users/michael/Code/cipher-box-ci-debug/apps/api/src/ipns/delegated-routing.client.ts`
+
+**Web App:**
+
+- **Upload Service:** `MAX_RETRIES = 3`, `RETRY_BASE_DELAY = 1000` (exponential backoff)
+  - File: `/Users/michael/Code/cipher-box-ci-debug/apps/web/src/services/upload.service.ts`
+  - Uses exponential backoff: `delay = baseDelay * 2^attempt`
+  - Does not retry user-cancelled uploads
+
+---
+
+### 3. **RETRY STRATEGIES**
+
+**Delegated Routing Client (Comprehensive Pattern):**
+
+File: `/Users/michael/Code/cipher-box-ci-debug/apps/api/src/ipns/delegated-routing.client.ts`
+
+- **Max Retries:** 3 attempts
+- **Base Delay:** 1000ms
+- **Max Retry Delay:** 30,000ms
+- **Strategy:**
+  - Primary endpoint (e.g., `delegated-ipfs.dev`) — if fails, try fallback
+  - For 429 (rate limit): respects `Retry-After` header, falls back to exponential backoff
+  - For network errors: exponential backoff (`1s → 2s → 4s`)
+  - For non-retryable errors (4xx/5xx except 429): immediate failure
+  - Metrics logged with `outcome` label: success, error, not_found
+  - All retries use `fetchWithTimeout()` with 10s timeout
+
+**Upload Service (Web App):**
+
+File: `/Users/michael/Code/cipher-box-ci-debug/apps/web/src/services/upload.service.ts`
+
+- **Max Retries:** 3
+- **Base Delay:** 1000ms, exponential backoff
+- **Skips retries** if error message is "Upload cancelled by user"
+
+**API Client (Token Refresh):**
+
+File: `/Users/michael/Code/cipher-box-ci-debug/packages/api-client/src/instance.ts`
+
+- **401 Refresh:** Single retry on 401 error
+- **Shared Promise:** All concurrent 401 handlers await the same refresh promise (prevents duplicate refresh calls)
+- **Non-Retry:** Refresh endpoint itself never retries (avoids infinite loops)
+
+---
+
+### 4. **CLIENT-SIDE PERFORMANCE INSTRUMENTATION**
+
+**Perf Module:**
+
+File: `/Users/michael/Code/cipher-box-ci-debug/packages/sdk-core/src/perf.ts`
+
+- **Gate:** Enabled in non-production environments only
+  - Check: `NODE_ENV !== 'production'` OR `globalThis.__CIPHERBOX_PERF__ === true`
+- **API:** `markStart()`, `markEnd()`, `withPerf<T>()` helper
+- **Format:** Marks named `cipherbox:<operation>:<id>:start` → `cipherbox:<operation>:<id>:end`
+- **Output:** Performance API measures (shows in DevTools → Performance tab)
+- **Status:** Test file exists (`perf.test.ts`), confirming it's actively used
+
+---
+
+### 5. **PERFORMANCE BASELINES**
+
+**Baseline Documents (in `.planning/baselines/`):**
+
+1. **18-performance-baselines.md** (Phase 18 — Server-Side Instrumentation)
+   - Capture date: 2026-03-07/08
+   - Staging environment baseline
+   - Client-side (curl): IPNS resolve p50=147ms, p95=224ms; IPFS pin p50=138ms; cat p50=133ms
+   - Server-side (Prometheus): publish=180ms p50, resolve=135ms p50, pin=8ms p50, cat=2ms p50
+
+2. **19-someguy-ipns-baselines.md** (Phase 19 — Delegated Routing)
+   - Post-Someguy integration baseline
+
+3. **19.2-pre-optimization-baselines.md** & **19.2-post-optimization-baselines.md** (Phase 19.2 — Upload Optimization)
+   - Pre-opt (staging, 10 clients): uploadFile p50=1,442ms, p95=3,666ms, p99=4,044ms
+   - Post-opt (local, 5 clients): uploadFile p50=1,502ms, p95=2,841ms, p99=3,432ms
+   - **Note:** Environment difference (staging vs local), client count difference (10 vs 5) — not directly comparable
+   - Three-point comparison methodology: isolated variables with 50 concurrent clients on local infrastructure
+
+4. **21-byo-baselines.md** (Phase 21 — BYO IPFS)
+   - Post-BYO-IPFS integration baseline
+
+5. **22-journey-baselines.md** (Phase 22 — End-to-End Journey Timing via Playwright)
+   - Capture date: 2026-03-25
+   - Environment: Staging
+   - **Journey 1 (Login-to-Vault):** 23,569ms total (23,483ms wallet auth, 86ms vault load)
+   - **Journey 2 (Upload-to-Visible):** 1,355ms total (100KB file)
+   - **Journey 3 (Share-to-Accessible):** 3,039ms total (2,236ms share create, 803ms recipient access)
+
+**Additional Perf Baseline:** `/Users/michael/Code/cipher-box-ci-debug/.planning/perf/staging-baseline-2026-03-24.md`
+   - Vault login path baseline (pre-IPNS-separation)
+   - Existing vault: 12,959ms total (9s Web3Auth, ~1.4s vault critical path)
+   - Auth/refresh race condition observed (6 concurrent calls, 2 fail with 401)
+
+---
+
+### 6. **PHASE 18 & 22 CONTEXT DOCUMENTS**
+
+**Phase 18 (Performance Instrumentation):**
+File: `/Users/michael/Code/cipher-box-ci-debug/.planning/phases/18-performance-instrumentation/18-CONTEXT.md`
+
+- **Scope:** Server-side histogram instrumentation for IPFS/IPNS operations
+- **Bucket Strategy:** Two-tier (fast: 1–500ms for DB, slow: 50ms–30s for network)
+- **Labels:** `operation` (resolve/publish/pin/cat), `result` (success/error/timeout), `source` (db/network for resolve)
+- **Dashboard:** Extended existing `cipherbox-staging.json`, no separate dashboard
+- **Baselines:** Documented in markdown with p50/p95/p99 values
+- **No Alerting:** Phase 18 observation-only; alerts premature before baselines
+
+**Phase 22 (Performance Baselines Completion):**
+File: `/Users/michael/Code/cipher-box-ci-debug/.planning/phases/22-performance-baselines-completion/22-CONTEXT.md`
+
+- **Scope:** Client-side instrumentation, E2E journey timing, load test enhancements, capacity documentation
+- **Client-Side:** Performance API (non-production only), SDK-level (encrypt/decrypt/upload/download/IPNS)
+- **Journey Tests:** 3 Playwright journeys (login-to-vault, upload-to-visible, share-to-accessible)
+- **Load Testing:** Enhance existing vitest harness (not k6) with pass/fail thresholds
+- **Capacity Doc:** New `docs/CAPACITY.md` with projections, scaling recommendations
+- **Reusable Patterns:** Baseline methodology from Phase 19.2 (three-point comparison, matched environment)
+
+---
+
+### 7. **KEY PATTERNS & TAKEAWAYS**
+
+**Histogram Bucket Design:**
+- "Fast" tier (DB/cache): 0.001–0.5s exponential spacing
+- "Slow" tier (network): 0.001–30s exponential spacing
+- "Extended" tier (TEE batches): 1–120s exponential spacing
+
+**Retry Philosophy:**
+- **Delegated Routing:** 3 attempts with exponential backoff + Retry-After header support
+- **Upload:** 3 attempts with exponential backoff, user-cancellation bypass
+- **Token Refresh:** Shared promise to deduplicate concurrent 401 handlers
+
+**Timeout Philosophy:**
+- SDK pinning providers: 30s (Kubo/PSA), 60s (Pinata, premium)
+- Connection probe: 5s
+- Delegated routing API: 10s
+- TEE service: 30s
+
+**Observability Gates:**
+- Perf instrumentation: Non-production only (`NODE_ENV !== 'production'`)
+- Metrics collection: Always-on, 30s interval for DB-polled gauges
+
+**Dashboard Strategy:**
+- Single staging dashboard extended with new panels (not separate dashboards per phase)
+- Alloy scrapes multiple endpoints: API `/metrics` + Kubo `/debug/metrics/prometheus` + Someguy metrics
+
+---
+
+### **File Paths (Absolute)**
+
+| Component | File Path |
+|-----------|-----------|
+| Prometheus Registry | `/Users/michael/Code/cipher-box-ci-debug/apps/api/src/metrics/metrics.service.ts` |
+| HTTP Interceptor | `/Users/michael/Code/cipher-box-ci-debug/apps/api/src/metrics/http-metrics.interceptor.ts` |
+| Metrics Controller | `/Users/michael/Code/cipher-box-ci-debug/apps/api/src/metrics/metrics.controller.ts` |
+| Grafana Dashboard | `/Users/michael/Code/cipher-box-ci-debug/docker/grafana/dashboards/cipherbox-staging.json` |
+| Alloy Config | `/Users/michael/Code/cipher-box-ci-debug/docker/alloy-config.river` |
+| Kubo Provider | `/Users/michael/Code/cipher-box-ci-debug/packages/sdk-core/src/pinning/kubo-provider.ts` |
+| Delegated Routing Client | `/Users/michael/Code/cipher-box-ci-debug/apps/api/src/ipns/delegated-routing.client.ts` |
+| Perf Instrumentation | `/Users/michael/Code/cipher-box-ci-debug/packages/sdk-core/src/perf.ts` |
+| Upload Service | `/Users/michael/Code/cipher-box-ci-debug/apps/web/src/services/upload.service.ts` |
+| API Client Instance | `/Users/michael/Code/cipher-box-ci-debug/packages/api-client/src/instance.ts` |
+| **Baselines** | `/Users/michael/Code/cipher-box-ci-debug/.planning/baselines/` (6 files) |
+| **Phase 18 Context** | `/Users/michael/Code/cipher-box-ci-debug/.planning/phases/18-performance-instrumentation/18-CONTEXT.md` |
+| **Phase 22 Context** | `/Users/michael/Code/cipher-box-ci-debug/.planning/phases/22-performance-baselines-completion/22-CONTEXT.md` |</result>
+<usage><total_tokens>76847</total_tokens><tool_uses>86</tool_uses><duration_ms>153539</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-ci-debug/c0abe932-15e1-4254-8a98-20c8096f009c/tasks/a9d4c3c79a7762e8d.output

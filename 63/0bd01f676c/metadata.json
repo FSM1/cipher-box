@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "630bd01f676c",
+  "strategy": "manual-commit",
+  "branch": "phase-30-web-app-observability",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "apps/web/src/components/ErrorFallback.tsx",
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/lib/faro.ts",
+    "apps/web/src/main.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/63/0bd01f676c/0/metadata.json",
+      "transcript": "/63/0bd01f676c/0/full.jsonl",
+      "content_hash": "/63/0bd01f676c/0/content_hash.txt",
+      "prompt": "/63/0bd01f676c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 227,
+    "cache_creation_tokens": 520239,
+    "cache_read_tokens": 29661311,
+    "output_tokens": 60240,
+    "api_call_count": 203
+  }
+}

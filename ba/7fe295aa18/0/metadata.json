@@ -1,0 +1,110 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ba7fe295aa18",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T07:18:48.865822Z",
+  "branch": "chore/perf-baseline-auth-refresh-race",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/perf/staging-baseline-2026-03-24.md",
+    "tests/web-e2e/staging-perf-wallet.mjs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2ad65fd928f0",
+  "token_usage": {
+    "input_tokens": 239,
+    "cache_creation_tokens": 196423,
+    "cache_read_tokens": 20075745,
+    "output_tokens": 66129,
+    "api_call_count": 171
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Monitor PR #349 for incoming automated reviews (CodeRabbit and Copilot), auto-resolve them as they arrive, then collect staging performance baselines for the vault login path before deploying vault migration changes.",
+    "outcome": "All 23 review threads across 4 review rounds were resolved with real bug fixes committed; staging E2E performance baselines were captured for fresh vault creation, existing vault login, and session restore scenarios, saved alongside a GSD todo for an auth/refresh race condition discovered during measurement.",
+    "learnings": {
+      "repo": [
+        "The cron/loop skill enables automated PR monitoring: CronCreate with a GraphQL polling prompt runs every 5 minutes and can trigger /resolve-pr-reviews automatically.",
+        "CodeRabbit and Copilot sometimes post 'outside of diff range' comments that don't appear as unresolved GraphQL reviewThreads — these must be checked separately via the review body.",
+        "Staging DB was wiped, so IPNS resolve returns 404 for all vaults created via test-login (the old staging code never publishes to IPNS during wallet-created vault flow).",
+        "Core Kit (Web3Auth) DKG on Sapphire Devnet dominates login time: ~45s cold, ~9s warm (cached DKG state). Our vault-critical path is \u003c1.5s total.",
+        "Auth token refresh on page reload triggers a race condition: 6 concurrent refresh calls fire, 2 fail with 401 and 4 succeed with 200.",
+        "The E2E test suite uses @johanneskares/wallet-mock with installMockWallet() for real secp256k1 ECDSA signing — the pattern to follow for Playwright wallet login scripts.",
+        "VaultBlobV2 type was removed; the functions now return Uint8Array directly."
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1312,
+          "end_line": 1312,
+          "finding": "Real bug: directRootIpnsName (the vault key IPNS name) was being reused as the root folder IPNS name for folder traversal. Fixed by deriving both IPNS names separately with distinct HKDF info constants."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 102,
+          "end_line": 146,
+          "finding": "Real bug: broad try/catch wrapped both getVault() and fetchFromIpfs() calls, so an IPFS 404 (missing CID for existing user) would incorrectly trigger vault initialization. Fixed by giving getVault() its own isolated try/catch."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 72,
+          "end_line": 72,
+          "finding": "Sequence-0 conflict on IPNS publish was previously a warn-and-continue; changed to return an error/abort to prevent silent data corruption."
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 99,
+          "end_line": 99,
+          "finding": "slice() was used where subarray() is correct for zero-copy Uint8Array views; switched to subarray()."
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Encryption table incorrectly described v2 blob as 'ECIES (key) + AES-256-GCM (metadata)' when v2 is key-only. Fixed to 'ECIES (wrapped rootFolderKey only)'."
+        },
+        {
+          "path": "docs/METADATA_SCHEMAS.md",
+          "line": 304,
+          "end_line": 304,
+          "finding": "Stale reference to VaultBlobV2 type (since removed); updated to reflect Uint8Array return type."
+        }
+      ],
+      "workflow": [
+        "The /loop skill with CronCreate enables fire-and-forget PR monitoring: schedule a GraphQL polling prompt, then get auto-notified and auto-remediated when reviews land.",
+        "Playwright MCP browser_run_code cannot import Node modules (no require/dynamic import from node_modules); standalone .mjs scripts run via Bash with proper working directory are the correct approach for E2E measurement scripts.",
+        "window.ethereum injection must happen via addInitScript (before page load) not evaluate (after load) for Web3Auth wallet detection to work.",
+        "Native Playwright request/response events (page.on('request'/'response')) are more reliable than fetch monkey-patching for network timing across navigations.",
+        "For before/after perf comparisons on architectural changes, API-level timings are more meaningful than full E2E times when the dominant cost (Web3Auth DKG) is unaffected by the change."
+      ]
+    },
+    "friction": [
+      "GitHub API timed out on one cron tick — transient network issue, no retry logic in the polling prompt.",
+      "Outside-diff-range review comments don't surface as unresolved GraphQL reviewThreads, causing them to be missed by the automated monitor until manually flagged.",
+      "Playwright MCP sandbox doesn't support Node module imports, requiring a full pivot from browser_run_code to a standalone Bash-executed script.",
+      "fetch() monkey-patching for network monitoring doesn't survive page navigations — had to rewrite to use Playwright's native request events.",
+      "Web3Auth OTP on staging is real (not a test bypass), blocking direct OTP-based login measurement.",
+      "Core Kit doesn't persist tKey shares across browser reloads in the mock wallet context, making true session restore measurement impossible without a persistent browser profile.",
+      "markdownlint failures blocked the initial commit of the baseline doc and todo file, requiring a fix pass before committing."
+    ],
+    "open_items": [
+      "Auth/refresh race condition on page reload: 6 concurrent refresh calls fire, 2 fail with 401. GSD todo created at .planning/todos/pending/2026-03-24-auth-refresh-token-race-condition.md on branch perf/staging-baseline-2026-03-24.",
+      "Re-run staging-perf-wallet.mjs after PR #349 deploys to staging to get post-migration IPNS resolve timings with a real v2 key blob (checklist in .planning/perf/staging-baseline-2026-03-24.md).",
+      "True session restore baseline (Core Kit cached session, tab reopen within session lifetime) was not captured — requires a persistent browser profile across script runs.",
+      "Cron job cadb6bcb was cancelled at end of session; if PR #349 needs further monitoring it must be rescheduled.",
+      "Cleanup decision deferred: tests/web-e2e/staging-perf-wallet.mjs kept for post-deploy comparison but may need to be moved or gitignored if not part of the standard test suite."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T07:18:05.253648Z",
+    "agent_lines": 309,
+    "human_added": 58,
+    "human_modified": 56,
+    "human_removed": 0,
+    "total_committed": 423,
+    "agent_percentage": 73.04964539007092
+  }
+}

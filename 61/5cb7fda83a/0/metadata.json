@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "615cb7fda83a",
+  "session_id": "83e52473-29e7-4f1d-9435-4735bac76aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T02:24:14.93772Z",
+  "branch": "feat/sdk-vault-key-blob-publish",
+  "checkpoints_count": 6,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "4634852373f7",
+  "token_usage": {
+    "input_tokens": 533,
+    "cache_creation_tokens": 710219,
+    "cache_read_tokens": 100167300,
+    "output_tokens": 92678,
+    "api_call_count": 437
+  },
+  "session_metrics": {
+    "turn_count": 46
+  },
+  "summary": {
+    "intent": "Execute Phase 24 (bug fixes + test infrastructure), get a PR merged with all CI passing, and fix a series of cascading issues discovered in the new recovery E2E test.",
+    "outcome": "Phase 24 shipped (3 plans, 9 commits). A critical architectural gap was discovered and fixed: vault key blob IPNS publish was missing from the SDK, living only in the web app's useAuth hook. SDK function extracted, createTestAccount updated, 8 completed todos cleaned up. Recovery E2E test CI infra still being debugged in PR #368.",
+    "learnings": {
+      "repo": [
+        "The vault key blob IPNS record is published client-side by useAuth.ts (not the API), using deriveVaultKeyIpnsKeypair + serializeVaultBlobV2 + addToIpfs + createAndPublishIpnsRecord. SDK's CipherBoxClient and createTestAccount were not doing this publish, causing recovery to fail.",
+        "createAndPublishIpnsRecord requires a configured axiosInstance on the SdkContext — it falls back to the global singleton (setApiClientConfig()) if none is provided, which isn't set up in E2E test fixtures.",
+        "In CI, IPNS records are published via mock-ipns-routing (port 3001) using delegated routing, NOT through Kubo's DHT. Kubo's /ipns/ gateway path cannot resolve these records in the browser.",
+        "The mock-ipns-routing tool lacked CORS headers, blocking browser-side access from Playwright tests. Added GET+OPTIONS allow headers.",
+        "The CipherBox API's /ipns/resolve endpoint requires JWT auth — recovery.html (standalone, no auth) cannot use it as a fallback.",
+        "The web app type errors (deriveVaultKeyIpnsKeypair, deriveByoConfigIpnsKeypair not found) were caused by stale package builds, not code issues. pnpm --filter @cipherbox/crypto build and @cipherbox/api-client build fixed them.",
+        "publishWithVerify had a bug: it re-published on every retry instead of publishing once and only retrying the verify step.",
+        "computeIpHash() already existed in device/info.ts — useAuth.ts was inlining 7 lines of SHA-256 instead of calling it.",
+        "The SDK E2E test for bin-operations expected sequenceNumber: 0 for a fresh bin, but the auto-repair change causes it to publish immediately, yielding sequenceNumber: 1.",
+        "byo-file-workload.ts had a TypeScript scoping bug: cid and pinSize declared inside try{} but referenced in finally{} — needed hoisting above the try block.",
+        "The registry/schema.ts v1/v2 validation had duplicated validateRegistryShape logic that was refactored out, but the cast needed explicit 'as unknown[]' annotation since TS doesn't propagate narrowing across function boundaries."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 202,
+          "end_line": 220,
+          "finding": "publishWithVerify was re-publishing on every retry. Should publish once, then retry only the verification step."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 176,
+          "end_line": 185,
+          "finding": "Vault key blob IPNS publish (deriveVaultKeyIpnsKeypair, serializeVaultBlobV2, createAndPublishIpnsRecord) lives here but was missing from SDK — now extracted to packages/sdk-core/src/vault/index.ts."
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 80,
+          "end_line": 100,
+          "finding": "validateRegistryShape() was too lenient — was auto-healing any malformed registry, should only auto-heal specifically empty ipHash ('') not other malformed values."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 725,
+          "end_line": 725,
+          "finding": "apiBase derived as window.location.origin.replace(/:\\d+$/, ':3000') — correct for dev (5173→3000), but /ipns/resolve requires JWT auth so unauthenticated recovery.html can't use it."
+        },
+        {
+          "path": "tests/web-e2e/tests/recovery.spec.ts",
+          "line": 23,
+          "end_line": 30,
+          "finding": "IPFS_GATEWAY and IPNS_GATEWAY env vars control gateway URLs. IPNS_GATEWAY defaults to DELEGATED_ROUTING_URL env var for CI compatibility."
+        },
+        {
+          "path": "tools/mock-ipns-routing/src/index.ts",
+          "line": 33,
+          "end_line": 40,
+          "finding": "Added CORS headers (GET+OPTIONS only) to allow browser-side access from Playwright tests running at localhost:5173."
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "line": 86,
+          "end_line": 115,
+          "finding": "createTestAccount was not publishing the vault key blob IPNS record — recovery.html could never resolve the vault for accounts created this way."
+        },
+        {
+          "path": "packages/sdk-core/src/vault/index.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "New module: publishVaultKeyBlob (derive keypair, serialize v2 blob, upload to IPFS, publish IPNS) and loadVaultKeyBlob (resolve IPNS, fetch from IPFS, deserialize). Extracted from useAuth.ts."
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 69,
+          "end_line": 170,
+          "finding": "cid and pinSize were declared inside try{} but accessed in finally{}. Hoisted above the try block and typed as string | undefined with narrowing at usage sites."
+        }
+      ],
+      "workflow": [
+        "When resolving planning file merge conflicts (ROADMAP, STATE, REQUIREMENTS, PROJECT), both branches' phase completions need to be preserved — keep both sets of phase markers.",
+        "GitHub Actions CI type errors that only appear in CI (not locally) are often caused by packages not being built before type checking — pnpm build for affected packages fixes them.",
+        "The classifyHandoffIfNeeded Claude Code bug fires after all tool calls complete — spot-check SUMMARYs and git commits to determine real success vs false failure.",
+        "Kubo's /ipns/ gateway path resolves IPNS via DHT — records published only through delegated routing (mock-ipns-routing) are not resolvable this way in CI.",
+        "When debugging test failures, running mock services locally with equivalent env vars to CI (DELEGATED_ROUTING_URL pointing to mock, etc.) allows faithful reproduction before pushing fixes."
+      ]
+    },
+    "friction": [
+      "Recovery E2E test required 5+ fix iterations across 4 PRs (363, 364, 365, 367, 368) due to layered issues: missing auth secret, CORS on Kubo, CORS on mock-ipns-routing, API auth requirement on /ipns/resolve, and finally the root cause (vault key blob not published in createTestAccount).",
+      "The CI GitHub API was intermittently unreachable during debugging, requiring the user to provide CI logs directly.",
+      "The recovery.html resolveIpns fallback chain has multiple strategies with significant timeout delays (30s per attempt), making CI failures slow to diagnose.",
+      "publishWithVerify bug was introduced by Phase 24 execution — the /simplify review caught it, but the SDK E2E test also needed updating to match new behavior (sequenceNumber: 1).",
+      "byo-file-workload.ts had a pre-existing TypeScript scoping bug that wasn't caught by local typecheck — only surfaced during the simplify review.",
+      "The stale package build issue caused misleading type errors in the web app that appeared to be code problems but were actually missing .d.ts files.",
+      "Cherry-picking from PR #367 to #368 caused conflicts requiring manual re-application of changes.",
+      "Docker host IP changed (192.168.133.114 → 192.168.133.12) mid-session, blocking local API startup."
+    ],
+    "open_items": [
+      "PR #368 (sdk-core vault module + createTestAccount fix) still needs CI to pass and merge — the axiosInstance fix for createTestAccount is the last known blocker.",
+      "useAuth.ts still has the vault key blob publish logic inline — should be updated to call publishVaultKeyBlob from sdk-core after PR #368 merges.",
+      "The recovery E2E test still has unresolved local testing friction: Kubo needs CORS configured on the Docker host (192.168.133.12) for local runs to work.",
+      "mock-ipns-routing CORS only allows GET+OPTIONS — if the routing protocol ever needs POST for IPNS resolution the CORS config will need updating.",
+      "6 remaining pending todos: Web Worker large file encryption, ERC-1271 contract wallet auth, CRDT IPNS inbox research, async incremental search index, alternative MFA factors, investigate mock-ipns-routing removal.",
+      "PR #367 was closed without merging — its todo file and mock-ipns CORS changes were incorporated into #368, but worth confirming nothing was missed."
+    ]
+  }
+}

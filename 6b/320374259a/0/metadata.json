@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6b320374259a",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T02:02:20.495027Z",
+  "branch": "docs/milestone-v1.1-completion",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".claude/hooks/statusline.js",
+    ".claude/settings.json"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "da913730e2e1",
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 31441,
+    "cache_read_tokens": 244027,
+    "output_tokens": 3700,
+    "api_call_count": 8
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Map the cipher-box codebase and identify candidates for web/desktop E2E testing, then assess feasibility of AES-CTR streaming tests and account deletion teardown.",
+    "outcome": "Existing codebase docs were confirmed current (skipped re-mapping). A prioritized E2E testing roadmap was produced: 4 test suites identified (media preview, AES-CTR streaming, batch download, shared account deletion teardown), with research confirming the streaming implementation is fully testable and teardown is only wired in 1 of 12 specs.",
+    "learnings": {
+      "repo": [
+        "AES-CTR mode is used for media files \u003e256KB, GCM for everything else — threshold-based selection in streaming-crypto.service.ts",
+        "Service Worker intercepts /decrypt-stream/* URLs and handles HTTP Range requests for seeking, enabling random-access decryption via BigInt counter math",
+        "deleteTestAccount() helper already exists in tests/sdk-e2e/src/fixtures/test-harness.ts (DELETE /auth/account with { confirmation: 'DELETE' }) but is only used in recovery.spec.ts",
+        "Only 1 of 12 E2E specs (recovery.spec.ts) calls deleteTestAccount() in teardown — load-test.spec.ts has the helper but doesn't invoke it",
+        "35 unit tests exist for crypto in packages/crypto but zero E2E tests cover AES-CTR streaming — Phase 12.1 left a human verification checklist that was never automated",
+        ".planning/codebase/ contains 7 structured docs (ARCHITECTURE, CONCERNS, CONVENTIONS, INTEGRATIONS, STACK, STRUCTURE, TESTING) totaling ~152KB"
+      ],
+      "code": [
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "deleteTestAccount() helper defined here — reusable for all spec teardowns"
+        },
+        {
+          "path": "src/streaming-crypto.service.ts",
+          "finding": "CTR/GCM mode selection logic — CTR for \u003e256KB media, GCM fallback"
+        },
+        {
+          "path": "src/decrypt-sw.ts",
+          "finding": "Service Worker handling /decrypt-stream/* URL interception and HTTP Range requests for media seeking"
+        }
+      ],
+      "workflow": [
+        "map-codebase workflow supports Refresh/Update/Skip options when .planning/codebase/ already exists — user can selectively update individual docs",
+        "Spawning parallel research agents (one for teardown patterns, one for streaming impl) is effective for gathering multi-domain context without polluting main context"
+      ]
+    },
+    "friction": [
+      "Link/unlink auth methods was initially listed as high-feasibility E2E candidate but user clarified it belongs in full-lifecycle flow — requires better upfront categorization of auth-dependent features"
+    ],
+    "open_items": [
+      "Create shared deleteAccount teardown helper for web-e2e and wire into all 12 specs' afterAll hooks",
+      "Build media-preview.spec.ts covering PDF viewer, video player, audio player",
+      "Build streaming-playback.spec.ts covering CTR mode selection, SW interception (/decrypt-stream/* requests), seeking behavior, progress tracking 0-100%, and GCM fallback for \u003c256KB files",
+      "Build batch-download.spec.ts covering multi-select, zip download, and zip contents verification",
+      "Decide whether to track these as a GSD milestone or proceed directly to implementation"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-28T02:02:03.31939Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 72,
+    "human_removed": 6,
+    "total_committed": 1,
+    "agent_percentage": 0
+  }
+}

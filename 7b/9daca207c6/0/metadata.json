@@ -1,0 +1,93 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "7b9daca207c6",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T04:08:14.53521Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "01aef33d4768",
+  "token_usage": {
+    "input_tokens": 170,
+    "cache_creation_tokens": 188883,
+    "cache_read_tokens": 20460861,
+    "output_tokens": 42712,
+    "api_call_count": 159
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Complete Phase 20 (Vault Migration) gap closure by removing dead migration code from API and client, then get PR #344 merged by resolving all review comments.",
+    "outcome": "Gap closure plans (20-05, 20-06) executed successfully, all 9 verification truths passed, and all PR review threads resolved across 4 rounds — including a critical vault.rs init ordering bug fix, security fixes to recovery.html, and zero-length key validation added to both TypeScript and Rust.",
+    "learnings": {
+      "repo": [
+        "Phase 20 vault migration: server is now zero-knowledge — DB columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) are fully dropped; all crypto material lives exclusively in IPFS v2 blobs",
+        "Orval API client regeneration does not automatically delete stale model files — manual removal of obsolete files (VaultResponseDtoEncryptedRootFolderKey, VaultResponseDtoEncryptedRootIpnsPrivateKey model files) and index.ts exports is required after schema changes",
+        "NestJS validation pipe rejects extra properties by default — SDK E2E test harness was still sending encryptedRootFolderKey/encryptedRootIpnsPrivateKey on vault init, causing 400 errors in CI",
+        "Web client and desktop Rust client had divergent vault init ordering: web correctly published IPFS blob before backend registration, but desktop Rust called /vault/init first — if IPFS upload failed, backend had orphaned vault row",
+        "Recovery tool (recovery.html) inline deserializeVaultBlobV2 was a copy of the core library function but lacked the zero-length key_len rejection added to blob.ts"
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 36,
+          "end_line": 46,
+          "finding": "POST /vault/init was called before IPFS upload + IPNS publish — reordered so backend registration only happens after successful IPFS operations to prevent orphaned vault rows"
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 56,
+          "end_line": 58,
+          "finding": "Zero-length key_len rejection added to both serializeVaultBlobV2 and deserializeVaultBlobV2 to enforce invariant in both directions"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "line": 69,
+          "end_line": 72,
+          "finding": "Zero-length key rejection added to both Rust serialize and deserialize paths to match TypeScript behavior — byte-identical cross-platform invariant"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 816,
+          "end_line": 820,
+          "finding": "All 6 fetch() calls wrapped with fetchWithTimeout helper (AbortController, 15s for IPNS resolution, 30s for IPFS content fetch) to prevent hung requests"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1369,
+          "end_line": 1380,
+          "finding": "rootIpnsName validated against ^k[0-9a-z]{20,}$ before use in innerHTML; escapeHtml helper added for exportedAt and derivationInfo fields; encryptedRootIpnsPrivateKey made optional in export-file path"
+        },
+        {
+          "path": "packages/api-client/src/models/index.ts",
+          "finding": "Stale exports for VaultResponseDtoEncryptedRootFolderKey and VaultResponseDtoEncryptedRootIpnsPrivateKey remained after orval regeneration and needed manual removal"
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "encryptVaultKeys import and crypto field usage in vault init request body were not cleaned up during Phase 20 execution — needed separate fix after CI failure"
+        }
+      ],
+      "workflow": [
+        "Outside-diff review comments on GitHub are easy to miss — they appear in the review body text rather than as inline thread annotations and won't show up in the standard reviewThreads GraphQL query",
+        "GSD gap closure mode (--gaps-only) correctly skips research phase and reads VERIFICATION.md gaps directly — planning and execution flow is identical to normal phases",
+        "Regression gate caught 143 prior-phase tests cleanly across 5 test suites before verification ran",
+        "CodeRabbit and Copilot reviews surfaced complementary issues — CodeRabbit caught security/input issues, Copilot caught symmetric validation gaps across language boundaries"
+      ]
+    },
+    "friction": [
+      "SDK E2E tests were not updated during plan execution (20-05/20-06) and only failed in CI — gap in the executor's awareness that E2E test fixtures need updating alongside DTO changes",
+      "Orval silently leaves stale model files behind after regeneration — no warning or cleanup, discovered only via CodeRabbit review comment",
+      "Outside-diff GitHub review comment (vault.rs init ordering) was invisible to the standard resolve-pr-reviews workflow and required manual URL lookup to discover",
+      "Verification file path lookup required multiple bash fallback commands due to working directory ambiguity between cipher-box and cipher-box-phase-20 roots",
+      "Plans were already committed by the planner agent before the orchestrator attempted to commit — double-commit attempt needed detection logic"
+    ],
+    "open_items": [
+      "2 items need human verification in a live environment: (1) new user init publishes v2 blob to IPFS before API registration, (2) recovery tool IPFS-direct path with real vault and real IPFS gateway",
+      "Next phase is Phase 23 — /gsd:discuss-phase 23 or /gsd:plan-phase 23 is the suggested next step",
+      "Desktop Rust vault init reordering (vault.rs) should be covered by an integration test to prevent regression — currently only verified by code review"
+    ]
+  }
+}

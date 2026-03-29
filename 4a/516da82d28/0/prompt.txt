@@ -1,0 +1,9 @@
+have all the phase 22 research and planning been committed to main directly?
+
+---
+
+we dont need a separate planning branch, just commit directly to feat/phase-22-{slug}
+
+---
+
+/gsd:execute-phase 22

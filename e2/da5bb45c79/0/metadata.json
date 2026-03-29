@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e2da5bb45c79",
+  "session_id": "e46def97-0d75-426f-9c5d-65e29924690b",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T00:42:05.100153Z",
+  "branch": "docs/update-codebase-map",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "455ae44ccc05",
+  "token_usage": {
+    "input_tokens": 77,
+    "cache_creation_tokens": 54257,
+    "cache_read_tokens": 2543641,
+    "output_tokens": 10659,
+    "api_call_count": 50
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Update the codebase map documents (primarily CONCERNS.md) to reflect work completed in phases 28-33, then clean up stale references and sensitive data from planning docs.",
+    "outcome": "CONCERNS.md and STRUCTURE.md were updated to reflect resolved concerns and structural changes from phases 28-33; stale references (legacy POC, docker host IP, phase-specific status labels) were cleaned from planning docs; changes were committed to a PR (FSM1/cipher-box#390).",
+    "learnings": {
+      "repo": [
+        "Phase 28 removed legacy POC directory (commit ee9bcd4e4) and replaced 127 console.* calls with structured logger at apps/web/src/lib/logger.ts",
+        "Phase 30 added Grafana Faro observability (apps/web/src/lib/faro.ts) and Prometheus metrics (apps/api/src/metrics/), but registerFaroTransport() is defined and never called — logger errors don't reach Faro",
+        "Phase 31 decomposed useSharedNavigation.ts (1199→378 lines) into 6 files and FileBrowser.tsx (964→362 lines)",
+        "Phase 32 resolved sync FilePointer blocking on macOS; Phase 33 completed the same fix for Windows (crates/fuse/src/platform/windows/read_ops.rs)",
+        "apps/web/src/lib/web3auth/hooks.ts retains 12 unguarded console.time/timeEnd calls not covered by Phase 28",
+        "FUSE production code has 19+ mutex lock().unwrap() sites that can cause cascading panics on poisoned mutex",
+        "IPNS unenrollment is fire-and-forget with no persistence across tab closure",
+        "192.168.133.114 (docker host IP) was present in 15 planning files across 30 occurrences — sanitized to \u003cdocker-host\u003e"
+      ],
+      "code": [
+        {
+          "path": ".planning/codebase/CONCERNS.md",
+          "line": 42,
+          "end_line": 42,
+          "finding": "Legacy POC concern was stale — POC directory was removed in Phase 28 (commit ee9bcd4e4)"
+        },
+        {
+          "path": ".planning/codebase/STRUCTURE.md",
+          "line": 535,
+          "end_line": 535,
+          "finding": "Docker host IP reference was stale and unnecessary in env vars table"
+        },
+        {
+          "path": ".planning/codebase/STRUCTURE.md",
+          "line": 539,
+          "end_line": 561,
+          "finding": "Status column in env vars table contained phase references and 'generated' labels that were unnecessary noise"
+        }
+      ],
+      "workflow": [
+        "When main has diverged, stash specific files, hard reset to origin/main, then restore the stash — avoids merge conflicts while preserving in-progress work",
+        "Re-run mapper agents after pulling in new phase work rather than manually editing, since agents do a more thorough audit",
+        "Codebase map docs should not contain internal IP addresses, phase references in status columns, or references to removed directories — these become stale quickly",
+        "The gsd-codebase-mapper agent reliably identifies both resolved concerns AND new concerns introduced by the work it's reviewing"
+      ]
+    },
+    "friction": [
+      "Initial commit diverged from origin/main because Phase 33 was merged mid-session, requiring a stash/reset/restore dance before re-running the concerns mapper",
+      "The concerns mapper ran twice due to the diverged branch issue — first pass was partially wasted work",
+      "Mapper agent produced CONCERNS.md with a stale legacy POC entry despite Phase 28 having removed it — required manual correction",
+      "STRUCTURE.md env vars table had phase-specific status labels that needed a separate cleanup pass after the mapper ran"
+    ],
+    "open_items": [
+      "registerFaroTransport() is defined but never called — logger.error/warn calls don't reach Faro (new concern in CONCERNS.md)",
+      "web3auth/hooks.ts has 12 console.time/timeEnd calls not covered by Phase 28 logging migration",
+      "19+ mutex lock().unwrap() sites in FUSE production code risk cascading panics on poisoned mutex",
+      "IPNS unenrollment is fire-and-forget with no persistence across tab closure",
+      "folder.service.ts (1059 lines) and bin.service.ts (971 lines) are still large candidates for future decomposition",
+      "Windows FilePointer async resolution (Phase 33) was merged but worth verifying no remaining sync paths exist"
+    ]
+  }
+}

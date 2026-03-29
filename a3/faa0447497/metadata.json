@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a3faa0447497",
+  "strategy": "manual-commit",
+  "branch": "fix/vault-init-folder-ipns-duplicate",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/a3/faa0447497/0/metadata.json",
+      "transcript": "/a3/faa0447497/0/full.jsonl",
+      "content_hash": "/a3/faa0447497/0/content_hash.txt",
+      "prompt": "/a3/faa0447497/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 381,
+    "cache_creation_tokens": 544223,
+    "cache_read_tokens": 48853046,
+    "output_tokens": 92553,
+    "api_call_count": 285
+  }
+}

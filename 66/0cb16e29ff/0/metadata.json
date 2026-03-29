@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "660cb16e29ff",
+  "session_id": "20f4a3f5-eda6-4aef-a4d0-b4bd794aa423",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T19:23:43.652056Z",
+  "branch": "docs/phase-20-context",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "b32b45890674",
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 111113,
+    "cache_read_tokens": 4595035,
+    "output_tokens": 17737,
+    "api_call_count": 50
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Capture implementation decisions for Phase 20 (Vault Migration) via discuss-phase, then kick off plan-phase to research and create executable PLAN.md files for moving rootFolderKey from the database into IPFS vault blob v2 format.",
+    "outcome": "CONTEXT.md was created and committed on a feature branch with all key migration decisions locked. plan-phase ran successfully: research (20-RESEARCH.md) and validation strategy (20-VALIDATION.md) were generated and committed; planner and checker agents were spawned as part of the standard workflow.",
+    "learnings": {
+      "repo": [
+        "Vault blob v2 format is defined as: 0x02 | uint16 key_length | ECIES_key | AES_GCM_metadata — this is the migration target format",
+        "encryptedRootFolderKey and encryptedRootIpnsPrivateKey are both stored on the vault DB row and both need to be NULLed post-migration (not just one)",
+        "IPNS key is HKDF-derivable, making the stored DB copy redundant — already confirmed in desktop Rust code",
+        "Phase 18 added server-side Prometheus histograms for IPNS resolve/publish; client-side end-to-end journey timing (login-to-vault) is planned for Phase 22",
+        "Kubo performance is a known bottleneck and active infra work is in-flight — silent DB fallback is the safety net until Kubo proves out",
+        "Blob v2 logic will live in @cipherbox/core (TypeScript) with a Rust equivalent in the desktop app",
+        "Migration fires on next login, not on publish — dormant accounts are not force-migrated",
+        "Per-user phased rollout is gated by a migratedAt timestamp on the vault row"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/vault/entities/vault.entity.ts",
+          "finding": "Contains encryptedRootFolderKey and encryptedRootIpnsPrivateKey columns — both to be NULLed after v2 blob is confirmed written, with column DROP deferred until all users migrated"
+        },
+        {
+          "path": "packages/core/src/vault/init.ts",
+          "finding": "Vault initialization logic lives here in @cipherbox/core — home for blob v2 read/write in TypeScript"
+        },
+        {
+          "path": "packages/core/src/vault/types.ts",
+          "finding": "Vault type definitions — will need updating for blob v2 format"
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "API vault service — migration trigger (on next login) and dual-write logic lands here"
+        },
+        {
+          "path": "apps/web/src/stores/vault.store.ts",
+          "finding": "Web client vault store — needs v2 blob parsing on login read path"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop Rust vault commands — confirmed IPNS key is HKDF-derivable; needs Rust blob v2 write on root folder publish"
+        }
+      ],
+      "workflow": [
+        "The discuss-phase workflow skips already-decided gray areas from prior CONTEXT.md files — Phase 19/19.1 decisions (IPNS resolution strategy, SDK architecture) were carried forward without re-asking",
+        "Silent DB fallback is the recommended pattern when introducing a new IPFS-dependent login flow — allows gradual rollout and benchmarking before cutting over",
+        "The commit signing failure (1Password agent unavailable in subprocess) is a known friction point — the workaround is to commit from a signing-capable terminal",
+        "The assistant correctly caught that it should not commit directly to main and created a feature branch (docs/phase-20-context) before committing"
+      ]
+    },
+    "friction": [
+      "git commit failed mid-workflow because the 1Password signing agent was unavailable in the subprocess context — user was AFK and missed the notification",
+      "Initial commit attempt was targeting main instead of a feature branch — caught and corrected after user pointed it out",
+      "System readiness question was framed too narrowly initially, requiring a follow-up free-text exchange to capture the Kubo performance context"
+    ],
+    "open_items": [
+      "Column DROP migration for encryptedRootFolderKey and encryptedRootIpnsPrivateKey — deferred until all users have been migrated to v2 blob",
+      "IPFS-only retry-then-error mode (removing silent DB fallback) — deferred until Kubo performance improvements prove out in production",
+      "Client-side end-to-end 'first login → fully loaded vault' baseline metrics — Phase 22 will add this instrumentation",
+      "Stop sending encryptedRootIpnsPrivateKey on vault init — API will accept but ignore; formal deprecation/removal is a follow-on task",
+      "20-RESEARCH.md and 20-VALIDATION.md were committed but PLAN.md files were still being generated at transcript end — planning not yet complete"
+    ]
+  }
+}

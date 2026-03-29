@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "2cb8b524a301",
+  "session_id": "2c89ddf4-4e09-4a48-8d9f-d3abc435dfff",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T03:53:26.709343Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "27d42d65df69",
+  "token_usage": {
+    "input_tokens": 95,
+    "cache_creation_tokens": 293721,
+    "cache_read_tokens": 6403426,
+    "output_tokens": 22878,
+    "api_call_count": 75
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "The user wanted to scope and plan Phase 27: Writable Shares (PoC) — extending Phase 14's read-only sharing to support read-write shares by leveraging CipherBox's existing server-coordinated IPNS conflict resolution.",
+    "outcome": "Phase 27 was added to the roadmap with a full CONTEXT.md capturing implementation decisions. Research and a VALIDATION.md were generated; plan-phase was blocked at the UI design contract gate, which triggered /gsd:ui-phase 27. The UI-SPEC was written but failed checker review and was sent back for revision — session ended mid-revision.",
+    "learnings": {
+      "repo": [
+        "CipherBox's server-relayed IPNS architecture (all publishes go through the API) sidesteps the general 'unsolved multi-writer IPNS' problem — the API acts as the coordination point, so sequence-number concurrency control works regardless of how many writers there are.",
+        "Vault-level IPNS keys (vault, vault-key-blob, BYO-IPFS config, device registry) are HKDF-derived from the secp256k1 private key to enable self-sovereign discovery before any decryption. Folder and file IPNS keys are randomly generated because their IPNS names are stored in parent metadata.",
+        "File IPNS keys were deliberately migrated from HKDF derivation to random generation (2026-02-21) specifically to decouple the IPNS private key from the master key, enabling future write-sharing without exposing the user's secp256k1 key.",
+        "For writable shares, the gap is small: the IPNS private key already exists as a random key wrapped in parent metadata — it just needs to also be ECIES-wrapped to the recipient's public key (a new encryptedIpnsKey column on the Share entity).",
+        "Phase 14 established the shares + share_keys table schema, lazy key rotation on revoke, and the terminal-style UI (--share, [RO] badge, ~/shared) that Phase 27 extends.",
+        "The planning docs describe 'unsolved multi-writer IPNS' as the blocker for writable shares, but this refers to the IPNS DHT layer — CipherBox bypasses this entirely via API-coordinated publishing, making the conflict resolution already in place sufficient."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/ipns/ipns.service.ts",
+          "line": 181,
+          "end_line": 192,
+          "finding": "Server-side optimistic concurrency check: expectedSequenceNumber validated before every IPNS publish, regardless of which user triggers it — works identically for multi-writer scenarios."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 196,
+          "end_line": 224,
+          "finding": "409 conflict detection with automatic single-retry + re-sync on publish collision."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 106,
+          "end_line": 106,
+          "finding": "Subfolder IPNS keys generated via generateEd25519Keypair() — random, not derived, making them independently shareable."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/ipns.service.ts",
+          "line": 344,
+          "end_line": 355,
+          "finding": "Sequence comparison between network and DB cache — highest wins for conflict resolution."
+        },
+        {
+          "path": "packages/crypto/src/vault/derive-ipns.ts",
+          "finding": "Vault-level IPNS keys derived via HKDF from secp256k1 private key using domain strings like 'cipherbox-vault-ipns-v1'."
+        },
+        {
+          "path": "packages/core/src/file/derive-ipns.ts",
+          "line": 102,
+          "end_line": 102,
+          "finding": "generateFileIpnsKeypair() — file IPNS keys are random (migrated from HKDF, per 2026-02-21 security review)."
+        },
+        {
+          "path": ".planning/todos/done/2026-02-21-random-file-ipns-keys.md",
+          "finding": "Documents rationale for switching file IPNS keys to random: deterministic HKDF derivation would have prevented write-sharing on individual files."
+        },
+        {
+          "path": ".planning/milestones/m2/phases/14-user-to-user-sharing/14-CONTEXT.md",
+          "line": 9,
+          "end_line": 9,
+          "finding": "Phase 14 explicitly scoped to read-only sharing; read-write sharing deferred as a future phase."
+        }
+      ],
+      "workflow": [
+        "The gsd:add-phase tool generates slugs automatically from the full description text — for long phase descriptions this produces unwieldy directory names requiring manual rename and roadmap entry correction.",
+        "The plan-phase UI design contract gate (step 5.6) triggers mid-flow when frontend indicators are found, requiring a full /gsd:ui-phase run before plan-phase can continue — this is a workflow detour that should be anticipated for any phase touching UI."
+      ]
+    },
+    "friction": [
+      "gsd-tools auto-generated an excessively long slug from the full phase description; required manual directory rename, roadmap entry edit, and summary table correction.",
+      "The depends-on field in the auto-generated ROADMAP entry defaulted to Phase 26 instead of the semantically correct Phase 14 — required manual correction.",
+      "plan-phase interrupted mid-flow at the UI design contract gate, requiring the user to run /gsd:ui-phase 27 as a separate command before returning to plan-phase.",
+      "UI checker found issues with the generated UI-SPEC on the first pass, requiring a revision iteration — session ended before the revision completed."
+    ],
+    "open_items": [
+      "UI-SPEC revision in progress (checker found issues, researcher revision spawned but session ended) — must complete before re-running /gsd:plan-phase 27.",
+      "plan-phase 27 not yet completed — no PLAN.md files generated yet.",
+      "Metadata-embedded IPNS key delivery (hide social graph from server by embedding encrypted keys in folder metadata rather than storing on server) — deferred to future phase.",
+      "Attribution / audit trail for writes in shared folders — explicitly deferred, not in Phase 27 PoC scope.",
+      "Transitive re-sharing — deferred, out of scope for Phase 27.",
+      "TEAM-11 (Milestone 4): cryptographic read/write key hierarchy with separate key trees — Phase 27 is a PoC using the existing single-key model; proper key hierarchy is a later milestone."
+    ]
+  }
+}

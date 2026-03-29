@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8a88063964fc",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T00:02:58.963043Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/commands/vault.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "59f166969069",
+  "token_usage": {
+    "input_tokens": 6473,
+    "cache_creation_tokens": 154114,
+    "cache_read_tokens": 4662536,
+    "output_tokens": 25546,
+    "api_call_count": 60
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute phase 20 (vault-migration) of the cipher-box project using GSD wave-based parallel execution, then perform a security review and code cleanup of all phase 20 work.",
+    "outcome": "All 4 plans executed successfully across 3 waves. Two HIGH security issues were fixed (key length bounds checking, sensitive field redaction in Debug impls). Code simplification fixed a duplicate HKDF derivation and a double ECIES wrap in desktop vault init. Phase 20 checkpoint is still pending human verification of the web client login flow.",
+    "learnings": {
+      "repo": [
+        "The project uses GSD (get-shit-done) workflow system with wave-based parallel plan execution via subagents.",
+        "cipher-box uses a vault blob v2 binary format for IPFS-stored encrypted vault keys, replacing the previous DB-stored approach.",
+        "The migration is lazy: non-migrated users trigger migration on first login; migrated users read rootFolderKey from IPFS v2 blob via HKDF-derived IPNS keypair.",
+        "orval (API client codegen) generates `{ [key: string]: unknown } | null` instead of `string | null` for nullable string fields — this is a known orval bug requiring `as unknown as string` casts as the correct workaround.",
+        "The project has a custom security:review skill that produces structured reports to `.planning/security/REVIEW-[timestamp].md`.",
+        "Desktop (Tauri/Rust) and web client both need to handle v2 blob format; Rust implementation lives in `src/crypto/vault_blob.rs`."
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 was changed to return Result to enforce key length bounds checking — all callers needed updating to handle the Result."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse were using derived Debug which would log encrypted key material. Fixed with custom Debug impls that redact sensitive fields."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Had a double ECIES wrap — the already-wrapped key was being re-wrapped before vault init. Fixed to reuse the existing wrapped key."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "PATH A (migrated user login) had duplicate HKDF derivation. Simplified to derive once and reuse."
+        },
+        {
+          "path": "packages/api-client/src/models/vaultResponseDtoEncryptedRootFolderKey.ts",
+          "finding": "orval generates object type instead of string for nullable fields — adding `type: String` to the NestJS DTO does not fix this because the OpenAPI spec was already correct. The bug is in orval's handling of nullable string schemas."
+        }
+      ],
+      "workflow": [
+        "GSD init tool must be run from the correct working directory — phase dirs may be siblings of the main repo (e.g. cipher-box-phase-20), not inside it.",
+        "Security review skill can be run inline during a GSD checkpoint pause to review implementation before approving continuation.",
+        "When orval codegen doesn't fix a type issue after DTO changes, check if the OpenAPI spec actually changed before pursuing further — the spec may already be correct and the bug is in orval itself.",
+        "The classifyHandoffIfNeeded error is a Claude Code runtime bug (fires post-completion), not a GSD failure — spot-check SUMMARY.md + git commits to determine actual success."
+      ]
+    },
+    "friction": [
+      "GSD init tool failed on first run because it was executed from the wrong directory (cipher-box instead of cipher-box-phase-20).",
+      "API error (ConnectionRefused) interrupted the first security review invocation, requiring a retry.",
+      "orval codegen investigation consumed multiple tool calls before confirming the `as unknown as string` casts are the correct/unavoidable workaround for a pre-existing orval bug — DTO change had to be reverted.",
+      "serialize_vault_blob_v2 return type change to Result required updating multiple call sites (vault.rs, fuse/mod.rs) and all test calls in vault_blob.rs."
+    ],
+    "open_items": [
+      "Human verification of plan 20-04 still pending: login with non-migrated account to trigger lazy migration, re-login to verify IPFS v2 blob PATH A, test /recovery.html both methods.",
+      "M-1: Recovery tool private key not zeroed after use.",
+      "M-2: No dedup guard on concurrent migration from multiple browser tabs — could cause duplicate migration calls.",
+      "M-3: Unnecessary ECIES re-wrap on every root folder publish (redundant crypto work on each write).",
+      "L-1: Zero-length key accepted by deserializers (bounds check only enforces upper bound).",
+      "L-2: No SRI hashes on CDN scripts in recovery.html.",
+      "orval nullable string type generation bug tracked as known issue — `as unknown as string` casts remain in codebase as workaround."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T00:02:20.939806Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}

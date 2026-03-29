@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c363aacf286e",
+  "strategy": "manual-commit",
+  "branch": "fix/writable-file-share-id-mismatch",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/api/src/app.module.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c3/63aacf286e/0/metadata.json",
+      "transcript": "/c3/63aacf286e/0/full.jsonl",
+      "content_hash": "/c3/63aacf286e/0/content_hash.txt",
+      "prompt": "/c3/63aacf286e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7395,
+    "cache_creation_tokens": 906394,
+    "cache_read_tokens": 66775471,
+    "output_tokens": 92370,
+    "api_call_count": 345
+  }
+}

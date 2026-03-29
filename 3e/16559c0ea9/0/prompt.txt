@@ -1,0 +1,29 @@
+https://github.com/FSM1/cipher-box/actions/runs/23574752203/job/68644678809 vault recovery e2e is still failing. 
+
+unless you know what the problem is, you will get the e2e tests passing locally before committing to a branch and PR'ing
+
+---
+
+<task-notification>
+<task-id>bhpgce5u2</task-id>
+<tool-use-id>toolu_01QEoRhE81yaYWMUhLARAZBX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bhpgce5u2.output</output-file>
+<status>completed</status>
+<summary>Background command "Start API with test config" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bhpgce5u2.output
+
+---
+
+<task-notification>
+<task-id>b8evtj5dt</task-id>
+<tool-use-id>toolu_01LXuw6L4Sy65HTeVzrbYCoH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/b8evtj5dt.output</output-file>
+<status>completed</status>
+<summary>Background command "Start web dev server" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/b8evtj5dt.output
+
+---
+
+/resolve-pr-reviews

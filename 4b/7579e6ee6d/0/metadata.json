@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4b7579e6ee6d",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T14:50:09.059117Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "28c437fc4b2b",
+  "token_usage": {
+    "input_tokens": 154,
+    "cache_creation_tokens": 205593,
+    "cache_read_tokens": 13533045,
+    "output_tokens": 25872,
+    "api_call_count": 128
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Complete Phase 23 (Rust SDK Extraction) gap closure execution, then run a security review on the phase's cryptographic code and increase Rust test coverage to satisfy Codecov requirements for PR #352.",
+    "outcome": "Phase 23 fully completed with all 8 plans executed and bookkeeping committed. Security review identified and fixed 2 HIGH findings (Ed25519 zeroization). 163 new unit tests added across 3 Rust crates (168 total). PR #352 created, merged with main, and CI failures fixed.",
+    "learnings": {
+      "repo": [
+        "Phase 23 is 'rust-sdk-extraction' — extracts crypto, core, fuse, sdk, and api crates from the desktop app monolith into a workspace of 5 independent crates.",
+        "The workspace uses a vendored fuser crate at apps/desktop/src-tauri/vendor/fuser patched via [patch.crates-io] in the root Cargo.toml — this applies workspace-wide including on Windows builds.",
+        "Ed25519 private key material in generate_ed25519_keypair was returned as bare Vec\u003cu8\u003e, leaving key bytes in freed memory; callers were wrapping with Zeroizing::new() redundantly.",
+        "ed25519-dalek's SigningKey only zeroes on drop when the 'zeroize' feature flag is explicitly enabled in the dependency declaration.",
+        "fetch_and_populate_folder and resolve_file_pointers_blocking existed as dead code in both platform paths (macOS/Linux operations.rs and Windows operations.rs) with no external callers.",
+        "CI runs cargo llvm-cov --workspace on Linux for Rust coverage reporting to Codecov; tests added to any workspace crate are automatically included.",
+        "The cross-language parity CI job was missing pnpm version specification (needs version: 10 to match other jobs); other jobs in ci.yml correctly specify version: 10.",
+        "KeyState and CipherBoxFS key fields already use Zeroizing\u003cVec\u003cu8\u003e\u003e with proper clear() on logout/unmount — the zeroization pattern is established but was not applied to keypair generation output."
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "finding": "generate_ed25519_keypair return type changed from (Vec\u003cu8\u003e, Vec\u003cu8\u003e) to (Vec\u003cu8\u003e, Zeroizing\u003cVec\u003cu8\u003e\u003e) to wrap private key material; callers in write_ops.rs were wrapping redundantly with Zeroizing::new()"
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 472,
+          "end_line": 522,
+          "finding": "After return type change, ipns_private_key.try_into() for Vec\u003cu8\u003e-\u003e[u8;32] conversion needed to use Vec::from(ipns_private_key).try_into() since Zeroizing\u003cVec\u003cu8\u003e\u003e doesn't implement TryInto\u003c[u8;32]\u003e directly"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "Same try_into() pattern on Zeroizing\u003cVec\u003cu8\u003e\u003e required Vec::from() unwrap before conversion"
+        },
+        {
+          "path": "crates/fuse/src/operations.rs",
+          "line": 51,
+          "finding": "fetch_and_populate_folder and resolve_file_pointers_blocking were dead code — resolve_* only called from fetch_*, and fetch_* had no external callers; ~181 lines removed across both platform files"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/build.rs",
+          "line": 8,
+          "end_line": 9,
+          "finding": "Build script called unimplemented!() on non-Linux without libfuse feature, causing Windows CI failures. Fixed by adding cfg(target_os = \"windows\") early return."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "finding": "Cross-language vector parity job missing 'version: 10' on pnpm/action-setup@v4 step, causing CI failure"
+        },
+        {
+          "path": "Cargo.toml",
+          "finding": "ed25519-dalek workspace dependency needed features = [\"zeroize\"] added for SigningKey to zero on drop"
+        }
+      ],
+      "workflow": [
+        "When a GSD executor agent disconnects mid-plan, spot-checking git log for phase-plan commit patterns and verifying acceptance criteria manually is the correct recovery path before creating SUMMARY.md.",
+        "1Password SSH signing agent can be flaky on first commit attempt; retrying 2-3 times before concluding it's unavailable is appropriate.",
+        "Zeroizing\u003cVec\u003cu8\u003e\u003e auto-derefs to \u0026[u8] transparently but does NOT implement TryInto\u003c[u8;32]\u003e — must use Vec::from(zeroizing_val).try_into() for array conversions.",
+        "Parallel agent spawning for independent test-writing tasks (one agent per crate) is effective; all three completed successfully and independently.",
+        "The security review command (security:review) produces a structured report at .planning/security/REVIEW-[timestamp].md and should be committed to the PR branch."
+      ]
+    },
+    "friction": [
+      "1Password SSH agent failed 3 consecutive commit attempts mid-session, requiring user to manually retry later after returning from AFK.",
+      "GSD executor agent connection refused (ConnectionRefused API error) mid-wave-1 execution, requiring manual resumption and spot-check recovery.",
+      "Zeroizing\u003cVec\u003cu8\u003e\u003e TryInto incompatibility was a non-obvious consequence of the return type change — required checking multiple call sites across platform-specific files.",
+      "The vendored fuser build.rs failure on Windows was not caught locally (macOS dev environment) and only surfaced in CI.",
+      "gh CLI output for failed CI jobs required multiple bash command iterations to extract actual compiler errors from verbose download/upload noise."
+    ],
+    "open_items": [
+      "AES-CTR lacks client-side CID integrity verification — client doesn't verify the IPFS CID after fetching bytes, leaving it vulnerable to bit-flip from a compromised relay (HIGH finding from security review, not fixed this session).",
+      "file_ipns_private_key in write_ops.rs (line ~174) uses ed25519_dalek directly with SigningKey::to_bytes().to_vec() rather than going through generate_ed25519_keypair — this secondary key generation path was noted as out of scope for the zeroization fix.",
+      "~30 test case suggestions from the security review (for AES-CTR attack scenarios, nonce reuse detection, replay attacks) were documented in the report but not implemented as actual tests.",
+      "Medium-priority security findings (4 MEDIUM, 5 LOW from review) were not addressed — only the 2 HIGH findings were fixed."
+    ]
+  }
+}

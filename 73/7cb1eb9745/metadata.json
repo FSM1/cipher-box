@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "737cb1eb9745",
+  "strategy": "manual-commit",
+  "branch": "docs/milestone-v1.1-completion",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-03-28-add-aes-ctr-streaming-playback-e2e-tests.md",
+    ".planning/todos/pending/2026-03-28-add-batch-download-zip-e2e-tests.md",
+    ".planning/todos/pending/2026-03-28-add-media-preview-e2e-test-suite.md",
+    ".planning/todos/pending/2026-03-28-add-shared-deleteaccount-teardown-to-all-e2e-specs.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/73/7cb1eb9745/0/metadata.json",
+      "transcript": "/73/7cb1eb9745/0/full.jsonl",
+      "content_hash": "/73/7cb1eb9745/0/content_hash.txt",
+      "prompt": "/73/7cb1eb9745/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 11427,
+    "cache_read_tokens": 591617,
+    "output_tokens": 3775,
+    "api_call_count": 12
+  }
+}

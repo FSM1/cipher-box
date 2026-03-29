@@ -1,0 +1,21 @@
+/gsd:progress
+
+---
+
+/gsd:discuss-phase 23
+
+---
+
+any reason not to mirror the TS split? it seems like the logical route to take, with easily testable and verifiable boundaries, crypto being pure functions, core being domain, etc.
+
+---
+
+is it not realistic to utilize the openapi spec to generate a rust client, same as what is being done by orval for the ts api client?
+
+---
+
+I think that your eval is wrong - all 3 platforms are working and exist.
+
+---
+
+the current desktop e2e tests should remain as the golden target, but basically unit and integration tests need to be added

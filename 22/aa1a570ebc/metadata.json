@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "22aa1a570ebc",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 11,
+  "files_touched": [
+    ".planning/security/REVIEW-2026-03-25-phase-21.md",
+    "tee-worker/package-lock.json",
+    "tee-worker/src/__tests__/ssrf-validation.test.ts",
+    "tee-worker/src/routes/connection-test.ts",
+    "tee-worker/src/routes/migrate.ts",
+    "tee-worker/src/services/migration-worker.ts",
+    "tee-worker/src/services/ssrf-validation.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/22/aa1a570ebc/0/metadata.json",
+      "transcript": "/22/aa1a570ebc/0/full.jsonl",
+      "content_hash": "/22/aa1a570ebc/0/content_hash.txt",
+      "prompt": "/22/aa1a570ebc/0/prompt.txt"
+    },
+    {
+      "metadata": "/22/aa1a570ebc/1/metadata.json",
+      "transcript": "/22/aa1a570ebc/1/full.jsonl",
+      "content_hash": "/22/aa1a570ebc/1/content_hash.txt",
+      "prompt": "/22/aa1a570ebc/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 652,
+    "cache_creation_tokens": 656711,
+    "cache_read_tokens": 70957539,
+    "output_tokens": 121719,
+    "api_call_count": 443
+  }
+}

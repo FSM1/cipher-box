@@ -1,0 +1,13 @@
+continue please
+
+---
+
+REDACTED
+
+---
+
+ok is there a way to teleport this session to claude code on the docker host?
+
+---
+
+lets go with option 2 and use the built in gsd tools.

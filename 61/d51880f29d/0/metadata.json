@@ -1,0 +1,107 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "61d51880f29d",
+  "session_id": "16707061-06f8-49fd-82d9-2a0e213d2c5d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T21:45:38.020181Z",
+  "branch": "phase-30-web-app-observability",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "25fa6d0c8d52",
+  "token_usage": {
+    "input_tokens": 3402,
+    "cache_creation_tokens": 709759,
+    "cache_read_tokens": 85648338,
+    "output_tokens": 118629,
+    "api_call_count": 392
+  },
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "summary": {
+    "intent": "Manage a milestone from a single terminal using the GSD manager workflow — clean up stale state, advance phases 30-32 through discuss/plan/execute, create PRs, and resolve all reviewer feedback.",
+    "outcome": "Phases 30-32 fully executed with PRs created and all review threads resolved (19 for Phase 30, 6 for Phase 31); Phase 33 context and roadmap entry created; 73 new SDK unit tests added; FUSE thread blocking eliminated with async FilePointer resolution.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro SDK's TypeScript types reject null for setUser but runtime accepts it; the correct API is faro.api.resetUser() which is a type-safe alias",
+        "Global regex with 'g' flag — lastIndex must be reset before .test() to avoid stale state from a prior match on a different string",
+        "FUSE single-thread constraint: all FUSE-T/SMB callbacks run on one thread; block_with_timeout per FilePointer inside drain_refresh_completions could block for O(N×10s)",
+        "isForbiddenError was missing the response.status path that isConflictError had — asymmetric implementations caught in review",
+        "isDescendantOf self-identity: a node is a descendant of itself (returning false was a semantic bug)",
+        "Merge conflicts in .planning/ files always take origin/main as authoritative — planning state on main is the ground truth",
+        "check-api-client.sh uses git diff --quiet intentionally: it detects staged-but-not-committed output, not whether api:generate was ever run — removing it causes false positives",
+        "Phase 28 logger not yet merged; registerFaroTransport wiring in main.tsx is intentionally deferred until it ships",
+        "scrubObject needed to handle arrays explicitly — nested arrays were being cast to plain objects, losing their shape"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "line": 36,
+          "end_line": 36,
+          "finding": "HEX_KEY_PATTERN.lastIndex must be reset before .test() not after, to avoid stale regex state across calls"
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "line": 61,
+          "end_line": 75,
+          "finding": "scrubObject array handling: arrays need explicit Array.isArray check before Object.entries, otherwise they get scrubbed as objects and lose their structure"
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 617,
+          "end_line": 643,
+          "finding": "drain_refresh_completions called block_with_timeout per FilePointer synchronously — replaced with tokio::spawn tasks so FUSE thread never blocks on network I/O"
+        },
+        {
+          "path": "packages/sdk/src/error.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "isForbiddenError only checked top-level status; isForbiddenError should also check err?.response?.status === 403 to mirror isConflictError"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/tree.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "isDescendantOf(node, node) was returning false; self-identity case should return true"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "hideSharedItem callback was missing p.setSharedItems and p.setError in useCallback deps array"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 200,
+          "end_line": 215,
+          "finding": "Non-null assertions on uploadFile/download results — should be replaced with explicit assertion checks before access to get useful failure messages"
+        }
+      ],
+      "workflow": [
+        "Worktrees need explicit cleanup after PRs merge — stale worktrees block branch checkout and inflate the active worktree list",
+        "pnpm add must run in the correct package directory; if the dependency addition isn't committed with the lockfile, CI fails with module not found",
+        "Prettier formatting failures are a consistent CI trap — run pnpm format before committing agent-generated code",
+        "Background agents produce worktree branches like worktree-agent-{id}; these need to be cherry-picked or merged into the feature branch before PR creation",
+        "Phase 30 went through 3 separate CodeRabbit review rounds — privacy/scrubbing code gets heavy automated scrutiny; invest more in the first pass",
+        "Conflict markers can survive a merge commit if the file has multiple conflict sections — always read the full file after resolving, not just the hunks"
+      ]
+    },
+    "friction": [
+      "pnpm add @grafana/faro-web-tracing silently ran in the wrong context and didn't persist to package.json, causing a CI build failure that required a follow-up fix commit",
+      "captureConsoleDisabledLevels was passed to Faro but is not a valid option — Faro API docs/types did not surface this clearly, caught only by CI typecheck failure",
+      "Merge conflict markers survived in ROADMAP.md progress table after the initial merge commit, requiring a second cleanup commit",
+      "Phase 30 required 3 separate resolve-pr-reviews passes (19 total threads) — privacy scrubbing code attracted disproportionate reviewer attention",
+      "Phase 31 PR had lint failures immediately after creation due to prettier formatting on agent-generated code",
+      "Switching between the main repo and multiple agent worktrees caused branch confusion mid-session — a checkout ended up on the wrong branch after worktree removal"
+    ],
+    "open_items": [
+      "deleteItem test in packages/sdk/src/__tests__/client.test.ts has a pre-existing failure: ipnsControllerUnenrollBatch is not mocked, left over from Phase 29 changes",
+      "Phase 28 logger not yet shipped — registerFaroTransport wiring in main.tsx is commented out and deferred until Phase 28 merges; log level constants also deferred",
+      "Staging GitHub Actions secrets (VITE_FARO_URL, GRAFANA_FARO_API_KEY, GRAFANA_STACK_ID) need to be configured before Faro activates in staging builds",
+      "Phase 33 (Windows WinFsp async FilePointer resolution) deferred — context and roadmap entry created in PR #385, blocked on Phase 32 merge",
+      "D-09 (bin purgeExpired migration) and D-15 (bin.service.ts retirement) from Phase 31 context were explicitly deferred — bin.service.ts has 2 consumers remaining",
+      "registerFaroTransport mutable array injection pattern creates tight coupling to Phase 28 logger internals — acceptable for now but worth revisiting when logger ships"
+    ]
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5e6526bb9f68",
+  "session_id": "e46def97-0d75-426f-9c5d-65e29924690b",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T01:45:53.657437Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a8e64ee5754d",
+  "token_usage": {
+    "input_tokens": 3621,
+    "cache_creation_tokens": 157262,
+    "cache_read_tokens": 14009721,
+    "output_tokens": 35112,
+    "api_call_count": 146
+  },
+  "session_metrics": {
+    "turn_count": 27
+  },
+  "summary": {
+    "intent": "Update the codebase map (CONCERNS.md, STRUCTURE.md) to reflect completed phases 28-33, clean up stale planning docs, and plan Phase 34 for E2E test expansion.",
+    "outcome": "Updated and merged two PRs: codebase map refresh (PR #390) and docs cleanup including DEFERRED.md, ROADMAP.md Phase 34 addition, and security backlog audit (PR #391). Phase 34 research completed and planning in progress on branch test/phase-34-e2e-expansion.",
+    "learnings": {
+      "repo": [
+        "Phase 28 replaced all 127 console.* calls in the web app with a structured logger at apps/web/src/lib/logger.ts, but web3auth/hooks.ts still has 12 unguarded console.time/timeEnd calls",
+        "registerFaroTransport() is defined in the Grafana Faro setup but never called, meaning logger.error/warn calls do not reach Faro",
+        "Phase 31 decomposed useSharedNavigation.ts (1199→378 lines) and FileBrowser.tsx (964→362 lines); folder.service.ts (1059 lines) and bin.service.ts (971 lines) remain large",
+        "Phase 32 resolved the FUSE FilePointer sync-blocking issue on macOS; Phase 33 completed the Windows equivalent using rt.spawn() channel patterns",
+        "The legacy POC directory was removed in commit ee9bcd4e4 (Phase 28) — any references to it in planning docs are stale",
+        "Batch download in handleBatchDownload (useFileBrowserActions.ts:430-446) downloads files individually via downloadFromIpns — there is no zip generation despite todo description saying otherwise",
+        "CTR streaming mode requires BOTH STREAMING_MIME_TYPES membership AND file.size \u003e 256KB to trigger service worker interception",
+        "Media preview dialogs (Video, Audio, PDF) use CSS class selectors only (.video-player-modal etc.) with no data-testid attributes",
+        "BYO-IPFS load test execution remains infrastructure-blocked — no external IPFS provider set up for staging, same constraint as Phase 21",
+        "FUSE production code has 19+ mutex lock().unwrap() sites that can cause cascading panics on mutex poisoning",
+        "The Entire CLI injects git hooks (.husky/post-commit, pre-push, prepare-commit-msg, commit-msg.pre-entire) as local artifacts that are not in .gitignore",
+        "192.168.133.114 (docker host IP) appeared in 15 planning doc files across 30 occurrences — was sanitized to \u003cdocker-host\u003e",
+        "All 7 low-severity Phase 9 security backlog items (#13-19) were resolved organically in later phases without being marked done in LOW-SEVERITY-BACKLOG.md"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/lib/web3auth/hooks.ts",
+          "finding": "12 unguarded console.time/timeEnd calls surviving Phase 28 logger migration"
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "finding": "registerFaroTransport() defined but never called — logger errors/warnings don't reach Grafana Faro"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileBrowserActions.ts",
+          "line": 430,
+          "end_line": 446,
+          "finding": "handleBatchDownload downloads files individually, not as a zip — no zip library exists in codebase"
+        },
+        {
+          "path": "apps/api/src/services/folder.service.ts",
+          "finding": "1059 lines — candidate for future decomposition after Phase 31"
+        },
+        {
+          "path": "apps/api/src/services/bin.service.ts",
+          "finding": "971 lines — candidate for future decomposition after Phase 31"
+        },
+        {
+          "path": ".planning/codebase/STRUCTURE.md",
+          "line": 539,
+          "end_line": 561,
+          "finding": "Environment config table had stale phase annotations and a hard-coded docker host IP that were removed"
+        },
+        {
+          "path": ".planning/security/LOW-SEVERITY-BACKLOG.md",
+          "finding": "Items #13-19 (all Phase 9) were resolved in later phases but never marked — updated to reflect resolved status"
+        }
+      ],
+      "workflow": [
+        "When pulling after a docs-only commit diverges from origin, stash the changed files, reset to origin/main, then restore — avoids a merge conflict on planning docs",
+        "gsd-codebase-mapper agents sometimes commit to their own auto-named branches; cherry-pick the research commit to the correct feature branch and delete the agent branch",
+        "The gsd-tools.cjs commit tool respects commit_docs config and gitignore automatically — no need to manually stage files",
+        "Entire CLI hooks should be added to .git/info/exclude (not .gitignore) to suppress them from git status without affecting other contributors",
+        "CodeRabbit reviews docs PRs and will flag stale footer dates — worth updating last-modified dates when editing planning docs",
+        "Worktrees can be created off main mid-session to enable parallel work in a separate Claude session without affecting the current branch"
+      ]
+    },
+    "friction": [
+      "git pull failed with divergent branch error after docs commit landed on local branch while origin had Phase 33 merged — required manual stash/reset/restore dance",
+      "The concerns mapper ran twice because Phase 33 (Windows async FilePointer) had not been pulled locally during the first run",
+      "The researcher agent committed 34-RESEARCH.md to its own auto-generated branch instead of the current feature branch, requiring cherry-pick and branch cleanup",
+      "gh pr edit failed silently on first attempt (background task exit code 1) — retry succeeded",
+      "The plan-phase workflow spawned a planner agent but the transcript ends mid-planning, so planning outcome is unknown"
+    ],
+    "open_items": [
+      "Phase 34 planning still in progress — planner agent was spawned but transcript ends before completion",
+      "registerFaroTransport() never called — logger errors don't reach Grafana Faro (new CONCERNS.md entry)",
+      "12 residual console.time/timeEnd calls in apps/web/src/lib/web3auth/hooks.ts (new CONCERNS.md entry)",
+      "19+ mutex lock().unwrap() sites in FUSE production code risk cascading panics on mutex poisoning (new CONCERNS.md entry)",
+      "IPNS unenrollment is fire-and-forget with no persistence across tab closure (existing concern, updated)",
+      "BYO-IPFS load test baselines (todo #11) remain infrastructure-blocked pending external IPFS provider on staging",
+      "folder.service.ts (1059 lines) and bin.service.ts (971 lines) are candidates for future decomposition",
+      "Phase 34 todo files (#7-12) are still in .planning/todos/pending/ — to be moved to done/ when phase is planned/executed",
+      "12 low-severity Phase 5 security backlog items (#1-12) remain open in LOW-SEVERITY-BACKLOG.md",
+      "Media preview dialogs lack data-testid attributes — E2E tests will need to use CSS class selectors until testids are added",
+      "E2E test for batch download needs to verify individual file downloads, not zip extraction"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T01:45:11.111684Z",
+    "agent_lines": 10,
+    "human_added": 1596,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1606,
+    "agent_percentage": 0.62266500622665
+  }
+}

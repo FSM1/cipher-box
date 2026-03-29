@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ebf384ba3cad",
+  "session_id": "307145be-5d6b-4c58-9faa-418cafde1db6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T20:03:05.25166Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "tests/load/src/scenarios/byo-upload-throughput.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "9db0bd777f35",
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 109525,
+    "cache_read_tokens": 2291290,
+    "output_tokens": 10930,
+    "api_call_count": 41
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Execute Phase 21 (BYO IPFS Node Support) across 7 plans in 4 waves, implementing SDK pinning abstractions, API endpoints, settings UI, migration backend, and performance benchmarks.",
+    "outcome": "Waves 1-3 completed fully (plans 21-01 through 21-05). Wave 4 is in progress — 21-06 reached a human-verify checkpoint after building migration progress UI, and 21-07 (benchmarks) is still running. Phase not yet verified or closed.",
+    "learnings": {
+      "repo": [
+        "The web app does not have @noble/ed25519 as a direct dependency — HKDF/ed25519 derivations must go through @cipherbox/crypto package (deriveByoConfigIpnsKeypair pattern), not inlined in the web app.",
+        "BYO config is stored encrypted via ECIES in a dedicated IPNS entry, separate from the vault key IPNS entry — zero-knowledge design preserved.",
+        "Migration job system uses BullMQ with a NestJS processor; TEE worker has a separate migration route with SSRF protection for provider endpoint validation.",
+        "Dev environment uses a QEMU VM guest connecting to Docker services on the host via a bridge network (192.168.133.x subnet) — DHCP can reassign the host IP, requiring .env updates.",
+        "The isByoUser flag lives on the vault entity and is toggled via setByoStatus() in vault.service.ts; quota enforcement becomes advisory (non-enforced) for BYO users."
+      ],
+      "code": [
+        {
+          "path": "apps/api/.env",
+          "finding": "Contains hardcoded host IP (192.168.133.114) for Redis, PostgreSQL, and IPFS — DHCP reassigned to 192.168.133.12, requiring manual update of all 5 references."
+        },
+        {
+          "path": "packages/crypto/src/vault/derive-ipns.ts",
+          "finding": "Added deriveByoConfigIpnsKeypair following the same pattern as deriveVaultKeyIpnsKeypair — required because web app lacks @noble/ed25519 as a direct dep."
+        },
+        {
+          "path": "apps/web/src/components/settings/StorageTab.tsx",
+          "finding": "Save handler encrypts BYO config via ECIES and publishes to dedicated IPNS entry; also ECIES-wraps configs with TEE public key on provider change to trigger migration."
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "isUserByo() and setByoStatus() methods control BYO mode; advisory quota logic lives here alongside standard quota enforcement."
+        }
+      ],
+      "workflow": [
+        "GSD wave-based parallel execution works well for independent plans — 21-01/21-02 and 21-04/21-05 ran truly in parallel with no conflicts.",
+        "Checkpoint plans (autonomous: false) block the wave but parallel non-checkpoint plans complete independently — 21-05 finished while waiting for 21-04 checkpoint approval.",
+        "Dev environment connectivity issues (host IP changes) should be debugged by checking the gateway IP first (ip route show default) rather than assuming the configured IP is still valid.",
+        "OTP extraction from API console logs is a useful debugging shortcut during dev verification sessions."
+      ]
+    },
+    "friction": [
+      "Docker stack host IP changed after restart (DHCP reassigned 192.168.133.114 → 192.168.133.12), blocking API startup and requiring manual .env edits across 5 references.",
+      "QEMU VM network topology made debugging confusing — the VM cannot reach the host at 192.168.133.114 because that IP is the host's address on a different interface, not reachable from the guest bridge.",
+      "Redis port mismatch suspicion (6379 vs 6380) was a red herring — actual issue was the host IP change.",
+      "Two background `pnpm dev` processes were killed before producing useful output, requiring multiple restarts to get a stable dev server."
+    ],
+    "open_items": [
+      "21-06 checkpoint verification pending — user needs to test the complete BYO-IPFS feature E2E in the browser including migration progress UI.",
+      "21-07 (BYO performance benchmarks) still running — load test scenarios comparing BYO vs CipherBox-only baseline from Phase 19.2.",
+      "Phase 21 verification (gsd-verifier) not yet run — VERIFICATION.md not created.",
+      "apps/api/.env has hardcoded host IP — should be made dynamic or use a stable hostname to survive Docker stack restarts.",
+      "Untracked file in tests/load/src/scenarios/byo-upload-throughput.test.ts noted by 21-06 agent as out-of-scope — may need to be staged or addressed by 21-07."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T20:02:33.575065Z",
+    "agent_lines": 82,
+    "human_added": 3018,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3100,
+    "agent_percentage": 2.6451612903225805
+  }
+}

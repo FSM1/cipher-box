@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ba128befbc2f",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ba/128befbc2f/0/metadata.json",
+      "transcript": "/ba/128befbc2f/0/full.jsonl",
+      "content_hash": "/ba/128befbc2f/0/content_hash.txt",
+      "prompt": "/ba/128befbc2f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 158681,
+    "cache_read_tokens": 5124901,
+    "output_tokens": 19589,
+    "api_call_count": 65
+  }
+}

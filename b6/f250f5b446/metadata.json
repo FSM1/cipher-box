@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b6f250f5b446",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/b6/f250f5b446/0/metadata.json",
+      "transcript": "/b6/f250f5b446/0/full.jsonl",
+      "content_hash": "/b6/f250f5b446/0/content_hash.txt",
+      "prompt": "/b6/f250f5b446/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 207,
+    "cache_creation_tokens": 433597,
+    "cache_read_tokens": 22097407,
+    "output_tokens": 34829,
+    "api_call_count": 176
+  }
+}

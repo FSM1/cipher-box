@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "9f226b204288",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T03:47:37.337986Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "c67cc83e42c9",
+  "token_usage": {
+    "input_tokens": 102,
+    "cache_creation_tokens": 135667,
+    "cache_read_tokens": 9083097,
+    "output_tokens": 27325,
+    "api_call_count": 95
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Complete Phase 20 (Vault Migration) gap closure by removing dead migration code, then resolve all PR review comments from CodeRabbit, and fix SDK E2E test failures caused by the now-removed vault crypto DB columns.",
+    "outcome": "Phase 20 fully completed with 9/9 verification truths passing and GAP-01 resolved. All 6 CodeRabbit PR review threads resolved (3 fixed, 3 not applicable). SDK E2E tests fixed to remove references to dropped crypto fields.",
+    "learnings": {
+      "repo": [
+        "Vault blob v2 format is now canonical — DB columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) are fully dropped; server is zero-knowledge",
+        "InitVaultDto only accepts ownerPublicKey and rootIpnsName; NestJS validation pipe rejects extra properties with 'property should not exist'",
+        "VaultExportDto no longer contains encryptedRootFolderKey — any code asserting on that field needs updating",
+        "SDK E2E test harness (tests/sdk-e2e/src/fixtures/test-harness.ts) was still sending old crypto fields on vault init after the migration cleanup",
+        "Phase 20 had 4 original plans + 2 gap closure plans (20-05, 20-06) totaling 6 plans",
+        "recovery.html is a standalone IPFS-direct recovery tool with no bundler — plain JS with inline helpers",
+        "rootIpnsName format follows pattern ^k[0-9a-z]{20,}$ (alphanumeric, starts with k)"
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 105,
+          "end_line": 105,
+          "finding": "Deserialization did not reject zero-length key_len — added validation to throw on key_len === 0"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 816,
+          "end_line": 816,
+          "finding": "All fetch() calls lacked AbortController timeouts — added fetchWithTimeout helper with 15s/30s limits"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1369,
+          "end_line": 1369,
+          "finding": "rootIpnsName flowed into innerHTML unsanitized — added format validation and escapeHtml helper"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1463,
+          "end_line": 1463,
+          "finding": "Export-file path still tried to decrypt encryptedRootIpnsPrivateKey unconditionally — made optional since v2 blob doesn't require it"
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "encryptVaultKeys helper and its usage needed removal — vault init no longer accepts crypto fields"
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/vault-lifecycle.test.ts",
+          "finding": "Assertions on encryptedRootFolderKey in vault export response needed removal after DTO simplification"
+        }
+      ],
+      "workflow": [
+        "GSD gap closure mode (--gaps-only) skips research and reads VERIFICATION.md directly to scope plans",
+        "Plan commits are made by the planner agent itself — orchestrator should check git log before attempting a duplicate commit",
+        "Pre-wave dependency check skips key-links that reference files in the upcoming wave (not prior waves)",
+        "CodeRabbit comments on already-executed plan files or deleted code paths can be marked not applicable with explanation",
+        "SDK E2E CI failures can be diagnosed by fetching job logs via gh CLI before the run fully completes"
+      ]
+    },
+    "friction": [
+      "Orchestrator attempted to commit plans that the planner agent had already committed (bd236c59a), requiring a git log check to detect",
+      "Verification file path resolution required multiple bash commands to locate due to working directory ambiguity between cipher-box and cipher-box-phase-20",
+      "vault-lifecycle.test.ts was accidentally overwritten with Write tool during editing, requiring a subsequent Edit to restore the last test case",
+      "CI failure for SDK E2E tests was not caught by local tests — the plan execution tests didn't cover the E2E harness fixture sending deprecated fields"
+    ],
+    "open_items": [
+      "2 items flagged for human verification: new user v2 blob publish to IPFS before API registration, and recovery tool IPFS-direct path with real vault (require live environment)",
+      "Next phase is Phase 23 — discuss-phase 23 suggested as next step",
+      "encryptedRootIpnsPrivateKey handling in recovery.html export-file path is now optional but the decrypt path still exists — could be removed entirely in a future cleanup"
+    ]
+  }
+}

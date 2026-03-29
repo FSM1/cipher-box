@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "38923d279427",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T01:02:33.307254Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "47773094d5e1",
+  "token_usage": {
+    "input_tokens": 6657,
+    "cache_creation_tokens": 414972,
+    "cache_read_tokens": 29069586,
+    "output_tokens": 67333,
+    "api_call_count": 199
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) which implements a v2 binary blob format for vaults across core, API, desktop (Rust), and web client, then verify the implementation works end-to-end.",
+    "outcome": "All 4 plans executed successfully. Migration works correctly (confirmed via DB). Two bugs were discovered and fixed post-execution: (1) folder sync crashing on v2 blobs, (2) recovery tool IPNS resolution using garbled CIDs from delegated routing API.",
+    "learnings": {
+      "repo": [
+        "NestJS does not auto-log incoming HTTP requests, making API calls invisible in server logs — confirmed calls only via direct DB query",
+        "orval codegen generates `{ [key: string]: unknown } | null` instead of `string | null` for nullable string fields in OpenAPI specs — `as unknown as string` casts are the correct workaround, not a bug",
+        "The local Kubo IPFS node exposes delegated routing at port 5001 (`/api/v0/name/resolve`) but NOT on the gateway port 8080 — IPNS resolution for recovery must use port 5001",
+        "IPNS records published on local Kubo do not automatically propagate to the public DHT — public gateways (ipfs.io, delegated-ipfs.dev) cannot resolve them",
+        "The delegated routing API returns CBOR-wrapped records, not raw protobuf — parsing as raw protobuf returns garbled binary CIDs"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parsed IPFS blobs without checking for v2 binary format first — caused SyntaxError crash after vault migration"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same v2 blob parsing bug as folder.service.ts — both needed detectBlobVersion + stripV2Header before JSON.parse"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 181,
+          "end_line": 233,
+          "finding": "Migration IIFE in PATH B succeeded silently on first login — no console output because NestJS request logging is disabled"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "finding": "fetchFromIpfs could return undefined on non-200/non-404 responses (loop falls through) — detectBlobVersion then crashes on undefined.length. Added explicit error throw."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 lacked key length bounds checks — HIGH security finding, now returns Result with validation"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse derived Debug which exposed encrypted key material in logs — replaced with custom Debug impls that redact sensitive fields"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop vault init double-wrapped rootFolderKey with ECIES — same key wrapped twice with same public key. Simplified to reuse first wrap."
+        }
+      ],
+      "workflow": [
+        "When API calls appear missing from logs, query the database directly to confirm whether they actually executed",
+        "Playwright browser automation can be used mid-session to grab auth store state (private keys, vault keypairs) for manual testing without adding UI code",
+        "OTPs appear in plain text in NestJS dev server terminal output and can be retrieved from background task output files",
+        "GSD debug command (gsd-debugger subagent) adds diagnostic console.log statements to trace execution flow, then removes them after root cause is found"
+      ]
+    },
+    "friction": [
+      "Phase init failed because working directory was cipher-box-phase-20 but init ran in cipher-box — required manual directory detection",
+      "Security review API connection refused on first attempt, required re-invocation",
+      "Migration appeared to fail silently (no /vault/migrate in logs) causing significant investigation time — root cause was NestJS not logging requests by default",
+      "Recovery tool had multiple layered bugs: undefined return from fetchFromIpfs, garbled CID from CBOR-vs-protobuf parsing mismatch, then IPNS record not on public DHT",
+      "orval codegen generates wrong TypeScript types for nullable strings — requires manual type casts that look like bugs",
+      "Local IPFS/IPNS setup doesn't propagate to public DHT, making recovery tool testing on public gateways impossible"
+    ],
+    "open_items": [
+      "M-1: Recovery tool private key not zeroed from memory after use",
+      "M-2: No deduplication guard on concurrent migration from multiple browser tabs (race condition possible)",
+      "M-3: ECIES re-wrap on every root folder FUSE publish — optimization requires caching wrapped key in AppState",
+      "L-1: Zero-length key accepted by v2 blob deserializers",
+      "L-2: No SRI hashes on CDN scripts in recovery.html",
+      "Recovery tool IPNS resolution on local dev requires pointing IPNS gateway to Kubo port 5001 — not obvious from UI, consider documenting or auto-detecting",
+      "Device registry sync fails with CryptoError: Invalid registry format — pre-existing schema mismatch between stored and expected format (captured as todo)",
+      "Bin IPNS name 404 resolution failure — pre-existing issue (captured as todo)"
+    ]
+  }
+}

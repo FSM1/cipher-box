@@ -1,0 +1,119 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0e18909127ac",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T22:02:21.605778Z",
+  "branch": "feat/phase-24-bug-fixes-test-infrastructure",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "9d1d5d40ce1a",
+  "token_usage": {
+    "input_tokens": 370,
+    "cache_creation_tokens": 821600,
+    "cache_read_tokens": 44398617,
+    "output_tokens": 65962,
+    "api_call_count": 288
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute Phase 22 (performance baselines completion), clean up the code, get it reviewed and merged, then plan the next phases (24-26) of the v1.1 milestone.",
+    "outcome": "Phase 22 was executed (SDK perf instrumentation, E2E journey timing, load test thresholds), PR #355 was created and merged with all review comments resolved, staging DB was reset to fix a vault init bug, journey timing baselines were populated from staging, phases 24-26 were added to the roadmap, and a worktree was created for parallel work.",
+    "learnings": {
+      "repo": [
+        "Phase 22 research/planning commits were accidentally made directly to main instead of a feature branch — had to move them via branch creation + hard reset",
+        "Staging DB schema was out of sync: Phase 20 vault migration removed encrypted_root_folder_key/encrypted_root_ipns_private_key columns and assumed staging DB would be reset, but it wasn't — causing 500 errors on first wallet login",
+        "Web3Auth Core Kit MPC init dominates login-to-vault timing at ~23.5s; actual vault load after auth is only 86ms",
+        "BYO-IPFS pinning path in upload/index.ts was uninstrumented — only CipherBox path had withPerf wrapping; fixed by adding ipfs:upload:byo marker",
+        "ipfs:upload was renamed to ipfs:upload:cipherbox for clarity alongside the new ipfs:upload:byo marker",
+        "Bin IPNS 404 bug root cause: no repair flow if DB cache is missing; unclear if initializeBin ever published the initial IPNS record",
+        "Device registry format error root cause: schema validator is strict with no versioning or backward-compat layer; registries written by older code fail current validation",
+        "Load test 401 failures at 75-100 concurrent clients: PoolClient passes static JWT, no 401 interceptor or token refresh logic exists",
+        "Recovery tool (recovery.html) has two modes but v1 export file recovery is dead code since all vaults are now v2 and staging DB was wiped — should be removed",
+        "Phase 23 was marked complete in ROADMAP.md ([x]) but STATE.md still showed EXECUTING — a contradiction that was flagged by Copilot review",
+        "REQUIREMENTS.md still referenced k6 after the load test harness was switched to Vitest — stale documentation not caught until PR review"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 23,
+          "end_line": 23,
+          "finding": "Concurrent withPerf calls with the same operation name would produce colliding mark names — fixed by adding per-invocation counter to mark names"
+        },
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 5,
+          "end_line": 5,
+          "finding": "PERF_ENABLED check using process.env can evaluate to true in browser prod due to bundler polyfills — fixed with typeof process.env?.NODE_ENV === 'string' guard"
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 205,
+          "end_line": 205,
+          "finding": "404 check was missing error.response.status — AxiosError puts status on error.response.status not error.status"
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 75,
+          "end_line": 75,
+          "finding": "pinFn BYO override path was not instrumented with withPerf; added ipfs:upload:byo marker alongside existing ipfs:upload:cipherbox for addToIpfs path"
+        },
+        {
+          "path": "tests/load/src/harness/thresholds.ts",
+          "line": 41,
+          "end_line": 41,
+          "finding": "expectThresholdsPassed() helper was extracted to replace 5 identical 8-line boilerplate blocks across all load test scenarios"
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/perf.test.ts",
+          "line": 20,
+          "end_line": 20,
+          "finding": "as any cast on globalThis replaced with declare global { var performance: Performance } for proper typing"
+        },
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 124,
+          "end_line": 124,
+          "finding": "Login flow duplication in journey tests is intentional for sub-phase timing capture, not a refactor target"
+        }
+      ],
+      "workflow": [
+        "GSD phase execution was run out of order (22 before 21) — the phase complete tool correctly returned next_phase: 23 but 23 was already done, causing misleading Next Up suggestions",
+        "Playwright journey timing tests require running via the test runner (not MCP browser) because installMockWallet uses page.addInitScript which only works in test runner context",
+        "Staging DB reset is the correct fix when incremental migrations were deleted under the assumption the DB would be reset — production DBs need explicit migration files",
+        "Multiple rounds of PR review comment resolution were needed (4 rounds, 16 total threads); automated reviewers (CodeRabbit, Copilot) generated new threads on each push",
+        "Git worktree should be created after phase docs exist on main, not before — branch from latest main with new phases already merged",
+        "Merge conflicts between Phase 21 (BYO-IPFS, added pinFn param) and Phase 22 (withPerf wrapping) in upload/index.ts required preserving both changes",
+        "GitHub Actions approval requirement appeared unexpectedly on PR #355 — likely triggered by commit author email mismatch or GitHub platform policy change, not a workflow file change",
+        "Background task notifications from executor subagents can arrive late (after phase is already complete) and can be safely ignored"
+      ]
+    },
+    "friction": [
+      "Phase 22 commits were made directly to main instead of a feature branch, requiring a manual branch creation + hard reset dance",
+      "Staging DB schema mismatch caused 500 errors during journey timing tests — wasted time diagnosing before discovering the root cause in API logs",
+      "Playwright temp config file approach failed because testDir was relative to /tmp — required absolute path workaround",
+      "4 rounds of PR review comment resolution needed due to automated reviewers generating new threads on each push",
+      "GitHub Actions lint-pr-title required manual approval unexpectedly — root cause unclear, may be GitHub platform policy change",
+      "Context limit interruption mid-session (usage reset required) caused a gap in the PR review flow",
+      "GSD phase tool incorrectly suggested phase 23 as next even though it was already marked [x] in ROADMAP.md"
+    ],
+    "open_items": [
+      "Phase 24: Fix bin IPNS 404 bug — add auto-repair flow when DB cache is missing; investigate whether initializeBin published the initial record",
+      "Phase 24: Fix device registry format error — add schema versioning (v1/v2) with backward-compat validation and migration path",
+      "Phase 24: Headless sdk-core load tests — direct function-level load tests calling sdk-core without CipherBoxClient wrapper",
+      "Phase 24: Recovery tool cleanup — remove dead v1 export file recovery mode, keep only IPFS-direct v2 blob recovery; add Playwright E2E tests",
+      "Phase 24: Load test 401 token refresh — add 401 interceptor with re-auth and folder metadata reload to PoolClient",
+      "Phase 25: Desktop auto-update mechanism",
+      "Phase 25: Desktop TEE file enrollment for new files",
+      "Phase 26: Grafana alerting thresholds based on Phase 18/22 baselines",
+      "Phase 26: Timeout tuning for sub-2s UX using baseline data",
+      "PR #355 human verification items: run journey tests against live services to populate baseline measurements; confirm Performance API marks visible in browser DevTools",
+      "Writable shares deferred: IPNS single-writer model, optimistic concurrency with sequence numbers, and TEE multi-key enrollment are all blockers",
+      "E2E tests re-run needed after timeout on release PR CI run (web-e2e job was cancelled)",
+      "13 pending todos and 1 active debug session noted in progress report"
+    ]
+  }
+}

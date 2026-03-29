@@ -1,0 +1,43 @@
+/security:review pr #346 planning docs, before implementation.
+
+---
+
+while that is happening, I also wanted to discuss some of the performance benchmarking implications of this knowing what we know about the application usage patterns from previous phases.
+
+We will need to gather new baselines and figure out how many users using their own IPFS we can simultaneously service (guessing this will be significantly higher than the 200 we can do now on the current staging instance, since such a large part of the load on the system seems to be ipfs calls).
+
+---
+
+<task-notification>
+<task-id>a3a704e396a553b49</task-id>
+<tool-use-id>toolu_01QHb82JNpod42h531zoHEwe</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/a3a704e396a553b49.output</output-file>
+<status>completed</status>
+<summary>Agent "Security review Phase 21 plans" completed</summary>
+<result>The security review is complete. Here is a summary of what was produced:
+
+**Report written to:** `/Users/michael/Code/cipher-box/.planning/security/REVIEW-2026-03-24-phase21-pre-impl.md`
+
+**Files analyzed:**
+- 4 planning context documents: `21-CONTEXT.md`, `21-RESEARCH.md`, `21-UI-SPEC.md`, `21-VALIDATION.md`
+- 6 implementation plans: `21-01-PLAN.md` through `21-06-PLAN.md`
+- 6 existing source files for comparison: `tee-worker/src/services/key-manager.ts`, `tee-worker/src/middleware/auth.ts`, `tee-worker/src/routes/republish.ts`, `apps/api/src/vault/vault.service.ts`, `apps/api/src/ipfs/providers/local.provider.ts`, `apps/api/src/ipfs/ipfs.controller.ts`
+
+**Key findings requiring action before implementation begins:**
+
+1. **CRITICAL -- SSRF in TEE migration worker** (Plan 05, Task 2): The `migration-worker.ts` `fetchFromProvider()` and `pinToProvider()` functions accept arbitrary URLs from decrypted user configs. An attacker could point these at cloud metadata endpoints (169.254.169.254), localhost services, or private networks. The research document acknowledged this risk but the plan code contains no mitigation. Must add HTTPS-only enforcement, private IP blocking, and DNS rebinding protection.
+
+2. **HIGH -- CID registration has no authorization gate** (Plan 02, Task 1): The `POST /ipfs/register-cid` endpoint accepts any CID and size from any authenticated user, with no format validation, no size cap, and no check that the user is actually a BYO user. Non-BYO users could abuse it to bypass quota enforcement, and any user can inject arbitrarily large size values.
+
+3. **HIGH -- String zeroing is a no-op** (Plan 05, Task 2): The TEE migration worker decrypts auth tokens as JSON strings, which are immutable in JavaScript and cannot be zeroed. The existing TEE `republish.ts` route correctly uses `Uint8Array.fill(0)` for IPNS keys -- the migration worker should process credentials as `Uint8Array` throughout to enable proper cleanup.</result>
+<usage><total_tokens>133961</total_tokens><tool_uses>50</tool_uses><duration_ms>309763</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/a3a704e396a553b49.output
+
+---
+
+I am honestly thinking that these tests will make most sense with an actual ipfs node from pinata or another external provider.
+
+---
+
+lets keep the decision on provider option and document some of these benchmarking type tasks in an additional plan in the current phase.

@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "dc5a7487e1ab",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-vault-key-blob-publish",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/dc/5a7487e1ab/0/metadata.json",
+      "transcript": "/dc/5a7487e1ab/0/full.jsonl",
+      "content_hash": "/dc/5a7487e1ab/0/content_hash.txt",
+      "prompt": "/dc/5a7487e1ab/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 2502,
+    "cache_read_tokens": 2082310,
+    "output_tokens": 1283,
+    "api_call_count": 6
+  }
+}

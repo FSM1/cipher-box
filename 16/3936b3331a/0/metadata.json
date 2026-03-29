@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "163936b3331a",
+  "session_id": "20f4a3f5-eda6-4aef-a4d0-b4bd794aa423",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T19:40:32.359491Z",
+  "branch": "docs/phase-20-context",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "b32b45890674",
+  "token_usage": {
+    "input_tokens": 70,
+    "cache_creation_tokens": 113489,
+    "cache_read_tokens": 5816521,
+    "output_tokens": 20431,
+    "api_call_count": 60
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Capture implementation decisions for Phase 20 (Vault Migration) via discuss-phase, then research and plan the phase using the GSD workflow.",
+    "outcome": "CONTEXT.md was written and committed on a feature branch, research (RESEARCH.md) and validation strategy (VALIDATION.md) were generated, and the planner agent was spawned to create PLAN.md files.",
+    "learnings": {
+      "repo": [
+        "Vault blob v2 format is defined as: 0x02 | uint16 key_length | ECIES_key | AES_GCM_metadata — this is the target storage format that removes rootFolderKey from the DB",
+        "encryptedRootFolderKey and encryptedRootIpnsPrivateKey are the two DB columns being migrated; both are NULLed after v2 blob is confirmed written",
+        "IPNS key is HKDF-derivable from master key — the stored copy in encryptedRootIpnsPrivateKey is therefore redundant and safe to remove",
+        "Migration trigger is next login (lazy), not a batch job or forced migration for dormant accounts",
+        "Read strategy is phased: migrated users (migratedAt set) use IPFS-first with silent DB fallback; unmigrated users use DB directly",
+        "Kubo performance is currently the main IPFS bottleneck; infra fixes are in-flight, which is why silent DB fallback is the initial safety net before transitioning to IPFS-only retry-then-error",
+        "Phase 18 added server-side Prometheus histograms for IPNS resolve/publish; Phase 22 will add end-to-end login-to-vault journey timing — Phase 20 can rely on these rather than capturing its own baselines",
+        "Blob v2 write logic lives in @cipherbox/core (TypeScript) with a Rust equivalent in the desktop app — both web and desktop write v2 on root folder publish",
+        "Recovery tool also needs to be updated to parse v2 blob format",
+        "API will continue accepting encryptedRootIpnsPrivateKey on init but ignore it, allowing gradual client deprecation"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/vault/entities/vault.entity.ts",
+          "finding": "Contains encryptedRootFolderKey and encryptedRootIpnsPrivateKey columns — both targeted for NULL after migration"
+        },
+        {
+          "path": "packages/core/src/vault/init.ts",
+          "finding": "Vault initialization logic in @cipherbox/core — blob v2 write logic should be added here"
+        },
+        {
+          "path": "packages/core/src/vault/types.ts",
+          "finding": "Vault type definitions — VaultBlob type will need updating for v2 format"
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "Server-side vault service — migration trigger and migratedAt stamping logic goes here"
+        },
+        {
+          "path": "apps/web/src/stores/vault.store.ts",
+          "finding": "Web client vault store — needs v2 blob write on root folder publish"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop Rust vault commands — confirmed IPNS key is HKDF-derivable; needs Rust equivalent of blob v2 write logic"
+        }
+      ],
+      "workflow": [
+        "GSD discuss-phase loads prior CONTEXT.md files from earlier phases to avoid re-asking already-decided questions — carrying forward decisions like network-first IPNS and the five-package SDK architecture",
+        "commit signing via 1Password requires an interactive terminal — subprocess git commits fail silently if the 1Pass agent notification is missed",
+        "Feature branches should be created before committing planning docs, not after — the workflow attempted to commit to main initially",
+        "The GSD workflow checks for a migratedAt flag pattern to implement per-user phased rollout — this is a standard pattern for lazy migrations",
+        "VALIDATION.md is generated from a template and filled with phase-specific frontmatter before being committed alongside RESEARCH.md"
+      ]
+    },
+    "friction": [
+      "1Password commit signing failed in the subprocess — the user was AFK and missed the signing notification, requiring a manual retry",
+      "Initial commit attempted to push to main instead of a feature branch — required branch creation after the fact",
+      "The system readiness question was framed too narrowly and the user had to clarify that Kubo performance (not metrics coverage) was the real constraint"
+    ],
+    "open_items": [
+      "Column DROP migration for encryptedRootFolderKey and encryptedRootIpnsPrivateKey — deferred until all users are confirmed migrated",
+      "IPFS-only retry-then-error mode (removing silent DB fallback) — deferred until Kubo performance fixes prove out",
+      "End-to-end login-to-vault baseline metrics — Phase 22 will add this instrumentation; Phase 20 relies on existing /metrics endpoint",
+      "Planner agent was spawned but transcript ends before PLAN.md files are confirmed complete"
+    ]
+  }
+}

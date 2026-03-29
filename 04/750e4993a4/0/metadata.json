@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "04750e4993a4",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T14:13:54.931237Z",
+  "branch": "docs/phase-19-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".claude/claude.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1cf3f361d04b",
+  "token_usage": {
+    "input_tokens": 612,
+    "cache_creation_tokens": 680593,
+    "cache_read_tokens": 108072203,
+    "output_tokens": 105996,
+    "api_call_count": 493
+  },
+  "session_metrics": {
+    "turn_count": 53
+  },
+  "summary": {
+    "intent": "Investigate and fix someguy v0.11.1 IPNS routing failures on staging (endpoints hanging indefinitely), validate the fix with E2E and load tests, then implement API-level fallback to delegated-ipfs.dev with Prometheus metrics to expose fallback frequency in Grafana.",
+    "outcome": "Someguy sidecar fixed (misconfigured resources, missing libp2p port, wrong DHT mode), fallback implemented in DelegatedRoutingClient with metrics, all 83 SDK E2E tests pass on staging with zero errors and 12x throughput improvement over Phase 18 baselines; release pipeline was also overhauled to fix a chronic release-please tagging deadlock caused by staging tag format collisions.",
+    "learnings": {
+      "repo": [
+        "Someguy IPNS endpoints hang because the previous staging deployment had: no libp2p port 4004 exposed, 'standard' DHT mode instead of 'accelerated', 0.5 CPU/768MB RAM (too tight), and 50/300 connection limits instead of defaults 100/3000.",
+        "SOMEGUY_LIBP2P_MAX_MEMORY expects a raw uint64 byte count (e.g. 1073741824), not a human-readable string like '1GB' — causes crash-loop on container start.",
+        "The DelegatedRoutingClient already had retry logic (3 attempts + exponential backoff); the new fallback triggers only after all primary retries are exhausted.",
+        "Vitest does NOT auto-load .env files into process.env — env vars must be passed explicitly via CLI (e.g. THROTTLE_BYPASS_SECRET=x pnpm exec vitest) or configured in vitest.config.ts.",
+        "The API throttler uses a bypass header (x-throttle-bypass) controlled by THROTTLE_BYPASS_SECRET, not NODE_ENV=test — tests need the env var set to avoid 429s.",
+        "74% of IPNS resolves in Phase 18 used the DB cache (not network), and the current architecture intentionally keeps DB-first for read-after-write consistency. Someguy's value is TEE republishing and disaster recovery, not primary resolve path.",
+        "Release-please with the Merge plugin generates 'chore: release main' PR titles (not versioned), and with include-component-in-tag: false it creates bare v{version} tags it then cannot match back to the root package path when other packages exist — use include-component-in-tag: true with an explicit component instead.",
+        "Old-format staging tags (v0.26.0-staging-rc-1) were being parsed by release-please as component 'staging' and polluting its release scanner, causing 'Missing 1 paths: .' deadlocks.",
+        "Staging deploy does not configure THROTTLE_BYPASS_SECRET — must be added to deploy workflow and GitHub staging environment secrets to enable test runs against staging.",
+        "packages/crypto was missing from release-please-config.json entirely, causing it to be unversioned independently."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 100,
+          "end_line": 100,
+          "finding": "The backend parameter type was 'string' — should be narrowed to 'primary' | 'fallback' for type safety on metric labels."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 294,
+          "end_line": 373,
+          "finding": "resolveRecord() always queries the DB regardless of network result. DB wins when sequence numbers match because it's written synchronously before DHT publish. Network resolve exists as a cross-check, not the primary source — 100% of resolves effectively use DB."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 75,
+          "end_line": 75,
+          "finding": "IPNS publish to delegated routing is fire-and-forget (detached promise), DB is the synchronous source of truth — intentional architecture choice."
+        }
+      ],
+      "workflow": [
+        "Someguy DHT routing table warms up significantly over hours — local tests showed someguy ~40% slower than delegated-ipfs.dev (cold DHT), but staging tests after 8h uptime showed someguy 40-50% faster than delegated-ipfs.dev baselines with 12x throughput vs Phase 18.",
+        "When release-please can't find an anchor release for a path, it walks the entire commit history and may create a major version bump due to historical feat: commits — fix by manually creating the missing tag/release and flipping the autorelease: pending label to autorelease: tagged before re-running.",
+        "GitHub Releases with staging-prefixed tags (staging-v*) are still scanned by release-please and can cause 'component not configured' warnings — these are benign as long as they don't match a configured package's tag pattern.",
+        "release-please labeling race condition: when a PR is created and immediately labeled, GitHub's graph node may not be resolved yet — transient error, label must be added manually if this occurs.",
+        "The 1Password SSH agent requires interactive approval for each SSH signing — cannot be used for automated/scripted SSH connections; use identity file directly or configure agent forwarding differently."
+      ]
+    },
+    "friction": [
+      "Release-please chronic deadlock: 'Missing 1 paths: .' caused by include-component-in-tag: false being broken in multi-package repos — required multiple PRs (#326, #328, #330, #333) and manual tag/label surgery across several versions to unblock.",
+      "Old staging tags (v*-staging-rc-*) polluted release-please's release scanner — 29 releases had to be manually deleted to stop the collision.",
+      "SOMEGUY_LIBP2P_MAX_MEMORY format difference between docker-compose versions caused crash-loop on staging that wasn't caught locally.",
+      "1Password SSH agent blocking automated VPS access — required user to run commands manually or approve interactively.",
+      "Vitest env var loading: no auto-.env loading meant throttle bypass tests required explicit CLI env var injection, discovered after multiple 429 failures.",
+      "Web E2E tests on main are flaky — blocked release PR #329 auto-merge multiple times, requiring manual re-runs.",
+      "Staging THROTTLE_BYPASS_SECRET was not configured — discovered only when running E2E against staging, required manual .env addition on VPS and workflow fix.",
+      "release-please labeling race condition on PR #327 creation caused workflow failure that required manual label application.",
+      "CodeRabbit flagged wget vs curl issue incorrectly at first (curl was actually right, wget was wrong for the container) — required container exec to verify."
+    ],
+    "open_items": [
+      "mock-ipns-routing service kept in docker-compose for CI purposes but is now redundant for local dev — could be removed from local docker-compose when convenient.",
+      "DB-first IPNS resolve architecture means 100% of resolves hit the database — if DB load becomes a concern, the fix is to return network result when sequence numbers match instead of re-querying DB.",
+      "Someguy SOMEGUY_IPNS_ENDPOINTS fanout config (delegated-ipfs.dev as parallel peer) was considered but not implemented — decided API-level fallback was better for observability.",
+      "Load test metrics JSON files in tests/load/ are untracked and not gitignored — should be added to .gitignore.",
+      "packages/crypto versioning: was added to release-please config but its first auto-versioned release will include all historical commits — acceptable but worth noting.",
+      "PR #335 (throttle bypass in deploy workflow) was opened but not yet merged — THROTTLE_BYPASS_SECRET needs to be wired into GitHub staging environment secrets for it to work.",
+      "PR #336 (Phase 19 baselines doc) was opened but not yet merged."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T14:12:59.215413Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}

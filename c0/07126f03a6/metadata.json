@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c007126f03a6",
+  "strategy": "manual-commit",
+  "branch": "chore/remove-build-desktop-workflow",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c0/07126f03a6/0/metadata.json",
+      "transcript": "/c0/07126f03a6/0/full.jsonl",
+      "content_hash": "/c0/07126f03a6/0/content_hash.txt",
+      "prompt": "/c0/07126f03a6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7471,
+    "cache_creation_tokens": 1270196,
+    "cache_read_tokens": 86030922,
+    "output_tokens": 101259,
+    "api_call_count": 402
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "12fa1b90966b",
+  "strategy": "manual-commit",
+  "branch": "fix/session-restore-race-conditions",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-03-24-auth-refresh-token-race-condition.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/12/fa1b90966b/0/metadata.json",
+      "transcript": "/12/fa1b90966b/0/full.jsonl",
+      "content_hash": "/12/fa1b90966b/0/content_hash.txt",
+      "prompt": "/12/fa1b90966b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 284,
+    "cache_creation_tokens": 236734,
+    "cache_read_tokens": 28077209,
+    "output_tokens": 77575,
+    "api_call_count": 206
+  }
+}

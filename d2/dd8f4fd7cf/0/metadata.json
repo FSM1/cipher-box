@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d2dd8f4fd7cf",
+  "session_id": "0efa9fff-3002-4b6b-a039-4843c3c6162e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T15:30:24.489273Z",
+  "branch": "docs/phase-19-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "0d0c473d7a09",
+  "checkpoint_transcript_start": 147,
+  "transcript_lines_at_start": 147,
+  "token_usage": {
+    "input_tokens": 57,
+    "cache_creation_tokens": 55773,
+    "cache_read_tokens": 2361951,
+    "output_tokens": 9499,
+    "api_call_count": 37
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Fix broken CI load test workflow (staging secrets not resolving, wrong test runner flag), then run extended load tests at 10/20/30 clients to establish staging performance baselines, and push toward finding the concurrency ceiling of a single instance.",
+    "outcome": "CI workflow fixed and merged (PR #337), all three baseline runs completed with zero errors, results documented in `.planning/baselines/19-someguy-ipns-baselines.md`, and 50/75/100-client runs kicked off to probe capacity limits.",
+    "learnings": {
+      "repo": [
+        "GitHub environment-scoped secrets (`STAGING_TEST_LOGIN_SECRET`, `STAGING_THROTTLE_BYPASS_SECRET`, `STAGING_API_URL`) require `environment: staging` on the job to be accessible — repository-level secrets do not need this.",
+        "The `environment:` field on a GitHub Actions job causes the UI to display 'Deploying to \u003cenv\u003e' even when no actual deployment occurs — this is cosmetic only.",
+        "Required status checks on `main` had a stale entry (`Verify E2E Passed`) from a previous workflow; the new consolidated CI job is named `SDK E2E Tests` and needed to be explicitly added as required.",
+        "Staging scales near-linearly up to 30 clients: 2.7x throughput at 3x clients, p50 latency grows only 15-25%, zero errors — no saturation observed yet.",
+        "Baseline docs live in `.planning/baselines/` with a per-phase naming convention (e.g., `19-someguy-ipns-baselines.md`); format reference is `18-performance-baselines.md`."
+      ],
+      "code": [
+        {
+          "path": "tests/load/vitest.config.ts",
+          "finding": "The `test:single` npm script used `--testPathPattern` (a Jest flag) instead of Vitest's positional file filter arg, causing the flag to be silently ignored by Vitest."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "finding": "Load test job was missing `environment: staging`, causing all three staging env vars to be empty at runtime."
+        }
+      ],
+      "workflow": [
+        "Vitest does not accept `--testPathPattern`; file filters are positional args. Passing `-- \u003cpattern\u003e` through an npm script puts args into CAC's separate bucket and does not filter files — use `pnpm exec vitest run --no-coverage \u003cscenario\u003e` directly in the workflow instead.",
+        "When consolidating/renaming CI workflows, required status check names on branch protection rules must be updated manually — GitHub does not auto-update them.",
+        "`gh run watch` output is just a summary; retrieving actual test step output requires a separate `gh run view --log` call filtered to the relevant step."
+      ]
+    },
+    "friction": [
+      "`--testPathPattern` silently failed in Vitest, causing all 5 load test scenarios to run instead of just `mixed-workload` — wasted significant CI time across all three runs.",
+      "`gh run watch` didn't surface test output directly; required extra log-fetching steps to get actual results.",
+      "The stale `Verify E2E Passed` required check caused confusion when investigating why `SDK E2E Tests` wasn't listed as required.",
+      "The `environment: staging` label displaying 'Deploying to staging' in the GitHub UI was misleading and required explanation."
+    ],
+    "open_items": [
+      "Fix scenario filtering bug: replace `pnpm test:single -- mixed-workload` in the load test workflow with `pnpm exec vitest run --no-coverage mixed-workload` to avoid CAC arg-bucket issue.",
+      "50/75/100-client runs were kicked off but results not yet captured in the transcript — baselines doc needs updating once those complete.",
+      "Determine the actual concurrency ceiling of a single staging instance based on 50/75/100-client results; may need to go higher if no saturation is observed.",
+      "Decision deferred: move staging secrets from the `staging` GitHub environment to repository-level to drop the `environment:` field and eliminate the misleading 'Deploying to staging' label."
+    ]
+  }
+}

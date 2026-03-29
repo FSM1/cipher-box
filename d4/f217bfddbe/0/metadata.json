@@ -1,0 +1,123 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d4f217bfddbe",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T22:50:18.208963Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a4d8ae4033ef",
+  "token_usage": {
+    "input_tokens": 734,
+    "cache_creation_tokens": 1382970,
+    "cache_read_tokens": 162543791,
+    "output_tokens": 173532,
+    "api_call_count": 636
+  },
+  "session_metrics": {
+    "turn_count": 44
+  },
+  "summary": {
+    "intent": "Execute Phase 27 of the cipher-box project to implement a writable shares proof-of-concept, covering API backend, owner UI, and recipient UI for write-enabled folder sharing.",
+    "outcome": "All 3 plans executed and verified, 12 security issues fixed via TDD, 21 E2E tests written and passing, PR #372 created and all 20 review threads resolved across 3 rounds of CodeRabbit feedback.",
+    "learnings": {
+      "repo": [
+        "SDK packages (core, sdk-core, sdk) must be built before the web dev server can start — `@cipherbox/sdk` resolution fails otherwise",
+        "`.env` files are not committed to cipher-box-ci-debug; they must be copied from the cipher-box checkout when setting up a new dev environment",
+        "Web app health check falls back to `window.location.origin + '/api'` when `VITE_API_URL` is unset, which resolves to port 5173 instead of 3000 — always set VITE_API_URL in web .env",
+        "Two conflicting `RequestWithUser` types existed: a local one in auth.controller.ts extending NestJS `@nestjs/common` Request (Fetch API), and the canonical one in common/types.ts extending Express Request — the local one was wrong",
+        "`createFileMetadata` zeroes the IPNS private key internally after wrapping, so callers cannot retrieve the raw key after calling it — must inline keypair generation when dual-wrapping is needed",
+        "The `withConflictRetry` closures in `useSharedNavigation.ts` captured stale React state for `currentSequenceNumber` and `folderChildren` — navigation functions (`navigateToSubfolder`, `navigateUp`, `navigateToBreadcrumb`) were also missing ref sync, causing stale data after navigation preceding a write",
+        "NestJS `api:generate` script runs ESLint across the entire repo, so pre-existing lint errors in unrelated files (sdk-e2e) cause it to fail even when the OpenAPI spec was successfully generated",
+        "The GSD workflow uses `gsd-tools.cjs` CLI for all state/roadmap/commit operations — direct git commits bypass tracking and should use the tool instead",
+        "API client must be regenerated after every DTO change that affects the OpenAPI spec; `@ApiProperty` enum decorators are what drive the spec, not just runtime validation",
+        "IpnsService injecting SharesService created a circular-like dependency that broke the ipns.service.spec.ts test module — mock must be explicitly provided"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 71,
+          "end_line": 71,
+          "finding": "Checks `item.fileMetaIpnsName` which is empty string for files uploaded via shared folders (set at useSharedNavigation.ts:807) — causes 'File metadata IPNS name not available' error for all shared-upload files"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Original shared upload set `fileMetaIpnsName: ''` because it used `createFileMetadata` which zeroes keys internally — fixed by inlining IPNS keypair generation with dual-key wrapping (owner in FilePointer, recipient in share_keys with keyType 'file-ipns')"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "finding": "`handleUpdateFile` did not re-wrap the new file key for share recipients after updating file content — owner edits silently broke recipient access until `reWrapForRecipients` was added post-update"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 389,
+          "end_line": 400,
+          "finding": "Permission downgrade (write→read) needed to be wrapped in a transaction — `encryptedIpnsKey` nullification and `file-ipns` share_key deletion could diverge on partial failure"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 223,
+          "end_line": 233,
+          "finding": "Guards `\u0026\u0026 existing.userId === userId` already existed on TEE enrollment and DB update paths — write-share recipients cannot overwrite TEE enrollment config (H-01 was already implemented)"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "Subfolder key wrapping used the recipient's public key instead of the owner's — owner permanently lost access to subfolders created by recipients until fixed to wrap with ownerPublicKey in FilePointer and add recipient share_key separately"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/ShareDialog.tsx",
+          "line": 367,
+          "end_line": 380,
+          "finding": "`setUpgradingId` was set before early returns at lines 374/380 with no finally block — UI would get stuck in busy state if permission upgrade failed before the try block"
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "finding": "ECIES ciphertext hex validation used `@Matches(/^[0-9a-f]+$/i)` but not even-length enforcement — ECIES output is always even-length bytes-as-hex; pattern should be `^([0-9a-f]{2})+$`"
+        }
+      ],
+      "workflow": [
+        "Dev servers started as background tasks get killed when conversation context resets — use detached processes (`nohup ... \u0026` or similar) for servers that need to outlive the task",
+        "TDD red-green cycle for security fixes: stash partial fixes, write failing tests against broken code, pop stash, verify tests go green — produces cleaner audit trail than retrofitting tests",
+        "Security reviews should be run immediately after implementing crypto features before moving to E2E testing — 12 issues caught that would have been harder to fix post-merge",
+        "E2E test selector bugs are inevitable when writing tests without running them — always run the full suite locally before committing; expect 2-3 selector fix rounds",
+        "Playwright test failures on `.navigateBack()` for deeply nested paths need explicit `waitForURL` calls rather than chained back navigations with timeouts",
+        "Coverage thresholds (78% branch) can be knocked below by new untested branches — check `pnpm test --coverage` locally before pushing security/backend changes",
+        "When resolving PR review threads, reply to the comment ID (not thread ID) via REST, then resolve the thread via GraphQL — these are two separate operations"
+      ]
+    },
+    "friction": [
+      "Background tasks killed by conversation context shifts repeatedly knocked down dev servers mid-UAT session — had to restart 5+ times across the session",
+      "DB host IP changed (192.168.133.114 → 192.168.133.12) mid-session with no .env in the CI debug checkout — required creating .env from scratch before API could start",
+      "Git lock file left behind by a previous operation blocked commits — had to manually remove",
+      "API client regeneration is a mandatory but error-prone step after every DTO change — easy to forget, causes TypeScript errors downstream",
+      "The `api:generate` script lints the entire repo, so pre-existing errors in unrelated files (sdk-e2e) caused false failures during client regeneration",
+      "GitHub API GraphQL queries for PR threads timed out repeatedly, requiring multiple retry attempts",
+      "The IpnsService circular dependency fix required updating the test module to provide a `SharesService` mock — CI caught this after a clean local run",
+      "Two rounds of CI failures post-PR creation (test DI failure, then lint unused import) that passed locally due to different module resolution"
+    ],
+    "open_items": [
+      "File upload to shared folders only creates `file-ipns` share_keys for the uploading recipient — if multiple recipients have write access, only the uploader can open the file they uploaded (PoC limitation)",
+      "`reWrapForRecipients` in useFileOperations.ts does not re-wrap `file-ipns` type keys when owner edits a file — owner edits will break access for recipients who uploaded the file (noted as 'by design' in review but is a real gap post-PoC)",
+      "Received shares polling fetches all shares every 30s but only checks the first 100 — pagination not implemented (PoC limitation)",
+      "The `(mockShareRepo as any).manager` cast in shares.service.spec.ts is the last remaining `no-explicit-any` warning — requires TypeORM EntityManager typing improvements to fix cleanly",
+      "Pre-existing TypeScript errors in `tests/sdk-e2e/src/suites/error-cases.test.ts` were not addressed — should be cleaned up in a separate pass",
+      "E2E tests for writable shares (21 tests) only run locally — CI pipeline does not yet execute the web-e2e Playwright suite against a real stack",
+      "Silent revocation (403 → RO transition) and 30s polling detection of permission changes are tested in unit/E2E specs but not verified in human UAT during this session"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T22:48:54.427579Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 1,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}

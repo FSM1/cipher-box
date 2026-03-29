@@ -1,0 +1,117 @@
+/gsd:execute-phase 21 --gaps-only
+
+---
+
+<task-notification>
+<task-id>a9801f217db259aee</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a9801f217db259aee.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-10 gap closure" completed</summary>
+<result>## PLAN COMPLETE
+
+**Plan:** 21-10
+**Tasks:** 2/2
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-10-SUMMARY.md`
+
+**Commits:**
+
+- `6f2ee87`: test(21-10): add failing tests for PinataProvider (RED phase)
+- `4b6c43b`: feat(21-10): implement PinataProvider with Pinata v3 native API (GREEN phase)
+- `47460a0`: feat(21-10): wire PinataProvider into connection test and SDK client
+- `3ab9763`: docs(21-10): complete PinataProvider plan
+
+**Duration:** 5 min
+
+**Key files:**
+
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/pinata-provider.ts` -- PinataProvider class with all 5 methods (pin, unpin, status, get, pinByCid)
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/__tests__/pinning/pinata-provider.test.ts` -- 13 unit tests, all passing
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk-core/src/pinning/connection-test.ts` -- Updated with probePinata function and Pinata URL heuristic
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk/src/client.ts` -- PinataProvider instantiation and direct-upload routing in pinWithMode</result>
+<usage><total_tokens>86029</total_tokens><tool_uses>79</tool_uses><duration_ms>496293</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/a9801f217db259aee.output
+
+---
+
+<task-notification>
+<task-id>ad7ea069fd03047c5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ad7ea069fd03047c5.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-08 gap closure" completed</summary>
+<result>## PLAN COMPLETE
+
+**Plan:** 21-08
+**Tasks:** 2/2
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-08-SUMMARY.md`
+
+**Commits:**
+
+- `ed8ac42fd`: feat(21-08): wire BYO pinning config into SDK client lifecycle
+- `47460a049`: feat(21-08): add source unpin after verified migration transfer
+- `0ee108db8`: docs(21-08): complete BYO config wiring plan
+
+**Duration:** 5min
+
+**Key files modified:**
+- `/Users/michael/Code/cipher-box-phase-20/apps/web/src/hooks/useAuth.ts` -- loadByoConfig helper + pinningConfig injection
+- `/Users/michael/Code/cipher-box-phase-20/apps/web/src/lib/sdk-provider.ts` -- _lastConfig + reconfigurePinning export
+- `/Users/michael/Code/cipher-box-phase-20/apps/web/src/components/settings/StorageTab.tsx` -- reconfigurePinning call on save
+- `/Users/michael/Code/cipher-box-phase-20/tee-worker/src/services/migration-worker.ts` -- unpinFromProvider + best-effort source unpin
+- `/Users/michael/Code/cipher-box-phase-20/packages/sdk/src/index.ts` -- PinningConfig type export
+
+**Deviation:** 1 auto-fix (Rule 3) -- PinningConfig was not exported from @cipherbox/sdk, added to package index.</result>
+<usage><total_tokens>92453</total_tokens><tool_uses>100</tool_uses><duration_ms>519262</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ad7ea069fd03047c5.output
+
+---
+
+<task-notification>
+<task-id>ada13fb6daa9ee293</task-id>
+<tool-use-id>toolu_01JPrAcqKAKxCuqDakwkwNp5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ada13fb6daa9ee293.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 21-09 gap closure" completed</summary>
+<result>All done. Here is the completion report.
+
+## PLAN COMPLETE
+
+**Plan:** 21-09
+**Tasks:** 3/3
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-20/.planning/phases/21-byo-ipfs-node-support/21-09-SUMMARY.md`
+
+**Commits:**
+
+- `ed8ac42fd`: feat(21-09): add TEE worker /connection-test endpoint with shared SSRF validation
+- `47c6daf5d`: feat(21-09): add API POST /tee/connection-test endpoint with generated client
+- `c29c58bcb`: feat(21-09): update ConnectionTest to use TEE-routed endpoint
+- `051f8abd7`: docs(21-09): complete TEE-routed connection test plan
+
+**Duration:** 9 min
+
+**Key files created/modified:**
+
+- `/Users/michael/Code/cipher-box-phase-20/tee-worker/src/routes/connection-test.ts` -- TEE worker endpoint: ECIES decrypt, SSRF validate, probe Kubo/PSA server-side
+- `/Users/michael/Code/cipher-box-phase-20/tee-worker/src/services/ssrf-validation.ts` -- Shared SSRF protection extracted from migration-worker
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/tee/tee.controller.ts` -- New NestJS controller with POST /tee/connection-test
+- `/Users/michael/Code/cipher-box-phase-20/apps/api/src/tee/dto/connection-test.dto.ts` -- Request/response DTOs
+- `/Users/michael/Code/cipher-box-phase-20/apps/web/src/components/settings/ConnectionTest.tsx` -- Updated to use TEE-routed testing with ECIES encryption
+- `/Users/michael/Code/cipher-box-phase-20/packages/api-client/src/generated/tee/tee.ts` -- Generated `teeControllerConnectionTest` function</result>
+<usage><total_tokens>116652</total_tokens><tool_uses>126</tool_uses><duration_ms>750368</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-20/f4ee3ed8-2f44-4bfc-8203-081f3f8f14f5/tasks/ada13fb6daa9ee293.output
+
+---
+
+ok lets go with pinata - how do you want me to do this?
+
+---
+
+ok the jwt has been set - you can export the last 2 variables yourself
+
+---
+
+ahhh well spotted there

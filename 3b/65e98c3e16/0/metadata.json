@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3b65e98c3e16",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T12:20:19.345575Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "9e3c274ed897",
+  "token_usage": {
+    "input_tokens": 263,
+    "cache_creation_tokens": 272414,
+    "cache_read_tokens": 27466346,
+    "output_tokens": 62942,
+    "api_call_count": 222
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) end-to-end: implement API backend, owner UI, and recipient write actions for shared folders, then verify via human UAT.",
+    "outcome": "All 3 plans executed successfully. A critical gap discovered during UAT (files uploaded to shared folders lacked IPNS records) was diagnosed and fixed with a dual-key IPNS wrapping scheme supporting both recipient and owner edits. Phase checkpoint approved after full end-to-end verification.",
+    "learnings": {
+      "repo": [
+        "The cipher-box-ci-debug checkout does not have .env files committed — they must be copied from ../cipher-box/ manually each session.",
+        "The web app defaults VITE_API_URL to window.location.origin+'/api' when the env var is absent, causing it to hit port 5173 instead of 3000.",
+        "SDK package build order matters: core → sdk-core → sdk. The web dev server fails if SDK is not built first.",
+        "The addShareKeys API endpoint originally only authorized the share owner; write-share recipients also need to add keys for files they upload.",
+        "NestJS watch mode does not always pick up DTO @ApiProperty enum changes — a full restart is required before OpenAPI spec reflects the update, which blocks API client regeneration.",
+        "Background bash tasks spawned by Claude Code are killed when conversation context shifts; use detached processes (nohup/disown) for dev servers."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Shared upload originally set fileMetaIpnsName: '' — no per-file IPNS record was created, making uploaded files unreadable."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 98,
+          "end_line": 101,
+          "finding": "Save handler used the owner's updateFile (useFolder hook) unconditionally — fails for shared files because parent folder is not in the owner's folder store."
+        },
+        {
+          "path": "apps/web/src/lib/api-config.ts",
+          "finding": "API URL fallback logic uses window.location.origin+'/api' when VITE_API_URL is unset, which is wrong for local dev where API runs on a different port."
+        },
+        {
+          "path": "apps/api/src/shares/dto/share-key.dto.ts",
+          "finding": "keyType enum was 'file' | 'folder' only; extended to 'file-ipns' to store per-file IPNS private keys wrapped per-recipient."
+        },
+        {
+          "path": "apps/api/src/shares/dto/share-response.dto.ts",
+          "finding": "@ApiProperty enum must be updated alongside the DTO validator enum or OpenAPI spec (and generated client) won't reflect the change."
+        }
+      ],
+      "workflow": [
+        "Dual-key wrapping pattern: when a shared file needs to be editable by both owner and recipient, wrap the IPNS private key separately for each party rather than relying on a single wrapping.",
+        "Per-file IPNS records must be created at upload time regardless of whether the upload originates from owner or shared-folder context.",
+        "After modifying NestJS DTOs with @ApiProperty enums, always restart the API fully before regenerating the API client — watch mode is insufficient.",
+        "OTP codes for testing can be retrieved directly from API server logs."
+      ]
+    },
+    "friction": [
+      "PostgreSQL host IP changed mid-session (192.168.133.114 → 192.168.133.12), requiring .env recreation.",
+      "Background bash tasks were killed repeatedly by Claude Code's conversation context shifts, requiring multiple restarts and eventually switching to detached processes.",
+      "No .env files in cipher-box-ci-debug checkout — had to be manually copied from the sibling cipher-box repo.",
+      "SDK not pre-built in ci-debug checkout; web server failed on first start requiring manual build of core → sdk-core → sdk chain.",
+      "NestJS watch mode silently failed to pick up DTO @ApiProperty enum changes, causing API client regeneration to produce stale types and a confusing TypeScript error cycle.",
+      "The addShareKeys authorization gap required an API change mid-UAT, adding unplanned scope to the checkpoint resolution."
+    ],
+    "open_items": [
+      "Files uploaded to shared folders before the IPNS fix (empty fileMetaIpnsName) are permanently unreadable — no migration or cleanup path exists for legacy shared uploads.",
+      "The 'file-ipns' share_key type is new and untested beyond the PoC — the key rotation and revocation paths have not been audited for this key type.",
+      "Shared file save path in updateSharedFileHandler fetches share_keys on every save — no caching; could be slow with many keys.",
+      "The addShareKeys authorization relaxation (write-share recipients can add keys) has not been audited for privilege escalation across different share types.",
+      "No regression tests were written for the shared upload IPNS creation or dual-key wrapping logic."
+    ]
+  }
+}

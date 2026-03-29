@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "eb33ffcdf605",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-26-observability-ux-tuning",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/eb/33ffcdf605/0/metadata.json",
+      "transcript": "/eb/33ffcdf605/0/full.jsonl",
+      "content_hash": "/eb/33ffcdf605/0/content_hash.txt",
+      "prompt": "/eb/33ffcdf605/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5676,
+    "cache_creation_tokens": 208409,
+    "cache_read_tokens": 16973623,
+    "output_tokens": 39925,
+    "api_call_count": 148
+  }
+}

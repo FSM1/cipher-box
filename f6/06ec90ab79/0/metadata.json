@@ -1,0 +1,63 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f606ec90ab79",
+  "session_id": "c330798c-ab40-490c-8805-6ed8f1747898",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T15:35:13.428649Z",
+  "branch": "fix/release-gate-e2e-for-feature-prs",
+  "checkpoints_count": 4,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "25f460927f80",
+  "checkpoint_transcript_start": 302,
+  "transcript_lines_at_start": 302,
+  "token_usage": {
+    "input_tokens": 85,
+    "cache_creation_tokens": 90026,
+    "cache_read_tokens": 1724520,
+    "output_tokens": 9589,
+    "api_call_count": 23
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Fix a release gate misconfiguration where non-release PRs (e.g. test: commits) were auto-passing the 'Verify E2E Passed' required check without actually waiting for E2E tests to complete.",
+    "outcome": "Updated release-gate.yml to add a `run-web-e2e` job via workflow_call for non-release PRs that touch relevant paths, and wired `verify-e2e` to gate on that result instead of auto-passing.",
+    "learnings": {
+      "repo": [
+        "release-gate.yml only enforced E2E checks for release-please--* branches; all other PRs got 'Not a release PR — E2E gate not applicable' and passed green",
+        "e2e.yml only triggers on push to main, not on PRs — so E2E runs post-merge, not pre-merge for feature PRs",
+        "The 'Verify E2E Passed' check was a required GitHub branch protection check but was effectively a no-op for non-release PRs",
+        "vars context is automatically inherited in reusable workflows called via workflow_call, no special handling needed"
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "line": 110,
+          "end_line": 110,
+          "finding": "Auto-pass logic for non-release PRs: 'Not a release PR — E2E gate not applicable' — this was the root cause of the gate bypass"
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "finding": "Only has push trigger on main branch; lacks pull_request trigger, so E2E never runs during PR review"
+        }
+      ],
+      "workflow": [
+        "A required GitHub check that unconditionally passes for certain PR types provides false security — the gate must actually block or run real verification",
+        "Polling for CI results using background tasks with wait-then-check patterns creates many short-lived tasks; better to use a single longer poll or webhook-style notification",
+        "When a PR has a test: conventional commit prefix, reviewers should verify the release gate actually ran E2E — it may have auto-passed"
+      ]
+    },
+    "friction": [
+      "The release gate silently auto-passed for non-release PRs, so the merge happened before E2E results were available — only discovered post-merge",
+      "Finding the correct REST comment IDs for CodeRabbit review threads required multiple gh API calls",
+      "Background polling tasks proliferated (15+ tasks) due to incremental retry intervals — difficult to track which polls were still relevant"
+    ],
+    "open_items": [
+      "The e2e.yml workflow still lacks a pull_request trigger with path filters — E2E only runs post-merge to main, not during PR review for feature branches",
+      "Pending todo: debug BYO IPFS register-cid 400 errors on staging (.planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md)",
+      "The latest web E2E test run (actions/runs/23712125460) results were not yet in when the session ended — unknown if tests passed"
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+/gsd:execute-phase 34
+
+---
+
+anything stopping you from executing these test scripts yourself?
+
+---
+
+i will populate pinata credentials in the env directly. you can set everything up yourself. the default pinata endpoint should be used. I will supply auth token directly through the file.

@@ -1,0 +1,80 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "647a223af267",
+  "session_id": "0efa9fff-3002-4b6b-a039-4843c3c6162e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T16:02:15.274618Z",
+  "branch": "fix/load-test-scenario-filter",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/load-test.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f7643eb1526b",
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 139537,
+    "cache_read_tokens": 5982724,
+    "output_tokens": 18047,
+    "api_call_count": 76
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Run load tests against the staging API at 10/20/30 clients to establish baselines, then escalate to 50/75/100 clients to find the single-instance concurrency ceiling, and instrument the uploadFile flow for deeper latency analysis.",
+    "outcome": "Baselines for 10/20/30 clients were successfully collected (zero errors, near-linear throughput scaling) and documented. Two workflow bugs were fixed via PR #337 (merged). The 50/75/100 client runs were cancelled due to a 30-minute job timeout caused by a scenario filter bug that ran all 5 scenarios instead of just the selected one. A second fix branch was opened at session end to address the timeout and filter issues.",
+    "learnings": {
+      "repo": [
+        "The load-test workflow uses GitHub Actions environment scoping (`environment: staging`) for staging secrets; this causes the UI to show 'Deploying to staging' but performs no actual deployment — purely cosmetic.",
+        "The `uploadFile` SDK operation actually makes 5 sequential API calls: 3x POST /ipfs/upload (ciphertext, file metadata, folder metadata) + 2x POST /ipns/publish (file IPNS record + folder IPNS record).",
+        "Prometheus metrics available for upload flow analysis: `cipherbox_ipfs_ipns_duration_seconds{operation=\"pin\"}`, `cipherbox_http_request_duration_seconds{route=\"/ipfs/upload\"}`, `cipherbox_http_request_duration_seconds{route=\"/ipns/publish\"}`, `cipherbox_ipns_publish_duration_seconds`.",
+        "Baseline format follows `.planning/baselines/NN-\u003cname\u003e.md` convention; phase-18 doc is the reference template.",
+        "Mixed-workload 10-client baseline: 434 ops, 4.49 ops/s, 96.6s. 20-client: 856 ops, 8.42 ops/s, 101.7s. 30-client: 1,299 ops, 12.14 ops/s, 107s. All zero errors.",
+        "SDK E2E job is named `SDK E2E Tests` in ci.yml; `Verify E2E Passed` is a separate, unrelated required check from release-gate.yml."
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "Missing `environment: staging` caused staging secrets/vars to be empty, silently failing all runs. Also missing `timeout-minutes` increase for high-client runs, and scenario filter was broken causing all 5 scenarios to run instead of the selected one."
+        },
+        {
+          "path": "tests/load/package.json",
+          "finding": "`test:single` script used `--testPathPattern` which is a Jest flag — invalid in Vitest. Vitest uses positional args for file filtering. The `--` separator for npm scripts also does not pass args correctly to Vitest's CAC parser; must call `vitest run \u003cscenario\u003e` directly."
+        }
+      ],
+      "workflow": [
+        "Running multiple `gh run watch` instances simultaneously (polling every 3s each) rapidly exhausts the GitHub API rate limit — avoid concurrent watchers.",
+        "When a job uses an environment-scoped secret but does not declare `environment:` on the job, all environment-scoped vars/secrets silently resolve to empty strings with no error.",
+        "Vitest does not accept Jest-style `--testPathPattern`; scenario selection requires positional args passed directly to the `vitest` binary, not through npm script `--` forwarding.",
+        "GitHub Actions `timeout-minutes` defaults are too tight for load tests running all scenarios at high concurrency — should be set per scenario or the filter must be correct first.",
+        "Parallel load test runs against a single staging instance will interfere with each other's results; a concurrency group should serialize them."
+      ]
+    },
+    "friction": [
+      "First set of 3 load test runs all failed due to two bugs simultaneously: wrong Vitest flag (`--testPathPattern`) and missing `environment: staging` on the job.",
+      "Scenario filter bug (`pnpm test:single -- mixed-workload`) caused all 5 scenarios to run instead of just the selected one, massively inflating run time.",
+      "Multiple `gh run watch` background tasks simultaneously burned the GitHub API rate limit, blocking status polling for ~5+ minutes.",
+      "`gh run watch` exited early on some runs (likely due to the deployment environment approval step), producing stale watchers that reported completion prematurely.",
+      "50/75/100 client runs were all cancelled due to the 30-minute job timeout before any results were collected — forced a third fix iteration.",
+      "User had to interrupt the assistant mid-sentence when it started investigating `Verify E2E Passed` instead of just adding the required check as asked."
+    ],
+    "open_items": [
+      "50/75/100 client load tests not yet successfully completed — need to re-trigger after the second fix branch is merged.",
+      "Scenario filtering fix (call `vitest run \u003cscenario\u003e` directly instead of `pnpm test:single --`) is in a new branch but not yet committed/pushed/merged at session end.",
+      "Job timeout increase for high-client runs is drafted but not yet merged.",
+      "Concurrency group to serialize load test runs (prevent parallel runs hitting same staging instance) is drafted but not yet merged.",
+      "Deep uploadFile latency analysis via Prometheus metrics and staging logs is pending completion of the 50/75/100 client runs.",
+      "Scenario filtering should be verified to confirm only `mixed-workload` runs when specified, not all 5 scenarios."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T16:01:38.545237Z",
+    "agent_lines": 0,
+    "human_added": 8,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 8,
+    "agent_percentage": 0
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "18e9b7f4db69",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T11:06:22.881425Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "e6b5d5b7f6c0",
+  "token_usage": {
+    "input_tokens": 386,
+    "cache_creation_tokens": 512097,
+    "cache_read_tokens": 29490920,
+    "output_tokens": 65869,
+    "api_call_count": 209
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E Test Expansion \u0026 Staging Baselines) — create account cleanup helpers, media/streaming E2E suites, batch download tests, and capture meaningful load test baselines against staging with BYO-IPFS (Pinata) support.",
+    "outcome": "All 4 plans executed and verified (13/13 must-haves). Real 200-client sustained load baselines captured (0.17% error rate, ~11k ops). BYO capacity ceiling baseline captured across all 5 tiers, though Pinata pin operations failed with 100% error rate. Phase marked complete with caveats on BYO pinning.",
+    "learnings": {
+      "repo": [
+        "Staging Web3Auth (Core Kit) initialization takes ~22.7s — wallet button timeout in E2E specs must be ≥30s for staging runs (was 20s, caused timeouts).",
+        "playwright.config.ts did not respect BASE_URL env var for targeting staging — required explicit fix to read process.env.BASE_URL and disable webServer block when set.",
+        "The deleteAccountViaPage cleanup helper hardcoded localhost:3000 as API URL — on staging the API is at api-staging.cipherbox.cc; helper needed to derive API URL from page URL hostname.",
+        "Vitest does not auto-load .env files — dotenv must be sourced in the shell before invoking vitest (e.g. `source .env \u0026\u0026 pnpm vitest run`).",
+        "Running two SDK load test suites simultaneously against staging saturates the instance regardless of throttle bypass header — root cause of initial 429 failures was concurrency, not bypass mechanism.",
+        "THROTTLE_BYPASS_SECRET works correctly end-to-end (curl, Node fetch, vitest) — no code bug, the bypass guard logic is sound.",
+        "BYO Pinata pin operations fail with 100% error rate in the capacity ceiling test — likely auth or endpoint configuration issue in PinataProvider, not a staging API issue.",
+        "load test threshold values in vitest config are tuned for small client counts — 200-client runs will exceed p95 thresholds and exit code 1 even on successful runs; results must be read from output, not inferred from exit code."
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "waitFor timeout of 20_000ms insufficient for staging Web3Auth init; increased to 45_000ms"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "finding": "deleteAccountViaPage derived API URL from hardcoded localhost:3000; fixed to derive from page URL hostname to support staging"
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "finding": "Added BASE_URL env var support and conditional webServer block — skip local dev server when BASE_URL points to external host"
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "finding": "No dotenv loading configured — env vars must be sourced in shell before invoking vitest; attempted loadEnv (Vite-only, not available in vitest config context)"
+        }
+      ],
+      "workflow": [
+        "Cherry-picking worktree commits to a phase branch causes STATE.md conflicts — always stash local changes first, cherry-pick, resolve conflict keeping worktree version, then restore stash.",
+        "Parallel subagent execution on the same git repo causes index.lock contention — prune and force-remove stale worktrees before retrying failed agents.",
+        "GSD worktree agents commit to their own worktree branch; orchestrator must cherry-pick to the phase branch manually — commits are not auto-merged.",
+        "Load test diagnostics: always test with a single isolated run before concluding bypass/auth mechanisms are broken — simultaneous test runs are the most common false positive.",
+        "The classifyHandoffIfNeeded Claude Code runtime bug can cause agents to report 'failed' even when all work completed — always spot-check SUMMARY.md and git commits before treating as real failure."
+      ]
+    },
+    "friction": [
+      "34-04 committed to worktree branch only — required manual cherry-pick with STATE.md conflict resolution to get commits onto phase branch.",
+      "34-03 failed on first attempt due to git index.lock contention from parallel execution; required worktree cleanup and retry.",
+      "Two load tests ran simultaneously on first attempt, causing mutual throttling that was initially misdiagnosed as a bypass header bug — required multiple diagnostic iterations.",
+      "loadEnv is a Vite-specific export not available in vitest config; led to failed attempt at automatic .env loading before settling on shell-level source.",
+      "SSH access to staging Docker containers failed (timeout/key issue) — could not inspect live container env vars directly.",
+      "Premature phase completion was committed to ROADMAP.md/STATE.md before baselines were confirmed meaningful — required targeted revert.",
+      "34.1 gap-closure phase was incorrectly inserted before confirming the throttle bypass issue was a code problem (it wasn't) — had to revert the insertion.",
+      "BYO capacity ceiling test ran concurrently with sustained load test on first attempt, invalidating both results."
+    ],
+    "open_items": [
+      "BYO Pinata pin operations fail with 100% error rate in capacity ceiling test — root cause unknown (possibly PinataProvider auth header format, endpoint URL, or JWT scope); needs investigation.",
+      "New media E2E specs (streaming-playback, media-preview) use binary stub fixtures — need live environment run to confirm they trigger expected AES-CTR/GCM code paths (1 human verification item outstanding).",
+      "SDK test harness createTestAccount does not batch with rate-aware backoff — at 200 clients, account creation takes ~38s; could be parallelized more aggressively with jitter.",
+      "Load test threshold values need tuning for 200-client scale — current values cause exit code 1 even on healthy runs, making CI integration misleading.",
+      "Staging Web3Auth 22.7s init time should be investigated — may indicate SDK cold-start optimization opportunity or misconfigured caching.",
+      "Journey timing spec tests 2 and 3 did not run (skipped after test 1 failure) — only Journey 1 baseline was captured on first attempt; subsequent runs got all 3 but the skip behavior on failure should be reviewed.",
+      "Learnings file created at .learnings/2026-03-29-staging-load-test-throttle-bypass.md documenting the simultaneous-run root cause — should be referenced before future load test runs."
+    ]
+  }
+}

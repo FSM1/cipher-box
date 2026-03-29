@@ -1,0 +1,110 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "50257f9b7a08",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T05:50:49.133854Z",
+  "branch": "fix/vault-key-ipns-separation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "150e0c74cfa2",
+  "token_usage": {
+    "input_tokens": 420,
+    "cache_creation_tokens": 355836,
+    "cache_read_tokens": 81957121,
+    "output_tokens": 112529,
+    "api_call_count": 375
+  },
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "summary": {
+    "intent": "Complete Phase 20 (vault migration cleanup) by executing gap-closure plans, resolving all PR review comments, and fixing a critical architectural bug where the vault key blob and root folder IPNS names were conflated.",
+    "outcome": "Phase 20 merged to main with all review threads resolved. A critical login-breaking bug (web client overwrites v2 key blob with v1 JSON on first root folder mutation) was discovered post-merge and fixed in PR #349 on a new branch, including simplifying the v2 blob to a key-only format (removing bundled metadata) and documenting the two-IPNS-name architecture.",
+    "learnings": {
+      "repo": [
+        "The vault IPNS name originally served dual purpose: stored v2 blob (rootFolderKey + metadata) on init, but web updateFolderMetadata overwrites it with v1 JSON on any root folder operation — breaking next login. Fix: separate HKDF derivations for vault key IPNS ('cipherbox-vault-key-ipns-v1') and root folder IPNS ('cipherbox-vault-ipns-v1').",
+        "v2 blob format is exclusively for the root vault key blob (wraps ECIES-encrypted rootFolderKey). All folder metadata — including root folder updates after init — uses v1 JSON {iv, data}. This distinction confused both CodeRabbit and GitHub Copilot across 4+ review rounds.",
+        "Desktop Rust (fuse/mod.rs) had encrypt_root_metadata_to_v2_blob wrapping root folder publishes in v2, making it inconsistent with web which used v1 for all folders. After separation, both platforms use v1 for all folder metadata.",
+        "Orval API client regeneration doesn't clean up stale model files from previously-generated types — orphaned files (e.g. vaultResponseDtoEncryptedRootIpnsPrivateKey.ts) must be manually deleted after schema simplification.",
+        "TypeORM discovers migrations by directory glob — no explicit imports needed, so deleted migration files are automatically removed from the migration chain.",
+        "FullSchema migration created vaults with crypto columns as NOT NULL; then AddVaultMigratedAt made them nullable + added migrated_at; then DropVaultCryptoColumns dropped all three. Net effect for a fresh DB reset: columns never existed. Collapsed all three into updated FullSchema.",
+        "NestJS validation pipe rejects extra properties — SDK E2E tests were sending encryptedRootFolderKey and encryptedRootIpnsPrivateKey in vault init requests after the DTO was simplified, causing property-should-not-exist failures.",
+        "Desktop vault.rs was calling /vault/init API before IPFS upload + IPNS publish — a critical ordering bug where backend has a vault row but no accessible blob if IPFS fails. Web client already did this correctly (publish-first)."
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "Simplified v2 blob to key-only format: 0x02 | uint16_BE(key_len) | ECIES_key. Removed metadata portion entirely. Both serialize and deserialize now handle only the encrypted root folder key."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 124,
+          "end_line": 160,
+          "finding": "Login reads rootFolderKey from vault key IPNS (deriveVaultKeyIpnsKeypair), not root folder IPNS. New user init publishes v2 key blob to vault key IPNS and v1 metadata to root folder IPNS separately."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 36,
+          "end_line": 115,
+          "finding": "Fixed init ordering: derive vault key keypair + root folder keypair, publish v2 key blob to vault key IPNS, publish v1 metadata to root folder IPNS, THEN call /vault/init API."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "line": 877,
+          "end_line": 881,
+          "finding": "pub_key computation and user_public_key parameter in spawn_metadata_publish were dead code after v2 removal from folder publishes. Removed parameter from function signature and both call sites."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 998,
+          "end_line": 1010,
+          "finding": "fetchWithTimeout had .finally(clearTimeout) which cleared abort timer before response body was read. Removed .finally() so abort timer covers full body reads."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/hkdf.rs",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Added derive_vault_key_ipns_keypair with info string 'cipherbox-vault-key-ipns-v1' to match new TypeScript deriveVaultKeyIpnsKeypair."
+        },
+        {
+          "path": "packages/api-client/src/models/index.ts",
+          "line": 109,
+          "end_line": 130,
+          "finding": "Orval left stale re-exports for deleted model types after regeneration. Must manually remove exports and delete orphaned model files."
+        },
+        {
+          "path": "apps/api/src/migrations/1700000000000-FullSchema.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "Updated to reflect current schema without crypto columns — vaults table now only has ownerPublicKey and rootIpnsName from creation."
+        }
+      ],
+      "workflow": [
+        "GitHub 'outside diff range' comments appear in the review body text only, not as resolvable threads — must fix and reply to the review body manually since the GraphQL thread resolver can't target them.",
+        "CodeRabbit and Copilot both misidentified v1 folder publishes as inconsistent with v2 format across multiple review rounds — proactive documentation of scope boundaries (which format applies where) prevents repeated reviewer confusion.",
+        "When a PR is already merged and a new branch is needed, the todo/fix file must be recreated on the new branch — files written to a merged branch don't transfer automatically.",
+        "For GSD gap closure mode, planning skips research and goes directly to planner with --gaps-only flag, which reads VERIFICATION.md for gap definitions.",
+        "Auto-merge + Windows cargo check as final gate is an effective release workflow — no manual merge step needed once all review threads are resolved and CI passes."
+      ]
+    },
+    "friction": [
+      "Recovery tool todo was committed to the merged phase-20 branch instead of main, requiring a branch switch and file recreation.",
+      "Blob format simplification in useAuth.ts new-user init path left a dangling 'encrypted' variable reference after removing the metadata encryption block — required a follow-up read to identify the root folder metadata still needed separate encryption.",
+      "Multiple review rounds (5 total) with significant overlap in CodeRabbit flagging the same v1/v2 distinction repeatedly — lack of inline docs forced repeated explanations.",
+      "Orval API client regeneration silently leaves orphaned model files — requires manual cleanup step that isn't part of standard regen workflow.",
+      "Desktop vault.rs init restructuring was complex because removing the metadata from the key blob path left json_bytes undefined at the root folder IPNS publish site — required careful re-reading to reconstruct.",
+      "PR #344 accumulated 18+ review threads across 5 resolution rounds, with the critical vault.rs ordering bug arriving as an outside-diff comment not discoverable via standard thread queries."
+    ],
+    "open_items": [
+      "SDK E2E tests for the vault key IPNS separation (PR #349) need live environment testing: new user init publishes v2 key blob before API registration, and login reads rootFolderKey from vault key IPNS.",
+      "Recovery tool IPFS-direct path with real vault requires live IPFS gateway — marked as human verification needed in Phase 20 VERIFICATION.md.",
+      "METADATA_SCHEMAS.md section reference stale link fix was committed but may need verification that all internal anchors resolve correctly after section renumbering.",
+      "Cross-platform test vectors for the new key-only v2 blob format (vault-blob-vectors.test.ts) should be verified to produce byte-identical output between TypeScript and Rust implementations in a live test run.",
+      "The v1 JSON folder metadata format used for all folders (including root after init) is not explicitly documented — METADATA_SCHEMAS.md covers VaultKeyBlob v2 well but lacks a formal spec for the v1 {iv, data} folder format."
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+/gsd:health
+
+---
+
+/gsd:stats
+
+---
+
+ok can we commit the gsd update to github
+
+---
+
+it seems like the @.claude/hooks/statusline.js file was nuked by the gsd update. could you restore it from a past commit on github?
+
+---
+
+yes

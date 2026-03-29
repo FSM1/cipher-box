@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0a7e10cbd575",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 4,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0a/7e10cbd575/0/metadata.json",
+      "transcript": "/0a/7e10cbd575/0/full.jsonl",
+      "content_hash": "/0a/7e10cbd575/0/content_hash.txt",
+      "prompt": "/0a/7e10cbd575/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1265,
+    "cache_creation_tokens": 226873,
+    "cache_read_tokens": 11641021,
+    "output_tokens": 34093,
+    "api_call_count": 113
+  }
+}

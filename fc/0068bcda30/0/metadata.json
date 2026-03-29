@@ -1,0 +1,118 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fc0068bcda30",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T02:08:26.298902Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/vault/dto/init-vault.dto.ts",
+    "apps/web/public/recovery.html"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e892b8aa7a9c",
+  "token_usage": {
+    "input_tokens": 6775,
+    "cache_creation_tokens": 465136,
+    "cache_read_tokens": 53757711,
+    "output_tokens": 90515,
+    "api_call_count": 299
+  },
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) of cipher-box end-to-end: implement vault blob v2 binary format, server-side migration infrastructure, Rust desktop support, and web client login flow with lazy migration.",
+    "outcome": "Phase 20 fully executed and verified (4/4 plans, 6/6 requirements). Multiple UAT bugs found and fixed during checkpoint verification. PR #344 created, merge conflicts resolved, and PR review comments addressed.",
+    "learnings": {
+      "repo": [
+        "orval v7.18.0 generates `{ [key: string]: unknown } | null` instead of `string | null` for nullable string fields in OpenAPI spec — confirmed bug, `as unknown as string` casts are the correct workaround",
+        "NestJS does not auto-log incoming request routes, making it appear endpoints are never called when they actually are — always verify via DB query when API logs show nothing",
+        "Kubo API port 5001 does not send CORS headers, blocking all browser requests; IPFS gateway port 8080 has `Access-Control-Allow-Origin: *` and supports IPNS resolution via `/ipns/{name}` HEAD request returning `X-Ipfs-Roots` CID header",
+        "IPNS records published during development are not propagated to the public DHT — subfolder IPNS records only exist in the CipherBox API DB cache and require JWT auth to access, making them unavailable to the unauthenticated recovery tool",
+        "The IPNS controller is fully JWT-guarded — no public endpoint exists for recovery tool use",
+        "Zustand stores are not exposed on `window` by default in this project"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parsed IPFS blob bytes — did not detect v2 binary format before parsing, causing SyntaxError for migrated users"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same v2 blob detection gap as folder.service.ts — both need detectBlobVersion before JSON.parse"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1265,
+          "end_line": 1277,
+          "finding": "fetchFromIpfs could return undefined on non-404 gateway errors, causing detectBlobVersion(undefined) to crash on .length — needed explicit throw on loop exhaustion"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "finding": "Delegated routing API returns CBOR-wrapped records, not raw protobuf — extractCidFromIpnsRecord was parsing incorrectly, returning garbled binary as CID; fix was to use /ipns/{name} gateway path HEAD request instead"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 181,
+          "end_line": 233,
+          "finding": "Migration IIFE called deriveVaultIpnsKeypair() twice with identical inputs (duplicate HKDF derivation); also had redundant destructure/re-wrap of ipnsKeypair into rootIpnsKeypair"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop vault init wrapped rootFolderKey twice with the same public key — once for DB, once for v2 blob; second wrap should reuse first"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 needed to return Result\u003cVec\u003cu8\u003e, VaultBlobError\u003e to enforce key length bounds (prevents silent u16 truncation for keys \u003e65535 bytes)"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse derived Debug, leaking encrypted key material to logs — needed custom Debug impls that redact sensitive fields"
+        }
+      ],
+      "workflow": [
+        "When API logs show no activity for an endpoint, query the database directly to verify actual state before assuming failure",
+        "GSD execute-phase checkpoint continuation requires spawning a fresh agent with explicit prior state — resume via Task() serialization is unreliable with parallel tool calls",
+        "The security:review command can be invoked mid-checkpoint to run a parallel security audit while UAT is paused",
+        "MCP Playwright browser session persists across tool calls and can be used to run JS in-page (browser_evaluate) to extract runtime state like private keys for testing",
+        "classifyHandoffIfNeeded errors from Claude Code are runtime bugs not agent failures — spot-check SUMMARY.md + commits to determine true completion status"
+      ]
+    },
+    "friction": [
+      "NestJS not logging requests caused significant investigation time — migration appeared silently broken for ~1 hour when it had actually succeeded at 00:12 UTC",
+      "Kubo CORS headers missing on API port blocked the simplest IPNS resolution approach; required multiple fallback strategies before landing on gateway /ipns/ HEAD request",
+      "Recovery tool IPNS resolution required 6+ iterative fixes: protobuf parsing bug, undefined return, CORS blocks on Kubo, CORS blocks on ipfs.io, API JWT gate, finally gateway HEAD approach",
+      "orval codegen bug forced `as unknown as string` casts throughout useAuth.ts — DTO annotation changes have no effect on the generated output",
+      "API connection error (ConnectionRefused) interrupted the first security review invocation, requiring a full retry",
+      "Working directory mismatch at session start — gsd-tools init was run from cipher-box instead of cipher-box-phase-20, causing phase not found error",
+      "Public IPFS DHT did not have IPNS records, making full end-to-end recovery tool testing impossible without local Kubo; subfolder recovery still hangs on resolution"
+    ],
+    "open_items": [
+      "Recovery tool: private key not zeroed from memory after use (M-1 security finding)",
+      "No dedup guard on concurrent vault migration from multiple browser tabs (M-2 security finding)",
+      "FUSE vault publish re-wraps rootFolderKey with ECIES on every root folder publish — should cache wrapped key in AppState (M-3 security finding)",
+      "Zero-length key accepted by v2 blob deserializers without error (L-1 security finding)",
+      "No SRI hashes on CDN scripts in recovery.html (L-2 security finding)",
+      "E2E tests for vault v2 recovery tool — todo created at .planning/todos/pending/2026-03-24-add-e2e-tests-for-vault-v2-recovery-tool.md",
+      "Device registry CryptoError: Invalid registry format — pre-existing schema mismatch in validateDeviceEntry (core/dist/index.mjs:360), todo created",
+      "Bin IPNS name 404 resolution failure — pre-existing, todo created",
+      "Subfolder IPNS records not propagated to public DHT — recovery tool traversal works for root folder only; full recursive recovery requires either DHT propagation or an unauthenticated API proxy endpoint",
+      "PR #344 review: orval-generated `as unknown as string` casts in useAuth.ts flagged by Copilot but cannot be removed until orval bug is fixed upstream"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T02:07:22.03518Z",
+    "agent_lines": 0,
+    "human_added": 14,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 14,
+    "agent_percentage": 0
+  }
+}

@@ -1,0 +1,27 @@
+<task-notification>
+<task-id>a2bf36090fdc39c9b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a2bf36090fdc39c9b.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 32: FUSE async FilePointer" completed</summary>
+<result>All plan files committed and pushed. Let me provide the summary.
+
+---
+
+**Phase 32 planning complete.** Three plans created in 2 waves on branch `phase-32-fuse-async-filepointer-resolution`:
+
+**Wave 1:**
+- **32-01**: Add `PendingFilePointer` channel infrastructure to `CipherBoxFS` -- new enum, mpsc channel pair (`filepointer_tx`/`filepointer_rx`), `resolving_file_pointers` HashSet dedup guard, and `drain_filepointer_completions()` method. Mirrors the existing `PendingContent`/`content_tx`/`content_rx`/`prefetching` pattern. Touches `crates/fuse/src/lib.rs` and both construction sites (`apps/desktop/src-tauri/src/fuse/mod.rs`, `apps/desktop/src-tauri/src/fuse/windows/mod.rs`).
+
+**Wave 2 (both depend on Plan 01):**
+- **32-02**: Refactor `drain_refresh_completions()` to spawn async tokio tasks instead of calling `block_with_timeout()` sequentially per FilePointer. Uses `get_unresolved_file_pointers_for_parent()` to scope resolution to the correct folder key. Adds `drain_filepointer_completions()` call to `handle_readdir()`. Touches `crates/fuse/src/lib.rs` and `crates/fuse/src/dir_ops.rs`.
+- **32-03**: Add poll-wait fallback to `handle_open()` and `handle_read()` for unresolved FilePointers. When a user opens a file still awaiting async resolution, polls `drain_filepointer_completions()` every 100ms for up to 5s. Returns EIO on timeout (Finder retries automatically). Also adds `drain_filepointer_completions()` to `handle_getattr()`. Touches `crates/fuse/src/read_ops.rs`.
+
+**Key decisions:**
+- Research skipped per roadmap ("Skip -- channel-based async pattern is well-defined")
+- Retry on failure is organic (ino removed from dedup set, re-attempted on next folder refresh cycle)
+- Scope limited to macOS FUSE-T/SMB as specified in context (Windows deferred)
+- No requirement IDs mapped (performance improvement, not a tracked requirement)</result>
+<usage><total_tokens>122297</total_tokens><tool_uses>115</tool_uses><duration_ms>739475</duration_ms></usage>
+<worktree><worktreePath>/Users/michael/Code/cipher-box/.claude/worktrees/agent-a2bf3609</worktreePath><worktreeBranch>worktree-agent-a2bf3609</worktreeBranch></worktree>
+</task-notification>

@@ -1,0 +1,136 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6676331950b6",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T00:01:38.518074Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/shares/dto/share-key.dto.ts",
+    "apps/api/src/shares/dto/share-response.dto.ts",
+    "apps/api/src/shares/entities/share-key.entity.ts",
+    "apps/api/src/shares/shares.controller.ts",
+    "apps/web/src/hooks/useSharedNavigation.ts",
+    "apps/web/src/services/share.service.ts",
+    "tests/web-e2e/tests/writable-shares.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1960d07c92f1",
+  "token_usage": {
+    "input_tokens": 795,
+    "cache_creation_tokens": 1872688,
+    "cache_read_tokens": 186744555,
+    "output_tokens": 181806,
+    "api_call_count": 687
+  },
+  "session_metrics": {
+    "turn_count": 50
+  },
+  "summary": {
+    "intent": "Execute Phase 27 of cipher-box to implement writable shares PoC — allowing share recipients to upload, edit, rename, and delete files in shared folders with proper per-file IPNS records and dual-key wrapping.",
+    "outcome": "Phase 27 fully shipped: 3 plans executed, 8 security issues fixed (TDD), 23 PR review threads resolved across 4 rounds, 21 E2E tests and 217 backend unit tests passing, branch pushed and PR #372 open.",
+    "learnings": {
+      "repo": [
+        "cipher-box-ci-debug is a separate checkout from cipher-box — .env files don't exist there and must be copied from the main repo (cipher-box/apps/api/.env etc.) when switching to the debug branch",
+        "Web dev server defaults to window.location.origin + '/api' when VITE_API_URL is unset, resolving to localhost:5173/api instead of localhost:3000 — always set VITE_API_URL in apps/web/.env",
+        "SDK, sdk-core, and core packages must be built in dependency order before the web dev server will start in cipher-box-ci-debug",
+        "OTPs for test login are logged to the API console and can be retrieved with: grep -a 'Your OTP' \u003capi-log\u003e",
+        "Orval generates an object type (not string) for nullable string fields in OpenAPI — known orval limitation; consumer code must handle this manually",
+        "openapi.json must end with a trailing newline or the CI api-client diff check fails",
+        "The GSD workflow system uses .planning/security/ for security review reports and supports TDD red/green verification of fixes",
+        "SharesService was added as a dependency of IpnsService during phase 27 — ipns.service.spec.ts needs a mockSharesService provider added to its test module",
+        "The withConflictRetry pattern captures React state in closures — all callers must use refs alongside setState to avoid stale data after navigation or concurrent operations",
+        "reWrapForRecipients must be called after every owner file content update (handleUpdateFile) to propagate new file keys to share_keys entries"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Shared upload previously set fileMetaIpnsName: '' — skipped per-file IPNS record creation. Fixed by inlining generateFileIpnsKeypair and wrapping with owner key (FilePointer) + recipient key (share_keys with keyType 'file-ipns')"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 71,
+          "end_line": 71,
+          "finding": "Checks item.fileMetaIpnsName which is '' for files uploaded via shared folders — needed a separate onSaveSharedFile callback prop wired through SharedFileBrowser to bypass the owner-only updateFile path"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 921,
+          "end_line": 921,
+          "finding": "withConflictRetry closures for upload/mkdir/rename/delete captured stale React state. Fix: maintain folderChildrenRef and sequenceNumberRef synced alongside setState calls, and sync refs in all navigation functions (navigateToSubfolder, navigateUp, navigateToBreadcrumb)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "finding": "handleUpdateFile did not re-wrap new file key for share recipients after owner edits. Fixed by calling reWrapForRecipients after every file content update, same as post-upload flow"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 78,
+          "end_line": 86,
+          "finding": "createShare did not validate the permission/IPNS-key invariant — write shares without encryptedIpnsKey or read shares with one could be created. Added explicit guard: write requires encryptedIpnsKey, read forbids it"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 389,
+          "end_line": 389,
+          "finding": "Permission downgrade (clearing encryptedIpnsKey + deleting file-ipns share_keys) must be wrapped in a transaction to prevent partial state on failure"
+        },
+        {
+          "path": "apps/api/src/shares/dto/share-key.dto.ts",
+          "finding": "ECIES ciphertext MinLength was set to 2 (too permissive) — changed to 64. Also added even-length hex @Matches validation to all encryptedKey fields in create-share.dto.ts and share-key.dto.ts"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 223,
+          "end_line": 233,
+          "finding": "FolderIpns lookup for write-share publish authorization must use the sharer's userId (from share record), not the calling recipient's userId — otherwise owner can't update their own files after recipient uploads"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/ShareDialog.tsx",
+          "line": 367,
+          "end_line": 380,
+          "finding": "upgradingId state gets stuck if handleUpgrade returns early (e.g. confirmation declined). Fixed with try/finally to always clear upgradingId/downgradingId. Also added unified isRowBusy(shareId) check so upgrade/downgrade/revoke buttons are all disabled while any action is in-flight for that row"
+        }
+      ],
+      "workflow": [
+        "TDD for security fixes: stash fixes, write failing tests (red), restore fixes, verify green — makes security regression coverage explicit",
+        "Background Bash tasks in Claude Code get killed when the conversation shifts — use nohup/setsid detached processes for dev servers that need to persist",
+        "When CI reports 'api client needs regeneration', check if openapi.json has a trailing newline — the diff check treats missing newline as a change",
+        "After adding a new service dependency to a NestJS module, update the corresponding .spec.ts test module providers or DI resolution will fail in CI even if local tests pass",
+        "Resolve PR threads via GitHub GraphQL resolveReviewThread mutation; reply first via REST (in_reply_to must be integer, use --field not -f)",
+        "Security review skill generates .planning/security/REVIEW-*.md with severity-classified findings and implementable test case suggestions — useful for catching crypto invariant violations before merge"
+      ]
+    },
+    "friction": [
+      "Dev servers in cipher-box-ci-debug repeatedly killed by background task cleanup — required 4+ restart attempts before switching to detached nohup processes",
+      "DB host IP changed mid-session (192.168.133.114 → 192.168.133.12) with no .env in the debug checkout — required creating .env from scratch then replacing with full copy from main repo",
+      "Web app connected to wrong API URL (localhost:5173/api) until VITE_API_URL explicitly set — not obvious from UI error message",
+      "git lock file blocked commits during the security fix phase — had to manually remove .git/index.lock",
+      "GitHub GraphQL API timed out multiple times when fetching review threads — required retries",
+      "Orval generates object type for nullable strings — the encryptedIpnsKey field in ReceivedShareResponseDto generates as a union object instead of string | null, requiring manual handling in consumers",
+      "CI caught unused ForbiddenException import left behind when a test was removed — minor but required a fix commit",
+      "Missing trailing newline in openapi.json caused spurious CI diff failure requiring another fix commit",
+      "ipns.service.spec.ts DI failure only appeared in CI (not local tests) because local test runner cached the module — required adding mockSharesService to test module providers"
+    ],
+    "open_items": [
+      "reWrap file-ipns keys when owner edits a file — currently owner edits don't update the recipient's file-ipns share_key entry, only the file key share_key (marked not applicable/by design for PoC but noted as future work)",
+      "Single-share polling endpoint — polling currently fetches all received shares every 30s; a targeted endpoint would reduce load (deferred as scope creep for PoC)",
+      "100-share limit in polling — fetchReceivedShares is implicitly limited; no pagination (accepted PoC limitation)",
+      "Orval nullable string codegen bug — ReceivedShareResponseDtoEncryptedIpnsKey generates as object union instead of string | null; needs orval config override or upstream fix",
+      "reWrap share keys before IPNS publish in shared uploads (pre-existing pattern from owner upload flow — not addressed in PoC scope)",
+      "E2E tests have transient Web3Auth Core Kit init failures that cause test suite retries — root cause not investigated"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-27T00:00:09.914225Z",
+    "agent_lines": 284,
+    "human_added": 11,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 295,
+    "agent_percentage": 96.27118644067797
+  }
+}

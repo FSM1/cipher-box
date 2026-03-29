@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f0b4d718ca74",
+  "session_id": "2c89ddf4-4e09-4a48-8d9f-d3abc435dfff",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T04:12:04.531596Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cfe220c7f749",
+  "token_usage": {
+    "input_tokens": 103,
+    "cache_creation_tokens": 300368,
+    "cache_read_tokens": 7478099,
+    "output_tokens": 25463,
+    "api_call_count": 82
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Add Phase 27 (Writable Shares PoC) to the CipherBox roadmap and complete the full planning pipeline: discuss-phase, plan-phase (with research, UI-SPEC, and verification).",
+    "outcome": "Phase 27 was added to the roadmap, CONTEXT.md captured implementation decisions, RESEARCH.md and VALIDATION.md were generated, UI-SPEC.md passed checker after one revision cycle, and the planner was spawned — planning was in progress at the end of the session.",
+    "learnings": {
+      "repo": [
+        "CipherBox's server-relayed IPNS architecture sidesteps the 'unsolved multi-writer IPNS problem' entirely — all publishes go through the API which acts as the sequencing coordinator, so two writers on the same folder already work like two devices from the same user.",
+        "Vault-level IPNS keys (vault, vault-key-blob, byo-ipfs-config, device-registry) are HKDF-derived from the secp256k1 private key to enable self-sovereign recovery without parent metadata. Folder and file IPNS keys are randomly generated because their IPNS names are discoverable from parent folder metadata.",
+        "File IPNS keys were deliberately migrated from HKDF-derived to random in a pre-Phase 14 security review (`.planning/todos/done/2026-02-21-random-file-ipns-keys.md`) specifically to enable future write-sharing — deterministic derivation would have required sharing the user's master secp256k1 key.",
+        "Phase 14 explicitly deferred writable shares: read-write sharing requires giving recipients the IPNS private key, and the multi-writer problem was considered unsolved. Phase 27 revisits this with the server-coordination insight.",
+        "Milestone 4 TEAM-11 plans a proper cryptographic read/write key hierarchy (separate keys so viewers literally cannot write) — Phase 27 PoC is a stepping stone, not the final architecture.",
+        "The existing optimistic concurrency stack (expectedSequenceNumber + 409 retry + conflict banner + 30s polling) already handles multi-writer scenarios — no new conflict infrastructure needed for the PoC."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/ipns/ipns.service.ts",
+          "line": 181,
+          "end_line": 192,
+          "finding": "Server-side expectedSequenceNumber check before every IPNS publish — the sequencing gate that makes multi-writer coordination work."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 196,
+          "end_line": 224,
+          "finding": "409 Conflict detection with automatic single-retry and re-sync on IPNS publish failure."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 106,
+          "end_line": 106,
+          "finding": "Subfolder IPNS keypair generation via generateEd25519Keypair() — random, not derived, enabling independent key sharing."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/folder-helpers.ts",
+          "line": 39,
+          "end_line": 63,
+          "finding": "UI conflict banner with jitter-delayed retry for human-visible conflict resolution."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/ipns.service.ts",
+          "line": 344,
+          "end_line": 355,
+          "finding": "Sequence number comparison across network vs DB cache — highest wins, used for sync convergence."
+        },
+        {
+          "path": "packages/core/src/file/derive-ipns.ts",
+          "line": 102,
+          "end_line": 102,
+          "finding": "File IPNS keypair generation via generateFileIpnsKeypair() — random after the 2026-02-21 migration from HKDF derivation."
+        },
+        {
+          "path": "packages/crypto/src/vault/derive-ipns.ts",
+          "finding": "Vault-level IPNS key derivation via HKDF — only the vault-discovery keys still use deterministic derivation."
+        }
+      ],
+      "workflow": [
+        "The GSD add-phase tool generates slugs from the full description text, producing absurdly long directory names when the description is a paragraph rather than a short label. Manual rename required.",
+        "The plan-phase UI design contract gate (step 5.6) will halt planning if frontend indicators are detected and no UI-SPEC exists — must run /gsd:ui-phase first when this triggers.",
+        "The gsd-tools CLI auto-calculated depends-on as Phase 26 (previous phase) rather than Phase 14 (the actual logical predecessor) — manual ROADMAP.md edit was needed to correct it.",
+        "UI-SPEC checker enforced a 2-font-weight cap and 4px grid alignment, catching issues in the first draft and requiring a revision pass."
+      ]
+    },
+    "friction": [
+      "Auto-generated phase slug from the long description was too long for a directory name — required manual rename of the phase directory and corresponding ROADMAP.md edits.",
+      "gsd-tools set depends-on to Phase 26 (sequential predecessor) rather than Phase 14 (semantic predecessor) — roadmap entry needed manual correction.",
+      "First /gsd:plan-phase 27 invocation was blocked by the UI design contract gate, requiring a detour through /gsd:ui-phase 27 before planning could proceed.",
+      "UI-SPEC required one revision cycle (typography and spacing fixes) before passing the 6-dimension checker."
+    ],
+    "open_items": [
+      "Planning (PLAN.md files) was being generated by the planner agent at the end of the session — outcome unknown from the transcript.",
+      "Metadata-embedded sharing (hiding the social graph from the server) deferred — would require embedding share records in encrypted folder metadata rather than server-side shares table.",
+      "Attribution and audit trail for write actions deferred — Phase 27 PoC treats multi-writer edits identically to multi-device sync with no per-user attribution.",
+      "Transitive re-sharing explicitly prohibited for PoC — owners can upgrade/downgrade permissions but recipients cannot re-share.",
+      "Milestone 4 TEAM-11 proper cryptographic read/write key hierarchy (separate keys enforcing viewer cannot-write at crypto layer) is a separate future phase from this PoC."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T04:11:12.305293Z",
+    "agent_lines": 0,
+    "human_added": 1080,
+    "human_modified": 25,
+    "human_removed": 0,
+    "total_committed": 1098,
+    "agent_percentage": 0
+  }
+}

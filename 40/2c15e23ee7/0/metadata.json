@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "402c15e23ee7",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T02:28:42.564713Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/crypto/vault_blob.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "3504a5630983",
+  "token_usage": {
+    "input_tokens": 6817,
+    "cache_creation_tokens": 496086,
+    "cache_read_tokens": 62514969,
+    "output_tokens": 97527,
+    "api_call_count": 329
+  },
+  "session_metrics": {
+    "turn_count": 30
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) of cipher-box end-to-end: implement vault blob v2 binary format across core, API, Rust desktop, and web client, then verify, ship, and resolve PR review comments.",
+    "outcome": "All 4 plans executed successfully across 3 waves, 6/6 VAULT requirements verified, PR #344 created and all 8 Copilot review threads resolved. Several UAT-discovered bugs fixed including v2 blob handling in folder sync, recovery tool IPNS resolution, and a failing API test.",
+    "learnings": {
+      "repo": [
+        "NestJS doesn't auto-log incoming request routes, so POST /vault/migrate calls were invisible in server logs — making a successful migration appear silent",
+        "orval v7.18.0 generates `{ [key: string]: unknown } | null` for nullable string fields even when OpenAPI spec correctly says `type: string, nullable: true` — `as unknown as string` casts are required as a workaround",
+        "Kubo IPFS API (port 5001) lacks CORS headers, blocking browser-side requests; the IPFS gateway (port 8080) allows `*` CORS and supports `/ipns/{name}` path resolution that returns both resolved CID (in `X-Ipfs-Roots` header) and content in one request",
+        "Subfolder IPNS records are only in the CipherBox API DB cache, not published to the public DHT — recovery tool can only traverse folders whose IPNS records are on-chain",
+        "The `migrated_at` DB column was set at 00:12:38 UTC before the first user login attempt, confirming migration succeeded silently before UAT began"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "`fetchAndDecryptMetadata` blindly JSON.parses IPFS blob content without checking for v2 binary format — causes SyntaxError crash when migrated vaults store binary blobs at the IPNS root"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same v2 blob handling gap as folder.service.ts — both implementations need detectBlobVersion/deserializeVaultBlobV2 before JSON.parse"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1265,
+          "end_line": 1277,
+          "finding": "`fetchFromIpfs` can return undefined when gateway returns non-200/non-404 status — `detectBlobVersion(undefined)` then crashes on `.length`; also, delegated routing API returns CBOR-wrapped records not raw protobuf so `extractCidFromIpnsRecord` was parsing garbage"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "`serialize_vault_blob_v2` originally had no key length bounds check — silent u16 truncation possible for keys \u003e 65535 bytes; changed to return Result with explicit error (HIGH security finding)"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "`#[derive(Debug)]` on `InitVaultRequest` and `VaultResponse` would log encrypted key material to Tauri debug output — replaced with custom Debug impls that redact sensitive fields (HIGH security finding)"
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.spec.ts",
+          "finding": "Test asserted `toVaultResponse` result without `migratedAt` field — failed CI after phase 20 added the field to the response DTO"
+        }
+      ],
+      "workflow": [
+        "GSD spot-checks (SUMMARY.md existence + git log grep) are sufficient to confirm subagent success even when the classifyHandoffIfNeeded Claude Code bug fires",
+        "Using Playwright's `browser_evaluate` to extract Zustand store state (e.g. private keys) during UAT is an effective debugging technique when devtools aren't available",
+        "IPFS gateway HEAD request to `/ipns/{name}` returns `X-Ipfs-Roots` header with the resolved CID — more reliable than delegated routing API for local dev since it avoids CBOR parsing complexity",
+        "The GSD debug workflow confirmed root cause via direct DB query (`SELECT migrated_at FROM vaults`) when log analysis was inconclusive — database is the source of truth when API logs are silent"
+      ]
+    },
+    "friction": [
+      "NestJS request logging is off by default, causing a successful /vault/migrate call to appear as a silent failure — triggered full debug investigation that was ultimately a false alarm",
+      "orval codegen bug with nullable string fields forced `as unknown as string` casts throughout useAuth.ts and the fixes could not be cleanly removed even after correcting DTO decorators",
+      "Kubo IPFS API has no CORS headers so browser-based recovery tool cannot call it directly — required adding a /ipns/{name} gateway path fallback after several failed resolution approaches",
+      "Recovery tool went through 4+ iterations of IPNS resolution strategy (delegated routing → Kubo API → CipherBox API proxy → gateway HEAD) before finding one that works in local dev",
+      "Merge conflicts in ROADMAP.md and STATE.md required manual resolution after main was merged into the phase branch"
+    ],
+    "open_items": [
+      "Recovery tool: subfolder traversal fails when IPNS records aren't on public DHT — needs either DHT propagation on publish or an authenticated fallback to the CipherBox API",
+      "Recovery tool: root private key not zeroed after use (M-1 security finding)",
+      "Recovery tool: no dedup guard for concurrent migration from multiple browser tabs (M-2 security finding)",
+      "Desktop FUSE vault: unnecessary ECIES re-wrap on every root folder publish — should cache wrapped key in AppState (M-3 security finding, also caught by simplify review)",
+      "E2E tests for vault v2 recovery tool (.planning/todos/pending/2026-03-24-add-e2e-tests-for-vault-v2-recovery-tool.md)",
+      "Pre-existing: device registry sync fails with CryptoError: Invalid registry format — schema mismatch between current format and stored IPFS records (.planning/todos/pending/2026-03-24-fix-device-registry-cryptoerror-invalid-registry-format.md)",
+      "Pre-existing: bin IPNS name 404 resolution failure during sync (.planning/todos/pending/2026-03-24-fix-bin-ipns-name-404-resolution-failure.md)",
+      "Rust integration code (commands/vault.rs, fuse/mod.rs) has 0% Codecov patch coverage — no test harness exists for Tauri IPC commands requiring live API + FUSE mount"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T02:27:53.856473Z",
+    "agent_lines": 0,
+    "human_added": 17,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "agent_percentage": 0
+  }
+}

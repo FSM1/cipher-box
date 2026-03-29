@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3b578941aab2",
+  "session_id": "b40e1bf6-b0a9-4f65-abea-691c4d692f4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T03:34:40.353812Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/21-byo-ipfs-node-support/21-CONTEXT.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0ac47872df74",
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 82633,
+    "cache_read_tokens": 2519926,
+    "output_tokens": 13682,
+    "api_call_count": 32
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Run discuss-phase for Phase 21 (BYO-IPFS Node Support) to capture implementation decisions about auth token security, pinning model, settings UI, and provider compatibility before planning begins.",
+    "outcome": "CONTEXT.md created at `.planning/phases/21-byo-ipfs-node-support/21-CONTEXT.md` with decisions that significantly depart from the original requirements — client-direct pinning becomes v1.1 (not v1.2), pinning mode is user-configurable (not always-dual), and TEE handles pin migration as a background job.",
+    "learnings": {
+      "repo": [
+        "The original PROJECT.md plan of 'server-relay for v1.1, client-direct v1.2' was reversed during discussion — the SDK's existence makes client-direct the natural v1.1 approach, with the server never relaying IPFS operations.",
+        "BYO-IPFS credentials should be stored as vault metadata on IPFS (encrypted with user's key), not in the server DB — preserving the zero-knowledge model already established for vault content.",
+        "The TEE (Phala Cloud + BullMQ) already handles background jobs like IPNS republishing and can handle pin migration the same way — it never needs plaintext, only opaque encrypted blobs and CID lists.",
+        "CipherBox API role in BYO-IPFS is narrowed to: IPNS publishes, DB mutations, and advisory quota tracking only — no server-side pinning relay.",
+        "Pinning mode becomes user-configurable: CipherBox only (default), external only, or dual-pin — determined after SDK-level benchmarking rather than prescribed upfront.",
+        "STATE.md contained an open concern about BYO-IPFS auth token storage that needed to be resolved before gray area discussion could proceed."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipfs/providers/ipfs-provider.interface.ts",
+          "finding": "Existing provider interface that the new RemotePinningProvider will implement — SDK-layer extension point for BYO-IPFS."
+        },
+        {
+          "path": "apps/api/src/ipfs/providers/local.provider.ts",
+          "finding": "Reference implementation for the provider pattern; RemotePinningProvider will follow the same structure."
+        },
+        {
+          "path": "apps/web/src/routes/SettingsPage.tsx",
+          "finding": "Existing settings page where BYO-IPFS configuration UI (endpoint, auth token, pinning mode selector, connection test, migration status) will be added."
+        },
+        {
+          "path": "apps/api/src/vault/entities/pinned-cid.entity.ts",
+          "finding": "Pinned CID entity may need a field to record which node(s) a CID is pinned to, supporting migration status tracking."
+        },
+        {
+          "path": ".planning/todos/done/2026-02-14-bring-your-own-ipfs-node.md",
+          "finding": "Original BYO-IPFS spec (BYO-01 through BYO-07) — the acceptance criteria still apply but the pinning model and auth storage approach differ from what was originally specified."
+        }
+      ],
+      "workflow": [
+        "discuss-phase correctly surfaced a conflict between STATE.md's open concern and the stated architecture, prompting a scope/model clarification before any gray areas were selected.",
+        "The discuss-phase workflow allowed a mid-discussion architectural pivot (server-relay → client-direct) to be captured cleanly without scope creep — the change was to the HOW, not the WHAT."
+      ]
+    },
+    "friction": [
+      "STATE.md had an unresolved open concern about auth token storage that wasn't fully resolved in prior phases, requiring it to be addressed at the start of this session rather than as a gray area.",
+      "The original PROJECT.md architecture (server-relay v1.1) conflicted with the zero-knowledge design principle already established for vault content — this inconsistency required explicit discussion before gray areas could be framed correctly."
+    ],
+    "open_items": [
+      "SDK-level benchmarking of RemotePinningProvider with external IPFS providers (Pinata, web3.storage, etc.) needed before deciding which pinning modes are viable long-term.",
+      "TEE pin migration job: client provides CID list + source/destination configs (auth tokens encrypted with TEE public key); TEE handles fetch-pin-verify cycle and reports progress to DB.",
+      "Settings UI migration status display — show per-CID or aggregate progress when user switches pinning modes.",
+      "Advisory quota tracking approach finalized (CID registration only, no enforcement) but the DB schema changes to support it are deferred to planning.",
+      "Provider compatibility matrix (which external providers support standard IPFS Pinning Service API vs requiring custom adapters) — deferred to research phase."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T03:34:05.281533Z",
+    "agent_lines": 176,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 176,
+    "agent_percentage": 100
+  }
+}

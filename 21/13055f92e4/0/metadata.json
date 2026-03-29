@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "2113055f92e4",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T04:44:09.191356Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "ad86f87c67e2",
+  "checkpoint_transcript_start": 361,
+  "transcript_lines_at_start": 361,
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 16671,
+    "cache_read_tokens": 4108627,
+    "output_tokens": 6189,
+    "api_call_count": 26
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Run BYO (Bring Your Own IPFS) capacity ceiling load tests against staging using Pinata as the IPFS provider, alongside a non-BYO sustained load baseline.",
+    "outcome": "Fixed vitest env loading (dotenv not available, solved by sourcing .env in shell before running), got both load tests running with clients being created. Updated the BYO load test plan doc from deferred to active status and committed it.",
+    "learnings": {
+      "repo": [
+        "Vitest does not auto-load .env files; the load test suite at tests/load/ has no dotenv integration — env vars must be sourced in the shell before invoking vitest.",
+        "dotenv is not installed in the load test package or the workspace root — loadEnv (Vite export) was mistakenly tried first.",
+        "BYO capacity ceiling test steps through 50→100→200→500→1000 clients, creating accounts in batches of 5 (10 concurrent batches at 50 clients), which hits staging rate limits.",
+        "PinataProvider sends BYO_IPFS_AUTH_TOKEN as 'Authorization: Bearer \u003ctoken\u003e' — requires the full JWT (eyJ... format)."
+      ],
+      "code": [
+        {
+          "path": "tests/load/vitest.config.ts",
+          "finding": "Config was edited multiple times to try loadEnv (Vite-only, not vitest), then reverted to shell-based env sourcing as the working solution."
+        },
+        {
+          "path": "tests/load/baselines/byo-load-test-plan.md",
+          "finding": "Plan doc tracks BYO load test status; was updated from deferred to ACTIVE after tests started running."
+        }
+      ],
+      "workflow": [
+        "When vitest lacks dotenv support and dotenv isn't installed, sourcing the .env file in the shell before running vitest is the simplest fix.",
+        "Running BYO and non-BYO load tests in parallel provides simultaneous ceiling and baseline data.",
+        "Background task notifications are used to detect when long-running load test processes complete."
+      ]
+    },
+    "friction": [
+      "vitest does not load .env files by default — BYO tests silently skipped with 'BYO_IPFS_ENDPOINT not set' instead of erroring loudly.",
+      "dotenv is not available in the load test package or workspace root, blocking the initially planned fix.",
+      "loadEnv is a Vite export, not a vitest export — attempted incorrectly, requiring a config revert.",
+      "Account creation at 50+ clients causes 'fetch failed' errors due to rate limiting on staging from concurrent batch creation.",
+      "Lint error in byo-load-test-plan.md required a second commit to fix before the first commit could land."
+    ],
+    "open_items": [
+      "Save BYO capacity ceiling test results to baselines once the 50→100→200→500→1000 client run completes.",
+      "Save sustained load (200 clients, non-BYO) baseline results.",
+      "Finalize Phase 34-04 SUMMARY document.",
+      "Run phase 34 verification after baselines are saved.",
+      "Investigate and potentially fix the 'fetch failed' rate limiting errors during bulk account creation in BYO tests."
+    ]
+  }
+}

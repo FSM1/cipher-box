@@ -1,0 +1,81 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8a5fc5b5e16a",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T01:58:06.870571Z",
+  "branch": "fix/someguy-ipns-routing",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".learnings/2026-03-23-vitest-env-vars-not-auto-loaded.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ce4bc0eeda1d",
+  "checkpoint_transcript_start": 530,
+  "transcript_lines_at_start": 530,
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 18572,
+    "cache_read_tokens": 3456171,
+    "output_tokens": 7164,
+    "api_call_count": 34
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Run load tests comparing self-hosted someguy IPNS sidecar vs delegated-ipfs.dev, document findings, and decide which backend to use for staging.",
+    "outcome": "Completed load tests across two scenarios (IPNS publish storm and mixed workload), documented results, wrote a vitest env vars learnings entry, and confirmed someguy as the right backend choice based on reliability and p99 latency advantages.",
+    "learnings": {
+      "repo": [
+        "The project uses a `.learnings/` directory with dated markdown files for capturing dev insights.",
+        "The API backend is configurable via `apps/api/.env` — switching IPNS backends requires editing this file and restarting the server.",
+        "Load tests live in `tests/load/src/` with scenarios (e.g. `ipns-publish-storm.test.ts`) and a harness (`client-pool.ts`).",
+        "someguy self-hosted sidecar has higher median latency but lower p99/tail latency vs delegated-ipfs.dev; delegated wins on throughput (~10.75 vs 8.39 ops/s for publish storm).",
+        "Both backends produced zero errors at the tested load level (5 clients x 50 cycles).",
+        "Cold DHT routing table on a freshly started someguy sidecar inflates median latency; it improves as the table warms over hours/days of operation."
+      ],
+      "code": [
+        {
+          "path": "tests/load/src/scenarios/ipns-publish-storm.test.ts",
+          "finding": "IPNS publish storm scenario runs 5 clients x 50 cycles = 750 total ops; used as primary benchmark for backend comparison."
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "Client pool harness used for load test concurrency management."
+        },
+        {
+          "path": "apps/api/.env",
+          "finding": "IPNS backend endpoint is configured here; was toggled between someguy and delegated-ipfs.dev for A/B load testing."
+        }
+      ],
+      "workflow": [
+        "Vitest does not auto-load env vars — this was worth a dedicated learnings entry (`2026-03-23-vitest-env-vars-not-auto-loaded.md`).",
+        "A/B backend testing was done by editing .env and restarting the API between runs, then saving raw metrics after each run before switching.",
+        "Push conflicts required stash/rebase/pop/push cycle before the session's main work could begin.",
+        "For infrastructure decisions on a tech demonstrator, reliability and tail latency matter more than median throughput when comparing self-hosted vs third-party services.",
+        "The `DelegatedRoutingClient` supports configuring someguy to proxy to delegated-ipfs.dev as a fallback — local-first with remote fallback is a viable hybrid option."
+      ]
+    },
+    "friction": [
+      "Push to remote failed initially, requiring a stash + rebase + pop + push sequence to resolve upstream conflicts.",
+      "Committing the learnings file required running the command from the repo root rather than a subdirectory — first attempt failed."
+    ],
+    "open_items": [
+      "PR not yet confirmed as opened — session ends with intent to open one but no confirmation in the transcript.",
+      "Mixed workload metrics for delegated-ipfs.dev were collected but the save step output was not shown — unclear if persisted.",
+      "Hybrid fallback configuration (someguy proxying to delegated-ipfs.dev for cold DHT misses) was discussed but not implemented.",
+      "Resource usage of someguy (2GB RAM + 1 CPU) on the Hostinger KVM2 VPS should be monitored once staging is live.",
+      "DHT warmup behavior on the sidecar should be revisited after staging has been running for a while to re-evaluate the median latency gap."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T01:52:44.827951Z",
+    "agent_lines": 29,
+    "human_added": 19,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 48,
+    "agent_percentage": 60.416666666666664
+  }
+}

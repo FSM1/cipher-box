@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "062f9488e089",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-19-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/baselines/19-someguy-ipns-baselines.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/06/2f9488e089/0/metadata.json",
+      "transcript": "/06/2f9488e089/0/full.jsonl",
+      "content_hash": "/06/2f9488e089/0/content_hash.txt",
+      "prompt": "/06/2f9488e089/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 150,
+    "cache_creation_tokens": 157807,
+    "cache_read_tokens": 9670435,
+    "output_tokens": 24226,
+    "api_call_count": 101
+  }
+}

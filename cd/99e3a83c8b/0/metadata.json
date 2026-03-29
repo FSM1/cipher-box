@@ -1,0 +1,57 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cd99e3a83c8b",
+  "session_id": "7cd9f030-b6d1-4c3c-8179-d9752fa12fd4",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T18:29:23.241705Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "6170887b8d57",
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 99637,
+    "cache_read_tokens": 1628528,
+    "output_tokens": 8996,
+    "api_call_count": 31
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Insert a new phase (19.2) after phase 19 to implement and test IPFS upload performance optimizations identified in the phase 19 baselines, then kick off research and planning for that phase.",
+    "outcome": "Phase 19.2 (IPFS Upload Performance Optimization) was inserted into the roadmap, a feature branch was created, and the researcher agent completed — producing RESEARCH.md and VALIDATION.md with a key correction: steps 2+3 (not 1+2) are the actual parallelization opportunity.",
+    "learnings": {
+      "repo": [
+        "Phase 19 baselines incorrectly identified pins 1+2 (ciphertext + file metadata) as parallelizable — they cannot be because file metadata embeds the CID from the ciphertext pin. The real opportunity is steps 2+3 (file IPNS batch publish + folder metadata update).",
+        "The existing load test infrastructure in tests/load/ (vitest, mixed-workload and upload-throughput scenarios) is already capable of before/after performance comparison with percentile breakdowns.",
+        "Prometheus histograms (cipherbox_ipfs_ipns_duration_seconds) already capture server-side pin timing — no new observability work needed.",
+        "Phase 19.1 already existed when 19.2 was inserted; gsd-tools placed 19.2 before 19.1 in the file, requiring a manual ordering fix in ROADMAP.md.",
+        "Kubo's badgerds datastore is deprecated and scheduled for removal; pebbleds (LSM-tree) is the recommended alternative to flatfs for write-heavy pin workloads."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "The primary parallelization fix is ~10 lines: wrap two sequential awaits (steps 2+3 of the upload flow) in Promise.allSettled. No new dependencies required."
+        }
+      ],
+      "workflow": [
+        "gsd-tools phase insert places the new entry immediately after the target phase number in the file, which may not respect existing decimal sub-phases — manual reordering may be needed.",
+        "A git worktree (../cipher-box-phase-20) can be created off main to work on phase 20 in parallel while phase 19.2 work proceeds on its feature branch.",
+        "The researcher agent can run as a background Task while other work (branch creation, worktree setup) proceeds concurrently."
+      ]
+    },
+    "friction": [
+      "gsd-tools inserted phase 19.2 before 19.1 in ROADMAP.md instead of after it, requiring multiple manual Edit calls to fix the ordering and flesh out the phase details.",
+      "The phase 19 baselines document contained an incorrect assertion about which pin steps could be parallelized — the researcher had to correct this by tracing actual code dependencies."
+    ],
+    "open_items": [
+      "pebbleds vs flatfs v0.40.0 performance comparison under CipherBox's specific workload (many small pins, moderate concurrency) — requires empirical testing, no published benchmarks exist.",
+      "Whether concurrent pin requests per upload hit Kubo internal write locks — empirical question to resolve during execution.",
+      "Whether IPFS_PROFILE=server,pebbleds correctly composes both profiles — needs local testing.",
+      "Planning for phase 19.2 not yet started — PLAN.md files still need to be created via /gsd:plan-phase 19.2.",
+      "Phase 20 worktree created but no work started there yet."
+    ]
+  }
+}

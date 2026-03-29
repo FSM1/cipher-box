@@ -1,0 +1,1167 @@
+https://github.com/FSM1/cipher-box/actions/runs/23574752203/job/68644678809 vault recovery e2e is still failing. 
+
+unless you know what the problem is, you will get the e2e tests passing locally before committing to a branch and PR'ing
+
+---
+
+<task-notification>
+<task-id>bhpgce5u2</task-id>
+<tool-use-id>toolu_01QEoRhE81yaYWMUhLARAZBX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bhpgce5u2.output</output-file>
+<status>completed</status>
+<summary>Background command "Start API with test config" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bhpgce5u2.output
+
+---
+
+<task-notification>
+<task-id>b8evtj5dt</task-id>
+<tool-use-id>toolu_01LXuw6L4Sy65HTeVzrbYCoH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/b8evtj5dt.output</output-file>
+<status>completed</status>
+<summary>Background command "Start web dev server" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/b8evtj5dt.output
+
+---
+
+/resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23568112633/job/68625811687 the last few deployments have been throwing errors during grafana dashboard provisioning - why?
+
+---
+
+health returns ok
+
+---
+
+I am seeing grafana loki api key and grafana prometheus api key - which one do i need to update
+
+---
+
+ok secret is updated - its a repo secret not an env secret.
+
+---
+
+just kicked off a fresh staging deployment https://github.com/FSM1/cipher-box/actions/runs/23576294028
+
+---
+
+please check that connection again - I can connect to it from hostinger dashboard
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23576294028/job/68650602138 desktop build is failing on a missing signing key
+
+---
+
+the keys have already been configured on github repo secrets - these just need to be wired in to the github action i guess
+
+---
+
+<task-notification>
+<task-id>bk0ijbei8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bk0ijbei8.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch staging deployment run" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bk0ijbei8.output
+
+---
+
+/insights
+
+---
+
+can you clean up all the worktrees that are currently active on this repo
+
+---
+
+/gsd:progress
+
+---
+
+/gsd:debug
+
+---
+
+1
+
+---
+
+ok can we create a docs branch for these cleanups and milestone completion
+
+---
+
+ok for starters, I think that the docs in @.planning/codebase are terribly outdated by now and need to be brought up to date with the nuew multi-package/crate architecture
+
+---
+
+<task-notification>
+<task-id>a6b4a6822954534de</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/a6b4a6822954534de.output</output-file>
+<status>completed</status>
+<summary>Agent "Map architecture and structure" completed</summary>
+<result>## Mapping Complete
+
+**Focus:** arch
+**Documents written:**
+- `.planning/codebase/ARCHITECTURE.md` (431 lines)
+- `.planning/codebase/STRUCTURE.md` (510 lines)
+
+Ready for orchestrator summary.</result>
+<usage><total_tokens>122098</total_tokens><tool_uses>89</tool_uses><duration_ms>416825</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/a6b4a6822954534de.output
+
+---
+
+<task-notification>
+<task-id>ae2136781865e19ab</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/ae2136781865e19ab.output</output-file>
+<status>completed</status>
+<summary>Agent "Map tech stack and packages" completed</summary>
+<result>## Mapping Complete
+
+**Focus:** tech
+**Documents written:**
+- `.planning/codebase/STACK.md` (527 lines)
+- `.planning/codebase/INTEGRATIONS.md` (232 lines)
+
+Ready for orchestrator summary.</result>
+<usage><total_tokens>84116</total_tokens><tool_uses>72</tool_uses><duration_ms>424671</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/ae2136781865e19ab.output
+
+---
+
+<task-notification>
+<task-id>a5de0e374b6e80369</task-id>
+<tool-use-id>toolu_01LNT5E1a6aKpePusTNsiTzp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/a5de0e374b6e80369.output</output-file>
+<status>completed</status>
+<summary>Agent "Map testing and concerns" completed</summary>
+<result>## Mapping Complete
+
+**Focus:** quality
+**Documents written:**
+- `.planning/codebase/TESTING.md` (540 lines)
+- `.planning/codebase/CONCERNS.md` (294 lines)
+
+Ready for orchestrator summary.</result>
+<usage><total_tokens>147751</total_tokens><tool_uses>106</tool_uses><duration_ms>508668</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/a5de0e374b6e80369.output
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23646120609/job/68878604034 the web e2e test is still failing in CI
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23647105689/job/68881913927 the latest web e2e test is still failing in CI - please can we stop this round-tripping to CI to get the tests working, and actually run the full suite of web e2e tests locally until these pass. only commit when you have a fully working web-e2e test locally.
+
+---
+
+<task-notification>
+<task-id>bd6pe60az</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bd6pe60az.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full web-e2e suite" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bd6pe60az.output
+
+---
+
+why can the api not be started with NODE_ENV=test to ensure that throttler doesnt mess with results?
+
+---
+
+/resolve-pr-reviews
+
+---
+
+<task-notification>
+<task-id>bnrimywn8</task-id>
+<tool-use-id>toolu_01BB1JKH4xw18Rfm9Bx7L8Qm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bnrimywn8.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run writable-shares suite" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bnrimywn8.output
+
+---
+
+<task-notification>
+<task-id>bbr7g33du</task-id>
+<tool-use-id>toolu_01942TnhrTYKF2CeXe41e3RE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bbr7g33du.output</output-file>
+<status>failed</status>
+<summary>Background command "Run full web-e2e suite with NODE_ENV=test API" failed with exit code 144</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bbr7g33du.output
+
+---
+
+<task-notification>
+<task-id>b0bla0a73</task-id>
+<tool-use-id>toolu_011fsnf1KmHFUmuHUeqVzPWc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/b0bla0a73.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait and check re-run results" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/b0bla0a73.output
+
+---
+
+ok, now can you please figure out how to start the api in NODE_ENV=test, so that all the throttling does not interfere with the full test run. I am not merging the #376 PR until the full web e2e spec is passing locally.
+
+---
+
+<task-notification>
+<task-id>bgoza34kn</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bgoza34kn.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full web-e2e suite with relaxed throttle" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bgoza34kn.output
+
+---
+
+ok can we run the web e2e CI flow against the fix branch code?
+
+---
+
+<task-notification>
+<task-id>bc279o9ye</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bc279o9ye.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch E2E run" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/bc279o9ye.output
+
+---
+
+/resolve-pr-reviews
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23652736648 seems like some GH actions dependencies have changed and now the actions are not able to run.
+
+---
+
+sorry i was afk - please try again
+
+---
+
+so it seems like GH actions is having some issue retrieving docker containers - is that the reason for failing actions on that PR?
+
+---
+
+I think the `build desktop` action can be removed from the repo - builds should only be made automatically when a staging release is tagged and goes through the entire process.
+
+---
+
+before I go ahead and merge this, could you explain to me what the motivation was for adding this workflow in the first place? it had something to do with the tauri signing changes from a couple days ago
+
+---
+
+the release please releases happen before staging runs - right now staging is the production environment, and binaries should only be built when the tag staging release workflow is run. the binaries produced should be signed, and if necessary for tauri operation, the `pre-release` label should be removed from the staging release artifacts.
+
+---
+
+same PR
+
+---
+
+/resolve-pr-reviews
+
+---
+
+ok can we get to the recent docs cleanup branch
+
+---
+
+yeah please merge the latest from main
+
+---
+
+ok can you look through all the phase documentation for the last milestone @.planning/milestones/m2/phases/ as well as @.planning/phases/ for any items marked as deferred ideas that have not been implemented. Also, it would probably be a good idea to have a feature list (per platform) both for documentation as well as ensuring e2e test coverage for all features exists.
+
+---
+
+<task-notification>
+<task-id>ae2973afc6a482177</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/ae2973afc6a482177.output</output-file>
+<status>completed</status>
+<summary>Agent "Find deferred items in m2 phases" completed</summary>
+<result>Perfect! I have gathered comprehensive information. Let me create a final summary report:
+
+## Comprehensive Deferred Items Report - CipherBox Phases 11-17.1
+
+I've completed a thorough search through all 22 phase directories in `.planning/milestones/m2/phases/` across CONTEXT.md, PLAN.md, VERIFICATION.md, SUMMARY.md, and RESEARCH.md files. Here are all deferred, postponed, and future work items:
+
+---
+
+### **Phase 11: Windows Desktop**
+
+**Deferred to Phase 11.3:**
+- Linux Desktop support (now a separate phase rather than bundled)
+- ProjFS as potential future Windows alternative if Rust ecosystem matures
+
+---
+
+### **Phase 11.1: macOS Desktop Catch-Up**
+
+**Deferred to Phase 11.2:**
+- `approveDevice()` UI trigger — function is API-complete but has no UI (auth.ts line 674, main.ts line 31)
+- Approval listener for device approval responses
+
+**Deferred to Phase 11 (cross-platform):**
+- WalletConnect QR code flow — currently only injected provider MVP; full WalletConnect deferred
+
+---
+
+### **Phase 12: Multi-Factor Authentication (Core Kit Identity Provider)**
+
+**Deferred to Phase 12.3 (SIWE):**
+- External wallet login (removed from active Phase 12 flow)
+- Method linking UI in LinkedMethods component
+- Web3Auth wallet connector support
+
+**Deferred to Plan 04:**
+- User display/info from PnP (currently removed; user info will display in Plan 04)
+
+---
+
+### **Phase 12.1: AES-CTR Streaming Encryption**
+
+**Deferred to future gap-closing phase:**
+- Desktop FUSE CTR support — web app gets CTR playback; desktop client update deferred to separate phase addressing all Phase 12.x macOS gaps
+
+**Deferred (out of scope):**
+- BYO-IPFS configuration for larger file uploads (separate phase already captured as pending todo)
+- Re-encryption of existing files (not needed due to clean-break database wipe)
+
+---
+
+### **Phase 12.2: Encrypted Device Registry**
+
+**Deferred ideas (acknowledged for future):**
+- Migrate vault IPNS to deterministic derivation (currently vault IPNS keys are backend-generated; deterministic derivation would enable self-sovereign recovery) — logged as todo `.planning/todos/pending/2026-02-13-deterministic-vault-ipns-derivation.md`
+- CRDT-style merge for concurrent device updates (simple approach, but last-write-wins preferred for simplicity)
+- Device approval gate — Phase 12.4 scope (currently "pending" status is non-blocking)
+
+---
+
+### **Phase 12.6: Per-File IPNS Metadata Split**
+
+**Deferred to Phase 14:**
+- Two TODO comments in folder.service.ts for TEE unenrollment on file deletion and orphaned TEE enrollment cleanup — marked as intentionally deferred; orphaned enrollments expire naturally via 24-hour IPNS record lifetime
+
+**Deferred to later phase or quick task:**
+- Desktop FUSE client v2 metadata support — desktop client has zero awareness of per-file IPNS records; web app gets v2 first; desktop catches up in follow-up phase or quick task
+
+**Deferred ideas:**
+- Dedicated single-file publish endpoint (useful for Phase 14 per-file sharing)
+- TEE enrollment drift reconciliation — periodic full-vault scan to sync enrollment with actual vault contents (add if drift appears in production)
+
+---
+
+### **Phase 13: File Versioning**
+
+**Deferred ideas:**
+- None explicitly listed; discussion stayed within phase scope
+
+---
+
+### **Phase 14: User-to-User Sharing**
+
+**Out of scope (this phase):**
+- Read-write sharing (read-only only; requires giving recipients IPNS private key)
+- Re-sharing (readers receive decryption keys only, not IPNS signing keys)
+
+**Deferred ideas:**
+- User discovery/lookup service by email, username, or wallet address (requires privacy controls; separate phase)
+- Display names for recipients instead of truncated pubkeys (depends on user discovery/profile phase)
+- Immediate key rotation on revoke (currently lazy rotation; easy to upgrade later)
+- Share notifications for recipients (currently relies on polling)
+- CRDT-based IPNS inbox approach (promising third option pending IPNS reliability research) — documented in `.planning/todos/pending/2026-02-22-crdt-ipns-inbox-sharing.md`
+
+---
+
+### **Phase 15: Link Sharing**
+
+**Out of scope:**
+- Unauthenticated file viewing (would be fundamentally different security surface)
+- Password-protected links
+- Multi-claim links (maxClaims column ready; just needs UI)
+- Short domain URLs (requires DNS/redirect infrastructure)
+
+**Deferred to Phase 15.1:**
+- Client-side search (split into separate phase)
+
+---
+
+### **Phase 15.1: Client-Side Search**
+
+**Deferred ideas:**
+- Recent search history (show 2-3 past queries) — nice-to-have for future release
+- Searching shared items — would require indexing across share boundaries (separate phase)
+- Full-text content search — fundamentally different (requires decrypting file contents); out of scope
+
+---
+
+### **Phase 16: Advanced Sync**
+
+**Rescoped from original roadmap (deferred to Milestone 4):**
+- Offline operation queue — persist write operations in IndexedDB for replay on reconnect
+- Idempotent replay — idempotency keys for queued operations to prevent duplicates (tightly coupled to offline queue)
+- Auto-merge of non-conflicting folder changes — three-way merge on encrypted folder metadata arrays (high complexity)
+- Per-file IPNS conflict detection — currently covered by versioning safety net; re-evaluate in M4
+
+**Deferred implementation details:**
+- OS notification on conflict (CONTEXT.md calls for it but AppHandle not easily accessible from background thread; tray status change remains visible)
+
+---
+
+### **Phase 17: Recycle Bin**
+
+**Deferred ideas:**
+- User-configurable retention period per-user settings
+- Organization-level retention policy
+- Desktop .Trash folder integration (Finder/Explorer native trash)
+- Desktop bin browsing and restore UI
+- Folder-hierarchy view in bin (group by original path)
+
+**Deferred/known limitation:**
+- TEE unenrollment on permanent delete (if API endpoint exists later; currently deferred to "Phase 14 TODO") — at minimum, orphaned IPNS records will expire naturally via 24-hour IPNS record lifetime; TEE republish service has capacity warnings at 1000+ records
+
+---
+
+### **Phase 11.3: Linux Desktop**
+
+**Deferred ideas:**
+- None — discussion stayed within phase scope
+
+---
+
+### **Phase 11.4: Cross-Platform E2E Testing**
+
+**Deferred ideas:**
+- None — discussion stayed within phase scope
+
+---
+
+## Summary Statistics
+
+- **Total phases analyzed:** 14 unique phases (plus sub-phases)
+- **Phases with deferred items:** 11 out of 14
+- **Total deferred/postponed items:** 40+ distinct items
+- **Most common deferral targets:** 
+  - Phases 12.3-12.4 (auth/MFA enhancements)
+  - Phase 14 (sharing-related features)
+  - Milestone 4 (offline queue, merge logic)
+  - Future undefined phases (desktop updates, gap closures)
+
+---
+
+**Key Files for Reference:**
+- `/Users/michael/Code/cipher-box/.planning/milestones/m2/phases/[phase]/[phase]-CONTEXT.md` — Primary source for all deferred items under `<deferred>` tags
+- `/Users/michael/Code/cipher-box/.planning/milestones/m2/phases/[phase]/[phase]-VERIFICATION.md` — Some deferred verification items
+- `/Users/michael/Code/cipher-box/.planning/milestones/m2/phases/[phase]/[phase]-SUMMARY.md` — Plan-specific deferrals documented inline</result>
+<usage><total_tokens>59380</total_tokens><tool_uses>23</tool_uses><duration_ms>50077</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/ae2973afc6a482177.output
+
+---
+
+<task-notification>
+<task-id>a3e935a21007eb2c8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/a3e935a21007eb2c8.output</output-file>
+<status>completed</status>
+<summary>Agent "Find deferred items in v1.1 phases" completed</summary>
+<result>Perfect! Now I have comprehensive information. Let me compile the final report based on my findings.
+
+## Summary of Deferred Items Across All Phases
+
+Based on my thorough search through `/Users/michael/Code/cipher-box/.planning/phases/` and `.planning/todos/pending/`, here is a comprehensive report of deferred, postponed, and TODO work:
+
+### Deferred Items by Phase
+
+#### **Phase 18: Performance Instrumentation**
+- **Deferred Ideas:** None documented
+
+#### **Phase 19: IPNS Resolution Improvement**
+- **Standalone CLI recovery tool** — Build a Node.js CLI that reads vault export JSON, resolves IPNS, and decrypts/downloads files. Pushed to future phase.
+- **TEE worker routing through Someguy** — Revisit when capacity metrics show delegated-ipfs.dev is a bottleneck, or when TEE moves to Phala infrastructure.
+- **Timeout tuning for UX** — After baseline data from Phase 18 + early Phase 19, tune timeout/retry for sub-2s user experience.
+- **Alerting thresholds** — Configure Grafana alerts for DB fallback rate after baseline data exists.
+
+#### **Phase 19.1: Extract Core Crypto SDK as Shared Package**
+- **Rust wasm-bindgen** — SDK architecture supports future wasm compilation, but no wasm work in this phase. Native Rust stays.
+- **Shared type definitions (JSON Schema)** for Rust ↔ TypeScript metadata parity — Useful but separate scope.
+- **npm publishing** — Packages monorepo-internal only. Publishing is future decision when external consumers exist.
+- **bin/share/device-registry extraction to sdk-core** — Currently stateful-SDK-only. Can be pushed down later if needed for load tests.
+- **Headless sdk-core load test scripts** — Key motivator for extraction but writing Node.js-only load tests is follow-up, not this phase.
+- **Pre-existing DTS circular build dependency** — @cipherbox/crypto ↔ @cipherbox/core circular re-exports. Workaround documented but not fixed. Logged to deferred-items.md.
+
+#### **Phase 19.2: IPFS Upload Performance Optimization**
+- (All goals completed; no deferred items documented)
+
+#### **Phase 20: Vault Migration**
+- **Column DROP migration** — After all users migrated, drop `encryptedRootFolderKey` and `encryptedRootIpnsPrivateKey` columns. Separate future migration, not this phase.
+- **IPFS-only retry-then-error mode** — Transition from silent DB fallback to hard IPFS-only after Kubo performance proves out. Configuration change, not code change.
+- **Full login-to-vault E2E timing** — Pushed to Phase 22 (PERF-06).
+- **Forced migration for dormant accounts** — Not needed; they migrate on next login.
+
+#### **Phase 21: BYO IPFS Node Support**
+- **Task 4: Benchmark execution against real external provider** — Deferred. Requires external IPFS provider infrastructure (Pinata, Filebase, or self-hosted). Baselines document (.planning/baselines/21-byo-baselines.md) to be created when provider infrastructure available.
+- **S3-compatible storage** — Pin to S3/Minio with CID-addressed layout. Interesting but diverges from IPFS protocol. Future phase if demand exists.
+- **Client-side migration fallback** — If TEE migration not viable for edge case, allow browser-based migration. Requires browser to stay open.
+- **Migration scheduling** — Schedule migrations for off-peak hours. v1.1 is immediate-start only.
+- **Provider marketplace** — Curated list of compatible IPFS providers with one-click setup. Future UX enhancement.
+
+#### **Phase 22: Performance Baselines Completion**
+- **Deferred Ideas:** None documented
+
+#### **Phase 23: Rust SDK Extraction**
+- **wasm-bindgen target** — Crate architecture supports future wasm compilation for browser use, but no wasm work in this phase.
+- **Shared JSON Schema for Rust ↔ TypeScript types** — Could auto-generate types from shared schema, but separate implementations verified by shared test vectors is sufficient for now.
+- **npm publishing of Rust crates via wasm** — Future consideration when external consumers exist.
+
+#### **Phase 24: Bug Fixes & Test Infrastructure**
+- **Error cases for recovery tool** (invalid key, unreachable gateway) — Could be added later once happy path has coverage.
+- **Export file recovery mode restoration** — Removed entirely; could be re-added if demand arises.
+- **Proactive token refresh in load tests** — Reactive is sufficient for now.
+
+#### **Phase 25: Desktop Enhancements**
+- **Platform code signing** (Apple notarization, Windows Authenticode) — Future phase.
+- **Beta/canary update channels** — Future if needed.
+- **Retroactive TEE enrollment for existing files** — Not planned; new files only.
+- **Delta updates** (Tauri supports but adds complexity) — Evaluate after initial implementation.
+
+#### **Phase 26: Observability & UX Tuning**
+- **Dedicated timeout regression test suite** — Noted for future hardening phase.
+- **Push notification channels** (email, Slack, Discord webhooks) — Add when team grows or on-call rotation exists.
+- **Automated CI timing gates** — Flaky due to runner variance; revisit when stable CI environment available.
+
+#### **Phase 27: Writable Shares PoC**
+- **Metadata-embedded sharing** — Move share data (including wrapped keys) directly onto IPFS metadata to hide social graph from server. Long-term goal per user preference.
+- **Attribution / audit trail** — Track who modified what in shared folders. Add `lastModifiedBy` pubkey to folder metadata.
+- **Transitive re-sharing** — Allow write-share recipients to share with others. Requires cascading revocation logic.
+- **Faster sync for shared folders** — Reduce poll interval for actively-shared folders (e.g., 10s) for snappier multi-writer experience.
+- **Immediate IPNS key rotation on revoke** — Rotate keypair immediately instead of lazy rotation. More secure but requires re-wrapping for all remaining recipients.
+- **Share notifications** — Notify recipients of permission changes (upgrade/downgrade/revoke).
+
+---
+
+### Pending TODO Items (in `.planning/todos/pending/`)
+
+These are explicitly tracked as deferred work items:
+
+1. **2026-02-07: Offload large file encryption to Web Worker**
+   - Files >= 10MB should use Web Worker; currently blocks main thread
+   - Three options documented: event loop yielding (quick win), full Web Worker (best), incremental updates (ideal long-term)
+
+2. **2026-02-14: Add ERC-1271 contract wallet authentication support**
+   - Smart contract wallets (Safe, Argent, Sequence) need ERC-1271 `isValidSignature` verification
+   - Requires on-chain call to wallet contract; needs RPC endpoint decision (free/paid/user-provided)
+
+3. **2026-02-22: Research CRDT-based IPNS inbox for serverless share discovery**
+   - Decentralized share discovery via CRDTs over IPNS, replacing centralized `shares` table
+   - Addresses write-conflict issues as horizontal concern; applies to folder metadata sync, device registry, share inbox
+   - Known challenges: write access control, IPNS reliability, revocation, state size growth
+
+4. **2026-02-24: Make search index build async/incremental for large vaults**
+   - `buildFromFolderTree()` currently synchronous; can block UI for large vaults
+   - Three options: event loop yielding (quick win), Web Worker (better), incremental updates (ideal)
+
+5. **2026-02-26: Add alternative MFA factor types**
+   - Currently only device shares + recovery mnemonic
+   - Priority: Passkey (WebAuthn PRF, best but fragmented platform support) > Password-derived key (simplest, weaker security) > Secondary OAuth (moderate complexity)
+   - Not viable: TOTP, SMS/Email OTP (ephemeral, can't derive deterministic keys)
+   - Deferred: Social recovery (high complexity, Shamir Secret Sharing among contacts)
+
+6. **2026-03-23: Investigate removal of mock-ipns-routing layer**
+   - Was needed for local dev; now that someguy at `192.168.133.114:8190` works, mock layer may be unnecessary
+   - Requires verification someguy works reliably for all IPNS scenarios; if so, remove mock service + config
+
+---
+
+### Security Review Findings (Deferred from Phase 14)
+
+From `/Users/michael/Code/cipher-box/.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
+
+- **M1 (Medium):** `itemName` stored plaintext on server — encrypt with recipient's public key (ECIES); decrypt client-side
+- **M5 (Medium):** `reWrapForRecipients` silently swallows errors — surface notifications or implement background retry
+- **L1 (Low):** `/shares/lookup` enables public key enumeration — change to always return 200 with `{ exists: boolean }`
+- **L4 (Low):** No pagination on `getReceivedShares`/`getSentShares` — add `limit`/`offset` query params
+
+---
+
+### Summary Statistics
+
+- **Total phases reviewed:** 12 (Phase 18–27)
+- **Phases with deferred items:** 11 of 12
+- **Total deferred ideas documented:** 50+ across all phases
+- **Pending TODO items:** 6 active items
+- **Security findings deferred:** 4 items (M1, M5, L1, L4)
+- **Benchmark execution deferred:** 1 (Phase 21-07, Task 4 — BYO baselines capture)
+- **DTS build issue deferred:** 1 (Phase 19.1 — circular dependency)
+
+All deferred items include reasoning, and most indicate which future phase or context they belong to. Common themes: infrastructure not available at phase time, requires baseline data from earlier phases, represents future enhancements beyond PoC scope, or involves external platform/provider setup.</result>
+<usage><total_tokens>51263</total_tokens><tool_uses>35</tool_uses><duration_ms>98296</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/a3e935a21007eb2c8.output
+
+---
+
+<task-notification>
+<task-id>a916f8cb2519c7943</task-id>
+<tool-use-id>toolu_01PPTpvMQUDBDeJymnPfsJPB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/a916f8cb2519c7943.output</output-file>
+<status>completed</status>
+<summary>Agent "Map current feature set per platform" completed</summary>
+<result>Now let me summarize what I've found. Let me compile the comprehensive feature mapping:
+
+Based on my thorough analysis of the CipherBox codebase, here's a comprehensive feature map across all platforms:
+
+## CIPHERBOX FEATURE SET MAPPING
+
+### WEB PLATFORM (React + TypeScript)
+
+#### Authentication Features
+- **Login Methods**
+  - Google OAuth (via Auth0)
+  - Email OTP (via SendGrid)
+  - Wallet login (via Web3Auth + SIWE - Sign In With Ethereum)
+  - Test-only login (via `/auth/test-login`)
+- **Multi-Factor Authentication (MFA)**
+  - MFA enrollment/enablement via Web3Auth DKG
+  - Recovery phrase generation (24-word BIP39)
+  - Device approval flow (new device MFA challenge)
+  - Device waiting screen (pending approval from existing device)
+  - Recovery input fallback (when approval not available)
+  - Authorized devices list (view previously approved devices)
+- **Auth Management**
+  - Link multiple auth methods to single account
+  - Unlink auth methods (minimum one required)
+  - Logout with token revocation
+  - Account deletion (permanent)
+- **Device Management**
+  - Device identity tracking via device ID and fingerprint
+  - Device registry sync across instances
+  - ECIES ephemeral key exchange for device approval
+
+#### File Operations
+- **File Upload**
+  - Single file upload via modal dialog
+  - Drag-and-drop upload zone
+  - Concurrent upload handling
+  - Upload progress tracking
+  - Error recovery with retry
+  - File size validation (max 100MB)
+  - Storage quota enforcement (500MB limit)
+  - Automatic file encryption before upload
+- **File Download**
+  - Single file download with decryption
+  - Batch file download (zip)
+  - Streaming decryption (for large files)
+  - Download progress tracking
+  - Support for multiple encryption modes
+- **File Operations**
+  - Rename files
+  - Delete to recycle bin
+  - File metadata inspection (size, date, CID, versions)
+  - Text file in-browser editing (modal dialog)
+  - File preview (images, PDF, video, audio)
+  - Replace file (delete and re-upload)
+- **File Versioning**
+  - Multiple versions support (tracked in metadata)
+  - Version history display
+  - Version restore capability
+
+#### Folder Operations
+- **Folder Management**
+  - Create folders at any level
+  - Rename folders
+  - Navigate folder hierarchy
+  - Breadcrumb navigation
+  - Parent directory navigation
+  - Move folders (to different parents)
+  - Delete folders to recycle bin
+- **Folder Structure**
+  - Unlimited nesting
+  - Folder hierarchy visualization
+  - Folder metadata encryption
+
+#### File Browser UI
+- **Navigation**
+  - File/folder list view
+  - Breadcrumbs with click navigation
+  - Parent directory row (`..')
+  - Folder double-click to open
+  - Multi-level folder hierarchy
+- **File Selection & Actions**
+  - Single file selection
+  - Multi-file selection (Shift+Click, Cmd+Click)
+  - Selection action bar (batch operations)
+  - Context menu (right-click)
+  - Folder-level action buttons
+- **Display**
+  - File list with name, size, date, CID columns
+  - File type icons
+  - Empty state UI
+  - Offline indicator banner
+  - Sync status indicator
+
+#### Sharing Features
+- **Direct User-to-User Sharing**
+  - Share files/folders with specific users
+  - Read-only permission (default)
+  - Write permission (bidirectional editing)
+  - Permission upgrade/downgrade
+  - Lazy key rotation (revoke + key re-wrap)
+  - Multiple recipient support
+  - Revoke shares (soft delete)
+  - Hide shares (recipient hides received share)
+- **Invite Links (Public Sharing)**
+  - Generate invite links (URL with ephemeral key)
+  - Claim invite links (authenticated)
+  - Invite link landing page (unauthenticated status check)
+  - Invite revocation
+  - Invite expiration tracking
+  - Support for files and folders
+  - Ephemeral key-based ECIES unwrapping
+- **Share Management**
+  - View received shares (paginated list)
+  - View sent shares (paginated list)
+  - Lookup users by public key
+  - Share key re-wrapping for new items added to shared folder
+  - Pending rotation detection (for deferred key rotation)
+
+#### Recycle Bin
+- **Bin Operations**
+  - Soft delete to bin (retention period: 30 days default)
+  - View deleted items in dedicated bin page
+  - Restore from bin (recover to original location)
+  - Permanent delete (hard delete)
+  - Empty bin (delete all)
+  - Bin metadata tracking (deleted item names, locations, dates)
+- **Bin Encryption**
+  - HKDF-derived bin key for deleted item metadata
+  - ECIES encryption of bin entries
+  - Separate bin IPNS namespace
+
+#### Search Features
+- **Search Palette**
+  - Cmd/Ctrl+K keyboard shortcut
+  - Header button activation
+  - Fuzzy file name matching
+  - Real-time search results
+  - Result selection and navigation
+  - Keyboard navigation (arrow keys + Enter)
+  - Click outside to close
+  - No-results state
+- **Search Index**
+  - Client-side search index
+  - Incremental index updates
+  - Per-folder indexing
+
+#### Settings & Account Management
+- **Settings Pages**
+  - Account/identity settings
+  - Security tab (MFA enrollment/management)
+  - Authorized devices display
+  - Recovery phrase display
+  - Storage quota display
+  - Connection test UI
+  - Migration progress display
+- **Storage Management**
+  - Storage quota display
+  - Used vs. available space
+  - Quota enforcement (402 Payment Required on exceed)
+  - Per-file size reporting
+
+#### Sync & Polling
+- **IPNS Polling**
+  - 30-second poll interval for folder metadata
+  - Sequence number tracking for conflict detection
+  - Cold-load IPNS resolution on navigation
+  - Caching of resolved IPNS→CID mappings
+- **Conflict Detection**
+  - Server 409 response on stale sequence number
+  - Auto-resync on conflict
+  - Retry with fresh sequence number
+  - Multi-device concurrent mutation handling
+- **Real-time Sync**
+  - Folder state synchronization
+  - Device registry sync
+  - Event-driven updates
+
+#### Media Features
+- **Image Preview**
+  - In-browser image display
+  - Support for common formats (PNG, JPG, GIF, etc.)
+- **PDF Preview**
+  - PDF viewer modal
+  - Page navigation
+  - Zoom controls
+- **Video Player**
+  - HTML5 video player
+  - Playback controls (play/pause, volume, speed)
+  - Timeline seeking
+  - Fullscreen mode
+  - Speed adjustment (0.5x-2x)
+- **Audio Player**
+  - HTML5 audio player
+  - Playback controls
+  - Progress seeking
+  - Volume control
+
+#### UI/UX Features
+- **Dialogs & Modals**
+  - Create folder dialog
+  - Rename dialog
+  - Move dialog (folder/file picker)
+  - Delete confirmation dialog
+  - Details panel
+  - Share dialog (with tabs for direct share and invite links)
+  - Settings page
+  - Invite landing page
+- **Status Indicators**
+  - Sync status (synced/syncing/offline)
+  - Upload/download progress
+  - Notification toasts
+  - Loading states
+- **Layout**
+  - Sidebar with navigation (Files, Shared, Bin, Settings)
+  - Header with user menu, search, sync status
+  - Footer with storage quota
+  - Responsive design
+
+---
+
+### DESKTOP PLATFORM (Tauri + Rust)
+
+#### File System Mount
+- **FUSE-T Mount (macOS)**
+  - SMB backend (not NFS) - works around macOS kernel bug
+  - Mount at `~/CipherBox`
+  - Pre-population of root folder from IPNS
+  - Pre-population of subfolders (recursive with caching)
+  - Inode table with stable inode numbering
+  - Metadata cache with TTL
+  - Content cache with prefetch
+- **FUSE Operations**
+  - `lookup()` - find inode by name
+  - `getattr()` - file/folder attributes
+  - `readdir()` - list directory contents
+  - `read()` - file content with async prefetch
+  - `write()` - buffered writes to temp file
+  - `create()` - new files
+  - `mkdir()` - new folders
+  - `rename()` - move/rename items
+  - `unlink()` - delete files
+  - `rmdir()` - delete folders
+  - `release()` - close file (trigger encrypt+upload)
+  - `opendir()` / `releasedir()` - directory handles
+
+#### File Operations via FUSE
+- **Transparent File Access**
+  - Read encrypted files transparently
+  - Write files with encryption on close
+  - Folder navigation
+  - File metadata access
+- **Encryption Integration**
+  - Client-side encryption for all writes
+  - On-demand decryption for reads
+  - File key derivation and wrapping
+  - File IV tracking
+  - Version support
+- **Upload/Publish**
+  - Encrypted file upload to IPFS
+  - IPNS metadata publish (debounced)
+  - Sequence number tracking
+  - Conflict detection
+
+#### Desktop-Specific Features
+- **Auth Management**
+  - Dev-key mode (headless login for testing)
+  - Test-login via `/auth/test-login`
+  - Token refresh handling
+  - OAuth popup window management
+- **Keychain Integration**
+  - Secure device ID storage
+  - Private key persistence (release builds only)
+  - Debug builds use ephemeral UUIDs
+- **Tray Integration**
+  - System tray icon
+  - Status indicator
+  - Mount/unmount controls
+  - Quit app
+- **Sync Management**
+  - Background sync daemon
+  - Device registry polling
+  - Folder metadata refresh
+  - MFA status tracking
+- **Background Tasks**
+  - Debounced IPNS publish queue
+  - Per-folder coalescing (max 10 pending)
+  - Publish coordinator (per-IPNS sequence tracking)
+  - Upload completion tracking
+- **Updater**
+  - Self-update capability
+  - Version checking
+- **Window Management**
+  - OAuth popup lifecycle
+  - Web view reload on auth complete
+  - Persist window state
+
+#### Desktop Configuration
+- **Environment Variables**
+  - `CIPHERBOX_API_URL` - API endpoint override
+  - `VITE_API_URL` - web view API target
+  - `VITE_ENVIRONMENT` - environment name
+  - `VITE_TEST_LOGIN_SECRET` - for dev-key mode
+  - `RUST_LOG` - logging level
+
+---
+
+### API BACKEND (NestJS + TypeScript)
+
+#### Authentication Endpoints
+- **POST `/auth/login`** - Authenticate with Web3Auth ID token, create/find user, issue JWT
+- **POST `/auth/refresh`** - Refresh JWT using refresh token (cookie or body)
+- **POST `/auth/logout`** - Invalidate all refresh tokens
+- **DELETE `/auth/account`** - Permanently delete user and all data
+- **GET `/auth/methods`** - List linked auth methods
+- **POST `/auth/link`** - Link new auth method to account
+- **POST `/auth/unlink`** - Unlink auth method
+- **POST `/auth/test-login`** - Test-only login (requires TEST_LOGIN_SECRET)
+
+#### Identity Endpoints (via `identity.controller.ts`)
+- **GET `/auth/identity/wallet/nonce`** - SIWE nonce for wallet login
+- **POST `/auth/identity/wallet`** - SIWE verification and login
+- **POST `/auth/identity/email/send-otp`** - Send OTP to email
+- **POST `/auth/identity/email/verify-otp`** - Verify OTP and login
+- **POST `/auth/identity/google`** - Google OAuth login
+
+#### Vault Endpoints
+- **POST `/vault/init`** - Initialize user vault with encrypted keys
+- **GET `/vault`** - Retrieve user vault
+- **GET `/vault/config`** - Get vault configuration (retention periods, etc.)
+- **GET `/vault/export`** - Export vault for independent recovery
+- **GET `/vault/quota`** - Get storage usage and limits
+
+#### File/IPFS Endpoints
+- **POST `/ipfs/upload`** - Upload encrypted file (multipart form-data, max 100MB)
+- **POST `/ipfs/unpin`** - Unpin files (stop tracking quota)
+- **POST `/ipfs/register-cid`** - Register CID for quota tracking
+
+#### IPNS Endpoints
+- **POST `/ipns/publish`** - Publish single IPNS record (pre-signed by client)
+- **POST `/ipns/publish-batch`** - Batch publish up to 200 IPNS records
+- **GET `/ipns/resolve`** - Resolve IPNS name to CID
+
+#### Share Endpoints
+- **POST `/shares`** - Create share (user-to-user)
+- **GET `/shares/received`** - List received shares (paginated)
+- **GET `/shares/sent`** - List sent shares (paginated)
+- **GET `/shares/lookup`** - Lookup user by public key
+- **GET `/shares/pending-rotations`** - Get shares pending lazy key rotation
+- **GET `/shares/:shareId/keys`** - Get re-wrapped share keys
+- **POST `/shares/:shareId/keys`** - Add re-wrapped keys to share
+- **PATCH `/shares/:shareId/permission`** - Upgrade/downgrade permission
+- **DELETE `/shares/:shareId`** - Revoke share (soft delete)
+- **PATCH `/shares/:shareId/hide`** - Hide received share
+- **PATCH `/shares/:shareId/encrypted-key`** - Update encrypted key after rotation
+- **DELETE `/shares/:shareId/complete-rotation`** - Hard delete after rotation
+
+#### Invite Link Endpoints
+- **GET `/invites/:token`** - Get invite status (public, no auth)
+- **GET `/invites/:token/data`** - Get invite data for claim (authenticated)
+- **POST `/invites/:token/claim`** - Claim invite link
+- **GET `/share-invites`** - List outgoing invite links
+- **POST `/share-invites`** - Create invite link
+- **DELETE `/share-invites/:inviteId`** - Revoke invite link
+
+#### Device Approval Endpoints
+- **POST `/device-approval/request`** - New device creates approval request
+- **GET `/device-approval/:requestId/status`** - Poll approval status
+- **GET `/device-approval/pending`** - List pending approval requests
+- **POST `/device-approval/:requestId/respond`** - Approve/deny request
+- **DELETE `/device-approval/:requestId`** - Cancel request
+
+#### Bin Endpoints (embedded in vault/share operations)
+- **Bin operations via SDK** - Soft delete, restore, permanent delete, empty
+
+#### Migration Endpoints
+- **POST `/migration/start`** - Start pin migration between IPFS providers
+- **GET `/migration/status`** - Get migration status
+- **POST `/migration/:id/pause`** - Pause migration
+- **POST `/migration/:id/resume`** - Resume migration
+- **POST `/migration/:id/cancel`** - Cancel migration
+
+#### TEE Endpoints
+- **POST `/tee/connection-test`** - Test external IPFS provider connection
+
+#### Health Endpoints
+- **GET `/health`** - API health check
+- **GET `/republish-health`** - TEE republishing health check
+- **GET `/metrics`** - Prometheus metrics
+
+#### App Endpoints
+- **GET `/`** - Root health check
+- **.well-known/jwks.json** - JWKS for token verification
+
+---
+
+### SDK (TypeScript Package)
+
+#### Core Client (`CipherBoxClient`)
+- **Initialization**
+  - Constructor with vault keypair, root folder key, API config
+  - Event emitter registration
+  - Pinning provider configuration (Kubo, Pinata, PSA)
+- **Folder Operations**
+  - `loadFolder(ipnsName)` - Load and decrypt folder metadata
+  - `createFolder(parentIpnsName, name)` - Create new folder
+  - `renameItem(ipnsName, childId, newName)` - Rename file/folder
+  - `moveItem(sourceIpnsName, destIpnsName, childId)` - Move to different folder
+  - `deleteItem(ipnsName, childId)` - Delete item
+- **File Operations**
+  - `uploadFile(ipnsName, content, fileName, mimeType, progressFn)` - Upload with progress callback
+  - `downloadFile(ipnsName, childId)` - Download and decrypt
+  - `downloadFromIpns(ipnsName, fileKey)` - Direct IPNS download
+- **Bin Operations**
+  - `loadBin()` - Load recycle bin entries
+  - `deleteToBin(ipnsName, childId, path)` - Soft delete
+  - `restoreFromBin(entryId, targetIpnsName)` - Restore item
+  - `permanentDelete(entryId)` - Hard delete
+  - `emptyBin()` - Delete all bin entries
+- **Share Operations**
+  - `shareFolder(ipnsName, recipientPublicKey, permission)` - Create share
+  - `revokeShare(shareId)` - Revoke share
+  - `reWrapForRecipients(shares, newItems)` - Re-wrap keys for share recipients
+- **Lifecycle**
+  - `destroy()` - Clear all key material from memory
+  - `hasFolder(ipnsName)` - Check if folder loaded
+  - `on(handler)` - Subscribe to events
+  - `off(handler)` - Unsubscribe
+
+#### State Management
+- **FolderTree** - In-memory folder hierarchy with sequence numbers
+- **KeyCache** - Cache for decrypted folder/file keys
+- **Event System** - Type-safe event emission (operation start/end/error)
+
+#### Cryptographic Functions
+- Folder metadata encryption/decryption
+- File encryption/decryption
+- File metadata encryption
+- Key wrapping/unwrapping (ECIES)
+- HKDF key derivation
+- AES-256-GCM encryption
+
+---
+
+### E2E TEST COVERAGE
+
+#### Test Files (12 test suites)
+1. **full-workflow.spec.ts** - Complete user journey with nested folders, file operations, editing
+2. **sharing-workflow.spec.ts** - User-to-user sharing (read-only and multi-recipient)
+3. **writable-shares.spec.ts** - Write-permission sharing and recipient mutations
+4. **invite-link-workflow.spec.ts** - Public invite links and claiming
+5. **recycle-bin.spec.ts** - Delete, restore, permanent delete, empty bin
+6. **search-workflow.spec.ts** - Search palette with keyboard/click navigation
+7. **mfa-flows.spec.ts** - MFA enrollment, device approval, recovery phrase
+8. **wallet-login.spec.ts** - Wallet (EIP-6963 via mock) login
+9. **recovery.spec.ts** - Vault recovery tool (independent recovery)
+10. **conflict-detection.spec.ts** - Multi-device conflict detection and auto-resync
+11. **journey-timing.spec.ts** - Performance timing benchmarks
+12. **load-test.spec.ts** - Concurrent operation stress testing
+
+#### Feature Coverage by Test
+- **Authentication**: MFA flows, wallet login, email OTP, recovery
+- **File Operations**: Upload, download, rename, delete, move, edit, replace, preview
+- **Folder Operations**: Create, navigate, rename, move, delete
+- **Sharing**: Direct shares, invite links, permissions, revocation, hiding
+- **Bin**: Soft delete, restore, permanent delete, empty
+- **Search**: Query, navigation, keyboard/UI activation
+- **Conflicts**: Multi-device scenarios, sequence number conflicts
+- **Media**: Image preview, PDF viewer, video player, audio player
+
+---
+
+### FEATURE MATRIX BY PLATFORM
+
+| Feature Category | Web | Desktop | API | SDK |
+|---|---|---|---|---|
+| **Authentication** | ✓ | ✓ | ✓ | - |
+| Google OAuth | ✓ | ✓ | ✓ | - |
+| Email OTP | ✓ | ✓ | ✓ | - |
+| Wallet Login | ✓ | ✓ | ✓ | - |
+| MFA/Device Approval | ✓ | ✓ | ✓ | - |
+| Recovery Phrase | ✓ | ✓ | ✓ | - |
+| **File Operations** | ✓ | ✓ | ✓ | ✓ |
+| Upload | ✓ | ✓ | ✓ | ✓ |
+| Download | ✓ | ✓ | ✓ | ✓ |
+| Rename | ✓ | ✓ | - | ✓ |
+| Delete | ✓ | ✓ | - | ✓ |
+| Move | ✓ | ✓ | - | ✓ |
+| Preview (Images/PDF/Video/Audio) | ✓ | - | - | - |
+| In-browser Edit (Text) | ✓ | - | - | - |
+| **Folder Operations** | ✓ | ✓ | ✓ | ✓ |
+| Create | ✓ | ✓ | - | ✓ |
+| Navigate | ✓ | ✓ | - | ✓ |
+| Rename | ✓ | ✓ | - | ✓ |
+| Delete | ✓ | ✓ | - | ✓ |
+| Move | ✓ | ✓ | - | ✓ |
+| **Sharing** | ✓ | - | ✓ | ✓ |
+| Direct User Share | ✓ | - | ✓ | ✓ |
+| Invite Links | ✓ | - | ✓ | ✓ |
+| Read-only Permission | ✓ | - | ✓ | ✓ |
+| Write Permission | ✓ | - | ✓ | ✓ |
+| Lazy Key Rotation | ✓ | - | ✓ | ✓ |
+| Share Revocation | ✓ | - | ✓ | ✓ |
+| **Recycle Bin** | ✓ | - | ✓ | ✓ |
+| Soft Delete | ✓ | - | ✓ | ✓ |
+| Restore | ✓ | - | ✓ | ✓ |
+| Permanent Delete | ✓ | - | ✓ | ✓ |
+| Empty Bin | ✓ | - | ✓ | ✓ |
+| **Search** | ✓ | - | - | - |
+| Fuzzy Search | ✓ | - | - | - |
+| **Sync/Polling** | ✓ | ✓ | ✓ | ✓ |
+| IPNS Polling | ✓ | ✓ | - | ✓ |
+| Conflict Detection | ✓ | ✓ | ✓ | ✓ |
+| Device Registry Sync | ✓ | ✓ | - | - |
+| **Desktop-Specific** | - | ✓ | - | - |
+| FUSE Mount | - | ✓ | - | - |
+| Transparent File Access | - | ✓ | - | - |
+| Tray Integration | - | ✓ | - | - |
+| Keychain Storage | - | ✓ | - | - |
+
+All features are covered by E2E tests where applicable.</result>
+<usage><total_tokens>86723</total_tokens><tool_uses>40</tool_uses><duration_ms>98145</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/a36fc590-4d3a-42d5-9771-75ac666cac49/tasks/a916f8cb2519c7943.output

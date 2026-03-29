@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "56f2a0194e8b",
+  "strategy": "manual-commit",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/56/f2a0194e8b/0/metadata.json",
+      "transcript": "/56/f2a0194e8b/0/full.jsonl",
+      "content_hash": "/56/f2a0194e8b/0/content_hash.txt",
+      "prompt": "/56/f2a0194e8b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 547,
+    "cache_creation_tokens": 858539,
+    "cache_read_tokens": 66096942,
+    "output_tokens": 103386,
+    "api_call_count": 340
+  }
+}

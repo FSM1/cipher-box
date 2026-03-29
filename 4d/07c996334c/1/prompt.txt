@@ -1,0 +1,9 @@
+/gsd:health
+
+---
+
+/gsd:stats
+
+---
+
+ok can we commit the gsd update to github

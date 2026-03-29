@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6b320374259a",
+  "strategy": "manual-commit",
+  "branch": "docs/milestone-v1.1-completion",
+  "checkpoints_count": 7,
+  "files_touched": [
+    ".claude/hooks/statusline.js",
+    ".claude/settings.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6b/320374259a/0/metadata.json",
+      "transcript": "/6b/320374259a/0/full.jsonl",
+      "content_hash": "/6b/320374259a/0/content_hash.txt",
+      "prompt": "/6b/320374259a/0/prompt.txt"
+    },
+    {
+      "metadata": "/6b/320374259a/1/metadata.json",
+      "transcript": "/6b/320374259a/1/full.jsonl",
+      "content_hash": "/6b/320374259a/1/content_hash.txt",
+      "prompt": "/6b/320374259a/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 45,
+    "cache_creation_tokens": 82720,
+    "cache_read_tokens": 953939,
+    "output_tokens": 7490,
+    "api_call_count": 26
+  }
+}

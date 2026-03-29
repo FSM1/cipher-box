@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d79c3190be0d",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/migration/migration.processor.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d7/9c3190be0d/0/metadata.json",
+      "transcript": "/d7/9c3190be0d/0/full.jsonl",
+      "content_hash": "/d7/9c3190be0d/0/content_hash.txt",
+      "prompt": "/d7/9c3190be0d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 496,
+    "cache_creation_tokens": 470172,
+    "cache_read_tokens": 55456768,
+    "output_tokens": 77946,
+    "api_call_count": 325
+  }
+}

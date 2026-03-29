@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "441c9b591b20",
+  "session_id": "0efa9fff-3002-4b6b-a039-4843c3c6162e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T17:35:42.299974Z",
+  "branch": "docs/phase-19-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/load/package.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "31c5cdb34fa9",
+  "token_usage": {
+    "input_tokens": 195,
+    "cache_creation_tokens": 196793,
+    "cache_read_tokens": 16570547,
+    "output_tokens": 41274,
+    "api_call_count": 138
+  },
+  "session_metrics": {
+    "turn_count": 26
+  },
+  "summary": {
+    "intent": "Run load tests at 10/20/30 concurrent clients against staging, then progressively increase to find the single-instance capacity ceiling, and document baselines with Prometheus-backed upload flow analysis.",
+    "outcome": "Full scaling curve established (10→200 clients), first errors found at 200 clients (0.05% error rate), Kubo IPFS pinning identified as the dominant bottleneck (~95% of uploadFile latency), all results documented in the baselines doc and merged via PR #341.",
+    "learnings": {
+      "repo": [
+        "The load-test workflow uses GitHub environment 'staging' to scope secrets (STAGING_TEST_LOGIN_SECRET, STAGING_THROTTLE_BYPASS_SECRET, STAGING_API_URL); this causes the UI to show 'Deploying to staging' even though no deployment occurs.",
+        "SDK uploadFile makes 5 sequential API calls: 3x POST /ipfs/upload (ciphertext, file metadata, folder metadata) + POST /ipns/publish-batch (file IPNS) + POST /ipns/publish (folder IPNS).",
+        "Kubo IPFS pinning accounts for ~95% of uploadFile latency (~1.6s mean per pin, 3 pins per upload). IPNS publish is fast at ~141ms (DB write only, async DHT).",
+        "Single-instance capacity ceiling: ~100 clients error-free, throughput plateau at ~24-28 ops/s starting around 50 clients, first errors at 200 clients.",
+        "The 'SDK E2E Tests' job was missing from required status checks on main after CI workflow consolidation; 'Verify E2E Passed' is a separate unrelated job.",
+        "Baselines docs live in .planning/baselines/ following a numbered phase convention (e.g. 19-someguy-ipns-baselines.md)."
+      ],
+      "code": [
+        {
+          "path": "tests/load/package.json",
+          "finding": "The 'test:single' script was using --testPathPattern which is a Jest CLI flag not recognized by Vitest. Fixed by calling 'pnpm exec vitest run --no-coverage \u003cscenario\u003e' directly in the workflow instead of going through the npm script."
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "Three bugs fixed across two PRs: (1) --testPathPattern Jest flag used instead of Vitest positional args, (2) missing 'environment: staging' caused all env vars to be empty, (3) no concurrency group meant parallel runs competed for the same staging API. Also timeout was 30min which caused cancellations when all 5 scenarios ran."
+        }
+      ],
+      "workflow": [
+        "Running multiple 'gh run watch' instances simultaneously (6 watchers at 3s polling = ~120 req/min) quickly exhausts the GitHub API rate limit of 5000 req/hour.",
+        "Use 'chore(ci):' commit prefix to prevent release-please from triggering a version bump on CI-only changes.",
+        "GitHub Actions concurrency groups ('load-test-\u003cenvironment\u003e') are effective for serializing load tests against a shared staging environment.",
+        "Passing args through npm script '--' separator to Vitest doesn't work as expected — CAC puts args after '--' in a separate bucket rather than the file filter list. Always call vitest directly for scenario filtering."
+      ]
+    },
+    "friction": [
+      "Initial load test runs failed due to --testPathPattern (Jest flag) and missing 'environment: staging' — required a bug-fix PR before any data could be collected.",
+      "gh run watch polling at 3s intervals across 6 concurrent watchers exhausted the GitHub API rate limit, blocking status checks for ~1 hour.",
+      "The -- separator bug in the npm test:single script caused all 5 scenarios to run instead of just the selected one, leading to 3 run cancellations due to the 30-minute timeout.",
+      "gh run watch exits early when it hits a deployment environment approval step, requiring re-watching and causing confusion about whether runs were still active.",
+      "Merge conflict in 19-someguy-ipns-baselines.md required manual resolution before PR #341 could be merged."
+    ],
+    "open_items": [
+      "Fix the scenario filtering bug properly in the npm test:single script (or document that the workflow should always call vitest directly).",
+      "Analyze whether Kubo pin performance can be improved via faster storage backend, pin batching, or concurrent pins to raise the throughput ceiling.",
+      "Fill in the scaling curve with 150-client data point to better characterize the throughput plateau between 100 and 200 clients.",
+      "Investigate the 324 async DHT propagation errors (0.26% error rate) and the 17.2s mean error duration.",
+      "Consider moving staging secrets from GitHub environment scope to repository-level to avoid the misleading 'Deploying to staging' UI label.",
+      "Trigger 50 and 75-client Prometheus delta analysis was done cumulatively — per-run isolation would give cleaner per-concurrency-level server metrics."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T17:35:07.81237Z",
+    "agent_lines": 0,
+    "human_added": 11,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 11,
+    "agent_percentage": 0
+  }
+}

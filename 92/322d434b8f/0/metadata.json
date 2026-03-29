@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "92322d434b8f",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T03:53:07.331338Z",
+  "branch": "fix/someguy-memory-uint64",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "b6f368b63107",
+  "token_usage": {
+    "input_tokens": 391,
+    "cache_creation_tokens": 279123,
+    "cache_read_tokens": 53587867,
+    "output_tokens": 74477,
+    "api_call_count": 318
+  },
+  "session_metrics": {
+    "turn_count": 31
+  },
+  "summary": {
+    "intent": "Investigate and fix someguy IPNS routing failures on staging (PR #322 had reverted to delegated-ipfs.dev), then restore someguy as the self-hosted IPNS sidecar with a delegated-ipfs.dev fallback and Prometheus metrics. Followed by fixing a long-standing release-please tagging deadlock.",
+    "outcome": "Someguy fixed with corrected Docker config (libp2p port, DHT mode, resources) and deployed to staging. API-level fallback to delegated-ipfs.dev added with Prometheus counters. Release-please deadlock root-caused and fixed by changing staging tag format. v0.26.2 released successfully to staging. A final someguy crash on staging (SOMEGUY_LIBP2P_MAX_MEMORY parsing) was discovered and partially fixed but not yet merged.",
+    "learnings": {
+      "repo": [
+        "Someguy staging deployment failed due to three config issues: libp2p port 4004 not exposed (DHT couldn't receive inbound), standard DHT mode instead of accelerated, and too-tight resources (0.5 CPU / 768MB RAM / 512MB libp2p memory).",
+        "SOMEGUY_LIBP2P_MAX_MEMORY and SOMEGUY_LIBP2P_MAX_FD env vars require raw numeric values (bytes/count), not human-readable strings like '1GB'. The staging container was crash-looping because of this.",
+        "The DB-first resolve architecture in ipns.service.ts is intentional: DB is always written synchronously before DHT publish, so DB always wins on sequence number comparison. 100% of resolves hit the DB by design.",
+        "release-please deadlock ('There are untagged, merged release PRs outstanding — aborting') was caused by staging tags in v*-staging* format matching the root package tag pattern, causing release-please to scan staging pre-releases and mark path '.' as already processed, skipping the real v0.26.x release.",
+        "packages/crypto existed at v0.25.1 but was missing from both release-please-config.json and .release-please-manifest.json, causing it to never be independently versioned.",
+        "Vitest does not auto-load .env files into process.env — env vars must be passed explicitly (e.g., VAR=value pnpm test) or configured in vitest.config.ts.",
+        "The throttler bypass uses an x-throttle-bypass header and THROTTLE_BYPASS_SECRET env var, not NODE_ENV=test. Tests that hit rate limits need this header configured.",
+        "Docker healthchecks with CMD-SHELL run inside the container, not on the host — the someguy image has curl but not wget, so wget-based healthchecks would silently fail in CI/staging even if they appeared to work locally when the host had wget."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 320,
+          "end_line": 358,
+          "finding": "resolveRecord() tries delegated routing (someguy) first then always queries the DB. When both exist, it prefers whichever has the higher sequence number — DB always wins because it's written synchronously while DHT propagation takes 10-30s. Network resolve acts as a cross-check, not a primary source."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 100,
+          "end_line": 100,
+          "finding": "backend parameter typed as 'primary' | 'fallback' (not string) for Prometheus label type safety. Fallback to DELEGATED_ROUTING_FALLBACK_URL only triggers after primary exhausts all retries."
+        },
+        {
+          "path": "docker/docker-compose.yml",
+          "line": 85,
+          "end_line": 85,
+          "finding": "Someguy healthcheck must use curl -sf, not wget. Someguy image ships curl but not wget."
+        },
+        {
+          "path": "docker/docker-compose.staging.yml",
+          "line": 122,
+          "end_line": 122,
+          "finding": "SOMEGUY_LIBP2P_MAX_MEMORY must be raw bytes (1073741824) not a human-readable string (1GB) — the flag parser is uint64 and rejects the suffix."
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 6,
+          "end_line": 6,
+          "finding": "Staging tag trigger pattern changed from 'v*-staging*' to 'staging-v*' to prevent collision with release-please's root package tag discovery."
+        }
+      ],
+      "workflow": [
+        "release-please requires a valid GitHub Release anchor for each tracked path. Manually created releases need the autorelease:tagged label on the release PR and the corresponding git tag — otherwise the next run sees 'untagged merged release PRs' and aborts.",
+        "When release-please has no anchor release for a path, it walks the entire commit history (656+ commits in this case), making runs very slow and prone to the Merge plugin deadlock.",
+        "Staging tags must not start with 'v' if release-please tracks a root package with the default vX.Y.Z tag pattern. Any v*-staging* tag gets scanned and can shadow the real release.",
+        "release-please 'Failed to add label' after PR creation is a transient GitHub API race condition — the PR node isn't yet resolvable in the graph. Manually adding autorelease:pending resolves it.",
+        "deploy-staging workflow triggers on tag push directly, independent of tag-staging-release workflow — pushing a staging tag manually will fire the deploy without E2E validation."
+      ]
+    },
+    "friction": [
+      "Release-please has had recurring tagging failures since the major refactor and reconfiguration — multiple previous fix attempts (PRs #300, #307, #311, #312, #313, #317, #322) all failed to resolve the root cause.",
+      "The staging tag format collision with release-please took significant log analysis (400+ lines) to root-cause — the error message 'Missing 1 paths: .' was misleading.",
+      "SOMEGUY_LIBP2P_MAX_MEMORY crash only discovered after deploying to staging (no Docker on the dev machine to test inside the container locally).",
+      "SSH access confusion — the root SSH key for the staging VPS existed but wasn't used initially, leading to a failed SSH attempt with the CI deploy key.",
+      "CodeRabbit flagged wget→curl correctly but the human reviewer was uncertain since wget worked locally (due to running on the host, not inside the container).",
+      "Throttle bypass required discovering a non-obvious pattern (custom header + secret) rather than a standard NODE_ENV=test guard.",
+      "Web E2E failures on main blocked auto-merge of release PR #327, requiring a manual re-run wait loop.",
+      "Background task notification for an already-completed commit created unnecessary noise mid-session."
+    ],
+    "open_items": [
+      "someguy memory fix (SOMEGUY_LIBP2P_MAX_MEMORY 1GB → 1073741824, SOMEGUY_LIBP2P_MAX_FD 100000) needs a PR created and merged — someguy is currently crash-looping on staging.",
+      "PR #326 (staging tag format fix) still open and needs merge before the next staging release.",
+      "Verify someguy is healthy on staging after memory fix is deployed.",
+      "IPNS resolution is 100% DB-first by design — shifting to network-first when sequence numbers match is a future optimization if DB load becomes a concern.",
+      "mock-ipns-routing service kept in docker-compose.yml alongside someguy — cleanup deferred (kept for CI isolation).",
+      "Load test comparison metrics (someguy vs delegated-ipfs.dev JSON files) were saved locally but not committed — no persistent record in the repo.",
+      "packages/crypto now tracked by release-please but its first auto-versioned release will bump from 0.25.1 to whatever release-please calculates from full history — may need monitoring."
+    ]
+  }
+}

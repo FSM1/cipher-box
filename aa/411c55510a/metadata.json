@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "aa411c55510a",
+  "strategy": "manual-commit",
+  "branch": "docs/milestone-v1.1-completion",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".planning/codebase/ARCHITECTURE.md",
+    ".planning/codebase/CONCERNS.md",
+    ".planning/codebase/CONVENTIONS.md",
+    ".planning/codebase/INTEGRATIONS.md",
+    ".planning/codebase/STACK.md",
+    ".planning/codebase/STRUCTURE.md",
+    ".planning/codebase/TESTING.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/aa/411c55510a/0/metadata.json",
+      "transcript": "/aa/411c55510a/0/full.jsonl",
+      "content_hash": "/aa/411c55510a/0/content_hash.txt",
+      "prompt": "/aa/411c55510a/0/prompt.txt"
+    },
+    {
+      "metadata": "/aa/411c55510a/1/metadata.json",
+      "transcript": "/aa/411c55510a/1/full.jsonl",
+      "content_hash": "/aa/411c55510a/1/content_hash.txt",
+      "prompt": "/aa/411c55510a/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7250,
+    "cache_creation_tokens": 536121,
+    "cache_read_tokens": 25471385,
+    "output_tokens": 66287,
+    "api_call_count": 215
+  }
+}

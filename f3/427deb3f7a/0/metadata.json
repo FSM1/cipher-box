@@ -1,0 +1,91 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f3427deb3f7a",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T03:04:23.186182Z",
+  "branch": "phase-28-code-hygiene-logging",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3fc13e901cde",
+  "token_usage": {
+    "input_tokens": 142,
+    "cache_creation_tokens": 323206,
+    "cache_read_tokens": 10224351,
+    "output_tokens": 34454,
+    "api_call_count": 104
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Review and update codebase mapping, identify E2E testing gaps and capture as todos, analyze technical concerns and add remediation phases to the roadmap, then begin discussing Phase 28 (Code Hygiene \u0026 Logging) via the GSD manager.",
+    "outcome": "6 new todos captured (4 E2E test improvements, 2 staging baseline tasks), 5 new roadmap phases added (28-32), Phase 28 context captured with custom logger design decision, and a lint-staged misconfiguration fixed that was corrupting `.planning/` markdown files on commit.",
+    "learnings": {
+      "repo": [
+        "Only 1 of 12 E2E specs (recovery.spec.ts) calls deleteTestAccount(); the remaining 11 leave orphaned test accounts after each run",
+        "deleteTestAccount() helper already exists in tests/sdk-e2e/src/fixtures/test-harness.ts using DELETE /auth/account with { confirmation: 'DELETE' }",
+        "AES-CTR streaming is fully implemented with 35 unit tests but zero E2E tests; Phase 12.1 left a manual verification checklist that was never automated",
+        "CTR mode is selected for media files \u003e256KB, GCM for everything else, controlled in streaming-crypto.service.ts",
+        "Service Worker intercepts /decrypt-stream/* URLs and handles HTTP Range requests for seeking (decrypt-sw.ts)",
+        "139 console.* calls exist across 29 files in apps/web/src/ (82 error, 27 warn, 18 log, 12 time/timeEnd); hooks.ts alone has 34 calls leaking Web3Auth SDK state",
+        "11 .catch(() =\u003e {}) silently swallow unpin failures; 3 non-unpin catches (audioContext.close(), dynamic import) are acceptable best-effort patterns",
+        "pino browser mode does not support redaction (Node.js only) and its Sentry integration is also Node.js only — custom wrapper is the correct choice for a privacy-focused web app",
+        "00-Preliminary-R\u0026D/poc/ contains 89MB of committed node_modules and deprecated ipfs-http-client@60.0.1; already excluded from ESLint",
+        "lint-staged in package.json runs markdownlint --fix on all *.md files, which bypasses .markdownlintignore when explicit paths are passed — .planning/ files were being corrupted on every commit",
+        "STATE.md todo count was stale (showed 10 when actual count was 6 before new todos), leading to an incorrect 6+4=14 calculation"
+      ],
+      "code": [
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "deleteTestAccount() helper exists here but is only called in recovery.spec.ts; needs to be wired into afterAll of all 12 specs"
+        },
+        {
+          "path": "apps/web/src/streaming-crypto.service.ts",
+          "finding": "CTR/GCM mode selection logic lives here; 256KB threshold determines streaming vs in-memory decryption"
+        },
+        {
+          "path": "apps/web/src/decrypt-sw.ts",
+          "finding": "Service Worker handling /decrypt-stream/* with Range request support; Playwright can assert SW interception by checking request URLs"
+        },
+        {
+          "path": "apps/web/src/hooks.ts",
+          "finding": "34 console.* calls (highest count), Web3Auth debug logging leaking SDK state; also contains actionable any casts: coreKit: any and loginParams: any"
+        },
+        {
+          "path": "package.json",
+          "finding": "lint-staged markdownlint glob was '**/*.md' — changed to exclude .planning/ to prevent escaping of intentional characters like console.* in planning docs"
+        },
+        {
+          "path": ".markdownlintignore",
+          "finding": "Was missing .planning/*.md and .planning/codebase/ — only phase and milestone subdirs were excluded, causing top-level planning files to be linted"
+        }
+      ],
+      "workflow": [
+        "GSD manager init JSON can break if ROADMAP.md contains markdown-escaped characters (e.g. console.\\* instead of console.*) — the gsd-tools.cjs parser is sensitive to this",
+        "lint-staged --fix hooks run after staging and can corrupt files before commit even when .markdownlintignore is set, because lint-staged passes explicit file paths that bypass ignore files",
+        "When updating STATE.md todo counts, always read the current count from the filesystem rather than adding to whatever number was in context — STATE.md can be stale"
+      ]
+    },
+    "friction": [
+      "STATE.md had a stale todo count (10) that caused an incorrect 6+4=14 display; required manual correction and re-commit",
+      "markdownlint lint-staged hook kept re-escaping console.* in ROADMAP.md on every commit attempt, requiring three separate fix commits before the root cause (lint-staged glob) was addressed",
+      "GSD manager init failed with JSON parse error due to escaped characters in ROADMAP.md, blocking the dashboard display until the markdown was fixed",
+      "AskUserQuestion returned empty response at one point during Phase 28 discussion, requiring retry"
+    ],
+    "open_items": [
+      "Phase 28 context captured but not yet planned — next step is /gsd:plan-phase 28",
+      "Phases 29 (Infrastructure Hardening) and 32 (FUSE Async FilePointer) are ready to plan immediately without discussion",
+      "Phases 30 (Web App Observability) and 31 (Structural Decomposition) need discuss-phase before planning; 30 is blocked on 28 completing first",
+      "deleteAccount teardown needs to be added to all 12 E2E spec afterAll hooks (todo: 2026-03-28-add-shared-deleteaccount-teardown-to-all-e2e-specs.md)",
+      "AES-CTR streaming E2E suite not yet built (todo: 2026-03-28-add-aes-ctr-streaming-playback-e2e-tests.md)",
+      "Media preview E2E suite (PDF/video/audio) not yet built (todo: 2026-03-28-add-media-preview-e2e-test-suite.md)",
+      "Batch download zip E2E tests not yet built (todo: 2026-03-28-add-batch-download-zip-e2e-tests.md)",
+      "Staging metrics baselines with new instrumentation not yet run (todo: 2026-03-28-run-staging-metrics-baselines-with-new-instrumentation.md)",
+      "BYO-IPFS load test baselines on staging not yet run (todo: 2026-03-28-byo-ipfs-load-test-baselines-on-staging.md)",
+      "PRs #380 (docs) and #381 (roadmap phases) were merged; branch cleanup may be needed"
+    ]
+  }
+}

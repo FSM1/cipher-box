@@ -1,0 +1,116 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3221a59f2435",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T03:25:25.649663Z",
+  "branch": "phase-29-infrastructure-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/29-infrastructure-hardening/29-01-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3fc13e901cde",
+  "token_usage": {
+    "input_tokens": 173,
+    "cache_creation_tokens": 349078,
+    "cache_read_tokens": 14520586,
+    "output_tokens": 46051,
+    "api_call_count": 129
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Review and update codebase documentation, identify E2E testing candidates, capture improvement todos, add technical debt phases to the roadmap, and begin discussing/planning those phases using the GSD workflow manager.",
+    "outcome": "Captured 6 E2E/testing todos, added 5 new phases (28-32) to the v1.1 roadmap, discussed and created CONTEXT.md for phases 28, 29, and started 30; launched background planning/execution agents for phases 28 and 29; created two PRs (FSM1/cipher-box#380, FSM1/cipher-box#381).",
+    "learnings": {
+      "repo": [
+        "AES-CTR streaming mode is used for media files \u003e256KB; GCM is used for files \u003c256KB — selection logic in streaming-crypto.service.ts",
+        "A Service Worker at decrypt-sw.ts intercepts /decrypt-stream/* URLs and handles HTTP Range requests for seeking",
+        "deleteTestAccount() helper exists in tests/sdk-e2e/src/fixtures/test-harness.ts but only recovery.spec.ts actually calls it — 11 of 12 specs leave orphaned test accounts",
+        "There are 139 console.* calls across 29 files in apps/web/src/ — hooks.ts alone has 34 (Web3Auth debug logging)",
+        "11 .catch(() =\u003e {}) patterns silently swallow unpinFromIpfs failures across bin.service.ts, useFileOperations.ts, useFileVersions.ts, ReplaceFileDialog.tsx, useDropUpload.ts",
+        "RepublishService.unenrollIpns() exists at apps/api/src/republish/republish.service.ts:255 but has no REST endpoint — a TODO at folder.service.ts:513 explicitly notes this was deferred to Phase 14",
+        "00-Preliminary-R\u0026D/poc/ contains 89MB of committed node_modules with deprecated ipfs-http-client@60.0.1 — ESLint already excludes it",
+        "Kubo port 5001 is already bound to 127.0.0.1 in staging Docker compose — not externally exposed",
+        "The test login endpoint on staging is well-guarded (NODE_ENV check + timing-safe secret comparison + unit tests) and must stay for E2E tests",
+        "lint-staged runs markdownlint --fix on all *.md files via package.json, which overrides .markdownlintignore for files passed explicitly — .planning/ docs were being auto-escaped on commit",
+        "Pino browser mode lacks redaction support and Sentry integration — both are Node.js only, making a custom ~50 LOC logger wrapper the correct choice for this privacy-first app"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks.ts",
+          "finding": "34 console.* calls including Web3Auth SDK debug logging that leaks SDK state; also contains coreKit: any and loginParams: any casts that could use Web3AuthMPCCoreKit type"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "line": 255,
+          "finding": "unenrollIpns() method exists but no REST endpoint exposes it"
+        },
+        {
+          "path": "apps/web/src/folder.service.ts",
+          "line": 513,
+          "finding": "TODO comment noting unenrollIpns should be exposed via REST — deferred since Phase 14"
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "deleteTestAccount() helper sends DELETE /auth/account with { confirmation: 'DELETE' } — exists but only called in recovery.spec.ts"
+        },
+        {
+          "path": "packages/crypto/streaming-crypto.service.ts",
+          "finding": "CTR mode selected for media files \u003e256KB, GCM for everything else"
+        },
+        {
+          "path": "packages/crypto/decrypt-sw.ts",
+          "finding": "Service Worker intercepts /decrypt-stream/* URLs and handles HTTP Range requests for seeking with BigInt counter math"
+        },
+        {
+          "path": "apps/web/src/main.tsx",
+          "finding": "Already uses import.meta.env.DEV for gating — good pattern to follow for logger level filtering via VITE_LOG_LEVEL"
+        },
+        {
+          "path": ".markdownlintignore",
+          "finding": ".planning/phases/ and .planning/milestones/ were excluded but top-level .planning/ files and .planning/codebase/ were not"
+        },
+        {
+          "path": "package.json",
+          "finding": "lint-staged glob for markdownlint needed to exclude .planning/** to prevent auto-escaping of technical notation like console.*"
+        }
+      ],
+      "workflow": [
+        "GSD manager dashboard can run discuss inline while plan/execute agents run in background — enables parallelizing phase work from one terminal",
+        "STATE.md pending todo counts can go stale across sessions — always re-read actual file counts rather than adding to the stored number",
+        "Assumptions mode discuss-phase is efficient: surfaces codebase-derived decisions with evidence, requires only 2-4 user corrections vs 15-20 interview questions",
+        "lint-staged bypasses .markdownlintignore because it passes explicit file paths — must configure the glob pattern in package.json lint-staged config to exclude directories",
+        "GSD tool init manager parses ROADMAP.md and fails on escaped characters like \\* — planning docs must avoid markdown special characters or use workarounds like 'all calls' instead of 'console.*'"
+      ]
+    },
+    "friction": [
+      "STATE.md todo count was stale (showed 10 before edits when actual was 6), leading to a wrong count of 14 being reported — required correction and re-commit",
+      "markdownlint via lint-staged kept auto-escaping 'console.*' to 'console.\\*' in ROADMAP.md on every commit, breaking GSD JSON parsing — required 3 separate fix commits before root cause (lint-staged glob) was addressed",
+      "Even after fixing .markdownlintignore, lint-staged still re-escaped because it passes explicit paths bypassing the ignore file — required changing the lint-staged glob pattern in package.json",
+      "GSD manager init command failed to parse JSON due to escaped asterisk, requiring investigation of linter config rather than being a GSD tool bug"
+    ],
+    "open_items": [
+      "Phase 28 execution running in background worktree — outcome not yet confirmed in transcript",
+      "Phase 29 planning running in background — 3 plans created per mid-session check but agent not confirmed complete",
+      "Phase 30 (Web App Observability) discussion paused at Faro vs Sentry decision — needs research on Faro React integration maturity, Grafana Cloud free tier Faro limits, and source map upload support",
+      "Phases 31 (Structural Decomposition) and 32 (FUSE Async FilePointer) not yet discussed or planned",
+      "6 E2E testing todos captured but not yet scheduled into phases: shared deleteAccount teardown, media preview suite, AES-CTR streaming suite, batch download suite, staging metrics baselines, BYO-IPFS load test baselines",
+      "Kubo IPFS access control deferred from Phase 29 — production ACL approach (native Kubo ACL vs reverse proxy) not yet decided",
+      "Web3Auth coreKit: any and loginParams: any casts in hooks.ts — flagged as potentially fixable but SDK boundary may force any regardless"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-28T03:24:39.172683Z",
+    "agent_lines": 176,
+    "human_added": 508,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 692,
+    "agent_percentage": 25.43352601156069
+  }
+}

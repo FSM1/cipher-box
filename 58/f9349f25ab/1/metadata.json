@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "58f9349f25ab",
+  "session_id": "73d04a0d-6c1b-4953-8636-dae034952597",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T04:48:09.047055Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-01-PLAN.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-02-PLAN.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-03-PLAN.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-04-PLAN.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-05-PLAN.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-06-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7f2b329c1c3d",
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 34939,
+    "cache_read_tokens": 402965,
+    "output_tokens": 3091,
+    "api_call_count": 10
+  },
+  "summary": {
+    "intent": "Generate executable PLAN.md files for Phase 21 (BYO-IPFS Node Support) using the GSD plan-phase workflow with research, planning, and verification stages.",
+    "outcome": "Successfully created 6 PLAN.md files for Phase 21 across the planning pipeline, with existing research, validation strategy, and UI-SPEC artifacts all reused without regeneration.",
+    "learnings": {
+      "repo": [
+        "Phase 21 is 'BYO-IPFS Node Support' — a phase with frontend indicators requiring a UI-SPEC before planning",
+        "The GSD workflow stores phase artifacts in .planning/phases/{padded_phase}-{slug}/ with prefixed filenames (21-CONTEXT.md, 21-RESEARCH.md, 21-UI-SPEC.md, 21-VALIDATION.md)",
+        "Phase 21 had all prerequisite artifacts already in place: CONTEXT.md, RESEARCH.md, UI-SPEC.md, and VALIDATION.md — planning could proceed directly",
+        "Plans are numbered sequentially: 21-01-PLAN.md through 21-06-PLAN.md (6 plans total)"
+      ],
+      "code": [],
+      "workflow": [
+        "The plan-phase workflow short-circuits research when RESEARCH.md already exists and no --research flag is provided",
+        "The UI Design Contract Gate checks for frontend keywords in the phase description and blocks planning if no UI-SPEC exists",
+        "Nyquist validation artifacts (VALIDATION.md) are checked before spawning the planner — missing artifacts prompt the user to re-research or disable Nyquist",
+        "The gsd-planner agent also updates ROADMAP.md as part of the planning output"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Plans have been created but not yet verified — the transcript ends after the planner returns without showing the gsd-plan-checker verification step completing",
+      "6 plans were created but their wave assignments and dependency structure are not captured in this summary — review 21-01 through 21-06 PLAN.md files for execution ordering"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T04:47:56.066601Z",
+    "agent_lines": 0,
+    "human_added": 3361,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 3361,
+    "agent_percentage": 0
+  }
+}

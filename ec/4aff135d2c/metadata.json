@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ec4aff135d2c",
+  "strategy": "manual-commit",
+  "branch": "docs/ipfs-datastore-migration-learnings",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ec/4aff135d2c/0/metadata.json",
+      "transcript": "/ec/4aff135d2c/0/full.jsonl",
+      "content_hash": "/ec/4aff135d2c/0/content_hash.txt",
+      "prompt": "/ec/4aff135d2c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1511,
+    "cache_creation_tokens": 503083,
+    "cache_read_tokens": 49192903,
+    "output_tokens": 79725,
+    "api_call_count": 286
+  }
+}

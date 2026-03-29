@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0eb210591a47",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T04:25:30.067419Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "tests/web-e2e/baselines/staging-journey-timing.json",
+    "tests/web-e2e/playwright.config.ts",
+    "tests/web-e2e/tests/journey-timing.spec.ts",
+    "tests/web-e2e/utils/cleanup-helpers.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "c6f27d9a15de",
+  "token_usage": {
+    "input_tokens": 230,
+    "cache_creation_tokens": 290607,
+    "cache_read_tokens": 6577168,
+    "output_tokens": 25633,
+    "api_call_count": 82
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E Test Expansion \u0026 Staging Baselines) using wave-based parallel execution, including creating account cleanup helpers, staging baseline tests, media/streaming E2E suites, and batch download tests.",
+    "outcome": "Wave 1 completed (34-01 cleanup helpers wired into all 10 specs, 34-04 BYO load test plan documented). Wave 2 launched (34-02 media tests completed and merged). 34-03 hit a git lock issue and was retried. Staging journey timing baselines captured after fixing BASE_URL config and Web3Auth timeout issues. Load test .env scaffolded for Pinata credentials.",
+    "learnings": {
+      "repo": [
+        "Playwright config does not respect BASE_URL env var by default — requires explicit `process.env.BASE_URL` override in playwright.config.ts and conditional webServer block to skip local dev server when targeting staging.",
+        "Web3Auth SDK initialization takes \u003e20s on staging, exceeding the 20s timeout hardcoded in journey-timing.spec.ts for the wallet-login-button visibility check.",
+        "cleanup-helpers.ts deleteAccountViaPage calls the API at localhost:3000 — does not derive API URL from the page's origin, causing 401s when tests run against staging.",
+        "The SDK-level load test harness (tests/load/) supports high client counts (50→1000) via byo-capacity-ceiling scenario and uses CipherBoxSDK clients rather than Playwright browsers — far more suitable than the Playwright load-test.spec.ts for 200+ concurrent users.",
+        "Default Pinata endpoint is https://api.pinata.cloud — used by PinataProvider in the load test harness.",
+        "Staging API health endpoint: https://api-staging.cipherbox.cc/health returns NestJS Terminus format with database status.",
+        "Wave executor agents commit with --no-verify and run in isolated git worktrees (branches named worktree-agent-{id}); orchestrator must cherry-pick commits back to the phase branch, often encountering STATE.md merge conflicts."
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "finding": "Added BASE_URL env var support and conditional webServer skip when BASE_URL is set to a non-localhost value."
+        },
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "waitFor timeout for wallet-login-button increased beyond 20s to accommodate Web3Auth cold-start on staging."
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "finding": "deleteAccountViaPage fixed to derive API URL from the page's current origin rather than hardcoding localhost:3000."
+        },
+        {
+          "path": "tests/load/.env",
+          "finding": "Scaffolded with LOAD_TEST_API_URL=https://api-staging.cipherbox.cc, THROTTLE_BYPASS_SECRET, BYO_IPFS_ENDPOINT/PROTOCOL set; BYO_IPFS_AUTH_TOKEN left blank for user to populate."
+        },
+        {
+          "path": "tests/web-e2e/baselines/staging-journey-timing.json",
+          "finding": "Staging baselines captured: login-to-vault 22,889ms (Web3Auth-heavy), upload-to-visible 906ms (100KB), share-to-accessible 1,483ms."
+        }
+      ],
+      "workflow": [
+        "Cherry-picking commits from agent worktrees to the phase branch frequently produces STATE.md merge conflicts — take the worktree version as it reflects the agent's completed state.",
+        "Playwright browser-based load tests (5 Chromium tabs) are not suitable for 200+ concurrent user testing; SDK-level harness should be used instead.",
+        "classifyHandoffIfNeeded error from Claude Code task completion is a runtime bug, not an agent failure — verify via SUMMARY.md existence and git log presence.",
+        "When a git lock file blocks an agent mid-execution, the agent fails and must be retried rather than resumed."
+      ]
+    },
+    "friction": [
+      "BASE_URL env var not respected by Playwright config required manual fix before any staging tests could run.",
+      "Web3Auth \u003e20s cold-start on staging caused journey-timing test failure; hardcoded 20s timeout in spec needed patching.",
+      "deleteAccountViaPage cleanup helper assumed localhost:3000 API URL, causing 401 errors on every staging test cleanup — required detecting API URL from page origin.",
+      "Git lock file conflict caused 34-03 agent to fail mid-execution, requiring a retry.",
+      "STATE.md merge conflicts on every cherry-pick from agent worktrees added manual resolution overhead.",
+      "5-client Playwright browser load test running in background with some clients hitting timeouts — not ideal for real load measurement.",
+      "Cherry-picking individual commits from worktree branches is fragile — required multiple stash/unstash/conflict resolution cycles."
+    ],
+    "open_items": [
+      "BYO_IPFS_AUTH_TOKEN in tests/load/.env needs to be populated by user before Pinata load tests can run.",
+      "Sustained-load (200 clients) and BYO capacity ceiling tests not yet executed — blocked on Pinata credentials.",
+      "34-04 Task 2 (staging baselines for load test + Faro/Grafana verification) not complete — continuation agent needed after load tests run.",
+      "34-04-SUMMARY.md is partial — needs update after Task 2 completes.",
+      "34-03 (batch download E2E) was retried after git lock failure — outcome not captured in transcript.",
+      "5-client Playwright browser load test results not yet saved to baselines/staging-load-test.json.",
+      "Prometheus metrics check (curl .../metrics | grep ipfs_operation_duration) from 34-04 Task 2 not yet run.",
+      "Faro/Grafana visual trace verification (Step 3 of 34-04 Task 2) deferred to human.",
+      "BYO load test plan document (tests/load/baselines/byo-load-test-plan.md) was created with DEFERRED status — should be updated to active now that Pinata account is available.",
+      "Phase 34 verification (gsd-verifier) not yet run — pending Wave 2 and 34-04 checkpoint completion."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T04:24:46.08739Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 1,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}

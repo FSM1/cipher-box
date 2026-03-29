@@ -1,0 +1,57 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e4a7fc6a9315",
+  "session_id": "083879b7-1fa3-49d4-841f-63a3d195d800",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T00:59:14.721761Z",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/22-performance-baselines-completion/22-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e383b2e7f881",
+  "checkpoint_transcript_start": 149,
+  "transcript_lines_at_start": 149,
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 5500,
+    "cache_read_tokens": 237781,
+    "output_tokens": 1635,
+    "api_call_count": 5
+  },
+  "summary": {
+    "intent": "Complete performance baselines work (phase 22) by generating research, validation architecture, and committing the validation strategy.",
+    "outcome": "VALIDATION.md was created from a template and committed to the phase 22 planning directory.",
+    "learnings": {
+      "repo": [
+        "Project uses a structured planning system under .planning/phases/\u003cphase-name\u003e/ with numbered phase directories",
+        "Validation strategies are templated from .claude/get-shit-done/templates/VALIDATION.md",
+        "Research outputs follow a naming convention: \u003cphase-number\u003e-RESEARCH.md"
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/22-performance-baselines-completion/22-VALIDATION.md",
+          "finding": "Validation architecture document generated from template for phase 22 performance baselines completion"
+        }
+      ],
+      "workflow": [
+        "A Researcher agent is used to produce research docs before validation architecture is defined",
+        "Validation docs are committed immediately after creation as a discrete step"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Phase 22 (performance baselines completion) appears to still be in progress — only the validation strategy was committed, not the implementation"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-25T00:59:06.948825Z",
+    "agent_lines": 78,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 78,
+    "agent_percentage": 100
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "641d48a3a9e2",
+  "strategy": "manual-commit",
+  "branch": "fix/writable-shares-e2e-save-race",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/web-e2e/tests/writable-shares.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/64/1d48a3a9e2/0/metadata.json",
+      "transcript": "/64/1d48a3a9e2/0/full.jsonl",
+      "content_hash": "/64/1d48a3a9e2/0/content_hash.txt",
+      "prompt": "/64/1d48a3a9e2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7235,
+    "cache_creation_tokens": 587774,
+    "cache_read_tokens": 25539860,
+    "output_tokens": 55285,
+    "api_call_count": 200
+  }
+}

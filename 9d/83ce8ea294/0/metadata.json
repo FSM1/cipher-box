@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "9d83ce8ea294",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T23:58:11.555983Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/sdk/src/__tests__/client-upload-concurrency.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "43adb07fc7cf",
+  "checkpoint_transcript_start": 2051,
+  "transcript_lines_at_start": 2051,
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 11924,
+    "cache_read_tokens": 3508855,
+    "output_tokens": 4528,
+    "api_call_count": 16
+  },
+  "session_metrics": {
+    "turn_count": 38
+  },
+  "summary": {
+    "intent": "Resolve all PR review threads on PR #342 and ensure the SDK test suite passes cleanly.",
+    "outcome": "All 10 review threads resolved (7 original + 3 new), 5 code fixes committed including mock corrections and a new partial failure test, and all 5 concurrency unit tests pass.",
+    "learnings": {
+      "repo": [
+        "cipher-box SDK lives at packages/sdk/src with tests in __tests__/",
+        "Integration tests require a running API on port 3000; unit tests run independently",
+        "PR #342 involves upload concurrency logic and asymmetric batch failure handling"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/__tests__/client-upload-concurrency.test.ts",
+          "finding": "Mocks needed correction and a partial failure test case was missing; after fixes all 5 concurrency tests pass"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 646,
+          "end_line": 646,
+          "finding": "batchResult.reason must be normalized to an Error object before use"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 616,
+          "end_line": 616,
+          "finding": "Fulfilled results need a totalFailed \u003e 0 guard to avoid false success reporting"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 634,
+          "end_line": 634,
+          "finding": "DB fallback + TEE republish is intentional design; retry queue handling is a planned follow-up"
+        }
+      ],
+      "workflow": [
+        "CodeRabbit and Copilot are both active reviewers on this repo and generate separate thread batches",
+        "Resolving threads in batches can miss new ones added concurrently; a follow-up check is necessary",
+        "Integration tests failing due to ECONNREFUSED are expected when API is not running and should not be treated as regressions"
+      ]
+    },
+    "friction": [
+      "Port 3000 was occupied by a leftover API process from earlier load testing, blocking pnpm dev",
+      "3 new review threads appeared after the initial resolution pass, requiring a second round of fixes",
+      "Integration tests always fail in this environment without a running API, adding noise to test output"
+    ],
+    "open_items": [
+      "Retry queue follow-up for the DB fallback + TEE republish design (noted in thread 7 response)",
+      "Staging migration pending PR #342 merge",
+      "Integration tests are not runnable locally without a live API; no local dev setup documented for this"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T23:57:55.909311Z",
+    "agent_lines": 40,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 40,
+    "agent_percentage": 100
+  }
+}

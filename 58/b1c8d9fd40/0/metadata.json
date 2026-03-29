@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "58b1c8d9fd40",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T01:37:35.126351Z",
+  "branch": "fix/someguy-ipns-routing",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "696f09010f41",
+  "checkpoint_transcript_start": 247,
+  "transcript_lines_at_start": 247,
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 45302,
+    "cache_read_tokens": 3826047,
+    "output_tokens": 11146,
+    "api_call_count": 54
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Fix a broken someguy IPNS routing service deployment on staging by diagnosing configuration issues and validating the fix via SDK E2E tests.",
+    "outcome": "Identified and fixed under-resourced someguy container config (missing port 4004, wrong DHT mode, low memory/CPU limits); all 83 SDK E2E tests pass with someguy as the IPNS routing backend; staging docker-compose, deploy workflow, and Alloy metrics config updated.",
+    "learnings": {
+      "repo": [
+        "someguy requires port 4004 exposed (TCP + UDP) for libp2p DHT peer discovery to function",
+        "someguy needs DHT mode 'accelerated' (not 'standard') and sufficient memory (1GB libp2p / 2GB container) for IPNS routing to work in staging",
+        "The API throttler uses a bypass header (x-throttle-bypass) controlled by THROTTLE_BYPASS_SECRET env var, not NODE_ENV=test",
+        "Vitest does not auto-load .env files into process.env — env vars must be passed explicitly or via a dotenv loader in vitest config",
+        "SDK E2E tests live in tests/sdk-e2e/ and require their own .env file mirroring THROTTLE_BYPASS_SECRET from the API",
+        "DELEGATED_ROUTING_URL in the API .env controls which routing backend is used; local dev uses a mock, staging should point to someguy at http://192.168.133.114:8190"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "finding": "Throttler bypass is implemented as a guard that checks for a secret header, not via NODE_ENV — test suites must send the header to avoid 429s"
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "The SDK axios instance forwards defaultHeaders to every request, so setting the bypass header in client config is sufficient"
+        },
+        {
+          "path": "tests/sdk-e2e/vitest.config.ts",
+          "finding": "No dotenv plugin configured — env vars from .env files are not loaded automatically, requiring explicit CLI injection"
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "Test harness reads THROTTLE_BYPASS_SECRET from process.env and sets it as a default header on the SDK client"
+        },
+        {
+          "path": "docker/docker-compose.staging.yml",
+          "finding": "someguy service config updated: added port 4004 TCP+UDP, accelerated DHT mode, increased memory to 2GB, CPU to 1.0, start period to 60s"
+        }
+      ],
+      "workflow": [
+        "When E2E tests show 429s, first suspect throttle bypass config before investigating rate limit logic",
+        "For vitest-based E2E suites, passing env vars explicitly on the CLI (VAR=value npx vitest) is more reliable than .env files unless dotenv is explicitly configured",
+        "DHT-based services (someguy/Kubo) need a warm-up period after startup before routing table is populated — allow 2+ minutes before testing IPNS resolve"
+      ]
+    },
+    "friction": [
+      "NODE_ENV=test had no effect on throttling — the actual mechanism (bypass header) was not obvious without reading the guard source",
+      "Vitest silently ignores .env files, causing the bypass secret to not be loaded even after creating the .env file — required a second debugging round",
+      "429 failures looked identical whether caused by missing bypass header or insufficient bypass propagation, making root cause diagnosis slow",
+      "Had to discover the throttle bypass mechanism by grepping source rather than from docs or comments"
+    ],
+    "open_items": [
+      "vitest.config.ts for sdk-e2e has no dotenv plugin — consider adding @dotenvx/dotenvx or vite-plugin-env-compatible so .env files work as expected",
+      "The staging someguy fix has been committed but not yet deployed — needs a deploy run to validate in actual staging environment",
+      "Consider documenting the THROTTLE_BYPASS_SECRET pattern and E2E test setup in a README or CONTRIBUTING guide to avoid repeating this debugging cycle"
+    ]
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "60737b3c4487",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T14:48:35.512914Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/__tests__/perf.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "39cf703503c9",
+  "token_usage": {
+    "input_tokens": 199,
+    "cache_creation_tokens": 299544,
+    "cache_read_tokens": 15494251,
+    "output_tokens": 36609,
+    "api_call_count": 159
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Execute Phase 22 (performance baselines completion), clean up the resulting code, populate journey timing baselines against staging, and get PR #355 merged.",
+    "outcome": "Phase 22 executed (3/3 plans, 9/9 must-haves verified), code cleaned up via simplify review, staging DB reset to fix vault init bug, journey baselines populated from live staging runs, PR created and all review comments resolved across two rounds.",
+    "learnings": {
+      "repo": [
+        "Phase 22 slug is 'performance-baselines-completion'; feature branch convention is feat/phase-{N}-{slug}",
+        "Staging DB was never reset after Phase 20 removed encrypted_root_folder_key/encrypted_root_ipns_private_key columns from the vault entity — the NOT NULL constraints remained, causing 500 errors on first-time wallet login",
+        "Phase 23 was completed out of order (2026-03-24) before Phase 22; Phase 21 is also actively in progress — phases are not executed strictly sequentially",
+        "The GSD phase-complete tool uses next_phase from roadmap order, not completion state — can suggest already-done phases",
+        "Staging docker-compose lives in ~/docker/ on the staging server; DB name is cipherbox_staging",
+        "1Password SSH key should be used for staging server access",
+        "lint-pr-title GitHub Actions workflow started requiring manual approval — cause unknown, possibly a GitHub platform change to Actions approval defaults"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 23,
+          "end_line": 23,
+          "finding": "Concurrent withPerf calls with the same operation name would collide on mark names — fixed by adding a per-invocation counter to mark/measure names"
+        },
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 5,
+          "end_line": 5,
+          "finding": "PERF_ENABLED check via process.env could evaluate true in browser prod due to process polyfill — needs typeof process.env?.NODE_ENV === 'string' guard"
+        },
+        {
+          "path": "packages/sdk-core/src/perf.ts",
+          "line": 21,
+          "end_line": 21,
+          "finding": "PerformanceMeasure entries must be cleared after creation (performance.clearMeasures) to prevent unbounded accumulation in long sessions"
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 205,
+          "end_line": 205,
+          "finding": "404 check was using error.status but Axios puts HTTP status on error.response.status"
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/perf.test.ts",
+          "line": 20,
+          "end_line": 20,
+          "finding": "globalThis typed as any — should use declare global to extend the type instead"
+        },
+        {
+          "path": "tests/load/src/harness/thresholds.ts",
+          "line": 41,
+          "end_line": 41,
+          "finding": "Missing metric silently skipped — intentional behavior, documented in JSDoc; not a bug"
+        },
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 124,
+          "end_line": 124,
+          "finding": "Login flow duplicated across journeys intentionally for sub-phase timing isolation"
+        },
+        {
+          "path": "tests/load/src/scenarios/upload-throughput.test.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "expect was imported from vitest but became unused after threshold assertion boilerplate was extracted into expectThresholdsPassed() helper"
+        }
+      ],
+      "workflow": [
+        "GSD executor agents commit directly to whatever branch is checked out — planning commits that land on main can be moved to a feature branch before push via git checkout -b + git reset --hard origin/main",
+        "Playwright journey timing tests require the test runner (not MCP browser) for wallet injection via page.addInitScript/EIP-1193 mock wallet",
+        "Multi-account E2E scenarios work by injecting different wallets into separate browser contexts — no special mock adapter needed, just standard EIP-1193 compliance",
+        "Staging baseURL override for Playwright requires an explicit config file with absolute testDir path — relative paths break when config is in /tmp",
+        "stale background task notifications (task-notification) from executor subagents can arrive after the phase is already complete and can be safely ignored",
+        "GSD simplify skill launches three parallel review agents (reuse, quality, efficiency) and aggregates findings before applying fixes"
+      ]
+    },
+    "friction": [
+      "GSD phase-complete tool returned next_phase: 23 even though phase 23 was already marked [x] complete — caused misleading 'Next Up' suggestion",
+      "Staging DB was never reset after Phase 20 schema changes, causing vault init 500 errors that blocked journey timing baseline collection",
+      "Playwright temp config file with relative testDir failed silently — required debugging to discover the absolute path requirement",
+      "lint-pr-title GitHub Actions workflow unexpectedly started requiring manual approval on this PR, requiring manual intervention; cause not identified",
+      "Usage limit hit mid-session, interrupting the PR review comment resolution flow",
+      "Background task notifications fired as stale noise after phase execution was already complete"
+    ],
+    "open_items": [
+      "Journey timing baselines are populated from a single staging run — should be re-run against production or averaged over multiple runs for more reliable baselines",
+      "perf.ts PERF_ENABLED flag needs to be explicitly set in the web app entrypoint for browser dev tooling — deferred as out of scope for this PR",
+      "Root cause of lint-pr-title workflow requiring approval not identified — GitHub Actions settings should be audited",
+      "Phase 21 is still actively in progress — was not touched in this session",
+      "Staging data was wiped in the DB reset — any existing test accounts or data are gone and will need to be recreated"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-25T14:47:55.772657Z",
+    "agent_lines": 0,
+    "human_added": 6,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 6,
+    "agent_percentage": 0
+  }
+}

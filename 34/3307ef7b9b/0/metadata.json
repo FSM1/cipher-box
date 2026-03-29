@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "343307ef7b9b",
+  "session_id": "cd67d434-4a3e-40a1-bbd7-272357f3bb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T01:35:01.984151Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "172391e1bb8a",
+  "checkpoint_transcript_start": 506,
+  "transcript_lines_at_start": 506,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 2449,
+    "cache_read_tokens": 540860,
+    "output_tokens": 770,
+    "api_call_count": 6
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Update PROJECT.md with current project state and commit the changes.",
+    "outcome": "PROJECT.md was read, edited twice, and committed successfully.",
+    "learnings": {
+      "repo": [
+        "PROJECT.md lives at /Users/michael/Code/cipher-box-phase-20/.planning/PROJECT.md",
+        "The project uses a .planning directory for documentation"
+      ],
+      "code": [
+        {
+          "path": ".planning/PROJECT.md",
+          "finding": "Contains a 'Current State' or '## Current' section and a 'Last updated' field that gets refreshed on updates"
+        }
+      ],
+      "workflow": [
+        "PROJECT.md updates follow a read-then-edit pattern with a grep check for key sections before editing",
+        "PROJECT.md changes are committed immediately after editing"
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  }
+}

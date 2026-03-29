@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a68b54a637ad",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T02:17:48.422391Z",
+  "branch": "docs/19.2-staging-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/baselines/19.2-post-optimization-baselines.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "4148234b4175",
+  "token_usage": {
+    "input_tokens": 1609,
+    "cache_creation_tokens": 537324,
+    "cache_read_tokens": 68284349,
+    "output_tokens": 92359,
+    "api_call_count": 353
+  },
+  "session_metrics": {
+    "turn_count": 28
+  },
+  "summary": {
+    "intent": "Complete Phase 19.2 IPFS upload performance optimization — execute gap closure plans, deploy pebbleds datastore to staging, run matched load tests, and merge the release.",
+    "outcome": "Phase 19.2 fully executed and merged (PR #342). Staging deployed with pebbleds + concurrent pin orchestration. Post-19.2 staging load tests showed 157% throughput improvement (5.87→15.10 ops/s at 5x client count) and survival at 200 concurrent users where the system previously broke entirely.",
+    "learnings": {
+      "repo": [
+        "Concurrent SDK pins (Promise.allSettled) alone cause a p95 regression at 50 clients — p95 jumped 18.7s→44.7s on flatfs. pebbleds is required to absorb the doubled write load; the two optimizations are synergistic.",
+        "Load test secrets (LOAD_TEST_SECRET, THROTTLE_BYPASS_SECRET) must be passed as inline shell env vars — vitest does not use dotenv. Pattern: `LOAD_TEST_SECRET=x THROTTLE_BYPASS_SECRET=y pnpm exec vitest run ...`",
+        "THROTTLE_BYPASS_SECRET is sent as X-Throttle-Bypass header; API's BypassableThrottlerGuard skips rate limiting when it matches and NODE_ENV !== 'production'.",
+        "Valid CIDs on staging are tracked in two places: pinned_cids table (presence = active) and folder_ipns.latest_cid IS NOT NULL. Everything pinned on Kubo not in those tables is stale.",
+        "DELEGATED_ROUTING_URL should point to someguy at 192.168.133.114:8190 for realistic staging-comparable testing, not mock-ipns-routing (localhost:3001).",
+        "The tag-staging-release GitHub Actions workflow must be used to create staging release tags — do not push raw git tags manually.",
+        "ipfs-ds-convert is archived and incompatible with modern Kubo. In-place flatfs→pebbleds conversion is not possible. For future production migrations, DAG export/import (CAR files) is the viable path."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 616,
+          "end_line": 650,
+          "finding": "Concurrent pin orchestration via Promise.allSettled — IPNS publish and folder metadata update run in parallel. Failure handling checks totalFailed only when batchResult.value exists (guard needed since mock returns undefined in tests)."
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "finding": "Added ipns:batchPublishFailed typed event to match share:reWrapFailed pattern — batch publish failures now surface as SDK events, not just console.warn."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/helpers.ts",
+          "line": 1,
+          "end_line": 65,
+          "finding": "Shared test helpers (createTestConfig, setupFolder) extracted from 3 duplicate test files. Helper uses Object.freeze on config to prevent test aliasing mutations."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-upload-concurrency.test.ts",
+          "finding": "New test file covering concurrent pin orchestration. All mock batchPublishIpnsRecords calls must return { totalSucceeded, totalFailed } — returning undefined causes guard check to fail silently."
+        }
+      ],
+      "workflow": [
+        "For staged load testing, CI is the right runner for staging comparisons (consistent hardware/network). Local dev results are useful for isolation but not directly comparable to pre-optimization staging baselines.",
+        "When probing concurrency limits, push until errors appear rather than stopping at the first sign of latency degradation — the 'knee' and 'breaking point' are different, and worst-case baseline data makes improvements more visible.",
+        "Bitswap pin-by-pin migration of ~31K CIDs is impractical (effectively stuck after minutes). For future datastore migrations with nearly-clean data, clean slate is the right call for staging.",
+        "Always verify the 1Password SSH agent socket is active before attempting remote operations that depend on it. The socket path is in ~/.ssh/config but the agent process must be running.",
+        "When killing duplicate API processes, confirm port ownership first — the latest PID holds the port, older pnpm wrapper processes may be zombies but still need force-killing."
+      ]
+    },
+    "friction": [
+      "Bitswap pin-by-pin migration stalled immediately — after 30+ minutes only 1 CID pinned out of 31,254. VPS became unresponsive from the load. Had to abort and go clean slate.",
+      "ipfs-ds-convert was investigated as an in-place conversion path but is archived and incompatible with modern Kubo — dead end.",
+      "1Password SSH agent socket wasn't active, blocking SSH access until the user opened a terminal session directly.",
+      "Multiple API processes accumulated on port 3000 from repeated test runs — required manual force-kill of zombie pnpm wrappers.",
+      "Load test background task for 75/100 clients exited with code 255 (SSH dropped) rather than returning results cleanly.",
+      "Premature git tag push triggered before the tag-staging-release workflow was used — had to revert and retrigger properly.",
+      "Pre-optimization SDK checkout left the working directory inside tests/load, causing git restore to fail until run from repo root."
+    ],
+    "open_items": [
+      "Load tests should handle 401s with token refresh — JWT tokens expire during long-running (600s+) load tests, causing auth failures at high client counts. Todo created: .planning/todos/pending/2026-03-23-load-tests-should-handle-401s-with-token-refresh.md",
+      "Investigate removal of mock-ipns-routing layer now that someguy is properly integrated into the stack. Todo: .planning/todos/pending/2026-03-23-investigate-removal-of-mock-ipns-routing-layer.md",
+      "Staging Prometheus baselines (pin mean latency -20.8%, histogram data) added to post-optimization baselines on a new branch — confirm that branch PR was merged.",
+      "batchResult totalFailed edge case: Copilot noted the case where batchPublishIpnsRecords returns a fulfilled result with partial failures (totalFailed \u003e 0) — acknowledged as intentional with retry queue as follow-up work.",
+      "Production IPFS datastore migration strategy: documented in .learnings/ with DAG export/import as the recommended path, but the actual procedure has not been rehearsed and the migration script is staging-specific.",
+      "SC3 (\u003e15% throughput improvement at 50+ concurrent users) was not met in local dev tests (+7%) but was definitively met on staging (+157%) — the VERIFICATION.md SC3 status may need updating to reflect the staging results."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T02:16:44.876803Z",
+    "agent_lines": 0,
+    "human_added": 84,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 84,
+    "agent_percentage": 0
+  }
+}

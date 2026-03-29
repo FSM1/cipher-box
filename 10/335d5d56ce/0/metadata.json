@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "10335d5d56ce",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T11:53:36.271038Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "cdf4087fb1bc",
+  "token_usage": {
+    "input_tokens": 190,
+    "cache_creation_tokens": 240434,
+    "cache_read_tokens": 15701731,
+    "output_tokens": 46230,
+    "api_call_count": 157
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) to implement write permission support for shared folders, including API backend, UI controls, and recipient write actions.",
+    "outcome": "All 3 plans executed successfully. During human verification, a significant gap was found and fixed: files uploaded to shared folders lacked per-file IPNS records, preventing download/edit. A full shared file read/write path was implemented including save support.",
+    "learnings": {
+      "repo": [
+        "cipher-box-ci-debug is a separate checkout from cipher-box and lacks .env files — they must be copied from the primary cipher-box repo",
+        "The web app's API URL defaults to window.location.origin + '/api' when VITE_API_URL is unset, causing it to call port 5173 instead of 3000",
+        "Packages must be built in dependency order: core → sdk-core → sdk before the web app can start",
+        "The API client (packages/api-client) must be regenerated after controller changes",
+        "SharedFileBrowser's TextEditorDialog used the owner's folder update path (useFolder hook) for all saves — there was no shared file save path at all"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 807,
+          "end_line": 807,
+          "finding": "Shared folder uploads set fileMetaIpnsName: '' — per-file IPNS records were never created, making uploaded files unreadable after session"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 71,
+          "end_line": 71,
+          "finding": "Error 'File metadata IPNS name not available (legacy v1 file?)' thrown when fileMetaIpnsName is empty — surfaced as misleading legacy error for a new PoC limitation"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 98,
+          "end_line": 101,
+          "finding": "Shared file load path throws if no share_key found — needed fallback to fileKeyEncrypted from file metadata for files uploaded before fix"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "createFileMetadata called with ownerPublicKey for IPNS key wrapping — recipient can't unwrap IPNS private key, so they can't update the file. Must use recipient's key for IPNS wrapping, owner's key for fileKeyEncrypted"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "addShareKeys was restricted to share owners only — needed relaxing to allow write-share recipients to add keys to their own share for per-file IPNS records"
+        },
+        {
+          "path": "apps/web/src/lib/api-config.ts",
+          "finding": "API URL fallback logic: uses VITE_API_URL env var if set, otherwise defaults to window.location.origin + '/api'"
+        }
+      ],
+      "workflow": [
+        "Background bash tasks in Claude Code get killed when conversation context shifts — use detached processes (nohup or \u0026) for dev servers to survive this",
+        "GSD checkpoint verification revealed a real functional gap (missing IPNS records) that automated verification missed — human testing caught what automated checks didn't",
+        "Per-file IPNS records created before the fix are unrecoverable — users must delete and re-upload affected files"
+      ]
+    },
+    "friction": [
+      "DB host IP had changed (192.168.133.114 → 192.168.133.12) and no .env existed in the ci-debug checkout — required manual .env creation before API could start",
+      "Background dev server tasks were repeatedly killed by conversation context shifts, requiring multiple restarts with different strategies",
+      "Web server showed 'disconnected' due to missing VITE_API_URL — defaulting to wrong port with no clear error",
+      "SDK and dependency packages needed manual build before web app could start — not documented in ci-debug checkout",
+      "Git lock file had to be manually removed before commit could proceed",
+      "API client regeneration required after controller changes — easy to forget step"
+    ],
+    "open_items": [
+      "Files uploaded to shared folders before the IPNS fix have permanently empty fileMetaIpnsName and cannot be recovered — no migration path for legacy broken files",
+      "The shared file save path (updateSharedFile) creates a new share_key for the recipient but the approach of wrapping IPNS key with recipient's key means the owner cannot update files uploaded by recipients",
+      "30s polling for sync in SharedFileBrowser (plan 27-03) should be reviewed for production — polling interval may need to be configurable",
+      "The addShareKeys API relaxation for write-share recipients has no rate limiting or abuse prevention",
+      "No automated test coverage for the shared file upload/download/edit cycle — the gap was only caught by human UAT"
+    ]
+  }
+}

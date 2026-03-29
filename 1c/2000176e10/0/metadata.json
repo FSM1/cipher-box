@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "1c2000176e10",
+  "session_id": "6145a5e4-6423-4826-b1cd-37384a2af563",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T00:58:14.611468Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "0cebc67e955a",
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 70999,
+    "cache_read_tokens": 629702,
+    "output_tokens": 5282,
+    "api_call_count": 13
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Extract shared-folder write operations from the React web UI (useSharedNavigation hook) into stateless SDK functions, add test coverage, and refactor the web UI to use the SDK as thin wrappers.",
+    "outcome": "A GSD quick task (260327-2ab) was planned and executed to create sdk/src/share/shared-write.ts with 6 stateless write functions plus SDK/sdk-core unit tests and web UI refactor. The executor was spawned but transcript ends before confirming completion.",
+    "learnings": {
+      "repo": [
+        "The SDK currently only covers the owner's perspective for share operations (shareFolder, revokeShare, reWrapForRecipients); the recipient write path was entirely missing from the SDK as of phase 27.",
+        "The SDK's ShareCallbacks type uses 'file' | 'folder' key types but the web UI has expanded this to 'file-ipns' | 'folder-ipns' — the SDK types need widening.",
+        "updateFolderMetadataAndPublish exists in sdk-core for the owner side; publishSharedFolderMetadata in the web UI is the recipient-side counterpart using re-wrapped IPNS keys.",
+        "uint8ToBase64 is already a utility in sdk-core — web UI has a duplicate that should be removed.",
+        "The web UI uses a withRevocationGuard/isForbiddenError pattern to detect 403 responses and transition to read-only; any SDK consumer doing shared writes needs this same pattern."
+      ],
+      "code": [
+        {
+          "path": "packages/web/src/hooks/useSharedNavigation.ts",
+          "line": 719,
+          "end_line": 719,
+          "finding": "publishSharedFolderMetadata — recipient-side equivalent of sdk-core's updateFolderMetadataAndPublish; encrypts folder metadata, uploads to IPFS, publishes IPNS using re-wrapped key."
+        },
+        {
+          "path": "packages/web/src/hooks/useSharedNavigation.ts",
+          "line": 761,
+          "end_line": 761,
+          "finding": "withRevocationGuard — wraps write operations to detect 403 and transition shared folder to read-only; needed as SDK utility."
+        },
+        {
+          "path": "packages/web/src/hooks/useSharedNavigation.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "isForbiddenError — helper used by withRevocationGuard to classify 403 responses."
+        },
+        {
+          "path": "packages/web/src/hooks/useSharedNavigation.ts",
+          "line": 254,
+          "end_line": 254,
+          "finding": "refreshFolderContents — resolves IPNS, decrypts shared folder metadata, returns children + sequence number; variant of sdk-core's fetchAndDecryptMetadata tailored for shared-folder context."
+        },
+        {
+          "path": "packages/web/src/services/share.service.ts",
+          "line": 514,
+          "end_line": 514,
+          "finding": "updateSharePermission — calls sharesControllerUpdatePermission; natural addition to SDK share module alongside createShare/revokeShare."
+        },
+        {
+          "path": "packages/web/src/hooks/useFileOperations.ts",
+          "line": 10,
+          "end_line": 32,
+          "finding": "Fire-and-forget reWrapForRecipients call after file update — SDK's write path should bake in this 'after any mutation, re-wrap for recipients' pattern."
+        }
+      ],
+      "workflow": [
+        "The GSD quick workflow init produces a JSON with planner/executor/checker/verifier model assignments, quick_id (YYMMDD-xxx format), slug, and directory paths used throughout orchestration.",
+        "Quick tasks update STATE.md 'Quick Tasks Completed' table but do NOT touch ROADMAP.md — intentional separation from planned phase tracking.",
+        "The analysis-then-implement pattern (first session analyzed candidacy, second session executed extraction) worked well for a task of this scope."
+      ]
+    },
+    "friction": [
+      "Transcript ends before executor completion confirmation — unclear whether SUMMARY.md was produced and STATE.md was updated successfully.",
+      "The SDK ShareCallbacks type mismatch ('file'|'folder' vs 'file-ipns'|'folder-ipns') is a latent type bug that could cause silent failures if not caught during extraction."
+    ],
+    "open_items": [
+      "Confirm executor completed successfully and 260327-2ab-SUMMARY.md exists.",
+      "Verify STATE.md was updated with the quick task row for 260327-2ab.",
+      "Widen SDK ShareCallbacks type from 'file'|'folder' to 'file-ipns'|'folder-ipns' if not handled in the extraction plan.",
+      "The restoreIpnsKeyForDepth IPNS key-unwrapping logic was flagged as a moderate SDK candidate but likely deferred — consider extracting the key-unwrap portion in a follow-up.",
+      "The 30s polling pattern in the web UI (React useEffect/setInterval) is UI-specific and was explicitly excluded — revisit if desktop app needs shared folder sync."
+    ]
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ec4aff135d2c",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T01:18:35.759561Z",
+  "branch": "docs/ipfs-datastore-migration-learnings",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7ba59c8e0727",
+  "token_usage": {
+    "input_tokens": 1511,
+    "cache_creation_tokens": 503083,
+    "cache_read_tokens": 49192903,
+    "output_tokens": 79725,
+    "api_call_count": 286
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Execute Phase 19.2 (IPFS upload performance optimization) gap closure, collect definitive three-point local baselines proving concurrent SDK pins and pebbleds datastore improvements, then merge the PR and begin staging deployment with a parallel IPFS datastore migration.",
+    "outcome": "Phase 19.2 gap closure plans executed and verified (6/6 must-haves), PR #342 merged with all 11 review threads resolved, staging deploy workflow triggered, and IPFS migration partially attempted before pivoting to a clean-slate approach with a learnings doc committed on a docs branch.",
+    "learnings": {
+      "repo": [
+        "SDK concurrent pins (`Promise.allSettled`) and pebbleds datastore are synergistic — concurrent pins alone cause a regression at 50 clients (p95 18.7s→44.7s, -26% throughput) because they double simultaneous Kubo write load; pebbleds handles the doubled load and restores+improves performance",
+        "At 75 clients, pebbleds eliminates failure mode entirely: 0 errors vs 10 on flatfs, p95 -53%, throughput +44%",
+        "Load test secrets (LOAD_TEST_SECRET, THROTTLE_BYPASS_SECRET) must be passed as inline shell env vars — vitest does not load dotenv, so .env files are ignored",
+        "Rate limiting is bypassed via X-Throttle-Bypass header (BypassableThrottlerGuard) — only active when NODE_ENV !== 'production'",
+        "DELEGATED_ROUTING_URL in apps/api/.env was pointing to localhost:3001 (mock-ipns-routing); someguy on 192.168.133.114:8190 is the correct target for staging-representative tests",
+        "Valid CIDs on staging are tracked in two tables: pinned_cids (file content) and folder_ipns where latest_cid IS NOT NULL — anything pinned on Kubo not in these tables is stale",
+        "Staging had 31,477 valid CIDs, 31,254 pinned on Kubo, only 1 stale CID — data was 99.997% clean",
+        "ipfs-ds-convert is archived and incompatible with modern Kubo (v0.40+) — there is no built-in datastore conversion command",
+        "The tag-staging-release workflow handles staging tagging properly — manual git tag pushes should not be used",
+        "CIDs in DB but not pinned on Kubo (~223 cases) are tolerated by the system — likely from failed uploads where DB record was created but pin didn't complete"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 616,
+          "end_line": 650,
+          "finding": "batchPublishIpnsRecords returns {totalSucceeded, totalFailed} — access totalFailed only if result.value exists (mock returns undefined in unit tests), emit ipns:batchPublishFailed typed event on failure consistent with share:reWrapFailed pattern"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/helpers.ts",
+          "line": 1,
+          "end_line": 51,
+          "finding": "Shared test helpers extracted here: createTestConfig and setupFolder were duplicated identically across client.test.ts, client-extended.test.ts, and client-upload-concurrency.test.ts"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-upload-concurrency.test.ts",
+          "line": 1,
+          "end_line": 241,
+          "finding": "New test file for concurrent pin orchestration — covers parallel execution, partial failure (one pin fails), and allSettled behavior. setTimeout(r, 10) replaced with Promise.resolve() for timer-free async flushing"
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "finding": "ipns:batchPublishFailed added as typed SDK event for batch publish failures"
+        }
+      ],
+      "workflow": [
+        "Sequential ipfs pin add for 31K CIDs via bitswap is not viable — got stuck on first CID after minutes; parallel approach with xargs -P or dag export/import would be needed",
+        "Three-point local baseline comparison (no opts / SDK only / SDK+Kubo) in matched environment is more rigorous than staging vs localhost comparison — eliminates confounding variables and isolates each optimization's contribution",
+        "Concurrency probe (Run 0) before load test baselines is valuable — found throughput plateau at ~3.5 ops/s from 10+ clients, 50 clients was highest clean run on flatfs",
+        "pnpm dev started multiple times can leave zombie API processes — check PIDs and kill older ones; port 3000 can only be held by one process",
+        "When pushing a staging release, use the tag-staging-release workflow rather than manually tagging — the workflow handles proper release sequencing",
+        "For IPFS datastore migration on staging, clean slate is pragmatic given only 1 stale CID; ipfs dag export/import per CID is the right approach for production migration",
+        "CodeRabbit and GitHub Copilot reviews required 3 separate rounds of resolution (11 total threads) — batch fixes by round to minimize CI churn"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent socket not available during session — had to use direct ssh command from user's terminal instead of scripted SSH commands; agent eventually worked but was initially blocked",
+      "Sequential ipfs pin add via bitswap overwhelmed the VPS and SSH connection dropped — 31K CIDs is too many for sequential pin migration",
+      "Background task for 100-client and 75-client probe runs timed out/failed with exit code 1 but results were already captured from earlier reads — stale task notifications caused confusion",
+      "Agent incorrectly pushed a manual git tag (staging-v0.26.6-rc-1) instead of triggering the tag-staging-release workflow — had to revert and re-trigger properly",
+      "SDK mock for batchPublishIpnsRecords returned undefined in unit tests after adding totalFailed check — required defensive access pattern",
+      "Duplicate API processes (3 pnpm dev instances running) caused transient DB health check failures during cleanup",
+      "ipfs-ds-convert is archived and unusable with modern Kubo — discovered mid-migration after already stopping the API and spinning up temp container"
+    ],
+    "open_items": [
+      "Staging IPFS migration to pebbleds still pending — clean slate approach agreed on, waiting for staging deploy to complete before executing",
+      "Staging deploy workflow approval ('Create Staging Tag' step) still in progress at end of session",
+      "Todo: investigate removal of mock-ipns-routing layer now that someguy is properly integrated (.planning/todos/pending/2026-03-23-investigate-removal-of-mock-ipns-routing-layer.md)",
+      "Todo: load tests should handle 401s with token refresh — JWT tokens expire under long-running 75-client tests (.planning/todos/pending/2026-03-23-load-tests-should-handle-401s-with-token-refresh.md)",
+      "SC3 requirement (\u003e15% throughput improvement) was not fully met — achieved +7% throughput but substantial tail latency improvements (p95 -13%, p99 -15%); may need requirement revision or further optimization",
+      "3 staging human-verification items remain: live pebbleds staging deploy confirmation, SC1 on staging, Prometheus histogram verification on live Grafana",
+      "Learnings doc for IPFS datastore migration committed on docs branch — PR not yet created at end of session (.learnings/2026-03-24-ipfs-datastore-migration.md)",
+      "batchResult.value.totalFailed \u003e 0 edge case in batch API noted but deferred — warrants follow-up retry queue implementation",
+      "apps/api/.env DELEGATED_ROUTING_URL changed to 192.168.133.114:8190 (someguy) for load testing — verify this doesn't break local dev for other team members"
+    ]
+  }
+}

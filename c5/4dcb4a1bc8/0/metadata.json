@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c54dcb4a1bc8",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T01:42:57.352078Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "a59d33362dc1",
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 35635,
+    "cache_read_tokens": 431424,
+    "output_tokens": 3510,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute phase 22 (performance-baselines-completion) plans, first fixing a branching issue where planning commits had landed directly on main instead of a feature branch.",
+    "outcome": "The 5 phase 22 planning commits were moved from main to feat/phase-22-performance-baselines-completion, main was reset to match origin/main, and phase 22 execution was initiated with 3 agents spawned in parallel for plans 22-01, 22-02, and 22-03.",
+    "learnings": {
+      "repo": [
+        "Phase 22 is named 'performance-baselines-completion' — feature branch convention is feat/phase-{N}-{slug}",
+        "GSD branching strategy for this project is 'phase', which pre-computes a branch name like phase-22-performance-baselines-completion — but the user overrides this with feat/ prefix",
+        "Phase 22 has 3 plans in a single wave: 22-01 (SDK perf instrumentation), 22-02 (E2E journey timing tests), 22-03 (load test thresholds and capacity model)"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD planning commits were going directly to main — the workflow doesn't enforce branch creation before committing planning artifacts",
+        "To retroactively move commits to a feature branch: create branch at current HEAD (captures commits), then git reset --hard origin/main to restore main",
+        "GSD branching_strategy 'phase' suggests a branch name without feat/ prefix, but the project convention is feat/phase-{N}-{slug} — the two can conflict and require manual override"
+      ]
+    },
+    "friction": [
+      "Phase 22 research and planning commits landed directly on main instead of a feature branch, requiring a manual fix before execution could proceed",
+      "GSD's auto-computed branch name (phase-22-performance-baselines-completion) didn't match the project's feat/ prefix convention, requiring the user to specify the correct branch name"
+    ],
+    "open_items": [
+      "Phase 22 execution was still in progress at transcript end — agents for 22-01, 22-02, 22-03 were spawned but results not yet collected",
+      "Commits haven't been pushed to origin — main was reset locally but the 5 planning commits now on feat/phase-22-performance-baselines-completion still need to be pushed"
+    ]
+  }
+}

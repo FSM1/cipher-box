@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4a516da82d28",
+  "session_id": "6639292d-be0e-410f-b93c-d946634c623e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-25T01:41:00.428447Z",
+  "branch": "feat/phase-22-performance-baselines-completion",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "a59d33362dc1",
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 35635,
+    "cache_read_tokens": 431424,
+    "output_tokens": 3510,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute phase 22 (performance-baselines-completion) plans, after first correcting that the phase 22 planning commits had landed directly on main instead of a feature branch.",
+    "outcome": "Phase 22 planning commits were moved to feat/phase-22-performance-baselines-completion, main was reset to origin/main, and all 3 phase 22 plans (SDK perf instrumentation, E2E journey timing, load test thresholds) were dispatched as parallel subagents for execution.",
+    "learnings": {
+      "repo": [
+        "Phase 22 is named 'performance-baselines-completion' — slug derived from .planning/phases directory name",
+        "GSD branching strategy for this project uses 'phase' strategy, generating branch names like feat/phase-{N}-{slug}",
+        "All 3 phase 22 plans fall in a single wave (no inter-plan dependencies), enabling full parallel execution"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD planning commits should go to feat/phase-{N}-{slug} branches, not directly to main",
+        "When phase commits land on main before push, the safe recovery is: create feature branch at current HEAD, then git reset --hard origin/main on main",
+        "GSD execute-phase init returns branch_name pre-computed; if a matching branch already exists from a prior step, skip the checkout -b and reuse it",
+        "The gsd-tools init execute-phase command provides executor_model, verifier_model, parallelization, plans, incomplete_plans, and branch metadata in one call"
+      ]
+    },
+    "friction": [
+      "Phase 22 planning commits were accidentally made directly to main instead of a feature branch, requiring manual branch surgery before execution could proceed"
+    ],
+    "open_items": [
+      "3 executor subagents (22-01, 22-02, 22-03) were spawned but transcript ends before their completion — verification, regression gate, and roadmap update steps are not yet done",
+      "Commits on feat/phase-22-performance-baselines-completion have not been pushed to origin yet"
+    ]
+  }
+}

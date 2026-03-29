@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5b395217989c",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T03:34:25.331022Z",
+  "branch": "phase-30-web-app-observability",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3fc13e901cde",
+  "token_usage": {
+    "input_tokens": 178,
+    "cache_creation_tokens": 355352,
+    "cache_read_tokens": 15471774,
+    "output_tokens": 51096,
+    "api_call_count": 134
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Review and update codebase maps, identify E2E testing gaps and new concerns from FEATURES.md and CONCERNS.md, capture todos, add new roadmap phases, and begin discussing/planning the new phases via the GSD manager.",
+    "outcome": "Added 6 todos for E2E/staging work, added 5 new roadmap phases (28-32) to the v1.1 milestone, captured CONTEXT.md for phases 28/29/30 via discuss workflow, spawned background planners for phases 28/29, and fixed a lint-staged issue that was corrupting ROADMAP.md. PRs #380 (docs) and #381 (roadmap phases) merged to main.",
+    "learnings": {
+      "repo": [
+        "Only 1 of 12 E2E specs (recovery.spec.ts) calls deleteTestAccount(); the rest leave orphaned test accounts. A deleteTestAccount() helper already exists in tests/sdk-e2e/src/fixtures/test-harness.ts.",
+        "AES-CTR streaming mode is selected for media files \u003e256KB, GCM for everything else, implemented in streaming-crypto.service.ts. Service worker at decrypt-sw.ts intercepts /decrypt-stream/* URLs for HTTP Range request support. 35 unit tests exist but zero E2E tests.",
+        "127 console.* calls across 29 files in apps/web/src/ — hooks.ts alone has 34 (Web3Auth debug logging). No logging infrastructure exists in the web app today.",
+        "RepublishService.unenrollIpns() exists at apps/api/src/republish/republish.service.ts:255 but has no REST endpoint. TODO at folder.service.ts:513 explicitly notes this was deferred to Phase 14.",
+        "Test login endpoint on staging is well-guarded (NODE_ENV check + timing-safe secret comparison + unit tests + cipherbox_auth_logins_total metric already emitted). E2E tests depend on it so it must not be removed.",
+        "Kubo port 5001 is already bound to 127.0.0.1 in staging Docker compose — the IPFS access control concern is lower risk than it appeared in CONCERNS.md.",
+        "Phase 28 logger decision: custom thin wrapper preferred over pino/browser because pino's redaction and Sentry integration are Node.js-only, not browser. Privacy-first app needs custom redact() interceptor regardless.",
+        "Phase 30 observability decision: Grafana Faro chosen over Sentry — single vendor (Grafana Cloud already in use), no session replay feature (privacy advantage), 50k sessions/month free vs Sentry's 5k errors/month, web vitals built-in.",
+        "All v1.1 phases 18-27 are complete. New phases 28-32 start at 28.",
+        "FEATURES.md and DEFERRED.md were added to .planning/ in the GSD update that pulled into main."
+      ],
+      "code": [
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "deleteTestAccount() helper exists (DELETE /auth/account with { confirmation: 'DELETE' }) but only called by recovery.spec.ts"
+        },
+        {
+          "path": "apps/web/src/services/streaming-crypto.service.ts",
+          "finding": "CTR mode threshold: files \u003e256KB use AES-CTR, smaller files use GCM"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "line": 255,
+          "finding": "unenrollIpns() method exists but no REST endpoint exposes it"
+        },
+        {
+          "path": "apps/web/src/hooks.ts",
+          "finding": "34 console.* calls — largest single file, Web3Auth debug logging leaking SDK state"
+        },
+        {
+          "path": "package.json",
+          "finding": "lint-staged runs markdownlint --fix on all *.md files — was corrupting .planning/ROADMAP.md by escaping asterisks. Fixed by excluding .planning/ glob from lint-staged config."
+        }
+      ],
+      "workflow": [
+        "GSD manager can run discuss inline while background planners execute — effective parallelism pattern for phase work.",
+        "STATE.md todo count can become stale from previous sessions; always verify against actual file count before incrementing.",
+        "lint-staged with markdownlint --fix bypasses .markdownlintignore when explicit file paths are passed — must exclude patterns in the lint-staged glob config in package.json, not just in .markdownlintignore.",
+        "GSD init manager JSON output breaks if ROADMAP.md contains markdown-escaped characters (e.g. \\*) — keep planning docs free of characters that markdownlint might escape.",
+        "Grafana Faro v2.0 went GA November 2025 — relatively new but sufficient for this use case."
+      ]
+    },
+    "friction": [
+      "markdownlint lint-staged hook kept re-escaping asterisks in ROADMAP.md on every commit, breaking gsd-tools.cjs JSON parsing. Required three separate fix attempts before resolving by updating the lint-staged glob in package.json.",
+      "STATE.md todo count was stale (showed 10 when actual count was 6), causing an incorrect increment to 14 that had to be corrected.",
+      "GSD manager init JSON parsing is brittle to markdown formatting in ROADMAP.md — a single escaped character breaks the entire dashboard."
+    ],
+    "open_items": [
+      "Phase 28 (Code Hygiene \u0026 Logging): background planner spawned, execution spawned — outcome not yet confirmed in transcript",
+      "Phase 29 (Infrastructure Hardening): background planner spawned (3 plans created per mid-session check) — execution not yet started",
+      "Phase 30 (Web App Observability): CONTEXT.md written, not yet planned or executed — blocked on Phase 28 completion",
+      "Phase 31 (Structural Decomposition): needs discussion, blocked on Phase 28",
+      "Phase 32 (FUSE Async FilePointer Resolution): ready to plan, not yet started",
+      "6 todos captured for future work: shared deleteAccount teardown, media preview E2E suite, AES-CTR streaming E2E tests, batch download E2E tests, staging metrics baselines, BYO-IPFS load test baselines",
+      "Kubo IPFS access control (port 5001) deferred from Phase 29 — currently bound to 127.0.0.1 but production hardening approach (native ACL vs reverse proxy) not yet decided",
+      "Phase 30 Faro privacy: beforeSend scrubbing strategy for breadcrumbs, URL params with IPNS names, and network request capture needs implementation detail in plans"
+    ]
+  }
+}

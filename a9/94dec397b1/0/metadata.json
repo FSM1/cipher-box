@@ -1,0 +1,113 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a994dec397b1",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T03:42:31.315416Z",
+  "branch": "phase-30-web-app-observability",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/30-web-app-observability/30-01-PLAN.md",
+    ".planning/phases/30-web-app-observability/30-02-PLAN.md",
+    ".planning/phases/30-web-app-observability/30-03-PLAN.md",
+    ".planning/phases/30-web-app-observability/30-04-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3fc13e901cde",
+  "token_usage": {
+    "input_tokens": 186,
+    "cache_creation_tokens": 365769,
+    "cache_read_tokens": 16852663,
+    "output_tokens": 55431,
+    "api_call_count": 141
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Review codebase concerns, plan remediation phases, and kick off the GSD manager to discuss and plan those phases in parallel.",
+    "outcome": "6 E2E testing todos captured, 5 new roadmap phases added (28-32), context documents created for phases 28-31 via discuss workflow, and background agents were executing phases 28-29 and planning phase 30 by end of session.",
+    "learnings": {
+      "repo": [
+        "deleteTestAccount() helper exists in tests/sdk-e2e/src/fixtures/test-harness.ts but only recovery.spec.ts calls it — 11 of 12 specs leave orphaned test accounts",
+        "AES-CTR streaming is fully implemented (CTR for \u003e256KB, GCM fallback) with 35 unit tests but zero E2E tests; Phase 12.1 left a human verification checklist that was never automated",
+        "Service worker intercepts /decrypt-stream/* URLs and handles HTTP Range requests for seeking, enabling Playwright to assert SW interception is working",
+        "unenrollIpns() exists at apps/api/src/republish/republish.service.ts:255 but has no REST endpoint; folder.service.ts:513 has a TODO explicitly deferring this to a future phase",
+        "Test login endpoint is already well-guarded (NODE_ENV check + timing-safe secret comparison); hardening is monitoring, not code changes",
+        "Kubo port 5001 is already bound to 127.0.0.1 in staging Docker compose — ACL hardening is documentation/production policy, not urgent code work",
+        "Grafana Faro has no session replay feature (privacy advantage for a ZK app); Pino browser mode lacks redaction and Sentry integration — both ruled out for their respective use cases",
+        "139 console.* calls across 29 web app files (82 error, 27 warn, 18 log, 12 time/timeEnd); hooks.ts alone has 34 from Web3Auth debug logging",
+        "Only 3 of 157 web app source files have unit tests; useSharedNavigation.ts is 1199 lines with zero unit tests",
+        "00-Preliminary-R\u0026D/poc/ has 89MB of committed node_modules and a single superseded source file — safe to delete entirely",
+        ".markdownlintignore excludes .planning/phases/ and .planning/milestones/ but not top-level .planning/ files or .planning/codebase/"
+      ],
+      "code": [
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "finding": "deleteTestAccount() calls DELETE /auth/account with { confirmation: 'DELETE' } — the shared teardown helper already exists, just needs wiring into all spec afterAll hooks"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "line": 255,
+          "finding": "unenrollIpns() method exists but is not exposed via REST — Phase 29 will add POST /ipns/unenroll endpoint following the existing publish-batch pattern"
+        },
+        {
+          "path": "apps/web/src/folder.service.ts",
+          "line": 513,
+          "finding": "TODO comment explicitly defers unenrollIpns REST endpoint to a future phase — confirms the implementation gap"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "1199 lines, zero unit tests; planned split into useSharedNavigationState (~400L), useSharedWriteContext (~300L), useSharedWriteOps (~400L) with thin composition layer"
+        },
+        {
+          "path": "apps/web/src/components/FileBrowser.tsx",
+          "finding": "964 lines; planned container/presentational split — extract ~600L of handlers into useFileBrowserActions hook, leaving pure presentational JSX"
+        },
+        {
+          "path": "apps/web/src/folder.service.ts",
+          "finding": "1089 lines; planned split into validation/metadata/crud/rotation modules with barrel re-export to preserve 8 consumer imports"
+        },
+        {
+          "path": "package.json",
+          "finding": "lint-staged runs markdownlint --fix on all *.md files via explicit path matching, which bypasses .markdownlintignore — needed to add exclusion glob directly in lint-staged config"
+        }
+      ],
+      "workflow": [
+        "GSD manager can dispatch plan/execute as background agents while discuss runs inline, enabling parallel phase progress from one terminal",
+        "STATE.md todo counts can become stale across sessions — always verify actual file count before incrementing",
+        "markdownlintignore alone is insufficient when lint-staged passes explicit file paths to markdownlint — the glob exclusion must also live in lint-staged config in package.json",
+        "When linter keeps re-escaping a character (like * in 'console.*'), changing the prose to avoid the character entirely is faster than fighting the linter config",
+        "gsd-tools.cjs init manager parses ROADMAP.md phase descriptions and will break on markdown escape sequences like \\* — prose must use linter-safe wording",
+        "Pino/browser ruled out for ZK apps because redaction doesn't work in browser mode and its Sentry transport is Node.js only — both the privacy and integration benefits are lost",
+        "Grafana Faro offers 50k sessions/month free vs Sentry's 5k errors/month, and integrates natively with existing Grafana Cloud stack"
+      ]
+    },
+    "friction": [
+      "STATE.md todo count was stale from a previous session; the add-todo workflow added 4 to the stale value (10+4=14) instead of computing from actual file count, requiring a manual correction",
+      "lint-staged markdownlint --fix kept re-escaping asterisks in ROADMAP.md on every commit, requiring three separate fix attempts before finding the root cause in lint-staged config",
+      "GSD manager init JSON parse broke each time markdownlint escaped characters in ROADMAP.md phase descriptions, breaking the dashboard until the prose was reworded",
+      "Todo duplicate detection uses keyword grep and produced false positives for all new todos (matched 'web' generically), making the check unhelpful for this session"
+    ],
+    "open_items": [
+      "Phase 28 execution was dispatched as background agent — outcome unknown at transcript end",
+      "Phase 29 execution was dispatched as background agent — outcome unknown at transcript end",
+      "Phase 30 planning was dispatched as background agent — 4 plans were written but execution not started",
+      "Phase 31 (Structural Decomposition) discussion was in progress at transcript end — CONTEXT.md not yet written",
+      "Phase 32 (FUSE Async FilePointer Resolution) not yet discussed or planned",
+      "6 E2E testing todos created but not implemented: shared deleteAccount teardown, media preview suite, AES-CTR streaming suite, batch download suite, staging metrics baselines, BYO-IPFS load test baselines",
+      "Kubo access control explicitly deferred from Phase 29 — no concrete plan for production ACL strategy",
+      "Web app unit test coverage at 3/157 files — Wave 4 test coverage strategy identified but no phases created yet"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-28T03:41:21.764916Z",
+    "agent_lines": 762,
+    "human_added": 21,
+    "human_modified": 144,
+    "human_removed": 0,
+    "total_committed": 927,
+    "agent_percentage": 82.20064724919094
+  }
+}

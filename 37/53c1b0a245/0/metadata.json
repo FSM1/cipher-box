@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3753c1b0a245",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T05:04:06.381784Z",
+  "branch": "chore/add-vault-key-separation-todo",
+  "checkpoints_count": 6,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "664642fb5438",
+  "token_usage": {
+    "input_tokens": 248,
+    "cache_creation_tokens": 247112,
+    "cache_read_tokens": 33803510,
+    "output_tokens": 62047,
+    "api_call_count": 218
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Complete Phase 20 (Vault Migration) gap closure by removing dead migration code, execute the plans, resolve all PR review comments from CodeRabbit and GitHub Copilot, and clean up unnecessary database migrations before a DB reset.",
+    "outcome": "Phase 20 fully executed and verified (9/9 truths, 143 regression tests passing), PR #344 merged after 5 rounds of review resolution, migrations consolidated into FullSchema, and a high-priority architectural bug discovered (v2 blob / root folder IPNS naming conflict) and captured as a todo.",
+    "learnings": {
+      "repo": [
+        "The vault IPNS name conflates two concerns: it stores the v2 blob (rootFolderKey + metadata) on init, but web updateFolderMetadata overwrites it with v1 JSON on root folder operations, breaking subsequent logins. Desktop avoids this by always wrapping root publishes in v2 via encrypt_root_metadata_to_v2_blob, but web has no equivalent.",
+        "v2 blob format is exclusively for the root vault blob (ECIES-wrapped rootFolderKey + AES-GCM root folder metadata). All non-root folder metadata uses v1 JSON ({iv, data}). This distinction was not documented and caused repeated reviewer confusion.",
+        "TypeORM auto-discovers migrations from the migrations/ directory glob — no explicit imports needed, so obsolete migration files can be deleted without any registration cleanup.",
+        "The NestJS validation pipe rejects extra properties on DTOs, causing SDK E2E tests to fail after vault DTO simplification since test-harness.ts still sent the old crypto fields.",
+        "Orval regenerates the API client index but does not delete stale model files — orphaned .ts files must be manually removed after schema changes.",
+        "Desktop vault.rs was registering the vault on the backend before IPFS upload + IPNS publish, creating a race where the backend row exists but no blob is accessible. Web client already did this correctly (publish-first)."
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 56,
+          "end_line": 58,
+          "finding": "Zero-length key_len must be rejected in both serializeVaultBlobV2 and deserializeVaultBlobV2. Both checks added; recovery.html inline parser also needed the check."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 36,
+          "end_line": 46,
+          "finding": "Critical ordering bug: /vault/init API call was before IPFS upload + IPNS publish. Fixed by moving registration to after successful IPFS/IPNS operations."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 998,
+          "end_line": 998,
+          "finding": "fetchWithTimeout used .finally(clearTimeout) which cleared the abort timer before body reads completed, defeating the timeout. Removed .finally() so AbortController covers the full response."
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "line": 101,
+          "end_line": 101,
+          "finding": "Test harness bypasses login flow — passes keys directly to CipherBoxClient, so no v2 blob IPFS read is needed. Copilot comment about v2 was not applicable."
+        },
+        {
+          "path": "apps/api/src/migrations/1700000000000-FullSchema.ts",
+          "line": 1,
+          "finding": "FullSchema originally created vaults with encrypted_root_folder_key and encrypted_root_ipns_private_key as NOT NULL. Consolidated to current schema (ownerPublicKey + rootIpnsName only) and deleted the two add/drop migrations."
+        }
+      ],
+      "workflow": [
+        "GitHub outside-diff review comments appear in the review body and cannot be resolved as threads — they must be addressed in code and replied to via the review body, not via the thread resolution GraphQL mutation.",
+        "The classifyHandoffIfNeeded error in Claude Code is a runtime bug that fires after all tool calls complete — spot-checking SUMMARY.md existence and git commits is the correct way to determine if an agent actually succeeded.",
+        "When a PR is merged mid-session, stale uncommitted files (like a .planning/todos/ file) need to be recreated on a fresh branch off main rather than committed on the merged branch.",
+        "GSD gap closure mode (--gaps-only) correctly skips research and reads VERIFICATION.md to scope only the delta plans, keeping the planning loop lean for post-verification fixes."
+      ]
+    },
+    "friction": [
+      "Working directory confusion after PR merge — the todo commit was initially staged on the merged branch (phase-20-vault-migration) instead of main, requiring branch switch and file recreation.",
+      "Orval API client regeneration does not delete stale model files, requiring manual cleanup after DTO changes — discoverable only after a Copilot review flagged orphaned exports.",
+      "GitHub outside-diff review comments have no thread ID and cannot be resolved programmatically — required a separate review body reply with no automated resolution path.",
+      "SDK E2E tests were not updated as part of the Phase 20 gap closure execution, surfacing only when CI ran — the executor agent missed aligning test-harness.ts with the simplified DTO.",
+      "Repeated reviewer confusion (4+ threads) about v1 vs v2 blob scope due to lack of documentation, requiring manual 'not applicable' triage and explanation each round."
+    ],
+    "open_items": [
+      "Separate vault key blob from root folder metadata IPNS name: derive a dedicated IPNS name for the vault key blob (different HKDF context, e.g. 'cipherbox-vault-key' vs 'cipherbox-vault-ipns'). Root folder uses standard v1 like all other folders. Affects useAuth.ts, vault.rs, deriveVaultIpnsKeypair, recovery.html, folder.service.ts. High priority — web client breaks on second login after any root folder modification. Captured as todo: .planning/todos/pending/2026-03-24-separate-vault-key-blob-from-root-folder-ipns-name.md",
+      "Phase 23 planning not yet started — next up after Phase 20 completion.",
+      "2 items require human verification in live environment: new user init publishing v2 blob to IPFS before API registration, and recovery tool IPFS-direct path with a real vault against a live IPFS gateway.",
+      "Documentation gap: no canonical doc distinguishes root vault blob (v2 binary format) from folder metadata (v1 JSON) — caused repeated automated reviewer confusion throughout PR review."
+    ]
+  }
+}

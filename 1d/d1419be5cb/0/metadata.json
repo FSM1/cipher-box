@@ -1,0 +1,88 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "1dd1419be5cb",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T02:40:12.37304Z",
+  "branch": "docs/add-concern-resolution-phases",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "2347523ae48a",
+  "checkpoint_transcript_start": 125,
+  "transcript_lines_at_start": 125,
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 46332,
+    "cache_read_tokens": 1868064,
+    "output_tokens": 8485,
+    "api_call_count": 22
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Push a docs PR, then analyze CONCERNS.md and add phases 28-32 to the roadmap to address code quality, infrastructure, observability, and structural refactoring concerns.",
+    "outcome": "PR FSM1/cipher-box#380 was created, and phases 28-32 were defined and committed to the roadmap and STATE.md on a feature branch.",
+    "learnings": {
+      "repo": [
+        "Phases 18-27 (v1.1) are all complete; new phases start at 28",
+        "Active milestone is m4; roadmap lives at .planning/milestones/m4/ROADMAP.md and .planning/ROADMAP.md",
+        "The gsd-local-patches directory was fully removed — all local overrides are now merged into the canonical .claude/get-shit-done/ tree",
+        "New hooks added: gsd-prompt-guard.js, gsd-workflow-guard.js, statusline.js",
+        "New library modules added: security.cjs, uat.cjs, workstream.cjs",
+        "There are 127 console.log calls in the web app and only 3/157 files have unit tests",
+        "TEE worker has 1/13 test files covered — security-critical gap",
+        "useSharedNavigation.ts is 1199 lines with zero unit tests — highest-risk fragile area",
+        "IPNS unenroll endpoint (unenrollIpns()) already exists but orphaned records are not being cleaned up",
+        "A test login endpoint exists on staging with only a NODE_ENV guard — needs monitoring alert",
+        "FUSE FilePointer blocking causes Finder 'connection lost' errors",
+        "vault-migration-iife-silent-failure debug item was resolved and renamed"
+      ],
+      "code": [
+        {
+          "path": ".planning/codebase/CONCERNS.md",
+          "finding": "Silenced unpin failures use .catch(() =\u003e {}) — replacing with .catch(log) is zero-behavior-change but gains visibility"
+        },
+        {
+          "path": ".planning/codebase/CONCERNS.md",
+          "finding": "Only 3 locations use `any` type — targeted wrappers are straightforward to add"
+        }
+      ],
+      "workflow": [
+        "Discussion phases are warranted when there are unresolved design decisions (Sentry vs self-hosted, decomposition boundaries); plan+execute is sufficient when implementation path is clear",
+        "Phase ordering matters: logger (Phase 28) must precede observability (Phase 30) since observability builds on it",
+        "Structural refactors that touch high-traffic shared code (useSharedNavigation) warrant a discussion phase to agree on split boundaries before execution",
+        "Concerns were triaged into four waves: quick wins, high-impact infrastructure, structural refactors, and ongoing test coverage — with some items explicitly marked as not worth addressing"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Phase 28: Code Hygiene \u0026 Logging — create logger wrapper, replace 127 console.log calls, fix silenced .catch(), clean any casts, archive POC dir",
+      "Phase 29: Infrastructure Hardening — wire up IPNS unenroll, harden test login endpoint, add IPFS ACL/reverse proxy",
+      "Phase 30: Web App Observability — needs discussion on error tracking vendor (Sentry vs self-hosted), scope (error tracking vs session replay vs perf monitoring), privacy implications",
+      "Phase 31: Structural Decomposition — needs discussion on split boundaries for useSharedNavigation.ts, FileBrowser.tsx container/presentational split, folder.service.ts alignment with SDK extraction",
+      "Phase 32: FUSE Async FilePointer Resolution — channel-based prefetch in crates/fuse/src/read_ops.rs",
+      "Test coverage gaps: web app (3/157), TEE worker (1/13), FUSE write_ops (publish coordination, conflict merge), versioning E2E, desktop TS auth flow",
+      "BYO-IPFS load test baselines on staging (pending todo)",
+      "Run staging metrics baselines with new instrumentation (pending todo)",
+      "Add AES-CTR streaming playback E2E tests (pending todo)",
+      "Add batch download ZIP E2E tests (pending todo)",
+      "Add media preview E2E test suite (pending todo)",
+      "Add shared deleteAccount teardown to all E2E specs (pending todo)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-28T02:39:48.237216Z",
+    "agent_lines": 109,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 109,
+    "agent_percentage": 100
+  }
+}

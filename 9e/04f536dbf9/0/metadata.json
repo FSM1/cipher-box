@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "9e04f536dbf9",
+  "session_id": "9e367a0f-780f-408b-8cb7-2c378e3aadfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T02:07:06.237404Z",
+  "branch": "docs/milestone-v1.1-completion",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "4ab44775fa55",
+  "checkpoint_transcript_start": 79,
+  "transcript_lines_at_start": 79,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 42921,
+    "cache_read_tokens": 175296,
+    "output_tokens": 667,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Add four new E2E test suite todos to the planning state for cipher-box.",
+    "outcome": "Four todos were added and committed, but the pending count in STATE.md was incorrectly reported as 14 (6+4) when the actual count was 10 (6+4). The error was caught by the user and corrected.",
+    "learnings": {
+      "repo": [
+        "STATE.md in .planning/ tracks pending todo counts and can become stale, requiring verification against actual state rather than trusting the stored value."
+      ],
+      "code": [
+        {
+          "path": ".planning/STATE.md",
+          "finding": "Stores pending todo count that can go stale; always verify actual count before doing arithmetic on it."
+        }
+      ],
+      "workflow": [
+        "Always verify current state from source of truth before performing arithmetic on counters — stale cached values lead to compounding errors.",
+        "When reporting state changes (e.g. 'X → Y'), recount from actual data rather than relying on previously stored counts."
+      ]
+    },
+    "friction": [
+      "STATE.md contained a stale pending count (showed 6 when actual was already 10), causing an incorrect 6+4=14 report instead of 10.",
+      "The assistant propagated the stale value without verification, requiring the user to catch the discrepancy."
+    ],
+    "open_items": [
+      "Add shared deleteAccount teardown to all E2E specs",
+      "Add media preview E2E test suite (PDF, video, audio)",
+      "Add AES-CTR streaming playback E2E tests (SW interception, seeking, progress)",
+      "Add batch download zip E2E tests"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-28T02:06:55.437477Z",
+    "agent_lines": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 100
+  }
+}

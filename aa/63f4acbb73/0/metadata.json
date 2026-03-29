@@ -1,0 +1,63 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "aa63f4acbb73",
+  "session_id": "b40e1bf6-b0a9-4f65-abea-691c4d692f4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T03:53:02.762365Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/21-byo-ipfs-node-support/21-RESEARCH.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7b7ec20b4e01",
+  "checkpoint_transcript_start": 240,
+  "transcript_lines_at_start": 240,
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 17863,
+    "cache_read_tokens": 809685,
+    "output_tokens": 2499,
+    "api_call_count": 8
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for Phase 21 (BYO-IPFS Node Support) to generate PLAN.md files, including research, planning, and verification steps.",
+    "outcome": "Phase 21 context was loaded from CONTEXT.md, the user opted to research first, and the gsd-phase-researcher agent was spawned and completed, producing 21-RESEARCH.md. The workflow was in progress (research complete, planning not yet started).",
+    "learnings": {
+      "repo": [
+        "Phase 21 is 'BYO-IPFS Node Support' — allows users to configure their own IPFS node for data sovereignty",
+        "Three-mode pinning model: CipherBox only / External only / Dual-pin, with client-direct architecture (no server relay)",
+        "Auth credentials stored in vault metadata on IPFS, encrypted with user key (zero-knowledge preserved)",
+        "PSA + Kubo RPC supported with auto-detection during connection test; CORS validated as part of connection test",
+        "Settings UI gets a new STORAGE tab with save/discard pattern and inline connection test",
+        "Pin migration uses TEE-based background migration with progress bar in Settings"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD plan-phase workflow: init → validate → load context → research → plan → verify → present results",
+        "CONTEXT.md is loaded early and passed to all downstream agents (researcher, planner, checker)",
+        "Research step is interactive — user is asked whether to research before spawning the researcher agent"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "ROADMAP.md success criteria (SC#2, BYO-02) needs updating to reflect revised scope (three-mode pinning model + client-direct architecture instead of server-relay dual-pin)",
+      "S3-compatible storage deferred to a future phase",
+      "Provider marketplace deferred as a future UX enhancement",
+      "Planning step (gsd-planner) not yet started — session ended after research completed",
+      "Plan verification (gsd-plan-checker) not yet run"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T03:52:51.379678Z",
+    "agent_lines": 895,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 895,
+    "agent_percentage": 100
+  }
+}

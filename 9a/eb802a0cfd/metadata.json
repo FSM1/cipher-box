@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "9aeb802a0cfd",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/web/src/components/file-browser/SharedFileBrowser.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9a/eb802a0cfd/0/metadata.json",
+      "transcript": "/9a/eb802a0cfd/0/full.jsonl",
+      "content_hash": "/9a/eb802a0cfd/0/content_hash.txt",
+      "prompt": "/9a/eb802a0cfd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 771,
+    "cache_creation_tokens": 1395936,
+    "cache_read_tokens": 178405628,
+    "output_tokens": 179455,
+    "api_call_count": 669
+  }
+}

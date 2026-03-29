@@ -1,0 +1,91 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5af9cce5b106",
+  "session_id": "73d04a0d-6c1b-4953-8636-dae034952597",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T05:42:23.317304Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/phases/21-byo-ipfs-node-support/21-01-PLAN.md",
+    ".planning/phases/21-byo-ipfs-node-support/21-02-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b8edf940f94c",
+  "token_usage": {
+    "input_tokens": 9575,
+    "cache_creation_tokens": 177382,
+    "cache_read_tokens": 7630178,
+    "output_tokens": 38662,
+    "api_call_count": 68
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Plan Phase 21 (BYO-IPFS Node Support) using the GSD workflow, then conduct a pre-implementation security review of the planning docs, and incorporate benchmarking and security hardening into the plans.",
+    "outcome": "Phase 21 planning completed with 7 plans across 4 waves (6 original + 1 benchmarking plan added). Security review identified 1 critical and 2 high-priority issues; all 3 were addressed by hardening Plans 01, 02, and 05. Plans committed to branch for PR #346.",
+    "learnings": {
+      "repo": [
+        "Phase 21 is BYO-IPFS Node Support — users can pin to their own Kubo node or PSA-compatible provider instead of CipherBox's infrastructure.",
+        "Current staging instance handles ~200 concurrent users; IPFS pinning (~3 Kubo calls per upload, ~1.37s each) accounts for ~95% of upload endpoint time.",
+        "The staging VPS plateaus at ~23-28 ops/s throughput and starts erroring at 200 concurrent clients.",
+        "BYO+Kubo external-only mode reduces per-upload API time from ~4.2s to ~105ms — a ~40x reduction — shifting the bottleneck from Kubo pin throughput to PostgreSQL write throughput.",
+        "BYO+PSA mode still uses CipherBox as a transient relay (upload → PSA pinByCid → wait → unpin), so it has a nearly identical load profile to the current CipherBox-only path.",
+        "TEE worker uses Uint8Array.fill(0) for IPNS key zeroing in republish.ts — migration worker must follow the same pattern; JS strings are immutable and cannot be zeroed.",
+        "Load test harness lives in tests/load/src/ with scenarios in scenarios/ and client pool in harness/client-pool.ts.",
+        "Existing baselines captured in .planning/baselines/ — most recent is 19.2-post-optimization-baselines.md.",
+        "Planning docs commit hook runs markdownlint — bold emphasis used as headings (e.g. **Assessment: ...**) triggers lint failures."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-05-PLAN.md",
+          "finding": "Migration worker's fetchFromProvider/pinToProvider accept arbitrary URLs from decrypted user configs with no SSRF protection — must add HTTPS-only enforcement, private IP blocking (including 169.254.169.254), and DNS rebinding protection before implementation."
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-02-PLAN.md",
+          "finding": "POST /ipfs/register-cid endpoint had no CID format validation, no size cap, no BYO-user authorization gate, and no rate limit — any authenticated user could abuse it to bypass quota enforcement or inject arbitrary size values."
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-01-PLAN.md",
+          "finding": "KuboProvider CID parameters in URL construction needed encodeURIComponent — raw CIDs passed into URL strings without encoding."
+        },
+        {
+          "path": "tee-worker/src/routes/republish.ts",
+          "finding": "Correct pattern for credential zeroing in TEE: uses Uint8Array.fill(0) for IPNS keys — this is the reference implementation the migration worker should replicate."
+        },
+        {
+          "path": "tests/load/src/scenarios/upload-throughput.test.ts",
+          "finding": "Existing load test scenario structure to follow when adding BYO benchmarking scenarios — stepped client pool expansion, per-operation metric recording."
+        }
+      ],
+      "workflow": [
+        "GSD plan-phase revision loop (max 3 iterations) caught 5 blockers on first checker pass; all resolved in 1 revision cycle before final verification pass.",
+        "Running security:review against planning docs (before implementation) rather than code is an effective pre-implementation gate — findings can be addressed cheaply as plan edits rather than code changes.",
+        "Background agents (security review) can run in parallel while discussing unrelated topics (benchmarking strategy), efficiently using wait time.",
+        "Plan file markdownlint errors block commits — bold-as-heading pattern (**Text:**) needs to be converted to plain text or proper heading syntax."
+      ]
+    },
+    "friction": [
+      "Markdownlint rejected the security review report due to **Assessment: ...** bold-emphasis-as-heading pattern, requiring multiple edit passes to fix before commit could proceed.",
+      "Plan frontmatter requirements field uses indented list format (  - BYO-06) that caused a grep to miss BYO-06 coverage initially, requiring a secondary verification pass."
+    ],
+    "open_items": [
+      "External IPFS provider selection for benchmarking left open — need to decide between Pinata, Filebase, or another provider with sufficient rate limits for load testing.",
+      "Need to determine whether to use a separate Pinata test account or the existing CipherBox account for load test runs.",
+      "Medium-priority security findings from REVIEW-2026-03-24-phase21-pre-impl.md not yet addressed in plans (4 medium + 5 low issues remain).",
+      "VALIDATION.md plan mapping errors flagged by the checker were noted as warnings but not explicitly resolved — worth verifying Plan 05/06 coverage in VALIDATION.md.",
+      "Benchmarking plan (21-07) requires a real external IPFS provider to be configured via env vars before Task 4 (run benchmarks + capture baselines) can execute — this is a checkpoint task.",
+      "CI strategy for BYO scenarios unclear — scenarios skip gracefully without env vars but the external-provider integration path won't be validated in automated CI without provider credentials."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T05:41:42.997233Z",
+    "agent_lines": 0,
+    "human_added": 163,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 163,
+    "agent_percentage": 0
+  }
+}

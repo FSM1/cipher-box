@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "75961cace381",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T01:00:54.511119Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "47773094d5e1",
+  "token_usage": {
+    "input_tokens": 6650,
+    "cache_creation_tokens": 411705,
+    "cache_read_tokens": 27517696,
+    "output_tokens": 65401,
+    "api_call_count": 192
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) end-to-end: implement vault blob v2 binary format, server-side migration infrastructure, Rust desktop support, and web client login flow with lazy migration.",
+    "outcome": "All 4 plans executed successfully with security review and simplify pass. The web client correctly handles v2 blobs and lazy migration works, but UAT revealed a bug in fetchAndDecryptMetadata (v2 blob parsing) and multiple issues in the recovery tool (undefined guard, garbled CID from IPNS resolution) that were fixed inline during verification.",
+    "learnings": {
+      "repo": [
+        "The vault migration is a lazy/background operation — non-migrated users trigger it silently on login, and NestJS doesn't auto-log incoming requests so successful calls are invisible in server output",
+        "orval codegen generates `{ [key: string]: unknown } | null` for nullable string fields instead of `string | null` — this is a known orval bug; `as unknown as string` casts are the correct workaround, not a code smell",
+        "The delegated routing API (routing/v1/ipns) returns CBOR-wrapped records, not raw protobuf — parsing as raw protobuf produces garbage bytes as CID",
+        "Kubo exposes IPNS resolution at /api/v0/name/resolve on port 5001, but the delegated routing format (/routing/v1/ipns) is NOT available on port 8080 (gateway)",
+        "The Docker IPFS stack exposes port 8080 (gateway) but public gateways (ipfs.io, delegated-ipfs.dev) may not have locally-published content cached, causing 400/502 errors during recovery"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parse'd IPFS blob without detecting v2 binary format — crashes with 'Unexpected token' on migrated vaults. Fixed by detecting blob version and stripping v2 header before parsing."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same v2 blob parsing bug as folder.service.ts — both need detectBlobVersion + header stripping before JSON.parse."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1265,
+          "end_line": 1277,
+          "finding": "fetchFromIpfs can return undefined on non-404 gateway errors (502, 503) causing detectBlobVersion to crash on undefined.length. Fixed by throwing on undefined return."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 181,
+          "end_line": 233,
+          "finding": "Migration IIFE: HKDF derivation was called twice with identical inputs (duplicate work). Simplified by hoisting result and reusing. Also had redundant destructure/re-wrap of ipnsKeypair into identical rootIpnsKeypair."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop vault init was ECIES-wrapping rootFolderKey twice with the same public key (once for DB storage, once for v2 blob). Fixed by reusing the first wrap result."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 had no bounds check on key length — silent u16 truncation possible. Changed to return Result with explicit length validation."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "#[derive(Debug)] on InitVaultRequest and VaultResponse leaked encrypted key material to logs. Fixed with custom Debug impls that redact sensitive fields."
+        }
+      ],
+      "workflow": [
+        "When NestJS doesn't log requests by default, a successful API call can look like a silent failure — query the database directly to confirm state rather than relying on log absence",
+        "The classifyHandoffIfNeeded GSD subagent error fires AFTER all tool calls complete and is a Claude Code runtime bug, not a real failure — spot-check SUMMARY.md + git commits to confirm success",
+        "Playwright browser_evaluate can extract runtime state (Zustand store values, crypto keys) from a running dev session without needing window exposure",
+        "Security review should run before the human verification checkpoint, not after — catching H-1/H-2 issues before UAT avoids a second checkpoint cycle"
+      ]
+    },
+    "friction": [
+      "API server doesn't log incoming requests by default, making migration debugging extremely confusing — looked like a silent failure for an extended period",
+      "orval codegen generates incorrect types for nullable strings requiring ugly type casts that look like bugs but are intentional workarounds",
+      "Delegated routing API returns CBOR-wrapped IPNS records but the recovery tool was parsing them as raw protobuf — garbled binary CID not caught until UAT",
+      "Local Kubo node doesn't expose delegated routing format on the gateway port, and public gateways may not have locally-published IPNS records cached",
+      "OTP retrieval required reading raw server logs — no convenient dev utility for this",
+      "Zustand stores not exposed on window by default in Vite dev mode, making console-based state inspection awkward"
+    ],
+    "open_items": [
+      "M-1: Recovery tool private key not zeroed from memory after use",
+      "M-2: No dedup guard on concurrent vault migration from multiple browser tabs (race condition possible)",
+      "M-3: Desktop FUSE publishes ECIES-re-wrap rootFolderKey on every root folder publish — should cache wrapped key in AppState",
+      "L-1: Blob deserializers accept zero-length keys without error",
+      "L-2: No SRI hashes on CDN scripts in recovery.html",
+      "fix-device-registry-cryptoerror-invalid-registry-format: CryptoError in validateDeviceEntry (core/dist/index.mjs:360) — schema mismatch between current device registry format and IPFS-stored format",
+      "fix-bin-ipns-name-404-resolution-failure: /bin IPNS name resolution returning 404 — pre-existing issue discovered during UAT",
+      "Recovery tool IPNS resolution still relies on public gateways having cached content — no local Kubo fallback for dev testing"
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "46d9ec2676aa",
+  "session_id": "83593aef-e71f-4c4d-8ee0-d4a440ee904c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T04:36:06.660475Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "344381bf1ee7",
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 34373,
+    "cache_read_tokens": 218100,
+    "output_tokens": 3606,
+    "api_call_count": 6
+  },
+  "summary": {
+    "intent": "Execute Phase 27 (writable-shares-poc) using wave-based parallel execution across 3 plans covering API backend, UI, and write actions for shared folders.",
+    "outcome": "Waves 1 and 2 were initiated successfully. Wave 1 (API backend with Share entity permission enum, IPNS key column, PATCH endpoint, and publish authorization) completed with 3 commits. Wave 2 (ShareDialog permission toggle and IPNS key wrapping UI) was spawned but the transcript ends mid-execution.",
+    "learnings": {
+      "repo": [
+        "Phase 27 branch is `feat/phase-27-writable-shares` — branching strategy is phase-level",
+        "Share entity was extended with a `permission` enum (read/write) and `encryptedIpnsKey` column",
+        "IPNS publish authorization was expanded to allow write-share recipients to publish",
+        "Plan 27-02 had no key-links to verify against wave 1 artifacts"
+      ],
+      "code": [],
+      "workflow": [
+        "Orchestrator runs spot-checks after each wave: SUMMARY.md existence, git log grep for phase-plan commits, and Self-Check: FAILED marker scan",
+        "Cross-plan dependency verification (verify key-links) runs before spawning each wave 2+ agent",
+        "Wave grouping is 1 plan per wave for this phase — no parallelization within waves"
+      ]
+    },
+    "friction": [
+      "Transcript ends mid-execution during Wave 2 agent spawn — outcome of 27-02 and 27-03 (checkpoint plan) is unknown"
+    ],
+    "open_items": [
+      "Wave 2 (27-02: ShareDialog permission toggle \u0026 IPNS key wrapping) execution result not confirmed",
+      "Wave 3 (27-03: write actions for shared folders) is a checkpoint plan requiring user interaction — not yet reached",
+      "Verification phase (gsd-verifier) has not run — phase goal achievement unconfirmed",
+      "ROADMAP.md, STATE.md, and REQUIREMENTS.md phase completion updates pending"
+    ]
+  }
+}

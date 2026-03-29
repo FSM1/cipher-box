@@ -1,0 +1,111 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0dae3861ae40",
+  "session_id": "16707061-06f8-49fd-82d9-2a0e213d2c5d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T21:37:24.215841Z",
+  "branch": "phase-30-web-app-observability",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "62407640c8d9",
+  "token_usage": {
+    "input_tokens": 3391,
+    "cache_creation_tokens": 704414,
+    "cache_read_tokens": 82297563,
+    "output_tokens": 116516,
+    "api_call_count": 383
+  },
+  "session_metrics": {
+    "turn_count": 21
+  },
+  "summary": {
+    "intent": "Manage a multi-phase milestone (cipher-box phases 28-33) from a single terminal using the GSD manager: execute pending phases, resolve PR reviews, simplify code, and advance the milestone to near-completion.",
+    "outcome": "Phases 29-32 all executed and PRs created (#386-388); 4 rounds of PR review comments resolved across Phase 29-31 PRs; code simplified for all three phases; 73 new SDK unit tests added; Phase 32 FUSE async redesign shipped (O(N×10s) blocking → O(10s) concurrent).",
+    "learnings": {
+      "repo": [
+        "The established async pattern in the FUSE crate is channel-based: PendingContent enum, mpsc channel pair (tx/rx), dedup HashSet — Phase 32 mirrored this exactly for FilePointers.",
+        "drain_refresh_completions() in crates/fuse/src/lib.rs was blocking the FUSE thread with block_with_timeout() per FilePointer — root cause of Finder 'connection lost' errors with many files.",
+        "unenrollIpns() in apps/api/src/ipns/ipns.service.ts returned void, causing unenrollBatch to always report 0 totalUnenrolled regardless of actual deletions.",
+        "registerFaroTransport uses mutable array injection (loggerTransports.push()) as an intentional design to integrate with Phase 28 logger at runtime — not a bug.",
+        "faro.api.resetUser() exists as a dedicated clean API for clearing user identity — cleaner than setUser(null as unknown as ...) cast.",
+        "Phase 31 planning deferred D-09 (bin purgeExpired migration) and D-15 (bin.service.ts retirement) — bin.service.ts already deprecated with only 2 consumers, SDK equivalents exist.",
+        "scripts/check-api-client.sh:42 uses git diff --quiet intentionally — removing it would cause false positives since you cannot detect 'api:generate was never run' at the git level.",
+        "@grafana/faro-web-tracing supports ignoreNetworkEvents and ignoreXhrBody options to prevent capturing sensitive request/response bodies in telemetry."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 617,
+          "end_line": 643,
+          "finding": "drain_refresh_completions() called block_with_timeout() sequentially per FilePointer on the FUSE thread — replaced with tokio::spawn() async tasks in Phase 32."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 307,
+          "finding": "unenrollIpns() returned void; changed to return number (affected rows) so unenrollBatch can sum actual deletions instead of overcounting."
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "line": 36,
+          "finding": "Global regex with /g flag (HEX_KEY_PATTERN) needs lastIndex reset BEFORE .test(), not after — stale lastIndex from prior calls causes missed matches on alternating calls."
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "line": 20,
+          "finding": "SENSITIVE_KEYS list must include 'email' explicitly — email scrubbing is separate from the hex-pattern regex path."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/tree.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "isDescendantOf(node, node) should return true (a node is a descendant of itself) — initial implementation returned false for self-identity."
+        },
+        {
+          "path": "packages/sdk/src/error.ts",
+          "line": 1,
+          "finding": "isForbiddenError() was missing the response.status check path that isConflictError() had — Axios error objects nest status under both error.status and error.response.status."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 1,
+          "finding": "hideSharedItem callback was missing p.setSharedItems and p.setError in its useCallback dependency array — could silently use stale closures."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-consistency.test.ts",
+          "line": 136,
+          "finding": "E2E test was accessing private SDK field via ctx casting — replaced with createAxiosInstance() exported from @cipherbox/api-client."
+        }
+      ],
+      "workflow": [
+        "Stale worktrees from merged PRs must be manually removed (git worktree remove) — they block branch checkout and pollute worktree list.",
+        "Planning files (.planning/ROADMAP.md, STATE.md) conflict frequently across feature branches — always take main's version as it's the canonical state.",
+        "pnpm add must be run from the correct package directory; running from repo root without -w/--filter does not persist to package.json or lockfile.",
+        "Prettier formatting issues should be caught before committing — caused a CI failure on Phase 31 PR that required a separate fix commit.",
+        "Background agents use isolated worktrees that hold branch locks — must remove worktree before switching to that branch in the main repo.",
+        "When multiple branches have diverged planning files, cherry-pick is cleaner than merge for selectively bringing in context commits.",
+        "The /simplify workflow runs three parallel review agents (reuse, quality, efficiency) and aggregates findings — false positives should be noted and skipped, not argued.",
+        "Global regexes (/g flag) are stateful in JS — always reset lastIndex before calling .test() if the regex instance is reused across calls."
+      ]
+    },
+    "friction": [
+      "Multiple rounds of merge conflicts in .planning/ ROADMAP.md across branches — happened 3+ times requiring manual resolution each time.",
+      "Phase 29 worktree had the Phase 31 branch checked out, blocking checkout in main repo — required worktree removal before switching branches.",
+      "pnpm add for @grafana/faro-web-tracing ran in wrong directory, silently not persisting to package.json — caused Phase 30 build failure in CI.",
+      "captureConsoleDisabledLevels was passed to Faro as a valid option but doesn't exist in the SDK — caused typecheck failure.",
+      "Phase 31 CI lint failure required a separate 'run prettier' fix commit — formatter was not run before committing simplify changes.",
+      "pre-existing TypeScript errors in SDK test mocks (client.test.ts deleteItem test missing ipnsControllerUnenrollBatch mock) create noise when running full test suite.",
+      "Three separate rounds of CodeRabbit/Copilot reviews on Phase 30 (faro.ts scrubbing) — each round surfacing related-but-distinct privacy issues suggesting the initial implementation lacked a comprehensive privacy threat model.",
+      "Phase 31 worktree's simplify commits were on worktree-agent-a7d4653c branch rather than feat/phase-31-structural-decomposition, requiring careful push targeting."
+    ],
+    "open_items": [
+      "Phase 33 (Windows WinFsp async FilePointer resolution) — context ready, depends on Phase 32 landing; intended to run in parallel on a Windows machine.",
+      "registerFaroTransport wiring in main.tsx is commented out pending Phase 28 logger shipping — Faro transport is ready but not activated.",
+      "GitHub staging environment secrets (VITE_FARO_URL, GRAFANA_FARO_API_KEY, GRAFANA_STACK_ID) need manual configuration before Faro activates in staging builds.",
+      "deleteItem test in packages/sdk/src/__tests__/client.test.ts has pre-existing missing mock for ipnsControllerUnenrollBatch (added in Phase 29) — not fixed in this session.",
+      "D-09 (bin.service.ts purgeExpired migration) and D-15 (bin.service.ts retirement) deferred from Phase 31 — bin.service.ts still has 2 consumers.",
+      "PRs #387 and #388 awaiting full CI completion — both had recent commits pushed.",
+      "Phase 32 Cargo.lock has version bump discrepancies from release-please divergence — left uncommitted in the Phase 32 worktree."
+    ]
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5beb7599be9b",
+  "session_id": "2c89ddf4-4e09-4a48-8d9f-d3abc435dfff",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T03:47:50.368479Z",
+  "branch": "feat/phase-27-writable-shares",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "27d42d65df69",
+  "token_usage": {
+    "input_tokens": 92,
+    "cache_creation_tokens": 288046,
+    "cache_read_tokens": 5969976,
+    "output_tokens": 21399,
+    "api_call_count": 72
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Investigate feasibility of writable shares in CipherBox and create Phase 27 (Writable Shares PoC) — adding the phase to the roadmap, capturing implementation decisions, and beginning the planning pipeline.",
+    "outcome": "Phase 27 added to roadmap with CONTEXT.md and RESEARCH.md created. VALIDATION.md written. Planning pipeline blocked at UI design contract gate requiring /gsd:ui-phase 27 to complete before /gsd:plan-phase 27 can proceed.",
+    "learnings": {
+      "repo": [
+        "CipherBox's server-relayed IPNS architecture sidesteps the general 'unsolved multi-writer IPNS' problem — all publishes go through the API, which acts as the coordination point, making multi-writer conflict detection equivalent to existing multi-device sync.",
+        "Vault-level IPNS keys (vault, key blob, device registry, BYO-IPFS config) are HKDF-derived from the secp256k1 private key to enable self-sovereign discovery before any decryption. Folder and file IPNS keys are randomly generated because their IPNS name is discoverable from parent folder metadata.",
+        "File IPNS keys were deliberately migrated from HKDF-derived to random in a pre-Phase 14 todo specifically to enable future write-sharing — deterministic derivation would have required sharing the root secp256k1 private key to share IPNS publish authority.",
+        "Phase 14 (user-to-user sharing) is read-only only; writable sharing was explicitly deferred and is the design target for Phase 27. TEAM-11 in M4 requirements plans a full cryptographic read/write key hierarchy.",
+        "The conflict resolution infrastructure (expectedSequenceNumber check, 409 retry, withConflictRetry, 30s polling) already handles the multi-writer case correctly — Phase 27 adds no new conflict logic, just IPNS key delivery to recipients."
+      ],
+      "code": [
+        {
+          "path": "packages/server/src/ipns/ipns.service.ts",
+          "line": 181,
+          "end_line": 192,
+          "finding": "Optimistic concurrency: expectedSequenceNumber checked server-side before every IPNS publish"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 196,
+          "end_line": 224,
+          "finding": "409 conflict detection with automatic single-retry + re-sync after sequence mismatch"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/folder-helpers.ts",
+          "line": 39,
+          "end_line": 63,
+          "finding": "UI conflict banner with jitter-delayed retry"
+        },
+        {
+          "path": "packages/server/src/ipns/ipns.service.ts",
+          "line": 344,
+          "end_line": 355,
+          "finding": "Sequence comparison across network vs DB cache — highest wins"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 106,
+          "end_line": 106,
+          "finding": "Subfolder IPNS keys use generateEd25519Keypair() — random, not derived, enabling independent shareability"
+        },
+        {
+          "path": "packages/crypto/src/vault/derive-ipns.ts",
+          "finding": "Vault-level IPNS keys derived via HKDF from secp256k1 key for recovery-phrase-based self-sovereign discovery"
+        },
+        {
+          "path": "packages/core/src/file/derive-ipns.ts",
+          "line": 102,
+          "end_line": 102,
+          "finding": "File IPNS keys use generateFileIpnsKeypair() — random, migrated away from HKDF derivation"
+        },
+        {
+          "path": ".planning/todos/done/2026-02-21-random-file-ipns-keys.md",
+          "finding": "Documents the rationale for switching file IPNS keys to random: deterministic design would have prevented write-sharing on individual files"
+        },
+        {
+          "path": ".planning/security/REVIEW-2026-02-21-random-ipns-keys.md",
+          "finding": "Security review for the IPNS key randomization migration"
+        }
+      ],
+      "workflow": [
+        "The gsd:add-phase tool generates slugs from the full description text, producing unusably long directory names when the description is verbose — manual rename and roadmap edit required.",
+        "The depends-on field in auto-generated roadmap entries defaults to the previous phase number rather than the logically correct dependency — always verify and fix manually.",
+        "The plan-phase UI design contract gate (step 5.6) will halt planning if a phase has frontend indicators and no UI-SPEC.md exists, requiring /gsd:ui-phase to be run first."
+      ]
+    },
+    "friction": [
+      "gsd-tools generated an absurdly long directory slug from the verbose phase description, requiring manual directory rename and roadmap entry correction.",
+      "The auto-generated depends-on in the roadmap entry was set to Phase 26 (previous phase) instead of Phase 14 (the actual logical dependency), requiring manual correction.",
+      "plan-phase hit the UI design contract gate and exited, requiring the user to run /gsd:ui-phase 27 as a separate step before plan-phase can continue — the session ended mid-pipeline."
+    ],
+    "open_items": [
+      "/gsd:ui-phase 27 was spawned but the session ended before completion — UI-SPEC.md not yet written or verified.",
+      "/gsd:plan-phase 27 not yet complete — blocked until UI-SPEC is approved.",
+      "Metadata-embedded sharing (hide social graph from server) explicitly deferred to a future phase.",
+      "Attribution / audit trail for write actions by share recipients deferred to a future phase.",
+      "Transitive re-sharing (recipient re-shares with third party) explicitly deferred.",
+      "HKDF + TEE enrollment path for subfolders created by read-write recipients noted in CONTEXT.md but may need further design work during planning."
+    ]
+  }
+}

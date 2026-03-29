@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b587eb39a445",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T03:51:54.482651Z",
+  "branch": "fix/staging-tag-format",
+  "checkpoints_count": 9,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "b6f368b63107",
+  "token_usage": {
+    "input_tokens": 386,
+    "cache_creation_tokens": 276005,
+    "cache_read_tokens": 52186898,
+    "output_tokens": 73424,
+    "api_call_count": 313
+  },
+  "session_metrics": {
+    "turn_count": 31
+  },
+  "summary": {
+    "intent": "Investigate and fix the someguy IPNS routing failures that caused staging to revert to delegated-ipfs.dev, then implement a delegated-ipfs.dev fallback with Prometheus metrics, fix the release-please tagging deadlock, and deploy v0.26.2 to staging.",
+    "outcome": "Someguy was fixed with corrected resource/DHT config, fallback routing with metrics was implemented, the staging tag format was changed from `v*-staging*` to `staging-v*` to stop colliding with release-please's tag discovery, and v0.26.2 was successfully released and deployed to staging (though someguy crashed on staging due to `SOMEGUY_LIBP2P_MAX_MEMORY` expecting raw bytes not a human-readable string).",
+    "learnings": {
+      "repo": [
+        "Someguy v0.11.1 requires SOMEGUY_LIBP2P_MAX_MEMORY as a raw uint64 byte count, not a human-readable string like '1GB'.",
+        "The someguy image ships with curl but NOT wget — CodeRabbit's healthcheck warning was correct.",
+        "Release-please has never successfully auto-tagged since the major reconfiguration; all prior v* tags were created manually.",
+        "Staging pre-release tags in `v{version}-staging-*` format were being scanned by release-please's release discovery (depth: 400) and colliding with root package tag pattern, causing 'Missing 1 paths: .' and the untagged-merged-PRs deadlock.",
+        "packages/crypto was missing from release-please-config.json and .release-please-manifest.json, causing it to walk the entire commit history when added.",
+        "The release-please Merge plugin produces PR titles like 'chore: release main' — the title pattern mismatch was a red herring; the real issue was staging tag collision.",
+        "IPNS resolution is 100% DB-first by design: publishRecord() does fire-and-forget DHT publish while the DB write is synchronous, so DB always wins on sequence number comparison in resolveRecord().",
+        "The ThrottlerBypassGuard uses an x-throttle-bypass header with a secret, not NODE_ENV=test — vitest does not auto-load .env files into process.env.",
+        "The delegated routing client's backend parameter was typed as string instead of 'primary' | 'fallback' union.",
+        "Alloy metrics scraping config for someguy had been removed during staging revert and needed restoration."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 294,
+          "end_line": 373,
+          "finding": "resolveRecord() always queries the DB regardless of network result, then prefers whichever has higher sequence number. Since publishRecord() does fire-and-forget DHT publish after synchronous DB write, DB always has a higher or equal sequence number, making network resolution effectively unused for reads."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 100,
+          "end_line": 100,
+          "finding": "backend parameter in recordRequest() metric call was typed as string — should be 'primary' | 'fallback' literal union for type safety."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 75,
+          "end_line": 75,
+          "finding": "publishRecord() comment explicitly states 'fire-and-forget — DB is the reliable source of truth', confirming the DB-first architecture is intentional."
+        },
+        {
+          "path": "tests/sdk-e2e/vitest.config.ts",
+          "finding": "vitest does not auto-load .env files — THROTTLE_BYPASS_SECRET must be passed as an explicit env var on the CLI, not via .env file."
+        },
+        {
+          "path": "docker/docker-compose.staging.yml",
+          "finding": "SOMEGUY_LIBP2P_MAX_MEMORY must be a raw uint64 byte count (e.g. 1073741824) not a human-readable string like '1GB' — causes crash-loop on start."
+        }
+      ],
+      "workflow": [
+        "release-please aborts with 'There are untagged, merged release PRs outstanding' when it finds a merged release PR it cannot tag — this is a deadlock that requires manual intervention (create the missing tag + flip label from autorelease:pending to autorelease:tagged).",
+        "release-please's release discovery scans up to 400 releases; staging pre-release tags in v* format appear in that scan and can be matched to package paths before the real release, causing 'Missing paths' errors.",
+        "Staging tags should use a non-v prefix format (e.g. staging-v0.26.2-rc-1) to avoid colliding with release-please tag discovery.",
+        "When adding a new package to release-please without a prior anchor release, it walks the entire commit history — either create an anchor release first or let it do a one-time historical bump.",
+        "The release-please GraphQL label mutation can fail with 'Could not resolve node' immediately after PR creation — a transient race condition; manually adding the label fixes it.",
+        "Someguy's SOMEGUY_IPNS_ENDPOINTS config does concurrent fanout (race), not sequential fallback — implementing fallback at the API DelegatedRoutingClient layer gives proper fallback semantics and controllable metrics.",
+        "Load tests showed someguy has higher median latency (+20-70%) but better tail latency at p99 (-12-22%) vs delegated-ipfs.dev, and zero errors on both — consistent performance is the key advantage.",
+        "Vitest throttle bypass: must pass THROTTLE_BYPASS_SECRET as explicit CLI env var (e.g. THROTTLE_BYPASS_SECRET=xxx pnpm test), not via .env file."
+      ]
+    },
+    "friction": [
+      "release-please has been broken since the major reconfiguration — every release has required manual tag creation, and the root cause (staging tag collision) took extensive log analysis to find.",
+      "Someguy crashed on staging immediately after deploy due to SOMEGUY_LIBP2P_MAX_MEMORY format mismatch — this was not caught locally because the local Docker host may have used a different someguy version or silently ignored the env var.",
+      "The ThrottlerBypassGuard uses a header-based secret bypass, not NODE_ENV=test — this was undiscovered until E2E tests all returned 429s, requiring investigation of the guard implementation.",
+      "SSH access to the staging VPS was available via a separate root key but not immediately obvious — required prompting from the user.",
+      "The staging deploy workflow triggered immediately on tag push without waiting for tag-staging-release to complete, causing an out-of-order deploy.",
+      "release-please failed with a transient GraphQL 'Could not resolve node' error when labeling the freshly created PR #327, requiring manual label fix.",
+      "The Web E2E check was blocking auto-merge on the release PR — required a re-run and wait cycle.",
+      "CodeRabbit's wget vs curl comment was correct but was initially dismissed as 'not applicable' before verification."
+    ],
+    "open_items": [
+      "Someguy is crash-looping on staging due to SOMEGUY_LIBP2P_MAX_MEMORY='1GB' — needs fix committed and redeployed (fix was committed at end of session but not yet deployed).",
+      "DB-first IPNS resolution means someguy provides zero benefit for read paths — the architectural shift to network-first resolution is deferred until DB load becomes a concern.",
+      "packages/crypto has no prior tagged releases and will get a historical version bump (to 0.26.0) on the next release — intentionally deferred.",
+      "Mock IPNS routing service remains in docker-compose.yml alongside someguy — intentionally left for CI compatibility, worth revisiting if it causes confusion.",
+      "PR #326 (staging tag format fix + crypto release-please config) needs review and merge.",
+      "Grafana dashboard panels for the new cipherbox_delegated_routing_requests_total and cipherbox_delegated_routing_fallbacks_total metrics need to be created — metrics are being emitted but no dashboards or alerts have been configured yet.",
+      "The someguy SOMEGUY_IPNS_ENDPOINTS fallback to delegated-ipfs.dev was explicitly NOT configured (fanout vs fallback semantics) — if someguy fallback at the DHT level is desired, this remains unimplemented.",
+      "Load test baseline metrics (someguy vs delegated-ipfs.dev JSON files) were saved locally but not committed to the repo."
+    ]
+  }
+}

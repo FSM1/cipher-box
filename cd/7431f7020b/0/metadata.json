@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cd7431f7020b",
+  "session_id": "c330798c-ab40-490c-8805-6ed8f1747898",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T15:43:57.921755Z",
+  "branch": "fix/release-gate-retrigger-on-main-push",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "127c9f40255f",
+  "token_usage": {
+    "input_tokens": 201,
+    "cache_creation_tokens": 154146,
+    "cache_read_tokens": 7230171,
+    "output_tokens": 40323,
+    "api_call_count": 134
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Resolve all automated PR review comments from GitHub Copilot and CodeRabbit on PR #392, then investigate why the release gate did not block merging until E2E tests completed.",
+    "outcome": "All 3 review comments were fixed, committed, and resolved. The root cause of the release gate issue was identified (stale green checks on the release-please PR after a `test:` commit merged to main), but the fix was in progress (adding a post-E2E job to re-trigger the release gate on open release-please PRs) and not yet merged.",
+    "learnings": {
+      "repo": [
+        "CodeRabbit has per-repo review quotas with ~23-minute cooldowns between review rounds.",
+        "The release gate (`release-gate.yml`) auto-passes with 'Not a release PR' for non-release PRs, making it meaningless as a blocking check for feature/test PRs.",
+        "E2E workflow only triggers on push to main, not on PRs — so tests only run after merge.",
+        "`test:` commit type does not trigger release-please to update its PR, so the release gate can have stale green checks when test-only changes land on main.",
+        "Committed fixture files live in `tests/web-e2e/fixtures/files/` and must not be overwritten or deleted by test utility functions.",
+        "The `vars` context is automatically available in reusable workflows called via `workflow_call`.",
+        "Phase 34 was e2e-test-expansion-staging-baselines, adding batch-download, media-preview, and streaming-playback specs plus cleanup helpers and load test baselines."
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/test-files.ts",
+          "line": 156,
+          "end_line": 156,
+          "finding": "createTestMediaFile, createTestImageFile, createTestTextFile, and createTestBinaryFile all needed a COMMITTED_FIXTURES guard to prevent test cleanup from deleting committed fixture files when the caller passes a name matching an existing fixture."
+        },
+        {
+          "path": "tests/web-e2e/baselines/staging-journey-timing.json",
+          "line": 1,
+          "end_line": 19,
+          "finding": "Missing `faro_enabled: true` metadata field that the plan spec required."
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 14,
+          "end_line": 16,
+          "finding": "page.evaluate() in teardown needed a page.isClosed() guard to avoid errors when the page was already closed before cleanup ran."
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "finding": "A new job was being added to re-trigger the release gate on open release-please PRs after E2E completes on main, to prevent stale green checks from allowing premature release merges."
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "line": 110,
+          "end_line": 110,
+          "finding": "The 'Not a release PR — E2E gate not applicable' skip path is the root cause of the release gate not blocking non-release PRs."
+        }
+      ],
+      "workflow": [
+        "When polling for external events (bot reviews), background tasks with sleep+check are effective but generate many stale task notifications that pile up.",
+        "Copilot reviews typically arrive within ~10 minutes; CodeRabbit has quota limits that can delay reviews by 20+ minutes.",
+        "Replying to review comments requires REST API comment IDs (integers), while resolving threads requires GraphQL thread IDs — these are different and require separate lookups.",
+        "Investigating CI gate failures requires checking both the trigger conditions AND the pass/skip logic of required checks — a check can be 'required' but always pass via a skip path."
+      ]
+    },
+    "friction": [
+      "CodeRabbit quota cooldown (~23 min) caused extensive polling loops with many redundant background tasks.",
+      "Background polling created a large number of completed task notifications that cluttered the conversation.",
+      "The initial diagnosis of the release gate issue was wrong twice — first proposed adding PR triggers to e2e.yml, then proposed gating feature PRs, before identifying the actual root cause (stale checks on release-please PR after test: commits).",
+      "REST vs GraphQL API distinction for PR review comment reply vs thread resolution required extra lookup steps to find correct IDs."
+    ],
+    "open_items": [
+      "PR adding post-E2E re-trigger job to e2e.yml was committed but not yet merged or reviewed.",
+      "The incorrectly scoped PR #393 (adding E2E gate for feature PRs) was closed but the underlying question of whether feature PRs should also require E2E is unresolved.",
+      "Pending todo: debug BYO IPFS register-cid 400 errors on staging (`.planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md`).",
+      "Latest web E2E test results from run 23712125460 (post-merge to main) were still pending at end of session — unclear if all new tests passed."
+    ]
+  }
+}

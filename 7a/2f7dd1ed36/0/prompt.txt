@@ -1,0 +1,5 @@
+ok, can you merge the latest changes on main in to this branch, and then check whether any of the planning assumptions have changed based on the recently merged phase 20 + fix code
+
+---
+
+lets update the plans to make implementation easier.

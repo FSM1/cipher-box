@@ -1,0 +1,107 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "15d7dce09a4a",
+  "session_id": "677d6a18-3517-428f-86c2-a9d8454c7cd3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T12:22:16.300535Z",
+  "branch": "fix/vault-init-folder-ipns-duplicate",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "202808184667",
+  "token_usage": {
+    "input_tokens": 422,
+    "cache_creation_tokens": 572181,
+    "cache_read_tokens": 59419672,
+    "output_tokens": 100421,
+    "api_call_count": 319
+  },
+  "session_metrics": {
+    "turn_count": 37
+  },
+  "summary": {
+    "intent": "Monitor PR #349 for incoming bot reviews (CodeRabbit, Copilot) and automatically resolve them, then investigate a session restore E2E test failure discovered during the process and fix the underlying race conditions.",
+    "outcome": "All 23 review threads on PR #349 resolved across 4 rounds with real bug fixes committed; two new PRs created (#350 for session restore race conditions, #351 for vault init duplicate key bug) and merged; staging performance baselines captured; desktop E2E test failure root-caused and fixed.",
+    "learnings": {
+      "repo": [
+        "Recovery script (apps/web/public/recovery.html) was using the vault key IPNS name for root folder traversal — IPNS derivation for vault key and root folder must use separate keypairs/constants",
+        "useAuth.ts getVault() 404 catch was too broad — caught IPFS fetch 404s unrelated to vault existence, misclassifying existing users as new",
+        "vault.service.ts initializeVault() had a TOCTOU race: findOne check + insert were not in a transaction, allowing concurrent requests to both pass the existence check",
+        "The IPNS publish endpoint (ipns.service.ts) creates folder_ipns rows on first publish, so POST /vault/init must not also try to insert for the same IPNS name — PR #349 introduced this sequencing bug by publishing before calling /vault/init",
+        "Web3Auth Core Kit DKG on Sapphire Devnet dominates login time (~9-45s); our vault-critical serial path is ~720ms (auth/login + GET /vault + IPNS resolve)",
+        "Auth/refresh is called directly (not via 401 interceptor) in session restore — 6 concurrent refresh calls observed on page reload, bypassing Axios interceptor deduplication",
+        "initializeOrLoadVault useCallback can be called concurrently from multiple React effect cycles on session restore, causing double vault init"
+      ],
+      "code": [
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1312,
+          "end_line": 1312,
+          "finding": "directRootIpnsName variable was actually the vault key IPNS name but was used for root folder traversal — needed separate derivation for each"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 102,
+          "end_line": 146,
+          "finding": "Broad try/catch around entire vault load including fetchFromIpfs — 404 from IPFS (missing CID) would incorrectly trigger vault re-initialization for existing users"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 45,
+          "end_line": 45,
+          "finding": "Module-level vaultInitPromise deduplication guard added — prevents concurrent initializeOrLoadVault executions from racing to double-init vault"
+        },
+        {
+          "path": "apps/web/src/lib/api/auth.ts",
+          "line": 53,
+          "end_line": 55,
+          "finding": "authApi.refresh() direct calls not deduplicated — added module-level refreshPromise so concurrent session restore effects collapse to a single in-flight request"
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "line": 87,
+          "end_line": 99,
+          "finding": "Replaced findOne + conditional save TOCTOU with optimistic insert + catch on PG error code 23505 (unique_violation), then falls back to update isRoot — race-safe and saves a DB round-trip"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 231,
+          "end_line": 246,
+          "finding": "IPNS publish endpoint creates folder_ipns rows on first publish — vault/init must not assume it needs to create this row, causing duplicate key constraint violations"
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 99,
+          "end_line": 99,
+          "finding": "slice() was used instead of subarray() — subarray() is zero-copy for Uint8Array operations"
+        }
+      ],
+      "workflow": [
+        "CronCreate with /loop skill enables fully automated PR review monitoring — bot reviews get auto-resolved without manual intervention",
+        "outside-diff-range comments don't appear as reviewThreads in GraphQL API — must be fetched via review body separately",
+        "Playwright native page.on('request'/'response') events are more reliable for network monitoring than injected fetch patches that don't survive navigation",
+        "installMockWallet from @johanneskares/wallet-mock handles full EIP-6963 provider with real secp256k1 signing for E2E wallet login tests",
+        "Coverage thresholds can be broken by adding new uncovered branches — optimistic insert + catch requires a test simulating PG duplicate key error (code 23505)",
+        "markdownlint runs in CI on all markdown files — failing lint (prettier) on perf scripts committed to the repo requires fixing before CI passes",
+        "Desktop E2E tests can be skipped when no relevant changes detected — need to verify actual passing run, not skipped run, when debugging regressions"
+      ]
+    },
+    "friction": [
+      "GitHub API GraphQL timed out on one poll cycle — handled gracefully but could cause missed review windows",
+      "outside-diff-range Copilot comments are not surfaced as reviewThreads — required manual URL to discover them",
+      "1Password SSH agent unavailable during one commit attempt while user was AFK — required retry after user returned",
+      "Playwright MCP sandbox doesn't support Node module imports (dynamic import fails) — had to fall back to standalone .mjs script via Bash",
+      "Web3Auth OTP flow on staging requires real credentials — test-login API bypass needed for perf measurement",
+      "Staging DB was wiped so no existing vaults available for IPNS resolve baseline — had to create vault via wallet login first",
+      "Auth/refresh race condition on session restore fired 6 concurrent refresh calls with 2 returning 401 — noise in logs complicated diagnosis",
+      "Pre-existing TypeScript error in vault.service.spec.ts caused typecheck noise unrelated to changes"
+    ],
+    "open_items": [
+      "Post-deploy re-measurement: run staging-perf-wallet.mjs after PR #349 deploys to get real IPNS resolve + IPFS fetch numbers with live vault key blob",
+      "Auth/refresh race produces 401s on 2 of 6 concurrent calls — the shared-Promise fix prevents concurrent calls but the root cause (multiple effects firing) should be investigated",
+      "vault.service.ts initializeVault() still lacks a database transaction wrapping the vault + folder_ipns inserts — deferred as over-engineering for once-per-user-lifetime operation",
+      "Session restore with Core Kit requires full re-initialization on page reload (tKey shares not persisted in Playwright browser context) — true session restore baseline not yet captured",
+      "Desktop E2E test coverage for vault init duplicate key path (the new catch block in vault.service.ts) relies on E2E rather than unit tests"
+    ]
+  }
+}

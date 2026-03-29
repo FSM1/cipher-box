@@ -1,0 +1,1 @@
+ok for the @.planning/codebase/CONCERNS.md there are a number of mentions of the production environment which does not exist at the moment. I suspect that some of these comments are based on outdated info in the @.planning/ENVIRONMENTS.md. Since production is not yet up, most of these concerns are irrelevant at present.

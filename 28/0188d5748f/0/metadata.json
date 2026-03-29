@@ -1,0 +1,92 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "280188d5748f",
+  "session_id": "20f4a3f5-eda6-4aef-a4d0-b4bd794aa423",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T19:01:10.527665Z",
+  "branch": "docs/phase-20-context",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/phases/20-vault-migration/20-CONTEXT.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "c015622581b7",
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 90529,
+    "cache_read_tokens": 3335825,
+    "output_tokens": 14290,
+    "api_call_count": 39
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Capture implementation decisions for Phase 20 (Vault Migration) by discussing gray areas with the user and writing a CONTEXT.md that downstream research and planning agents can act on.",
+    "outcome": "CONTEXT.md was written to .planning/phases/20-vault-migration/20-CONTEXT.md with decisions across migration trigger, login read strategy, cross-client write scope, IPNS key deprecation, and system readiness. The file was committed on a feature branch after an initial failed attempt to commit to main.",
+    "learnings": {
+      "repo": [
+        "Vault blob v2 format: 0x02 | uint16 key_length | ECIES_key | AES_GCM_metadata — defined in ARCHITECTURE.md research doc",
+        "DB columns encryptedRootFolderKey and encryptedRootIpnsPrivateKey both exist on the vault entity and are both targeted for NULL-then-eventual-drop after migration",
+        "IPNS key is HKDF-derivable, making the stored DB copy redundant — already verified in desktop Rust code",
+        "Kubo is the current IPFS performance bottleneck; infra fixes are in-flight, which is why silent DB fallback is the safety net for Phase 20",
+        "Phase 18 added server-side Prometheus histograms for IPNS resolve/publish; Phase 22 will add end-to-end login-to-vault journey timing",
+        "Migration strategy: dual-write (v2 blob + DB), version-aware read, per-user phased rollout via migratedAt timestamp",
+        "Five-package SDK architecture established in Phase 19.1 — vault init and blob v2 logic belongs in @cipherbox/core"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/vault/entities/vault.entity.ts",
+          "finding": "Contains encryptedRootFolderKey and encryptedRootIpnsPrivateKey columns targeted for NULL-then-drop"
+        },
+        {
+          "path": "packages/core/src/vault/init.ts",
+          "finding": "Vault initialization logic in @cipherbox/core — blob v2 TypeScript implementation will live here"
+        },
+        {
+          "path": "packages/core/src/vault/types.ts",
+          "finding": "Vault type definitions in shared core package"
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "API-side vault service — will need to accept but ignore IPNS key on init after deprecation"
+        },
+        {
+          "path": "apps/web/src/stores/vault.store.ts",
+          "finding": "Web client vault store — needs update to write v2 blob on root folder publish"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop Rust vault commands — needs Rust equivalent of blob v2 logic; IPNS key HKDF-derivability already verified here"
+        }
+      ],
+      "workflow": [
+        "The gsd discuss-phase workflow scouts the codebase and loads prior CONTEXT.md files to avoid re-asking already-decided questions",
+        "Canonical refs section in CONTEXT.md is mandatory — downstream agents need full relative paths to specs/ADRs, not inline mentions",
+        "Auto-advance via --auto flag chains discuss → plan → execute at the same nesting level to avoid deep agent nesting freezes"
+      ]
+    },
+    "friction": [
+      "Git commit failed due to 1Password signing agent not being available in the subprocess — required manual intervention from user",
+      "Claude initially attempted to commit directly to main branch instead of creating a feature branch first, requiring user correction",
+      "System readiness gray area was poorly framed initially — the question was too narrow and the user had to clarify context about baselines and Kubo performance"
+    ],
+    "open_items": [
+      "Column DROP migration for encryptedRootFolderKey and encryptedRootIpnsPrivateKey — deferred until all users have migrated",
+      "IPFS-only retry-then-error mode (no silent DB fallback) — deferred until Kubo performance improvements prove out",
+      "Client-side end-to-end 'first login → fully loaded vault' baseline metrics — covered by Phase 22 instrumentation, not Phase 20",
+      "Kubo performance fixes — in-flight infrastructure work, not part of Phase 20 scope",
+      "Recovery tool update to parse blob v2 format — scoped to Phase 20 but not yet implemented"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T19:00:46.085426Z",
+    "agent_lines": 165,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 165,
+    "agent_percentage": 100
+  }
+}

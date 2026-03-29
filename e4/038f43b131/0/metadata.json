@@ -1,0 +1,73 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e4038f43b131",
+  "session_id": "16707061-06f8-49fd-82d9-2a0e213d2c5d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T21:26:38.317975Z",
+  "branch": "phase-30-web-app-observability",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "ba7443cd0f68",
+  "checkpoint_transcript_start": 1047,
+  "transcript_lines_at_start": 1047,
+  "token_usage": {
+    "input_tokens": 43,
+    "cache_creation_tokens": 20954,
+    "cache_read_tokens": 13765374,
+    "output_tokens": 10846,
+    "api_call_count": 39
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Address PR review feedback for Phase 30 and Phase 31 of the cipher-box project, fixing bugs and code quality issues identified by reviewers.",
+    "outcome": "All 6 Phase 31 review threads resolved and committed (isDescendantOf self-identity, isForbiddenError, non-null assertions, useCallback deps). Phase 30 faro.ts regex lastIndex reset fix also committed.",
+    "learnings": {
+      "repo": [
+        "Phase 31 work lives in a Claude worktree at .claude/worktrees/agent-a7d4653c",
+        "SDK package split: sdk-core holds folder/tree logic, sdk holds error handling and integration tests",
+        "ipnsControllerUnenrollBatch mock missing in client.test.ts deleteItem test — pre-existing issue introduced in Phase 29",
+        "@grafana/faro-web-tracing was missing from package.json and captureConsoleDisabledLevels is not a valid Faro option"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/folder/tree.ts",
+          "finding": "isDescendantOf had incorrect self-identity behavior — needed to return true when a node is compared to itself"
+        },
+        {
+          "path": "packages/sdk/src/error.ts",
+          "finding": "isForbiddenError was missing the response.status check path that isConflictError already had — pattern should be mirrored between the two"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "finding": "hideSharedItem useCallback was missing p.setSharedItems and p.setError in its dependency array"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 211,
+          "finding": "Multiple non-null assertions (!) used in tests instead of explicit assertions — needed to be replaced with proper expect/assert calls"
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "line": 36,
+          "finding": "Regex lastIndex reset must occur BEFORE calling .test(), not after — stale lastIndex from a prior call can cause .test() to incorrectly return false"
+        }
+      ],
+      "workflow": [
+        "Pre-existing test failures should be identified and documented before committing to avoid confusion about whether changes introduced regressions",
+        "Integration tests that require a live API will always fail in CI without a running server — these are expected failures, not regressions",
+        "resolve-pr-reviews workflow covers: read review threads, read referenced code, apply fixes, run tests, commit, reply to threads, resolve threads"
+      ]
+    },
+    "friction": [
+      "client.test.ts deleteItem failure is a pre-existing issue from Phase 29 (missing ipnsControllerUnenrollBatch mock) that creates noise when running the test suite",
+      "@grafana/faro-web-tracing was omitted from a prior commit, requiring a follow-up fix push"
+    ],
+    "open_items": [
+      "client.test.ts deleteItem test needs ipnsControllerUnenrollBatch mock added — pre-existing debt from Phase 29",
+      "Integration tests require a running API to pass — no CI strategy mentioned for these"
+    ]
+  }
+}
