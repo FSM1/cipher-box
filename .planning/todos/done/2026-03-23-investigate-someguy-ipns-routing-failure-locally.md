@@ -18,10 +18,10 @@ Staging has been reverted to `https://delegated-ipfs.dev` (PR #322) and someguy 
 
 ## Solution
 
-Reproduce and diagnose locally using the Docker host (192.168.133.114) with Kubo v0.40.0:
+Reproduce and diagnose locally using the Docker host (<docker-host>) with Kubo v0.40.0:
 
 1. Add someguy v0.11.1 to `docker/docker-compose.yml`
-2. Point API `DELEGATED_ROUTING_URL` at `http://192.168.133.114:<port>`
+2. Point API `DELEGATED_ROUTING_URL` at `http://<docker-host>:<port>`
 3. Test IPNS endpoint directly: `curl --max-time 30 http://<someguy>/routing/v1/ipns/<key>`
 4. If it hangs locally too — check someguy GitHub issues for known IPNS bugs, file one if needed
 5. If it works locally — investigate staging-specific factors (networking, resource constraints, DNS)

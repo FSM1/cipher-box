@@ -18,7 +18,7 @@
 
 - **Fastest fix for JWKS cache issues: new ngrok URL.** Since Web3Auth caches per-URL, restarting ngrok gives a new URL with zero cached state. Update the verifier's JWKS endpoint on the Web3Auth dashboard and the new key is picked up immediately.
 
-- **Local IPFS node (Kubo) runs on the Docker host, not localhost.** `IPFS_LOCAL_API_URL` must point to `192.168.133.114:5001`, not `localhost:5001`. Same host as PostgreSQL and Redis.
+- **Local IPFS node (Kubo) runs on the Docker host, not localhost.** `IPFS_LOCAL_API_URL` must point to `<docker-host>:5001`, not `localhost:5001`. Same host as PostgreSQL and Redis.
 
 - **Mock IPNS routing service exists at `tools/mock-ipns-routing/`.** Set `DELEGATED_ROUTING_URL=http://localhost:3001` in API `.env` and run `pnpm --filter @cipherbox/mock-ipns-routing dev`. This avoids hitting the public DHT (`delegated-ipfs.dev`) which returns garbled records ("Unsupported wire type 4") in dev.
 
@@ -26,7 +26,7 @@
 
 - Having `IDENTITY_JWT_PRIVATE_KEY` set in `.env` from the start (or documented in dev setup)
 - A startup log warning when using ephemeral keys: "JWKS key will change on restart, Web3Auth may cache the old key"
-- Knowing the IPFS host is `192.168.133.114` not `localhost` before starting UAT
+- Knowing the IPFS host is `<docker-host>` not `localhost` before starting UAT
 - Starting the mock IPNS routing service as part of the standard dev environment
 
 ## Key Files
