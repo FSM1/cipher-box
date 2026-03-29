@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5a4b0c7e875c",
+  "session_id": "ffba864c-19e4-4410-85a8-92c0cefc49cb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T21:14:02.970541Z",
+  "branch": "fix/e2e-test-failures-v2",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "c2f565ea94f6",
+  "token_usage": {
+    "input_tokens": 1863,
+    "cache_creation_tokens": 335255,
+    "cache_read_tokens": 70497905,
+    "output_tokens": 121010,
+    "api_call_count": 317
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Fix failing E2E tests in CI (batch-download and streaming-playback), investigate a stuck release-gate workflow, and optimize the CI pipeline to gate cargo jobs behind Rust change detection.",
+    "outcome": "PR #398 merged with E2E test fixes (beforeAll timeout, clickClear replacement, SW dev wrapper), CI cargo job optimization, and a proper todo logged for the root-cause SDK bug (uploadFile hardcodes GCM).",
+    "learnings": {
+      "repo": [
+        "Playwright's beforeAll hook has a 30s default timeout independent of test.setTimeout() — suites with slow wallet login need an explicit test.setTimeout() call at the top level AND inside beforeAll.",
+        "The Escape key does not reliably dismiss the selection bar after batch operations; clickClear() is the correct approach.",
+        "The release-please PR branch carries its own copy of release-gate.yml which can reference stale workflow names after renames — self-resolves on next rebase.",
+        "Vite 7 cannot inject Service-Worker-Allowed headers on transformed files via configureServer middleware; the workaround is a static public/ wrapper that importScripts the real SW.",
+        "The SDK's uploadFile() in packages/sdk-core/src/upload/index.ts hardcodes encryptAesGcm (line 88) and encryptionMode: 'GCM' (line 113) — the selectEncryptionMode() CTR selection logic in apps/web/src/services/streaming-crypto.service.ts is only reached via the duplicate-file re-encrypt path, never normal uploads.",
+        "E2E tests for environment-dependent features (CTR streaming badge) should use test.skip() with a bug reference rather than soft assertion catches — the latter masks real regressions.",
+        "The ci.yml desktop filter previously triggered cargo jobs for TypeScript desktop frontend changes; narrowing it to Rust paths prevents unnecessary cargo builds."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "encryptAesGcm is hardcoded for all uploads; encryptionMode is always set to 'GCM'. There is no mode selection based on file size or MIME type, so CTR streaming encryption never activates for new uploads."
+        },
+        {
+          "path": "apps/web/src/services/streaming-crypto.service.ts",
+          "finding": "selectEncryptionMode() exists but is only called in the duplicate-file re-encrypt path, not in the normal SDK upload path."
+        },
+        {
+          "path": "apps/web/src/lib/sw-registration.ts",
+          "finding": "Updated to use public/decrypt-sw-dev.js wrapper in dev mode to work around Vite 7's inability to set Service-Worker-Allowed headers on transformed worker files."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "finding": "The desktop filter path list was broadened beyond Rust sources; narrowing to src-tauri/**, Cargo.toml, Cargo.lock, and the workflow file itself prevents spurious cargo job runs on TS-only changes."
+        },
+        {
+          "path": "tests/web-e2e/tests/batch-download.spec.ts",
+          "finding": "Multiple locations used keyboard Escape to dismiss selection bar; replaced with selectionBar.clickClear() which is reliable."
+        },
+        {
+          "path": "tests/web-e2e/tests/streaming-playback.spec.ts",
+          "line": 33,
+          "end_line": 33,
+          "finding": "beforeAll hook timeout must match the suite-level test.setTimeout() value (180s), otherwise Playwright kills the hook after the default 30s before login completes."
+        }
+      ],
+      "workflow": [
+        "Always run E2E tests against staging (BASE_URL override) before concluding a test is broken locally — local wallet login was non-functional due to unrelated environment issues.",
+        "When a test consistently fails with a missing UI element, use Playwright MCP + browser console capture to trace the full feature pipeline rather than immediately softening assertions.",
+        "Use the /gsd:add-todo skill to log deferred work rather than ad-hoc TODO files — structured todos get committed with proper frontmatter and area tagging.",
+        "When fixing a test failure, distinguish between 'test is wrong' and 'test correctly caught a bug' — the CTR badge test was correct; the bug was in the SDK upload pipeline."
+      ]
+    },
+    "friction": [
+      "Vite 7 configureServer middleware silently fails to inject headers on transformed files — multiple approaches tried (plugin, global headers, writeHead monkey-patch) before discovering the public/ wrapper workaround.",
+      "Background task notifications arrived after the relevant investigation had already concluded, adding noise without value.",
+      "Local wallet login was broken (blank page, button not found) which blocked local test verification and required pivoting to staging runs mid-investigation.",
+      "CI logs were truncated, requiring multiple targeted extraction commands to find the actual test failure lines.",
+      "A stopgap TODO.md was created manually before the user pointed out the /gsd:add-todo skill should be used — required cleanup."
+    ],
+    "open_items": [
+      "SDK uploadFile() hardcodes GCM encryption — packages/sdk-core/src/upload/index.ts needs encryptionMode param support, using encryptAesCtr for media files \u003e256KB. Tracked in .planning/todos/pending/2026-03-29-sdk-uploadfile-hardcodes-gcm-wire-ctr-encryption-for-media-uploads.md.",
+      "Release-gate on the release-please PR branch has stale --workflow=e2e.yml reference (renamed to ci-e2e.yml in #396) — will self-resolve when release-please rebases after next merge to main.",
+      "Local wallet login is broken (blank page in Playwright) — unrelated to the E2E fixes but worth investigating separately."
+    ]
+  }
+}
