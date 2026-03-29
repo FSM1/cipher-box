@@ -164,7 +164,7 @@ jobs:
           fi
 
           # Verify the Web E2E job actually ran (not skipped due to no web changes).
-          # When ci-e2e.yml calls e2e.yml via workflow_call, the job name is
+          # When ci-e2e.yml calls web-e2e.yml via workflow_call, the job name is
           # composed as "Web E2E / Web E2E Tests" — contains("Web E2E") matches both.
           if ! WEB_E2E_RAN=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
             --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length'); then
