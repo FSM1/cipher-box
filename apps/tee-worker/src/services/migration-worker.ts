@@ -17,7 +17,7 @@
 import { unwrapKey } from '@cipherbox/crypto';
 import { KuboProvider, PsaProvider } from '@cipherbox/sdk-core';
 import { getKeypair } from './tee-keys.js';
-import { validateEndpointUrl, validateResolvedIp, ssrfSafeFetch } from './ssrf-validation.js';
+import { validateEndpointUrl, ssrfSafeFetch } from './ssrf-validation.js';
 
 /** Migration timeout for provider operations (generous for large files) */
 const MIGRATION_TIMEOUT_MS = 60_000;
@@ -102,18 +102,13 @@ export async function migrateBatch(
   const sourceConfig = parseProviderConfig(sourceConfigBytes);
   const destConfig = parseProviderConfig(destConfigBytes);
 
-  // 2b. SSRF validation on both endpoints (skipped in simulator mode)
+  // 2b. SSRF validation on both endpoints
+  // DNS rebinding protection is handled by ssrfSafeFetch (DNS pinning in CVM mode)
   if (sourceConfig.endpoint !== 'cipherbox') {
     validateEndpointUrl(sourceConfig.endpoint);
-    if (process.env.TEE_MODE !== 'simulator') {
-      await validateResolvedIp(new URL(sourceConfig.endpoint).hostname);
-    }
   }
   if (destConfig.endpoint !== 'cipherbox') {
     validateEndpointUrl(destConfig.endpoint);
-    if (process.env.TEE_MODE !== 'simulator') {
-      await validateResolvedIp(new URL(destConfig.endpoint).hostname);
-    }
   }
 
   // 3. Instantiate providers with SSRF-safe fetch injection

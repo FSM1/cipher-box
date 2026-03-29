@@ -134,31 +134,60 @@ describe('ssrf-validation', () => {
   });
 
   describe('ssrfSafeFetch', () => {
-    it('sets redirect to error to prevent redirect-based SSRF', async () => {
+    it('pins DNS and sets redirect to error in CVM mode', async () => {
+      const dns = await import('node:dns/promises');
+      vi.mocked(dns.lookup).mockResolvedValue({ address: '93.184.216.34', family: 4 });
+
       const mockFetch = vi.fn().mockResolvedValue(new Response('ok'));
       vi.stubGlobal('fetch', mockFetch);
 
       await ssrfSafeFetch('https://example.com/test', { method: 'GET' });
 
+      // URL should have pinned IP, with Host header for TLS SNI
+      expect(mockFetch).toHaveBeenCalledWith('https://93.184.216.34/test', {
+        method: 'GET',
+        redirect: 'error',
+        headers: { host: 'example.com' },
+      });
+    });
+
+    it('rejects DNS resolving to private IP', async () => {
+      const dns = await import('node:dns/promises');
+      vi.mocked(dns.lookup).mockResolvedValue({ address: '169.254.169.254', family: 4 });
+
+      await expect(ssrfSafeFetch('https://evil.com/test')).rejects.toThrow('private');
+    });
+
+    it('skips DNS pinning in simulator mode', async () => {
+      process.env.TEE_MODE = 'simulator';
+      const mockFetch = vi.fn().mockResolvedValue(new Response('ok'));
+      vi.stubGlobal('fetch', mockFetch);
+
+      await ssrfSafeFetch('https://example.com/test', { method: 'GET' });
+
+      // In simulator mode, URL is passed through unchanged
       expect(mockFetch).toHaveBeenCalledWith('https://example.com/test', {
         method: 'GET',
         redirect: 'error',
       });
     });
 
-    it('preserves other request options', async () => {
+    it('preserves request options and adds Host header in CVM mode', async () => {
+      const dns = await import('node:dns/promises');
+      vi.mocked(dns.lookup).mockResolvedValue({ address: '93.184.216.34', family: 4 });
+
       const mockFetch = vi.fn().mockResolvedValue(new Response('ok'));
       vi.stubGlobal('fetch', mockFetch);
 
       await ssrfSafeFetch('https://example.com', {
         method: 'POST',
         headers: { Authorization: 'Bearer token' },
-        signal: AbortSignal.timeout(5000),
       });
 
       const callArgs = mockFetch.mock.calls[0][1];
       expect(callArgs.method).toBe('POST');
-      expect(callArgs.headers).toEqual({ Authorization: 'Bearer token' });
+      expect(callArgs.headers).toHaveProperty('authorization', 'Bearer token');
+      expect(callArgs.headers).toHaveProperty('host', 'example.com');
       expect(callArgs.redirect).toBe('error');
     });
   });

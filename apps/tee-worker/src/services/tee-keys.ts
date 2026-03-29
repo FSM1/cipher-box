@@ -12,6 +12,11 @@ import * as secp from '@noble/secp256k1';
 
 /** Cache public keys per epoch to avoid repeated derivation */
 const publicKeyCache = new Map<number, Uint8Array>();
+const MAX_CACHE_SIZE = 100;
+
+/** Valid epoch range — epochs are small sequential integers (one per ~4 weeks) */
+export const MIN_EPOCH = 1;
+export const MAX_EPOCH = 10_000;
 
 /**
  * Derive a deterministic secp256k1 keypair for a given epoch.
@@ -69,7 +74,11 @@ export async function getKeypair(
   // Derive uncompressed public key (65 bytes, 0x04 prefix)
   const publicKey = secp.getPublicKey(privateKey, false);
 
-  // Cache public key for this epoch
+  // Cache public key for this epoch (bounded to prevent memory DoS)
+  if (publicKeyCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = publicKeyCache.keys().next().value;
+    if (firstKey !== undefined) publicKeyCache.delete(firstKey);
+  }
   publicKeyCache.set(epoch, publicKey);
 
   return { publicKey, privateKey };

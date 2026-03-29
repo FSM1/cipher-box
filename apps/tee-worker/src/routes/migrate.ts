@@ -21,15 +21,16 @@ import { logger } from '../services/logger.js';
 
 const router = Router();
 
-/** Current TEE epoch -- in production this would come from tee-keys state */
-const TEE_EPOCH = parseInt(process.env.TEE_CURRENT_EPOCH || '1', 10);
-
 router.post('/migrate', async (req: Request, res: Response) => {
-  const { cids, sourceConfigEncrypted, destConfigEncrypted } = req.body as {
+  const { cids, sourceConfigEncrypted, destConfigEncrypted, currentEpoch } = req.body as {
     cids?: string[];
     sourceConfigEncrypted?: string;
     destConfigEncrypted?: string;
+    currentEpoch?: number;
   };
+
+  // Use request-provided epoch, falling back to env var
+  const epoch = currentEpoch ?? parseInt(process.env.TEE_CURRENT_EPOCH || '1', 10);
 
   if (!cids || !Array.isArray(cids) || !sourceConfigEncrypted || !destConfigEncrypted) {
     res.status(400).json({
@@ -51,8 +52,8 @@ router.post('/migrate', async (req: Request, res: Response) => {
       .json({ error: `Batch size ${cids.length} exceeds maximum of ${MAX_BATCH_SIZE}` });
     return;
   }
-  if (!cids.every((c: unknown) => typeof c === 'string' && c.length > 0 && c.length <= 200)) {
-    res.status(400).json({ error: 'Each CID must be a non-empty string (max 200 chars)' });
+  if (!cids.every((c: unknown) => typeof c === 'string' && isValidCidFormat(c as string))) {
+    res.status(400).json({ error: 'Each CID must be a valid IPFS CID (CIDv0 or CIDv1)' });
     return;
   }
   if (
@@ -66,7 +67,7 @@ router.post('/migrate', async (req: Request, res: Response) => {
   }
 
   try {
-    const result = await migrateBatch(cids, sourceConfigEncrypted, destConfigEncrypted, TEE_EPOCH);
+    const result = await migrateBatch(cids, sourceConfigEncrypted, destConfigEncrypted, epoch);
 
     // Increment Prometheus counters per CID result
     migrationCids.inc({ result: 'success' }, result.succeeded.length);
@@ -89,5 +90,15 @@ router.post('/migrate', async (req: Request, res: Response) => {
     });
   }
 });
+
+/** Basic CID format validation (CIDv0 or CIDv1, max 200 chars) */
+function isValidCidFormat(cid: string): boolean {
+  if (cid.length === 0 || cid.length > 200) return false;
+  // CIDv0: starts with Qm, base58btc, 46 chars
+  if (/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(cid)) return true;
+  // CIDv1: starts with b (base32) or z (base58btc) or f (base16)
+  if (/^[bBzf][a-zA-Z2-7+=]+$/.test(cid)) return true;
+  return false;
+}
 
 export default router;

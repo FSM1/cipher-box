@@ -85,10 +85,36 @@ export async function validateResolvedIp(hostname: string): Promise<void> {
 }
 
 /**
- * Shared fetch wrapper that disables redirects to prevent SSRF via redirect.
- * An attacker's server could 302 to http://169.254.169.254/... after passing
- * the initial URL validation.
+ * SSRF-safe fetch with DNS pinning to prevent TOCTOU rebinding attacks.
+ *
+ * In CVM mode: resolves hostname, validates the IP is not private, then
+ * connects directly to the resolved IP with Host header for TLS SNI.
+ * This eliminates the gap between DNS validation and HTTP connection.
+ *
+ * In simulator mode: skips DNS pinning (no SSRF risk in dev).
  */
 export async function ssrfSafeFetch(url: string, init?: RequestInit): Promise<Response> {
-  return fetch(url, { ...init, redirect: 'error' });
+  if (process.env.TEE_MODE === 'simulator') {
+    return fetch(url, { ...init, redirect: 'error' });
+  }
+
+  const parsed = new URL(url);
+  const { address } = await lookup(parsed.hostname);
+
+  if (isPrivateAddress(address)) {
+    throw new Error('Endpoint DNS resolves to private address');
+  }
+
+  // Pin the resolved IP: replace hostname with IP, set Host header for TLS SNI
+  const pinnedUrl = new URL(url);
+  pinnedUrl.hostname = address;
+
+  const mergedHeaders = new Headers(init?.headers);
+  mergedHeaders.set('host', parsed.hostname);
+
+  return fetch(pinnedUrl.toString(), {
+    ...init,
+    redirect: 'error',
+    headers: Object.fromEntries(mergedHeaders.entries()),
+  });
 }

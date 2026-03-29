@@ -21,7 +21,6 @@ import { getKeypair } from '../services/tee-keys.js';
 import { logger } from '../services/logger.js';
 import {
   validateEndpointUrl,
-  validateResolvedIp,
   ssrfSafeFetch,
 } from '../services/ssrf-validation.js';
 
@@ -59,33 +58,29 @@ router.post('/connection-test', async (req: Request, res: Response) => {
     // 3. Zero TEE private key immediately
     keypair.privateKey.fill(0);
 
-    // 4. Parse config
-    const configText = new TextDecoder().decode(configBytes);
-    const { endpoint, authToken } = JSON.parse(configText) as {
+    // 4. Parse config — use let for explicit nullification after use
+    let configText: string | undefined = new TextDecoder().decode(configBytes);
+    const parsed = JSON.parse(configText) as {
       endpoint: string;
       authToken?: string;
     };
+    configText = undefined; // help GC reclaim the full JSON string
 
-    // 5. Create Uint8Array copy of auth token for zeroing
-    tokenBytes = new TextEncoder().encode(authToken ?? '');
+    const normalizedEndpoint = parsed.endpoint.replace(/\/+$/, '');
+    tokenBytes = new TextEncoder().encode(parsed.authToken ?? '');
 
-    // 6. Normalize endpoint
-    const normalizedEndpoint = endpoint.replace(/\/+$/, '');
-
-    // 7. SSRF validation (skipped in simulator mode)
+    // 5. SSRF validation (DNS rebinding protection handled by ssrfSafeFetch)
     validateEndpointUrl(normalizedEndpoint);
-    if (process.env.TEE_MODE !== 'simulator') {
-      await validateResolvedIp(new URL(normalizedEndpoint).hostname);
-    }
 
-    // 8. Sequential probe: Kubo first, then PSA
-    const kuboResult = await probeKubo(normalizedEndpoint, authToken);
+    // 6. Sequential probe: Kubo first, then PSA
+    // Auth token passed as string (JS limitation — cannot be zeroed, but scoped to probe calls)
+    const kuboResult = await probeKubo(normalizedEndpoint, parsed.authToken);
     if (kuboResult) {
       res.status(200).json(kuboResult);
       return;
     }
 
-    const psaResult = await probePsa(normalizedEndpoint, authToken);
+    const psaResult = await probePsa(normalizedEndpoint, parsed.authToken);
     if (psaResult) {
       res.status(200).json(psaResult);
       return;
