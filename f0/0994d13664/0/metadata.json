@@ -1,0 +1,72 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f00994d13664",
+  "session_id": "ff0881c5-92cf-4488-b10c-fdd58e15cd21",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T01:52:52.789134Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "77bb8dec872f",
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 217059,
+    "cache_read_tokens": 3629667,
+    "output_tokens": 8890,
+    "api_call_count": 40
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Identify M4 research items that could be pulled into M3, then plan and research Phase 35 (migrating the staging TEE from a local Docker simulator to real Phala testnet infrastructure).",
+    "outcome": "Phase 35 was scoped, added to the M3 roadmap on a new feature branch, researched in depth, and a RESEARCH.md + VALIDATION.md were written and committed. AWS Nitro TEE (M4 Phase 27) was identified as a future M3 candidate, deferred until after Phase 35 establishes a real Phala baseline.",
+    "learnings": {
+      "repo": [
+        "M4 phases form a tight dependency chain (Billing → Teams → Editors → Signing) and none can be extracted independently into M3.",
+        "AWS Nitro TEE was deferred from M2 and again in M4; it depends only on Phase 12 (already shipped) and is a strong M3 candidate after Phase 35.",
+        "Staging TEE is currently a simulator/mock running on the same Docker host as the API — not real Phala infrastructure.",
+        "TEE worker has minimal test coverage: only 1 test file for 13 source files, with only SSRF validation tested (CONCERNS.md:216-221).",
+        "Switching from simulator to CVM produces entirely different keys for the same epoch; staging migration requires wiping ipns_republish_schedule and re-enrolling.",
+        "Phala Cloud provides a `phala deploy` CLI that auto-detects existing CVMs by name and can be integrated into the existing deploy-staging.yml GitHub Actions workflow."
+      ],
+      "code": [
+        {
+          "path": "tee-worker/src/services/tee-keys.ts",
+          "line": 48,
+          "end_line": 48,
+          "finding": "Uses `keyResult.asUint8Array().slice(0, 32)` — but dstack SDK v0.5.7 may have changed the return type of getKey() from `{ asUint8Array(): Uint8Array }` to `{ key: Uint8Array }`, requiring verification and defensive handling."
+        },
+        {
+          "path": "tee-worker/docker-compose.yml",
+          "finding": "Mounts `/var/run/tappd.sock` (dstack OS 0.3.x legacy). Current dstack OS 0.5.x uses `/var/run/dstack.sock` — must be updated for Phala CVM deployment."
+        },
+        {
+          "path": "tee-worker/src/services/tee-keys.ts",
+          "finding": "Already has a `TEE_MODE=cvm` code path that dynamically imports `@phala/dstack-sdk` and calls `DstackClient.getKey()` — minimal code changes needed for CVM mode."
+        }
+      ],
+      "workflow": [
+        "GSD plan-phase workflow: when no CONTEXT.md exists and scope is already well-defined from prior discussion, research can proceed without a discuss-phase step.",
+        "Phase directories must be manually created before plan-phase can initialize — the workflow doesn't auto-create them.",
+        "Research agent returns findings as a task notification with output file path; planner should read the output file before committing."
+      ]
+    },
+    "friction": [
+      "The plan-phase workflow attempted to read plan-phase.md multiple times (8 reads) before successfully initializing — likely a pagination or offset issue reading a large workflow file.",
+      "Phase directory didn't exist and had to be created manually before the workflow could proceed.",
+      "The assistant initially started reading CONCERNS.md and environment docs while the researcher was still running, creating parallel work that risked duplication."
+    ],
+    "open_items": [
+      "AWS Nitro TEE (M4 Phase 27) still needs to be formally moved to M3 — deferred until Phase 35 establishes a working Phala testnet baseline.",
+      "dstack SDK v0.5.7 `getKey()` return type needs runtime verification before tee-keys.ts is updated.",
+      "Phala Cloud free tier adequacy for a lightweight Express server needs confirmation.",
+      "Key persistence across `phala deploy` re-deployments (same CVM name preserving app_id) must be verified.",
+      "TEE test coverage gap: IPNS signing, key management, epoch rotation, and auth middleware are all untested — flagged as High priority in CONCERNS.md.",
+      "Production migration path for epoch key transition (simulator → CVM) needs future design; staging can wipe + re-enroll but production cannot.",
+      "Phase 35 PLAN.md files have not yet been created — transcript ends after VALIDATION.md commit, before the planner agent was spawned."
+    ]
+  }
+}
