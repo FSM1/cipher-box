@@ -22,6 +22,14 @@ export interface PinningProvider {
   get(cid: string): Promise<Uint8Array>;
 }
 
+/** Optional constructor parameters for KuboProvider and PsaProvider */
+export type ProviderOptions = {
+  /** Custom fetch function (e.g., SSRF-safe fetch in TEE) */
+  fetchFn?: typeof globalThis.fetch;
+  /** Request timeout in milliseconds */
+  timeoutMs?: number;
+};
+
 /** User-selectable pinning mode */
 export type PinningMode = 'cipherbox' | 'external' | 'dual';
 
