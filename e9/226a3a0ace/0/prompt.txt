@@ -295,3 +295,7 @@ Yes I think this is a great pattern to follow. while we are at it, would it poss
 ---
 
 the pr description mentions that a push to main touching only apps/desktop would cause the desktop e2e to run. does this include any changes to upstream rust crates?
+
+---
+
+/resolve-pr-reviews
