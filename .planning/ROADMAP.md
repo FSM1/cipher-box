@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (completed 2026-03-28)
 - [x] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread (completed 2026-03-28)
 - [x] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend (completed 2026-03-28)
-- [ ] **Phase 34: E2E Test Expansion & Staging Baselines** - Streaming playback, media preview, batch download, and shared teardown E2E tests; BYO-IPFS load test and Faro metrics baselines on staging
+- [x] **Phase 34: E2E Test Expansion & Staging Baselines** - Streaming playback, media preview, batch download, and shared teardown E2E tests; BYO-IPFS load test and Faro metrics baselines on staging (completed 2026-03-29)
 
 ## Phase Details
 
@@ -413,13 +413,13 @@ Plans:
 - `.planning/todos/pending/2026-03-28-byo-ipfs-load-test-baselines-on-staging.md`
 - `.planning/todos/pending/2026-03-28-run-staging-metrics-baselines-with-new-instrumentation.md`
 
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 
 - [x] 34-01-PLAN.md -- Shared deleteAccountViaPage helper + wiring into all 10 E2E spec afterAll hooks
 - [x] 34-02-PLAN.md -- Media fixture generation + streaming-playback.spec.ts + media-preview.spec.ts E2E suites
-- [ ] 34-03-PLAN.md -- Batch download E2E tests (multi-select + individual file downloads)
+- [x] 34-03-PLAN.md -- Batch download E2E tests (multi-select + individual file downloads)
 - [x] 34-04-PLAN.md -- BYO-IPFS load test plan document + staging journey/load baselines capture
 
 ## Progress
@@ -447,7 +447,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 31. Structural Decomposition              | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete    | 2026-03-28 |
-| 34. E2E Test Expansion & Baselines        | v1.1      | 3/4 | In Progress|  |
+| 34. E2E Test Expansion & Baselines        | v1.1      | 4/4 | Complete   | 2026-03-29 |
 
 ### Phase 27: Writable Shares (PoC)
 
