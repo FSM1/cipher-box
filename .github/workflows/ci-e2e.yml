@@ -1,0 +1,108 @@
+name: CI E2E Tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          base: ${{ github.event.before || 'HEAD~1' }}
+          filters: |
+            web:
+              - 'apps/web/**'
+              - 'apps/api/**'
+              - 'packages/**'
+              - 'tests/web-e2e/**'
+              - 'tools/mock-ipns-routing/**'
+              - '.github/workflows/e2e.yml'
+              - '.github/workflows/ci-e2e.yml'
+            desktop:
+              - 'apps/desktop/src/**'
+              - 'apps/desktop/src-tauri/src/**'
+              - 'apps/desktop/src-tauri/vendor/**'
+              - 'apps/desktop/src-tauri/capabilities/**'
+              - 'apps/desktop/src-tauri/resources/**'
+              - 'apps/desktop/src-tauri/Cargo.toml'
+              - 'apps/desktop/src-tauri/build.rs'
+              - 'apps/desktop/src-tauri/rust-toolchain.toml'
+              - 'apps/desktop/index.html'
+              - 'apps/desktop/vite.config.*'
+              - 'apps/desktop/tsconfig*'
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'tests/vectors/**'
+              - 'packages/crypto/src/**'
+              - 'packages/crypto/tsconfig*'
+              - '.github/workflows/desktop-e2e.yml'
+              - '.github/workflows/ci-e2e.yml'
+
+      - name: Summary
+        run: |
+          echo "Web changes: ${{ steps.filter.outputs.web }}"
+          echo "Desktop changes: ${{ steps.filter.outputs.desktop }}"
+
+  web-e2e:
+    name: Web E2E
+    needs: detect-changes
+    if: needs.detect-changes.outputs.web == 'true' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/e2e.yml
+    secrets: inherit
+
+  desktop-e2e:
+    name: Desktop E2E
+    needs: detect-changes
+    if: needs.detect-changes.outputs.desktop == 'true' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/desktop-e2e.yml
+    secrets: inherit
+
+  retrigger-release-gate:
+    name: Re-trigger Release Gate
+    needs: [detect-changes, web-e2e, desktop-e2e]
+    if: always() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Re-run release gate on open release-please PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Find any open release-please PR
+          PR_BRANCH=$(gh pr list --repo "${{ github.repository }}" \
+            --search "head:release-please" --state open --limit 1 \
+            --json headRefName --jq '.[0].headRefName // empty')
+
+          if [ -z "$PR_BRANCH" ]; then
+            echo "No open release-please PR — nothing to re-trigger"
+            exit 0
+          fi
+
+          echo "Found open release-please PR on branch: ${PR_BRANCH}"
+
+          # Find the most recent completed release gate run for this branch
+          RUN_ID=$(gh run list --repo "${{ github.repository }}" \
+            --workflow=release-gate.yml --branch="${PR_BRANCH}" \
+            --limit 20 --json databaseId,status \
+            --jq 'map(select(.status == "completed")) | .[0].databaseId // empty')
+
+          if [ -z "$RUN_ID" ]; then
+            echo "No completed release gate run found for ${PR_BRANCH} — nothing to re-trigger"
+            exit 0
+          fi
+
+          echo "Re-running release gate (run ${RUN_ID}) so it verifies E2E against current main"
+          gh run rerun "${RUN_ID}" --repo "${{ github.repository }}"
