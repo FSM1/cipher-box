@@ -45,7 +45,7 @@ completed: 2026-03-29
 
 # Plan 35-06: Initial Phala Cloud CVM Deployment Summary
 
-**Phala Cloud CVM deployed to testnet, epoch key persistence verified across restarts, IPNS republish cycle validated end-to-end**
+**Phala Cloud CVM deployed (production infra, free tier — no separate testnet exists), epoch key persistence verified across restarts, IPNS republish cycle validated end-to-end**
 
 ## Performance
 
@@ -57,7 +57,7 @@ completed: 2026-03-29
 
 ## Accomplishments
 
-- CVM running on Phala Cloud prod5 node with hardware-backed key derivation (mode=cvm)
+- CVM running on Phala Cloud prod5 node (production infra, free tier) with hardware-backed key derivation (mode=cvm)
 - Epoch 1 public key identical before and after CVM restart (SC-3: deterministic derivation)
 - ECIES-encrypted IPNS key successfully decrypted and used for IPNS record signing (SC-2)
 - Republish latency baselines: ~1155ms avg (network-bound to remote CVM, not compute-bound)

@@ -21,7 +21,7 @@ CipherBox requires isolated environments to prevent cross-environment interferen
 | -------------- | -------------- | ---------------- | ---------------------- | ------------------- | -------------------- | -------------------------- |
 | **Local Dev**  | Kubo (offline) | Sapphire Devnet  | Mock service           | Local Postgres      | **Disabled**         | Full                       |
 | **CI E2E**     | Kubo (offline) | Sapphire Devnet  | Mock service (per-run) | Ephemeral Postgres  | **Disabled**         | Full per-run               |
-| **Staging**    | Kubo (online)  | Sapphire Devnet  | Self-hosted Someguy    | Managed Postgres    | **Phala Cloud CVM** (testnet) | Shared with Local/CI users |
+| **Staging**    | Kubo (online)  | Sapphire Devnet  | Self-hosted Someguy    | Managed Postgres    | **Phala Cloud CVM** (production infra, free tier) | Shared with Local/CI users |
 | **Production** | Kubo (managed) | Sapphire Mainnet | delegated-ipfs.dev     | Production Postgres | **Active** (mainnet) | Full                       |
 
 ## Solution: Environment-Aware Key Derivation
@@ -415,7 +415,7 @@ export const web3AuthOptions: Web3AuthOptions = {
 | `JWT_SECRET`            | dev-secret              | ci-secret               | secrets.JWT_STAGING   | secrets.JWT_PROD             |
 | `TEE_ENABLED`           | **false**               | **false**               | true                  | true                         |
 | `TEE_PROVIDER`          | -                       | -                       | phala                 | phala                        |
-| `PHALA_API_URL`         | -                       | -                       | testnet.phala.network | api.phala.network            |
+| `PHALA_API_URL`         | -                       | -                       | cloud.phala.network   | cloud.phala.network          |
 
 ## TEE Infrastructure by Environment
 
@@ -427,7 +427,7 @@ The TEE (Trusted Execution Environment) layer handles IPNS republishing to preve
 | -------------- | ---------------------- | ----------------- | ----------------- | -------------------------- |
 | **Local Dev**  | None                   | Not needed        | None              | User resets to clean slate |
 | **CI E2E**     | None                   | Not needed        | None              | Ephemeral per-run          |
-| **Staging**    | Phala Cloud CVM (testnet) | Every 3 hours     | Integration tests | Periodic DHT cleanup       |
+| **Staging**    | Phala Cloud CVM (prod infra, free tier) | Every 3 hours     | Integration tests | Periodic DHT cleanup       |
 | **Production** | Active (Phala mainnet) | Every 3 hours     | Full alerting     | Automated stale detection  |
 
 ### Local Development: No TEE
@@ -482,7 +482,7 @@ env:
 
 **Infrastructure:**
 
-The staging TEE worker runs as a Phala Cloud CVM (Confidential Virtual Machine) on the Phala testnet, providing hardware-backed key derivation via Intel TDX.
+The staging TEE worker runs as a Phala Cloud CVM (Confidential Virtual Machine) on Phala's production infrastructure (free tier, $20 credit). Phala Cloud has no separate testnet — the free tier runs on the same production nodes (Intel TDX hardware) as paid deployments.
 
 | Property          | Value                                                              |
 | ----------------- | ------------------------------------------------------------------ |
@@ -521,7 +521,7 @@ services:
 TEE_ENABLED=true
 TEE_PROVIDER=phala
 TEE_WORKER_URL=https://{app-id}-3001.dstack-prod{N}.phala.network  # External Phala Cloud CVM endpoint
-PHALA_API_URL=https://testnet.phala.network/api/v1
+PHALA_API_URL=https://cloud.phala.network/api/v1
 PHALA_CONTRACT_ID=${{ secrets.PHALA_CONTRACT_ID_STAGING }}
 PHALA_API_KEY=${{ secrets.PHALA_API_KEY_STAGING }}
 
@@ -556,7 +556,7 @@ Phase 35 migrated the staging TEE from a local Docker container running in simul
    - No automatic cleanup (IPNS records naturally expire after 24h without republish)
 
 3. **TEE Key Epochs**
-   - Staging TEE uses testnet keys (may be rotated more frequently)
+   - Staging TEE uses production-infra keys on free tier (same hardware as paid deployments)
    - 4-week grace period still applies
 
 **Staging Cleanup Strategy:**
@@ -887,7 +887,7 @@ Records encrypted with an expired epoch that were not re-encrypted during the gr
 
 #### Phase 3: Staging Integration Testing
 
-- [ ] Deploy TEE to staging with testnet credentials
+- [ ] Deploy TEE to staging with Phala Cloud credentials
 - [ ] Create integration test suite for republishing
 - [ ] Implement staging cleanup job
 - [ ] Add CI job for periodic staging health check
