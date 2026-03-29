@@ -166,8 +166,11 @@ jobs:
           # Verify the Web E2E job actually ran (not skipped due to no web changes).
           # When ci-e2e.yml calls e2e.yml via workflow_call, the job name is
           # composed as "Web E2E / Web E2E Tests" — contains("Web E2E") matches both.
-          WEB_E2E_RAN=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
-            --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length')
+          if ! WEB_E2E_RAN=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
+            --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length'); then
+            echo "::error::Failed to query jobs for CI E2E run ${E2E_RUN_ID} (API error)"
+            exit 1
+          fi
 
           if [ "${WEB_E2E_RAN:-0}" -eq 0 ]; then
             echo "CI E2E passed but Web E2E was skipped (no web changes in latest push)."
@@ -178,8 +181,11 @@ jobs:
               --json databaseId,conclusion,status \
               --jq '[.[] | select(.status == "completed" and .conclusion == "success")] | .[].databaseId' \
               | while read -r rid; do
-                  WEB_COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/${rid}/jobs" \
-                    --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length')
+                  if ! WEB_COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/${rid}/jobs" \
+                    --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length'); then
+                    echo "::warning::Failed to query jobs for run ${rid}, skipping" >&2
+                    continue
+                  fi
                   if [ "${WEB_COUNT:-0}" -gt 0 ]; then
                     echo "$rid"
                     break
@@ -283,9 +289,9 @@ jobs:
             exit 1
           fi
 
-          # Get recent completed desktop E2E runs (newest first) and find the
-          # most recent one whose commit is within the release range AND whose
-          # desktop-e2e jobs actually ran (not skipped)
+          # Get recent completed CI E2E orchestrator runs (newest first) and find
+          # the most recent one whose commit is within the release range AND whose
+          # Desktop E2E jobs actually ran (not skipped due to no desktop changes)
           RUNS=$(gh run list --repo ${{ github.repository }} \
             --workflow=ci-e2e.yml --branch=main --limit=50 \
             --json headSha,conclusion,status,databaseId \
