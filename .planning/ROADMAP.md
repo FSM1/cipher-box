@@ -397,11 +397,11 @@ Plans:
 **Requirements**: None (test coverage and baseline capture)
 **Success Criteria** (what must be TRUE):
 
-1. AES-CTR streaming playback E2E tests cover mode selection, SW interception, seeking, and progress
-2. Batch download zip E2E tests cover multi-file selection and zip generation
+1. AES-CTR streaming playback E2E tests cover mode selection, SW interception, and progress
+2. Batch download E2E tests cover multi-file selection and individual file download events
 3. Media preview E2E tests cover PDF viewer, video player, and audio player
 4. Shared deleteAccount teardown wired into all E2E spec afterAll hooks
-5. BYO-IPFS load test baselines captured on staging
+5. BYO-IPFS load test plan documented (execution deferred pending provider infrastructure)
 6. Staging metrics baselines captured with Phase 30 Faro instrumentation
 
 **Todos consumed:**
@@ -413,14 +413,14 @@ Plans:
 - `.planning/todos/pending/2026-03-28-byo-ipfs-load-test-baselines-on-staging.md`
 - `.planning/todos/pending/2026-03-28-run-staging-metrics-baselines-with-new-instrumentation.md`
 
-**Plans:** TBD
+**Plans:** 4 plans
 
 Plans:
 
-- [ ] 34-01-PLAN.md -- Shared E2E teardown helper and deleteAccount wiring across all specs
-- [ ] 34-02-PLAN.md -- AES-CTR streaming playback and media preview E2E suites
-- [ ] 34-03-PLAN.md -- Batch download zip E2E tests
-- [ ] 34-04-PLAN.md -- BYO-IPFS load test baselines and staging metrics capture
+- [ ] 34-01-PLAN.md -- Shared deleteAccountViaPage helper + wiring into all 10 E2E spec afterAll hooks
+- [ ] 34-02-PLAN.md -- Media fixture generation + streaming-playback.spec.ts + media-preview.spec.ts E2E suites
+- [ ] 34-03-PLAN.md -- Batch download E2E tests (multi-select + individual file downloads)
+- [ ] 34-04-PLAN.md -- BYO-IPFS load test plan document + staging journey/load baselines capture
 
 ## Progress
 
@@ -474,5 +474,5 @@ Plans:
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-28_
-_Total M1.1 phases: 17 (18-27 complete + 28-32 planned) | Concern resolution: 5 phases_
+_Last updated: 2026-03-29_
+_Total M1.1 phases: 17 (18-27 complete + 28-34 planned) | Concern resolution: 5 phases_
