@@ -437,7 +437,7 @@ Plans:
 4. Republish latency on Phala testnet is within acceptable bounds (< 2x simulator latency per batch) and captured as new staging baselines
 5. Staging docker-compose no longer runs a local `tee-worker` container -- the TEE is fully external on Phala testnet
 
-**Plans:** 35-01 (W0: TEE test coverage), 35-02 (W1: dstack SDK + CVM compose), 35-03 (W2: staging infra + CI/CD), 35-04 (W2: docs), 35-05 (W3: CVM deploy + verification)
+**Plans:** 35-01 (W1: move + shared package integration), 35-02 (W2: TEE test coverage), 35-03 (W2: dstack SDK + CVM compose + instrumentation), 35-04 (W3: staging infra + CI/CD), 35-05 (W3: docs), 35-06 (W4: CVM deploy + verification)
 
 ## Progress
 
@@ -465,7 +465,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete    | 2026-03-28 |
 | 34. E2E Test Expansion & Baselines        | v1.1      | 0/4            | Not Started | -          |
-| 35. Phala Testnet TEE Migration           | v1.1      | 0/5            | Not Started | -          |
+| 35. Phala Testnet TEE Migration           | v1.1      | 0/6            | Not Started | -          |
 
 ### Phase 27: Writable Shares (PoC)
 
