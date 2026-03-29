@@ -9,6 +9,7 @@ import type {
   InitVaultDto,
   QuotaResponseDto,
   SetByoStatusDto,
+  SetByoStatusResponseDto,
   VaultConfigResponseDto,
   VaultExportDto,
   VaultResponseDto,
@@ -79,9 +80,9 @@ export const vaultControllerGetQuota = (
  */
 export const vaultControllerSetByoStatus = (
   setByoStatusDto: BodyType<SetByoStatusDto>,
-  options?: SecondParameter<typeof customInstance<void>>
+  options?: SecondParameter<typeof customInstance<SetByoStatusResponseDto>>
 ) => {
-  return customInstance<void>(
+  return customInstance<SetByoStatusResponseDto>(
     {
       url: `/vault/byo-status`,
       method: 'PATCH',

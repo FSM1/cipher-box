@@ -6,3 +6,8 @@ export class SetByoStatusDto {
   @IsBoolean()
   isByo!: boolean;
 }
+
+export class SetByoStatusResponseDto {
+  @ApiProperty({ description: 'Whether the operation succeeded' })
+  success!: boolean;
+}

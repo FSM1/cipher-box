@@ -177,23 +177,38 @@ export async function createByoClientPool(opts: ByoPoolOptions): Promise<ByoPool
   });
 
   // Enable BYO mode on each account's vault so register-cid is authorized
-  await Promise.all(
+  const byoResults = await Promise.allSettled(
     byoPool.map(async (pc) => {
-      try {
-        const ctx = createSdkContext(pc);
-        await ctx.axiosInstance!.patch('/vault/byo-status', { isByo: true });
-      } catch (err) {
-        console.warn(`[Client ${pc.id}] Failed to enable BYO mode: ${(err as Error).message}`);
-      }
+      const ctx = createSdkContext(pc);
+      await ctx.axiosInstance!.patch('/vault/byo-status', { isByo: true });
+      return pc;
     })
   );
 
+  const enabledPool: ByoPoolClient[] = [];
+  for (const result of byoResults) {
+    if (result.status === 'fulfilled') {
+      enabledPool.push(result.value);
+    } else {
+      console.warn(`BYO enable failed for a client: ${result.reason}`);
+    }
+  }
+
+  if (enabledPool.length === 0) {
+    throw new Error('Failed to enable BYO mode on any client — cannot run BYO scenarios');
+  }
+  if (enabledPool.length < byoPool.length) {
+    console.warn(
+      `BYO mode enabled on ${enabledPool.length}/${byoPool.length} clients — continuing with partial pool`
+    );
+  }
+
   console.log(
-    `BYO pool: ${byoPool.length} clients with ${opts.externalProvider.protocol} provider ` +
+    `BYO pool: ${enabledPool.length} clients with ${opts.externalProvider.protocol} provider ` +
       `(mode: ${opts.pinningMode}, endpoint: ${opts.externalProvider.endpoint})`
   );
 
-  return byoPool;
+  return enabledPool;
 }
 
 /**

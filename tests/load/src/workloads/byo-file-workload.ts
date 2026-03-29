@@ -56,6 +56,7 @@ export async function runByoFileWorkload(
 
   const isPsa = pc.provider instanceof PsaProvider;
   const { client, rootIpnsName, metrics } = pc;
+  const sdkCtx = createSdkContext(pc);
 
   for (let i = 0; i < fileCount; i++) {
     const size = minSize + Math.floor(Math.random() * (maxSize - minSize + 1));
@@ -134,7 +135,7 @@ export async function runByoFileWorkload(
           ipnsName: rootIpnsName,
           metadataCid: cid!,
           sequenceNumber: BigInt(i),
-          ctx: createSdkContext(pc),
+          ctx: sdkCtx,
         });
       });
 

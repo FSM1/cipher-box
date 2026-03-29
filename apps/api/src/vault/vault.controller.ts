@@ -15,7 +15,7 @@ import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
 import { VaultExportDto } from './dto/vault-export.dto';
 import { QuotaResponseDto } from './dto/quota.dto';
 import { VaultConfigResponseDto } from './dto/vault-config.dto';
-import { SetByoStatusDto } from './dto/byo-status.dto';
+import { SetByoStatusDto, SetByoStatusResponseDto } from './dto/byo-status.dto';
 import { RequestWithUser } from '../common/types';
 
 @ApiTags('Vault')
@@ -144,13 +144,13 @@ export class VaultController {
       'Toggle BYO (Bring Your Own) IPFS mode for the authenticated user. ' +
       'When enabled, quota tracking becomes advisory only.',
   })
-  @ApiResponse({ status: 200, description: 'BYO status updated' })
+  @ApiResponse({ status: 200, description: 'BYO status updated', type: SetByoStatusResponseDto })
   @ApiResponse({ status: 401, description: 'Unauthorized - JWT token required' })
   @ApiResponse({ status: 404, description: 'Not Found - Vault does not exist' })
   async setByoStatus(
     @Request() req: RequestWithUser,
     @Body() dto: SetByoStatusDto
-  ): Promise<{ success: boolean }> {
+  ): Promise<SetByoStatusResponseDto> {
     const vault = await this.vaultService.findVault(req.user.id);
     if (!vault) {
       throw new NotFoundException('Vault not found');
