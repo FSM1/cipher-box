@@ -1,0 +1,88 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5d9576a5baf5",
+  "session_id": "c330798c-ab40-490c-8805-6ed8f1747898",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T17:48:06.586719Z",
+  "branch": "fix/increase-e2e-timeout",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "b76eb1045674",
+  "token_usage": {
+    "input_tokens": 327,
+    "cache_creation_tokens": 253215,
+    "cache_read_tokens": 25254747,
+    "output_tokens": 77434,
+    "api_call_count": 244
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Resolve final round of automated PR review comments from Copilot and CodeRabbit on PR #392, then fix a release gate gap where non-release PRs (e.g. `test:` commits) could merge to main without E2E verification.",
+    "outcome": "All 3 review comments on PR #392 were fixed and resolved. PR #394 was merged introducing a unified `ci-e2e.yml` orchestrator with path-based change detection, a retrigger mechanism for the release gate after E2E completes on main, and a renamed `web-e2e.yml`. Multiple rounds of bot reviews on PR #394 were also resolved.",
+    "learnings": {
+      "repo": [
+        "The release gate auto-passes with 'Not a release PR' for non-release-please branches, making it a no-op gate for feature/test PRs despite being a required check.",
+        "`test:` commits do not trigger release-please to update the release PR, so the release gate can go stale and allow merging without re-verifying latest E2E.",
+        "Desktop E2E previously had its own `dorny/paths-filter` change detection inside `desktop-e2e.yml`; web E2E had none.",
+        "Committed fixture files live in `tests/web-e2e/fixtures/files/` — `createTestMediaFile`, `createTestImageFile`, etc. were at risk of overwriting them during cleanup if a test used a matching name.",
+        "The repo uses `dorny/paths-filter` for change detection and `workflow_call` for reusable workflows, consistent with the desktop-e2e pattern.",
+        "`apps/desktop/src-tauri/Cargo.lock` does not exist; the root `Cargo.lock` covers all Rust workspace crates.",
+        "The `vars` context is automatically available in reusable `workflow_call` workflows from the calling repository."
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/test-files.ts",
+          "line": 156,
+          "end_line": 156,
+          "finding": "Missing guard: if the `name` argument matched the source fixture filename, cleanup would delete a committed fixture. Added `COMMITTED_FIXTURES` set guard to all four create helpers."
+        },
+        {
+          "path": "tests/web-e2e/baselines/staging-journey-timing.json",
+          "line": 1,
+          "end_line": 19,
+          "finding": "Was missing the `faro_enabled: true` metadata field required by the schema."
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 14,
+          "end_line": 16,
+          "finding": "Missing `page.isClosed()` guard before `page.evaluate()` in teardown — calling evaluate on a closed page throws."
+        },
+        {
+          "path": ".github/workflows/ci-e2e.yml",
+          "line": 22,
+          "end_line": 23,
+          "finding": "Need `fetch-depth: 0` for `dorny/paths-filter` to access the `before` SHA for proper diff; also need all-zero SHA guard for branch creation events."
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "line": 132,
+          "end_line": 135,
+          "finding": "Using `// empty` in jq on a null value produces empty string, causing parse errors downstream; desktop patterns were also out of sync with ci-e2e.yml path list."
+        }
+      ],
+      "workflow": [
+        "Polling for bot reviews with background `sleep` + `gh api graphql` is fragile and verbose; CodeRabbit has quota cooldowns (~23 min) that must be waited out.",
+        "When `gh run rerun` re-runs a workflow, `GITHUB_SHA` is the original stale commit, not current main — diffs must use `origin/main` instead of `HEAD`.",
+        "Outside-diff-range review comments are not returned by the GraphQL `reviewThreads` query; they must be fetched via the REST reviews API and handled separately.",
+        "Renaming a workflow file requires updating all `uses:` and polling references in ci-e2e.yml, tag-staging.yml, and release-gate.yml."
+      ]
+    },
+    "friction": [
+      "CodeRabbit was rate-limited for ~23 minutes, requiring extensive polling (20+ background tasks) before its review arrived.",
+      "The user's original request was misunderstood twice — the release gate issue was initially diagnosed as 'feature PRs not gating on E2E' when the real problem was 'stale green checks on release-please PRs after test: commits land on main'.",
+      "An incorrect PR (#393) was created and had to be closed before the correct fix was implemented in #394.",
+      "Outside-diff-range comments are invisible to the GraphQL `reviewThreads` query, requiring a separate REST API call to discover them.",
+      "Several `gh api` reply calls hit network timeouts and had to be retried."
+    ],
+    "open_items": [
+      "Verify the `retrigger-release-gate` mechanism works end-to-end in a real scenario where a `test:` commit lands after the release gate last ran.",
+      "The release gate still auto-passes for non-release PRs that don't touch web/desktop paths — consider whether all PRs should require some form of CI gate.",
+      "Web E2E timeout was bumped to 20 minutes; monitor whether tests still exceed this and investigate root causes if so.",
+      "Pending todo: `2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md` was added to the planning todos during the merge."
+    ]
+  }
+}
