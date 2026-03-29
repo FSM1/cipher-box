@@ -536,29 +536,29 @@ Phase 31 decomposed the original monolithic `useSharedNavigation.ts` (1199 lines
 
 ## Implementation Status
 
-| Component             | Location                     | Status                  |
-| --------------------- | ---------------------------- | ----------------------- |
-| Backend API           | `apps/api/`                  | Implemented             |
-| API Metrics           | `apps/api/src/metrics/`      | Implemented (Phase 30)  |
-| Web Frontend          | `apps/web/`                  | Implemented             |
-| Web Logger            | `apps/web/src/lib/logger.ts` | Implemented (Phase 28)  |
-| Web Observability     | `apps/web/src/lib/faro.ts`   | Implemented (Phase 30)  |
-| Desktop App           | `apps/desktop/`              | Implemented             |
-| TEE Worker            | `tee-worker/`                | Implemented             |
-| @cipherbox/crypto     | `packages/crypto/`           | Implemented             |
-| @cipherbox/core       | `packages/core/`             | Implemented             |
-| @cipherbox/api-client | `packages/api-client/`       | Implemented (generated) |
-| @cipherbox/sdk-core   | `packages/sdk-core/`         | Implemented             |
-| @cipherbox/sdk        | `packages/sdk/`              | Implemented             |
-| cipherbox-crypto      | `crates/crypto/`             | Implemented             |
-| cipherbox-core        | `crates/core/`               | Implemented             |
-| cipherbox-api-client  | `crates/api-client/`         | Implemented             |
-| cipherbox-sdk         | `crates/sdk/`                | Implemented             |
-| cipherbox-fuse        | `crates/fuse/`               | Implemented             |
-| Playwright E2E        | `tests/web-e2e/`             | Implemented             |
-| SDK E2E               | `tests/sdk-e2e/`             | Implemented             |
-| Test Vectors          | `tests/vectors/`             | Implemented             |
-| Mock IPNS Routing     | `tools/mock-ipns-routing/`   | Implemented             |
+| Component             | Location                     | Status      |
+| --------------------- | ---------------------------- | ----------- |
+| Backend API           | `apps/api/`                  | Implemented |
+| API Metrics           | `apps/api/src/metrics/`      | Implemented |
+| Web Frontend          | `apps/web/`                  | Implemented |
+| Web Logger            | `apps/web/src/lib/logger.ts` | Implemented |
+| Web Observability     | `apps/web/src/lib/faro.ts`   | Implemented |
+| Desktop App           | `apps/desktop/`              | Implemented |
+| TEE Worker            | `tee-worker/`                | Implemented |
+| @cipherbox/crypto     | `packages/crypto/`           | Implemented |
+| @cipherbox/core       | `packages/core/`             | Implemented |
+| @cipherbox/api-client | `packages/api-client/`       | Implemented |
+| @cipherbox/sdk-core   | `packages/sdk-core/`         | Implemented |
+| @cipherbox/sdk        | `packages/sdk/`              | Implemented |
+| cipherbox-crypto      | `crates/crypto/`             | Implemented |
+| cipherbox-core        | `crates/core/`               | Implemented |
+| cipherbox-api-client  | `crates/api-client/`         | Implemented |
+| cipherbox-sdk         | `crates/sdk/`                | Implemented |
+| cipherbox-fuse        | `crates/fuse/`               | Implemented |
+| Playwright E2E        | `tests/web-e2e/`             | Implemented |
+| SDK E2E               | `tests/sdk-e2e/`             | Implemented |
+| Test Vectors          | `tests/vectors/`             | Implemented |
+| Mock IPNS Routing     | `tools/mock-ipns-routing/`   | Implemented |
 
 ---
 
