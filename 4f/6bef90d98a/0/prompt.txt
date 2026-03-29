@@ -1,0 +1,31 @@
+/gsd:check-todos
+
+---
+
+14
+
+---
+
+1 and you can branch off the current branch which will be merged to main as soon as ci passes.
+
+---
+
+please fix any pre-existing test errors in the sdk
+
+---
+
+also please run the streaming e2e test against the local api and ui to make sure that the feature you jsut implemented works e2e.
+
+---
+
+<task-notification>
+<task-id>bl5yjwaxj</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/bl5yjwaxj.output</output-file>
+<status>completed</status>
+<summary>Background command "Run streaming playback E2E test" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok lets get a pr for this up
