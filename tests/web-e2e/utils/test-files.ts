@@ -1,4 +1,4 @@
-import { writeFileSync, copyFileSync, unlinkSync, existsSync, statSync } from 'fs';
+import { writeFileSync, copyFileSync, unlinkSync, existsSync, statSync, readdirSync } from 'fs';
 import { resolve, dirname, basename, extname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -17,6 +17,9 @@ const __dirname = dirname(__filename);
 
 const FIXTURES_DIR = resolve(__dirname, '../fixtures/files');
 const createdFiles: string[] = [];
+
+/** Names of committed fixture files — never overwrite or delete these. */
+const COMMITTED_FIXTURES = new Set(readdirSync(FIXTURES_DIR).filter((f) => !f.startsWith('.')));
 
 interface TestTextFile {
   name: string;
@@ -41,6 +44,9 @@ interface TestBinaryFile {
 export function createTestTextFile(name?: string, content?: string): TestTextFile {
   const timestamp = Date.now();
   const fileName = name || `test-file-${timestamp}.txt`;
+  if (COMMITTED_FIXTURES.has(fileName)) {
+    throw new Error(`Refusing to overwrite committed fixture: ${fileName}`);
+  }
   const fileContent =
     content || `Test file created at ${new Date(timestamp).toISOString()}\nThis is test content.`;
   const filePath = resolve(FIXTURES_DIR, fileName);
@@ -66,6 +72,9 @@ export function createTestTextFile(name?: string, content?: string): TestTextFil
 export function createTestBinaryFile(sizeKb: number, name?: string): TestBinaryFile {
   const timestamp = Date.now();
   const fileName = name || `test-binary-${timestamp}.bin`;
+  if (COMMITTED_FIXTURES.has(fileName)) {
+    throw new Error(`Refusing to overwrite committed fixture: ${fileName}`);
+  }
   const filePath = resolve(FIXTURES_DIR, fileName);
 
   // Create buffer with random bytes
@@ -95,6 +104,9 @@ export function createTestBinaryFile(sizeKb: number, name?: string): TestBinaryF
 export function createTestImageFile(name?: string): TestBinaryFile {
   const timestamp = Date.now();
   const fileName = name || `test-image-${timestamp}.png`;
+  if (COMMITTED_FIXTURES.has(fileName)) {
+    throw new Error(`Refusing to overwrite committed fixture: ${fileName}`);
+  }
   const filePath = resolve(FIXTURES_DIR, fileName);
   const fixturePath = resolve(FIXTURES_DIR, 'test-image.png');
 
@@ -148,6 +160,9 @@ export function createTestMediaFile(sourceFixture: string, name?: string): TestB
   const safeSource = basename(sourceFixture);
   const ext = extname(safeSource).replace('.', '') || 'bin';
   const fileName = basename(name || `test-media-${timestamp}.${ext}`);
+  if (COMMITTED_FIXTURES.has(fileName)) {
+    throw new Error(`Refusing to overwrite committed fixture: ${fileName}`);
+  }
   const fixturePath = resolve(FIXTURES_DIR, safeSource);
   const filePath = resolve(FIXTURES_DIR, fileName);
   const stats = statSync(fixturePath);
