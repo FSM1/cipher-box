@@ -1,0 +1,61 @@
+https://github.com/FSM1/cipher-box/actions/runs/23717147226/job/69086023371 web e2e is still failing, and https://github.com/FSM1/cipher-box/actions/runs/23697472039/job/69086812839?pr=384 is still looking for a e2e test run that has already finished (and failed).
+
+also want to optimise @.github/workflows/ci.yml to have the `cargo` tasks grouped and gated to only run if changes in the rust codebase are detected.
+
+---
+
+or at least all the previously failing ones.
+
+---
+
+have you tried running the tests against the staging ui?
+
+---
+
+<task-notification>
+<task-id>bqa6fshq1</task-id>
+<tool-use-id>toolu_01KKSh1EGVcupMJ6f956N62a</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/bqa6fshq1.output</output-file>
+<status>completed</status>
+<summary>Background command "Run wallet-login test to verify local setup works" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bkfm131fe</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/bkfm131fe.output</output-file>
+<status>completed</status>
+<summary>Background command "Run batch-download with headed browser to see what happens" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwvs0uti6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/bwvs0uti6.output</output-file>
+<status>completed</status>
+<summary>Background command "Run wallet-login test headless" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bng5eylvb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/bng5eylvb.output</output-file>
+<status>completed</status>
+<summary>Background command "Run batch-download tests against staging" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b9o4qhyf7</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/b9o4qhyf7.output</output-file>
+<status>completed</status>
+<summary>Background command "Run streaming-playback against staging" completed (exit code 0)</summary>
+</task-notification>
