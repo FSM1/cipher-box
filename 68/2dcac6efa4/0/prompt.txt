@@ -81,3 +81,7 @@ the aes ctr upload code has been deployed to staging for a very long time. I hon
 ---
 
 also, you should be able to get a lot more info using playwright mcp and inspecting the browser
+
+---
+
+ok lets log a todo to fix the ctr upload, and then we can get this PR updated with the service worker fixes, and once merged deal with the SDK uploadFile issue.
