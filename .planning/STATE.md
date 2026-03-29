@@ -9,7 +9,7 @@ progress:
   total_phases: 20
   completed_phases: 18
   total_plans: 78
-  completed_plans: 74
+  completed_plans: 75
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 35 (phala-testnet-tee-migration) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 
 ## Performance Metrics
 
@@ -82,6 +82,7 @@ Plan: 2 of 6
 | Phase 33 P01 | 11min | 2 tasks | 3 files |
 | Phase 33 P02 | 3min | 1 tasks | 3 files |
 | Phase 35 P02 | 5min | 4 tasks | 6 files |
+| Phase 35 P03 | 8min | 4 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -163,6 +164,10 @@ Recent for v1.1:
 - FilePointer resolution uses FileMetadata directly (no separate ResolvedFileMetadata struct)
 - FilePointer resolution scoped to parent folder via get_unresolved_file_pointers_for_parent() to avoid wrong-folder-key decryption
 - FilePointer async resolution: 500ms base * 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
+- Removed custom dstack-sdk.d.ts since @phala/dstack-sdk@0.5.7 ships own TypeScript types
+- Defensive CVM key derivation handles both key (v0.5+) and asUint8Array (legacy) SDK return types
+- TEE worker Prometheus metrics use cipherbox_tee_* prefix for Grafana dashboard coexistence with API metrics
+- TEE worker structured JSON logger has zero external dependencies (JSON.stringify to stdout/stderr)
 
 ### Roadmap Evolution
 
