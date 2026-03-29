@@ -283,3 +283,7 @@ this is once again not the issue here - everything works, but since the `test(34
 so currently, the web e2e always runs on merges to main while desktop-e2e runs on changes to the desktop app.
 
 would it make sense to gate the web-e2e to only run when the web (or any of its dependencies) is updated?
+
+---
+
+Yes I think this is a great pattern to follow. while we are at it, would it possibly make sense to use once common `detect changes` job driving whether the `web-e2e` and `desktop-e2e` are needed
