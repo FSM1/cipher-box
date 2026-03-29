@@ -1,0 +1,91 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "05a1212bd0c6",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T16:52:43.900046Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/35-phala-testnet-tee-migration/35-06-SUMMARY.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8786f800d8db",
+  "token_usage": {
+    "input_tokens": 141,
+    "cache_creation_tokens": 456042,
+    "cache_read_tokens": 10016922,
+    "output_tokens": 37296,
+    "api_call_count": 111
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Execute Phase 35 (Phala Testnet TEE Migration) end-to-end: restructure TEE worker into monorepo apps/, integrate shared packages, add unit tests, Phala SDK, staging infra, documentation, and deploy a live CVM to Phala Cloud.",
+    "outcome": "All 6 plans completed across 4 waves with a live CVM running on Phala Cloud production infrastructure, epoch key determinism verified, end-to-end IPNS republish validated, and phase marked complete. Documentation corrected to reflect 'production' instead of 'testnet'.",
+    "learnings": {
+      "repo": [
+        "TEE worker was moved from root `tee-worker/` to `apps/tee-worker/` and now uses shared monorepo packages: `@cipherbox/crypto` for ECIES, `@cipherbox/core` for IPNS signing, `@cipherbox/sdk-core` for KuboProvider/PsaProvider.",
+        "Phala Cloud has no separate testnet — the free tier ($20 credit) runs on production nodes (dstack-pha-prod5). 'Testnet' in phase name and docs was a misnomer.",
+        "Live CVM endpoint: `https://011f138783487e4c43ea104cfcbacf817ac4f31b-3001.dstack-pha-prod5.phala.network`",
+        "GitHub staging environment now has `PHALA_CLOUD_API_KEY` (secret) and `PHALA_TEE_WORKER_URL` (variable) configured.",
+        "TEE worker Docker image published as `ghcr.io/fsm1/cipherbox-tee-worker:v35-amd64`.",
+        "Republish latency from remote client to Phala Cloud CVM is ~1155ms avg — network-bound, not compute-bound; co-located deployment will be much faster.",
+        "56 unit tests cover TEE-specific orchestration: key derivation, epoch fallback, auth middleware, republish batch processing.",
+        "deploy-staging.yml gained `build-tee` and `deploy-tee-phala` jobs; staging docker-compose no longer runs tee-worker locally."
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/routes/republish.ts",
+          "finding": "Republish route requires ECIES-encrypted IPNS key via `wrapKey`/`unwrapKey` from `@cipherbox/crypto`; test payloads must be properly encrypted with the CVM's derived public key."
+        },
+        {
+          "path": "apps/tee-worker/src/services/key-manager.ts",
+          "finding": "Key manager uses `wrapKey`/`unwrapKey` from `@cipherbox/crypto` for ECIES operations; epoch keys are derived deterministically from Phala dstack-sdk and persist across CVM restarts."
+        },
+        {
+          "path": "apps/tee-worker/docker-compose.phala.yml",
+          "finding": "Phala CVM docker-compose uses envsubst for `PHALA_TEE_WORKER_URL`, `TEE_WORKER_SECRET`, `GITHUB_REPOSITORY_OWNER`, and `TAG` substitution before `phala deploy`."
+        },
+        {
+          "path": ".planning/ENVIRONMENTS.md",
+          "finding": "Updated to correct 'testnet' to 'production Phala Cloud' throughout; clarifies no separate testnet exists."
+        }
+      ],
+      "workflow": [
+        "Parallel subagent execution with git worktrees can cause `git config` lock contention — running agents sequentially instead of parallel resolved this.",
+        "When agent worktrees produce merge conflicts in STATE.md, taking the agent's version is correct (it reflects the latest completed state).",
+        "GSD pause-work/resume-work handoff cycle works well across machine boundaries — credentials, remaining tasks, and context survived the session transfer cleanly.",
+        "After `git pull` showed 'Already up to date' twice before showing new commits, a explicit `git fetch --all \u0026\u0026 git pull` from the Docker host was needed to see updated branch.",
+        "The `classifyHandoffIfNeeded` Claude Code runtime bug may fire on agent completion but spot-checks (SUMMARY.md + commits) are the reliable completion signal.",
+        "Parallel wave agents should use `--no-verify` on commits; orchestrator runs pre-commit hooks once post-wave.",
+        "HANDOFF.json is a one-shot artifact — should be deleted after successful resumption."
+      ]
+    },
+    "friction": [
+      "Wave 2 parallel execution failed: 35-02 hit a git config lock from parallel worktree spawning, 35-03 was cut off by a usage limit mid-execution — had to re-run both sequentially.",
+      "Usage limit hit mid-session required user to type 'continue please' to resume.",
+      "CVM restart took several minutes with repeated health check failures before coming back online — no exponential backoff in polling logic.",
+      "Docker build/push couldn't run from the main dev machine (Docker daemon at 192.168.133.12) — required a session transfer via pause-work/resume-work to the Docker host.",
+      "Memory file had stale Docker host IP (192.168.133.114 vs correct 192.168.133.12) that needed correction mid-session.",
+      "Phase name 'phala-testnet-tee-migration' was a misnomer from the start — required post-completion doc corrections across multiple files."
+    ],
+    "open_items": [
+      "Phase 35 branch has not been merged to main — a PR needs to be created (`/gsd:ship`).",
+      "35-HUMAN-UAT.md persists with `status: partial` — will surface in future `/gsd:progress` and `/gsd:audit-uat` until formally closed.",
+      "STAGING_TEE_WORKER_SECRET was regenerated during this session (`REDACTED/I=`) — old value may still exist in other env files or deployment configs.",
+      "Republish latency baseline (~1155ms) is network-bound for remote testing; production co-location latency not yet measured.",
+      "CI pipeline (`deploy-tee-phala` job) added but not yet triggered end-to-end via a staging tag push — untested automated deployment path."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T16:52:01.955023Z",
+    "agent_lines": 0,
+    "human_added": 7,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 7,
+    "agent_percentage": 0
+  }
+}
