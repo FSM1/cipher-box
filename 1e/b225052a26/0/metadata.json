@@ -1,0 +1,116 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "1eb225052a26",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T19:42:31.669041Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/tee-worker/src/services/migration-worker.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "c76bbf691005",
+  "token_usage": {
+    "input_tokens": 422,
+    "cache_creation_tokens": 587353,
+    "cache_read_tokens": 59089195,
+    "output_tokens": 90796,
+    "api_call_count": 340
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Execute Phase 35 of the cipher-box project, migrating the TEE worker to Phala Cloud CVM with full monorepo integration, tests, instrumentation, and deployment verification.",
+    "outcome": "All 6 plans completed across 4 waves: TEE worker relocated to apps/tee-worker/ with shared packages, 58 unit tests added, Phala SDK integrated with Prometheus metrics, staging CI/CD updated, and CVM deployed and verified on Phala Cloud production infrastructure. PR #395 created with security fixes, lint fixes, and all review comments resolved.",
+    "learnings": {
+      "repo": [
+        "Phala Cloud has no separate testnet — the free tier runs on production nodes (Intel TDX, dstack-pha-prod5). Phase 35 was named 'phala-testnet' but the CVM runs on production Phala infrastructure.",
+        "The `entire` branch stores full conversation transcripts as JSONL files and is pushed automatically — any credentials shared in conversation will be checkpointed to this branch.",
+        "HANDOFF.json and .continue-here.md are used for cross-session/cross-machine resumption; they should never contain live credentials.",
+        "The staging deploy workflow (deploy-staging.yml) has build-tee and deploy-tee-phala jobs that auto-deploy the CVM when a staging-v* tag is pushed, using PHALA_CLOUD_API_KEY and STAGING_TEE_WORKER_SECRET from GitHub staging environment secrets.",
+        "TEE_WORKER_SECRET must be kept in sync between the API's staging .env on the VPS and the Phala CVM deployment — both are injected from the same GitHub staging secret.",
+        "multiformats package (providing CID.parse) is a dependency of @cipherbox/crypto and should be used for CID validation rather than hand-rolled regex.",
+        "undici is bundled with Node.js but requires explicit installation as a dev dependency for TypeScript types in pnpm workspaces."
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/routes/public-key.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Original implementation called getKeypair() instead of getPublicKey(), leaking private key material into the route scope."
+        },
+        {
+          "path": "apps/tee-worker/src/services/ssrf-validation.ts",
+          "line": 80,
+          "end_line": 130,
+          "finding": "DNS pinning via hostname rewrite (changing URL host to resolved IP) breaks TLS SNI and certificate validation. Correct approach: use undici Agent with a custom lookup function so the original hostname is preserved for TLS while the connection goes to the pinned IP."
+        },
+        {
+          "path": "apps/tee-worker/src/services/migration-worker.ts",
+          "line": 112,
+          "end_line": 112,
+          "finding": "SSRF bypass check compared endpoint variable against 'cipherbox' instead of the protocol variable — a logic bug that would allow non-cipherbox protocols to bypass the check."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/migrate.ts",
+          "line": 33,
+          "end_line": 34,
+          "finding": "parseInt(process.env.TEE_CURRENT_EPOCH || '1', 10) yields NaN if the env var is set to a non-numeric string. Fixed with explicit isFinite check and fallback to 1."
+        },
+        {
+          "path": "apps/tee-worker/src/services/migration-worker.ts",
+          "line": 40,
+          "end_line": 43,
+          "finding": "Buffer.from(hex, 'hex') silently truncates invalid hex chars. Explicit validation of hex string format (non-empty, even length, /^[0-9a-fA-F]+$/) should precede unwrapKey call."
+        },
+        {
+          "path": "apps/tee-worker/src/middleware/metrics.ts",
+          "line": 51,
+          "end_line": 51,
+          "finding": "404/unmatched route label should be '/:unmatched' not 'unmatched' to align with the API's http-metrics.interceptor.ts pattern and prevent unbounded Prometheus label cardinality."
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/index.ts",
+          "line": 1,
+          "end_line": 9,
+          "finding": "FetchFn type was exported from types.ts but not re-exported from the pinning barrel index, forcing consumers to use ProviderOptions['fetchFn'] or deep-import."
+        }
+      ],
+      "workflow": [
+        "GSD pause-work/resume-work successfully transferred execution context across machines (development machine → Docker host → back). HANDOFF.json provides structured machine-readable state; .continue-here.md provides human context.",
+        "When parallel executor agents commit with --no-verify, worktree merge conflicts in STATE.md and ROADMAP.md are common and require manual resolution taking the agent's version.",
+        "Git worktree-based parallel agent execution can hit git config lock contention; sequential execution of Wave 2 agents resolved the issue.",
+        "Security review should be done before creating a PR, not after — several high/medium findings required post-PR commits.",
+        "Credentials pasted into Claude conversations appear in the entire/ branch transcripts automatically. Rotate any secrets shared in conversation regardless of whether they appear in committed files."
+      ]
+    },
+    "friction": [
+      "Usage limit interruption mid-Wave 2 parallel execution — both agents failed and required manual retry sequentially",
+      "Git config lock contention prevented parallel worktree agent execution for Wave 2; had to fall back to sequential",
+      "Worktree merge was complicated by STATE.md conflicts on every wave merge — required manual resolution each time",
+      "gsd-tools init failed when run from the main repo instead of the worktree, requiring discovery of the correct working directory",
+      "undici TypeScript types not auto-resolved in pnpm workspace despite being bundled with Node.js — required explicit pnpm add undici",
+      "Phala CLI restart command doesn't provide a clean wait mechanism — required polling with curl retries and significant wait times",
+      "Handoff files (HANDOFF.json, .continue-here.md) included live credentials that were pushed to remote and later appeared in entire/ branch transcripts, requiring credential rotation"
+    ],
+    "open_items": [
+      "SSRF connection-test.ts vs sdk-core probe deduplication — significant refactor deferred from /simplify review",
+      "Phala CVM deployment currently requires manual staging tag push to redeploy with rotated credentials — the old (now-revoked) API key and TEE worker secret are in git history on the phase-35 branch and entire/ transcript",
+      "The 35-HUMAN-UAT.md file persists with status: partial and will surface in future /gsd:progress and /gsd:audit-uat until explicitly verified/closed",
+      "Phase 35 directory is named 'phala-testnet-tee-migration' which is a misnomer — docs updated but directory name retained to avoid breaking cross-references",
+      "Republish latency baselines (~1155ms avg) are network-bound from the test machine to Phala Cloud prod5 — production co-located latency not yet measured",
+      "CVM epoch persistence tested only through one restart cycle — long-term epoch stability under production load not validated"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T19:41:46.681841Z",
+    "agent_lines": 0,
+    "human_added": 3,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "agent_percentage": 0
+  }
+}
