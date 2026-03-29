@@ -44,11 +44,25 @@ test.describe.serial('Batch Download', () => {
   test.beforeAll(async ({ browser: b }) => {
     browser = b;
     const account = createTestAccount();
-    context = await browser.newContext();
-    page = await context.newPage();
-    await setupMockWallet(page, account);
-    const result = await loginViaWallet(page, { timeout: 90_000 });
-    expect(result.outcome).toBe('success');
+
+    // Retry login once — the first test suite in the CI run can hit cold-start
+    // issues where the page crashes before the auth flow completes.
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        context = await browser.newContext();
+        page = await context.newPage();
+        await setupMockWallet(page, account);
+        const result = await loginViaWallet(page, { timeout: 90_000 });
+        expect(result.outcome).toBe('success');
+        lastError = undefined;
+        break;
+      } catch (err) {
+        lastError = err;
+        await context?.close().catch(() => {});
+      }
+    }
+    if (lastError) throw lastError;
 
     fileList = new FileListPage(page);
     uploadZone = new UploadZonePage(page);
