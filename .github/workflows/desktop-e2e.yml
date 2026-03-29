@@ -1,8 +1,6 @@
 name: Desktop E2E Tests
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -12,49 +10,8 @@ on:
         type: string
 
 jobs:
-  changes:
-    name: Detect Changes
-    # Only run change detection for push events (skip for workflow_dispatch and workflow_call)
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    outputs:
-      desktop: ${{ steps.filter.outputs.desktop }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          base: ${{ github.event.before }}
-          filters: |
-            desktop:
-              - 'apps/desktop/src/**'
-              - 'apps/desktop/src-tauri/src/**'
-              - 'apps/desktop/src-tauri/vendor/**'
-              - 'apps/desktop/src-tauri/capabilities/**'
-              - 'apps/desktop/src-tauri/resources/**'
-              - 'apps/desktop/src-tauri/Cargo.toml'
-              - 'apps/desktop/src-tauri/build.rs'
-              - 'apps/desktop/src-tauri/rust-toolchain.toml'
-              - 'apps/desktop/index.html'
-              - 'apps/desktop/vite.config.*'
-              - 'apps/desktop/tsconfig*'
-              - 'crates/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'tests/vectors/**'
-              - 'packages/crypto/src/**'
-              - 'packages/crypto/tsconfig*'
-              - '.github/workflows/desktop-e2e.yml'
-
   desktop-e2e:
     name: Desktop E2E (${{ matrix.platform }})
-    needs: [changes]
-    if: >-
-      always() && !cancelled() &&
-      (
-        github.event_name != 'push' ||
-        needs.changes.outputs.desktop == 'true'
-      )
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
