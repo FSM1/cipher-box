@@ -63,3 +63,33 @@ Ready for orchestrator summary.
 ---
 
 ok can we stash the structure changes, pull in latest main, and run the concerns analysis again, now that phase 33 has been merged.
+
+---
+
+<task-notification>
+<task-id>ac17890cfb8a73b1e</task-id>
+<tool-use-id>toolu_01JH6SphdueCrVseSPXJRuXS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/ac17890cfb8a73b1e.output</output-file>
+<status>completed</status>
+<summary>Agent "Re-map codebase concerns" completed</summary>
+<result>## Mapping Complete
+
+**Focus:** concerns
+**Documents written:**
+- `/Users/michael/Code/cipher-box/.planning/codebase/CONCERNS.md` (233 lines)
+
+**Resolved concerns (removed):**
+- "Pervasive console.log/warn/error in web app" — Phase 28 replaced all 127 calls with structured `logger` (`apps/web/src/lib/logger.ts`). Only 2 files retain `console.*` calls.
+- "No monitoring/observability (web app)" — Phase 30 added Grafana Faro integration (`apps/web/src/lib/faro.ts`) with sensitive data scrubbing, deployed via `VITE_FARO_URL` in staging CI.
+- "Large monolithic files in web app" — Phase 31 decomposed the largest files. `useSharedNavigation.ts` dropped from 1199 to 378 lines; `FileBrowser.tsx` from 964 to 362 lines. Remaining large files (`folder.service.ts` at 1059, `bin.service.ts` at 971) no longer cross the prior threshold warranting a separate concern entry.
+- "FUSE FilePointer resolution blocks filesystem thread" — Phase 32 (macOS) and Phase 33 (Windows) both converted FilePointer resolution to async via `rt.spawn()` channel patterns. Both `crates/fuse/src/read_ops.rs` and `crates/fuse/src/platform/windows/read_ops.rs` now use async resolution.
+
+**New concerns added:**
+- Residual `console.time` calls in `apps/web/src/lib/web3auth/hooks.ts` (12 unguarded calls surviving Phase 28)
+- Mutex `unwrap()` calls in FUSE production code — 19+ `lock().unwrap()` sites that can cause cascading panics on poisoned mutex
+- Orphaned IPNS unenrollment concern updated to reflect that SDK handles it fire-and-forget but without persistence across tab closure
+- Versioning E2E test gap removed — quick task 018 was completed 2026-02-19
+
+Ready for orchestrator summary.</result>
+<usage><total_tokens>83891</total_tokens><tool_uses>131</tool_uses><duration_ms>414865</duration_ms></usage>
+</task-notification>
