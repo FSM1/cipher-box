@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0eb210591a47",
+  "strategy": "manual-commit",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "tests/web-e2e/baselines/staging-journey-timing.json",
+    "tests/web-e2e/playwright.config.ts",
+    "tests/web-e2e/tests/journey-timing.spec.ts",
+    "tests/web-e2e/utils/cleanup-helpers.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0e/b210591a47/0/metadata.json",
+      "transcript": "/0e/b210591a47/0/full.jsonl",
+      "content_hash": "/0e/b210591a47/0/content_hash.txt",
+      "prompt": "/0e/b210591a47/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 230,
+    "cache_creation_tokens": 290607,
+    "cache_read_tokens": 6577168,
+    "output_tokens": 25633,
+    "api_call_count": 82
+  }
+}
