@@ -1,4 +1,6 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
+import { writeFileSync, unlinkSync } from 'fs';
+import { resolve } from 'path';
 import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { createTestMediaFile, cleanupTestFiles } from '../utils/test-files';
 import { deleteAccountViaPage } from '../utils/cleanup-helpers';
@@ -117,52 +119,45 @@ test.describe.serial('Media Preview', () => {
   });
 
   test('preview error state for corrupt file', async () => {
-    // Upload a text file with .mp4 extension to trigger an error state
     const corruptName = `corrupt-${timestamp}.mp4`;
-    const { writeFileSync } = await import('fs');
-    const { resolve } = await import('path');
-    const corruptPath = resolve(
-      process.cwd(),
-      'tests/web-e2e/fixtures/files',
-      corruptName
-    );
-    writeFileSync(corruptPath, 'This is not a valid video file');
+    const corruptPath = resolve(process.cwd(), 'tests/web-e2e/fixtures/files', corruptName);
 
-    await uploadZone.uploadFile(corruptPath);
-    await fileList.waitForItemToAppear(corruptName, { timeout: 60_000 });
+    try {
+      // Create a text file with .mp4 extension to trigger an error state
+      writeFileSync(corruptPath, 'This is not a valid video file');
 
-    // Open preview
-    await fileList.rightClickItem(corruptName);
-    await contextMenu.waitForOpen();
-    await contextMenu.clickPreview();
+      await uploadZone.uploadFile(corruptPath);
+      await fileList.waitForItemToAppear(corruptName, { timeout: 60_000 });
 
-    // Wait for the video modal to appear
-    await page.locator('.video-player-modal').waitFor({ state: 'visible', timeout: 30_000 });
+      await fileList.rightClickItem(corruptName);
+      await contextMenu.waitForOpen();
+      await contextMenu.clickPreview();
 
-    // Check for error state -- the video element may show an error or the
-    // error container may appear. Accept either outcome.
-    const errorVisible = await page
-      .locator('.video-preview-error')
-      .waitFor({ state: 'visible', timeout: 15_000 })
-      .then(() => true)
-      .catch(() => false);
+      await page.locator('.video-player-modal').waitFor({ state: 'visible', timeout: 30_000 });
 
-    if (!errorVisible) {
-      // The video element itself may have errored -- check via evaluate
-      const videoError = await page.evaluate(() => {
-        const video = document.querySelector('.video-player-modal video') as HTMLVideoElement;
-        return video ? video.error !== null : false;
-      });
       // Accept either explicit error container or video element error
-      expect(errorVisible || videoError).toBe(true);
+      const errorVisible = await page
+        .locator('.video-preview-error')
+        .waitFor({ state: 'visible', timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+
+      if (!errorVisible) {
+        const videoError = await page.evaluate(() => {
+          const video = document.querySelector('.video-player-modal video') as HTMLVideoElement;
+          return video ? video.error !== null : false;
+        });
+        expect(errorVisible || videoError).toBe(true);
+      }
+
+      await page.keyboard.press('Escape');
+      await page.locator('.video-player-modal').waitFor({ state: 'hidden', timeout: 5_000 });
+    } finally {
+      try {
+        unlinkSync(corruptPath);
+      } catch {
+        /* already cleaned up */
+      }
     }
-
-    // Clean up temp file
-    const { unlinkSync, existsSync } = await import('fs');
-    if (existsSync(corruptPath)) unlinkSync(corruptPath);
-
-    // Close modal
-    await page.keyboard.press('Escape');
-    await page.locator('.video-player-modal').waitFor({ state: 'hidden', timeout: 5_000 });
   });
 });

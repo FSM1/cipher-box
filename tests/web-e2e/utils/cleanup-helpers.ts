@@ -13,22 +13,18 @@ import type { Page } from '@playwright/test';
  */
 export async function deleteAccountViaPage(page: Page): Promise<void> {
   try {
-    // Discover the API base URL from the app's runtime config or page URL
-    const apiBase = await page.evaluate(() => {
-      // Check if the app exposes the API URL at runtime
-      const fromWindow = (window as unknown as Record<string, string>).__VITE_API_URL;
-      if (fromWindow) return fromWindow;
-      const fromMeta = document.querySelector('meta[name="api-url"]')?.getAttribute('content');
-      if (fromMeta) return fromMeta;
-      // Derive from page URL: app-staging.cipherbox.cc -> api-staging.cipherbox.cc
-      const origin = window.location.origin;
-      if (origin.includes('app-staging.')) return origin.replace('app-staging.', 'api-staging.');
-      if (origin.includes('app.')) return origin.replace('app.', 'api.');
-      return 'http://localhost:3000';
-    });
+    const result = await page.evaluate(async () => {
+      // Discover API URL from app runtime config or derive from page origin
+      const apiUrl =
+        (window as unknown as Record<string, string>).__VITE_API_URL ||
+        document.querySelector('meta[name="api-url"]')?.getAttribute('content') ||
+        (window.location.origin.includes('app-staging.')
+          ? window.location.origin.replace('app-staging.', 'api-staging.')
+          : window.location.origin.includes('app.')
+            ? window.location.origin.replace('app.', 'api.')
+            : 'http://localhost:3000');
 
-    const result = await page.evaluate(async (apiUrl: string) => {
-      // Step 1: Refresh to get a fresh access token (uses HTTP-only cookie)
+      // Refresh to get access token (uses HTTP-only cookie)
       const refreshRes = await fetch(`${apiUrl}/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
@@ -36,7 +32,6 @@ export async function deleteAccountViaPage(page: Page): Promise<void> {
       if (!refreshRes.ok) return { ok: false, step: 'refresh', status: refreshRes.status };
       const { accessToken } = await refreshRes.json();
 
-      // Step 2: Delete the account
       const deleteRes = await fetch(`${apiUrl}/auth/account`, {
         method: 'DELETE',
         credentials: 'include',
@@ -47,7 +42,7 @@ export async function deleteAccountViaPage(page: Page): Promise<void> {
         body: JSON.stringify({ confirmation: 'DELETE' }),
       });
       return { ok: deleteRes.ok, step: 'delete', status: deleteRes.status };
-    }, apiBase);
+    });
 
     if (!result.ok) {
       console.warn(`[cleanup] Account deletion failed at ${result.step}: HTTP ${result.status}`);

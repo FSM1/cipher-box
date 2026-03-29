@@ -11,6 +11,7 @@ import { RenameDialogPage } from '../page-objects/dialogs/rename-dialog.page';
 import { ConfirmDialogPage } from '../page-objects/dialogs/confirm-dialog.page';
 import { MoveDialogPage } from '../page-objects/dialogs/move-dialog.page';
 import { createTestTextFile, createTestBinaryFile, cleanupTestFiles } from '../utils/test-files';
+import { deleteAccountViaPage } from '../utils/cleanup-helpers';
 
 /**
  * Load Test — Concurrent Users Against Staging
@@ -163,45 +164,10 @@ async function deleteItem(client: LoadClient, itemName: string): Promise<void> {
   await client.fileList.waitForItemToDisappear(itemName, { timeout: OP_TIMEOUT });
 }
 
-/** Delete account by calling the API from within the page context.
- *  Uses fetch with credentials to send the refresh token cookie,
- *  gets a fresh access token, then calls DELETE /auth/account. */
+/** Delete account using shared cleanup helper. Throws on failure (unlike
+ *  the best-effort version in afterAll hooks) so load test reports failures. */
 async function deleteAccount(client: LoadClient): Promise<void> {
-  // Discover the API base URL from the app's runtime config
-  const apiBase = await client.page.evaluate(() => {
-    // Vite injects env vars at build time — read from the same source as apiClient
-    return (
-      (window as unknown as Record<string, string>).__VITE_API_URL ||
-      document.querySelector('meta[name="api-url"]')?.getAttribute('content') ||
-      'https://api-staging.cipherbox.cc'
-    );
-  });
-
-  const deleted = await client.page.evaluate(async (apiUrl: string) => {
-    // Step 1: Refresh to get a fresh access token (uses HTTP-only cookie)
-    const refreshRes = await fetch(`${apiUrl}/auth/refresh`, {
-      method: 'POST',
-      credentials: 'include',
-    });
-    if (!refreshRes.ok) return { ok: false, step: 'refresh', status: refreshRes.status };
-    const { accessToken } = await refreshRes.json();
-
-    // Step 2: Delete the account
-    const deleteRes = await fetch(`${apiUrl}/auth/account`, {
-      method: 'DELETE',
-      credentials: 'include',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ confirmation: 'DELETE' }),
-    });
-    return { ok: deleteRes.ok, step: 'delete', status: deleteRes.status };
-  }, apiBase);
-
-  if (!deleted.ok) {
-    throw new Error(`Account deletion failed at ${deleted.step}: HTTP ${deleted.status}`);
-  }
+  await deleteAccountViaPage(client.page);
 }
 
 /** Multi-select items and batch move */
