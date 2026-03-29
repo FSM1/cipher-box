@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a97d8f0b009f",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T05:03:10.795432Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "0a8410f610b6",
+  "token_usage": {
+    "input_tokens": 325,
+    "cache_creation_tokens": 350747,
+    "cache_read_tokens": 19977252,
+    "output_tokens": 52307,
+    "api_call_count": 161
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E Test Expansion \u0026 Staging Baselines) — create account cleanup helpers, media/streaming tests, batch download tests, and capture staging performance baselines including BYO-IPFS (Pinata) load tests.",
+    "outcome": "Phase 34 completed with 4/4 plans verified (13/13 must-haves passed). All test suites created and wired up. Staging journey timing baselines captured. SDK-level load tests were throttle-limited to ~10 clients due to a staging throttle bypass gap — a learnings file was created and gap closure planning deferred.",
+    "learnings": {
+      "repo": [
+        "Staging Web3Auth init takes ~22.7s (wallet auth phase); vault load after auth is only ~142ms — tests need \u003e20s timeout for the wallet button",
+        "playwright.config.ts did not respect BASE_URL env var for targeting staging — required fix to use process.env.BASE_URL and skip webServer when targeting external URL",
+        "Vitest does not auto-load .env files — must source .env manually before running vitest or configure dotenv in setup",
+        "deleteAccountViaPage cleanup helper hardcoded localhost:3000 API URL — needed fix to derive API URL dynamically from page URL for staging runs",
+        "SDK load test createTestAccount does not forward THROTTLE_BYPASS_SECRET header, causing 429s when creating many accounts against staging (bypass works fine for regular API calls)",
+        "Staging uses NODE_ENV=staging with production throttle limits (10/sec, 100/min); CI uses NODE_ENV=test with relaxed limits (200/sec, 2000/min) — this is why load tests pass in CI but fail on staging",
+        "Caddy reverse proxy upstream of NestJS may apply its own rate limiting independent of the ThrottlerBypassGuard"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "Wallet button waitFor timeout of 20s is too short for staging — Web3Auth SDK init can take \u003e20s; increased to 45s"
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "finding": "Added BASE_URL env var support and conditional webServer (skip when BASE_URL points to external host)"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "finding": "deleteAccountViaPage now derives API URL from page URL (replace app subdomain with api subdomain) instead of hardcoding localhost:3000"
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "finding": "Guard logic is correct — bypass header works when manually tested with curl/Node fetch against staging. Issue is upstream in test harness account creation flow"
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "finding": "No dotenv loading configured — env vars must be sourced in shell before invoking vitest"
+        }
+      ],
+      "workflow": [
+        "When agents commit with --no-verify to avoid hook contention, cherry-picking to the main branch can cause STATE.md conflicts — take the worktree version",
+        "Worktree cleanup must be done before spawning a new agent to the same plan directory to avoid git lock contention",
+        "Background bash tasks time out at 10 minutes — long-running load tests should be structured to emit partial results early",
+        "For BYO provider testing, always verify the provider endpoint and auth token are propagated to the test process (vitest worker thread env isolation)",
+        "Verify test infrastructure against staging manually before delegating to agents — staging-specific config gaps (BASE_URL, timeouts) will silently fail"
+      ]
+    },
+    "friction": [
+      "Vitest does not load .env files by default — BYO capacity ceiling test skipped entirely with 'BYO_IPFS_ENDPOINT not set' until env was sourced manually",
+      "playwright.config.ts BASE_URL env var was not respected — all 'staging' test runs were silently hitting localhost:5173 until config was patched",
+      "Journey timing test timed out on staging because Web3Auth init takes \u003e20s but timeout was hardcoded to 20s",
+      "Git lock contention when 34-03 spawned while 34-02 worktree was still being cleaned up — required manual worktree force-removal",
+      "Cherry-picking worktree commits to phase branch caused STATE.md merge conflicts on every plan",
+      "SSH to VPS timed out when trying to verify staging Docker container env vars — could not confirm server-side secret value",
+      "Staging throttle limiter blocked SDK load test at ~10 concurrent account creations, making 200-client load baselines uncapturable in this phase",
+      "BYO capacity ceiling test completed with all BYO tests skipped (env not loaded) on first run — wasted ~5 minutes of test time"
+    ],
+    "open_items": [
+      "Gap closure needed: SDK test harness createTestAccount does not forward THROTTLE_BYPASS_SECRET header — staging load tests throttle-limited to ~10 clients, making meaningful load baselines uncapturable",
+      "Caddy reverse proxy may apply independent rate limiting upstream of NestJS ThrottlerBypassGuard — needs investigation",
+      "BYO capacity ceiling test (50→100→200→500→1000 clients) never produced results — needs re-run after throttle bypass gap is fixed",
+      "Sustained load test (200 clients) only ran 10/200 clients — needs re-run after fix",
+      "New media/streaming test specs (streaming-playback.spec.ts, media-preview.spec.ts) use binary stub fixtures — need live environment run to confirm AES-CTR/GCM code paths are actually triggered",
+      "Browser load test (5 Chromium clients) showed C4/C5 context exhaustion under contention — Playwright concurrent session limits need investigation for higher client counts",
+      "Learnings file committed at .learnings/2026-03-29-staging-load-test-throttle-bypass.md — needs follow-up after gap closure to update with resolution"
+    ]
+  }
+}
