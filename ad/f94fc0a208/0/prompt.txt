@@ -319,3 +319,7 @@ any reason for that file name not matching the test name - web-e2e.yml?
 ---
 
 are you sure there are no other timeouts set at 10 minutes elsewhere in the pipeline, like on the web-e2e workflow directly
+
+---
+
+/resolve-pr-reviews
