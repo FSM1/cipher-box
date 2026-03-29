@@ -1,0 +1,81 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cb7f6e5552c0",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T21:57:19.693309Z",
+  "branch": "feat/sdk-ctr-upload",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "e7c66bfc86af",
+  "token_usage": {
+    "input_tokens": 102,
+    "cache_creation_tokens": 81669,
+    "cache_read_tokens": 5598636,
+    "output_tokens": 19214,
+    "api_call_count": 84
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Wire CTR encryption mode into the SDK's uploadFile() for large media files, so newly uploaded media activates the streaming playback pipeline instead of always using GCM.",
+    "outcome": "CTR encryption is now correctly selected for large media files in both the SDK and web app, FLAC support was added, MIME type logic was centralized into sdk-core, pre-existing test failures were fixed, E2E tests passed, and a PR was created and reviewed.",
+    "learnings": {
+      "repo": [
+        "selectEncryptionMode() existed only in apps/web/src/services/streaming-crypto.service.ts and was never called for new SDK uploads — only for the duplicate-file re-encrypt path.",
+        "STREAMING_MIME_TYPES and CTR_SIZE_THRESHOLD (256KB) were duplicated between packages/sdk/src/client.ts and apps/web/src/services/streaming-crypto.service.ts; consolidated into packages/sdk-core/src/encryption-mode.ts.",
+        "sdk-core pre-existing test failures: PublishIpnsResponseDto lost the `cid` field; ResolveIpnsResponseDto lost the `source` field; IpfsAddResult shape is { cid, size, recorded } not just { cid }.",
+        "The SDK imports compiled types from sdk-core's build output, so sdk-core must be rebuilt before typechecking the SDK.",
+        "FLAC files (audio/flac) were missing from STREAMING_MIME_TYPES in both the SDK client and web app streaming-crypto service.",
+        "The streaming-playback E2E spec had a test.skip on the CTR encrypted badge test that was intentionally deferred until this feature landed.",
+        "The web app's selectEncryptionMode takes a File object (browser API) while the centralized version takes (mimeType, size); web app now wraps the shared function."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "uploadFile() hardcoded encryptAesGcm and GCM mode; now accepts optional encryptionMode param and branches on CTR vs GCM."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "end_line": 691,
+          "finding": "uploadFile() now calls selectEncryptionMode() from sdk-core before delegating to sdkCore.uploadFile()."
+        },
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "finding": "New module centralizing STREAMING_MIME_TYPES, CTR_SIZE_THRESHOLD, selectEncryptionMode(), and normalizeEncryptionMode() to avoid duplication across packages."
+        },
+        {
+          "path": "apps/web/src/services/streaming-crypto.service.ts",
+          "line": 53,
+          "end_line": 53,
+          "finding": "Local selectEncryptionMode replaced with thin wrapper delegating to sdk-core's shared implementation."
+        },
+        {
+          "path": "tests/web-e2e/tests/streaming-playback.spec.ts",
+          "finding": "Removed test.skip from CTR encrypted badge visibility test; all 6 streaming playback tests now pass including this one."
+        }
+      ],
+      "workflow": [
+        "Build sdk-core before typechecking dependent packages (sdk, web) to avoid stale type errors.",
+        "Rebuilt sdk-core packages are picked up by the Vite dev server via HMR for E2E testing without restarting the dev server.",
+        "PR review comments from automated reviewers (CodeRabbit) flagged both the missing validation and the MIME type duplication — both were valid and addressed."
+      ]
+    },
+    "friction": [
+      "sdk typecheck failed initially because sdk-core build output was stale — had to rebuild sdk-core first before the SDK could typecheck cleanly.",
+      "FLAC was missing from STREAMING_MIME_TYPES and only caught post-PR by the user, not during implementation.",
+      "MIME type list was duplicated in two places from the start; CodeRabbit had to flag it before it was centralized."
+    ],
+    "open_items": [
+      "PR FSM1/cipher-box#399 targets fix/e2e-test-failures-v2 (not main); needs retargeting to main after that branch merges.",
+      "The other 13 pending todos (Web Worker offload, ERC-1271, CRDT IPNS inbox, async search index, MFA factor types, mock-ipns-routing removal, multiple E2E test suites, BYO-IPFS load tests, staging metrics baselines, BYO-IPFS 400 errors) remain pending.",
+      "normalizeEncryptionMode() in sdk-core validates/normalizes encryptionMode at the upload boundary — consider whether callers outside the SDK also need this guard."
+    ]
+  }
+}
