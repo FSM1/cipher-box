@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "adf94fc0a208",
+  "session_id": "c330798c-ab40-490c-8805-6ed8f1747898",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T17:54:43.844755Z",
+  "branch": "fix/increase-e2e-timeout",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "eeab10ea6b0f",
+  "token_usage": {
+    "input_tokens": 340,
+    "cache_creation_tokens": 261334,
+    "cache_read_tokens": 27342970,
+    "output_tokens": 79262,
+    "api_call_count": 254
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Resolve automated PR review comments from Copilot and CodeRabbit on PR #392, then improve the CI/CD pipeline by fixing the release gate to block on E2E tests and consolidating change detection into a single orchestrator workflow.",
+    "outcome": "All review comments on PR #392 resolved with 3 fixes committed. PR #394 merged to main introducing ci-e2e.yml orchestrator with unified path-based change detection for both web and desktop E2E, plus a retrigger mechanism ensuring release-please PRs re-evaluate after any push to main. PR #396 opened to increase web-e2e timeout from 15→20 minutes and rename e2e.yml to web-e2e.yml.",
+    "learnings": {
+      "repo": [
+        "Release gate (release-gate.yml) only enforced E2E for release-please branches, auto-passing with 'Not a release PR' for all other PRs — this was the root cause of the stale gate issue",
+        "web-e2e runs on push to main (not on PRs); desktop-e2e previously had its own dorny/paths-filter; both now delegated to ci-e2e.yml orchestrator",
+        "CodeRabbit has a quota/rate-limit that enforces cooldown periods between reviews on the same PR",
+        "Committed fixture files live in tests/web-e2e/fixtures/files/ — test-audio.mp3, test-document.pdf, test-video-small.mp4, test-video.mp4",
+        "Playwright config uses reuseExistingServer: !process.env.CI, meaning in CI Playwright starts its own API and web dev servers from scratch",
+        "The project uses dorny/paths-filter for conditional job execution and requires fetch-depth: 0 for proper before/after SHA diff",
+        "gh run rerun preserves the original GITHUB_SHA, so retrigger jobs must diff against origin/main rather than HEAD",
+        "Desktop E2E relevant paths: apps/desktop/**, crates/**, Cargo.toml, Cargo.lock, tests/vectors/**, .github/workflows/ci-e2e.yml",
+        "Web E2E relevant paths: apps/web/**, apps/api/**, packages/crypto/**, packages/core/**, packages/api-client/**, packages/sdk/**, packages/sdk-core/**, tests/web-e2e/**",
+        "Reusable workflow job names in GitHub Actions compose as 'caller-job / callee-job' when checking required status checks"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/test-files.ts",
+          "line": 156,
+          "end_line": 156,
+          "finding": "createTestMediaFile, createTestImageFile, createTestTextFile, and createTestBinaryFile all lacked a guard preventing overwriting committed fixture files — added COMMITTED_FIXTURES set check"
+        },
+        {
+          "path": "tests/web-e2e/baselines/staging-journey-timing.json",
+          "line": 1,
+          "end_line": 19,
+          "finding": "Missing faro_enabled: true metadata field that was required by the verification schema"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 14,
+          "end_line": 16,
+          "finding": "page.evaluate() called in teardown without checking page.isClosed() first, causing errors when page was already closed"
+        },
+        {
+          "path": ".github/workflows/ci-e2e.yml",
+          "line": 22,
+          "end_line": 23,
+          "finding": "dorny/paths-filter requires fetch-depth: 0 to access the before SHA for proper diff; also needs guard for all-zero SHA on branch creation events"
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "line": 286,
+          "end_line": 292,
+          "finding": "Release gate polling loop (40 attempts * 30s = 20 min) must match or exceed the E2E job timeout to avoid declaring failure before E2E completes"
+        }
+      ],
+      "workflow": [
+        "When using gh run rerun to retrigger workflows, the rerun preserves the original checkout SHA — diff comparisons must use origin/main explicitly",
+        "dorny/paths-filter with base/ref SHA comparison is more reliable than relying on GITHUB_SHA for detecting relevant changes",
+        "Automated reviewer comments that are 'outside diff range' don't appear as GraphQL reviewThreads and must be fetched via the review body instead",
+        "gh api GraphQL resolveReviewThread requires the thread node ID, not the comment REST ID — these are different identifiers",
+        "Replying to review comments requires the REST comment ID (integer) as in_reply_to, not the GraphQL node ID",
+        "Release gate required checks that auto-pass (skip) for non-target PRs provide false security — any required check that can green without actual verification is a gap"
+      ]
+    },
+    "friction": [
+      "CodeRabbit was rate-limited for ~23 minutes mid-session, requiring extensive background polling (~30 minutes of wait loops) before the review arrived",
+      "Background poll tasks accumulated during the wait — many completed stale after CodeRabbit eventually posted",
+      "Reply attempts to review comment threads via gh api sometimes hit network timeouts and required retries",
+      "Initial diagnosis of the release gate issue was wrong twice — first thought it was about feature PRs needing E2E on PRs, then about re-triggering on push, before identifying the real issue: stale green checks on release-please PRs after test: commits land",
+      "Outside-diff-range CodeRabbit comments don't surface via GraphQL reviewThreads query, requiring a separate review body fetch to discover them",
+      "ci-e2e.yml desktop patterns in release-gate.yml drifted immediately after ci-e2e.yml was written, requiring a fix commit"
+    ],
+    "open_items": [
+      "Web E2E tests regularly exceeding 20-minute timeout — root cause not yet investigated; Playwright starts API and web dev servers from scratch in CI which adds significant overhead",
+      "Pending todo: debug BYO IPFS register-cid 400 errors on staging (.planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md)",
+      "PR #396 (timeout increase + rename) not yet merged at end of session",
+      "The retrigger-release-gate mechanism only re-runs the release gate if a release-please PR is open — if the gate job is already queued or running, gh run rerun behavior is undefined",
+      "Release gate polling timeout (40 * 30s = 20 min) is exactly equal to the E2E timeout with no buffer — any overhead in the gate job itself could still cause false failures"
+    ]
+  }
+}
