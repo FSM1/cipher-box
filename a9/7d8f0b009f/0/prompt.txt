@@ -51,3 +51,7 @@ ok its updated in the env file.
 <status>failed</status>
 <summary>Background command "Run sustained load 200 clients with env sourced" failed with exit code 1</summary>
 </task-notification>
+
+---
+
+ok, but without the actual unthrottled load test results, does completing this phase even mean anything? can you plan a phase gap closure to fix the throttle bypass not being set. be careful though as this was working perfectly in CI and uses the same script AFAIK
