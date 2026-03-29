@@ -5,19 +5,23 @@ import type { SdkEvent } from '../events';
 import { createTestConfig } from './helpers';
 
 // Mock sdk-core to avoid real IPFS/IPNS calls
-vi.mock('@cipherbox/sdk-core', () => ({
-  loadFolderMetadata: vi.fn(),
-  createSubfolder: vi.fn(),
-  updateFolderMetadataAndPublish: vi.fn(),
-  renameInFolder: vi.fn(),
-  deleteFromFolder: vi.fn(),
-  moveItem: vi.fn(),
-  addFilePointerToFolder: vi.fn(),
-  uploadFile: vi.fn(),
-  downloadAndDecrypt: vi.fn(),
-  batchPublishIpnsRecords: vi.fn(),
-  createAndPublishIpnsRecord: vi.fn(),
-}));
+vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
+  return {
+    ...actual,
+    loadFolderMetadata: vi.fn(),
+    createSubfolder: vi.fn(),
+    updateFolderMetadataAndPublish: vi.fn(),
+    renameInFolder: vi.fn(),
+    deleteFromFolder: vi.fn(),
+    moveItem: vi.fn(),
+    addFilePointerToFolder: vi.fn(),
+    uploadFile: vi.fn(),
+    downloadAndDecrypt: vi.fn(),
+    batchPublishIpnsRecords: vi.fn(),
+    createAndPublishIpnsRecord: vi.fn(),
+  };
+});
 
 import * as sdkCore from '@cipherbox/sdk-core';
 

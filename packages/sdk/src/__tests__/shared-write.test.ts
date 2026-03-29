@@ -34,37 +34,41 @@ vi.mock('@cipherbox/core', async () => {
   };
 });
 
-vi.mock('@cipherbox/sdk-core', () => ({
-  updateFolderMetadataAndPublish: vi.fn().mockResolvedValue({
-    cid: 'QmUpdated',
-    newSequenceNumber: 2n,
-  }),
-  addToIpfs: vi.fn().mockResolvedValue({ cid: 'QmUploaded', size: 100, recorded: true }),
-  batchPublishIpnsRecords: vi.fn().mockResolvedValue({ totalSucceeded: 1, totalFailed: 0 }),
-  createAndPublishIpnsRecord: vi.fn().mockResolvedValue({ success: true, sequenceNumber: 1n }),
-  resolveFileMetadata: vi.fn().mockResolvedValue({
-    metadata: {
-      version: 'v1',
-      cid: 'QmOldFile',
-      fileKeyEncrypted: 'oldkey',
-      fileIv: 'oldiv',
-      size: 50,
-      mimeType: 'text/plain',
-      encryptionMode: 'GCM',
-      createdAt: 1000,
-      modifiedAt: 1000,
-    },
-    metadataCid: 'QmOldMeta',
-  }),
-  updateFileMetadata: vi.fn().mockResolvedValue({
-    ipnsRecord: {
-      ipnsName: 'k51fileipns',
-      recordBase64: 'mockbase64',
-      metadataCid: 'QmNewMeta',
-    },
-    prunedCids: [],
-  }),
-}));
+vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
+  return {
+    ...actual,
+    updateFolderMetadataAndPublish: vi.fn().mockResolvedValue({
+      cid: 'QmUpdated',
+      newSequenceNumber: 2n,
+    }),
+    addToIpfs: vi.fn().mockResolvedValue({ cid: 'QmUploaded', size: 100, recorded: true }),
+    batchPublishIpnsRecords: vi.fn().mockResolvedValue({ totalSucceeded: 1, totalFailed: 0 }),
+    createAndPublishIpnsRecord: vi.fn().mockResolvedValue({ success: true, sequenceNumber: 1n }),
+    resolveFileMetadata: vi.fn().mockResolvedValue({
+      metadata: {
+        version: 'v1',
+        cid: 'QmOldFile',
+        fileKeyEncrypted: 'oldkey',
+        fileIv: 'oldiv',
+        size: 50,
+        mimeType: 'text/plain',
+        encryptionMode: 'GCM',
+        createdAt: 1000,
+        modifiedAt: 1000,
+      },
+      metadataCid: 'QmOldMeta',
+    }),
+    updateFileMetadata: vi.fn().mockResolvedValue({
+      ipnsRecord: {
+        ipnsName: 'k51fileipns',
+        recordBase64: 'mockbase64',
+        metadataCid: 'QmNewMeta',
+      },
+      prunedCids: [],
+    }),
+  };
+});
 
 // ---- Imports under test (after mocks) ----
 

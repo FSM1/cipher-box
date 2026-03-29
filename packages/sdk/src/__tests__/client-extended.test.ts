@@ -13,23 +13,27 @@ vi.mock('@cipherbox/crypto', () => ({
 }));
 
 // Mock sdk-core
-vi.mock('@cipherbox/sdk-core', () => ({
-  loadFolderMetadata: vi.fn(),
-  createSubfolder: vi.fn(),
-  updateFolderMetadataAndPublish: vi.fn(),
-  renameInFolder: vi.fn(),
-  deleteFromFolder: vi.fn(),
-  moveItem: vi.fn(),
-  addFilePointerToFolder: vi.fn(),
-  uploadFile: vi.fn(),
-  downloadAndDecrypt: vi.fn(),
-  resolveFileMetadata: vi.fn(),
-  batchPublishIpnsRecords: vi.fn(),
-  createAndPublishIpnsRecord: vi.fn(),
-  addToIpfs: vi.fn(),
-  fetchFromIpfs: vi.fn(),
-  unpinFromIpfs: vi.fn(),
-}));
+vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
+  return {
+    ...actual,
+    loadFolderMetadata: vi.fn(),
+    createSubfolder: vi.fn(),
+    updateFolderMetadataAndPublish: vi.fn(),
+    renameInFolder: vi.fn(),
+    deleteFromFolder: vi.fn(),
+    moveItem: vi.fn(),
+    addFilePointerToFolder: vi.fn(),
+    uploadFile: vi.fn(),
+    downloadAndDecrypt: vi.fn(),
+    resolveFileMetadata: vi.fn(),
+    batchPublishIpnsRecords: vi.fn(),
+    createAndPublishIpnsRecord: vi.fn(),
+    addToIpfs: vi.fn(),
+    fetchFromIpfs: vi.fn(),
+    unpinFromIpfs: vi.fn(),
+  };
+});
 
 // Mock bin module
 vi.mock('../bin', () => ({
