@@ -532,7 +532,7 @@ Phase 31 decomposed the original monolithic `useSharedNavigation.ts` (1199 lines
 
 - Purpose: Infrastructure configuration for staging/production
 - Contains: `grafana/dashboards/`, `grafana/alerts/`, Caddyfile (reverse proxy), Alloy config (telemetry), docker-compose variants
-- Not used for local dev (services run directly on host at `192.168.133.114`)
+- Not used for local dev
 
 ## Implementation Status
 
