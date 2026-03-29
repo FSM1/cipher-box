@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Milestone complete
-last_updated: '2026-03-29T04:52:03.283Z'
+last_updated: "2026-03-29T16:46:52.980Z"
 last_activity: 2026-03-29
 progress:
-  total_phases: 19
-  completed_phases: 19
-  total_plans: 76
-  completed_plans: 76
+  total_phases: 20
+  completed_phases: 20
+  total_plans: 80
+  completed_plans: 80
 ---
 
 # Project State
@@ -19,11 +19,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 34 — E2E Test Expansion & Staging Baselines
+**Current focus:** Milestone complete — all phases (18-35) finished
 
 ## Current Position
 
-Phase: 34
+Phase: 35 (complete)
 Plan: Not started
 
 ## Performance Metrics
@@ -84,6 +84,9 @@ Plan: Not started
 | Phase 34 P01 | 3min  | 2 tasks  | 9 files |
 | Phase 34 P02 | 4min  | 2 tasks  | 8 files |
 | Phase 34 P03 | 2min  | 1 tasks  | 1 files |
+| Phase 35 P02 | 5min  | 4 tasks  | 6 files |
+| Phase 35 P03 | 8min  | 4 tasks  | 14 files |
+| Phase 35 P05 | 5min  | 3 tasks  | 3 files |
 
 ## Accumulated Context
 
@@ -164,7 +167,11 @@ Recent for v1.1:
 - Shared file download/view falls back to fileKeyEncrypted from metadata when no share_key exists
 - FilePointer resolution uses FileMetadata directly (no separate ResolvedFileMetadata struct)
 - FilePointer resolution scoped to parent folder via get_unresolved_file_pointers_for_parent() to avoid wrong-folder-key decryption
-- FilePointer async resolution: 500ms base \* 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
+- FilePointer async resolution: 500ms base * 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
+- Removed custom dstack-sdk.d.ts since @phala/dstack-sdk@0.5.7 ships own TypeScript types
+- Defensive CVM key derivation handles both key (v0.5+) and asUint8Array (legacy) SDK return types
+- TEE worker Prometheus metrics use cipherbox_tee_* prefix for Grafana dashboard coexistence with API metrics
+- TEE worker structured JSON logger has zero external dependencies (JSON.stringify to stdout/stderr)
 
 ### Roadmap Evolution
 

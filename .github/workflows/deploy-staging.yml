@@ -67,12 +67,53 @@ jobs:
 
       - uses: docker/build-push-action@v5
         with:
-          context: ./tee-worker
-          file: tee-worker/Dockerfile
+          context: .
+          file: apps/tee-worker/Dockerfile
           push: true
           tags: |
             ${{ env.TEE_IMAGE }}:${{ env.DEPLOY_TAG }}
             ${{ env.TEE_IMAGE }}:latest
+
+  deploy-tee-phala:
+    name: Deploy TEE Worker to Phala Cloud
+    needs: [build-tee]
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Phala CLI
+        run: npm install -g phala
+
+      - name: Deploy CVM to Phala Cloud
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+          TEE_WORKER_SECRET: ${{ secrets.STAGING_TEE_WORKER_SECRET }}
+        run: |
+          set -euo pipefail
+          OWNER="${{ github.repository_owner }}"
+          export GITHUB_REPOSITORY_OWNER="${OWNER,,}"
+          export TAG="${{ env.DEPLOY_TAG }}"
+
+          # Substitute env vars in compose file
+          envsubst < apps/tee-worker/docker-compose.phala.yml > /tmp/docker-compose.phala.yml
+
+          # Deploy or update CVM (same name = update, preserving app_id and derived keys)
+          # CRITICAL: Never delete and recreate -- app_id changes would invalidate all epoch keys
+          phala deploy \
+            -c /tmp/docker-compose.phala.yml \
+            -n cipherbox-tee-staging \
+            -e "TEE_WORKER_SECRET=${TEE_WORKER_SECRET}" \
+            --wait
+
+          # Output CVM info for debugging
+          phala cvms get cipherbox-tee-staging || true
 
   build-web:
     name: Build Web App
@@ -383,7 +424,7 @@ jobs:
 
   deploy-vps:
     name: Deploy to Staging VPS
-    needs: [build-api, build-tee, build-web]
+    needs: [build-api, build-tee, build-web, deploy-tee-phala]
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -422,7 +463,10 @@ jobs:
           THROTTLE_BYPASS_SECRET=${{ secrets.STAGING_THROTTLE_BYPASS_SECRET }}
           REDIS_HOST=redis
           REDIS_PORT=6379
-          TEE_WORKER_URL=http://tee-worker:3001
+          # TEE_WORKER_URL: Set PHALA_TEE_WORKER_URL in GitHub staging environment vars
+          # after first CVM deploy. Format: https://{app-id}-3001.dstack-prod{N}.phala.network
+          # Get the URL: phala cvms get cipherbox-tee-staging
+          TEE_WORKER_URL=${{ vars.PHALA_TEE_WORKER_URL }}
           TEE_WORKER_SECRET=${{ secrets.STAGING_TEE_WORKER_SECRET }}
           REDIS_PASSWORD=${{ secrets.STAGING_REDIS_PASSWORD }}
           GRAFANA_LOKI_URL=${{ vars.GRAFANA_LOKI_URL }}

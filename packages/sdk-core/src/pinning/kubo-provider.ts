@@ -1,7 +1,7 @@
-import type { PinningProvider, PinResult, PinStatus } from './types';
+import type { PinningProvider, PinResult, PinStatus, ProviderOptions, FetchFn } from './types';
 
-/** Timeout for all Kubo RPC requests — generous for large file pins */
-const REQUEST_TIMEOUT_MS = 10_000;
+/** Default timeout for all Kubo RPC requests — generous for large file pins */
+const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
  * PinningProvider implementation for Kubo RPC API (/api/v0/*).
@@ -12,11 +12,15 @@ const REQUEST_TIMEOUT_MS = 10_000;
 export class KuboProvider implements PinningProvider {
   private readonly endpoint: string;
   private readonly authToken?: string;
+  private readonly fetchFn: FetchFn;
+  private readonly timeoutMs: number;
 
-  constructor(endpoint: string, authToken?: string) {
+  constructor(endpoint: string, authToken?: string, options?: ProviderOptions) {
     // Normalize: strip trailing slash
     this.endpoint = endpoint.replace(/\/+$/, '');
     this.authToken = authToken;
+    this.fetchFn = options?.fetchFn ?? globalThis.fetch;
+    this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
   /**
@@ -30,11 +34,11 @@ export class KuboProvider implements PinningProvider {
     const blob = new Blob([data as BlobPart], { type: 'application/octet-stream' });
     formData.append('file', blob);
 
-    const response = await fetch(url, {
+    const response = await this.fetchFn(url, {
       method: 'POST',
       body: formData,
       headers: this.buildHeaders(),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {
@@ -58,10 +62,10 @@ export class KuboProvider implements PinningProvider {
   async unpin(cid: string): Promise<void> {
     const url = `${this.endpoint}/api/v0/pin/rm?arg=${encodeURIComponent(cid)}`;
 
-    const response = await fetch(url, {
+    const response = await this.fetchFn(url, {
       method: 'POST',
       headers: this.buildHeaders(),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {
@@ -82,10 +86,10 @@ export class KuboProvider implements PinningProvider {
     const url = `${this.endpoint}/api/v0/pin/ls?arg=${encodeURIComponent(cid)}`;
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchFn(url, {
         method: 'POST',
         headers: this.buildHeaders(),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
 
       if (!response.ok) {
@@ -105,10 +109,10 @@ export class KuboProvider implements PinningProvider {
   async get(cid: string): Promise<Uint8Array> {
     const url = `${this.endpoint}/api/v0/cat?arg=${encodeURIComponent(cid)}`;
 
-    const response = await fetch(url, {
+    const response = await this.fetchFn(url, {
       method: 'POST',
       headers: this.buildHeaders(),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {
