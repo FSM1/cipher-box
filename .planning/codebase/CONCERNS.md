@@ -39,13 +39,6 @@
 - Impact: Type safety gap around the authentication flow. Could mask breaking SDK changes.
 - Fix approach: Create typed wrappers for Web3Auth SDK interactions using `unknown` + type guards.
 
-**Legacy POC directory still in repo:**
-
-- Issue: `00-Preliminary-R&D/poc/` remains alongside production code. Uses deprecated `ipfs-http-client@60.0.1`, has no tests, and uses patterns explicitly superseded by the production implementation.
-- Files: `00-Preliminary-R&D/poc/src/index.ts`, `00-Preliminary-R&D/poc/package.json`
-- Impact: Adds noise to searches and dependency audits. New contributors may confuse PoC with current implementation.
-- Fix approach: Already marked as historical reference per CLAUDE.md. Consider moving to a separate branch or archive tag.
-
 ## Known Bugs
 
 **No active known bugs identified in the current codebase.**
