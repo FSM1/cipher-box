@@ -6,6 +6,7 @@ export type {
   ExternalProviderConfig,
   ConnectionTestResult,
   ProviderOptions,
+  FetchFn,
 } from './types';
 export { KuboProvider } from './kubo-provider';
 export { PsaProvider } from './psa-provider';
