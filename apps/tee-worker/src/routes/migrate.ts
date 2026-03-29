@@ -17,6 +17,7 @@
 import { Router, type Request, type Response } from 'express';
 import { migrateBatch } from '../services/migration-worker.js';
 import { migrationCids } from '../middleware/metrics.js';
+import { logger } from '../services/logger.js';
 
 const router = Router();
 
@@ -72,13 +73,17 @@ router.post('/migrate', async (req: Request, res: Response) => {
     migrationCids.inc({ result: 'failure' }, result.failed.length);
 
     // Log migration summary (NEVER log credentials or config contents)
-    console.log(
-      `Migration batch: ${cids.length} CIDs, ${result.succeeded.length} succeeded, ${result.failed.length} failed`
-    );
+    logger.info('Migration batch complete', {
+      total: cids.length,
+      succeeded: result.succeeded.length,
+      failed: result.failed.length,
+    });
 
     res.status(200).json(result);
   } catch (err) {
-    console.error('Migration batch failed:', err instanceof Error ? err.message : 'Unknown error');
+    logger.error('Migration batch failed', {
+      error: err instanceof Error ? err.message : 'Unknown error',
+    });
     res.status(500).json({
       error: err instanceof Error ? err.message : 'Migration failed',
     });

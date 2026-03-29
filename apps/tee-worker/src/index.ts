@@ -17,6 +17,7 @@
 import express from 'express';
 import { authMiddleware } from './middleware/auth.js';
 import { metricsMiddleware } from './middleware/metrics.js';
+import { logger } from './services/logger.js';
 import healthRouter from './routes/health.js';
 import metricsRouter from './routes/metrics.js';
 import publicKeyRouter from './routes/public-key.js';
@@ -45,7 +46,7 @@ app.use(authMiddleware, migrateRouter);
 app.use(authMiddleware, connectionTestRouter);
 
 app.listen(port, () => {
-  console.log(`TEE Worker started on port ${port} (mode: ${mode})`);
+  logger.info('TEE worker started', { port, mode });
 });
 
 export default app;

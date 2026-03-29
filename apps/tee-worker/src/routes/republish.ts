@@ -17,6 +17,7 @@ import { Router, type Request, type Response } from 'express';
 import { decryptWithFallback, reEncryptForEpoch } from '../services/key-manager.js';
 import { signIpnsRecord } from '../services/ipns-signer.js';
 import { republishEntries } from '../middleware/metrics.js';
+import { logger } from '../services/logger.js';
 
 const router = Router();
 
@@ -122,9 +123,11 @@ router.post('/republish', async (req: Request, res: Response) => {
   }
 
   // Log processing summary (NEVER log key material)
-  console.log(
-    `Republish batch: ${entries.length} entries, ${successes} successes, ${failures} failures`
-  );
+  logger.info('Republish batch complete', {
+    total: entries.length,
+    succeeded: successes,
+    failed: failures,
+  });
 
   res.json({ results });
 });

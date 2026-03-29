@@ -18,6 +18,7 @@
 import { Router, type Request, type Response } from 'express';
 import { unwrapKey } from '@cipherbox/crypto';
 import { getKeypair } from '../services/tee-keys.js';
+import { logger } from '../services/logger.js';
 import {
   validateEndpointUrl,
   validateResolvedIp,
@@ -97,7 +98,9 @@ router.post('/connection-test', async (req: Request, res: Response) => {
       error: 'could not detect ipfs protocol at this endpoint.',
     });
   } catch (err) {
-    console.error('Connection test failed:', err instanceof Error ? err.message : 'Unknown error');
+    logger.error('Connection test failed', {
+      error: err instanceof Error ? err.message : 'Unknown error',
+    });
     res.status(200).json({
       success: false,
       latencyMs: 0,

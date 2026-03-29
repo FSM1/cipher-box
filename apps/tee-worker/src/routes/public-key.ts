@@ -7,6 +7,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { getKeypair } from '../services/tee-keys.js';
+import { logger } from '../services/logger.js';
 
 const router = Router();
 
@@ -31,7 +32,7 @@ router.get('/public-key', async (req: Request, res: Response) => {
       publicKey: publicKeyHex,
     });
   } catch (error) {
-    console.error(`Failed to derive key for epoch ${epoch}:`, (error as Error).message);
+    logger.error('Key derivation failed', { epoch, error: (error as Error).message });
     res.status(500).json({ error: 'Key derivation failed' });
   }
 });
