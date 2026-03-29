@@ -1,4 +1,4 @@
-import { writeFileSync, copyFileSync, unlinkSync, existsSync } from 'fs';
+import { writeFileSync, copyFileSync, unlinkSync, existsSync, statSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -133,6 +133,26 @@ export function cleanupTestFiles(): void {
  */
 export function getTestFilePath(name: string): string {
   return resolve(FIXTURES_DIR, name);
+}
+
+/**
+ * Creates a test media file by copying a committed fixture (e.g. test-video.mp4)
+ * to a unique name. File is tracked for cleanup.
+ *
+ * @param sourceFixture - Name of the committed fixture file (e.g. 'test-video.mp4')
+ * @param name - Optional destination file name (defaults to test-media-{timestamp}.{ext})
+ * @returns Object with file name, absolute path, and size in KB
+ */
+export function createTestMediaFile(sourceFixture: string, name?: string): TestBinaryFile {
+  const timestamp = Date.now();
+  const ext = sourceFixture.split('.').pop() ?? 'bin';
+  const fileName = name || `test-media-${timestamp}.${ext}`;
+  const filePath = resolve(FIXTURES_DIR, fileName);
+  const fixturePath = resolve(FIXTURES_DIR, sourceFixture);
+  copyFileSync(fixturePath, filePath);
+  createdFiles.push(filePath);
+  const stats = statSync(filePath);
+  return { name: fileName, path: filePath, sizeKb: Math.ceil(stats.size / 1024) };
 }
 
 /**
