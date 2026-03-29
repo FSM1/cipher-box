@@ -11,7 +11,10 @@ const __dirname = dirname(__filename);
 config({ path: resolve(__dirname, '.env') });
 
 // When BASE_URL points to an external environment (staging/prod), skip local webServer startup
-const isExternalTarget = process.env.BASE_URL && !process.env.BASE_URL.includes('localhost');
+const isExternalTarget =
+  process.env.BASE_URL &&
+  !process.env.BASE_URL.includes('localhost') &&
+  !process.env.BASE_URL.includes('127.0.0.1');
 
 export default defineConfig({
   testDir: './tests',

@@ -47,7 +47,7 @@ test.describe.serial('Media Preview', () => {
 
   test.afterAll(async () => {
     cleanupTestFiles();
-    await deleteAccountViaPage(page);
+    if (page) await deleteAccountViaPage(page);
     if (context) await context.close();
   });
 

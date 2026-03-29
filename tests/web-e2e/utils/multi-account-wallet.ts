@@ -136,9 +136,13 @@ export async function closeWalletTestAccounts(accounts: WalletTestAccount[]): Pr
     }
   }
 
-  // Step 2: Close browser contexts
+  // Step 2: Close browser contexts (individually guarded so one failure doesn't block others)
   for (const account of accounts) {
-    await account.context.close();
+    try {
+      await account.context.close();
+    } catch (err) {
+      console.warn(`[cleanup] Failed to close context "${account.name}":`, err);
+    }
   }
 }
 

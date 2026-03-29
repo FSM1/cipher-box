@@ -43,7 +43,7 @@ test.describe.serial('AES-CTR Streaming Playback', () => {
 
   test.afterAll(async () => {
     cleanupTestFiles();
-    await deleteAccountViaPage(page);
+    if (page) await deleteAccountViaPage(page);
     if (context) await context.close();
   });
 

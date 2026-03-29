@@ -41,21 +41,21 @@ re_verification: false
 
 ### Required Artifacts
 
-| Artifact                                              | Expected                                                | Status   | Details                                                                                                  |
-| ----------------------------------------------------- | ------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
-| `tests/web-e2e/utils/cleanup-helpers.ts`              | Shared `deleteAccountViaPage(page)` helper              | VERIFIED | 58 lines, exports `deleteAccountViaPage`, calls `/auth/refresh` + DELETE `/auth/account`, full try/catch |
-| `tests/web-e2e/utils/multi-account-wallet.ts`         | `closeWalletTestAccounts` integrates account deletion   | VERIFIED | Imports `deleteAccountViaPage`, loops accounts for deletion before context close, per-account try/catch  |
-| `tests/web-e2e/tests/streaming-playback.spec.ts`      | AES-CTR streaming playback E2E suite (min 80 lines)     | VERIFIED | 142 lines, 6 tests in `test.describe.serial('AES-CTR Streaming Playback')`                               |
-| `tests/web-e2e/tests/media-preview.spec.ts`           | PDF/video/audio preview dialog E2E suite (min 60 lines) | VERIFIED | 168 lines, 5 tests in `test.describe.serial('Media Preview')`                                            |
-| `tests/web-e2e/tests/batch-download.spec.ts`          | Batch download E2E suite (min 60 lines)                 | VERIFIED | 160 lines, 5 tests in `test.describe.serial('Batch Download')`                                           |
-| `tests/web-e2e/fixtures/files/test-video.mp4`         | Video fixture >256KB for CTR mode                       | VERIFIED | 307,200 bytes (300KB, above 262,144 threshold)                                                           |
-| `tests/web-e2e/fixtures/files/test-video-small.mp4`   | Small video fixture <256KB for GCM fallback             | VERIFIED | 102,400 bytes (100KB, below threshold)                                                                   |
-| `tests/web-e2e/fixtures/files/test-audio.mp3`         | Audio fixture >256KB                                    | VERIFIED | 307,200 bytes (300KB)                                                                                    |
-| `tests/web-e2e/fixtures/files/test-document.pdf`      | PDF fixture for preview testing                         | VERIFIED | 552 bytes, starts with `%PDF` header                                                                     |
-| `tests/web-e2e/baselines/staging-journey-timing.json` | Staging journey timing baseline (3 journeys)            | VERIFIED | Contains all 3 required journey keys with real values from staging run                                   |
-| `tests/web-e2e/baselines/staging-load-test.json`      | Staging load test baseline (concurrent user metrics)    | VERIFIED | Contains `clients: 5`, `results.ops_per_sec: 0.71`, `results.failed: 90`, `environment: "staging"`       |
-| `tests/load/baselines/byo-load-test-plan.md`          | BYO-IPFS load test plan with setup requirements         | VERIFIED | 138 lines, ACTIVE status, all 3 scenarios documented, execution commands, Pinata env vars, metrics table |
-| `tests/load/baselines/staging-sustained-load.json`    | Staging SDK sustained load baseline                     | VERIFIED | Exists at 965 bytes; documents throttle-limited run (10/200 clients, 429 issue documented)               |
+| Artifact                                                 | Expected                                                | Status   | Details                                                                                                  |
+| -------------------------------------------------------- | ------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
+| `tests/web-e2e/utils/cleanup-helpers.ts`                 | Shared `deleteAccountViaPage(page)` helper              | VERIFIED | 58 lines, exports `deleteAccountViaPage`, calls `/auth/refresh` + DELETE `/auth/account`, full try/catch |
+| `tests/web-e2e/utils/multi-account-wallet.ts`            | `closeWalletTestAccounts` integrates account deletion   | VERIFIED | Imports `deleteAccountViaPage`, loops accounts for deletion before context close, per-account try/catch  |
+| `tests/web-e2e/tests/streaming-playback.spec.ts`         | AES-CTR streaming playback E2E suite (min 80 lines)     | VERIFIED | 142 lines, 6 tests in `test.describe.serial('AES-CTR Streaming Playback')`                               |
+| `tests/web-e2e/tests/media-preview.spec.ts`              | PDF/video/audio preview dialog E2E suite (min 60 lines) | VERIFIED | 168 lines, 5 tests in `test.describe.serial('Media Preview')`                                            |
+| `tests/web-e2e/tests/batch-download.spec.ts`             | Batch download E2E suite (min 60 lines)                 | VERIFIED | 160 lines, 5 tests in `test.describe.serial('Batch Download')`                                           |
+| `tests/web-e2e/fixtures/files/test-video.mp4`            | Video fixture >256KB for CTR mode                       | VERIFIED | 307,200 bytes (300KB, above 262,144 threshold)                                                           |
+| `tests/web-e2e/fixtures/files/test-video-small.mp4`      | Small video fixture <256KB for GCM fallback             | VERIFIED | 102,400 bytes (100KB, below threshold)                                                                   |
+| `tests/web-e2e/fixtures/files/test-audio.mp3`            | Audio fixture >256KB                                    | VERIFIED | 307,200 bytes (300KB)                                                                                    |
+| `tests/web-e2e/fixtures/files/test-document.pdf`         | PDF fixture for preview testing                         | VERIFIED | 552 bytes, starts with `%PDF` header                                                                     |
+| `tests/web-e2e/baselines/staging-journey-timing.json`    | Staging journey timing baseline (3 journeys)            | VERIFIED | Contains all 3 required journey keys with real values from staging run                                   |
+| `tests/load/baselines/byo-load-test-plan.md`             | BYO-IPFS load test plan with setup requirements         | VERIFIED | PARTIAL status, all 3 scenarios documented, execution commands, Pinata env vars, metrics table           |
+| `tests/load/baselines/staging-sustained-load.json`       | Staging SDK sustained load baseline                     | VERIFIED | 200 clients, 11,174 ops, 0.17% error rate, upload p50=8.1s                                               |
+| `tests/load/baselines/staging-byo-capacity-ceiling.json` | BYO capacity ceiling baseline (5 tiers)                 | VERIFIED | 50-1000 clients, pin p50=718ms works, register-cid 400 (tracked in todo)                                 |
 
 ---
 
