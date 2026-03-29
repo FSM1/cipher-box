@@ -16,6 +16,7 @@
 
 import { unwrapKey } from '@cipherbox/crypto';
 import { KuboProvider, PsaProvider } from '@cipherbox/sdk-core';
+import { CID } from 'multiformats/cid';
 import { getKeypair } from './tee-keys.js';
 import { validateEndpointUrl, ssrfSafeFetch } from './ssrf-validation.js';
 
@@ -169,7 +170,8 @@ export async function migrateBatch(
         }
 
         // 6. Verify CID match (content integrity)
-        if (destCid !== cid) {
+        // Normalize to CIDv1 — Kubo returns CIDv1 even for CIDv0 inputs
+        if (!CID.parse(destCid).toV1().equals(CID.parse(cid).toV1())) {
           throw new Error(`CID mismatch: expected ${cid}, got ${destCid}`);
         }
 
