@@ -36,6 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread (completed 2026-03-28)
 - [x] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend (completed 2026-03-28)
 - [ ] **Phase 34: E2E Test Expansion & Staging Baselines** - Streaming playback, media preview, batch download, and shared teardown E2E tests; BYO-IPFS load test and Faro metrics baselines on staging
+- [ ] **Phase 35: Phala Testnet TEE Migration** - Replace staging TEE simulator with real Phala testnet CVM deployment, validate hardware-backed key derivation and IPNS republishing end-to-end
 
 ## Phase Details
 
@@ -422,10 +423,26 @@ Plans:
 - [ ] 34-03-PLAN.md -- Batch download zip E2E tests
 - [ ] 34-04-PLAN.md -- BYO-IPFS load test baselines and staging metrics capture
 
+### Phase 35: Phala Testnet TEE Migration
+
+**Goal**: Staging TEE republishing runs on real Phala testnet infrastructure with hardware-backed key derivation, replacing the local Docker simulator
+**Depends on**: Phase 34 (staging baselines captured first to measure before/after)
+**Requirements**: None (infrastructure migration -- moves from mock to real TEE)
+**Research flag**: NEEDS `/gsd:research-phase` -- Phala testnet deployment process, dstack SDK CVM configuration, attestation verification, testnet resource provisioning
+**Success Criteria** (what must be TRUE):
+
+1. TEE worker is deployed as a Phala testnet CVM with `TEE_MODE=cvm`, using dstack SDK for hardware-backed secp256k1 key derivation (no more HKDF simulator seed)
+2. Staging API connects to the Phala testnet TEE worker endpoint and successfully completes IPNS republish cycles (enroll, sign, publish) end-to-end
+3. TEE key epoch initialization and rotation work correctly with CVM-derived keys (epoch state persists across worker restarts)
+4. Republish latency on Phala testnet is within acceptable bounds (< 2x simulator latency per batch) and captured as new staging baselines
+5. Staging docker-compose no longer runs a local `tee-worker` container -- the TEE is fully external on Phala testnet
+
+**Plans:** TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33 -> 34
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33 -> 34 -> 35
 
 | Phase                                     | Milestone | Plans Complete | Status      | Completed  |
 | ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
@@ -448,6 +465,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete    | 2026-03-28 |
 | 34. E2E Test Expansion & Baselines        | v1.1      | 0/4            | Not Started | -          |
+| 35. Phala Testnet TEE Migration           | v1.1      | 0/TBD          | Not Started | -          |
 
 ### Phase 27: Writable Shares (PoC)
 
@@ -474,5 +492,5 @@ Plans:
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-28_
-_Total M1.1 phases: 17 (18-27 complete + 28-32 planned) | Concern resolution: 5 phases_
+_Last updated: 2026-03-29_
+_Total M1.1 phases: 18 (18-33 complete + 34-35 planned) | Concern resolution: 5 phases_
