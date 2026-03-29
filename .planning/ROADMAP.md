@@ -35,6 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (completed 2026-03-28)
 - [x] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread (completed 2026-03-28)
 - [x] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend (completed 2026-03-28)
+- [ ] **Phase 34: E2E Test Expansion & Staging Baselines** - Streaming playback, media preview, batch download, and shared teardown E2E tests; BYO-IPFS load test and Faro metrics baselines on staging
 
 ## Phase Details
 
@@ -389,10 +390,42 @@ Plans:
 - [x] 33-01-PLAN.md -- Shared async FilePointer resolution infrastructure (PendingFilePointer, channel pair, drain method, modified drain_refresh_completions)
 - [x] 33-02-PLAN.md -- Windows WinFsp callback wiring (drain calls in open/read/readdir, read-while-resolving poll, STATUS_DEVICE_NOT_READY)
 
+### Phase 34: E2E Test Expansion & Staging Baselines
+
+**Goal**: Expand E2E test coverage to untested features and capture staging baselines with new instrumentation
+**Depends on**: Phase 33 (all code changes complete; this is a testing/validation phase)
+**Requirements**: None (test coverage and baseline capture)
+**Success Criteria** (what must be TRUE):
+
+1. AES-CTR streaming playback E2E tests cover mode selection, SW interception, seeking, and progress
+2. Batch download zip E2E tests cover multi-file selection and zip generation
+3. Media preview E2E tests cover PDF viewer, video player, and audio player
+4. Shared deleteAccount teardown wired into all E2E spec afterAll hooks
+5. BYO-IPFS load test baselines captured on staging
+6. Staging metrics baselines captured with Phase 30 Faro instrumentation
+
+**Todos consumed:**
+
+- `.planning/todos/pending/2026-03-28-add-aes-ctr-streaming-playback-e2e-tests.md`
+- `.planning/todos/pending/2026-03-28-add-batch-download-zip-e2e-tests.md`
+- `.planning/todos/pending/2026-03-28-add-media-preview-e2e-test-suite.md`
+- `.planning/todos/pending/2026-03-28-add-shared-deleteaccount-teardown-to-all-e2e-specs.md`
+- `.planning/todos/pending/2026-03-28-byo-ipfs-load-test-baselines-on-staging.md`
+- `.planning/todos/pending/2026-03-28-run-staging-metrics-baselines-with-new-instrumentation.md`
+
+**Plans:** TBD
+
+Plans:
+
+- [ ] 34-01-PLAN.md -- Shared E2E teardown helper and deleteAccount wiring across all specs
+- [ ] 34-02-PLAN.md -- AES-CTR streaming playback and media preview E2E suites
+- [ ] 34-03-PLAN.md -- Batch download zip E2E tests
+- [ ] 34-04-PLAN.md -- BYO-IPFS load test baselines and staging metrics capture
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33 -> 34
 
 | Phase                                     | Milestone | Plans Complete | Status      | Completed  |
 | ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
@@ -414,6 +447,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 31. Structural Decomposition              | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete    | 2026-03-28 |
+| 34. E2E Test Expansion & Baselines        | v1.1      | 0/4            | Not Started | -          |
 
 ### Phase 27: Writable Shares (PoC)
 
