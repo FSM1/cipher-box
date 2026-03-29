@@ -5,7 +5,7 @@
   "provider": "pinata",
   "endpoint": "https://api.pinata.cloud",
   "pin_error_rate": 1.0,
-  "pin_error_note": "All byo-pin ops failed (fetch failed). Pinata endpoint/auth may need adjustment. Account creation, encryption, and API metadata ops all succeeded — only the external pin call failed.",
+  "pin_error_note": "All byo-pin ops failed: Pinata free tier plan limits exceeded (403: account surpassing plan limits). JWT auth valid but quota exhausted by test runs. Need paid Pinata plan or fresh account for successful pin baselines. Client-side latencies below measure time-to-rejection, not actual pin performance.",
   "tiers": [
     {
       "clients": 50,
