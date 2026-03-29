@@ -187,6 +187,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      pull-requests: read
     steps:
       - name: Re-run release gate on open release-please PR
         env:
@@ -204,14 +205,14 @@ jobs:
 
           echo "Found open release-please PR on branch: ${PR_BRANCH}"
 
-          # Find the most recent release gate run for this branch
+          # Find the most recent completed release gate run for this branch
           RUN_ID=$(gh run list --repo "${{ github.repository }}" \
             --workflow=release-gate.yml --branch="${PR_BRANCH}" \
-            --limit 1 --json databaseId,status \
-            --jq '.[0].databaseId // empty')
+            --limit 20 --json databaseId,status \
+            --jq 'map(select(.status == "completed")) | .[0].databaseId // empty')
 
           if [ -z "$RUN_ID" ]; then
-            echo "No release gate run found for ${PR_BRANCH} — nothing to re-trigger"
+            echo "No completed release gate run found for ${PR_BRANCH} — nothing to re-trigger"
             exit 0
           fi
 
