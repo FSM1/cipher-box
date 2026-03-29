@@ -30,6 +30,7 @@ const STREAMING_MIME_TYPES = new Set([
   'audio/webm',
   'audio/ogg',
   'audio/aac',
+  'audio/flac',
 ]);
 
 /** Minimum file size (bytes) to use CTR mode: 256KB */
