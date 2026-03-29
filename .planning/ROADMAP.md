@@ -34,7 +34,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (completed 2026-03-28)
 - [x] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (completed 2026-03-28)
 - [x] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread (completed 2026-03-28)
-- [ ] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend
+- [x] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend (completed 2026-03-28)
 
 ## Phase Details
 
@@ -382,7 +382,12 @@ Plans:
 3. Resolution latency bounded by timeout rather than O(N \* network_timeout)
 4. Windows desktop E2E tests pass with the async resolution path
 
-**Plans**: TBD
+**Plans:** 2/2 plans complete
+
+Plans:
+
+- [x] 33-01-PLAN.md -- Shared async FilePointer resolution infrastructure (PendingFilePointer, channel pair, drain method, modified drain_refresh_completions)
+- [x] 33-02-PLAN.md -- Windows WinFsp callback wiring (drain calls in open/read/readdir, read-while-resolving poll, STATUS_DEVICE_NOT_READY)
 
 ## Progress
 
@@ -408,7 +413,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 30. Web App Observability                 | v1.1      | 4/4            | Complete    | 2026-03-28 |
 | 31. Structural Decomposition              | v1.1      | 3/3            | Complete    | 2026-03-28 |
 | 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete    | 2026-03-28 |
-| 33. Windows Async FilePointer Resolution  | v1.1      | 0/TBD          | Not started | -          |
+| 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete    | 2026-03-28 |
 
 ### Phase 27: Writable Shares (PoC)
 

@@ -20,6 +20,7 @@ pub mod implementation {
         WinFspContext, WinFspFileContext,
         status_object_name_not_found, status_invalid_parameter,
         status_invalid_handle, status_io_device_error,
+        status_device_not_ready,
         resolve_path, fill_file_info, PERMISSIVE_SD,
         fetch_and_decrypt_file_content, fetch_and_decrypt_content_async,
         is_windows_special,
@@ -271,7 +272,7 @@ pub mod implementation {
             }
         }
 
-        let (cid, encrypted_file_key_hex, iv_hex, encryption_mode) = {
+        let (mut cid, mut encrypted_file_key_hex, mut iv_hex, mut encryption_mode) = {
             match fs.inodes.get(ino) {
                 Some(inode) => match &inode.kind {
                     InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } => (
@@ -282,6 +283,37 @@ pub mod implementation {
                 None => return Err(status_object_name_not_found()),
             }
         };
+
+        // --- FilePointer resolution poll (D-06) ---
+        // If cid is empty and resolution is in-flight, wait up to 5s
+        if cid.is_empty() && !fs.pending_content.contains_key(&ino) && fs.resolving_file_pointers.contains(&ino) {
+            let poll_start = std::time::Instant::now();
+            let max_wait = Duration::from_secs(5);
+            loop {
+                drop(fs);
+                std::thread::sleep(Duration::from_millis(100));
+                fs = ctx.inner.lock().unwrap();
+                fs.drain_filepointer_completions();
+
+                if let Some(inode) = fs.inodes.get(ino) {
+                    if let InodeKind::File { file_meta_resolved: true, cid: ref c, encrypted_file_key: ref e, iv: ref i, encryption_mode: ref m, .. } = &inode.kind {
+                        cid = c.clone();
+                        encrypted_file_key_hex = e.clone();
+                        iv_hex = i.clone();
+                        encryption_mode = m.clone();
+                        break;
+                    }
+                }
+                // Early exit: resolution finished (failed) but inode still unresolved
+                if !fs.resolving_file_pointers.contains(&ino) {
+                    break;
+                }
+                if poll_start.elapsed() > max_wait {
+                    log::warn!("FilePointer resolve poll timed out for ino {} after 5s", ino);
+                    return Err(status_device_not_ready());
+                }
+            }
+        }
 
         if cid.is_empty() {
             if let Some(content) = fs.pending_content.get(&ino) {
