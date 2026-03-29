@@ -3,7 +3,7 @@
   "checkpoint_id": "123fec3c406d",
   "strategy": "manual-commit",
   "branch": "fix/e2e-test-failures-v2",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": null,
   "sessions": [
     {
@@ -14,10 +14,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 60,
-    "cache_creation_tokens": 64203,
-    "cache_read_tokens": 11208199,
-    "output_tokens": 22178,
-    "api_call_count": 58
+    "input_tokens": 1684,
+    "cache_creation_tokens": 226674,
+    "cache_read_tokens": 24456544,
+    "output_tokens": 76348,
+    "api_call_count": 157
   }
 }
