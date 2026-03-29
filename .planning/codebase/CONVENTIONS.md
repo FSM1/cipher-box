@@ -746,6 +746,65 @@ log::error!("Failed to build tray: {}", e);
 - `// SAFETY:` comments required near `unsafe` blocks
 - Section dividers with `// -- SectionName ---...` pattern
 
+## Testing Conventions
+
+### Mock Typing in NestJS Specs (Jest)
+
+**Never use `jest.Mocked<Partial<T>>`** for mocks retrieved via `module.get()`. The `module.get()` return type is the real service, not the mock, so `.mockResolvedValue()` fails to typecheck.
+
+```typescript
+// WRONG -- loses mock methods after module.get()
+let service: jest.Mocked<Partial<MyService>>;
+service = module.get(MyService); // typed as MyService, not jest.Mock
+
+// CORRECT -- type the mock shape directly
+let mockService: { myMethod: jest.Mock; otherMethod: jest.Mock };
+// ...
+mockService = module.get(MyService) as unknown as typeof mockService;
+```
+
+Alternatively, keep a reference to the mock object created in `beforeEach` and use it directly:
+
+```typescript
+let mockService: { myMethod: jest.Mock };
+
+beforeEach(async () => {
+  mockService = { myMethod: jest.fn() };
+  const module = await Test.createTestingModule({
+    providers: [{ provide: MyService, useValue: mockService }],
+  }).compile();
+  // No need to module.get() -- use mockService directly
+});
+```
+
+### Module Mocking in Vitest
+
+**Always use `importOriginal` when partially mocking a module.** Bare factory mocks replace the entire module, dropping any export you don't explicitly list:
+
+```typescript
+// WRONG -- drops all non-listed exports (e.g., selectEncryptionMode)
+vi.mock('@cipherbox/sdk-core', () => ({
+  uploadFile: vi.fn(),
+  downloadAndDecrypt: vi.fn(),
+}));
+
+// CORRECT -- real exports survive alongside mocked functions
+vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
+  return {
+    ...actual,
+    uploadFile: vi.fn(),
+    downloadAndDecrypt: vi.fn(),
+  };
+});
+```
+
+**When to use bare factory:** Only when you want to replace every export in the module (rare).
+
+### Test Entity Mocks
+
+When mocking TypeORM entities, include **all required fields** from the entity class. Missing fields cause TS errors that accumulate silently. When a migration adds a column to an entity, grep for that entity's test mocks and update them.
+
 ## Security Conventions
 
 - **Memory-only keys:** `Uint8Array` key material is never persisted to localStorage/sessionStorage

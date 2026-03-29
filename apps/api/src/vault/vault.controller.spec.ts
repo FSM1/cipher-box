@@ -4,6 +4,7 @@ import { VaultController } from './vault.controller';
 import { VaultService } from './vault.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { InitVaultDto } from './dto/init-vault.dto';
+import { RequestWithUser } from '../common/types';
 
 describe('VaultController', () => {
   let controller: VaultController;
@@ -61,7 +62,7 @@ describe('VaultController', () => {
     it('should call vaultService.initializeVault with user.id and dto', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       vaultService.initializeVault.mockResolvedValue(mockVaultResponse);
 
@@ -73,7 +74,7 @@ describe('VaultController', () => {
     it('should return vault response', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       vaultService.initializeVault.mockResolvedValue(mockVaultResponse);
 
@@ -87,7 +88,7 @@ describe('VaultController', () => {
     it('should call vaultService.findVault with user.id', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       vaultService.findVault.mockResolvedValue(mockVaultResponse);
 
@@ -99,7 +100,7 @@ describe('VaultController', () => {
     it('should throw NotFoundException if vault is null', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       vaultService.findVault.mockResolvedValue(null);
 
@@ -110,7 +111,7 @@ describe('VaultController', () => {
     it('should return vault response if found', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       vaultService.findVault.mockResolvedValue(mockVaultResponse);
 
@@ -125,12 +126,13 @@ describe('VaultController', () => {
       usedBytes: 1000000,
       limitBytes: 524288000,
       remainingBytes: 523288000,
+      advisory: false,
     };
 
     it('should call vaultService.getQuota with user.id', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       vaultService.getQuota.mockResolvedValue(mockQuotaResponse);
 
@@ -142,7 +144,7 @@ describe('VaultController', () => {
     it('should return quota response', async () => {
       const mockRequest = {
         user: mockUser,
-      } as unknown as Request & { user: typeof mockUser };
+      } as unknown as RequestWithUser;
 
       vaultService.getQuota.mockResolvedValue(mockQuotaResponse);
 

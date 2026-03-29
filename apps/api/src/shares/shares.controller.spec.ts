@@ -12,6 +12,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Share } from './entities/share.entity';
 import { ShareKey } from './entities/share-key.entity';
 import { User } from '../auth/entities/user.entity';
+import { RequestWithUser } from '../common/types';
 
 describe('SharesController', () => {
   let controller: SharesController;
@@ -35,7 +36,7 @@ describe('SharesController', () => {
   const recipientPublicKey = '04' + 'ab'.repeat(64);
   const testEncryptedKey = 'cc'.repeat(64);
 
-  const mockReq: { user: { id: string } } = { user: { id: userId } };
+  const mockReq = { user: { id: userId } } as unknown as RequestWithUser;
 
   const mockShare: Share = {
     id: shareId,
@@ -45,6 +46,8 @@ describe('SharesController', () => {
     ipnsName: 'k51qzi5uqu5dg12345',
     itemName: 'My Folder',
     encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
+    permission: 'read',
+    encryptedIpnsKey: null,
     hiddenByRecipient: false,
     revokedAt: null,
     shareKeys: [],

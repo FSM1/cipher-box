@@ -60,6 +60,7 @@ describe('IpnsService', () => {
     encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
     keyEpoch: testKeyEpoch,
     isRoot: false,
+    recordType: 'folder',
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
     user: {} as User,

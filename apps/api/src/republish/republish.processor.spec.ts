@@ -5,7 +5,7 @@ import { Job } from 'bullmq';
 
 describe('RepublishProcessor', () => {
   let processor: RepublishProcessor;
-  let republishService: jest.Mocked<Partial<RepublishService>>;
+  let republishService: { processRepublishBatch: jest.Mock };
   let mockEndBatchTimer: jest.Mock;
   let mockStartBatchTimer: jest.Mock;
   let metricsService: {
@@ -49,7 +49,7 @@ describe('RepublishProcessor', () => {
   });
 
   it('should call processRepublishBatch and complete successfully', async () => {
-    republishService.processRepublishBatch!.mockResolvedValue({
+    republishService.processRepublishBatch.mockResolvedValue({
       processed: 10,
       succeeded: 8,
       failed: 2,
@@ -61,7 +61,7 @@ describe('RepublishProcessor', () => {
   });
 
   it('should handle zero processed entries without warning', async () => {
-    republishService.processRepublishBatch!.mockResolvedValue({
+    republishService.processRepublishBatch.mockResolvedValue({
       processed: 0,
       succeeded: 0,
       failed: 0,
@@ -75,7 +75,7 @@ describe('RepublishProcessor', () => {
   it('should complete without throwing when all entries failed (logs warning)', async () => {
     // When all entries fail, the processor logs a warning but does NOT throw.
     // This allows BullMQ to mark the job as complete rather than retrying.
-    republishService.processRepublishBatch!.mockResolvedValue({
+    republishService.processRepublishBatch.mockResolvedValue({
       processed: 5,
       succeeded: 0,
       failed: 5,
@@ -88,7 +88,7 @@ describe('RepublishProcessor', () => {
 
   it('should re-throw errors from processRepublishBatch for BullMQ retry', async () => {
     const error = new Error('Database connection lost');
-    republishService.processRepublishBatch!.mockRejectedValue(error);
+    republishService.processRepublishBatch.mockRejectedValue(error);
 
     await expect(processor.process(createMockJob())).rejects.toThrow('Database connection lost');
 
@@ -96,13 +96,13 @@ describe('RepublishProcessor', () => {
   });
 
   it('should re-throw non-Error thrown values', async () => {
-    republishService.processRepublishBatch!.mockRejectedValue('string-error');
+    republishService.processRepublishBatch.mockRejectedValue('string-error');
 
     await expect(processor.process(createMockJob())).rejects.toBe('string-error');
   });
 
   it('should pass job metadata for logging (job.name and job.id)', async () => {
-    republishService.processRepublishBatch!.mockResolvedValue({
+    republishService.processRepublishBatch.mockResolvedValue({
       processed: 1,
       succeeded: 1,
       failed: 0,
@@ -115,7 +115,7 @@ describe('RepublishProcessor', () => {
   });
 
   it('should handle partial success results', async () => {
-    republishService.processRepublishBatch!.mockResolvedValue({
+    republishService.processRepublishBatch.mockResolvedValue({
       processed: 10,
       succeeded: 7,
       failed: 3,
@@ -127,7 +127,7 @@ describe('RepublishProcessor', () => {
 
   it('should handle result where processed > 0 but succeeded > 0 (no warning)', async () => {
     // This verifies the condition: only logs warning when succeeded === 0 AND failed === processed
-    republishService.processRepublishBatch!.mockResolvedValue({
+    republishService.processRepublishBatch.mockResolvedValue({
       processed: 10,
       succeeded: 1,
       failed: 9,
@@ -139,7 +139,7 @@ describe('RepublishProcessor', () => {
 
   describe('batch duration instrumentation', () => {
     it('should observe batch duration with success result', async () => {
-      republishService.processRepublishBatch!.mockResolvedValue({
+      republishService.processRepublishBatch.mockResolvedValue({
         processed: 5,
         succeeded: 5,
         failed: 0,
@@ -152,7 +152,7 @@ describe('RepublishProcessor', () => {
     });
 
     it('should observe batch duration with error result when processRepublishBatch throws', async () => {
-      republishService.processRepublishBatch!.mockRejectedValue(
+      republishService.processRepublishBatch.mockRejectedValue(
         new Error('Database connection lost')
       );
 
@@ -163,7 +163,7 @@ describe('RepublishProcessor', () => {
     });
 
     it('should observe error result when all entries failed (TEE likely unreachable)', async () => {
-      republishService.processRepublishBatch!.mockResolvedValue({
+      republishService.processRepublishBatch.mockResolvedValue({
         processed: 5,
         succeeded: 0,
         failed: 5,
