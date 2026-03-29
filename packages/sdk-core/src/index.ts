@@ -44,6 +44,13 @@ export {
 // Upload operations
 export { uploadFile, type UploadResult } from './upload';
 
+// Encryption mode selection
+export {
+  selectEncryptionMode,
+  normalizeEncryptionMode,
+  type EncryptionMode,
+} from './encryption-mode';
+
 // Download operations
 export { downloadAndDecrypt } from './download';
 

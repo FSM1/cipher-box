@@ -19,22 +19,8 @@ import {
   AES_CTR_NONCE_SIZE,
 } from '@cipherbox/crypto';
 
+import { selectEncryptionMode as selectMode } from '@cipherbox/sdk-core';
 import type { EncryptedFileResult } from './file-crypto.service';
-
-/** MIME types eligible for CTR streaming encryption */
-const STREAMING_MIME_TYPES = new Set([
-  'video/mp4',
-  'video/webm',
-  'audio/mpeg',
-  'audio/mp4',
-  'audio/webm',
-  'audio/ogg',
-  'audio/aac',
-  'audio/flac',
-]);
-
-/** Minimum file size (bytes) to use CTR mode: 256KB */
-const CTR_SIZE_THRESHOLD = 256 * 1024;
 
 /** Chunk size for streaming encryption: 1MB */
 const CHUNK_SIZE = 1024 * 1024;
@@ -45,17 +31,10 @@ const AES_CTR_ALGORITHM = 'AES-CTR';
 /**
  * Select encryption mode based on file MIME type and size.
  *
- * Returns 'CTR' for media files above 256KB (streaming media benefits from
- * random-access decryption). All other files use 'GCM' for authenticated encryption.
- *
- * @param file - File to classify
- * @returns 'CTR' for streaming media, 'GCM' for everything else
+ * Delegates to the shared policy in @cipherbox/sdk-core.
  */
 export function selectEncryptionMode(file: File): 'GCM' | 'CTR' {
-  if (STREAMING_MIME_TYPES.has(file.type) && file.size > CTR_SIZE_THRESHOLD) {
-    return 'CTR';
-  }
-  return 'GCM';
+  return selectMode(file.type, file.size);
 }
 
 /**

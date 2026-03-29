@@ -16,6 +16,7 @@
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
 import type { PinningProvider } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
+import { selectEncryptionMode } from '@cipherbox/sdk-core';
 import { createAxiosInstance, ipnsControllerUnenrollBatch } from '@cipherbox/api-client';
 import { clearBytes } from '@cipherbox/crypto';
 import type { FolderChild, FolderEntry, FilePointer, BinEntry } from '@cipherbox/core';
@@ -1245,32 +1246,4 @@ export class CipherBoxClient {
       console.warn('[SDK] Lifecycle callback threw:', err);
     }
   }
-}
-
-// ---- Encryption mode selection ----
-
-/** MIME types eligible for CTR streaming encryption */
-const STREAMING_MIME_TYPES = new Set([
-  'video/mp4',
-  'video/webm',
-  'audio/mpeg',
-  'audio/mp4',
-  'audio/webm',
-  'audio/ogg',
-  'audio/aac',
-  'audio/flac',
-]);
-
-/** Minimum file size (bytes) to use CTR mode: 256KB */
-const CTR_SIZE_THRESHOLD = 256 * 1024;
-
-/**
- * Select encryption mode based on MIME type and size.
- * Media files above 256KB use CTR for random-access streaming decryption.
- */
-function selectEncryptionMode(mimeType: string, size: number): 'GCM' | 'CTR' {
-  if (STREAMING_MIME_TYPES.has(mimeType) && size > CTR_SIZE_THRESHOLD) {
-    return 'CTR';
-  }
-  return 'GCM';
 }

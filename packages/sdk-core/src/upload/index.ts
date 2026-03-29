@@ -20,6 +20,7 @@ import {
 import type { SdkContext, TeeKeys, ProgressCallback } from '../types';
 import { addToIpfs } from '../ipfs';
 import { createFileMetadata, type FileIpnsRecordPayload } from '../file';
+import { normalizeEncryptionMode } from '../encryption-mode';
 import { withPerf } from '../perf';
 
 /**
@@ -83,7 +84,7 @@ export async function uploadFile(params: {
   encryptionMode?: 'GCM' | 'CTR';
 }): Promise<UploadResult> {
   return withPerf('upload:full', async () => {
-    const mode = params.encryptionMode ?? 'GCM';
+    const mode = normalizeEncryptionMode(params.encryptionMode);
 
     // 1. Generate unique file key and IV (CTR uses 16-byte nonce+counter, GCM uses 12-byte random)
     const fileKey = generateFileKey();
