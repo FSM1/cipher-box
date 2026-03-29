@@ -149,3 +149,7 @@ ok lets create a PR for all these changes.
 ---
 
 [Image #1] will the byo-ipfs settings be configurable for the sdk load tests when launching from GH actions?
+
+---
+
+can these be prefixed with `LOAD_TEST_` so that it is immediately obvious which part of the workflow they are used for? also, any reason not to let the users just set these values for a specific run in the dialog box on GH? That way different providers could be evaluated against each other as well.
