@@ -5,3 +5,7 @@ also want to optimise @.github/workflows/ci.yml to have the `cargo` tasks groupe
 ---
 
 or at least all the previously failing ones.
+
+---
+
+have you tried running the tests against the staging ui?
