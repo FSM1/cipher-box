@@ -1,0 +1,112 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "56f2a0194e8b",
+  "session_id": "c321433f-c2b7-41a7-bab7-40556c531d01",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T14:10:52.128774Z",
+  "branch": "phase-34-e2e-test-expansion-staging-baselines",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "76bcafcf04fb",
+  "token_usage": {
+    "input_tokens": 547,
+    "cache_creation_tokens": 858539,
+    "cache_read_tokens": 66096942,
+    "output_tokens": 103386,
+    "api_call_count": 340
+  },
+  "session_metrics": {
+    "turn_count": 31
+  },
+  "summary": {
+    "intent": "Execute Phase 34 (E2E Test Expansion \u0026 Staging Baselines) — create shared account cleanup helpers, media/streaming E2E suites, batch download tests, and capture staging performance baselines including BYO-IPFS load tests.",
+    "outcome": "All 4 plans completed and verified (13/13 must-haves passed). PR #392 created and all 15 reviewer threads resolved. Real 200-client sustained load baselines captured (0.17% error rate, 11,174 ops). BYO capacity ceiling captured but Pinata free tier exhausted before meaningful pin data collected.",
+    "learnings": {
+      "repo": [
+        "Staging uses Web3Auth which takes ~22.7s to initialize — wallet button timeout of 20s in journey-timing.spec.ts was too short for staging environments",
+        "playwright.config.ts BASE_URL env var was not wired to override the Playwright baseURL config, and the webServer block needed a conditional skip when targeting staging",
+        "The SDK load test harness (tests/load/) uses direct API calls with bypass headers; the browser load test (tests/web-e2e/tests/load-test.spec.ts) was redundant and has been removed",
+        "Running two load test processes simultaneously against staging saturated the API — the throttle bypass header works correctly when only one test suite runs at a time",
+        "Vitest does not auto-load .env files; env vars must be sourced via shell before running vitest (source .env \u0026\u0026 pnpm vitest)",
+        "The BYO-IPFS register-cid and ipns-publish endpoints return 400 on staging — Pinata pin succeeds but CipherBox API rejects CID registration (test accounts may not be provisioned for BYO mode)",
+        "cleanup-helpers.ts derives the API URL from the page URL (app subdomain → api subdomain replacement) since VITE_API_URL is not accessible at test runtime on staging",
+        "deleteAccountViaPage uses page.evaluate to call fetch with cookies — only valid for browser-based Playwright tests, not SDK headless tests which use destroyClientPool() → deleteTestAccount()"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/tests/journey-timing.spec.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "waitFor timeout for wallet-login-button was 20000ms — increased to 60000ms for staging where Web3Auth init takes ~22.7s"
+        },
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Added BASE_URL env var support and conditional webServer skip when targeting non-localhost environments"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "API URL derived from page URL at runtime; two page.evaluate calls merged into one to eliminate extra browser round-trip"
+        },
+        {
+          "path": "tests/load/vitest.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "No dotenv loading — env must be sourced via shell before running tests"
+        },
+        {
+          "path": "tests/web-e2e/utils/test-files.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "createTestMediaFile needs path.basename() sanitization on filename parameter to prevent path traversal"
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "line": 1,
+          "end_line": 80,
+          "finding": "BYO env vars scoped to byo-* scenario conditional with explicit error if LOAD_TEST_BYO_AUTH_TOKEN secret is missing; endpoint/protocol/label exposed as workflow_dispatch inputs with defaults for per-run provider switching"
+        }
+      ],
+      "workflow": [
+        "Cherry-picking commits from worktree branches to the phase branch requires careful STATE.md conflict resolution — worktree version should win since it has the latest plan state",
+        "Running parallel load test suites against the same staging instance causes apparent throttle bypass failures — always run load tests sequentially against shared staging",
+        "CodeRabbit and Copilot re-review after fixes can introduce new threads — should run /resolve-pr-comments in a loop until zero unresolved threads",
+        "GSD phase completion should not be marked until all baselines are meaningful — premature phase completion required rollback when load test data was invalidated",
+        "BYO capacity ceiling test consumed the entire Pinata free tier quota across multiple failed runs before cleanup — need paid Pinata account for meaningful BYO baseline data"
+      ]
+    },
+    "friction": [
+      "Web3Auth 22.7s init time on staging caused journey-timing test to fail with 20s timeout — required code change to unblock baseline capture",
+      "BASE_URL env var not wired in playwright.config.ts — tests silently hit localhost instead of staging URL, requiring config investigation",
+      "Running sustained-load (200 clients) and BYO ceiling tests simultaneously saturated staging, producing false 429 throttle bypass failures — took significant debugging to identify concurrent execution as root cause",
+      "Vitest does not load .env files automatically — BYO tests skipped silently until shell env sourcing was added",
+      "Git worktree cherry-pick conflicts on STATE.md required manual resolution across 4 separate plan merges",
+      "Git lock files from failed/killed worktree agents required force cleanup before retry",
+      "Pinata free tier was exhausted by multiple failed BYO ceiling test runs, invalidating all BYO pin baseline data",
+      "SSH to staging VPS failed (timeout/key issue) during throttle bypass investigation — had to fall back to curl-based diagnostics",
+      "Phase completion was prematurely committed before load tests produced meaningful data, requiring manual rollback discussion"
+    ],
+    "open_items": [
+      "BYO-IPFS register-cid and ipns-publish return 400 on staging — todo filed at .planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md; likely test accounts not provisioned for BYO mode",
+      "Pinata paid plan needed to capture real BYO capacity ceiling baselines — free tier exhausted during Phase 34",
+      "New media/streaming E2E specs (streaming-playback.spec.ts, media-preview.spec.ts) use binary stub fixtures that need a live environment run to confirm AES-CTR/GCM code paths are actually exercised",
+      "SDK load test harness createTestAccount does not forward THROTTLE_BYPASS_SECRET during account creation — currently works because tests run sequentially, but concurrent multi-suite runs could still saturate staging",
+      "load-test.yml BYO scenarios require LOAD_TEST_BYO_AUTH_TOKEN in GitHub staging environment secrets — not yet configured"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T14:10:07.057648Z",
+    "agent_lines": 0,
+    "human_added": 14,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 14,
+    "agent_percentage": 0
+  }
+}
