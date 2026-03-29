@@ -269,3 +269,7 @@ the issue here is that the release please release gate did not block merging unt
 ---
 
 I think that the reason the release gate was not required is that the PR was the `test:` commit message when the PR was merged. I had to manually kick off the `Release gate job` to see that the e2e tests were failing.
+
+---
+
+this is once again not the issue here - everything works, but since the `test(34):` PR was merged https://github.com/FSM1/cipher-box/commit/78bef4b897570574d0cf2997ec0f4a93ba0408c9 but was not included in the changelog of the next release, the verify-e2e should still have flagged the changes and required the e2e tests to pass before the release please pr was merged. this should have happened automatically
