@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "29400bfce99e",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T17:25:09.294531Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/tee-worker/src/routes/public-key.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a14bd8f2a588",
+  "token_usage": {
+    "input_tokens": 221,
+    "cache_creation_tokens": 515219,
+    "cache_read_tokens": 22720780,
+    "output_tokens": 56033,
+    "api_call_count": 185
+  },
+  "session_metrics": {
+    "turn_count": 13
+  },
+  "summary": {
+    "intent": "Execute Phase 35 (Phala Testnet TEE Migration) — migrate the TEE worker into the monorepo apps/ structure with shared packages, add Phala Cloud CVM deployment, and verify end-to-end operation.",
+    "outcome": "All 6 plans completed across 4 waves. TEE worker restructured, 58 unit tests passing, CVM deployed to Phala Cloud production (not testnet), epoch key determinism and IPNS republish cycle verified. Security review performed and all high/medium findings fixed before shipping.",
+    "learnings": {
+      "repo": [
+        "Phala Cloud has no separate testnet — the free tier ($20 credit) runs on the same production nodes (Intel TDX hardware) as paid deployments. 'dstack-pha-prod5.phala.network' is the actual host.",
+        "TEE worker was moved from root tee-worker/ to apps/tee-worker/ as part of monorepo restructure. All cross-references, Dockerfile, and CI jobs updated accordingly.",
+        "Shared packages used by tee-worker: @cipherbox/crypto (ECIES), @cipherbox/core (IPNS signing), @cipherbox/sdk-core (KuboProvider, PsaProvider).",
+        "GitHub staging environment uses: PHALA_CLOUD_API_KEY secret, STAGING_TEE_WORKER_SECRET secret, PHALA_TEE_WORKER_URL variable.",
+        "Live CVM endpoint: https://011f138783487e4c43ea104cfcbacf817ac4f31b-3001.dstack-pha-prod5.phala.network — health returns {healthy:true,mode:'cvm',epoch:1}.",
+        "TEE_WORKER_SECRET value (new): REDACTED/I=",
+        "Docker host is at 192.168.133.12 (not .114 as previously recorded).",
+        "PHALA_CLOUD_API_KEY: REDACTED"
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/routes/public-key.ts",
+          "finding": "Original code called getKeypair() instead of getPublicKey(), leaking the private key into route scope. Fixed to use getPublicKey(). Also added epoch bounds validation (0-999) to prevent negative/huge epoch numbers."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/health.ts",
+          "finding": "Was reading TEE_EPOCH env var but the rest of the codebase uses TEE_CURRENT_EPOCH. Fixed to use consistent name."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/republish.ts",
+          "finding": "Added MAX_BATCH_SIZE=100 limit to prevent unbounded ECIES decryption DoS. Removed dead keyEpoch field from interface. Eliminated redundant mutable successes/failures counters by deriving from results array."
+        },
+        {
+          "path": "apps/tee-worker/src/middleware/metrics.ts",
+          "finding": "req.path on 404 handlers creates unbounded Prometheus label cardinality. Fixed to use 'unmatched' fallback for unmatched routes."
+        },
+        {
+          "path": "apps/tee-worker/src/services/ssrf-validation.ts",
+          "finding": "TOCTOU DNS race: DNS lookup happened separately from HTTP fetch, enabling DNS rebinding attacks. Fixed by merging validateResolvedIp into ssrfSafeFetch with DNS pinning — resolve once, pin the IP for the actual connection. Headers API lowercases keys via entries(), so host header must be lowercase 'host' not 'Host'."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/migrate.ts",
+          "finding": "Route was reading TEE_CURRENT_EPOCH once at module load (stale after rotation). Fixed to read dynamically from request body. Added isValidCidFormat() CID validation for user-provided CIDs."
+        },
+        {
+          "path": "apps/tee-worker/src/services/tee-keys.ts",
+          "finding": "Key cache had no size limit — could grow unbounded with epoch enumeration attacks. Added MAX_CACHE_SIZE=100 with LRU eviction."
+        }
+      ],
+      "workflow": [
+        "GSD pause-work/resume-work successfully transferred session state across machines (Mac dev box → Docker host). HANDOFF.json provides machine-readable state; .continue-here.md provides human-readable context.",
+        "When parallel Wave 2 agent spawning caused git config lock contention, sequential execution resolved it. Clean up stale worktrees before retrying.",
+        "classifyHandoffIfNeeded error from Claude Code is a runtime bug, not an agent failure — spot-check SUMMARY.md + commits to confirm real completion status.",
+        "Phala CLI deploy command: phala deploy -c docker-compose.phala.yml -n \u003cname\u003e -e 'KEY=value' --wait",
+        "Docker image for TEE worker pushed as ghcr.io/fsm1/cipherbox-tee-worker:v35-amd64 (not :latest) from Docker host.",
+        "Republish latency baselines: ~1155ms avg from remote machine to Phala Cloud prod5. Network-bound, not compute-bound. Co-located production deployment will be much faster.",
+        "Security review should happen before /simplify — code quality and security fixes can overlap and ordering matters."
+      ]
+    },
+    "friction": [
+      "Wave 2 parallel agent spawn caused git config lock contention between agents — had to fall back to sequential execution.",
+      "Usage limit hit mid-Wave 2 execution (35-03 agent interrupted), requiring manual continuation.",
+      "gsd-tools init runs from wrong directory when in a worktree — had to explicitly cd to worktree path for init command.",
+      "Session transfer between machines required manual git pull on Docker host before /gsd:resume-work worked correctly.",
+      "HANDOFF.json was stale on the 'uncommitted Dockerfile' point after Docker host committed and pushed it — caused brief confusion.",
+      "Phase named 'phala-testnet-tee-migration' but Phala has no testnet — naming mismatch required documentation cleanup post-completion.",
+      "Headers API case sensitivity issue in SSRF tests: new Headers().entries() lowercases keys but direct Host header assignment was uppercase, causing 2 test failures after security fix."
+    ],
+    "open_items": [
+      "SSRF probe deduplication: connection-test.ts has similar DNS probe logic to sdk-core — skipped as significant refactor.",
+      "Staging CI pipeline not yet triggered to build/deploy the new tee-worker image automatically — manual Docker host build was used for this phase.",
+      "35-HUMAN-UAT.md persists with status:partial — needs /gsd:verify-work to formally close out the 2 human verification items (CVM health, GitHub env vars).",
+      "Republish latency baseline only measured from remote machine (~1155ms). Need co-located baseline once staging is deployed normally via CI.",
+      "Phase branch phase-35-phala-testnet-tee-migration not yet merged to main — /gsd:ship (PR creation) was suggested but not run."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T17:24:18.110878Z",
+    "agent_lines": 0,
+    "human_added": 110,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 110,
+    "agent_percentage": 0
+  }
+}
