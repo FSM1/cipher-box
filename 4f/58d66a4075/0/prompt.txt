@@ -123,3 +123,7 @@ https://github.com/FSM1/cipher-box/pull/400#issuecomment-4151240284 can you add 
 <status>completed</status>
 <summary>Background command "Commit and push test coverage" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23721040526/job/69096022983?pr=400 typecheck is failing in ci on that branch
