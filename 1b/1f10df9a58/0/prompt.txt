@@ -1,0 +1,5 @@
+/gsd:progress
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23722740337/job/69101684017 the phala cloud cvm deployment failed - we had this error on local already, a flag needs to be set to redeploy over the existing node.
