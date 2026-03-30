@@ -88,7 +88,7 @@ CipherBox filters platform-specific system files that should never be created, s
 | ------------- | ------ | ------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Max file size | 100 MB | Client-side (web upload), server-side (API) | `MAX_FILE_SIZE` in `useDropUpload.ts`, `MaxFileSizeValidator` in `ipfs.controller.ts` |
 
-**Rationale:** 100 MB balances usability with memory constraints. The entire file must fit in memory for AES-256-GCM encryption (authenticated encryption requires the full plaintext). AES-256-CTR streaming mode could support larger files but is currently only used for decryption/playback, not upload. The Web Worker encryption offload helps with CPU blocking but does not change the memory requirement.
+**Rationale:** 100 MB balances usability with memory constraints. AES-256-GCM requires the full plaintext in memory for authentication tag computation. Large media files use AES-256-CTR which supports streaming, but the 100 MB limit applies uniformly. The Web Worker encryption offload helps with CPU blocking but does not change the memory requirement.
 
 ### Storage Quota
 
@@ -167,12 +167,12 @@ if (nameExists) throw new Error('An item with this name already exists');
 
 ## Encryption Modes
 
-| Mode        | Usage                              | File size threshold    | Notes                                           |
-| ----------- | ---------------------------------- | ---------------------- | ----------------------------------------------- |
-| AES-256-GCM | Default for all files              | Any                    | Authenticated encryption; full file in memory   |
-| AES-256-CTR | Large media streaming (decryption) | > 256 KB (video/audio) | Enables streaming playback without full decrypt |
+| Mode        | Usage                                 | File size threshold    | Notes                                            |
+| ----------- | ------------------------------------- | ---------------------- | ------------------------------------------------ |
+| AES-256-GCM | Default for all files                 | Any                    | Authenticated encryption; full file in memory    |
+| AES-256-CTR | Large media files (encrypt + decrypt) | > 256 KB (video/audio) | Streaming encrypt/decrypt without full buffering |
 
-**Rationale:** GCM provides authentication (tamper detection) but requires the entire plaintext in memory. CTR mode is used only for decryption/playback of large media files where streaming is essential for UX. Uploads always use GCM. The mode is recorded in file metadata so the correct decryption path is selected on download.
+**Rationale:** GCM provides authentication (tamper detection) but requires the entire plaintext in memory. CTR mode is used for large media files (video, audio) both on upload and download, enabling streaming without buffering the entire file. The encryption mode is recorded in file metadata so the correct decryption path is selected on download.
 
 ## Metadata Storage
 
