@@ -44,30 +44,28 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
     };
   }, [file?.status, fileId, removeFile]);
 
-  if (!file) return null;
-
-  const isError = file.status === 'error';
-  const isComplete = file.status === 'complete';
-  const isEncrypting = file.status === 'encrypting';
-
-  // Cancel handler: cancel the network request and remove from UI immediately (D-07, D-08)
+  // All hooks must be declared before any early return (React Rules of Hooks)
   const handleCancel = useCallback(() => {
     cancelFile(fileId);
     removeFile(fileId);
   }, [fileId, cancelFile, removeFile]);
 
-  // Dismiss handler: remove failed upload row from UI (D-10)
   const handleDismiss = useCallback(() => {
     removeFile(fileId);
   }, [fileId, removeFile]);
 
-  // Retry handler: reset visual state AND re-trigger the actual upload (D-09)
   const handleRetry = useCallback(() => {
     retryFile(fileId);
     if (file?.file && onRetry) {
       onRetry(file.file);
     }
   }, [fileId, retryFile, file?.file, onRetry]);
+
+  if (!file) return null;
+
+  const isError = file.status === 'error';
+  const isComplete = file.status === 'complete';
+  const isEncrypting = file.status === 'encrypting';
 
   const rowClassName = [
     'file-list-item',
