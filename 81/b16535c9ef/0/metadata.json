@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "81b16535c9ef",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T22:38:40.266806Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "a5ca2b94cdfe",
+  "token_usage": {
+    "input_tokens": 3771,
+    "cache_creation_tokens": 172826,
+    "cache_read_tokens": 12567042,
+    "output_tokens": 43662,
+    "api_call_count": 114
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Resolve open PR review comments on PR #416, then switch to a docs branch to audit and update project planning documents (DEFERRED.md, FEATURES.md, README.md) and create a new filesystem specification.",
+    "outcome": "PR #416 review comments were resolved and merged to main. A docs PR (#419) was created on branch `docs/update-project-documentation` with updated planning docs, a new FILESYSTEM_SPECIFICATION.md, and a thoroughly audited DEFERRED.md with phases 38 and 39 added to the roadmap.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro (apps/web/src/lib/faro.ts) is the chosen observability/error tracking solution — not Sentry, Datadog, or Loki.",
+        "folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines, 2 functions actually used) are deprecated but not yet retired — Phase 38 target.",
+        "Desktop FUSE layer is intentionally not unit tested; it is thin OS plumbing covered by the Desktop E2E suite instead.",
+        "Vault v1 legacy columns were removed when staging was reset; the full schema baseline (1700000000000-FullSchema.ts) was written after that reset and never included them.",
+        "@cipherbox/crypto has @cipherbox/core as a devDependency only for a single test (vault-ipns.test.ts) that compares key derivation — a leftover from the restructuring phase, targeted for cleanup in Phase 38.",
+        "RECYCLE_BIN_RETENTION_DAYS is an operator-level env var, not a user-facing setting — user-configurable bin retention is still deferred (Phase 39).",
+        "Session replay is explicitly out of scope as an anti-feature for a zero-knowledge privacy product.",
+        "pin:secondaryFailed event was implemented in Phase 37 as part of the batch upload pipeline.",
+        "Per-file IPNS conflict detection has been implemented since Phase 12.6.",
+        "The Copilot review comment about lazy file reads in useDropUpload.ts:140 was a duplicate of CodeRabbit thread 8 from the first review round, already tracked as a deferred item in 37-CONTEXT.md."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage/getWorker can throw synchronously, leaking entries from the pending map — fixed with try/catch that deletes the pending entry on error."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "JSDoc comment on uploadFiles() overstated memory bounding — corrected to accurately describe actual buffering behavior."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "Batch reads all files to memory before SDK call — architectural limitation requiring SDK API change (accept File objects or read callback instead of Uint8Array); deferred, not a bug fix."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/vault-ipns.test.ts",
+          "finding": "Sole consumer of the @cipherbox/core devDependency in the crypto package — test could use hardcoded vectors instead; circular devDep removal targeted for Phase 38."
+        }
+      ],
+      "workflow": [
+        "When asked to audit a list for stale items, do a systematic pass of every single item against the codebase — not just the ones explicitly called out by the user.",
+        "GraphQL resolveReviewThread mutation can batch multiple thread resolutions; REST endpoint requires --field (integer) not -f for in_reply_to parameter.",
+        "Pre-existing integration test failures (live API tests requiring a running backend) should be distinguished from new failures before committing.",
+        "Planning documents (DEFERRED.md especially) drift quickly — items get implemented across phases without the deferred list being updated, requiring periodic full audits."
+      ]
+    },
+    "friction": [
+      "Multiple rounds needed to properly audit DEFERRED.md — initial pass was shallow and only removed items explicitly called out by the user rather than doing a full systematic review.",
+      "Remote log shipping item was left in DEFERRED.md even though Grafana Faro was identified as already implemented — required another user prompt to catch.",
+      "DTS circular dependency was prematurely removed from DEFERRED.md before confirming with user whether it was intentional; had to be re-added.",
+      "RECYCLE_BIN_RETENTION_DAYS was initially miscategorized as implementing the user-configurable retention deferred item, when it is actually an operator env var — corrected after user pushback.",
+      "Edit tool reformatted table widths requiring a raw bash cat workaround to read exact file content before making targeted edits."
+    ],
+    "open_items": [
+      "Phase 38: Retire folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines, 2 used functions) by migrating callers to SDK methods; also remove @cipherbox/crypto devDependency on @cipherbox/core by refactoring vault-ipns.test.ts to use hardcoded test vectors.",
+      "Phase 39: Add user-configurable vault parameters — specifically allowing end users to set their own recycle bin retention period (distinct from the operator-level RECYCLE_BIN_RETENTION_DAYS env var).",
+      "Lazy file reading in useDropUpload.ts (batch reads all files to memory before SDK call) requires a breaking SDK API change to accept File objects or a read callback instead of Uint8Array.",
+      "docs/update-project-documentation PR #419 is open and needs review/merge."
+    ]
+  }
+}
