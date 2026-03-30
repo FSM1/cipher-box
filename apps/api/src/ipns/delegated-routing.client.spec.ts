@@ -57,7 +57,7 @@ describe('DelegatedRoutingClient', () => {
       .mockResolvedValue(undefined as never) as unknown as jest.SpyInstance<
       Promise<void>,
       [ms: number],
-      any
+      unknown
     >;
   });
 

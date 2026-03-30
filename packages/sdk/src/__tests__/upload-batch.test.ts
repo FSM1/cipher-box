@@ -172,6 +172,7 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
     // Return fresh metadata from loadFolderMetadata
     vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue({
       metadata: {
+        version: 'v2',
         children: [
           {
             type: 'file' as const,
@@ -183,7 +184,7 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
             modifiedAt: 0,
           },
         ],
-      } as any,
+      },
       sequenceNumber: 5n,
       cid: 'bafyfresh',
     });
@@ -275,7 +276,7 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
     vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
 
     const events: Array<{ type: string; successes?: unknown[]; failures?: unknown[] }> = [];
-    client.on((e) => events.push(e as typeof events[0]));
+    client.on((e) => events.push(e as (typeof events)[0]));
 
     const files = makeTestFiles(3);
     await client.uploadFiles('folder-ipns', files);
@@ -321,7 +322,7 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
     vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
 
     const events: Array<{ type: string; sequenceNumber?: bigint }> = [];
-    client.on((e) => events.push(e as typeof events[0]));
+    client.on((e) => events.push(e as (typeof events)[0]));
 
     const files = makeTestFiles(2);
     await client.uploadFiles('folder-ipns', files);
