@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f7582e9de5ef",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T21:59:32.633029Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "68617860744c",
+  "token_usage": {
+    "input_tokens": 3720,
+    "cache_creation_tokens": 122005,
+    "cache_read_tokens": 6321887,
+    "output_tokens": 29294,
+    "api_call_count": 75
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Resolve open PR review comments on the batch upload pipeline PR, then merge it; afterward update planning docs (DEFERRED.md, FEATURES.md, README.md) and create a new filesystem specification document on a docs branch.",
+    "outcome": "All 4 review threads were triaged, fixed where valid, replied to, and resolved; the PR was merged to main. A docs branch (PR #419) was created with updated DEFERRED.md, FEATURES.md, README.md, and a new docs/FILESYSTEM_SPECIFICATION.md, with several follow-up corrections applied (stale/invalid deferred items removed, FUSE test rationale documented, vault v1 fields confirmed gone).",
+    "learnings": {
+      "repo": [
+        "Grafana Faro is the live error tracking solution (apps/web/src/lib/faro.ts) — not Sentry. Any deferred item referencing Sentry is stale.",
+        "Session replay is considered an anti-feature for this zero-knowledge privacy-focused product and is explicitly out of scope.",
+        "FUSE layer (crates/fuse/) has no unit tests by design — the OS integration plumbing is covered by the Desktop E2E suite instead, making unit mocking unreliable and unnecessary.",
+        "Vault v1 legacy fields were purged when staging was reset and a full-schema baseline migration was established; no DROP COLUMN migrations exist because the columns never appeared in the new schema.",
+        "Web Worker encryption (Phase 37) was fully implemented but the corresponding todo file was still sitting in .planning/todos/pending/ — it needed a manual move to done/.",
+        "Phases are tracked under .planning/phases/ with per-phase CONTEXT, PLAN, SUMMARY, RESEARCH, VALIDATION, and VERIFICATION docs.",
+        "CodeRabbit and GitHub Copilot both independently flagged the same lazy-file-reading architectural issue in useDropUpload.ts, which was already tracked as a deferred item from an earlier CodeRabbit review round.",
+        "The 3 failing integration tests in packages/sdk/src/__tests__/integration.test.ts require a live backend and are pre-existing — they are expected to fail in local CI."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage() and getWorker() can throw, leaving pending entries in the queue without cleanup. Fixed with try/catch that removes the pending entry on error."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "Batch reads all files into memory before the SDK call. This is an architectural limitation — SDK accepts Uint8Array, not File/stream. Deferred: requires SDK contract change to accept File objects or a read callback."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "JSDoc comment on uploadFiles() overstated memory bounding. Fixed to accurately describe the actual concurrency-bounded memory behavior."
+        }
+      ],
+      "workflow": [
+        "When resolving PR review threads, use gh api graphql for fetching threads (isResolved filter) and resolving them, but use REST (gh api repos/.../pulls/.../comments) for posting replies — the --field flag (not -f) is required for integer fields like in_reply_to.",
+        "Deferred items lists accumulate stale entries quickly; each cleanup pass should verify against the actual codebase (grep for symbols, check file existence) rather than trusting the list at face value.",
+        "After a large merge (4802 insertions), planning docs (FEATURES.md, DEFERRED.md, README.md) typically need a dedicated cleanup pass — best done on a separate docs branch rather than mixed into feature PRs."
+      ]
+    },
+    "friction": [
+      "The web worker encryption todo file was not moved to done/ when Phase 37 was completed — required a manual catch after the fact.",
+      "DEFERRED.md had accumulated multiple invalid entries: already-implemented items (Grafana Faro), explicitly out-of-scope items (session replay), and premature infrastructure items (production Kubo hardening) — required a separate review pass with user correction.",
+      "git push initially failed on the docs branch and required a retry.",
+      "Edit tool reformatted markdown table column widths, making subsequent edits harder to target without re-reading the raw file with bash cat -n."
+    ],
+    "open_items": [
+      "Lazy file reading in useDropUpload.ts (useDropUpload.ts:140) — SDK needs to accept File objects or a read callback instead of Uint8Array to avoid reading all files into memory before the upload call.",
+      "Batch upload is not yet implemented in the Rust SDK — noted in updated FEATURES.md feature matrix.",
+      "Cross-platform filesystem edge cases documented in docs/FILESYSTEM_SPECIFICATION.md: case-insensitive collision handling on Windows/macOS HFS+, Windows reserved names (CON, PRN, etc.), trailing dot stripping on Windows, emoji normalization across platforms, and symlink/alias behavior differences.",
+      "Desktop E2E test suite coverage for FUSE write operations — covered by existing Desktop E2E but not explicitly enumerated in the feature matrix.",
+      "Observability deferred items remain: structured log shipping pipeline, distributed tracing across API/IPFS/SDK boundaries, and performance budget alerting.",
+      "Upload pipeline deferred items: resumable uploads (tus protocol), per-file granular progress events in SDK, upload queue persistence across page reloads."
+    ]
+  }
+}
