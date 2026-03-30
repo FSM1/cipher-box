@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "114c8ed1ad9e",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T22:43:11.369516Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "a36547467dd8",
+  "token_usage": {
+    "input_tokens": 3777,
+    "cache_creation_tokens": 174601,
+    "cache_read_tokens": 13285110,
+    "output_tokens": 44300,
+    "api_call_count": 118
+  },
+  "session_metrics": {
+    "turn_count": 13
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on PR #416, then merge to main and perform a comprehensive documentation update: pruning stale deferred items, updating feature tables, refreshing the README, creating a filesystem specification, and planning the next two development phases.",
+    "outcome": "PR #416 was merged after fixing try/catch on postMessage/getWorker in encrypt-worker.service.ts and updating a doc comment in client.ts. A docs branch (PR #419) was created with updated DEFERRED.md (thoroughly audited), FEATURES.md, README.md, a new FILESYSTEM_SPECIFICATION.md, and ROADMAP.md entries for phases 38 and 39.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro (apps/web/src/lib/faro.ts) is the error tracking and remote log shipping solution — not Sentry, Datadog, or Loki.",
+        "Session replay is explicitly out of scope as an anti-feature for a zero-knowledge privacy product.",
+        "FUSE desktop components are intentionally not unit tested; they are covered by the Desktop E2E suite since unit testing would require mocking too much of the host OS.",
+        "Vault v1 legacy columns were fully removed when staging was reset; the baseline migration 1700000000000-FullSchema.ts reflects the clean schema.",
+        "RECYCLE_BIN_RETENTION_DAYS is an operator-level env var, not a user-facing setting — user-configurable retention is still deferred.",
+        "folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines, 2 functions actually used) are the remaining deprecated web services not yet migrated to the SDK.",
+        "@cipherbox/crypto has @cipherbox/core as a devDependency used only in vault-ipns.test.ts to compare key derivation — a test-only circular dep that was supposed to be removed during Phase 19.1.",
+        "Phase 38 will retire folder.service.ts, bin.service.ts, and remove the crypto-\u003ecore devDependency; Phase 39 will add user-configurable vault parameters (versioning defaults, bin retention, soft/hard delete).",
+        "Desktop adopts the Rust FUSE SDK, not the JS SDK — JS SDK migration deferred items do not apply to desktop.",
+        "pin:secondaryFailed events, per-file IPNS conflict detection, and batch upload pipeline were all implemented in Phase 37."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage/getWorker can throw, leaking pending entries — fixed with try/catch that cleans up the pending map on error."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "uploadFiles() doc comment overstated memory bounding — updated to accurately describe behavior."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "Batch reads all files to memory before SDK call — flagged by both CodeRabbit and Copilot as a concern, but deferred as it requires an SDK contract change to accept File objects or read callbacks instead of Uint8Array."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/vault-ipns.test.ts",
+          "finding": "Imports deriveRegistryIpnsKeypair and initializeVault from @cipherbox/core only to verify domain separation — should be refactored to use hardcoded test vectors or moved to a cross-package integration test directory."
+        }
+      ],
+      "workflow": [
+        "When asked to audit/prune a list, go through every single item systematically against the codebase — not just the ones the user explicitly calls out. Shallow passes that remove only what is questioned will keep requiring manual correction rounds.",
+        "GraphQL resolveReviewThread mutation can batch multiple thread resolutions; REST endpoint for PR comment replies requires --field (integer) for in_reply_to, not --raw-field.",
+        "Integration tests hitting a live API backend will fail in CI without a running backend — distinguish pre-existing failures from regression before blocking on them.",
+        "When verifying whether a deferred item is implemented, grep for the actual code artifact (function name, file, env var) rather than relying on phase summaries alone."
+      ]
+    },
+    "friction": [
+      "Initial deferred item audit was too shallow — only removed the 3 items the user called out rather than systematically verifying every entry, requiring multiple correction rounds.",
+      "Edit tool reformatted table whitespace in DEFERRED.md, making subsequent edits require re-reading the file to get exact strings.",
+      "The 'Production Kubo deployment hardening' and 'session replay' items should have been caught in the first audit pass as obviously out-of-scope or already-implemented.",
+      "The user had to explicitly point out that Grafana Faro = remote log shipping, that FUSE tests are intentionally not unit tested, and that vault v1 columns were already removed — all of which should have been discovered during the audit."
+    ],
+    "open_items": [
+      "Phase 38: Retire folder.service.ts and bin.service.ts, migrate remaining callers to SDK methods, and remove the @cipherbox/crypto devDependency on @cipherbox/core by refactoring vault-ipns.test.ts to use hardcoded test vectors.",
+      "Phase 39: User-configurable vault parameters — versioning defaults, bin retention period (end-user setting, distinct from operator env var), and soft-delete vs hard-delete preference.",
+      "Lazy file reading in useDropUpload.ts (line 140) — requires SDK contract change to accept File objects or read callbacks instead of Uint8Array; tracked as architectural deferred item.",
+      "PR #419 (docs branch) is open and needs review/merge.",
+      "Filesystem specification (docs/FILESYSTEM_SPECIFICATION.md) documents 5 cross-platform gaps that may need future resolution."
+    ]
+  }
+}
