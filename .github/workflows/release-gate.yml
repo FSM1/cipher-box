@@ -252,7 +252,7 @@ jobs:
             done
           fi
 
-          # No run for HEAD — find the most recent completed run in the release range
+          # No run for HEAD — walk commits newest-first and find a Desktop E2E run
           echo "No Desktop E2E run for HEAD. Searching since ${PREV_TAG}..."
 
           if [ -z "$PREV_TAG" ]; then
@@ -260,34 +260,58 @@ jobs:
             exit 1
           fi
 
+          # Commits newest-first (reverse the API's oldest-first order)
           RANGE_COMMITS=$(gh api "repos/${{ github.repository }}/compare/${PREV_TAG}...${MAIN_SHA}" \
-            --jq '[.commits[].sha] | join("\n")' 2>/dev/null || echo "")
+            --jq '[.commits[].sha] | reverse | .[]' 2>/dev/null || echo "")
 
           if [ -z "$RANGE_COMMITS" ]; then
             echo "::error::Could not determine commits in range ${PREV_TAG}..${MAIN_SHA}"
             exit 1
           fi
 
+          # Build a lookup of all desktop-e2e runs (includes in-progress)
           RUNS=$(gh run list --repo ${{ github.repository }} \
             --workflow=desktop-e2e.yml --branch=main --limit=50 \
             --json headSha,conclusion,status,databaseId \
-            --jq '.[] | select(.status == "completed") | "\(.headSha) \(.conclusion) \(.databaseId)"')
+            --jq '.[] | "\(.headSha) \(.status) \(.conclusion) \(.databaseId)"')
 
           FOUND_SHA=""
           FOUND_CONCLUSION=""
           FOUND_RUN_ID=""
 
-          while IFS=" " read -r sha conclusion run_id; do
-            [ -z "$sha" ] && continue
-            if echo "$RANGE_COMMITS" | grep -Fq "$sha"; then
-              FOUND_SHA="$sha"
-              FOUND_CONCLUSION="$conclusion"
-              FOUND_RUN_ID="$run_id"
-              break
+          # Walk commits newest-first, find the first one with a desktop-e2e run
+          while IFS= read -r commit_sha; do
+            [ -z "$commit_sha" ] && continue
+            RUN_LINE=$(echo "$RUNS" | grep "^${commit_sha} " | head -1)
+            [ -z "$RUN_LINE" ] && continue
+
+            read -r _sha run_status run_conclusion run_id <<< "$RUN_LINE"
+            echo "Found Desktop E2E run ${run_id} for ${commit_sha} (status: ${run_status}, conclusion: ${run_conclusion})"
+
+            # If still running, poll until complete
+            if [ "$run_status" != "completed" ]; then
+              echo "Run ${run_id} still in progress — polling..."
+              for attempt in $(seq 1 40); do
+                run_conclusion=$(gh run view "$run_id" --repo ${{ github.repository }} \
+                  --json conclusion --jq '.conclusion // empty')
+                if [ -n "$run_conclusion" ]; then
+                  echo "Run ${run_id} completed (conclusion: ${run_conclusion})"
+                  break
+                fi
+                if [ "$attempt" -eq 40 ]; then
+                  echo "::error::Desktop E2E run ${run_id} did not complete within 20 minutes."
+                  exit 1
+                fi
+                echo "Attempt ${attempt}/40: still running, waiting 30s..."
+                sleep 30
+              done
             fi
-          done <<EOF
-          $RUNS
-          EOF
+
+            FOUND_SHA="$commit_sha"
+            FOUND_CONCLUSION="$run_conclusion"
+            FOUND_RUN_ID="$run_id"
+            break
+          done <<< "$RANGE_COMMITS"
 
           if [ -z "$FOUND_SHA" ]; then
             echo "::error::No Desktop E2E run found for any commit in ${PREV_TAG}..HEAD."
