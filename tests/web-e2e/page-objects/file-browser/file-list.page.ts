@@ -7,6 +7,8 @@ import { type Page, type Locator } from '@playwright/test';
  * Uses semantic selectors (getByRole, getByText) for maintainability.
  */
 export class FileListPage {
+  private static readonly ROW_SELECTOR = '.file-list-item:not(.upload-inline-row)';
+
   constructor(private readonly page: Page) {}
 
   /**
@@ -20,7 +22,7 @@ export class FileListPage {
    * Get all file list items (excludes upload progress rows).
    */
   fileItems(): Locator {
-    return this.page.locator('.file-list-item:not(.upload-inline-row)');
+    return this.page.locator(FileListPage.ROW_SELECTOR);
   }
 
   /**
@@ -29,7 +31,7 @@ export class FileListPage {
    * during the brief overlap between upload completion and real file appearance.
    */
   getItem(name: string): Locator {
-    return this.page.locator('.file-list-item:not(.upload-inline-row)', { hasText: name }).filter({
+    return this.page.locator(FileListPage.ROW_SELECTOR, { hasText: name }).filter({
       has: this.page.locator('.file-list-item-name', { hasText: name }),
     });
   }
