@@ -527,8 +527,8 @@ Plans: _not yet planned_
 
 ### Phase 39: User-configurable vault parameters
 
-**Goal:** Add end-user settings for vault parameters such as recycle bin retention period, replacing the current operator-only environment variable with per-user configuration stored in vault metadata
-**Requirements**: None (deferred item from Phase 17)
+**Goal:** Add end-user vault settings stored in encrypted vault metadata, giving users control over: recycle bin retention period (default 30 days), delete behavior (soft delete to bin vs hard delete), and file versioning defaults (max versions per file, version cooldown period). Settings UI in the web app with sensible defaults matching current hardcoded values.
+**Requirements**: None (deferred items from Phases 13, 17)
 **Depends on:** Phase 38
 
 Plans: _not yet planned_
