@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ccdc3e408477",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T22:59:04.21339Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "5c790d18e9dd",
+  "token_usage": {
+    "input_tokens": 3831,
+    "cache_creation_tokens": 207774,
+    "cache_read_tokens": 22330000,
+    "output_tokens": 54217,
+    "api_call_count": 164
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Resolve open PR review comments on PR #416, then merge and update all project documentation (DEFERRED.md, FEATURES.md, README.md, docs/ folder, ROADMAP.md) to reflect phases 28-37 changes on a dedicated docs branch.",
+    "outcome": "PR #416 merged after fixing encrypt-worker error handling and a doc comment. Docs branch PR #419 created with comprehensive updates: DEFERRED.md pruned of stale/implemented items, FEATURES.md updated with new features, README.md refreshed, new FILESYSTEM_SPECIFICATION.md created, and all docs/ files audited and updated for phases 28-37.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro (apps/web/src/lib/faro.ts) is the production error tracking and remote log shipping solution — replaces any Sentry/Datadog/Loki references in docs.",
+        "Session replay is explicitly out of scope as an anti-feature for a privacy-first zero-knowledge product.",
+        "RECYCLE_BIN_RETENTION_DAYS is operator-level config, not end-user configurable — user-configurable retention is still deferred.",
+        "Desktop FUSE components are intentionally not unit tested; they are integration-tested via the Desktop E2E suite, as unit testing would require mocking too much of the host OS.",
+        "Linux FUSE is fully implemented under the same 'fuse' feature flag as macOS (libfuse3), giving NFC normalization and case-sensitive lookups.",
+        "The @cipherbox/crypto package has @cipherbox/core as a devDependency only for one test file (vault-ipns.test.ts) that verifies key domain separation — a leftover from Phase 19.1 restructuring that was never cleaned up.",
+        "folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines, 2 functions actually used) are the remaining deprecated web services to be retired in Phase 38.",
+        "Database has grown to 14 tables; share_invites and pin_migrations were added in phases 28-37 and were missing from DATABASE_EVOLUTION_PROTOCOL.md.",
+        "TEE is now Phala Cloud CVM, not AWS Nitro (which was a planned fallback).",
+        "IPNS republish interval is 6h, not 3h — CLAUDE.md had a stale value.",
+        "The CipherBox FUSE mount is accessible via terminal on macOS and via PowerShell and Git Bash on Windows.",
+        "Preliminary R\u0026D docs moved from 00-Preliminary-R\u0026D/ to .planning/milestones/m0/ during a recent reorganization."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage/getWorker calls could throw, leaking pending map entries — fixed with try/catch that cleans up the pending entry on error."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "uploadFiles() doc comment overstated memory bounding — fixed to clarify actual memory behavior."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/vault-ipns.test.ts",
+          "line": 1,
+          "finding": "Only file in @cipherbox/crypto that imports @cipherbox/core — creates a circular devDependency. Should be refactored to use hardcoded test vectors or moved to a cross-package integration test directory."
+        }
+      ],
+      "workflow": [
+        "When asked to prune a list, do a systematic per-item verification pass — not just spot-checking items raised by the user. Shallow passes leave stale items that the user must find manually.",
+        "GraphQL resolve mutation and REST reply-to-comment are separate operations when closing PR review threads via gh CLI.",
+        "Pre-existing integration test failures (requiring live backend) can be distinguished from unit test failures by checking test file names (integration.test.ts) before concluding a test suite is broken.",
+        "When removing deferred items, check both the deferred doc and CONCERNS.md — they can contain related but separate entries for the same issue."
+      ]
+    },
+    "friction": [
+      "Multiple rounds of user correction needed on DEFERRED.md — the initial pruning pass was shallow and missed already-implemented items (Grafana Faro, Linux FUSE, vault v1 columns, pin:secondaryFailed events, etc.).",
+      "Edit tool reformatted markdown table whitespace after edits, making it harder to read the actual current file content and requiring a raw bash cat to see the real state.",
+      "gh CLI push required a retry (likely a transient remote error).",
+      "The DTS circular dependency was prematurely removed from DEFERRED.md, then had to be re-added when the user clarified it was intentionally deferred for Phase 38."
+    ],
+    "open_items": [
+      "Phase 38: Retire folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines), remove @cipherbox/crypto circular devDependency on @cipherbox/core by refactoring vault-ipns.test.ts.",
+      "Phase 39: User-configurable vault parameters — bin retention period (default 30 days), soft vs hard delete behavior, versioning defaults (max versions per file, version cooldown period).",
+      "useDropUpload.ts batch memory issue (lazy file reads) — architectural change requiring SDK API to accept File objects or read callbacks instead of Uint8Array; tracked as deferred Upload Pipeline item.",
+      "Sharing link expiry / revocation — still in deferred.",
+      "Passive IPFS node seeding for resilience — still in deferred.",
+      "Admin audit log export (CSV/JSON) — still in deferred.",
+      "Rate limiting on sharing endpoints — still in deferred."
+    ]
+  }
+}
