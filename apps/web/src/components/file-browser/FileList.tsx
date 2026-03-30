@@ -150,11 +150,13 @@ export function FileList({
   const realFileNames = new Set(
     items.filter((item) => item.type === 'file').map((item) => item.name)
   );
-  const completingNames = new Set(
-    uploadEntries.filter((e) => e.status === 'complete').map((e) => e.filename)
+  const completeUploadIds = new Set(
+    uploadEntries
+      .filter((e) => e.status === 'complete' && realFileNames.has(e.filename))
+      .map((e) => e.id)
   );
   const filteredUploadEntries = uploadVirtualEntries.filter(
-    (entry) => !(completingNames.has(entry.name) && realFileNames.has(entry.name))
+    (entry) => !completeUploadIds.has(entry.id)
   );
 
   // Merge and sort all items together
