@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "058ef38e725f",
+  "strategy": "manual-commit",
+  "branch": "feat/inline-upload-progress",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/phases/36-inline-upload-progress/.gitkeep",
+    ".planning/phases/36-refactor-upload-progress-in-web-app-to-an-inline-progress-display-and-remove-the-popup-upload-progress/36-CONTEXT.md",
+    ".planning/phases/36-refactor-upload-progress-in-web-app-to-an-inline-progress-display-and-remove-the-popup-upload-progress/36-DISCUSSION-LOG.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/05/8ef38e725f/0/metadata.json",
+      "transcript": "/05/8ef38e725f/0/full.jsonl",
+      "content_hash": "/05/8ef38e725f/0/content_hash.txt",
+      "prompt": "/05/8ef38e725f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 85703,
+    "cache_read_tokens": 3310438,
+    "output_tokens": 15857,
+    "api_call_count": 46
+  }
+}
