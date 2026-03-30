@@ -21,10 +21,11 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@cipherbox/crypto": "workspace:*",
-    "@cipherbox/core": "workspace:*",
     "@cipherbox/api-client": "workspace:*",
-    "@cipherbox/sdk-core": "workspace:*"
+    "@cipherbox/core": "workspace:*",
+    "@cipherbox/crypto": "workspace:*",
+    "@cipherbox/sdk-core": "workspace:*",
+    "p-limit": "^7.3.0"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^3.2.4",

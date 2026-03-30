@@ -8,5 +8,5 @@
     "declaration": false,
     "declarationMap": false
   },
-  "include": ["src/workers/decrypt-sw.ts"]
+  "include": ["src/workers/decrypt-sw.ts", "src/workers/encrypt.worker.ts"]
 }

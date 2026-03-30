@@ -10,6 +10,7 @@
 import { CipherBoxClient, type CipherBoxClientConfig } from '@cipherbox/sdk';
 import type { PinningConfig } from '@cipherbox/sdk';
 import { apiAxios } from './api-config';
+import { destroyEncryptionWorker } from '../services/encrypt-worker.service';
 import type { FolderNode } from '../stores/folder.store';
 
 let _client: CipherBoxClient | null = null;
@@ -61,6 +62,8 @@ export function destroySdkClient(): void {
     _client = null;
   }
   _lastConfig = null;
+  // Terminate encryption Web Worker (no-op if not initialized)
+  destroyEncryptionWorker();
 }
 
 /**

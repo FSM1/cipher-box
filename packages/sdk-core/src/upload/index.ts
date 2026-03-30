@@ -24,6 +24,24 @@ import { normalizeEncryptionMode } from '../encryption-mode';
 import { withPerf } from '../perf';
 
 /**
+ * External encryption function type for Web Worker offloading.
+ * When provided to uploadFile(), replaces internal AES encrypt + key wrap steps.
+ * Must return ciphertext, hex-encoded wrappedKey/iv, and raw fileKey for re-wrapping.
+ */
+export type ExternalEncryptFn = (params: {
+  data: Uint8Array;
+  userPublicKey: Uint8Array;
+  encryptionMode: 'GCM' | 'CTR';
+}) => Promise<{
+  ciphertext: Uint8Array;
+  wrappedKey: string;
+  iv: string;
+  fileKey: Uint8Array;
+  originalSize: number;
+  encryptedSize: number;
+}>;
+
+/**
  * Result of a single file upload operation.
  */
 export type UploadResult = {
@@ -82,23 +100,61 @@ export async function uploadFile(params: {
   ) => Promise<{ cid: string; size: number }>;
   /** Encryption mode: GCM (default, authenticated) or CTR (streaming media). */
   encryptionMode?: 'GCM' | 'CTR';
+  /** Optional external encryption function (e.g., Web Worker). If provided, skips internal AES encrypt.
+   * Must return ciphertext, hex-encoded wrappedKey, hex-encoded iv, and raw fileKey for re-wrapping. */
+  encryptFn?: ExternalEncryptFn;
 }): Promise<UploadResult> {
   return withPerf('upload:full', async () => {
     const mode = normalizeEncryptionMode(params.encryptionMode);
 
-    // 1. Generate unique file key and IV (CTR uses 16-byte nonce+counter, GCM uses 12-byte random)
-    const fileKey = generateFileKey();
-    const iv = mode === 'CTR' ? generateCtrIv() : generateIv();
+    // Capture original size before any Transferable detachment (encryptFn may
+    // transfer params.data.buffer to a Worker, making params.data.length = 0)
+    const originalSize = params.data.length;
+
+    // Internal file key -- only generated when encryptFn is NOT provided.
+    // When encryptFn is provided, the caller owns the returned fileKey memory.
+    let fileKeyInternal: Uint8Array | null = null;
+    let fileKeyExternal: Uint8Array | null = null;
 
     try {
-      // 2. Encrypt file content
-      const ciphertext =
-        mode === 'CTR'
-          ? await encryptAesCtr(params.data, fileKey, iv)
-          : await encryptAesGcm(params.data, fileKey, iv);
+      let ciphertext: Uint8Array;
+      let wrappedKeyHex: string;
+      let ivHex: string;
+      let fileKeyForResult: Uint8Array;
 
-      // 3. Wrap file key with user's public key (ECIES)
-      const wrappedKey = await wrapKey(fileKey, params.userPublicKey);
+      if (params.encryptFn) {
+        // External encryption path (e.g., Web Worker)
+        const extResult = await params.encryptFn({
+          data: params.data,
+          userPublicKey: params.userPublicKey,
+          encryptionMode: mode,
+        });
+        ciphertext = extResult.ciphertext;
+        wrappedKeyHex = extResult.wrappedKey;
+        ivHex = extResult.iv;
+        fileKeyForResult = extResult.fileKey;
+        fileKeyExternal = extResult.fileKey;
+      } else {
+        // Internal encryption path (original behavior)
+        // 1. Generate unique file key and IV (CTR uses 16-byte nonce+counter, GCM uses 12-byte random)
+        fileKeyInternal = generateFileKey();
+        const iv = mode === 'CTR' ? generateCtrIv() : generateIv();
+
+        // 2. Encrypt file content
+        ciphertext =
+          mode === 'CTR'
+            ? await encryptAesCtr(params.data, fileKeyInternal, iv)
+            : await encryptAesGcm(params.data, fileKeyInternal, iv);
+
+        // 3. Wrap file key with user's public key (ECIES)
+        const wrappedKey = await wrapKey(fileKeyInternal, params.userPublicKey);
+        wrappedKeyHex = bytesToHex(wrappedKey);
+        ivHex = bytesToHex(iv);
+
+        // Return a defensive copy of the file key for re-wrapping.
+        // The caller is responsible for clearing it after use.
+        fileKeyForResult = new Uint8Array(fileKeyInternal);
+      }
 
       // 4. Upload encrypted content to IPFS (or BYO node via pinFn override)
       const pinResult = params.pinFn
@@ -112,9 +168,9 @@ export async function uploadFile(params: {
       const fileMetaResult = await createFileMetadata({
         fileId: params.fileId,
         cid,
-        fileKeyEncrypted: bytesToHex(wrappedKey),
-        fileIv: bytesToHex(iv),
-        size: params.data.length,
+        fileKeyEncrypted: wrappedKeyHex,
+        fileIv: ivHex,
+        size: originalSize,
         mimeType: params.mimeType,
         folderKey: params.folderKey,
         userPublicKey: params.userPublicKey,
@@ -123,21 +179,26 @@ export async function uploadFile(params: {
         encryptionMode: mode,
       });
 
-      // Return a defensive copy of the file key for re-wrapping.
-      // The caller is responsible for clearing it after use.
-      const fileKeyCopy = new Uint8Array(fileKey);
-
       return {
         cid,
         encryptedSize,
         fileMetaIpnsName: fileMetaResult.fileMetaIpnsName,
         ipnsRecord: fileMetaResult.ipnsRecord,
         ipnsPrivateKeyEncrypted: fileMetaResult.ipnsPrivateKeyEncrypted,
-        fileKey: fileKeyCopy,
+        fileKey: fileKeyForResult,
       };
+    } catch (err) {
+      // Clear external fileKey if a later step (pinning/metadata) throws —
+      // the caller never receives the UploadResult so can't clear it themselves
+      if (fileKeyExternal) {
+        clearBytes(fileKeyExternal);
+      }
+      throw err;
     } finally {
-      // 6. Clear the internal copy of the key from memory
-      clearBytes(fileKey);
+      // Clear the internal copy of the key from memory (only if internally generated)
+      if (fileKeyInternal) {
+        clearBytes(fileKeyInternal);
+      }
     }
   });
 }

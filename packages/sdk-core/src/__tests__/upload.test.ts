@@ -105,6 +105,125 @@ describe('Upload operations', () => {
       expect(clearBytes).toHaveBeenCalled();
     });
 
+    it('uses encryptFn when provided and skips internal encryption', async () => {
+      const ctx = createMockContext();
+      const data = new Uint8Array([1, 2, 3]);
+      const userPublicKey = new Uint8Array(65).fill(0x04);
+      const folderKey = new Uint8Array(32).fill(0xcc);
+      const externalFileKey = new Uint8Array(32).fill(0xdd);
+
+      const encryptFn = vi.fn().mockResolvedValue({
+        ciphertext: new Uint8Array([88, 88, 88]),
+        wrappedKey: 'external-wrapped-key',
+        iv: 'external-iv-hex',
+        fileKey: externalFileKey,
+        originalSize: 3,
+        encryptedSize: 3,
+      });
+
+      const result = await uploadFile({
+        data,
+        fileId: 'encrypt-fn-test',
+        mimeType: 'text/plain',
+        folderKey,
+        userPublicKey,
+        ctx,
+        encryptFn,
+      });
+
+      // encryptFn should have been called
+      expect(encryptFn).toHaveBeenCalledWith({
+        data,
+        userPublicKey,
+        encryptionMode: 'GCM',
+      });
+
+      // Internal crypto functions should NOT have been called
+      const { generateFileKey, encryptAesGcm, wrapKey } = await import('@cipherbox/crypto');
+      expect(generateFileKey).not.toHaveBeenCalled();
+      expect(encryptAesGcm).not.toHaveBeenCalled();
+      expect(wrapKey).not.toHaveBeenCalled();
+
+      // Result should use the external file key
+      expect(result.fileKey).toBe(externalFileKey);
+
+      // IPFS upload should have been called with the external ciphertext
+      const { addToIpfs } = await import('../ipfs');
+      expect(addToIpfs).toHaveBeenCalledWith(ctx, new Uint8Array([88, 88, 88]), undefined);
+
+      // clearBytes should NOT have been called for the internal key (none was generated)
+      const { clearBytes } = await import('@cipherbox/crypto');
+      expect(clearBytes).not.toHaveBeenCalled();
+    });
+
+    it('uses encryptFn result for file metadata creation', async () => {
+      const ctx = createMockContext();
+      const encryptFn = vi.fn().mockResolvedValue({
+        ciphertext: new Uint8Array([88]),
+        wrappedKey: 'ext-wrapped',
+        iv: 'ext-iv',
+        fileKey: new Uint8Array(32).fill(0xee),
+        originalSize: 1,
+        encryptedSize: 1,
+      });
+
+      await uploadFile({
+        data: new Uint8Array([1]),
+        fileId: 'meta-test',
+        mimeType: 'text/plain',
+        folderKey: new Uint8Array(32),
+        userPublicKey: new Uint8Array(65),
+        ctx,
+        encryptFn,
+      });
+
+      const { createFileMetadata } = await import('../file');
+      expect(createFileMetadata).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileKeyEncrypted: 'ext-wrapped',
+          fileIv: 'ext-iv',
+        })
+      );
+    });
+
+    it('records correct file size even when encryptFn detaches the data buffer', async () => {
+      const ctx = createMockContext();
+      const originalData = new Uint8Array([1, 2, 3, 4, 5]);
+
+      // Simulate Transferable detachment: encryptFn receives the buffer,
+      // then the caller's Uint8Array becomes zero-length
+      const encryptFn = vi.fn().mockImplementation(async (params: { data: Uint8Array }) => {
+        // Simulate postMessage transfer — detach the ArrayBuffer
+        const detached = new ArrayBuffer(0);
+        Object.defineProperty(params.data, 'buffer', { value: detached });
+        Object.defineProperty(params.data, 'length', { value: 0 });
+        Object.defineProperty(params.data, 'byteLength', { value: 0 });
+
+        return {
+          ciphertext: new Uint8Array([99]),
+          wrappedKey: 'detach-wrapped',
+          iv: 'detach-iv',
+          fileKey: new Uint8Array(32).fill(0xaa),
+          originalSize: 5,
+          encryptedSize: 1,
+        };
+      });
+
+      await uploadFile({
+        data: originalData,
+        fileId: 'detach-test',
+        mimeType: 'text/plain',
+        folderKey: new Uint8Array(32),
+        userPublicKey: new Uint8Array(65),
+        ctx,
+        encryptFn,
+      });
+
+      const { createFileMetadata } = await import('../file');
+      // Size must be 5 (original), not 0 (post-detachment)
+      expect(createFileMetadata).toHaveBeenCalledWith(expect.objectContaining({ size: 5 }));
+    });
+
     it('passes teeKeys when provided', async () => {
       const ctx = createMockContext();
       const { createFileMetadata } = await import('../file');

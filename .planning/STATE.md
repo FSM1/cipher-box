@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Milestone complete
-last_updated: '2026-03-30T02:55:11.837Z'
+last_updated: "2026-03-30T16:58:03.188Z"
 last_activity: 2026-03-30
 progress:
-  total_phases: 21
-  completed_phases: 21
-  total_plans: 84
-  completed_plans: 84
+  total_phases: 22
+  completed_phases: 22
+  total_plans: 86
+  completed_plans: 86
 ---
 
 # Project State
@@ -19,11 +19,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 36 — inline-upload-progress
+**Current focus:** Phase 37 — parallel-batch-upload-pipeline
 
 ## Current Position
 
-Phase: 36
+Phase: 37
 Plan: Not started
 
 ## Performance Metrics
@@ -87,6 +87,7 @@ Plan: Not started
 | Phase 35 P02 | 5min  | 4 tasks  | 6 files  |
 | Phase 35 P03 | 8min  | 4 tasks  | 14 files |
 | Phase 35 P05 | 5min  | 3 tasks  | 3 files  |
+| Phase 37 P02 | 5min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -180,6 +181,7 @@ Recent for v1.1:
 - Phase 23 added: Rust SDK Extraction — extract shared cipherbox-core crate, replace duplicated logic in desktop FUSE code, enable unit testing parity with TypeScript
 - Phase 27 added: Writable Shares (PoC) — extend read-only sharing to read-write using existing server-coordinated conflict resolution
 - Phase 36 added: Refactor upload progress in web app, to an inline progress display and remove the popup upload progress
+- Phase 37 added: Parallel batch upload pipeline — replace sequential per-file upload loop with parallel encrypt+pin and single folder metadata update
 
 ### Open Concerns
 

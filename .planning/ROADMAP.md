@@ -501,6 +501,18 @@ Plans:
 - [x] 36-01-PLAN.md -- Upload store refactor to per-file tracking, upload loop migration to per-file actions
 - [x] 36-02-PLAN.md -- UploadListItem component, FileList virtual entry merging, inline CSS, delete UploadModal/UploadItem
 
+### Phase 37: Parallel batch upload pipeline
+
+**Goal:** Replace sequential per-file upload loop with parallel encrypt+pin pipeline and single folder metadata update, reducing N folder IPNS publishes to 1 and enabling concurrent file processing
+**Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10, D-11, D-12
+**Depends on:** Phase 36
+**Plans:** 2/2 plans complete
+
+Plans:
+
+- [x] 37-01-PLAN.md -- SDK batch uploadFiles() method with p-limit concurrency pool, stale-children re-read, partial failure handling
+- [x] 37-02-PLAN.md -- Web Worker encryption offloading, EncryptionWorkerService wrapper, useDropUpload rewire to batch API
+
 ---
 
 _Roadmap created: 2026-03-07_
