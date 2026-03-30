@@ -316,6 +316,225 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
     expect(errorCalls[0].error).toContain('Upload failed');
   });
 
+  it('handles addFilePointerToFolder collision gracefully', async () => {
+    setupFolder(client);
+    setupBatchMocks(3);
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+
+    // Second call throws a name collision
+    let callCount = 0;
+    vi.mocked(sdkCore.addFilePointerToFolder).mockImplementation(({ children, fileName }) => {
+      callCount++;
+      if (callCount === 2) {
+        throw new Error('An item with this name already exists');
+      }
+      return {
+        updatedChildren: [
+          ...children,
+          {
+            type: 'file' as const,
+            id: `file-${fileName}`,
+            name: fileName,
+            fileMetaIpnsName: `k51-${fileName}`,
+            ipnsPrivateKeyEncrypted: 'enc-key',
+            createdAt: Date.now(),
+            modifiedAt: Date.now(),
+          },
+        ],
+        filePointer: {
+          type: 'file' as const,
+          id: `file-${fileName}`,
+          name: fileName,
+          fileMetaIpnsName: `k51-${fileName}`,
+          ipnsPrivateKeyEncrypted: 'enc-key',
+          createdAt: Date.now(),
+          modifiedAt: Date.now(),
+        },
+      };
+    });
+
+    const errorCalls: Array<{ fileName: string; error: string }> = [];
+    const files = makeTestFiles(3);
+    const result = await client.uploadFiles('folder-ipns', files, {
+      onFileError: (fileName, error) => errorCalls.push({ fileName, error }),
+    });
+
+    // 2 successes (files 0 and 2), 1 collision failure (file 1)
+    expect(result.successes).toHaveLength(2);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].error).toContain('already exists');
+    expect(errorCalls).toHaveLength(1);
+    // Folder still publishes with the 2 successful files
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips publish when all addFilePointerToFolder calls collide', async () => {
+    setupFolder(client);
+    setupBatchMocks(2);
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+
+    vi.mocked(sdkCore.addFilePointerToFolder).mockImplementation(() => {
+      throw new Error('An item with this name already exists');
+    });
+
+    const files = makeTestFiles(2);
+    const result = await client.uploadFiles('folder-ipns', files);
+
+    expect(result.successes).toHaveLength(0);
+    expect(result.failures).toHaveLength(2);
+    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
+  });
+
+  it('throws when folder publish fails', async () => {
+    setupFolder(client);
+    setupBatchMocks(2);
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockRejectedValue(
+      new Error('IPNS publish timeout')
+    );
+
+    const files = makeTestFiles(2);
+    await expect(client.uploadFiles('folder-ipns', files)).rejects.toThrow('IPNS publish timeout');
+  });
+
+  it('emits ipns:batchPublishFailed when batch IPNS publish rejects', async () => {
+    setupFolder(client);
+    setupBatchMocks(2);
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+    vi.mocked(sdkCore.batchPublishIpnsRecords).mockRejectedValue(new Error('IPNS batch timeout'));
+
+    const events: Array<{ type: string; error?: Error }> = [];
+    client.on((e) => events.push(e as (typeof events)[0]));
+
+    const files = makeTestFiles(2);
+    const result = await client.uploadFiles('folder-ipns', files);
+
+    // Upload still succeeds (batch IPNS publish is non-critical)
+    expect(result.successes).toHaveLength(2);
+    const failEvent = events.find((e) => e.type === 'ipns:batchPublishFailed');
+    expect(failEvent).toBeDefined();
+    expect(failEvent!.error!.message).toBe('IPNS batch timeout');
+  });
+
+  it('emits ipns:batchPublishFailed on partial batch IPNS failure', async () => {
+    setupFolder(client);
+    setupBatchMocks(2);
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+    vi.mocked(sdkCore.batchPublishIpnsRecords).mockResolvedValue({
+      totalSucceeded: 1,
+      totalFailed: 1,
+    });
+
+    const events: Array<{ type: string; error?: Error }> = [];
+    client.on((e) => events.push(e as (typeof events)[0]));
+
+    const files = makeTestFiles(2);
+    const result = await client.uploadFiles('folder-ipns', files);
+
+    expect(result.successes).toHaveLength(2);
+    const failEvent = events.find((e) => e.type === 'ipns:batchPublishFailed');
+    expect(failEvent).toBeDefined();
+    expect(failEvent!.error!.message).toContain('partial failure');
+  });
+
+  it('uses BYO-IPFS pinFn when external provider is configured', async () => {
+    const byoClient = new CipherBoxClient(
+      createTestConfig({
+        pinningConfig: {
+          mode: 'dual',
+          externalProvider: {
+            endpoint: 'https://byo.example.com',
+            accessToken: 'test-token',
+          },
+        },
+      })
+    );
+    setupFolder(byoClient);
+    setupBatchMocks(1);
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+
+    const files = makeTestFiles(1);
+    await byoClient.uploadFiles('folder-ipns', files);
+
+    // sdkCore.uploadFile should receive a pinFn (the BYO wrapper)
+    expect(sdkCore.uploadFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pinFn: expect.any(Function),
+      })
+    );
+  });
+
+  it('uses custom pinFn from options when provided', async () => {
+    setupFolder(client);
+    setupBatchMocks(1);
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+
+    const customPinFn = vi.fn().mockResolvedValue({ cid: 'bafycustom', size: 100 });
+
+    const files = makeTestFiles(1);
+    await client.uploadFiles('folder-ipns', files, {}, { pinFn: customPinFn });
+
+    // sdkCore.uploadFile should receive the custom pinFn
+    expect(sdkCore.uploadFile).toHaveBeenCalledWith(
+      expect.objectContaining({ pinFn: customPinFn })
+    );
+  });
+
+  it('handles non-Error rejection from batch IPNS publish', async () => {
+    setupFolder(client);
+    setupBatchMocks(1);
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+    vi.mocked(sdkCore.batchPublishIpnsRecords).mockRejectedValue('string error');
+
+    const events: Array<{ type: string; error?: Error }> = [];
+    client.on((e) => events.push(e as (typeof events)[0]));
+
+    const files = makeTestFiles(1);
+    const result = await client.uploadFiles('folder-ipns', files);
+
+    expect(result.successes).toHaveLength(1);
+    const failEvent = events.find((e) => e.type === 'ipns:batchPublishFailed');
+    expect(failEvent).toBeDefined();
+    expect(failEvent!.error!.message).toBe('string error');
+  });
+
+  it('re-wraps file keys for share recipients when shareCallbacks configured', async () => {
+    const getCoveringShares = vi.fn().mockResolvedValue([]);
+    const addShareKeys = vi.fn().mockResolvedValue(undefined);
+    const shareClient = new CipherBoxClient(
+      createTestConfig({
+        shareCallbacks: { getCoveringShares, addShareKeys },
+      })
+    );
+    setupFolder(shareClient);
+    setupBatchMocks(2);
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+
+    const files = makeTestFiles(2);
+    await shareClient.uploadFiles('folder-ipns', files);
+
+    // getCoveringShares should be called for the folder
+    expect(getCoveringShares).toHaveBeenCalled();
+  });
+
+  it('handles re-wrap failure gracefully (best-effort)', async () => {
+    const getCoveringShares = vi.fn().mockRejectedValue(new Error('share lookup failed'));
+    const addShareKeys = vi.fn();
+    const shareClient = new CipherBoxClient(
+      createTestConfig({
+        shareCallbacks: { getCoveringShares, addShareKeys },
+      })
+    );
+    setupFolder(shareClient);
+    setupBatchMocks(1);
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+
+    const files = makeTestFiles(1);
+    // Should not throw — re-wrap failure is best-effort
+    const result = await shareClient.uploadFiles('folder-ipns', files);
+    expect(result.successes).toHaveLength(1);
+  });
+
   it('emits folder:updated event after successful batch publish', async () => {
     setupFolder(client);
     setupBatchMocks(2);
