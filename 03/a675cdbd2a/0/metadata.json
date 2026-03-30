@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "03a675cdbd2a",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T22:06:53.929155Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/DEFERRED.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a3f084dce307",
+  "token_usage": {
+    "input_tokens": 3729,
+    "cache_creation_tokens": 144478,
+    "cache_read_tokens": 7270647,
+    "output_tokens": 35946,
+    "api_call_count": 82
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on PR #416, then switch to main and do a comprehensive documentation update: prune DEFERRED.md, update FEATURES.md and README.md, and create a new filesystem specification document.",
+    "outcome": "PR #416 review comments resolved (4 threads), committed, and pushed. Documentation PR #419 created on branch `docs/update-project-documentation` with all four documents updated/created, plus iterative cleanup of DEFERRED.md based on user feedback.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro is the implemented error tracking solution (apps/web/src/lib/faro.ts), not Sentry — session replay was never in scope as an anti-feature for a zero-knowledge privacy product.",
+        "Desktop FUSE layer is intentionally not unit tested — it is OS integration plumbing between the host OS and Rust SDK, covered instead by the Desktop E2E test suite.",
+        "Vault v1 legacy fields were removed when staging was reset; the current schema baseline (1700000000000-FullSchema.ts) was written after the reset and does not contain them.",
+        "Phase 37 implemented Web Worker encryption (encrypt-worker.service.ts, encrypt.worker.ts, encrypt.types.ts) and the `pin:secondaryFailed` event for batch upload secondary pin warning.",
+        "Linux FUSE mount is implemented (crates/fuse/src/platform/linux.rs), CTR streaming is in crates/fuse/src/operations.rs — both were incorrectly still listed as deferred.",
+        "Per-file IPNS conflict detection has been implemented via per-file IPNS metadata since Phase 12.6.",
+        "RECYCLE_BIN_RETENTION_DAYS env var provides user-configurable bin retention — was listed as deferred but already implemented.",
+        "Desktop app uses Rust FUSE directly, not the JS SDK — deferred items about desktop adopting new JS SDK exports were not applicable.",
+        "The batch upload pipeline (Phase 37) is implemented in JS SDK only; Rust SDK does not have batch upload support.",
+        "Integration tests in packages/sdk/src/__tests__/integration.test.ts require a live backend and are expected to fail in CI without one — 3 pre-existing failures are not regressions."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage/getWorker can throw without cleanup — fixed with try/catch that deletes pending entry on error to prevent map leak."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "Doc comment for uploadFiles() overstated memory bounding — corrected to clarify actual behavior."
+        }
+      ],
+      "workflow": [
+        "When asked to audit and prune a list, do every item systematically in one pass rather than only verifying items the user explicitly calls out — partial passes lead to repeated correction cycles.",
+        "Deferred item audits should run parallel codebase searches (grep for identifiers, check file existence) rather than relying on memory of what was implemented.",
+        "gh api GraphQL resolveReviewThread can batch multiple thread resolutions in a single call.",
+        "Use --field (not -f) for integer parameters like in_reply_to when posting PR review replies via REST.",
+        "DEFERRED.md should have an 'Implemented' section alongside the active deferred items so completed work can be tracked without being deleted."
+      ]
+    },
+    "friction": [
+      "Initial DEFERRED.md audit was shallow — assistant only verified items the user explicitly flagged rather than doing a full systematic pass, requiring 4+ correction rounds.",
+      "Edit tool reformatted markdown table whitespace on the first DEFERRED.md edit, requiring a re-read and raw bash cat to see actual file content before subsequent edits.",
+      "Push to new docs branch required a retry (first push failed, likely missing --set-upstream).",
+      "The 'Already addressed' triage category for Copilot thread #3 (batch memory reads) required cross-referencing the deferred items context doc (37-CONTEXT.md) to confirm it was the same issue CodeRabbit had previously flagged."
+    ],
+    "open_items": [
+      "Lazy file reading within concurrency pool (useDropUpload.ts) — requires SDK API change to accept File objects or read callbacks instead of Uint8Array; tracked as deferred.",
+      "Batch upload not implemented in Rust SDK — only available in JS SDK.",
+      "Structured log query library / dashboard templates for Grafana Loki — deferred observability work.",
+      "SDK-level upload retry with exponential backoff — deferred upload pipeline hardening.",
+      "Chunked upload resume / partial retry on network interruption — deferred upload pipeline.",
+      "Cross-platform filesystem edge cases documented in FILESYSTEM_SPECIFICATION.md (5 documented gaps).",
+      "Desktop E2E test suite coverage for FUSE write operations — covered by existing Desktop E2E, but the spec of what scenarios are tested could be more explicit.",
+      "Security review findings tracked separately — were verified but details not surfaced in transcript.",
+      "PR #419 (docs update) needs review and merge."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T22:06:20.363361Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 47,
+    "human_removed": 1,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
