@@ -228,13 +228,13 @@ jobs:
                 echo "::warning::Failed to query jobs for run ${rid}, skipping" >&2
                 continue
               fi
-              TOTAL=$(echo "$JOBS_JSON" | jq 'length')
-              # Skip runs where Web E2E was absent/skipped
-              [ "${TOTAL:-0}" -eq 0 ] && continue
-              # First run with Web E2E jobs is authoritative — pass or fail
+              # Filter to non-skipped jobs — all-skipped means E2E didn't run
+              ACTIVE=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion != "skipped" and .conclusion != null)] | length')
+              [ "${ACTIVE:-0}" -eq 0 ] && continue
+              # First run with active Web E2E jobs is authoritative — pass or fail
               SUCCESS=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion == "success")] | length')
-              if [ "${SUCCESS:-0}" -ne "${TOTAL:-0}" ]; then
-                echo "::error::Most recent CI E2E run with Web E2E (run ${rid}) failed (${SUCCESS}/${TOTAL} passed)."
+              if [ "${SUCCESS:-0}" -ne "${ACTIVE}" ]; then
+                echo "::error::Most recent CI E2E run with Web E2E (run ${rid}) failed (${SUCCESS}/${ACTIVE} passed)."
                 exit 1
               fi
               RECENT_RUN_ID="$rid"
@@ -326,13 +326,13 @@ jobs:
                 echo "::warning::Failed to query jobs for run ${rid}, skipping" >&2
                 continue
               fi
-              TOTAL=$(echo "$JOBS_JSON" | jq 'length')
-              # Skip runs where Desktop E2E was absent/skipped
-              [ "${TOTAL:-0}" -eq 0 ] && continue
-              # First run with Desktop E2E jobs is authoritative — pass or fail
+              # Filter to non-skipped jobs — all-skipped means E2E didn't run
+              ACTIVE=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion != "skipped" and .conclusion != null)] | length')
+              [ "${ACTIVE:-0}" -eq 0 ] && continue
+              # First run with active Desktop E2E jobs is authoritative — pass or fail
               SUCCESS=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion == "success")] | length')
-              if [ "${SUCCESS:-0}" -ne "${TOTAL:-0}" ]; then
-                echo "::error::Most recent CI E2E run with Desktop E2E (run ${rid}) failed (${SUCCESS}/${TOTAL} passed)."
+              if [ "${SUCCESS:-0}" -ne "${ACTIVE}" ]; then
+                echo "::error::Most recent CI E2E run with Desktop E2E (run ${rid}) failed (${SUCCESS}/${ACTIVE} passed)."
                 exit 1
               fi
               RECENT_RUN_ID="$rid"
