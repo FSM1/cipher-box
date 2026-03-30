@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8a402cb62b2b",
+  "session_id": "66b8eabe-070d-4f34-96a8-81ed94408db2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T17:38:46.584166Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "4093700429c1",
+  "token_usage": {
+    "input_tokens": 1517,
+    "cache_creation_tokens": 184981,
+    "cache_read_tokens": 24436940,
+    "output_tokens": 60788,
+    "api_call_count": 207
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Implement a parallel batch upload pipeline for cipher-box (Phase 37): SDK uploadFiles() method with p-limit concurrency and a Web Worker for off-thread AES-256-GCM encryption, then wire the web UI's useDropUpload hook to the new batch API.",
+    "outcome": "Both plans executed successfully, PR #416 created and merged-ready with 20 unit tests, SDK integration tests, E2E suite, full lint compliance, and 96.4% coverage on uploadFiles(). All 15 CodeRabbit review threads resolved.",
+    "learnings": {
+      "repo": [
+        "p-limit is used for concurrency control in the SDK — max 3 concurrent uploads via UPLOAD_CONCURRENCY constant in client.ts",
+        "Web Workers follow the pattern of new Worker(new URL(..., import.meta.url)) — Vite handles this natively with no extra config needed",
+        "The existing decrypt-sw.ts service worker has its own tsconfig.sw.json for type-checking — new workers must be added there too",
+        "The codebase uses a structured logger, not console.warn/log/error — raw console calls are lint violations",
+        "ExternalEncryptFn type lives in @cipherbox/sdk-core and should be reused rather than re-declared inline",
+        "FolderMetadata shape requires version and children fields (packages/core/src/folder/types.ts)",
+        "addFilePointerToFolder can throw on hash collision and must be wrapped in try/catch to avoid aborting the entire batch",
+        "lint:fix treats @typescript-eslint/no-explicit-any as warnings not errors, but the team explicitly treats all warnings as errors",
+        "Codecov patch coverage is tracked per PR — uncovered lines in new methods will be flagged even if overall coverage is high"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 167,
+          "end_line": 167,
+          "finding": "params.data.length becomes 0 after Transferable buffer transfer — originalSize must be captured before passing data to encryptFn"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 967,
+          "end_line": 970,
+          "finding": "addFilePointerToFolder wrapped in try/catch — collision errors are non-fatal and should not abort entire batch"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 975,
+          "end_line": 982,
+          "finding": "Early return when all registrations fail — returns empty succeeded array without attempting folder publish"
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 146,
+          "end_line": 146,
+          "finding": "useDropUpload rewired to call client.uploadFiles() instead of sequential single-file loop"
+        },
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Inline encryption result type was duplicated 4x — now uses ReturnType\u003cExternalEncryptFn\u003e from sdk-core"
+        },
+        {
+          "path": "apps/web/tsconfig.sw.json",
+          "line": 1,
+          "end_line": 10,
+          "finding": "encrypt.worker.ts was excluded from tsconfig.json but not added to tsconfig.sw.json — worker type errors were invisible to CI until fixed"
+        }
+      ],
+      "workflow": [
+        "Worktree merges can fail silently when the branch ref isn't updated — cherry-picking by commit hash is a reliable fallback",
+        "GSD verifier can produce false negatives when run before cherry-picked commits are visible in the working tree — spot-check files directly before trusting VERIFICATION.md gaps",
+        "pnpm lint:fix auto-formats staged files — always commit formatting changes separately from logic fixes to keep diff reviewable",
+        "CodeRabbit threads must be explicitly resolved via GraphQL mutation after replying — reply alone does not close the thread",
+        "sdk-core must be rebuilt before typechecking sdk or web — build order: sdk-core → sdk → web"
+      ]
+    },
+    "friction": [
+      "Worktree branch ref wasn't updated after agent commits — main branch merge pulled stale HEAD, requiring manual cherry-picks of 3 commits",
+      "GSD verifier spawned before cherry-picks were visible, producing 4 false-negative gaps — VERIFICATION.md had to be manually corrected with 10+ edits",
+      "Phase completion commands ran on wrong branch (accidentally inside worktree directory) — required reset and redo",
+      "TypeScript warnings in test files (as any) were silently ignored by lint:fix instead of being caught as errors — user had to explicitly flag this",
+      "encrypt.worker.ts was excluded from all tsconfig files — type errors in the worker were invisible until tsconfig.sw.json was updated"
+    ],
+    "open_items": [
+      "Web E2E tests not updated for multi-file batch upload flows, partial failure, or cancellation — existing tests only cover serial single-file uploads",
+      "Upfront file buffer allocation (all files read into Uint8Array before batch starts) — bounded by MAX_FILE_SIZE (100MB) but should be revisited if batch sizes grow; requires SDK contract change to accept File objects instead of Uint8Array",
+      "Blob .buffer usage in apps/web/src/services/upload.service.ts violates apps/web/CLAUDE.md guidance — pre-existing issue, not Phase 37 scope",
+      "Secondary pin warning not emitted in batch path (Thread 3 from CodeRabbit) — deferred as low priority",
+      "AbortSignal/cancel support for in-flight batch uploads — requires significant SDK changes, deferred",
+      "BYO-IPFS pinFn lambda body (lines 870-876 in client.ts) not covered by batch tests — tested indirectly via single-file upload tests but not in batch context"
+    ]
+  }
+}
