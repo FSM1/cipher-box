@@ -52,3 +52,16 @@ Ok given that we are less constrained by IPFS infra having tested 200 concurrent
 ---
 
 /resolve-pr-reviews
+
+---
+
+Verify each finding against the current code and only fix it if needed.
+
+In `@tests/web-e2e/page-objects/file-browser/file-list.page.ts` around lines 23 -
+33, The selector string '.file-list-item:not(.upload-inline-row)' is duplicated;
+extract it to a class-level constant (e.g. private static readonly ROW_SELECTOR
+= '.file-list-item:not(.upload-inline-row)') and replace the literal in
+getItem(name: string) and the other method that currently returns
+this.page.locator('.file-list-item:not(.upload-inline-row)') to use that
+constant (this.constructor.ROW_SELECTOR or ClassName.ROW_SELECTOR depending on
+instance/static choice) so both locators share a single source of truth.
