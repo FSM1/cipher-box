@@ -1,0 +1,63 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a5f4c4dacebd",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T21:30:33.121358Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "984f96d33d94",
+  "checkpoint_transcript_start": 47,
+  "transcript_lines_at_start": 47,
+  "token_usage": {
+    "input_tokens": 3583,
+    "cache_creation_tokens": 60584,
+    "cache_read_tokens": 2093789,
+    "output_tokens": 18137,
+    "api_call_count": 30
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Wrap up PR #37 (parallel batch upload pipeline) by addressing code review threads, then update all planning and documentation on a docs branch — including DEFERRED.md, FEATURES.md, README.md, and a new filesystem specification.",
+    "outcome": "PR #37 was merged to main after fixing 3 of 4 review threads (postMessage try/catch, doc comment) and deferring 1 (lazy file reading). On a docs branch, DEFERRED.md, FEATURES.md, and README.md were updated, and a new FILESYSTEM_SPECIFICATION.md was created and committed.",
+    "learnings": {
+      "repo": [
+        "Batch upload is implemented in the JS/TS SDK but NOT in the Rust SDK — feature matrix must reflect this gap.",
+        "Lazy file reading within the concurrency pool (useDropUpload.ts:140) requires an SDK contract change to accept File objects or a read callback instead of Uint8Array — deferred as architectural work.",
+        "The CipherBox filesystem must conform to Windows-style case-insensitive naming as the strictest common denominator across Desktop OSes.",
+        "Phase planning docs live under .planning/phases/\u003cphase-slug\u003e/ with PLAN, SUMMARY, CONTEXT, DISCUSSION-LOG, RESEARCH, VALIDATION, and VERIFICATION files.",
+        "Preliminary R\u0026D docs were renamed/moved into .planning/milestones/m0/ during the main merge."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "File reads happen eagerly inside the concurrency pool; lazy reading requires SDK API change to accept File objects instead of Uint8Array."
+        },
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "finding": "encrypt() needed try/catch around getWorker()/postMessage() — both CodeRabbit and Copilot independently flagged the same missing error boundary."
+        }
+      ],
+      "workflow": [
+        "When multiple reviewers (CodeRabbit + Copilot) flag the same issue independently, it is a strong signal the fix is necessary but also that future review rounds yield diminishing returns.",
+        "Deferred items should be cross-referenced between PR review threads and the central DEFERRED.md to avoid re-litigating the same architectural decisions in every review cycle.",
+        "Parallel agent research (phases, feature state, filesystem rules) significantly accelerates large documentation update tasks."
+      ]
+    },
+    "friction": [
+      "Copilot's batch memory thread (#3) was a duplicate of an already-tracked CodeRabbit deferred item — reviewers had no visibility into existing deferred decisions, causing redundant discussion.",
+      "E2E test coverage and feature matrix in FEATURES.md were stale enough to require a dedicated update pass after every major feature merge."
+    ],
+    "open_items": [
+      "Lazy file reading within concurrency pool (useDropUpload.ts:140) — requires SDK contract change to accept File objects or read callback instead of Uint8Array.",
+      "Batch upload not yet implemented in the Rust SDK — feature matrix gap to be closed in a future phase.",
+      "E2E test coverage for batch upload scenarios may need further expansion beyond the initial suite added in tests/sdk-e2e/src/suites/batch-upload.test.ts."
+    ]
+  }
+}
