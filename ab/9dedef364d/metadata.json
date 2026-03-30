@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ab9dedef364d",
+  "strategy": "manual-commit",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ab/9dedef364d/0/metadata.json",
+      "transcript": "/ab/9dedef364d/0/full.jsonl",
+      "content_hash": "/ab/9dedef364d/0/content_hash.txt",
+      "prompt": "/ab/9dedef364d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1450,
+    "cache_creation_tokens": 140405,
+    "cache_read_tokens": 13785845,
+    "output_tokens": 39265,
+    "api_call_count": 145
+  }
+}
