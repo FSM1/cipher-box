@@ -9,7 +9,7 @@ ai_context: Technical architecture for CipherBox. Contains encryption specs, key
 
 **Document Type:** Technical Specification
 **Status:** Finalized
-**Last Updated:** January 20, 2026  
+**Last Updated:** January 20, 2026
 
 ---
 
@@ -29,19 +29,19 @@ ai_context: Technical architecture for CipherBox. Contains encryption specs, key
 
 ## Terminology
 
-| Term | Code/API | Prose | Notes |
-|------|----------|-------|-------|
-| Root folder encryption key | `rootFolderKey` | root folder key | AES-256 symmetric key |
-| User's ECDSA public key | `publicKey` | public key | secp256k1 curve |
-| User's ECDSA private key | `privateKey` | private key | Never stored/transmitted |
-| IPNS identifier | `ipnsName` | IPNS name | e.g., k51qzi5uqu5dlvj55... |
-| IPNS signed data structure | `ipnsRecord` | IPNS record | Contains encrypted metadata |
-| Folder encryption key | `folderKey` | folder key | Per-folder AES-256 key |
-| File encryption key | `fileKey` | file key | Per-file AES-256 key |
-| IPNS signing key | `ipnsPrivateKey` | IPNS private key | Ed25519, stored encrypted |
-| TEE public key | `teePublicKey` | TEE public key | Current epoch key for IPNS key encryption |
-| TEE epoch | `teeEpoch` | TEE epoch | Key rotation epoch identifier |
-| Encrypted IPNS key (for TEE) | `encryptedIpnsPrivateKey` | encrypted IPNS private key | IPNS key encrypted with TEE public key |
+| Term                         | Code/API                  | Prose                      | Notes                                     |
+| ---------------------------- | ------------------------- | -------------------------- | ----------------------------------------- |
+| Root folder encryption key   | `rootFolderKey`           | root folder key            | AES-256 symmetric key                     |
+| User's ECDSA public key      | `publicKey`               | public key                 | secp256k1 curve                           |
+| User's ECDSA private key     | `privateKey`              | private key                | Never stored/transmitted                  |
+| IPNS identifier              | `ipnsName`                | IPNS name                  | e.g., k51qzi5uqu5dlvj55...                |
+| IPNS signed data structure   | `ipnsRecord`              | IPNS record                | Contains encrypted metadata               |
+| Folder encryption key        | `folderKey`               | folder key                 | Per-folder AES-256 key                    |
+| File encryption key          | `fileKey`                 | file key                   | Per-file AES-256 key                      |
+| IPNS signing key             | `ipnsPrivateKey`          | IPNS private key           | Ed25519, stored encrypted                 |
+| TEE public key               | `teePublicKey`            | TEE public key             | Current epoch key for IPNS key encryption |
+| TEE epoch                    | `teeEpoch`                | TEE epoch                  | Key rotation epoch identifier             |
+| Encrypted IPNS key (for TEE) | `encryptedIpnsPrivateKey` | encrypted IPNS private key | IPNS key encrypted with TEE public key    |
 
 ---
 
@@ -132,7 +132,7 @@ sequenceDiagram
     participant W as Web3Auth
     participant B as CipherBox Backend
     participant DB as PostgreSQL
-    
+
     U->>C: Click "Sign In"
     C->>W: Redirect to login
     U->>W: Complete auth (Google/Email/Wallet)
@@ -149,12 +149,12 @@ sequenceDiagram
 
 ### 2.2 Supported Auth Methods (via Web3Auth)
 
-| Method | Flow | Notes |
-|--------|------|-------|
-| Email + Password | Web3Auth verifies credentials | Password never sent to CipherBox |
-| OAuth (Google/Apple/GitHub) | Standard OAuth via Web3Auth | Token verified by Web3Auth |
-| Magic Link | Email link via Web3Auth | Passwordless |
-| External Wallet | MetaMask/WalletConnect signature | Trustless, wallet proves identity |
+| Method                      | Flow                             | Notes                             |
+| --------------------------- | -------------------------------- | --------------------------------- |
+| Email + Password            | Web3Auth verifies credentials    | Password never sent to CipherBox  |
+| OAuth (Google/Apple/GitHub) | Standard OAuth via Web3Auth      | Token verified by Web3Auth        |
+| Magic Link                  | Email link via Web3Auth          | Passwordless                      |
+| External Wallet             | MetaMask/WalletConnect signature | Trustless, wallet proves identity |
 
 ### 2.3 Web3Auth Group Connections
 
@@ -167,11 +167,11 @@ const modalConfig = {
       loginMethods: {
         google: {
           authConnectionId: 'w3a-google',
-          groupedAuthConnectionId: 'cipherbox-aggregate',  // Group ID
+          groupedAuthConnectionId: 'cipherbox-aggregate', // Group ID
         },
         email_passwordless: {
           authConnectionId: 'w3a-email-passwordless',
-          groupedAuthConnectionId: 'cipherbox-aggregate',  // Same group
+          groupedAuthConnectionId: 'cipherbox-aggregate', // Same group
         },
       },
     },
@@ -186,11 +186,13 @@ const modalConfig = {
 After Web3Auth key derivation, client authenticates with backend:
 
 **Option A: Web3Auth ID Token (JWT)**
+
 - Client sends ID token to backend
 - Backend verifies via Web3Auth JWKS endpoint
 - Simpler flow, relies on Web3Auth token signing
 
 **Option B: SIWE-like Signature**
+
 - Client requests nonce from backend
 - Client signs message with private key
 - Backend verifies signature recovers to claimed public key
@@ -198,11 +200,11 @@ After Web3Auth key derivation, client authenticates with backend:
 
 ### 2.5 Token Architecture
 
-| Token | Issuer | Expiry | Storage | Purpose |
-|-------|--------|--------|---------|---------|
-| Web3Auth ID Token | Web3Auth | 1 hour | Memory | Authenticate with CipherBox backend |
-| Access Token | CipherBox | 15 min | Memory only | API authorization |
-| Refresh Token | CipherBox | 7 days | HTTP-only cookie or encrypted storage | Obtain new access tokens |
+| Token             | Issuer    | Expiry | Storage                               | Purpose                             |
+| ----------------- | --------- | ------ | ------------------------------------- | ----------------------------------- |
+| Web3Auth ID Token | Web3Auth  | 1 hour | Memory                                | Authenticate with CipherBox backend |
+| Access Token      | CipherBox | 15 min | Memory only                           | API authorization                   |
+| Refresh Token     | CipherBox | 7 days | HTTP-only cookie or encrypted storage | Obtain new access tokens            |
 
 ### 2.6 Web3Auth Key Export (Recovery Path)
 
@@ -228,27 +230,29 @@ Future implementation can support this as fallback.
 
 ### 3.1 Encryption Primitives
 
-| Algorithm | Purpose | Standard | Implementation | Version |
-|-----------|---------|----------|----------------|---------|
-| AES-256-GCM | File content + metadata encryption | NIST | Web Crypto API | v1.0+ |
-| AES-256-CTR | Streaming file encryption (video/audio) | NIST | Web Crypto API | v1.1+ |
-| ECIES (secp256k1) | Key wrapping (asymmetric encryption of symmetric keys) | SEC 2 | ethers.js | v1.0+ |
-| ECDSA (secp256k1) | Signing, key derivation | NIST/SECG | Web3Auth | v1.0+ |
-| Ed25519 | IPNS record signing | RFC 8032 | libsodium.js | v1.0+ |
-| HKDF-SHA256 | Key derivation | RFC 5869 | Web Crypto API | v1.0+ |
-| SHA-256 | Hashing | NIST | Web Crypto API | v1.0+ |
+| Algorithm         | Purpose                                                | Standard  | Implementation | Version |
+| ----------------- | ------------------------------------------------------ | --------- | -------------- | ------- |
+| AES-256-GCM       | File content + metadata encryption                     | NIST      | Web Crypto API | v1.0+   |
+| AES-256-CTR       | Streaming file encryption (video/audio)                | NIST      | Web Crypto API | v1.1+   |
+| ECIES (secp256k1) | Key wrapping (asymmetric encryption of symmetric keys) | SEC 2     | ethers.js      | v1.0+   |
+| ECDSA (secp256k1) | Signing, key derivation                                | NIST/SECG | Web3Auth       | v1.0+   |
+| Ed25519           | IPNS record signing                                    | RFC 8032  | libsodium.js   | v1.0+   |
+| HKDF-SHA256       | Key derivation                                         | RFC 5869  | Web Crypto API | v1.0+   |
+| SHA-256           | Hashing                                                | NIST      | Web Crypto API | v1.0+   |
 
 ### 3.1.1 Encryption Mode Roadmap
 
 CipherBox implements a hybrid encryption approach to balance security with streaming capabilities:
 
 **v1.0 (Current): Foundation**
+
 - All files encrypted with AES-256-GCM
 - `encryptionMode` metadata field added to all files (set to "GCM")
 - Provides authenticated encryption with 16-byte authentication tag
 - No streaming support (full file must be downloaded before decryption)
 
 **v1.1 (Future): Hybrid GCM + CTR**
+
 - Implement AES-256-CTR encryption for streaming use cases
 - Auto-detect MIME type (video/audio → CTR, others → GCM)
 - Support chunk-by-chunk decryption for media streaming
@@ -343,11 +347,13 @@ Folder metadata (child list) is encrypted with the folder's key:
 ```
 
 **Field Descriptions:**
+
 - `encryptionMode`: Specifies the encryption algorithm used for file content ("GCM" or "CTR"). Always "GCM" in v1.0. Added to support future streaming capabilities (v1.1+). Client-side decryption logic must default to "GCM" if field is missing for backward compatibility.
 
 ### 3.5 No File Deduplication
 
 CipherBox does NOT deduplicate files. Each upload uses:
+
 - Unique random 256-bit AES key
 - Unique random 96-bit IV
 
@@ -406,18 +412,18 @@ File Keys (AES-256, one per file)
 
 ### 4.2 Key Storage Summary
 
-| Key | Storage Location | Encrypted With | When Decrypted |
-|-----|------------------|----------------|----------------|
-| privateKey | Client RAM only | N/A | Session lifetime |
-| publicKey | Server (Users table) | N/A (public) | N/A |
-| rootFolderKey | Server (Vaults table) | ECIES(publicKey) | On login |
-| rootIpnsPrivateKey | Server (Vaults table) | ECIES(publicKey) | On login |
-| folderKey | Parent IPNS record | ECIES(publicKey) | On folder access |
-| fileKey | Folder IPNS record | ECIES(publicKey) | On file download |
-| ipnsPrivateKey (subfolder) | Parent IPNS record | ECIES(publicKey) | On folder write |
-| teePublicKey (current) | Server (tee_key_state) | N/A (public) | Returned at login |
-| teePublicKey (previous) | Server (tee_key_state) | N/A (public) | Returned at login (grace period) |
-| encryptedIpnsPrivateKey (for TEE) | Server (ipns_republish_schedule) | ECIES(teePublicKey) | By TEE during republish |
+| Key                               | Storage Location                 | Encrypted With      | When Decrypted                   |
+| --------------------------------- | -------------------------------- | ------------------- | -------------------------------- |
+| privateKey                        | Client RAM only                  | N/A                 | Session lifetime                 |
+| publicKey                         | Server (Users table)             | N/A (public)        | N/A                              |
+| rootFolderKey                     | Server (Vaults table)            | ECIES(publicKey)    | On login                         |
+| rootIpnsPrivateKey                | Server (Vaults table)            | ECIES(publicKey)    | On login                         |
+| folderKey                         | Parent IPNS record               | ECIES(publicKey)    | On folder access                 |
+| fileKey                           | Folder IPNS record               | ECIES(publicKey)    | On file download                 |
+| ipnsPrivateKey (subfolder)        | Parent IPNS record               | ECIES(publicKey)    | On folder write                  |
+| teePublicKey (current)            | Server (tee_key_state)           | N/A (public)        | Returned at login                |
+| teePublicKey (previous)           | Server (tee_key_state)           | N/A (public)        | Returned at login (grace period) |
+| encryptedIpnsPrivateKey (for TEE) | Server (ipns_republish_schedule) | ECIES(teePublicKey) | By TEE during republish          |
 
 ### 4.3 TEE Key Epochs
 
@@ -438,6 +444,7 @@ Client Flow:
 ```
 
 **Key Rotation (4-Week Grace Period):**
+
 - Week 0: Rotation announced (TEE governance)
 - Week 4: Backend detects new epoch, updates tee_key_state
 - Week 5: TEE republishes auto-upgrade old entries to new epoch
@@ -447,6 +454,7 @@ Client Flow:
 ### 4.4 Key Lifecycle
 
 **Session Start:**
+
 1. User authenticates via Web3Auth
 2. privateKey reconstructed in client RAM
 3. Client fetches encrypted rootFolderKey from server
@@ -454,6 +462,7 @@ Client Flow:
 5. Session active
 
 **Session End:**
+
 1. User clicks logout (or session expires)
 2. Clear privateKey from memory
 3. Clear rootFolderKey from memory
@@ -465,6 +474,7 @@ Client Flow:
 The console PoC bypasses Web3Auth and the backend. It uses a locally provided `privateKey` and persists only the minimum vault state to disk for the duration of the run.
 
 **PoC bootstrap rules:**
+
 - Load `privateKey` from `.env` (client-only, never logged)
 - Derive `publicKey` locally (secp256k1)
 - Generate `rootFolderKey` and store on disk for the run
@@ -472,6 +482,7 @@ The console PoC bypasses Web3Auth and the backend. It uses a locally provided `p
 - Store the IPNS key **name** encrypted with ECIES in folder metadata (stand-in for `ipnsPrivateKey`), while the actual IPNS private key remains in the local IPFS keystore
 
 **Teardown:**
+
 - Unpin all file and folder metadata CIDs created during the run
 - Remove any IPNS keys created in the local IPFS keystore
 
@@ -504,7 +515,7 @@ sequenceDiagram
     participant C as Client
     participant B as CipherBox Backend
     participant IPFS as IPFS Network
-    
+
     C->>C: Update folder metadata (add/remove child)
     C->>C: Encrypt metadata: AES-GCM(metadata, folderKey)
     C->>C: Decrypt folder's ipnsPrivateKey
@@ -526,26 +537,30 @@ sequenceDiagram
 async function fetchFileTree(ipnsName: string, folderKey: Uint8Array): Promise<FolderNode> {
   // 1. Resolve IPNS via backend relay
   const { cid } = await api.get(`/ipns/resolve?ipnsName=${ipnsName}`);
-  
+
   // 2. Fetch encrypted metadata from IPFS
-  const encryptedData = await api.get(`/ipfs/cat?cid=${cid}`, { responseType: "arraybuffer" });
+  const encryptedData = await api.get(`/ipfs/cat?cid=${cid}`, { responseType: 'arraybuffer' });
   const { encryptedMetadata, iv } = JSON.parse(encryptedData);
-  
+
   // 3. Decrypt metadata
   const metadataJson = AES256GCM_Decrypt(encryptedMetadata, folderKey, iv);
   const metadata = JSON.parse(metadataJson);
-  
+
   // 4. Process children
   const tree = { children: [] };
   for (const child of metadata.children) {
-    if (child.type === "folder") {
+    if (child.type === 'folder') {
       // Decrypt subfolder key
       const subfolderKey = ECIES_Decrypt(child.folderKeyEncrypted, privateKey);
       // Recursively fetch subfolder
       const childTree = await fetchFileTree(child.ipnsName, subfolderKey);
-      tree.children.push({ type: "folder", name: decrypt(child.nameEncrypted), subtree: childTree });
+      tree.children.push({
+        type: 'folder',
+        name: decrypt(child.nameEncrypted),
+        subtree: childTree,
+      });
     } else {
-      tree.children.push({ type: "file", name: decrypt(child.nameEncrypted), cid: child.cid });
+      tree.children.push({ type: 'file', name: decrypt(child.nameEncrypted), cid: child.cid });
     }
   }
   return tree;
@@ -560,7 +575,7 @@ sequenceDiagram
     participant B as CipherBox Backend
     participant IPFS as IPFS Network
     participant D2 as Device 2
-    
+
     D1->>B: POST /ipfs/add + POST /ipns/publish
     B->>IPFS: Relay publish
     loop Every 30s
@@ -578,6 +593,7 @@ sequenceDiagram
 ### 5.5 Conflict Resolution (v1)
 
 For v1, IPFS network determines which IPNS update wins:
+
 - IPNS records have sequence numbers
 - Latest valid record (highest sequence) wins
 - No application-level conflict resolution
@@ -588,18 +604,18 @@ Future versions may implement vector clocks or CRDTs.
 
 ## 6. Tech Stack
 
-| Component | Technology | Rationale |
-|-----------|------------|-----------|
-| Frontend | React 18 + TypeScript | Modern, good for encryption UI |
-| Web Crypto | Web Crypto API | Native browser encryption |
-| IPFS Client | CipherBox IPFS relay | HTTP relay to IPFS/IPNS |
-| Web3Auth SDK | @web3auth/modal | Auth and key derivation |
-| Backend | Node.js + NestJS + TypeScript | Type-safe, same language as frontend |
-| JWT Verification | jose | Verify Web3Auth tokens |
-| Database | PostgreSQL | ACID, structured data |
-| IPFS Pinning | Pinata API | Managed pinning service |
-| Desktop (macOS) | Tauri or Electron | FUSE support |
-| FUSE (macOS) | macFUSE | Userland filesystem |
+| Component        | Technology                    | Rationale                            |
+| ---------------- | ----------------------------- | ------------------------------------ |
+| Frontend         | React 18 + TypeScript         | Modern, good for encryption UI       |
+| Web Crypto       | Web Crypto API                | Native browser encryption            |
+| IPFS Client      | CipherBox IPFS relay          | HTTP relay to IPFS/IPNS              |
+| Web3Auth SDK     | @web3auth/modal               | Auth and key derivation              |
+| Backend          | Node.js + NestJS + TypeScript | Type-safe, same language as frontend |
+| JWT Verification | jose                          | Verify Web3Auth tokens               |
+| Database         | PostgreSQL                    | ACID, structured data                |
+| IPFS Pinning     | Pinata API                    | Managed pinning service              |
+| Desktop (macOS)  | Tauri or Electron             | FUSE support                         |
+| FUSE (macOS)     | macFUSE                       | Userland filesystem                  |
 
 ---
 
@@ -610,12 +626,14 @@ Future versions may implement vector clocks or CRDTs.
 **Scenario:** Attacker gains access to CipherBox database and code.
 
 **What attacker has:**
+
 - Encrypted root folder keys
 - User public keys
 - Refresh token hashes
 - IPNS names
 
 **What attacker cannot do:**
+
 - Decrypt any files (no private keys)
 - Impersonate users (refresh tokens are hashed)
 - Access vault contents (all encrypted)
@@ -629,6 +647,7 @@ Future versions may implement vector clocks or CRDTs.
 **Impact:** Could potentially derive user keypairs (requires compromising threshold of nodes).
 
 **Mitigation:**
+
 - Web3Auth uses threshold cryptography (no single point of failure)
 - Users can export keys for independent recovery
 - SIWE auth validates identity without relying on Web3Auth tokens
@@ -638,11 +657,13 @@ Future versions may implement vector clocks or CRDTs.
 **Scenario:** Attacker intercepts HTTPS traffic.
 
 **What attacker sees:**
+
 - Ciphertexts (encrypted files)
 - IPFS CIDs
 - Public keys
 
 **What attacker cannot do:**
+
 - Decrypt ciphertexts (no private keys)
 - Derive private key from public key
 
@@ -655,6 +676,7 @@ Future versions may implement vector clocks or CRDTs.
 **Impact:** Attacker can access private key in RAM.
 
 **Mitigation:**
+
 - Keys discarded on logout
 - Short access token expiry (15 min)
 - External wallet auth requires wallet approval
@@ -666,6 +688,7 @@ Future versions may implement vector clocks or CRDTs.
 **Impact:** Attacker can obtain new access tokens, impersonate user.
 
 **Mitigation:**
+
 - Refresh token rotation (new token on each use)
 - Secure storage (HTTP-only cookie)
 - Short access token expiry limits exposure
@@ -675,21 +698,25 @@ Future versions may implement vector clocks or CRDTs.
 **Scenario:** Attacker compromises TEE hardware or TEE provider infrastructure.
 
 **What attacker could access:**
+
 - IPNS private keys during the brief decryption window (milliseconds)
 - Ability to sign IPNS records for affected users
 
 **What attacker cannot do:**
+
 - Decrypt file contents (IPNS keys only sign metadata pointers, not file encryption keys)
 - Access vault encryption keys (stored encrypted with user's publicKey, not TEE)
 - Persist IPNS private keys (TEE zeroes memory after signing)
 - Affect users who haven't published since last TEE key rotation
 
 **Impact severity:** Medium
+
 - Attacker could point IPNS names to malicious CIDs
 - Users would see corrupted/fake metadata (detectable by decryption failure)
 - Cannot access actual file contents
 
 **Mitigation:**
+
 - TEE hardware attestation (Intel SGX/AMD SEV) verified before key operations
 - IPNS private keys decrypted only for milliseconds, then zeroed
 - 4-week key epoch rotation limits exposure window
@@ -703,39 +730,39 @@ Future versions may implement vector clocks or CRDTs.
 
 ### 8.1 Security Criteria
 
-| ID | Criterion | Test Method | Owner |
-|----|-----------|-------------|-------|
-| S1 | Private key never written to localStorage/sessionStorage | Unit test: mock storage, verify no writes | Frontend |
-| S2 | Private key cleared from memory on logout | Integration test: verify state cleared | Frontend |
-| S3 | All /vault/upload requests contain only encrypted content | Network inspection test | QA |
-| S4 | ECIES decryption fails with wrong private key | Unit test: decrypt with random key | Frontend |
-| S5 | AES-GCM decryption detects tampering | Unit test: modify ciphertext, verify failure | Frontend |
-| S6 | Refresh tokens stored as SHA-256 hash only | DB inspection | Backend |
-| S7 | SIWE nonces deleted after single use | Integration test: replay attack fails | Backend |
-| S8 | No private keys in application logs | Log audit | DevOps |
-| S9 | HTTPS enforced on all endpoints | Deployment config review | DevOps |
+| ID  | Criterion                                                 | Test Method                                  | Owner    |
+| --- | --------------------------------------------------------- | -------------------------------------------- | -------- |
+| S1  | Private key never written to localStorage/sessionStorage  | Unit test: mock storage, verify no writes    | Frontend |
+| S2  | Private key cleared from memory on logout                 | Integration test: verify state cleared       | Frontend |
+| S3  | All /vault/upload requests contain only encrypted content | Network inspection test                      | QA       |
+| S4  | ECIES decryption fails with wrong private key             | Unit test: decrypt with random key           | Frontend |
+| S5  | AES-GCM decryption detects tampering                      | Unit test: modify ciphertext, verify failure | Frontend |
+| S6  | Refresh tokens stored as SHA-256 hash only                | DB inspection                                | Backend  |
+| S7  | SIWE nonces deleted after single use                      | Integration test: replay attack fails        | Backend  |
+| S8  | No private keys in application logs                       | Log audit                                    | DevOps   |
+| S9  | HTTPS enforced on all endpoints                           | Deployment config review                     | DevOps   |
 
 ### 8.2 Encryption Criteria
 
-| ID | Criterion | Test Method | Owner |
-|----|-----------|-------------|-------|
-| E1 | Same file uploaded twice produces different CIDs | Integration test | Frontend |
-| E2 | File decryption produces original content | Round-trip test | Frontend |
-| E3 | Folder metadata decryption produces valid JSON | Integration test | Frontend |
-| E4 | Key derivation is deterministic across auth methods | Cross-method login test | Frontend |
-| E5 | File metadata includes encryptionMode field | Unit test | Frontend |
-| E6 | Decryption handles both GCM and missing encryptionMode | Unit test | Frontend |
+| ID  | Criterion                                              | Test Method             | Owner    |
+| --- | ------------------------------------------------------ | ----------------------- | -------- |
+| E1  | Same file uploaded twice produces different CIDs       | Integration test        | Frontend |
+| E2  | File decryption produces original content              | Round-trip test         | Frontend |
+| E3  | Folder metadata decryption produces valid JSON         | Integration test        | Frontend |
+| E4  | Key derivation is deterministic across auth methods    | Cross-method login test | Frontend |
+| E5  | File metadata includes encryptionMode field            | Unit test               | Frontend |
+| E6  | Decryption handles both GCM and missing encryptionMode | Unit test               | Frontend |
 
 ### 8.3 Performance Criteria
 
-| ID | Criterion | Target | Test Method | Owner |
-|----|-----------|--------|-------------|-------|
-| P1 | Auth flow (Web3Auth + backend) | <3s P95 | Load test | Backend |
-| P2 | File encryption (<100MB) | <2s | Benchmark | Frontend |
-| P3 | File upload (<100MB) | <5s P95 | Integration test | QA |
-| P4 | IPNS resolution (cached) | <200ms | Integration test | Frontend |
-| P5 | IPNS resolution (uncached) | <2s | Integration test | Frontend |
-| P6 | Tree traversal (1000 files) | <2s | Benchmark | Frontend |
+| ID  | Criterion                      | Target  | Test Method      | Owner    |
+| --- | ------------------------------ | ------- | ---------------- | -------- |
+| P1  | Auth flow (Web3Auth + backend) | <3s P95 | Load test        | Backend  |
+| P2  | File encryption (<100MB)       | <2s     | Benchmark        | Frontend |
+| P3  | File upload (<100MB)           | <5s P95 | Integration test | QA       |
+| P4  | IPNS resolution (cached)       | <200ms  | Integration test | Frontend |
+| P5  | IPNS resolution (uncached)     | <2s     | Integration test | Frontend |
+| P6  | Tree traversal (1000 files)    | <2s     | Benchmark        | Frontend |
 
 ---
 
@@ -746,6 +773,7 @@ Future versions may implement vector clocks or CRDTs.
 **The Problem:** IPNS records expire after approximately 24 hours. Without republishing, folder metadata becomes inaccessible and users lose access to their vault structure.
 
 **Client-only limitations:**
+
 - User must be online every 24 hours to republish
 - Offline users lose vault access after record expiry
 - Battery drain from background polling
@@ -753,6 +781,7 @@ Future versions may implement vector clocks or CRDTs.
 - No resilience to client crashes or connectivity issues
 
 **TEE Solution:**
+
 - Automatic republishing every 3 hours (well within 24h expiry)
 - Works when all user devices are offline
 - Zero client battery drain for republishing
@@ -781,6 +810,7 @@ Security Flow:
 ```
 
 **Zero-Knowledge Guarantees:**
+
 - Backend never sees plaintext IPNS private keys
 - TEE hardware enclave is tamper-resistant
 - Keys exist in TEE memory only for milliseconds during signing
@@ -788,19 +818,20 @@ Security Flow:
 
 ### 9.3 TEE Provider Options
 
-| Criterion | Phala Cloud (Primary) | AWS Nitro (Fallback) |
-|-----------|----------------------|---------------------|
-| Cost | ~$0.10/hr | ~$0.17-0.50/hr |
-| Decentralization | 30K+ nodes | Centralized |
-| Hardware | Intel SGX | AWS custom silicon |
-| Attestation | On-chain verification | AWS attestation API |
-| Republish latency | 12-30s | <100ms |
+| Criterion         | Phala Cloud (Primary) | AWS Nitro (Fallback) |
+| ----------------- | --------------------- | -------------------- |
+| Cost              | ~$0.10/hr             | ~$0.17-0.50/hr       |
+| Decentralization  | 30K+ nodes            | Centralized          |
+| Hardware          | Intel SGX             | AWS custom silicon   |
+| Attestation       | On-chain verification | AWS attestation API  |
+| Republish latency | 12-30s                | <100ms               |
 
 **Monthly Cost Estimate (10K users):** Phala ~$50-100 vs AWS ~$200-400
 
 **Recommendation:** Phala Cloud as primary provider for cost efficiency and decentralization, with AWS Nitro as fallback for reliability.
 
 **Failover Process (1 week migration):**
+
 1. Update `tee_key_state` with AWS Nitro public key
 2. Redirect republish cron to AWS endpoint
 3. Clients auto-receive new TEE keys on next login
@@ -1020,6 +1051,7 @@ async republishIpns() {
 ```
 
 **Retry Strategy:**
+
 - Initial retry: 30 seconds
 - Exponential backoff: 30s → 60s → 120s → 240s → 300s (max)
 - After 5 failed attempts, entry marked for manual review
@@ -1031,23 +1063,23 @@ The login endpoint returns TEE public keys for client-side encryption:
 ```typescript
 // POST /auth/login response
 interface LoginResponse {
-    accessToken: string;
-    refreshToken: string;
-    user: {
-        publicKey: string;
-        // ... other user fields
-    };
-    vault: {
-        encryptedRootFolderKey: string;
-        rootIpnsName: string;
-        encryptedRootIpnsPrivateKey: string;
-    };
-    teeKeys: {
-        currentEpoch: number;
-        currentPublicKey: string;      // Base64-encoded secp256k1 public key
-        previousEpoch: number | null;
-        previousPublicKey: string | null;  // For grace period
-    };
+  accessToken: string;
+  refreshToken: string;
+  user: {
+    publicKey: string;
+    // ... other user fields
+  };
+  vault: {
+    encryptedRootFolderKey: string;
+    rootIpnsName: string;
+    encryptedRootIpnsPrivateKey: string;
+  };
+  teeKeys: {
+    currentEpoch: number;
+    currentPublicKey: string; // Base64-encoded secp256k1 public key
+    previousEpoch: number | null;
+    previousPublicKey: string | null; // For grace period
+  };
 }
 ```
 
@@ -1059,39 +1091,39 @@ const { teeKeys } = await api.login();
 
 // When publishing IPNS record
 async function publishIpnsRecord(
-    ipnsName: string,
-    ipnsPrivateKey: Uint8Array,
-    metadata: EncryptedMetadata
+  ipnsName: string,
+  ipnsPrivateKey: Uint8Array,
+  metadata: EncryptedMetadata
 ): Promise<void> {
-    // 1. Add encrypted metadata to IPFS
-    const cid = await api.post('/ipfs/add', metadata);
+  // 1. Add encrypted metadata to IPFS
+  const cid = await api.post('/ipfs/add', metadata);
 
-    // 2. Sign IPNS record locally
-    const signedRecord = await signIpnsRecord(ipnsPrivateKey, cid);
+  // 2. Sign IPNS record locally
+  const signedRecord = await signIpnsRecord(ipnsPrivateKey, cid);
 
-    // 3. Encrypt IPNS private key for TEE republishing
-    const teePublicKey = base64ToBytes(teeKeys.currentPublicKey);
-    const encryptedIpnsPrivateKey = await eciesEncrypt(ipnsPrivateKey, teePublicKey);
+  // 3. Encrypt IPNS private key for TEE republishing
+  const teePublicKey = base64ToBytes(teeKeys.currentPublicKey);
+  const encryptedIpnsPrivateKey = await eciesEncrypt(ipnsPrivateKey, teePublicKey);
 
-    // 4. Publish with TEE registration
-    await api.post('/ipns/publish', {
-        ipnsName,
-        signedRecord: encodeBase64(signedRecord),
-        encryptedIpnsPrivateKey: encodeBase64(encryptedIpnsPrivateKey),
-        keyEpoch: teeKeys.currentEpoch
-    });
+  // 4. Publish with TEE registration
+  await api.post('/ipns/publish', {
+    ipnsName,
+    signedRecord: encodeBase64(signedRecord),
+    encryptedIpnsPrivateKey: encodeBase64(encryptedIpnsPrivateKey),
+    keyEpoch: teeKeys.currentEpoch,
+  });
 }
 ```
 
 ### 9.11 Monitoring and Alerts
 
-| Metric | Target | Alert Threshold |
-|--------|--------|-----------------|
-| Republish success rate | 99.9% | <99% |
-| Epoch rotation lag | <5 min | >10 min |
-| Old epoch entries | 0% (after 4 weeks) | >10% (after 2 weeks) |
-| TEE response latency | <30s | >60s |
-| Retry queue depth | <100 | >500 |
+| Metric                 | Target             | Alert Threshold      |
+| ---------------------- | ------------------ | -------------------- |
+| Republish success rate | 99.9%              | <99%                 |
+| Epoch rotation lag     | <5 min             | >10 min              |
+| Old epoch entries      | 0% (after 4 weeks) | >10% (after 2 weeks) |
+| TEE response latency   | <30s               | >60s                 |
+| Retry queue depth      | <100               | >500                 |
 
 ---
 

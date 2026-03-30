@@ -27,18 +27,19 @@ ai_context: API specification for CipherBox backend. Contains all endpoints, req
 
 ## Terminology
 
-| Term | Code/API | Notes |
-|------|----------|-------|
-| Root folder encryption key | `rootFolderKey` | AES-256 symmetric key |
-| User's ECDSA public key | `publicKey` | secp256k1 curve |
-| IPNS identifier | `ipnsName` | e.g., k51qzi5uqu5dlvj55... |
-| Folder encryption key | `folderKey` | Per-folder AES-256 key |
-| File encryption key | `fileKey` | Per-file AES-256 key |
-| IPNS signing key | `ipnsPrivateKey` | Ed25519, stored encrypted |
-| TEE key rotation epoch | `keyEpoch` | Integer epoch for TEE key rotation |
-| TEE-encrypted IPNS key | `encryptedIpnsPrivateKey` | IPNS private key encrypted with TEE public key |
+| Term                       | Code/API                  | Notes                                          |
+| -------------------------- | ------------------------- | ---------------------------------------------- |
+| Root folder encryption key | `rootFolderKey`           | AES-256 symmetric key                          |
+| User's ECDSA public key    | `publicKey`               | secp256k1 curve                                |
+| IPNS identifier            | `ipnsName`                | e.g., k51qzi5uqu5dlvj55...                     |
+| Folder encryption key      | `folderKey`               | Per-folder AES-256 key                         |
+| File encryption key        | `fileKey`                 | Per-file AES-256 key                           |
+| IPNS signing key           | `ipnsPrivateKey`          | Ed25519, stored encrypted                      |
+| TEE key rotation epoch     | `keyEpoch`                | Integer epoch for TEE key rotation             |
+| TEE-encrypted IPNS key     | `encryptedIpnsPrivateKey` | IPNS private key encrypted with TEE public key |
 
 **Naming Conventions:**
+
 - API fields: `camelCase`
 - Database columns: `snake_case`
 
@@ -49,6 +50,7 @@ ai_context: API specification for CipherBox backend. Contains all endpoints, req
 ### 1.1 Architecture
 
 The CipherBox backend provides:
+
 - User authentication (via Web3Auth JWT or SIWE signature)
 - Token management (access + refresh tokens)
 - Vault management (encrypted key storage)
@@ -57,6 +59,7 @@ The CipherBox backend provides:
 - IPFS/IPNS relay for encrypted metadata and signed IPNS records
 
 The backend **never** handles:
+
 - Plaintext files
 - Unencrypted keys
 - Client private keys or unsigned IPNS records
@@ -79,10 +82,10 @@ All protected endpoints require `Authorization: Bearer <accessToken>` header.
 
 ### 2.1 Token Types
 
-| Token | Issuer | Expiry | Storage | Purpose |
-|-------|--------|--------|---------|---------|
-| Access Token | CipherBox Backend | 15 minutes | Client memory only | API authorization |
-| Refresh Token | CipherBox Backend | 7 days | HTTP-only cookie or encrypted storage | Obtain new access tokens |
+| Token         | Issuer            | Expiry     | Storage                               | Purpose                  |
+| ------------- | ----------------- | ---------- | ------------------------------------- | ------------------------ |
+| Access Token  | CipherBox Backend | 15 minutes | Client memory only                    | API authorization        |
+| Refresh Token | CipherBox Backend | 7 days     | HTTP-only cookie or encrypted storage | Obtain new access tokens |
 
 ### 2.2 Access Token Claims
 
@@ -98,6 +101,7 @@ All protected endpoints require `Authorization: Bearer <accessToken>` header.
 ### 2.3 Refresh Token Rotation
 
 On each `/auth/refresh` call:
+
 1. Old refresh token is invalidated
 2. New refresh token is issued
 3. New access token is issued
@@ -115,6 +119,7 @@ This limits exposure if a refresh token is compromised.
 Get a nonce for SIWE-style signature authentication.
 
 **Response (200):**
+
 ```json
 {
   "nonce": "abc123xyz789",
@@ -123,6 +128,7 @@ Get a nonce for SIWE-style signature authentication.
 ```
 
 **Notes:**
+
 - Nonces expire after 5 minutes
 - Nonces are single-use (deleted on successful auth)
 
@@ -133,6 +139,7 @@ Get a nonce for SIWE-style signature authentication.
 Authenticate user and obtain tokens.
 
 **Request (JWT Authentication):**
+
 ```json
 {
   "idToken": "eyJhbGciOiJFUzI1NiIs...",
@@ -141,6 +148,7 @@ Authenticate user and obtain tokens.
 ```
 
 **Request (SIWE Authentication):**
+
 ```json
 {
   "message": {
@@ -156,6 +164,7 @@ Authenticate user and obtain tokens.
 ```
 
 **Response (200):**
+
 ```json
 {
   "accessToken": "eyJhbGciOiJSUzI1NiIs...",
@@ -172,16 +181,19 @@ Authenticate user and obtain tokens.
 ```
 
 **Notes:**
+
 - `teeKeys` contains the current and previous TEE public keys for IPNS key encryption
 - Clients should encrypt IPNS private keys with `currentPublicKey` and include `currentEpoch`
 - `previousPublicKey` is provided for key rotation transitions (may be null if no previous epoch)
 
 **Errors:**
+
 - `400 Bad Request` - Invalid signature or malformed request
 - `401 Unauthorized` - Invalid or expired ID token
 - `429 Too Many Requests` - Rate limited
 
 **JWT Verification:**
+
 1. Fetch JWKS from `https://api-auth.web3auth.io/jwks`
 2. Verify JWT signature (ES256)
 3. Check `iss` = `https://api-auth.web3auth.io`
@@ -191,6 +203,7 @@ Authenticate user and obtain tokens.
 7. Verify `publicKey` matches wallet's `public_key`
 
 **SIWE Verification:**
+
 1. Find nonce in `auth_nonces` table
 2. Verify nonce not expired and not used
 3. Verify domain matches `cipherbox.io`
@@ -205,6 +218,7 @@ Authenticate user and obtain tokens.
 Exchange refresh token for new token pair.
 
 **Request:**
+
 ```json
 {
   "refreshToken": "abc123..."
@@ -212,6 +226,7 @@ Exchange refresh token for new token pair.
 ```
 
 **Response (200):**
+
 ```json
 {
   "accessToken": "eyJhbGciOiJSUzI1NiIs...",
@@ -226,10 +241,12 @@ Exchange refresh token for new token pair.
 ```
 
 **Errors:**
+
 - `401 Unauthorized` - Invalid or expired refresh token
 - `429 Too Many Requests` - Rate limited
 
 **Notes:**
+
 - Old refresh token is invalidated
 - New refresh token has fresh 7-day expiry
 - TEE keys included to ensure clients always have current keys after token refresh
@@ -241,11 +258,13 @@ Exchange refresh token for new token pair.
 Invalidate refresh token.
 
 **Headers:**
+
 ```
 Authorization: Bearer <accessToken>
 ```
 
 **Request:**
+
 ```json
 {
   "refreshToken": "abc123..."
@@ -253,6 +272,7 @@ Authorization: Bearer <accessToken>
 ```
 
 **Response (200):**
+
 ```json
 {
   "status": "logged_out"
@@ -268,11 +288,13 @@ Authorization: Bearer <accessToken>
 Get user's vault information.
 
 **Headers:**
+
 ```
 Authorization: Bearer <accessToken>
 ```
 
 **Response (200 - Initialized):**
+
 ```json
 {
   "vaultId": "550e8400-e29b-41d4-a716-446655440000",
@@ -285,6 +307,7 @@ Authorization: Bearer <accessToken>
 ```
 
 **Response (403 - Not Initialized):**
+
 ```json
 {
   "error": "VAULT_NOT_INITIALIZED",
@@ -299,11 +322,13 @@ Authorization: Bearer <accessToken>
 Initialize user's vault with encrypted keys.
 
 **Headers:**
+
 ```
 Authorization: Bearer <accessToken>
 ```
 
 **Request:**
+
 ```json
 {
   "publicKey": "0x04abc123...",
@@ -314,6 +339,7 @@ Authorization: Bearer <accessToken>
 ```
 
 **Response (201):**
+
 ```json
 {
   "vaultId": "550e8400-e29b-41d4-a716-446655440000",
@@ -322,6 +348,7 @@ Authorization: Bearer <accessToken>
 ```
 
 **Errors:**
+
 - `400 Bad Request` - Invalid key format
 - `409 Conflict` - Vault already initialized
 
@@ -332,12 +359,14 @@ Authorization: Bearer <accessToken>
 Upload encrypted file to IPFS via Pinata.
 
 **Headers:**
+
 ```
 Authorization: Bearer <accessToken>
 Content-Type: multipart/form-data
 ```
 
 **Request (FormData):**
+
 ```
 encryptedFile: <binary blob>
 iv: "0x1234567890abcdef..."
@@ -345,6 +374,7 @@ fileName: "budget.xlsx" (optional, for audit)
 ```
 
 **Response (201):**
+
 ```json
 {
   "cid": "QmXxxx...",
@@ -354,11 +384,13 @@ fileName: "budget.xlsx" (optional, for audit)
 ```
 
 **Errors:**
+
 - `400 Bad Request` - Missing file or invalid format
 - `413 Payload Too Large` - File exceeds 100MB limit
 - `507 Insufficient Storage` - Quota exceeded
 
 **Notes:**
+
 - File is uploaded to Pinata as-is (already encrypted by client)
 - Backend never sees plaintext
 - Size counted against user's storage quota
@@ -370,11 +402,13 @@ fileName: "budget.xlsx" (optional, for audit)
 Unpin a CID from IPFS (for delete/update operations).
 
 **Headers:**
+
 ```
 Authorization: Bearer <accessToken>
 ```
 
 **Request:**
+
 ```json
 {
   "cid": "QmXxxx..."
@@ -382,6 +416,7 @@ Authorization: Bearer <accessToken>
 ```
 
 **Response (200):**
+
 ```json
 {
   "success": true,
@@ -390,10 +425,12 @@ Authorization: Bearer <accessToken>
 ```
 
 **Errors:**
+
 - `400 Bad Request` - Invalid CID
 - `404 Not Found` - CID not pinned by this user
 
 **Notes:**
+
 - Storage quota reclaimed immediately
 - CID may still exist on IPFS network (just not pinned)
 
@@ -406,11 +443,13 @@ Authorization: Bearer <accessToken>
 Get user profile information.
 
 **Headers:**
+
 ```
 Authorization: Bearer <accessToken>
 ```
 
 **Response (200):**
+
 ```json
 {
   "userId": "550e8400-e29b-41d4-a716-446655440000",
@@ -428,11 +467,13 @@ Authorization: Bearer <accessToken>
 Export vault data for independent recovery.
 
 **Headers:**
+
 ```
 Authorization: Bearer <accessToken>
 ```
 
 **Response (200):**
+
 ```json
 {
   "version": "1.0",
@@ -440,11 +481,7 @@ Authorization: Bearer <accessToken>
   "rootIpnsName": "k51qzi5uqu5dlvj55...",
   "encryptedRootFolderKey": "0x...",
   "encryptedRootIpnsPrivateKey": "0x...",
-  "pinnedCids": [
-    "QmXxxx...",
-    "QmYyyy...",
-    "QmZzzz..."
-  ],
+  "pinnedCids": ["QmXxxx...", "QmYyyy...", "QmZzzz..."],
   "instructions": "To recover: decrypt keys with your private key, resolve IPNS via any gateway, fetch and decrypt all content."
 }
 ```
@@ -456,11 +493,13 @@ Authorization: Bearer <accessToken>
 Permanently delete user account and vault.
 
 **Headers:**
+
 ```
 Authorization: Bearer <accessToken>
 ```
 
 **Request:**
+
 ```json
 {
   "confirmDelete": true
@@ -468,6 +507,7 @@ Authorization: Bearer <accessToken>
 ```
 
 **Response (200):**
+
 ```json
 {
   "deleted": true,
@@ -476,10 +516,12 @@ Authorization: Bearer <accessToken>
 ```
 
 **Errors:**
+
 - `400 Bad Request` - `confirmDelete` not true
 - `429 Too Many Requests` - Rate limited (1 request/hour)
 
 **Notes:**
+
 - Unpins all CIDs from Pinata
 - Deletes all database records
 - Cannot be undone
@@ -495,6 +537,7 @@ All relay endpoints require `Authorization: Bearer <accessToken>`.
 Add encrypted metadata (or any encrypted content) to IPFS via backend relay.
 
 **Headers:**
+
 ```
 Authorization: Bearer <accessToken>
 Content-Type: application/octet-stream
@@ -504,6 +547,7 @@ Content-Type: application/octet-stream
 Raw bytes (encrypted content)
 
 **Response (201):**
+
 ```json
 {
   "cid": "QmXxxx...",
@@ -512,6 +556,7 @@ Raw bytes (encrypted content)
 ```
 
 **Errors:**
+
 - `400 Bad Request` - Invalid payload
 - `429 Too Many Requests` - Rate limited
 - `502 Bad Gateway` - IPFS relay failed
@@ -523,16 +568,19 @@ Raw bytes (encrypted content)
 Fetch encrypted content by CID via backend relay.
 
 **Query:**
+
 ```
 ?cid=QmXxxx...
 ```
 
 **Response (200):**
+
 ```
 <raw bytes>
 ```
 
 **Errors:**
+
 - `400 Bad Request` - Invalid CID
 - `404 Not Found` - CID not found
 - `429 Too Many Requests` - Rate limited
@@ -545,11 +593,13 @@ Fetch encrypted content by CID via backend relay.
 Resolve IPNS name to current CID via backend relay.
 
 **Query:**
+
 ```
 ?ipnsName=k51qzi5uqu5dlvj55...
 ```
 
 **Response (200):**
+
 ```json
 {
   "cid": "QmXxxx...",
@@ -558,6 +608,7 @@ Resolve IPNS name to current CID via backend relay.
 ```
 
 **Errors:**
+
 - `400 Bad Request` - Invalid IPNS name
 - `404 Not Found` - IPNS name not found
 - `429 Too Many Requests` - Rate limited
@@ -570,6 +621,7 @@ Resolve IPNS name to current CID via backend relay.
 Relay a client-signed IPNS record to the IPFS/IPNS network and optionally register for TEE-based republishing.
 
 **Request:**
+
 ```json
 {
   "ipnsName": "k51qzi5uqu5dlvj55...",
@@ -582,6 +634,7 @@ Relay a client-signed IPNS record to the IPFS/IPNS network and optionally regist
 ```
 
 **Response (200):**
+
 ```json
 {
   "published": true,
@@ -593,6 +646,7 @@ Relay a client-signed IPNS record to the IPFS/IPNS network and optionally regist
 ```
 
 **Errors:**
+
 - `400 Bad Request` - Invalid record or malformed request
 - `401 Unauthorized` - Invalid access token
 - `409 Conflict` - Sequence number too low
@@ -600,6 +654,7 @@ Relay a client-signed IPNS record to the IPFS/IPNS network and optionally regist
 - `502 Bad Gateway` - IPNS relay failed
 
 **Notes:**
+
 - `encryptedIpnsPrivateKey` is the IPNS Ed25519 private key encrypted with the TEE's current public key
 - `keyEpoch` must match the current TEE epoch (obtained from `/auth/login` response)
 - When `encryptedIpnsPrivateKey` is provided, the backend schedules automatic IPNS republishing
@@ -624,6 +679,7 @@ CREATE INDEX idx_users_public_key ON users(public_key);
 ```
 
 **Notes:**
+
 - Users identified by public key, not email
 - No auth provider mapping (handled by Web3Auth)
 
@@ -647,6 +703,7 @@ CREATE INDEX idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
 ```
 
 **Notes:**
+
 - Tokens stored as SHA-256 hash
 - `revoked_at` set on logout or rotation
 
@@ -669,6 +726,7 @@ CREATE INDEX idx_auth_nonces_expires_at ON auth_nonces(expires_at);
 ```
 
 **Notes:**
+
 - Nonces deleted immediately on successful verification
 - TTL-based cleanup for expired/unused nonces
 
@@ -754,6 +812,7 @@ CREATE INDEX idx_ipns_republish_user ON ipns_republish_schedule(user_id);
 ```
 
 **Notes:**
+
 - `encrypted_ipns_key` is the IPNS private key encrypted with TEE's current public key
 - `encrypted_ipns_key_prev` stores the key encrypted with previous TEE epoch (for rotation transitions)
 - `next_republish_at` is set to ~80% of TTL to ensure republish before expiry
@@ -778,6 +837,7 @@ CREATE TABLE tee_key_state (
 ```
 
 **Notes:**
+
 - Single-row table (enforced by `CHECK (id = 1)`)
 - `phala_block_height` tracks the Phala blockchain height when key was last synced
 - `public_key_previous` allows clients to verify during key rotation transitions
@@ -801,6 +861,7 @@ CREATE INDEX idx_tee_rotation_time ON tee_key_rotation_log(rotation_time);
 ```
 
 **Notes:**
+
 - `affected_entries` is the count of `ipns_republish_schedule` rows that were re-encrypted
 - Used for auditing and debugging key rotation issues
 
@@ -827,6 +888,7 @@ CREATE INDEX idx_ipfs_ops_type ON ipfs_operations_log(operation_type);
 ```
 
 **Notes:**
+
 - `operation_type` values: `ipfs_add`, `ipfs_cat`, `ipns_resolve`, `ipns_publish`, `ipns_republish`
 - `status` values: `success`, `failed`, `timeout`
 - Used for monitoring IPFS gateway health and debugging issues
@@ -837,22 +899,23 @@ CREATE INDEX idx_ipfs_ops_type ON ipfs_operations_log(operation_type);
 
 ### 5.1 Rate Limits by Endpoint
 
-| Endpoint | Limit | Window | Rationale |
-|----------|-------|--------|-----------|
-| POST /auth/login | 10 | per minute | Prevent brute-force |
-| POST /auth/refresh | 30 | per minute | Normal usage |
-| GET /auth/nonce | 20 | per minute | SIWE flow attempts |
-| POST /vault/upload | 60 | per minute | Batch upload support |
-| GET /my-vault | 120 | per minute | Polling + normal access |
-| DELETE /user/account | 1 | per hour | Prevent accidental deletion |
-| POST /ipfs/add | 120 | per minute | Metadata relay |
-| GET /ipfs/cat | 300 | per minute | Encrypted content relay |
-| GET /ipns/resolve | 240 | per minute | Sync polling |
-| POST /ipns/publish | 120 | per minute | Signed-record relay |
+| Endpoint             | Limit | Window     | Rationale                   |
+| -------------------- | ----- | ---------- | --------------------------- |
+| POST /auth/login     | 10    | per minute | Prevent brute-force         |
+| POST /auth/refresh   | 30    | per minute | Normal usage                |
+| GET /auth/nonce      | 20    | per minute | SIWE flow attempts          |
+| POST /vault/upload   | 60    | per minute | Batch upload support        |
+| GET /my-vault        | 120   | per minute | Polling + normal access     |
+| DELETE /user/account | 1     | per hour   | Prevent accidental deletion |
+| POST /ipfs/add       | 120   | per minute | Metadata relay              |
+| GET /ipfs/cat        | 300   | per minute | Encrypted content relay     |
+| GET /ipns/resolve    | 240   | per minute | Sync polling                |
+| POST /ipns/publish   | 120   | per minute | Signed-record relay         |
 
 ### 5.2 Rate Limit Headers
 
 All responses include:
+
 ```
 X-RateLimit-Limit: 60
 X-RateLimit-Remaining: 45
@@ -862,6 +925,7 @@ X-RateLimit-Reset: 1705298460
 ### 5.3 Rate Limit Response
 
 **Response (429):**
+
 ```json
 {
   "error": "RATE_LIMIT_EXCEEDED",
@@ -871,6 +935,7 @@ X-RateLimit-Reset: 1705298460
 ```
 
 Headers:
+
 ```
 Retry-After: 30
 ```
@@ -893,23 +958,23 @@ All errors follow this format:
 
 ### 6.2 Error Codes
 
-| Code | HTTP Status | Description |
-|------|-------------|-------------|
-| `INVALID_REQUEST` | 400 | Malformed request body |
-| `INVALID_TOKEN` | 401 | Invalid or expired token |
-| `INVALID_SIGNATURE` | 401 | SIWE signature verification failed |
-| `NONCE_EXPIRED` | 401 | SIWE nonce has expired |
-| `NONCE_USED` | 401 | SIWE nonce already used |
-| `VAULT_NOT_INITIALIZED` | 403 | Vault must be initialized first |
-| `VAULT_ALREADY_INITIALIZED` | 409 | Cannot re-initialize vault |
-| `CID_NOT_FOUND` | 404 | CID not pinned by this user |
-| `FILE_TOO_LARGE` | 413 | File exceeds 100MB limit |
-| `RATE_LIMIT_EXCEEDED` | 429 | Too many requests |
-| `QUOTA_EXCEEDED` | 507 | Storage quota exceeded |
-| `IPFS_RELAY_FAILED` | 502 | IPFS relay failed |
-| `IPNS_RELAY_FAILED` | 502 | IPNS relay failed |
-| `KEY_EPOCH_MISMATCH` | 400 | TEE key epoch does not match current epoch |
-| `INTERNAL_ERROR` | 500 | Unexpected server error |
+| Code                        | HTTP Status | Description                                |
+| --------------------------- | ----------- | ------------------------------------------ |
+| `INVALID_REQUEST`           | 400         | Malformed request body                     |
+| `INVALID_TOKEN`             | 401         | Invalid or expired token                   |
+| `INVALID_SIGNATURE`         | 401         | SIWE signature verification failed         |
+| `NONCE_EXPIRED`             | 401         | SIWE nonce has expired                     |
+| `NONCE_USED`                | 401         | SIWE nonce already used                    |
+| `VAULT_NOT_INITIALIZED`     | 403         | Vault must be initialized first            |
+| `VAULT_ALREADY_INITIALIZED` | 409         | Cannot re-initialize vault                 |
+| `CID_NOT_FOUND`             | 404         | CID not pinned by this user                |
+| `FILE_TOO_LARGE`            | 413         | File exceeds 100MB limit                   |
+| `RATE_LIMIT_EXCEEDED`       | 429         | Too many requests                          |
+| `QUOTA_EXCEEDED`            | 507         | Storage quota exceeded                     |
+| `IPFS_RELAY_FAILED`         | 502         | IPFS relay failed                          |
+| `IPNS_RELAY_FAILED`         | 502         | IPNS relay failed                          |
+| `KEY_EPOCH_MISMATCH`        | 400         | TEE key epoch does not match current epoch |
+| `INTERNAL_ERROR`            | 500         | Unexpected server error                    |
 
 ---
 
