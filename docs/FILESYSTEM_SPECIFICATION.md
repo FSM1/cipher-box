@@ -7,9 +7,9 @@ This document defines the rules, constraints, and rationale governing the Cipher
 CipherBox must present a consistent filesystem experience across three very different access surfaces:
 
 1. **Web browser** — drag-and-drop uploads, folder tree UI
-2. **macOS desktop** — FUSE-T virtual mount via SMB backend, accessed through Finder
-3. **Linux desktop** — kernel FUSE (libfuse3) virtual mount, accessed through file manager or terminal
-4. **Windows desktop** — WinFsp virtual mount, accessed through Explorer
+2. **macOS desktop** — FUSE-T virtual mount via SMB backend, accessed through Finder and Terminal
+3. **Linux desktop** — kernel FUSE (libfuse3) virtual mount, accessed through file manager and terminal
+4. **Windows desktop** — WinFsp virtual mount, accessed through Explorer, PowerShell, and Git Bash
 
 The strictest platform constraint wins. Windows is case-insensitive and has the most restricted filename rules, so CipherBox defaults to rules compatible with Windows even when accessed from other platforms. This ensures files created on any platform are accessible on every other platform.
 
