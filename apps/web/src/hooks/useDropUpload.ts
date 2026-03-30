@@ -113,69 +113,81 @@ export function useDropUpload() {
 
     try {
       // Upload new files via SDK batch pipeline (single folder publish for all)
+      const uploadIdMap = new Map<string, string>(); // fileName -> uploadId
       if (newFiles.length > 0) {
         // Register all files in upload store first (for UI progress rows)
-        const uploadIdMap = new Map<string, string>(); // fileName -> uploadId
         for (const file of newFiles) {
           const uploadId = createUploadId(file.name);
           uploadIdMap.set(file.name, uploadId);
           useUploadStore.getState().addFile(uploadId, file.name, folderId, file);
         }
 
-        // Read file data into Uint8Array (detect read errors early before entering SDK)
-        const fileEntries: Array<{ data: Uint8Array; fileName: string; mimeType: string }> = [];
-        for (const file of newFiles) {
-          const uploadId = uploadIdMap.get(file.name)!;
-          // Check if cancelled before reading
-          if (!useUploadStore.getState().files.get(uploadId)) {
-            continue; // User cancelled this file before it started
+        try {
+          // Read file data into Uint8Array (detect read errors early before entering SDK)
+          const fileEntries: Array<{ data: Uint8Array; fileName: string; mimeType: string }> = [];
+          for (const file of newFiles) {
+            const uploadId = uploadIdMap.get(file.name)!;
+            // Check if cancelled before reading
+            if (!useUploadStore.getState().files.get(uploadId)) {
+              continue; // User cancelled this file before it started
+            }
+            const data = new Uint8Array(await file.arrayBuffer());
+            fileEntries.push({
+              data,
+              fileName: file.name,
+              mimeType: file.type || 'application/octet-stream',
+            });
           }
-          const data = new Uint8Array(await file.arrayBuffer());
-          fileEntries.push({
-            data,
-            fileName: file.name,
-            mimeType: file.type || 'application/octet-stream',
-          });
-        }
 
-        if (fileEntries.length > 0) {
-          // Get encryption Worker's encryptFn for off-main-thread encryption
-          const encryptionWorker = getEncryptionWorker();
-          const encryptFn = encryptionWorker.createEncryptFn();
+          if (fileEntries.length > 0) {
+            // Get encryption Worker's encryptFn for off-main-thread encryption
+            const encryptionWorker = getEncryptionWorker();
+            const encryptFn = encryptionWorker.createEncryptFn();
 
-          const result = await client.uploadFiles(
-            parentFolder.ipnsName,
-            fileEntries,
-            {
-              onFileProgress: (fileName, percent) => {
-                const uploadId = uploadIdMap.get(fileName);
-                if (uploadId) {
-                  useUploadStore.getState().updateFileProgress(uploadId, percent);
-                }
+            const result = await client.uploadFiles(
+              parentFolder.ipnsName,
+              fileEntries,
+              {
+                onFileProgress: (fileName, percent) => {
+                  const uploadId = uploadIdMap.get(fileName);
+                  if (uploadId) {
+                    useUploadStore.getState().updateFileProgress(uploadId, percent);
+                  }
+                },
+                onFileComplete: (fileName) => {
+                  const uploadId = uploadIdMap.get(fileName);
+                  if (uploadId) {
+                    useUploadStore.getState().setFileStatus(uploadId, 'complete');
+                  }
+                },
+                onFileError: (fileName, error) => {
+                  const uploadId = uploadIdMap.get(fileName);
+                  if (uploadId) {
+                    useUploadStore.getState().setFileStatus(uploadId, 'error', error);
+                  }
+                },
               },
-              onFileComplete: (fileName) => {
-                const uploadId = uploadIdMap.get(fileName);
-                if (uploadId) {
-                  useUploadStore.getState().setFileStatus(uploadId, 'complete');
-                }
-              },
-              onFileError: (fileName, error) => {
-                const uploadId = uploadIdMap.get(fileName);
-                if (uploadId) {
-                  useUploadStore.getState().setFileStatus(uploadId, 'error', error);
-                }
-              },
-            },
-            { encryptFn }
-          );
-
-          // Failures already surfaced via onFileError callback (sets upload store to 'error').
-          if (result.failures.length > 0) {
-            logger.warn(
-              `[Upload] Batch upload partial failure: ${result.failures.length} file(s) failed`,
-              result.failures
+              { encryptFn }
             );
+
+            // Failures already surfaced via onFileError callback (sets upload store to 'error').
+            if (result.failures.length > 0) {
+              logger.warn(
+                `[Upload] Batch upload partial failure: ${result.failures.length} file(s) failed`,
+                result.failures
+              );
+            }
           }
+        } catch (batchErr) {
+          // Mark all non-complete new-file rows as error so UI doesn't get stuck
+          const msg = (batchErr as Error).message;
+          for (const [, uploadId] of uploadIdMap) {
+            const entry = useUploadStore.getState().files.get(uploadId);
+            if (entry && entry.status !== 'complete') {
+              useUploadStore.getState().setFileStatus(uploadId, 'error', msg);
+            }
+          }
+          throw batchErr; // Re-throw so outer catch handles orphan cleanup
         }
       }
 

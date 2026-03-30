@@ -949,20 +949,40 @@ export class CipherBoxClient {
         let mergedChildren = freshFolder?.metadata.children ?? folder.children;
         const freshSeq = freshFolder?.sequenceNumber ?? folder.sequenceNumber;
 
-        // Add FilePointers for all successful uploads
+        // Add FilePointers for all successful uploads (skip collisions gracefully)
+        const registeredSuccesses: FileResult[] = [];
         for (const success of successes) {
-          const { updatedChildren } = sdkCore.addFilePointerToFolder({
-            children: mergedChildren,
-            fileId: success.fileId,
-            fileName: success.fileName,
-            fileMetaIpnsName: success.uploadResult.fileMetaIpnsName,
-            ipnsPrivateKeyEncrypted: success.uploadResult.ipnsPrivateKeyEncrypted,
+          try {
+            const { updatedChildren } = sdkCore.addFilePointerToFolder({
+              children: mergedChildren,
+              fileId: success.fileId,
+              fileName: success.fileName,
+              fileMetaIpnsName: success.uploadResult.fileMetaIpnsName,
+              ipnsPrivateKeyEncrypted: success.uploadResult.ipnsPrivateKeyEncrypted,
+            });
+            mergedChildren = updatedChildren;
+            registeredSuccesses.push(success);
+          } catch (err) {
+            // Name collision from concurrent upload on another device — treat as failure
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            failures.push({ fileName: success.fileName, error: errorMsg });
+            callbacks?.onFileError?.(success.fileName, errorMsg);
+          }
+        }
+
+        // If all registrations failed after collision handling, skip publish
+        if (registeredSuccesses.length === 0) {
+          this.emitter.emit({
+            type: 'files:batchUploaded',
+            folderId: folderIpnsName,
+            successes: [],
+            failures: failures.map((f) => ({ fileName: f.fileName, error: f.error })),
           });
-          mergedChildren = updatedChildren;
+          return { successes: [], failures };
         }
 
         // Single folder publish + batch IPNS publish (concurrent)
-        const ipnsRecords = successes.map((s) => s.uploadResult.ipnsRecord);
+        const ipnsRecords = registeredSuccesses.map((s) => s.uploadResult.ipnsRecord);
         const [folderResult, batchResult] = await Promise.allSettled([
           sdkCore.updateFolderMetadataAndPublish({
             children: mergedChildren,
@@ -1020,7 +1040,10 @@ export class CipherBoxClient {
         this.emitter.emit({
           type: 'files:batchUploaded',
           folderId: folderIpnsName,
-          successes: successes.map((s) => ({ fileName: s.fileName, cid: s.uploadResult.cid })),
+          successes: registeredSuccesses.map((s) => ({
+            fileName: s.fileName,
+            cid: s.uploadResult.cid,
+          })),
           failures,
         });
         this.emitter.emit({
@@ -1036,7 +1059,7 @@ export class CipherBoxClient {
           if (this.config.shareCallbacks) {
             await this.reWrapNewItems(
               folderIpnsName,
-              successes.map((s) => ({
+              registeredSuccesses.map((s) => ({
                 keyType: 'file' as const,
                 itemId: s.fileId,
                 plaintextKey: s.uploadResult.fileKey,
@@ -1048,11 +1071,14 @@ export class CipherBoxClient {
         }
 
         return {
-          successes: successes.map((s) => ({ fileName: s.fileName, cid: s.uploadResult.cid })),
+          successes: registeredSuccesses.map((s) => ({
+            fileName: s.fileName,
+            cid: s.uploadResult.cid,
+          })),
           failures,
         };
       } finally {
-        // Clear file keys for all successful uploads
+        // Clear file keys for all uploads (including collision-failed ones)
         for (const success of successes) {
           clearBytes(success.uploadResult.fileKey);
         }

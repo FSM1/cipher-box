@@ -107,6 +107,10 @@ export async function uploadFile(params: {
   return withPerf('upload:full', async () => {
     const mode = normalizeEncryptionMode(params.encryptionMode);
 
+    // Capture original size before any Transferable detachment (encryptFn may
+    // transfer params.data.buffer to a Worker, making params.data.length = 0)
+    const originalSize = params.data.length;
+
     // Internal file key -- only generated when encryptFn is NOT provided.
     // When encryptFn is provided, the caller owns the returned fileKey memory.
     let fileKeyInternal: Uint8Array | null = null;
@@ -164,7 +168,7 @@ export async function uploadFile(params: {
         cid,
         fileKeyEncrypted: wrappedKeyHex,
         fileIv: ivHex,
-        size: params.data.length,
+        size: originalSize,
         mimeType: params.mimeType,
         folderKey: params.folderKey,
         userPublicKey: params.userPublicKey,

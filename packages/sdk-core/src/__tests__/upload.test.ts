@@ -186,6 +186,44 @@ describe('Upload operations', () => {
       );
     });
 
+    it('records correct file size even when encryptFn detaches the data buffer', async () => {
+      const ctx = createMockContext();
+      const originalData = new Uint8Array([1, 2, 3, 4, 5]);
+
+      // Simulate Transferable detachment: encryptFn receives the buffer,
+      // then the caller's Uint8Array becomes zero-length
+      const encryptFn = vi.fn().mockImplementation(async (params: { data: Uint8Array }) => {
+        // Simulate postMessage transfer — detach the ArrayBuffer
+        const detached = new ArrayBuffer(0);
+        Object.defineProperty(params.data, 'buffer', { value: detached });
+        Object.defineProperty(params.data, 'length', { value: 0 });
+        Object.defineProperty(params.data, 'byteLength', { value: 0 });
+
+        return {
+          ciphertext: new Uint8Array([99]),
+          wrappedKey: 'detach-wrapped',
+          iv: 'detach-iv',
+          fileKey: new Uint8Array(32).fill(0xaa),
+          originalSize: 5,
+          encryptedSize: 1,
+        };
+      });
+
+      await uploadFile({
+        data: originalData,
+        fileId: 'detach-test',
+        mimeType: 'text/plain',
+        folderKey: new Uint8Array(32),
+        userPublicKey: new Uint8Array(65),
+        ctx,
+        encryptFn,
+      });
+
+      const { createFileMetadata } = await import('../file');
+      // Size must be 5 (original), not 0 (post-detachment)
+      expect(createFileMetadata).toHaveBeenCalledWith(expect.objectContaining({ size: 5 }));
+    });
+
     it('passes teeKeys when provided', async () => {
       const ctx = createMockContext();
       const { createFileMetadata } = await import('../file');
