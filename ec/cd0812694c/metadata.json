@@ -3,7 +3,7 @@
   "checkpoint_id": "eccd0812694c",
   "strategy": "manual-commit",
   "branch": "feat/inline-upload-progress",
-  "checkpoints_count": 3,
+  "checkpoints_count": 5,
   "files_touched": [
     ".planning/config.json"
   ],
@@ -19,13 +19,19 @@
       "transcript": "/ec/cd0812694c/1/full.jsonl",
       "content_hash": "/ec/cd0812694c/1/content_hash.txt",
       "prompt": "/ec/cd0812694c/1/prompt.txt"
+    },
+    {
+      "metadata": "/ec/cd0812694c/2/metadata.json",
+      "transcript": "/ec/cd0812694c/2/full.jsonl",
+      "content_hash": "/ec/cd0812694c/2/content_hash.txt",
+      "prompt": "/ec/cd0812694c/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 10869,
-    "cache_creation_tokens": 845074,
-    "cache_read_tokens": 29791057,
-    "output_tokens": 101997,
-    "api_call_count": 237
+    "input_tokens": 11417,
+    "cache_creation_tokens": 1564871,
+    "cache_read_tokens": 133910268,
+    "output_tokens": 198465,
+    "api_call_count": 685
   }
 }
