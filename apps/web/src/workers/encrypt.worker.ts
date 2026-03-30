@@ -1,5 +1,10 @@
 /// <reference lib="webworker" />
 
+// eciesjs (transitive dep of @cipherbox/crypto) uses Buffer globally.
+// Workers don't inherit the main thread's polyfills, so import explicitly.
+import { Buffer } from 'buffer';
+globalThis.Buffer = Buffer;
+
 import {
   generateFileKey,
   generateIv,

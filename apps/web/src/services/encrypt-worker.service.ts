@@ -85,8 +85,7 @@ export class EncryptionWorkerService {
       // If data is a subview, copy first — transferring .buffer would detach
       // the entire underlying ArrayBuffer beyond the intended range.
       const isFullBuffer =
-        params.data.byteOffset === 0 &&
-        params.data.byteLength === params.data.buffer.byteLength;
+        params.data.byteOffset === 0 && params.data.byteLength === params.data.buffer.byteLength;
       const transferData = isFullBuffer ? params.data : params.data.slice();
       message.data = transferData;
       worker.postMessage(message, [transferData.buffer] as Transferable[]);
