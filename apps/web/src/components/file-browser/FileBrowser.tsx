@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import type { FolderEntry, FilePointer } from '@cipherbox/core';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
@@ -24,7 +25,6 @@ import { ImagePreviewDialog } from './ImagePreviewDialog';
 import { PdfPreviewDialog } from './PdfPreviewDialog';
 import { AudioPlayerDialog } from './AudioPlayerDialog';
 import { VideoPlayerDialog } from './VideoPlayerDialog';
-import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
 import { SyncIndicator } from './SyncIndicator';
 import { OfflineBanner } from './OfflineBanner';
@@ -53,6 +53,15 @@ export function FileBrowser() {
 
   const { downloadFromIpns, isDownloading } = useFileDownload();
   const { handleFileDrop } = useDropUpload();
+
+  /** Re-trigger upload for a single failed file (retry button in UploadListItem). */
+  const handleRetryUpload = useCallback(
+    (file: File) => {
+      handleFileDrop([file], currentFolderId);
+    },
+    [handleFileDrop, currentFolderId]
+  );
+
   const contextMenu = useContextMenu();
   const { rootIpnsName } = useVaultStore();
   const initialSyncComplete = useSyncStore((state) => state.initialSyncComplete);
@@ -169,6 +178,7 @@ export function FileBrowser() {
           onDragStart={actions.handleDragStart}
           onDropOnFolder={actions.handleDropOnFolder}
           onExternalFileDrop={actions.handleExternalFileDrop}
+          onRetryUpload={handleRetryUpload}
         />
       )}
 
@@ -355,8 +365,6 @@ export function FileBrowser() {
         currentFolderId={currentFolderId}
         isLoading={isOperating}
       />
-
-      <UploadModal />
     </div>
   );
 }
