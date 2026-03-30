@@ -80,7 +80,6 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 | Push notifications (WebSocket sync)            | 16           | Currently polling-only; requires backend infra          |
 | Batch API endpoint for IPNS resolves           | 32           | Could reduce round trips for folders with many files    |
 | Kubo API access control (reverse proxy or ACL) | 29           | Current Docker 127.0.0.1 binding sufficient for staging |
-| Production Kubo deployment hardening           | 29           | Only relevant when production environment exists        |
 
 ### Upload Pipeline (Phase 37)
 
@@ -95,14 +94,12 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 
 ### Observability (Phases 28, 30)
 
-| Item                                           | Source Phase | Notes                                                        |
-| ---------------------------------------------- | ------------ | ------------------------------------------------------------ |
-| Remote log shipping (Datadog, Loki)            | 28           | Deferred to Phase 30 scope if needed                         |
-| Error tracking service (Sentry or alternative) | 28, 30       | Sentry migration path available if Grafana Faro insufficient |
-| `no-console` ESLint rule enforcement           | 28           | Optional enforcement mechanism                               |
-| Web Worker logging (MessagePort bridge)        | 28           | Requires separate communication protocol                     |
-| Session replay                                 | 30           | Excluded for privacy (zero-knowledge app)                    |
-| "Report a problem" user-facing button          | 30           | Nice-to-have, not in scope                                   |
+| Item                                    | Source Phase | Notes                                    |
+| --------------------------------------- | ------------ | ---------------------------------------- |
+| Remote log shipping (Datadog, Loki)     | 28           | Deferred to Phase 30 scope if needed     |
+| `no-console` ESLint rule enforcement    | 28           | Optional enforcement mechanism           |
+| Web Worker logging (MessagePort bridge) | 28           | Requires separate communication protocol |
+| "Report a problem" user-facing button   | 30           | Nice-to-have, not in scope               |
 
 ### Sync & Conflict Resolution (Deferred to Milestone 4)
 
@@ -154,5 +151,6 @@ These were deferred but have since been completed:
 | Pagination on shares endpoints (L4)    | Phase 14 security review | Phase 14       |
 | Structured logging wrapper for web app | -                        | Phase 28       |
 | Web Worker for large file encryption   | -                        | Phase 37       |
+| Error tracking (Grafana Faro)          | Phase 28, 30             | Phase 30       |
 
 <!-- Deferred inventory: 2026-03-30 -->
