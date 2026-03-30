@@ -1,0 +1,13 @@
+can you clean up stale worktrees please
+
+---
+
+yeah the ci -debug is done now
+
+---
+
+ok seems like the deploy phala tee is failing - the following is logged on phala side: `unable to get image 'ghcr.io/OWNER/cipherbox-tee-worker:latest': Error response from daemon: invalid reference format: repository name (OWNER/cipherbox-tee-worker) must be lowercase`
+
+---
+
+I would prefer the repo owner variable used here, to prevent issues when the repo is moved to its own org.

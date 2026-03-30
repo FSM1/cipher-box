@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "2669a5678053",
+  "strategy": "manual-commit",
+  "branch": "fix/tee-docker-image-lowercase",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/tee-worker/docker-compose.phala.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/26/69a5678053/0/metadata.json",
+      "transcript": "/26/69a5678053/0/full.jsonl",
+      "content_hash": "/26/69a5678053/0/content_hash.txt",
+      "prompt": "/26/69a5678053/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 8615,
+    "cache_read_tokens": 3998313,
+    "output_tokens": 3486,
+    "api_call_count": 21
+  }
+}
