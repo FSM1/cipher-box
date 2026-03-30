@@ -1,0 +1,13 @@
+/gsd:add-phase refactor upload progress in web app, to an inline progress display and remove the popup upload progress
+
+---
+
+ok create a phase 36 branch for this
+
+---
+
+/gsd:discuss-phase 36
+
+---
+
+what is up with that branch name and phase name? can we rename the branch to something a little more recognizable - feat/{slug}
