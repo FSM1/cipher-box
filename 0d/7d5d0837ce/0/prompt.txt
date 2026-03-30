@@ -31,3 +31,7 @@ so if I understand it correctly, your recommended solution will only decrease Fo
 ---
 
 thats exactly how I understood it would work, but then I must be missing the point of the question and the answer being proposed. could you repeat the question?
+
+---
+
+I think for now, the retry is jsut a normal single file upload, but the retries accumulating might be a nice deferred idea, if we notice a lot of failures.
