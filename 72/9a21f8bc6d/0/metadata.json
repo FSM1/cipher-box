@@ -1,0 +1,130 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "729a21f8bc6d",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T00:35:40.152856Z",
+  "branch": "chore/update-actions-node24",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "2399c47af645",
+  "token_usage": {
+    "input_tokens": 537,
+    "cache_creation_tokens": 596582,
+    "cache_read_tokens": 87824966,
+    "output_tokens": 104248,
+    "api_call_count": 452
+  },
+  "session_metrics": {
+    "turn_count": 44
+  },
+  "summary": {
+    "intent": "Work through pending todos covering SDK encryption mode selection, BYO-IPFS staging debugging, release gate failures, and GitHub Actions deprecation warnings.",
+    "outcome": "Shipped four PRs: CTR encryption wired through SDK upload pipeline (#399), PATCH /vault/byo-status endpoint + load test fixes (#400), release gate rewrite to search standalone desktop-e2e.yml runs (#401), and GitHub Actions Node.js 24 upgrades (#402). Resolved all automated reviewer threads on each PR.",
+    "learnings": {
+      "repo": [
+        "selectEncryptionMode and STREAMING_MIME_TYPES were duplicated between packages/sdk/src/client.ts and apps/web/src/services/streaming-crypto.service.ts — centralized into packages/sdk-core/src/encryption-mode.ts",
+        "setByoStatus() existed as a vault service method but had no controller endpoint, making BYO mode untoggleable via API — this was the real cause of register-cid 403 errors, not a 400 validation failure as the todo described",
+        "The release gate searched ci-e2e.yml orchestrator runs for desktop E2E results, but successful desktop E2E tests run as standalone desktop-e2e.yml workflows — the gate never found them",
+        "Rust build artifacts in target/ were being scanned by ESLint, producing 261 of 262 lint errors — target/ was missing from eslint.config.js ignores (src-tauri/target/** was present but not root target/**)",
+        "The todo file for sdk-uploadfile-gcm ended up in both pending/ and done/ after the merge from fix/e2e-test-failures-v2 brought in both copies",
+        "API test files systematically used jest.Mocked\u003cPartial\u003cT\u003e\u003e and then re-fetched via module.get(), losing mock method types — pattern appears across republish, tee, shares, and vault spec files",
+        "FLAC audio (audio/flac) was missing from STREAMING_MIME_TYPES in both the SDK client and streaming-crypto.service.ts",
+        "SDK test files that mock @cipherbox/sdk-core with a bare factory object silently drop all exports not explicitly listed — adding new exports to sdk-core breaks those tests",
+        "pnpm api:generate script includes a lint:fix step that lints the entire repo, causing it to fail on Rust-generated JS in target/",
+        "The load test workload was calling /ipns/publish with {ipnsName, cid} but PublishIpnsEntryDto requires {ipnsName, record, metadataCid} — the signed IPNS record was entirely missing"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "end_line": 48,
+          "finding": "New module centralizing STREAMING_MIME_TYPES, CTR_SIZE_THRESHOLD_BYTES, selectEncryptionMode(mimeType, size), and normalizeEncryptionMode(mode)"
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "Added optional encryptionMode param — uses encryptAesCtr + generateCtrIv when 'CTR', falls back to GCM. normalizeEncryptionMode() guards invalid values"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "end_line": 691,
+          "finding": "uploadFile now calls selectEncryptionMode(mimeType, size) imported from sdk-core before delegating to sdkCore.uploadFile"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Added PATCH /vault/byo-status endpoint calling vaultService.setByoStatus() — previously this service method had no controller wiring"
+        },
+        {
+          "path": "apps/api/src/vault/dto/byo-status.dto.ts",
+          "line": 1,
+          "end_line": 13,
+          "finding": "SetByoStatusDto (enable: boolean) and SetByoStatusResponseDto (isByoUser: boolean) added for the new endpoint"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "createByoClientPool now calls PATCH /vault/byo-status for each client after creation, filters out failed enables, and throws if zero clients succeed"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "ipns-publish step replaced with createAndPublishIpnsRecord from sdk-core; createSdkContext hoisted outside per-iteration loop; register-cid failures now logged with HTTP status"
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "line": 1,
+          "end_line": 136,
+          "finding": "Desktop E2E gate rewritten to search desktop-e2e.yml runs directly, walking commits newest-first by SHA, polling in-progress runs — replaced 97-line dual-source search with 27 lines"
+        },
+        {
+          "path": "eslint.config.js",
+          "line": 1,
+          "end_line": 5,
+          "finding": "Added target/** to ignores — was missing despite src-tauri/target/** being present, causing 261 Rust artifact lint errors"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.spec.ts",
+          "line": 1,
+          "end_line": 200,
+          "finding": "Fixed jest.Mocked\u003cPartial\u003cT\u003e\u003e pattern — use mock objects directly instead of re-fetching via module.get() which loses mock method types. Pattern applies across republish, tee, shares, vault specs"
+        }
+      ],
+      "workflow": [
+        "When vi.mock('@cipherbox/sdk-core', () =\u003e ({...})) uses a bare factory, all new exports added to sdk-core silently break those tests — use importOriginal + spread instead",
+        "After adding a new export to a package, rebuild the package before typechecking dependent packages — the SDK imports compiled types from sdk-core dist",
+        "pnpm api:generate requires the API server to be running to generate the OpenAPI spec; running it writes to cwd if the output path isn't specified, causing accidental openapi.json files",
+        "GitHub Actions `gh run list` returns runs by creation time, not commit order — re-triggered runs for older commits appear newest; walk commits first and look up runs by SHA to get correct ordering",
+        "CodeRabbit and Copilot both review PRs; Copilot comments appear as REST pull request comments (not GraphQL review threads in all cases), requiring REST fallback when GraphQL times out"
+      ]
+    },
+    "friction": [
+      "GraphQL API for fetching review threads timed out repeatedly, requiring REST fallback to get PR comment data",
+      "accidental openapi.json written to apps/api/ (cwd) instead of packages/api-client/ during manual OpenAPI generation — had to remove it post-push",
+      "api-client generated files were not fully staged in the initial commit, causing CI drift check failure — had to add the missing model files and generated directories in a follow-up commit",
+      ".husky/commit-msg and .husky/commit-msg.pre-entire created by Entire CLI kept appearing in git status — required adding to .git/info/exclude",
+      "The todo file for the completed SDK GCM work appeared in both pending/ and done/ after merging, requiring manual cleanup",
+      "Background task for 'Fix pre-existing API test errors' ran in parallel with manual fixes — work was duplicated but not conflicting",
+      "pnpm api:generate lint step failing on Rust target/ files blocked the api:generate workflow even though the actual generation succeeded"
+    ],
+    "open_items": [
+      "Remaining GitHub Actions not yet updated to Node.js 24: release-please@v4, tauri-apps/tauri-action@v0, ikalnytskyi/action-setup-postgres@v8, appleboy/scp-action@v0.1.7, appleboy/ssh-action@v1.2.0 — todo created to check before June 2026 deadline",
+      "MigrationStatusDto.completedAt typed as object instead of Date — pre-existing Phase 35 DTO issue, not addressed in this session",
+      "Investigate removal of mock-ipns-routing layer (api area, 7d old todo) — not addressed this session",
+      "Add alternative MFA factor types (auth area, 32d old todo)",
+      "Add ERC-1271 contract wallet authentication support (auth area, 44d old todo)",
+      "Offload large file encryption to Web Worker (ui area, 51d old todo)",
+      "Research CRDT-based IPNS inbox for serverless share discovery (architecture area, 36d old todo)",
+      "BYO-IPFS load test baselines on staging — marked done in todos but actual load test run against staging not performed in this session",
+      "Run staging metrics baselines with new instrumentation — marked done in todos but not performed in this session",
+      "The one remaining ESLint warning: @typescript-eslint/no-explicit-any in apps/api/src/ipns/delegated-routing.client.spec.ts:60"
+    ]
+  }
+}
