@@ -35,6 +35,12 @@ export type SdkEvent =
     }
   | { type: 'folder:deleted'; folderId: string }
   | { type: 'file:uploaded'; folderId: string; fileName: string; cid: string }
+  | {
+      type: 'files:batchUploaded';
+      folderId: string;
+      successes: Array<{ fileName: string; cid: string }>;
+      failures: Array<{ fileName: string; error: string }>;
+    }
   | { type: 'file:downloaded'; cid: string }
   | { type: 'bin:updated'; entries: BinEntry[] }
   | { type: 'share:reWrapFailed'; folderIpnsName: string; failedRecipients: string[] }

@@ -42,7 +42,7 @@ export {
 } from './file';
 
 // Upload operations
-export { uploadFile, type UploadResult } from './upload';
+export { uploadFile, type UploadResult, type ExternalEncryptFn } from './upload';
 
 // Encryption mode selection
 export {
