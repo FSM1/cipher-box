@@ -80,13 +80,12 @@ export async function uploadFile(
 
 /**
  * Upload multiple files sequentially.
- * Pre-checks quota and tracks progress via upload store.
+ * Pre-checks quota and tracks progress via upload store (per-file tracking).
  */
 export async function uploadFiles(
   files: File[],
   userPublicKey: Uint8Array
 ): Promise<UploadedFile[]> {
-  const uploadStore = useUploadStore.getState();
   const quotaStore = useQuotaStore.getState();
 
   // Calculate total size
@@ -99,36 +98,34 @@ export async function uploadFiles(
     );
   }
 
-  uploadStore.startUpload(files.length);
   const results: UploadedFile[] = [];
 
   try {
     // Sequential uploads per CONTEXT.md decision
     for (const file of files) {
-      const cancelSource = useUploadStore.getState().cancelSource;
-      if (useUploadStore.getState().status === 'cancelled') {
+      const uploadId = `upload-${file.name}-${Date.now()}`;
+      useUploadStore.getState().addFile(uploadId, file.name, '', file);
+
+      const cancelSource = useUploadStore.getState().files.get(uploadId)?.cancelSource;
+      if (useUploadStore.getState().files.get(uploadId)?.status === 'cancelled') {
         throw new Error('Upload cancelled by user');
       }
-
-      uploadStore.setEncrypting(file.name);
 
       const result = await uploadFile(
         file,
         userPublicKey,
-        (percent) => uploadStore.setUploading(file.name, percent),
+        (percent) => useUploadStore.getState().updateFileProgress(uploadId, percent),
         cancelSource?.token
       );
 
       results.push(result);
-      uploadStore.fileComplete();
+      useUploadStore.getState().setFileComplete(uploadId);
     }
 
-    uploadStore.setSuccess();
     return results;
   } catch (error) {
     const message = (error as Error).message;
     if (message !== 'Upload cancelled by user') {
-      uploadStore.setError(message);
       logger.error('[Upload] Upload failed:', error);
     }
     throw error;
