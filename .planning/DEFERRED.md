@@ -116,7 +116,6 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 | --------------------------------------------- | ------------ | ------------------------------------------------------------------ |
 | TEE unenrollment on file/folder delete        | 12.6, 17     | Orphaned IPNS records expire naturally (24h) but waste TEE compute |
 | TEE enrollment drift reconciliation           | 12.6         | Periodic vault scan to sync enrollment                             |
-| Column DROP migration (vault v1 fields)       | 20           | After all users migrated, drop legacy columns                      |
 | User-configurable bin retention period        | 17           | Currently fixed 30-day retention                                   |
 | Retroactive TEE enrollment for existing files | 25           | New files only; existing files not enrolled                        |
 | Periodic reconciliation job for unenrollment  | 29           | Fire-and-forget pattern may be insufficient                        |
