@@ -28,7 +28,7 @@ jobs:
             echo "Not a release PR — skipping change detection"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         if: steps.release-check.outputs.is_release == 'true'
         with:
           fetch-depth: 0
