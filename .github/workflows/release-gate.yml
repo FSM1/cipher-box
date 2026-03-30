@@ -252,7 +252,7 @@ jobs:
             done
           fi
 
-          # No run for HEAD — find the most recent successful run in the release range
+          # No run for HEAD — find the most recent completed run in the release range
           echo "No Desktop E2E run for HEAD. Searching since ${PREV_TAG}..."
 
           if [ -z "$PREV_TAG" ]; then
