@@ -1,0 +1,5 @@
+/gsd:add-phase refactor upload progress in web app, to an inline progress display and remove the popup upload progress
+
+---
+
+ok create a phase 36 branch for this
