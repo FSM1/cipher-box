@@ -1,0 +1,5 @@
+we're meant to be on `feat/inline-upload...` not 100% sure the exact name
+
+---
+
+can you update the gsd branch naming configs so that these do not conflict with what we have for the commitlint
