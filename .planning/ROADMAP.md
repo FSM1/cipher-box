@@ -489,7 +489,7 @@ Plans:
 - [x] 27-02-PLAN.md -- Share store types, ShareDialog permission toggle, IPNS key wrapping, recipient permission management
 - [x] 27-03-PLAN.md -- SharedFileBrowser write UI (badges, toolbar, context menu), useSharedNavigation write ops, 30s polling
 
-### Phase 36: refactor upload progress in web app, to an inline progress display and remove the popup upload progress
+### Phase 36: Inline upload progress
 
 **Goal:** [To be planned]
 **Requirements**: TBD
