@@ -133,7 +133,7 @@ export function FileBrowser() {
             +folder
           </button>
           <div className="toolbar-upload">
-            <UploadZone folderId={currentFolderId} />
+            <UploadZone folderId={currentFolderId} onUploadComplete={actions.handleSync} />
           </div>
           <SyncIndicator />
         </div>

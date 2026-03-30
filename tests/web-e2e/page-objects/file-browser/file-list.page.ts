@@ -17,18 +17,19 @@ export class FileListPage {
   }
 
   /**
-   * Get all file list items.
+   * Get all file list items (excludes upload progress rows).
    */
   fileItems(): Locator {
-    return this.page.locator('.file-list-item');
+    return this.page.locator('.file-list-item:not(.upload-inline-row)');
   }
 
   /**
    * Get a specific item by name (file or folder).
-   * Uses the item text content to locate.
+   * Excludes upload progress rows to avoid strict mode violations
+   * during the brief overlap between upload completion and real file appearance.
    */
   getItem(name: string): Locator {
-    return this.page.locator('.file-list-item', { hasText: name }).filter({
+    return this.page.locator('.file-list-item:not(.upload-inline-row)', { hasText: name }).filter({
       has: this.page.locator('.file-list-item-name', { hasText: name }),
     });
   }
