@@ -1,0 +1,81 @@
+is the issue picked up by GH copilot (#3 in the table above) the same issue as already identified by coderabbit previously and noted in the deferred items?
+
+---
+
+ok I think we are getting close to the point of diminishing returns with these reviews on this PR. What are your thoughts, one more round or lets merge this sucker and deploy?
+
+---
+
+ok, take a look through @.planning/DEFERRED.md, as well as the phase docs from the last ~10 phases (28 -> 37) and identify if any deferred items exist.
+
+also, update the @.planning/FEATURES.md tables with the latest features as well as update the feature matrix (batch uploads are not implemented in the rust SDK for example). 
+
+The E2E test coverage in the feature matrix probably also needs an update.
+
+You can also update the @README.md since it seems like a lot of that is now out of date.
+
+One more piece of documentation to be added is the actual CipherBox file system specification which has not previously been documented, but should be done so now, for future reference. This doc should include both the various file system rules as well as the rationale for why these rules were implemented. Overall I am guessing we will need to stick with the strictest Desktop OS format (windows with its case insensitive naming).
+
+All if this is to be done on a docs branch.
+
+---
+
+has the web worker encryption todo been moved to done?
+
+---
+
+A lot of those `deferred` items have been implemented already - for example the error tracking service, possible sentry migration path, session replay should not be in deferred, it is an anti-feature in a privacy focused product. Please go through the list again and make sure that the items in the list are actually deferred and not either already implemented, or not ever in scope.
+
+---
+
+The mention of lack of Desktop FUSE automated tests is also misleading - there aren't unit tests as these would require mocking too much of the host OS to be reliable. Those are intentionally not tested at a unit level, since it is mostly jsut plumbing between the OS and the rust SDK. These components are recularly tested in the `Desktop E2E` test suite, so saying there is no automated testing is false, its just not unit testing.
+
+The source for this in @.planning/codebase/CONCERNS.md should also be updated as irrelevant (wont fix) with the details of the above note.
+
+---
+
+Ok, then in data management there is mention of vault v1 fields in the database, from my understanding, these have been removed from the codebase when staging was reset and all data cleared.
+
+---
+
+so when I asked you to go through the deferred items and prune any that have already been implemented, what did you actually do? why do I keep finding more irrelevant items?
+
+---
+
+Why does the Obeservability table still list remote log shipping as deferred - this was configured as part of phase 30 most likely?
+
+---
+
+Ok, now can you please take a look at the code quality items and make sure these are all still valid. if any are, then I think this should be the next phase, followed by a phase to `add user-configurable vault parameters` which takes care of the one `deferred` item.
+
+---
+
+is this circular dependency necessary though? I thought it was meant to have been removed at the end of the restructuring phase when it was raised, and likely just never removed.
+
+---
+
+yeah add it to phase 38
+
+---
+
+For the user configurable vault phase, it should include things like versioning defaults, bin retention and delete settings (soft delete or hard delete).
+
+---
+
+Can we add the features from phase 39 to the `features` document?
+
+---
+
+ok can you please go through all the files in the @docs/ folder, and make sure everything there is updated and current, based on the context on the changes in phases 28-37
+
+---
+
+the file system doc fails to mention that the cipherbox mount is accessible via terminal on macos as well, and via powershell and git bash on windows.
+
+---
+
+the filesystem doc mentions AES-CTR for large files, but then goes on to mention only video, AES CTR is also used for audio files.
+
+---
+
+also, in the same doc, there is mention of uploads always using AES GCM - this is false, large files are encrypted using AES-CTR client side.

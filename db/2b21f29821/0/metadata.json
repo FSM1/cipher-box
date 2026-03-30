@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "db2b21f29821",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T23:13:50.41042Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "a051dc88cd2b",
+  "token_usage": {
+    "input_tokens": 3845,
+    "cache_creation_tokens": 211675,
+    "cache_read_tokens": 24462516,
+    "output_tokens": 55845,
+    "api_call_count": 174
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Resolve open PR review comments on PR #416, then perform comprehensive documentation updates including pruning stale deferred items, updating feature matrices, refreshing the README, and creating a new filesystem specification document.",
+    "outcome": "All 4 PR review threads resolved and pushed; documentation branch created with thorough updates to DEFERRED.md, FEATURES.md, README.md, ARCHITECTURE.md, DATABASE_EVOLUTION_PROTOCOL.md, FILESYSTEM_SPECIFICATION.md (new), and CLAUDE.md; phases 38 and 39 added to roadmap; PR #419 created.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro (apps/web/src/lib/faro.ts) is the implemented observability/error tracking solution — not Sentry or Datadog as older docs suggested",
+        "Desktop FUSE layer has no unit tests by design — it is thin OS plumbing and is covered by the Desktop E2E suite instead",
+        "Vault v1 legacy columns were removed when staging was reset; the current baseline migration (1700000000000-FullSchema.ts) does not include them",
+        "@cipherbox/crypto has a devDependency on @cipherbox/core solely for a single test file (vault-ipns.test.ts) that verifies key separation — this was meant to be cleaned up after the Phase 19 restructuring",
+        "Large files (video and audio) use AES-256-CTR encryption client-side; small files use AES-256-GCM — the filesystem spec incorrectly stated uploads always use GCM",
+        "Linux FUSE uses the same 'fuse' feature flag as macOS: NFC normalization, case-sensitive lookups, libfuse3 backend",
+        "RECYCLE_BIN_RETENTION_DAYS is an operator-level env var, not a user-facing setting — the user-configurable bin retention is still a deferred feature",
+        "The database has grown to 14 tables including share_invites and pin_migrations added in later phases; DATABASE_EVOLUTION_PROTOCOL.md was significantly out of date",
+        "TEE provider is Phala Cloud CVM, not AWS Nitro (which was previously listed as a planned fallback)",
+        "IPNS republish interval is 6h, not 3h as documented in CLAUDE.md",
+        "The old 00-Preliminary-R\u0026D/ documentation path was renamed to .planning/milestones/m0/ during a reorganization"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage/getWorker calls can throw, leaking pending map entries — fixed with try/catch that deletes the pending entry on error"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "uploadFiles() doc comment overstated memory bounding — corrected to accurately describe chunked streaming behavior"
+        },
+        {
+          "path": "packages/crypto/src/__tests__/vault-ipns.test.ts",
+          "finding": "Only file importing @cipherbox/core inside the crypto package — a devDependency that creates an unintended circular dependency; should be refactored to use hardcoded test vectors or moved to an integration test directory"
+        },
+        {
+          "path": "crates/fuse/src/platform/linux.rs",
+          "finding": "Linux FUSE is fully implemented using libfuse3, same NFC normalization and case-sensitivity as macOS"
+        }
+      ],
+      "workflow": [
+        "When asked to audit a list for stale items, verify every single item against the codebase rather than spot-checking only the ones explicitly called out by the user",
+        "GraphQL resolve threads can be batched in a single mutation call",
+        "Use --field (not -f) for integer parameters like in_reply_to when posting PR review replies via gh api",
+        "Integration tests that require a live backend will fail in CI/local without a running service — treat these as expected pre-existing failures when assessing test suite health",
+        "Operator env vars and user-facing settings are distinct concepts — do not conflate them when reviewing deferred items",
+        "Session replay is an anti-feature in a zero-knowledge privacy product and should never be added to the roadmap"
+      ]
+    },
+    "friction": [
+      "Initial deferred items audit was too shallow — required multiple rounds of user corrections to remove already-implemented or out-of-scope items (Grafana Faro, session replay, vault v1 columns, Linux FUSE, log shipping, batch pin events, per-file IPNS, DTS circular dep, useFileOperations decomposition)",
+      "FILESYSTEM_SPECIFICATION.md had several factual errors introduced at creation: missing Linux platform, audio omitted from AES-CTR description, incorrect claim that all uploads use AES-GCM — required multiple follow-up edits",
+      "Git commit hook required lowercase subject line — initial commit with parenthetical subject failed and needed a retry",
+      "Edit tool reformatted markdown table widths after an edit, obscuring surrounding content and requiring re-read before subsequent edits"
+    ],
+    "open_items": [
+      "Phase 38: Retire folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines) by migrating callers to SDK methods; also remove @cipherbox/core devDependency from crypto package by refactoring vault-ipns.test.ts to use hardcoded test vectors",
+      "Phase 39: User-configurable vault parameters — bin retention period (default 30 days), soft vs hard delete toggle, max versions per file, version cooldown period",
+      "Lazy file reading in useDropUpload.ts / batch upload pipeline — requires changing SDK contract to accept File objects or a read callback instead of Uint8Array (architectural change, deferred)",
+      "Sharing: per-share revocation, share expiry dates, share activity audit log",
+      "Search: full-text search across file names and metadata",
+      "Observability: distributed tracing (OpenTelemetry) across API and FUSE layer",
+      "Upload pipeline: resumable uploads for large files, parallel chunk verification",
+      "Security: formal third-party security audit before public launch"
+    ]
+  }
+}
