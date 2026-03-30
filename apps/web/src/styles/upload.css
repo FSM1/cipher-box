@@ -187,7 +187,8 @@
 
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .upload-inline-progress-fill {
+  .upload-inline-progress-fill,
+  .upload-inline-progress-track--pulse .upload-inline-progress-fill {
     animation: none;
     transition: none;
   }

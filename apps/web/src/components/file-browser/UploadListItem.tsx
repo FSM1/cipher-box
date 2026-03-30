@@ -24,7 +24,6 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
   const file = useUploadStore((s) => s.files.get(fileId));
   const cancelFile = useUploadStore((s) => s.cancelFile);
   const removeFile = useUploadStore((s) => s.removeFile);
-  const retryFile = useUploadStore((s) => s.retryFile);
 
   const completionTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
@@ -52,11 +51,12 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
   }, [fileId, removeFile]);
 
   const handleRetry = useCallback(() => {
-    retryFile(fileId);
-    if (file?.file && onRetry) {
-      onRetry(file.file);
+    const originalFile = file?.file;
+    removeFile(fileId);
+    if (originalFile && onRetry) {
+      onRetry(originalFile);
     }
-  }, [fileId, retryFile, file?.file, onRetry]);
+  }, [fileId, removeFile, file?.file, onRetry]);
 
   if (!file) return null;
 
@@ -89,9 +89,9 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
               style={{ width: `${file.progress}%` }}
               data-status={file.status}
               role="progressbar"
-              aria-valuenow={file.progress}
-              aria-valuemin={0}
-              aria-valuemax={100}
+              {...(isEncrypting
+                ? { 'aria-valuetext': 'Encrypting' }
+                : { 'aria-valuenow': file.progress, 'aria-valuemin': 0, 'aria-valuemax': 100 })}
               aria-label={`Upload progress for ${file.filename}`}
             />
           </div>

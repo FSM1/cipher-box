@@ -170,7 +170,7 @@ Recent for v1.1:
 - FilePointer async resolution: 500ms base \* 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
 - Removed custom dstack-sdk.d.ts since @phala/dstack-sdk@0.5.7 ships own TypeScript types
 - Defensive CVM key derivation handles both key (v0.5+) and asUint8Array (legacy) SDK return types
-- TEE worker Prometheus metrics use cipherbox*tee*\* prefix for Grafana dashboard coexistence with API metrics
+- TEE worker Prometheus metrics use `cipherbox_tee_*` prefix for Grafana dashboard coexistence with API metrics
 - TEE worker structured JSON logger has zero external dependencies (JSON.stringify to stdout/stderr)
 
 ### Roadmap Evolution

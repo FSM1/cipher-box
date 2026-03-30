@@ -43,7 +43,6 @@ type UploadState = {
   setFileStatus: (id: string, status: PerFileUpload['status'], error?: string) => void;
   removeFile: (id: string) => void;
   cancelFile: (id: string) => void;
-  retryFile: (id: string) => void;
 
   // Batch-level actions (kept for backward compat / derived)
   reset: () => void;
@@ -110,21 +109,6 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       entry.cancelSource?.cancel('Upload cancelled by user');
       const next = new Map(state.files);
       next.delete(id);
-      return { files: next };
-    }),
-
-  retryFile: (id) =>
-    set((state) => {
-      const entry = state.files.get(id);
-      if (!entry) return state;
-      const next = new Map(state.files);
-      next.set(id, {
-        ...entry,
-        status: 'encrypting',
-        progress: 0,
-        error: null,
-        cancelSource: axios.CancelToken.source(),
-      });
       return { files: next };
     }),
 
