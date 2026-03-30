@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c07c1b1ea4be",
+  "session_id": "66b8eabe-070d-4f34-96a8-81ed94408db2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T16:36:01.417002Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/config.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "faf7f567a9e2",
+  "token_usage": {
+    "input_tokens": 13,
+    "cache_creation_tokens": 35691,
+    "cache_read_tokens": 429510,
+    "output_tokens": 2956,
+    "api_call_count": 10
+  },
+  "summary": {
+    "intent": "Execute Phase 37 (parallel-batch-upload-pipeline) using the GSD wave-based orchestration workflow, running 2 plans across 2 waves with subagent parallelization.",
+    "outcome": "Wave 1 (plan 37-01: SDK batch upload pipeline) completed successfully with 10 unit tests and 3 commits. Wave 2 was not yet reached; the session ended after merging the worktree branch back into the feature branch.",
+    "learnings": {
+      "repo": [
+        "Phase 37 is the 'parallel-batch-upload-pipeline' feature branch (`feat/parallel-batch-upload-pipeline`).",
+        "Plan 37-01 implements `uploadFiles()` on `CipherBoxClient` with p-limit concurrency (max 3 concurrent), re-reads folder metadata after uploads to avoid stale-children races, and does a single folder IPNS publish.",
+        "Plan 37-02 (Wave 2) handles Web Worker encryption and `useDropUpload` rewire — depends on Wave 1's SDK method."
+      ],
+      "code": [],
+      "workflow": [
+        "GSD executor agents run in isolated git worktrees; after completion the orchestrator must explicitly merge the worktree branch back into the feature branch before proceeding.",
+        "Merging worktree branches can produce conflicts in STATE.md and config.json; the worktree version of STATE.md was used to resolve the conflict.",
+        "Spot-checks (SUMMARY.md existence, key files, test files, recent commits) are used to verify agent completion before advancing waves.",
+        "The stale auto-chain flag in gsd-tools config must be cleared at init when `--auto` is not passed, to prevent unwanted auto-advance from prior interrupted runs."
+      ]
+    },
+    "friction": [
+      "Merging the worktree branch back required multiple bash steps and produced a merge conflict in STATE.md that needed manual resolution.",
+      "Working tree had local changes (STATE.md, config.json) that had to be stashed before the merge could proceed."
+    ],
+    "open_items": [
+      "Wave 2 (plan 37-02: Web Worker encryption + useDropUpload rewire) has not been executed yet.",
+      "Phase-level verification, ROADMAP.md update, and phase completion have not run — pending Wave 2 completion.",
+      "PROJECT.md evolution step after phase completion is deferred until the full phase finishes."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T16:35:44.381842Z",
+    "agent_lines": 8,
+    "human_added": 878,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 886,
+    "agent_percentage": 0.9029345372460496
+  }
+}
