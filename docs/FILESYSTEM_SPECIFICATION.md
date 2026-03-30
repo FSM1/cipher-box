@@ -11,7 +11,7 @@ CipherBox must present a consistent filesystem experience across three very diff
 3. **Linux desktop** — kernel FUSE (libfuse3) virtual mount, accessed through file manager and terminal
 4. **Windows desktop** — WinFsp virtual mount, accessed through Explorer, PowerShell, and Git Bash
 
-The strictest platform constraint wins. Windows is case-insensitive and has the most restricted filename rules, so CipherBox defaults to rules compatible with Windows even when accessed from other platforms. This ensures files created on any platform are accessible on every other platform.
+The target invariant is that the strictest platform constraint (Windows) should govern all platforms, ensuring files created anywhere are accessible everywhere. In practice, several known gaps exist where the web layer does not yet enforce Windows-compatible rules — these are documented in the [Known Gaps](#known-gaps) section below.
 
 ## Naming Rules
 
@@ -149,7 +149,7 @@ if (nameExists) throw new Error('An item with this name already exists');
 | Download timeout | 120s   | `CONTENT_DOWNLOAD_TIMEOUT` |
 | Block size       | 4096 B | `BLOCK_SIZE`               |
 
-**Rationale:** File content is fetched from IPFS on `open()` and cached in memory. Large files (up to 100 MB) can take 30-60 seconds from the staging IPFS gateway. The 120-second timeout accommodates slow networks while preventing indefinite hangs. After the initial fetch, all `read()` calls are served from cache.
+**Rationale:** File content is fetched from IPFS via the Kubo RPC API on `open()` and cached in memory. Large files (up to 100 MB) can take 30-60 seconds over slow connections. The 120-second timeout accommodates this while preventing indefinite hangs. After the initial fetch, all `read()` calls are served from cache.
 
 ### Mount Backend
 

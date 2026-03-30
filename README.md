@@ -61,7 +61,7 @@ The client encrypts everything locally. The API is a zero-knowledge relay — it
 | **Storage**        | IPFS via Kubo                                                   |
 | **Desktop**        | Tauri v2 + FUSE-T (macOS) / libfuse3 (Linux) / WinFsp (Windows) |
 | **TEE**            | Phala Cloud (IPNS republishing)                                 |
-| **Crypto**         | Web Crypto API (AES-256-GCM/CTR, ECIES secp256k1)               |
+| **Crypto**         | Web Crypto API (AES-256-GCM/CTR) + eciesjs (ECIES secp256k1)    |
 | **Observability**  | Grafana Faro (web), Prometheus (API)                            |
 
 ## Project Structure

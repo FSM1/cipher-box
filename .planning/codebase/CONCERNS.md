@@ -225,7 +225,7 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 **@phala/dstack-sdk:**
 
 - Risk: Phala-specific SDK for CVM key derivation. Tightly coupled to Phala Cloud infrastructure. No alternative provider is implemented.
-- Impact: If Phala Cloud has an outage or breaking API change, the TEE republishing pipeline stops. No fallback means IPNS records eventually expire (72-hour TTL).
+- Impact: If Phala Cloud has an outage or breaking API change, the TEE republishing pipeline stops. No fallback means IPNS records eventually expire (48-hour TTL).
 - Migration plan: Abstract key derivation behind an interface so alternative providers (AWS Nitro Enclaves, Azure Confidential Computing) can be plugged in. Currently blocked by the complexity of re-implementing key derivation + epoch management for a second provider.
 
 ## Missing Critical Features
