@@ -1,0 +1,15 @@
+<task-notification>
+<task-id>b0cpwlwwe</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/b0cpwlwwe.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit simplification changes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok now create the PR
+
+---
+
+how is test coverage for this change looking? are there sdk integration tests making sure this all works as expected? are the web-e2e tests updated for these new flows? Has the web worker been set up such that it will work in local dev, ci, staging (production build) instances?
