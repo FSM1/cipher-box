@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.33.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.32.1...cipher-box-v0.33.0) (2026-03-30)
+
+
+### Features
+
+* **web:** Inline upload progress ([#410](https://github.com/FSM1/cipher-box/issues/410)) ([81c9f71](https://github.com/FSM1/cipher-box/commit/81c9f717bb39ccd43feef4738f0c011a6d8d2ed2))
+
+
+### Bug Fixes
+
+* **tee:** remove bash default syntax from compose image reference ([#412](https://github.com/FSM1/cipher-box/issues/412)) ([d206e19](https://github.com/FSM1/cipher-box/commit/d206e1932057b71357fa157e0156571a8019f8c2))
+* **web:** reverse upload dedup to prevent real file rows disappearing ([#414](https://github.com/FSM1/cipher-box/issues/414)) ([e2321f8](https://github.com/FSM1/cipher-box/commit/e2321f849a188a114767c4704ebaf79cb3514e8e))
+* **web:** trigger sync after upload, fix E2E duplicate row failures ([#413](https://github.com/FSM1/cipher-box/issues/413)) ([e2932af](https://github.com/FSM1/cipher-box/commit/e2932af90dc7009e82360752d574ee8173997f6a))
+
 ## [0.32.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.32.0...cipher-box-v0.32.1) (2026-03-30)
 
 
