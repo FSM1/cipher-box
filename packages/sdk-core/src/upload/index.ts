@@ -114,6 +114,7 @@ export async function uploadFile(params: {
     // Internal file key -- only generated when encryptFn is NOT provided.
     // When encryptFn is provided, the caller owns the returned fileKey memory.
     let fileKeyInternal: Uint8Array | null = null;
+    let fileKeyExternal: Uint8Array | null = null;
 
     try {
       let ciphertext: Uint8Array;
@@ -132,6 +133,7 @@ export async function uploadFile(params: {
         wrappedKeyHex = extResult.wrappedKey;
         ivHex = extResult.iv;
         fileKeyForResult = extResult.fileKey;
+        fileKeyExternal = extResult.fileKey;
       } else {
         // Internal encryption path (original behavior)
         // 1. Generate unique file key and IV (CTR uses 16-byte nonce+counter, GCM uses 12-byte random)
@@ -185,8 +187,15 @@ export async function uploadFile(params: {
         ipnsPrivateKeyEncrypted: fileMetaResult.ipnsPrivateKeyEncrypted,
         fileKey: fileKeyForResult,
       };
+    } catch (err) {
+      // Clear external fileKey if a later step (pinning/metadata) throws —
+      // the caller never receives the UploadResult so can't clear it themselves
+      if (fileKeyExternal) {
+        clearBytes(fileKeyExternal);
+      }
+      throw err;
     } finally {
-      // 6. Clear the internal copy of the key from memory (only if internally generated)
+      // Clear the internal copy of the key from memory (only if internally generated)
       if (fileKeyInternal) {
         clearBytes(fileKeyInternal);
       }

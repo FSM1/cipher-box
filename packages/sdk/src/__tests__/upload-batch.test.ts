@@ -444,7 +444,8 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
           mode: 'dual',
           externalProvider: {
             endpoint: 'https://byo.example.com',
-            accessToken: 'test-token',
+            authToken: 'test-token',
+            protocol: 'kubo',
           },
         },
       })

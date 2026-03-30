@@ -1,5 +1,5 @@
 import type { ExternalEncryptFn } from '@cipherbox/sdk-core';
-import type { EncryptRequest, EncryptResponse } from '../workers/encrypt.worker';
+import type { EncryptRequest, EncryptResponse } from '../workers/encrypt.types';
 
 /**
  * Main-thread wrapper for the encryption Web Worker.

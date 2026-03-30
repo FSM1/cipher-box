@@ -11,35 +11,13 @@ import {
   bytesToHex,
 } from '@cipherbox/crypto';
 
-export type EncryptRequest = {
-  type: 'encrypt';
-  id: string;
-  data: Uint8Array;
-  userPublicKey: Uint8Array;
-  encryptionMode: 'GCM' | 'CTR';
-};
-
-export type EncryptResponse =
-  | {
-      type: 'success';
-      id: string;
-      ciphertext: Uint8Array;
-      wrappedKey: string;
-      iv: string;
-      fileKey: Uint8Array;
-      originalSize: number;
-      encryptedSize: number;
-    }
-  | {
-      type: 'error';
-      id: string;
-      error: string;
-    };
+import type { EncryptRequest, EncryptResponse } from './encrypt.types';
 
 self.onmessage = async (event: MessageEvent<EncryptRequest>) => {
   const { id, data, userPublicKey, encryptionMode } = event.data;
+  let fileKey: Uint8Array | null = null;
   try {
-    const fileKey = generateFileKey();
+    fileKey = generateFileKey();
     const iv = encryptionMode === 'CTR' ? generateCtrIv() : generateIv();
 
     const ciphertext =
@@ -53,6 +31,7 @@ self.onmessage = async (event: MessageEvent<EncryptRequest>) => {
     // so the key material doesn't linger in Worker memory after transfer
     const fileKeyCopy = new Uint8Array(fileKey);
     clearBytes(fileKey);
+    fileKey = null; // Prevent double-clear in finally
 
     const response: EncryptResponse = {
       type: 'success',
@@ -74,5 +53,10 @@ self.onmessage = async (event: MessageEvent<EncryptRequest>) => {
       error: (err as Error).message,
     };
     self.postMessage(response);
+  } finally {
+    // Clear key material on any exit path (encrypt/wrap/postMessage failure)
+    if (fileKey) {
+      clearBytes(fileKey);
+    }
   }
 };

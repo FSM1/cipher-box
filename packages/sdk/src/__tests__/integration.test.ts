@@ -226,76 +226,101 @@ describeIf('SDK Integration (live API)', () => {
     }
   );
 
-  it('batch upload: uploadFiles() uploads multiple files with single folder publish', async () => {
-    const keys = await initializeVault(SECRET, API);
-    const vault = await encryptVaultKeys(keys, API);
-    const rootIpnsName = await deriveIpnsName(vault.rootFolderIpnsPrivateKey);
+  it(
+    'batch upload: uploadFiles() uploads multiple files with single folder publish',
+    { timeout: 120000 },
+    async () => {
+      const email = `sdk-batch-${Date.now()}@example.com`;
 
-    const client = new CipherBoxClient({
-      apiBaseUrl: API,
-      authToken: vault.authToken,
-      vaultKeypair: { publicKey: vault.publicKey, privateKey: vault.privateKey },
-      rootFolderIpnsName: rootIpnsName,
-      rootFolderIpnsPrivateKey: vault.rootFolderIpnsPrivateKey,
-      rootFolderKey: vault.rootFolderKey,
-      teeKeys: vault.teeKeys,
-    });
-
-    try {
-      await client.loadFolder(rootIpnsName);
-
-      // Upload 3 files in one batch
-      const files = [
-        {
-          data: new TextEncoder().encode('file-a ' + Date.now()),
-          fileName: 'batch-a.txt',
-          mimeType: 'text/plain',
-        },
-        {
-          data: new TextEncoder().encode('file-b ' + Date.now()),
-          fileName: 'batch-b.txt',
-          mimeType: 'text/plain',
-        },
-        {
-          data: new TextEncoder().encode('file-c ' + Date.now()),
-          fileName: 'batch-c.txt',
-          mimeType: 'text/plain',
-        },
-      ];
-
-      const completedFiles: string[] = [];
-      const result = await client.uploadFiles(rootIpnsName, files, {
-        onFileComplete: (fileName) => completedFiles.push(fileName),
+      const loginRes = await fetch(`${API}/auth/test-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, secret: SECRET }),
       });
+      expect(loginRes.ok).toBe(true);
+      const { accessToken, publicKeyHex, privateKeyHex } = await loginRes.json();
+      const publicKey = hexToBytes(publicKeyHex);
+      const privateKey = hexToBytes(privateKeyHex);
 
-      // All 3 should succeed
-      expect(result.successes).toHaveLength(3);
-      expect(result.failures).toHaveLength(0);
-      expect(completedFiles).toHaveLength(3);
-      console.log('  ✓ Batch upload: 3 files uploaded');
+      const vault = await initializeVault(privateKey);
+      const encrypted = await encryptVaultKeys(vault, publicKey);
+      const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
 
-      // Verify all 3 appear in folder
-      const root = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
-      const names = root!.children.map((c: FolderChild) => c.name).sort();
-      expect(names).toContain('batch-a.txt');
-      expect(names).toContain('batch-b.txt');
-      expect(names).toContain('batch-c.txt');
-      console.log('  ✓ All 3 files visible in folder');
+      const initRes = await fetch(`${API}/vault/init`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ownerPublicKey: bytesToHex(publicKey),
+          encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
+          encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
+          rootIpnsName,
+        }),
+      });
+      expect(initRes.ok).toBe(true);
 
-      // Download one and verify content
-      const fileChild = root!.children.find(
-        (c): c is FilePointer => c.type === 'file' && c.name === 'batch-a.txt'
-      );
-      expect(fileChild).toBeTruthy();
-      const downloaded = await client.downloadFromIpns(
-        fileChild!.fileMetaIpnsName,
-        vault.rootFolderKey
-      );
-      const text = new TextDecoder().decode(downloaded);
-      expect(text).toContain('file-a');
-      console.log('  ✓ Downloaded batch-a.txt, content verified');
-    } finally {
-      client.destroy();
+      const client = new CipherBoxClient({
+        apiUrl: API,
+        getAccessToken: async () => accessToken,
+        vaultKeypair: { publicKey, privateKey },
+        rootIpnsName,
+        rootFolderKey: vault.rootFolderKey,
+      });
+      client.registerFolder(rootIpnsName, vault.rootFolderKey, vault.rootIpnsKeypair, [], 0n);
+
+      try {
+        // Upload 3 files in one batch
+        const files = [
+          {
+            data: new TextEncoder().encode('file-a ' + Date.now()),
+            fileName: 'batch-a.txt',
+            mimeType: 'text/plain',
+          },
+          {
+            data: new TextEncoder().encode('file-b ' + Date.now()),
+            fileName: 'batch-b.txt',
+            mimeType: 'text/plain',
+          },
+          {
+            data: new TextEncoder().encode('file-c ' + Date.now()),
+            fileName: 'batch-c.txt',
+            mimeType: 'text/plain',
+          },
+        ];
+
+        const completedFiles: string[] = [];
+        const result = await client.uploadFiles(rootIpnsName, files, {
+          onFileComplete: (fileName) => completedFiles.push(fileName),
+        });
+
+        // All 3 should succeed
+        expect(result.successes).toHaveLength(3);
+        expect(result.failures).toHaveLength(0);
+        expect(completedFiles).toHaveLength(3);
+        console.log('  ✓ Batch upload: 3 files uploaded');
+
+        // Verify all 3 appear in folder
+        const root = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
+        const names = root!.children.map((c: FolderChild) => c.name).sort();
+        expect(names).toContain('batch-a.txt');
+        expect(names).toContain('batch-b.txt');
+        expect(names).toContain('batch-c.txt');
+        console.log('  ✓ All 3 files visible in folder');
+
+        // Download one and verify content
+        const fileChild = root!.children.find(
+          (c): c is FilePointer => c.type === 'file' && c.name === 'batch-a.txt'
+        );
+        expect(fileChild).toBeTruthy();
+        const downloaded = await client.downloadFromIpns(
+          fileChild!.fileMetaIpnsName,
+          vault.rootFolderKey
+        );
+        const text = new TextDecoder().decode(downloaded);
+        expect(text).toContain('file-a');
+        console.log('  ✓ Downloaded batch-a.txt, content verified');
+      } finally {
+        client.destroy();
+      }
     }
-  });
+  );
 });
