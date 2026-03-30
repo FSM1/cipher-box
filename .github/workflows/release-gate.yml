@@ -134,7 +134,7 @@ jobs:
     needs: detect-changes
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - name: Fail if detect-changes did not complete (release PR)
         if: startsWith(github.head_ref, 'release-please--') && needs.detect-changes.result != 'success'
@@ -159,9 +159,9 @@ jobs:
           MAIN_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
           echo "Latest main commit: ${MAIN_SHA}"
 
-          # Poll for the CI E2E orchestrator run to complete (it triggers on the same push)
-          # 40 * 30s = 20 min — matches the web-e2e.yml job timeout
-          MAX_ATTEMPTS=40
+          # Poll for the CI E2E orchestrator run to complete (it triggers on the same push).
+          # 90 * 30s = 45 min — aligned with desktop-e2e.yml timeout (the longest suite).
+          MAX_ATTEMPTS=90
           POLL_INTERVAL=30
           echo "Waiting for CI E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
 
@@ -266,7 +266,8 @@ jobs:
           # "Desktop E2E / Desktop E2E (<platform>)" — contains("Desktop E2E") matches.
 
           # Poll for CI E2E orchestrator run at HEAD to complete
-          MAX_ATTEMPTS=40
+          # 90 * 30s = 45 min — aligned with desktop-e2e.yml timeout
+          MAX_ATTEMPTS=90
           POLL_INTERVAL=30
           echo "Waiting for CI E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
 
