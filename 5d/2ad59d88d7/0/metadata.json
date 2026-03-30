@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5d2ad59d88d7",
+  "session_id": "66b8eabe-070d-4f34-96a8-81ed94408db2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T17:45:21.27801Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/37-parallel-batch-upload-pipeline/37-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ce4d2f442802",
+  "token_usage": {
+    "input_tokens": 1538,
+    "cache_creation_tokens": 190201,
+    "cache_read_tokens": 27384029,
+    "output_tokens": 63804,
+    "api_call_count": 222
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Implement a parallel batch upload pipeline (Phase 37) for cipher-box, including SDK-level batch upload method and Web Worker-based encryption offloading, then clean up, review, and get the PR merged.",
+    "outcome": "Phase 37 completed with 2 plans executed across 2 waves: `uploadFiles()` on `CipherBoxClient` with p-limit(3) concurrency, and `encrypt.worker.ts` offloading AES-256-GCM encryption off the main thread. PR #416 created, code reviewed/simplified, 15 review threads resolved, coverage improved from 68% to 96.4%, and deferred items documented.",
+    "learnings": {
+      "repo": [
+        "Worktree branch refs can desync from HEAD — after agent execution in isolation mode, the branch pointer may not update, requiring cherry-pick instead of standard merge",
+        "The gsd-verifier agent can produce false negatives if run before cherry-picked commits are visible in the working tree — spot-checks against disk/grep are the source of truth",
+        "encrypt.worker.ts was excluded from tsconfig.json but not included in tsconfig.sw.json — the worker was not being type-checked in CI; decrypt-sw.ts has its own tsconfig.sw.json and the encrypt worker should follow the same pattern",
+        "The codebase uses a structured logger rather than console.warn/log/error — raw console calls are flagged in code reviews",
+        "apps/web/CLAUDE.md contains guidance about Blob.buffer usage being incorrect; pre-existing violation in upload.service.ts",
+        "ESLint warnings in tests are treated as errors per user preference — `@typescript-eslint/no-explicit-any` must be resolved with proper types even in test files",
+        "p-limit is the concurrency primitive used for bounded parallel operations in the SDK layer",
+        "BYO-IPFS pinFn wrapper (lines 869-876 in client.ts) discards secondaryWarning, so pin:secondaryFailed events do not emit for batch uploads — known gap"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 167,
+          "end_line": 167,
+          "finding": "originalSize must be captured BEFORE passing data as a Transferable — after transfer, params.data.length becomes 0"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 967,
+          "end_line": 970,
+          "finding": "addFilePointerToFolder can throw on hash collision; wrapped in try/catch so a collision on one file doesn't abort the entire batch — partial success tracked in registeredSuccesses"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 975,
+          "end_line": 982,
+          "finding": "Early return path when all registrations fail — was uncovered until batch test suite expansion"
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Batch-level errors (arrayBuffer failure, uploadFiles throw) left upload rows stuck in 'encrypting' state — outer catch needed to mark newFileIds as 'error'"
+        },
+        {
+          "path": "apps/web/tsconfig.sw.json",
+          "finding": "encrypt.worker.ts added to include array so it's type-checked alongside decrypt-sw.ts in CI"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/upload-batch.test.ts",
+          "finding": "Coverage expanded from 10 to 20 tests covering: partial failure, folder-publish failure, all-registrations-failed, BYO-IPFS pinFn, share re-wrap, and batchError String() branch"
+        }
+      ],
+      "workflow": [
+        "When gsd executor agents run in worktree isolation, always verify SUMMARY.md and git commits before treating as success — completion signals can be unreliable",
+        "False-negative verifier results require manual spot-checks (grep for key symbols, check file sizes) and direct VERIFICATION.md edits with justification",
+        "The /simplify skill surfaces design trade-offs (upfront buffer allocation, D-0X task comments, type deduplication) that should be explicitly acknowledged even when not fully fixable",
+        "PR review comments marked 'not applicable' should still be replied to with clear reasoning before resolving the thread",
+        "Deferred items from PR reviews must be added to phase CONTEXT.md and VERIFICATION.md — they won't be tracked otherwise",
+        "pnpm lint:fix auto-formats files but only treats no-explicit-any as a warning — must be manually fixed to zero warnings"
+      ]
+    },
+    "friction": [
+      "Worktree branch ref desync after agent execution required manual cherry-pick of 3 commits and reset of bad merge — root cause is worktree HEAD not updating the branch pointer",
+      "gsd-verifier produced false negatives for all Wave 2 artifacts, requiring extensive manual VERIFICATION.md edits across ~10 separate Edit calls",
+      "Accidentally ended up in the worktree directory after cherry-picking, causing confusion about which branch PROJECT.md changes were being applied to",
+      "Background task completion for STATE.md conflict resolution and phase completion commit arrived after the main flow had already moved on, causing minor confusion",
+      "Reply to threads 7-15 bash command failed on thread 15 due to jq parse error on non-JSON response — required retry",
+      "lint:fix auto-applied formatting changes that needed a separate commit after the main lint-fix commit was already made"
+    ],
+    "open_items": [
+      "Secondary pin warning not emitted in batch path — BYO-IPFS pinFn wrapper discards secondaryWarning, so pin:secondaryFailed events never fire for uploadFiles()",
+      "AbortSignal/cancel support for in-flight batch uploads — no way to cancel once uploadFiles() is invoked; requires SDK contract change",
+      "Lazy file reading within concurrency pool — currently reads all file ArrayBuffers upfront before p-limit pool starts; should accept File objects and read lazily to bound peak memory for large batches",
+      "Web E2E tests not updated for multi-file batch upload flows — existing tests cover serial single-file path only; batch drag-drop and progress during concurrent uploads untested in browser",
+      "Blob.buffer pre-existing violation in apps/web/src/services/upload.service.ts flagged by apps/web/CLAUDE.md guidance — not Phase 37 scope, should be fixed separately",
+      "BYO-IPFS pinFn lambda body (lines 869-876 in client.ts) remains uncovered by batch test suite — covered only via single-file upload tests since the lambda is passed through to mocked sdkCore.uploadFile"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T17:44:36.321486Z",
+    "agent_lines": 0,
+    "human_added": 11,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 11,
+    "agent_percentage": 0
+  }
+}
