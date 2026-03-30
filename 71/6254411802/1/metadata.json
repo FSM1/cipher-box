@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "716254411802",
+  "session_id": "f2707fb4-9582-4986-8999-f84ff5395978",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T15:12:27.246007Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "9c38a6ad5ad6",
+  "token_usage": {
+    "input_tokens": 6233,
+    "cache_creation_tokens": 674844,
+    "cache_read_tokens": 54932391,
+    "output_tokens": 84599,
+    "api_call_count": 351
+  },
+  "session_metrics": {
+    "turn_count": 31
+  },
+  "summary": {
+    "intent": "Execute Phase 36 (inline upload progress) using the GSD workflow, then clean up the resulting PR through code review, simplification, and multiple rounds of automated review comment resolution.",
+    "outcome": "Phase 36 fully executed and merged to main — upload store refactored to per-file Map tracking, UploadListItem component created with inline progress UI, old UploadModal/UploadItem deleted. PR 410 shipped after 5 rounds of review fixes, plus a follow-on E2E fix PR 413 and a Phala deploy fix PR 412.",
+    "learnings": {
+      "repo": [
+        "Upload flow is fully sequential: for...of loop in useDropUpload with await on each client.uploadFile(), meaning N files = N sequential encrypt+IPFS pin+FileMetadata IPNS publish+folder IPNS publish cycles",
+        "Folder IPNS is published once per file, not once per batch — 5 files = 5 folder metadata pins + 5 folder IPNS publishes, making only the last one meaningful",
+        "FilePointer → IPNS name → resolves to → IPFS CID of FileMetadata → contains → IPFS CID of encrypted content (two levels of indirection)",
+        "IPNS sync poll interval is 30s; before the onUploadComplete fix, uploaded files only appeared after the next poll cycle",
+        "UploadZone had an onUploadComplete prop that was never wired to FileBrowser.handleSync, causing E2E tests to time out waiting for file visibility",
+        "The 'cancelled' status was stored in PerFileUpload but cancelFile now deletes the entry instead, making the status type dead — race-condition guards checking status === 'cancelled' needed updating to check for missing entry",
+        "envsubst does not support bash default syntax (${VAR:-default}); the :-OWNER fallback in docker-compose.phala.yml was producing broken image references instead of substituting correctly",
+        "Zustand v5 does not support a second equality argument on the hook returned by create(); useRef-based equality check is the idiomatic workaround",
+        "FileListItem uses a separate .file-list-item-mobile-actions gridcell (hidden on desktop, shown on mobile) — UploadListItem needed the same pattern for mobile action button visibility",
+        "Completion timer in UploadListItem only ran while mounted; moved to store-level setTimeout in setFileStatus so auto-removal fires even if the component unmounts during the flash window"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/stores/upload.store.ts",
+          "line": 1,
+          "end_line": 200,
+          "finding": "Refactored from batch-level state to Map\u003cstring, PerFileUpload\u003e with per-file actions. Added createUploadId() helper and isActiveUpload() predicate to eliminate duplication. cancelFile() is now atomic (cancel + remove in single set()). setFileComplete removed as redundant with setFileStatus(id, 'complete'). Completion auto-removal timer moved here from component level."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/UploadListItem.tsx",
+          "line": 47,
+          "end_line": 47,
+          "finding": "React Rules of Hooks violation — three useCallback hooks were defined after an early return (if (!file) return null). Must be moved before all early returns."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/FileList.tsx",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Zustand selector returned a new array every render causing re-render storms on every progress tick. Fixed with useRef-based equality check since Zustand v5 doesn't support second arg on bound hook."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 1,
+          "end_line": 200,
+          "finding": "Sequential for...of upload loop. orphanCids tracking was incorrectly including SDK-registered CIDs (which are fully registered and should not be unpinned on partial failure). isUploading derived as boolean in selector to avoid subscribing entire Map."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/FileBrowser.tsx",
+          "line": 1,
+          "end_line": 50,
+          "finding": "onUploadComplete prop of UploadZone was never wired; added onUploadComplete={() =\u003e { void actions.handleSync().catch(() =\u003e {}) }} to trigger immediate IPNS refresh after upload batch completes."
+        },
+        {
+          "path": "tests/web-e2e/page-objects/file-browser/file-list.page.ts",
+          "line": 23,
+          "end_line": 33,
+          "finding": "Locators must use '.file-list-item:not(.upload-inline-row)' to exclude upload progress rows from strict-mode matching; extracted to private static readonly ROW_SELECTOR. Without this, getItem() resolves to 2 elements during the completion flash window when both upload row and real file row coexist."
+        },
+        {
+          "path": "apps/tee-worker/docker-compose.phala.yml",
+          "line": 1,
+          "end_line": 10,
+          "finding": "envsubst does not process ${VAR:-default} syntax — the :-OWNER literal was leaking into the image reference causing 'invalid reference format: repository name must be lowercase'. Removed the default, keeping plain ${GITHUB_REPOSITORY_OWNER} since CI always sets it lowercased before envsubst."
+        }
+      ],
+      "workflow": [
+        "GSD wave-based parallel execution: each plan runs in an isolated git worktree branch, merged back to feature branch after completion with conflict resolution on STATE.md",
+        "classifyHandoffIfNeeded error from Claude Code is a runtime bug that fires after all tool calls finish — spot-check SUMMARY.md + git commits to determine actual success",
+        "Stale worktrees from prior sessions should be pruned before starting new wave execution to avoid confusion",
+        "Verifier catches React hooks violations that TypeScript misses — hooks ordering bugs (after early returns) only surface at runtime",
+        "CodeRabbit generates multiple review rounds; expect 4-5 rounds of automated review comments on a non-trivial PR",
+        "E2E tests that previously relied on upload rows matching file locators will break after adding upload progress rows — locators need explicit exclusion of in-progress rows",
+        "Moving cleanup/side-effect timers from component level to store level makes them resilient to component unmount timing"
+      ]
+    },
+    "friction": [
+      "Multiple git merge conflicts on STATE.md when merging agent worktree branches — required manual resolution each time",
+      "Zustand v5 broke the two-argument selector pattern; had to use useRef-based equality instead of the clean equalityFn approach",
+      "envsubst silently mangled ${VAR:-default} syntax instead of erroring — caused a Phala deploy failure that was non-obvious to diagnose",
+      "E2E tests could not run in isolation (required full auth session from prior steps), making iterative debugging slow",
+      "Dev server port collisions (5173 already in use) when trying to start a staging-pointed dev server alongside the local one",
+      "The cancelFile atomicity change (delete instead of set-cancelled) broke the race-condition guards in the upload loop — required a second pass to update all guards from status === 'cancelled' to checking for missing Map entry",
+      "Wave 1 agent worktree had no stale cleanup built in — had to manually remove leftover cipher-box-wt-phase36 worktree from a previous session"
+    ],
+    "open_items": [
+      "Phase 37 added: parallel batch upload pipeline — SDK needs new uploadFiles() method that encrypts+pins all files in parallel, then does a single folder metadata update + single folder IPNS publish instead of N sequential updates",
+      "The 'cancelled' status type may still be useful for future cancellation states that don't immediately remove the entry (e.g., queued-cancel); left in place for now",
+      "EmptyState upload zone does not have onUploadComplete wired to handleSync — only the toolbar UploadZone was fixed",
+      "Sequential upload loop means N files = N×(encrypt+IPFS+IPNS) wall-clock time; no parallelism despite per-file progress tracking supporting it visually",
+      "Session persistence fails after page reload when running E2E tests against staging locally — pre-existing issue unrelated to upload changes",
+      "writable-shares E2E test suite has session loss failures not caused by upload changes — needs investigation",
+      "SDK uploadFiles batch publish endpoint already supports arrays but SDK only passes [oneRecord] at a time — batch endpoint could be leveraged immediately without SDK changes"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T15:11:28.34349Z",
+    "agent_lines": 1,
+    "human_added": 230,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 231,
+    "agent_percentage": 0.4329004329004329
+  }
+}
