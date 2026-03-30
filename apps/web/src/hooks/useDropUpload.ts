@@ -7,6 +7,7 @@ import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
 import { getSdkClient, hasSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
 import { getRootFolderState } from './folder-helpers';
+import { getEncryptionWorker } from '../services/encrypt-worker.service';
 import type { PendingReplacement } from '../stores/upload.store';
 
 export const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per FILE-01
@@ -22,7 +23,9 @@ export function isExternalFileDrag(dataTransfer: DataTransfer): boolean {
 /**
  * Hook for handling external file drops (from Finder/Explorer) anywhere in the app.
  *
- * Uses the SDK's uploadFile() for atomic encrypt -> upload -> register flow.
+ * Uses the SDK's uploadFiles() batch method for new files (D-03: single folder
+ * publish for the entire batch) with Web Worker encryption (D-07).
+ * Duplicate files use the old encrypt+upload path for the Replace dialog.
  * All IPNS state is managed by the SDK -- no dual-path conflicts.
  */
 export function useDropUpload() {
@@ -106,30 +109,75 @@ export function useDropUpload() {
     ensureFolderRegistered(parentFolder);
 
     const orphanCids: string[] = []; // Only unregistered CIDs (duplicates staged for replacement)
-    let currentUploadId: string | undefined;
+    let currentDupUploadId: string | undefined; // Tracks current duplicate file for error reporting
 
     try {
-      // Upload new files via SDK (atomic: encrypt -> IPFS -> FilePointer -> IPNS publish)
-      for (const file of newFiles) {
-        const uploadId = createUploadId(file.name);
-        currentUploadId = uploadId;
-        useUploadStore.getState().addFile(uploadId, file.name, folderId, file);
-
-        if (!useUploadStore.getState().files.get(uploadId)) {
-          throw new Error('Upload cancelled by user');
+      // Upload new files via SDK batch pipeline (D-03: single folder publish for all)
+      if (newFiles.length > 0) {
+        // Register all files in upload store first (for UI progress rows)
+        const uploadIdMap = new Map<string, string>(); // fileName -> uploadId
+        for (const file of newFiles) {
+          const uploadId = createUploadId(file.name);
+          uploadIdMap.set(file.name, uploadId);
+          useUploadStore.getState().addFile(uploadId, file.name, folderId, file);
         }
 
-        const data = new Uint8Array(await file.arrayBuffer());
+        // Read file data into Uint8Array (detect read errors early before entering SDK)
+        const fileEntries: Array<{ data: Uint8Array; fileName: string; mimeType: string }> = [];
+        for (const file of newFiles) {
+          const uploadId = uploadIdMap.get(file.name)!;
+          // Check if cancelled before reading
+          if (!useUploadStore.getState().files.get(uploadId)) {
+            continue; // User cancelled this file before it started
+          }
+          const data = new Uint8Array(await file.arrayBuffer());
+          fileEntries.push({
+            data,
+            fileName: file.name,
+            mimeType: file.type || 'application/octet-stream',
+          });
+        }
 
-        await client.uploadFile(
-          parentFolder.ipnsName,
-          data,
-          file.name,
-          file.type || 'application/octet-stream',
-          (percent) => useUploadStore.getState().updateFileProgress(uploadId, percent)
-        );
+        if (fileEntries.length > 0) {
+          // Get encryption Worker's encryptFn for off-main-thread encryption (D-07)
+          const encryptionWorker = getEncryptionWorker();
+          const encryptFn = encryptionWorker.createEncryptFn();
 
-        useUploadStore.getState().setFileStatus(uploadId, 'complete');
+          const result = await client.uploadFiles(
+            parentFolder.ipnsName,
+            fileEntries,
+            {
+              onFileProgress: (fileName, percent) => {
+                const uploadId = uploadIdMap.get(fileName);
+                if (uploadId) {
+                  useUploadStore.getState().updateFileProgress(uploadId, percent);
+                }
+              },
+              onFileComplete: (fileName) => {
+                const uploadId = uploadIdMap.get(fileName);
+                if (uploadId) {
+                  useUploadStore.getState().setFileStatus(uploadId, 'complete');
+                }
+              },
+              onFileError: (fileName, error) => {
+                const uploadId = uploadIdMap.get(fileName);
+                if (uploadId) {
+                  useUploadStore.getState().setFileStatus(uploadId, 'error', error);
+                }
+              },
+            },
+            { encryptFn },
+          );
+
+          // Failures already surfaced via onFileError callback (sets upload store to 'error').
+          // Existing UploadListItem component shows retry buttons for error rows (D-11).
+          if (result.failures.length > 0) {
+            logger.warn(
+              `[Upload] Batch upload partial failure: ${result.failures.length} file(s) failed`,
+              result.failures,
+            );
+          }
+        }
       }
 
       // Handle duplicate files: encrypt + upload to IPFS, then surface as pending replacements
@@ -146,7 +194,7 @@ export function useDropUpload() {
 
         for (const file of duplicateFiles) {
           const uploadId = createUploadId(file.name);
-          currentUploadId = uploadId;
+          currentDupUploadId = uploadId;
           useUploadStore.getState().addFile(uploadId, file.name, folderId, file);
 
           if (!useUploadStore.getState().files.get(uploadId)) {
@@ -198,8 +246,8 @@ export function useDropUpload() {
       return true;
     } catch (err) {
       const message = (err as Error).message;
-      if (message !== 'Upload cancelled by user' && currentUploadId) {
-        useUploadStore.getState().setFileStatus(currentUploadId, 'error', message);
+      if (message !== 'Upload cancelled by user' && currentDupUploadId) {
+        useUploadStore.getState().setFileStatus(currentDupUploadId, 'error', message);
       }
       // Best-effort cleanup: unpin orphaned CIDs from failed upload
       if (orphanCids.length > 0) {
