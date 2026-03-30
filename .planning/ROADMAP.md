@@ -506,12 +506,12 @@ Plans:
 **Goal:** Replace sequential per-file upload loop with parallel encrypt+pin pipeline and single folder metadata update, reducing N folder IPNS publishes to 1 and enabling concurrent file processing
 **Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10, D-11, D-12
 **Depends on:** Phase 36
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
 - [x] 37-01-PLAN.md -- SDK batch uploadFiles() method with p-limit concurrency pool, stale-children re-read, partial failure handling
-- [ ] 37-02-PLAN.md -- Web Worker encryption offloading, EncryptionWorkerService wrapper, useDropUpload rewire to batch API
+- [x] 37-02-PLAN.md -- Web Worker encryption offloading, EncryptionWorkerService wrapper, useDropUpload rewire to batch API
 
 ---
 
