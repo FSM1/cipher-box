@@ -1,0 +1,10 @@
+redner is failing to build the web app, ever since the application was split in to packages.
+
+The error during build is the missing internal @cipherbox packages that were never built.
+
+The current build command used is: `pnpm install --frozen-lockfile; pnpm --filter crypto build; pnpm --filter web build` 
+Please generate me the new build command with all the necessary sub packages built as well.
+
+---
+
+/resolve-pr-reviews
