@@ -1,9 +1,6 @@
 import { encryptFile, EncryptedFileResult } from './file-crypto.service';
 import { addToIpfs, AddResponse } from '../lib/api/ipfs';
-import { useQuotaStore } from '../stores/quota.store';
-import { useUploadStore } from '../stores/upload.store';
 import { CancelToken } from 'axios';
-import { logger } from '../lib/logger';
 
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY = 500;
@@ -76,61 +73,4 @@ export async function uploadFile(
     originalSize: encrypted.originalSize,
     encryptionMode: encrypted.encryptionMode,
   };
-}
-
-/**
- * Upload multiple files sequentially.
- * Pre-checks quota and tracks progress via upload store (per-file tracking).
- */
-export async function uploadFiles(
-  files: File[],
-  userPublicKey: Uint8Array
-): Promise<UploadedFile[]> {
-  const quotaStore = useQuotaStore.getState();
-
-  // Calculate total size
-  const totalSize = files.reduce((sum, f) => sum + f.size, 0);
-
-  // Pre-check quota
-  if (!quotaStore.canUpload(totalSize)) {
-    throw new Error(
-      `Not enough space (${Math.round(quotaStore.usedBytes / 1024 / 1024)} of ${Math.round(quotaStore.limitBytes / 1024 / 1024)}MB used)`
-    );
-  }
-
-  const results: UploadedFile[] = [];
-
-  try {
-    // Sequential uploads per CONTEXT.md decision
-    for (const file of files) {
-      const uploadId = `upload-${file.name}-${Date.now()}`;
-      useUploadStore.getState().addFile(uploadId, file.name, '', file);
-
-      const cancelSource = useUploadStore.getState().files.get(uploadId)?.cancelSource;
-      if (useUploadStore.getState().files.get(uploadId)?.status === 'cancelled') {
-        throw new Error('Upload cancelled by user');
-      }
-
-      const result = await uploadFile(
-        file,
-        userPublicKey,
-        (percent) => useUploadStore.getState().updateFileProgress(uploadId, percent),
-        cancelSource?.token
-      );
-
-      results.push(result);
-      useUploadStore.getState().setFileComplete(uploadId);
-    }
-
-    return results;
-  } catch (error) {
-    const message = (error as Error).message;
-    if (message !== 'Upload cancelled by user') {
-      logger.error('[Upload] Upload failed:', error);
-    }
-    throw error;
-  } finally {
-    // Refresh quota from server (authoritative source after atomic upload)
-    await useQuotaStore.getState().fetchQuota();
-  }
 }

@@ -15,15 +15,23 @@ export type PendingReplacement = {
 };
 
 export type PerFileUpload = {
-  id: string; // format: `upload-${filename}-${Date.now()}`
+  id: string;
   filename: string;
-  targetFolderId: string; // folder ID where this file is being uploaded
-  status: 'encrypting' | 'uploading' | 'complete' | 'error' | 'cancelled';
+  targetFolderId: string;
+  status: 'encrypting' | 'uploading' | 'complete' | 'error';
   progress: number; // 0-100
   error: string | null;
   cancelSource: ReturnType<typeof axios.CancelToken.source> | null;
   file: File | null; // Original File reference for retry (D-09)
 };
+
+export function createUploadId(filename: string): string {
+  return `upload-${filename}-${Date.now()}`;
+}
+
+export function isActiveUpload(status: PerFileUpload['status']): boolean {
+  return status === 'encrypting' || status === 'uploading';
+}
 
 type UploadState = {
   files: Map<string, PerFileUpload>;
@@ -33,7 +41,6 @@ type UploadState = {
   addFile: (id: string, filename: string, targetFolderId: string, file: File) => void;
   updateFileProgress: (id: string, progress: number) => void;
   setFileStatus: (id: string, status: PerFileUpload['status'], error?: string) => void;
-  setFileComplete: (id: string) => void;
   removeFile: (id: string) => void;
   cancelFile: (id: string) => void;
   retryFile: (id: string) => void;
@@ -70,6 +77,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     set((state) => {
       const entry = state.files.get(id);
       if (!entry) return state;
+      if (entry.status === 'uploading' && entry.progress === progress) return state;
       const next = new Map(state.files);
       next.set(id, { ...entry, status: 'uploading', progress });
       return { files: next };
@@ -88,15 +96,6 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       return { files: next };
     }),
 
-  setFileComplete: (id) =>
-    set((state) => {
-      const entry = state.files.get(id);
-      if (!entry) return state;
-      const next = new Map(state.files);
-      next.set(id, { ...entry, status: 'complete', progress: 100 });
-      return { files: next };
-    }),
-
   removeFile: (id) =>
     set((state) => {
       const next = new Map(state.files);
@@ -110,7 +109,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       if (!entry) return state;
       entry.cancelSource?.cancel('Upload cancelled by user');
       const next = new Map(state.files);
-      next.set(id, { ...entry, status: 'cancelled' });
+      next.delete(id);
       return { files: next };
     }),
 
@@ -133,7 +132,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     // Cancel all active uploads before clearing
     const { files } = get();
     for (const entry of files.values()) {
-      if (entry.cancelSource && (entry.status === 'encrypting' || entry.status === 'uploading')) {
+      if (entry.cancelSource && isActiveUpload(entry.status)) {
         entry.cancelSource.cancel('Upload cancelled by user');
       }
     }

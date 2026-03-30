@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { logger } from '../lib/logger';
-import { useUploadStore } from '../stores/upload.store';
+import { useUploadStore, createUploadId } from '../stores/upload.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
@@ -26,12 +26,12 @@ export function isExternalFileDrag(dataTransfer: DataTransfer): boolean {
  * All IPNS state is managed by the SDK -- no dual-path conflicts.
  */
 export function useDropUpload() {
-  const uploadFiles = useUploadStore((s) => s.files);
-  const isUploading =
-    uploadFiles.size > 0 &&
-    Array.from(uploadFiles.values()).some(
-      (f) => f.status === 'encrypting' || f.status === 'uploading'
-    );
+  const isUploading = useUploadStore((s) => {
+    for (const f of s.files.values()) {
+      if (f.status === 'encrypting' || f.status === 'uploading') return true;
+    }
+    return false;
+  });
 
   const handleFileDrop = useCallback(async (files: File[], folderId: string): Promise<boolean> => {
     // Filter out oversized files
@@ -111,15 +111,14 @@ export function useDropUpload() {
     try {
       // Upload new files via SDK (atomic: encrypt -> IPFS -> FilePointer -> IPNS publish)
       for (const file of newFiles) {
-        const uploadId = `upload-${file.name}-${Date.now()}`;
+        const uploadId = createUploadId(file.name);
         currentUploadId = uploadId;
         useUploadStore.getState().addFile(uploadId, file.name, folderId, file);
 
-        if (useUploadStore.getState().files.get(uploadId)?.status === 'cancelled') {
+        if (!useUploadStore.getState().files.get(uploadId)) {
           throw new Error('Upload cancelled by user');
         }
 
-        // Read File to Uint8Array
         const data = new Uint8Array(await file.arrayBuffer());
 
         const result = await client.uploadFile(
@@ -131,7 +130,7 @@ export function useDropUpload() {
         );
 
         uploadedCids.push(result.cid);
-        useUploadStore.getState().setFileComplete(uploadId);
+        useUploadStore.getState().setFileStatus(uploadId, 'complete');
       }
 
       // Handle duplicate files: encrypt + upload to IPFS, then surface as pending replacements
@@ -147,11 +146,11 @@ export function useDropUpload() {
         const { addToIpfs } = await import('../lib/api/ipfs');
 
         for (const file of duplicateFiles) {
-          const uploadId = `upload-${file.name}-${Date.now()}`;
+          const uploadId = createUploadId(file.name);
           currentUploadId = uploadId;
           useUploadStore.getState().addFile(uploadId, file.name, folderId, file);
 
-          if (useUploadStore.getState().files.get(uploadId)?.status === 'cancelled') {
+          if (!useUploadStore.getState().files.get(uploadId)) {
             throw new Error('Upload cancelled by user');
           }
 
@@ -173,7 +172,7 @@ export function useDropUpload() {
           );
 
           uploadedCids.push(ipfsResult.cid);
-          useUploadStore.getState().setFileComplete(uploadId);
+          useUploadStore.getState().setFileStatus(uploadId, 'complete');
 
           const existingFileId = existingByName.get(file.name);
           if (existingFileId) {

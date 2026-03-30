@@ -26,10 +26,9 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
   const removeFile = useUploadStore((s) => s.removeFile);
   const retryFile = useUploadStore((s) => s.retryFile);
 
-  // Timer ref for completion flash (D-05, D-06)
   const completionTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // When status becomes 'complete', start 1000ms timer then remove (D-05)
+  // Auto-remove after 1s green flash on completion (D-05)
   useEffect(() => {
     if (file?.status === 'complete') {
       completionTimerRef.current = setTimeout(() => {
@@ -44,11 +43,9 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
     };
   }, [file?.status, fileId, removeFile]);
 
-  // All hooks must be declared before any early return (React Rules of Hooks)
   const handleCancel = useCallback(() => {
     cancelFile(fileId);
-    removeFile(fileId);
-  }, [fileId, cancelFile, removeFile]);
+  }, [fileId, cancelFile]);
 
   const handleDismiss = useCallback(() => {
     removeFile(fileId);
@@ -78,7 +75,6 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
 
   return (
     <div className={rowClassName} role="row">
-      {/* Row top: icon + name + progress bar */}
       <div className="file-list-item-row-top" role="gridcell">
         <span className="file-list-item-icon upload-inline-icon" aria-hidden="true">
           {isError ? '[!]' : '[^]'}
@@ -102,13 +98,11 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
         </div>
       </div>
 
-      {/* Row bottom: size + date/actions */}
       <div className="file-list-item-row-bottom">
         <span className="file-list-item-size" role="gridcell">
           {'--'}
         </span>
         <span className="file-list-item-date upload-inline-actions" role="gridcell">
-          {/* Cancel button -- visible during encrypting/uploading */}
           {!isComplete && !isError && (
             <button
               type="button"
@@ -120,7 +114,6 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
               {'[x]'}
             </button>
           )}
-          {/* Error state -- retry + dismiss */}
           {isError && (
             <>
               <button

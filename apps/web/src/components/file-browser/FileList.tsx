@@ -1,4 +1,4 @@
-import { type DragEvent, type MouseEvent } from 'react';
+import { type DragEvent, type MouseEvent, useRef } from 'react';
 import type { FolderChild } from '@cipherbox/core';
 import { useUploadStore } from '../../stores/upload.store';
 import type { PerFileUpload } from '../../stores/upload.store';
@@ -110,15 +110,26 @@ export function FileList({
   onExternalFileDrop,
   onRetryUpload,
 }: FileListProps) {
-  // Subscribe to upload files for this folder only (IDs + filenames + status, not progress).
+  // Subscribe to upload entries for this folder only (IDs + status, not progress).
   // Progress updates re-render individual UploadListItem rows via their own fine-grained selectors.
+  // Custom equality via ref prevents re-renders on every progress tick.
+  type UploadEntry = { id: string; filename: string; status: PerFileUpload['status'] };
+  const prevEntriesRef = useRef<UploadEntry[]>([]);
   const uploadEntries = useUploadStore((s) => {
-    const entries: { id: string; filename: string; status: PerFileUpload['status'] }[] = [];
+    const entries: UploadEntry[] = [];
     for (const f of s.files.values()) {
-      if (f.targetFolderId === parentId && f.status !== 'cancelled') {
+      if (f.targetFolderId === parentId) {
         entries.push({ id: f.id, filename: f.filename, status: f.status });
       }
     }
+    const prev = prevEntriesRef.current;
+    if (
+      prev.length === entries.length &&
+      prev.every((p, i) => p.id === entries[i].id && p.status === entries[i].status)
+    ) {
+      return prev;
+    }
+    prevEntriesRef.current = entries;
     return entries;
   });
 
@@ -128,8 +139,8 @@ export function FileList({
     id: f.id,
     name: f.filename,
     fileMetaIpnsName: '' as const,
-    createdAt: Date.now(),
-    modifiedAt: Date.now(),
+    createdAt: 0,
+    modifiedAt: 0,
     _uploading: true as const,
   }));
 
