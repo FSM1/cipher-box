@@ -41,7 +41,11 @@ export function useFileUpload() {
 
   return {
     // State (derived from per-file Map)
-    status: hasError ? ('error' as const) : hasActiveUpload ? ('uploading' as const) : ('idle' as const),
+    status: hasError
+      ? ('error' as const)
+      : hasActiveUpload
+        ? ('uploading' as const)
+        : ('idle' as const),
     progress: activeFile?.progress ?? 0,
     currentFile: activeFile?.filename ?? null,
     totalFiles: fileEntries.length,

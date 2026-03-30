@@ -133,10 +133,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     // Cancel all active uploads before clearing
     const { files } = get();
     for (const entry of files.values()) {
-      if (
-        entry.cancelSource &&
-        (entry.status === 'encrypting' || entry.status === 'uploading')
-      ) {
+      if (entry.cancelSource && (entry.status === 'encrypting' || entry.status === 'uploading')) {
         entry.cancelSource.cancel('Upload cancelled by user');
       }
     }
