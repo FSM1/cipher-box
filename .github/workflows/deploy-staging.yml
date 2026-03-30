@@ -104,9 +104,10 @@ jobs:
           # Substitute env vars in compose file
           envsubst < apps/tee-worker/docker-compose.phala.yml > /tmp/docker-compose.phala.yml
 
-          # Deploy or update CVM (same name = update, preserving app_id and derived keys)
+          # Deploy or update CVM (--cvm-id targets existing CVM for update)
           # CRITICAL: Never delete and recreate -- app_id changes would invalidate all epoch keys
           phala deploy \
+            --cvm-id cipherbox-tee-staging \
             -c /tmp/docker-compose.phala.yml \
             -n cipherbox-tee-staging \
             -e "TEE_WORKER_SECRET=${TEE_WORKER_SECRET}" \
