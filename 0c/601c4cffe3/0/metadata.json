@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0c601c4cffe3",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T22:57:25.93388Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "docs/FILESYSTEM_SPECIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f7a89b5ff1b2",
+  "token_usage": {
+    "input_tokens": 3826,
+    "cache_creation_tokens": 204224,
+    "cache_read_tokens": 21700302,
+    "output_tokens": 53400,
+    "api_call_count": 161
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Resolve open PR review comments on a parallel batch upload pipeline PR, then merge and perform comprehensive documentation updates across the project including DEFERRED.md audit, FEATURES.md update, README refresh, and a new filesystem specification doc.",
+    "outcome": "PR #416 was merged after fixing worker postMessage error handling and a doc comment. A new docs branch (PR #419) was created with updated DEFERRED.md (thoroughly audited), FEATURES.md (new features + Phase 39 vault settings), README.md, ARCHITECTURE.md, DATABASE_EVOLUTION_PROTOCOL.md, FILESYSTEM_SPECIFICATION.md (new), and CLAUDE.md. Phases 38 and 39 were added to the roadmap.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro (apps/web/src/lib/faro.ts) is the implemented error tracking and remote log shipping solution — not Sentry or Datadog.",
+        "Desktop FUSE components are intentionally not unit tested; they are covered by the Desktop E2E suite because unit testing would require mocking too much of the host OS.",
+        "vault v1 legacy columns were removed when staging was reset; the full schema baseline (1700000000000-FullSchema.ts) never included them.",
+        "RECYCLE_BIN_RETENTION_DAYS is an operator-level env var, not a user-facing setting — user-configurable retention is still deferred to Phase 39.",
+        "@cipherbox/crypto has @cipherbox/core as a devDependency only in a single test file (vault-ipns.test.ts) to test IPNS key domain separation; this is a leftover from the restructuring phase and should be removed.",
+        "folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines, 2 functions actually used) are the remaining deprecated web services to retire in Phase 38.",
+        "Linux FUSE is implemented under the same 'fuse' feature flag as macOS, giving it NFC normalization and case-sensitive lookups.",
+        "The database has 14 tables total; share_invites and file_versions tables were added in phases 28-37 and were missing from DATABASE_EVOLUTION_PROTOCOL.md.",
+        "Old 00-Preliminary-R\u0026D/Documentation/ paths were moved to .planning/milestones/m0/ in the main merge pulled at the start of the docs session.",
+        "pin:secondaryFailed event is emitted in Phase 37 — batch upload secondary pin warning events are implemented.",
+        "Per-file IPNS conflict detection has been implemented since Phase 12.6 via per-file IPNS metadata."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage and getWorker calls can throw, leaking pending entries. Fixed with try/catch to clean up pending map on error."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "uploadFiles() doc comment overstated memory bounding; updated to clarify actual per-file chunk memory behavior."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "Batch reads all files to memory before SDK call — architectural limitation requiring SDK contract change (accept File objects or read callback instead of Uint8Array). Deferred as out of scope."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/vault-ipns.test.ts",
+          "finding": "Only file in @cipherbox/crypto that imports @cipherbox/core, creating the cross-package devDependency. Could be refactored to use hardcoded test vectors instead."
+        }
+      ],
+      "workflow": [
+        "When asked to audit a list for stale items, do a full systematic pass — not just the items the user calls out. Shallow passes require multiple correction rounds.",
+        "Resolving GitHub review threads requires two steps: REST API reply (using --field not -f for integer in_reply_to) then GraphQL mutation to mark resolved.",
+        "Integration tests requiring a live backend will always show as failures in local test runs; confirm they are pre-existing before treating as blockers.",
+        "Distinguishing operator config (env vars) from user-facing settings is important for deferred item accuracy — they address different problems.",
+        "The DTS circular dependency between crypto and core is test-only and was missed in the initial code quality audit pass; always check devDependencies separately from production deps."
+      ]
+    },
+    "friction": [
+      "Initial DEFERRED.md audit was too shallow — multiple follow-up rounds were needed to catch items that were already implemented, never in scope (session replay), or premature (production Kubo hardening).",
+      "File editing tool reformatted markdown table widths, requiring a re-read of the actual file content before subsequent edits could match exactly.",
+      "Push failed on first attempt for the docs branch, requiring a retry.",
+      "RECYCLE_BIN_RETENTION_DAYS was initially (incorrectly) marked as implemented before recognizing it was operator config vs user-configurable setting — required an additional correction commit.",
+      "Linux FUSE support was missing from multiple docs (FILESYSTEM_SPECIFICATION.md, README.md, ARCHITECTURE.md) and required several targeted edits across files."
+    ],
+    "open_items": [
+      "Phase 38: Retire folder.service.ts and bin.service.ts (migrate 9 importers to SDK methods, extract 2 used bin functions, remove @cipherbox/crypto devDependency on @cipherbox/core by refactoring vault-ipns.test.ts to use hardcoded test vectors).",
+      "Phase 39: User-configurable vault parameters — bin retention period, soft vs hard delete toggle, max versions per file, version cooldown period.",
+      "Lazy file reading in useDropUpload.ts (reading all files to memory before SDK call) — requires SDK contract change to accept File objects or read callbacks instead of Uint8Array.",
+      "Sharing: link expiry enforcement, revocation propagation delay across nodes, and share invite email notifications are still deferred.",
+      "Upload pipeline: retry/resume for failed chunks on poor connections, and upload queue persistence across page reloads.",
+      "Desktop: auto-update mechanism for the desktop app.",
+      "Security: formal third-party security audit has not been scheduled."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T22:56:44.661641Z",
+    "agent_lines": 0,
+    "human_added": 36,
+    "human_modified": 16,
+    "human_removed": 0,
+    "total_committed": 36,
+    "agent_percentage": 0
+  }
+}
