@@ -9,3 +9,19 @@
 ---
 
 /simplify pr 410 code
+
+---
+
+have these changes been pushed yet?
+
+---
+
+yeah push it
+
+---
+
+ok can you update the description on pr 410 please
+
+---
+
+/resolve-pr-reviews
