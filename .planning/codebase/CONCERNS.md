@@ -1,13 +1,13 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-03-29
+**Analysis Date:** 2026-03-30
 
 ## Tech Debt
 
 **Orphaned IPNS records on file/folder deletion:**
 
 - Issue: When files or folders are deleted, their IPNS records and TEE republish enrollments are handled by `fireAndForgetUnenroll()` in `packages/sdk/src/client.ts`. The web app services correctly delegate to the SDK. However, SDK-based unenrollment is fire-and-forget with no persistence — if the browser tab closes before the API call completes, unenrollments are silently dropped.
-- Files: `packages/sdk/src/client.ts:150-163`, `apps/web/src/services/delete.service.ts:23`, `apps/web/src/services/folder.service.ts:457`
+- Files: `packages/sdk/src/client.ts:156-174`, `apps/web/src/services/folder.service.ts`
 - Impact: Orphaned IPNS records accumulate in the TEE republish schedule. Each orphan wastes TEE compute and delegated routing bandwidth every 6 hours. Capacity warnings trigger at 1000+ records.
 - Fix approach: Persist a local unenrollment queue to IndexedDB. Flush on next session start before loading folders.
 
@@ -39,6 +39,20 @@
 - Impact: Type safety gap around the authentication flow. Could mask breaking SDK changes.
 - Fix approach: Create typed wrappers for Web3Auth SDK interactions using `unknown` + type guards.
 
+**Residual `console.warn` calls in SDK packages (not structured logger):**
+
+- Issue: 11 `console.warn` calls in `packages/sdk/src/client.ts` and isolated calls in `packages/sdk/src/bin/index.ts:193` and `packages/sdk-core/src/ipns/index.ts:193` use raw `console.warn` rather than going through a structured logger. Phase 28 structured logging covered the web app but not the SDK packages (which have no logger dependency by design — they are zero-dependency packages).
+- Files: `packages/sdk/src/client.ts` (lines 139, 168, 460, 752, 763, 817, 1012, 1022, 1073, 1437, 1516), `packages/sdk/src/bin/index.ts:193`, `packages/sdk-core/src/ipns/index.ts:193`
+- Impact: SDK warnings bypass the web app's Faro transport and won't appear in Grafana dashboards. Debugging SDK-level issues in staging/production requires reading raw browser console logs.
+- Fix approach: SDK and SDK-core are zero-dependency packages — they should not import a logging library. An acceptable alternative is accepting a logger callback in `CipherBoxClientConfig` and routing internal warnings through it. Alternatively, document that SDK warnings remain on raw console and are outside Faro coverage.
+
+**Duplicate file upload path bypasses Web Worker encryption:**
+
+- Issue: When a dropped file has the same name as an existing file in the target folder, it enters the duplicate/replacement path in `apps/web/src/hooks/useDropUpload.ts:199-255`. This path uses `encryptFile()` from `file-crypto.service.ts` which runs synchronously on the main thread, not through the `EncryptionWorkerService` introduced in Phase 37.
+- Files: `apps/web/src/hooks/useDropUpload.ts:203`, `apps/web/src/services/file-crypto.service.ts`
+- Impact: Large duplicate files (up to 100 MB) block the main thread during encryption, causing UI jank. Inconsistent with the batch upload path which uses the Worker.
+- Fix approach: Route the duplicate upload through `getEncryptionWorker().createEncryptFn()` instead of `encryptFile()`. The `file-crypto.service` can remain for testing purposes.
+
 ## Known Bugs
 
 **No active known bugs identified in the current codebase.**
@@ -51,7 +65,7 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 - Risk: `clearBytes()` / `.fill(0)` cannot guarantee sensitive key material is erased from V8 heap, JIT-compiled code, or GC intermediaries.
 - Files: `packages/crypto/src/utils/memory.ts`, `apps/web/src/stores/vault.store.ts`, `apps/web/src/stores/auth.store.ts`, `apps/web/src/stores/folder.store.ts`
-- Current mitigation: The codebase consistently uses `.fill(0)` on key buffers during logout and store cleanup. The Rust side uses `zeroize` crate.
+- Current mitigation: The codebase consistently uses `.fill(0)` on key buffers during logout and store cleanup. The Rust side uses `zeroize` crate. The encryption Web Worker (Phase 37) also calls `clearBytes(fileKey)` before transferring the buffer, preventing key material from lingering in Worker memory.
 - Recommendations: Inherent JavaScript limitation. Acceptable for browser context; desktop Rust code uses proper zeroization.
 
 **Web3Auth localStorage usage:**
@@ -75,14 +89,21 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 - Current mitigation: Guarded by `NODE_ENV` check and requires knowing the secret.
 - Recommendations: Ensure `TEST_LOGIN_SECRET` is never set when a production environment is deployed. Add monitoring alert for staging usage.
 
+**Grafana Faro telemetry scrub relies on key-name allow-list:**
+
+- Risk: The `SENSITIVE_KEYS` set in `apps/web/src/lib/faro.ts` scrubs known field names (e.g., `privateKey`, `fileKey`, `rootFolderKey`). Unknown or newly added field names containing key material would not be scrubbed.
+- Files: `apps/web/src/lib/faro.ts:12-22`
+- Current mitigation: A secondary heuristic scrubs any string value matching 64+ hex characters regardless of key name. Binary `ArrayBuffer` / `ArrayBufferView` values are always redacted.
+- Recommendations: When adding new fields that hold key material, ensure they are added to `SENSITIVE_KEYS`. The hex pattern heuristic is a safety net, not the primary defence.
+
 ## Performance Bottlenecks
 
-**Full file content buffering for AES-GCM encryption:**
+**Full file content buffering for AES-GCM encryption (duplicate upload path):**
 
-- Problem: Files encrypted with GCM mode are fully loaded into memory. The 100 MB file size limit means up to 100 MB memory per concurrent upload.
-- Files: `packages/crypto/src/aes/encrypt.ts`
-- Cause: AES-256-GCM requires full content for authentication tag computation.
-- Improvement path: AES-256-CTR streaming encryption already exists (`packages/crypto/src/aes/encrypt-ctr.ts`, `packages/crypto/src/aes/decrypt-ctr.ts`) and is used for media streaming. Extend CTR usage to all uploads for reduced memory pressure.
+- Problem: The duplicate file upload path (`useDropUpload.ts` duplicate branch) uses `encryptFile()` which reads the entire file into memory on the main thread and uses AES-256-GCM (full-buffer). The batch upload path for new files uses the Worker and selects CTR for eligible media files automatically.
+- Files: `apps/web/src/services/file-crypto.service.ts`, `apps/web/src/hooks/useDropUpload.ts:203`
+- Cause: The replacement/duplicate flow was not updated in Phase 37. It also doesn't benefit from Worker offloading.
+- Improvement path: Migrate the duplicate path to use `EncryptionWorkerService` and pass `encryptFn` to the staging upload. This removes the main-thread block and enables CTR for large media files on the duplicate path.
 
 **IPNS polling for sync (30-second interval):**
 
@@ -105,18 +126,18 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 - Files: `crates/fuse/src/lib.rs` (766 lines), `crates/fuse/src/write_ops.rs` (976 lines), `crates/fuse/src/read_ops.rs` (928 lines), `apps/desktop/src-tauri/vendor/fuser/src/channel.rs`
 - Why fragile: FUSE-T is a userspace NFS/SMB translation layer, not kernel FUSE. Numerous workarounds for macOS-specific issues (SMB opendir requires non-zero fh, rename truncates filenames by 8 bytes, UID mismatch under SMB proxy). Each macOS update could introduce new kernel-side behavior changes.
 - Safe modification: Always test with Finder, Terminal `ls`/`mv`/`cp`, and multi-file operations.
-- Test coverage: Desktop E2E shell scripts exercise basic operations. Rust inline tests cover inode table and cache. No unit tests for filesystem callback implementations.
+- Test coverage: Desktop E2E shell scripts exercise basic operations. Rust inline tests cover inode table and cache. No unit tests for filesystem callback implementations (won't fix — Desktop E2E is the appropriate level).
 
 **Windows FUSE implementation (WinFSP):**
 
 - Files: `crates/fuse/src/platform/windows/write_ops.rs` (1008 lines), `crates/fuse/src/platform/windows/operations.rs` (602 lines), `crates/fuse/src/platform/windows/read_ops.rs` (464 lines), `crates/fuse/src/platform/windows/dir_ops.rs` (206 lines)
 - Why fragile: 2280 lines of platform-specific FUSE code. Uses WinFSP which has different semantics from macOS FUSE-T.
 - Safe modification: Test on actual Windows with Explorer, cmd, and PowerShell.
-- Test coverage: Desktop E2E runs on Windows in CI. No unit tests for Windows FUSE operations.
+- Test coverage: Desktop E2E runs on Windows in CI. No unit tests for Windows FUSE operations (won't fix).
 
 **Mutex `unwrap()` calls in FUSE production code:**
 
-- Files: `crates/fuse/src/lib.rs:141`, `:179`, `:183`, `crates/fuse/src/platform/windows/read_ops.rs`, `crates/fuse/src/platform/windows/write_ops.rs`
+- Files: `crates/fuse/src/lib.rs:141`, `:179`, `:183`; `crates/fuse/src/platform/windows/read_ops.rs` (7 occurrences); `crates/fuse/src/platform/windows/write_ops.rs` (9 occurrences); `crates/fuse/src/platform/windows/dir_ops.rs:27`
 - Why fragile: 19+ `lock().unwrap()` calls on `Mutex` objects in FUSE production code (not tests). If any background thread panics while holding a lock, subsequent lock attempts will panic with "poisoned mutex", crashing the filesystem thread and unmounting the drive.
 - Safe modification: Replace with `lock().unwrap_or_else(|p| p.into_inner())` for poison recovery, or propagate errors via `EIO`.
 - Test coverage: No tests exercise panic-during-lock scenarios.
@@ -142,6 +163,13 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 - Safe modification: Test all auth flows (email, Google, wallet) end-to-end after any Web3Auth dependency update.
 - Test coverage: Auth flow tested via E2E. Web3Auth unit mocking is complex.
 
+**Phala Cloud CVM deployment (single provider):**
+
+- Files: `apps/tee-worker/src/services/tee-keys.ts`, `apps/tee-worker/src/index.ts`
+- Why fragile: Phase 35 migrated TEE to Phala Cloud CVM using the dstack SDK (`@phala/dstack-sdk`). There is no fallback TEE provider — the previous AWS Nitro fallback option was not implemented. The dstack SDK is dynamically imported only inside `TEE_MODE=cvm`, making it unavailable for local testing without a CVM.
+- Safe modification: Key derivation and signing logic is tested via unit tests with `TEE_MODE=test`. Production CVM changes require Phala console deployment.
+- Test coverage: `apps/tee-worker/src/__tests__/tee-keys.test.ts` covers the test-mode derivation path. The CVM code path itself is not unit-testable outside a real Phala CVM.
+
 ## Scaling Limits
 
 **IPNS record propagation and TEE republishing:**
@@ -156,11 +184,11 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 - Limit: With FilePointers (~100 bytes each), a 1000-file folder produces ~100 KB of metadata before encryption.
 - Scaling path: This limit is enforced by design. For larger collections, users must create subfolders.
 
-**File size limit (100 MB with GCM):**
+**File size limit (100 MB):**
 
 - Current capacity: 100 MB per file per PRD constraint.
-- Limit: Browser memory pressure with full-file buffering for GCM encryption.
-- Scaling path: CTR streaming encryption is implemented but not yet the default for uploads.
+- Limit: New file uploads (batch path) use the Worker and select CTR for eligible media files, reducing main-thread pressure. Duplicate uploads still buffer on the main thread (see Performance Bottlenecks).
+- Scaling path: Migrate duplicate upload path to Worker + CTR (see Tech Debt).
 
 **Single Kubo IPFS node:**
 
@@ -194,6 +222,12 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 - Impact: macOS updates can break FUSE-T. The NFS-to-SMB backend switch was forced by a macOS Sequoia kernel bug.
 - Migration plan: Monitor FUSE-T releases. Consider FileProvider API on macOS as long-term alternative.
 
+**@phala/dstack-sdk:**
+
+- Risk: Phala-specific SDK for CVM key derivation. Tightly coupled to Phala Cloud infrastructure. No alternative provider is implemented.
+- Impact: If Phala Cloud has an outage or breaking API change, the TEE republishing pipeline stops. No fallback means IPNS records eventually expire (72-hour TTL).
+- Migration plan: Abstract key derivation behind an interface so alternative providers (AWS Nitro Enclaves, Azure Confidential Computing) can be plugged in. Currently blocked by the complexity of re-implementing key derivation + epoch management for a second provider.
+
 ## Missing Critical Features
 
 **No offline support (web or desktop):**
@@ -203,22 +237,22 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 ## Test Coverage Gaps
 
-**Web app has minimal unit tests (3 test files for 165 source files):**
+**Web app has minimal unit tests (3 test files for 163 source files):**
 
-- What's not tested: All React components, most hooks, all services except sync store.
+- What's not tested: All React components, most hooks, all services except sync store and upload error recovery.
 - Files: Only 3 test files exist:
   - `apps/web/src/stores/__tests__/sync-store.test.ts`
   - `apps/web/src/stores/__tests__/upload-error-recovery.test.ts`
   - `apps/web/src/stores/__tests__/logout-security.test.ts`
-- Risk: Regressions in folder operations, file uploads, auth flows, sharing, and bin operations go undetected until E2E tests or manual testing. The 1059-line `folder.service.ts`, 971-line `bin.service.ts`, and 791-line `SharedFileBrowser.tsx` have zero unit test coverage.
+- Risk: Regressions in folder operations, file uploads, auth flows, sharing, and bin operations go undetected until E2E tests or manual testing. The 1059-line `folder.service.ts`, 971-line `bin.service.ts`, 791-line `SharedFileBrowser.tsx`, 623-line `useFileBrowserActions.ts`, and 515-line `useFileOperations.ts` have zero unit test coverage.
 - Priority: High. Focus first on services (`folder.service.ts`, `bin.service.ts`, `share.service.ts`) and critical hooks (`useAuth.ts`, `useFolderMutations.ts`, `useFileOperations.ts`).
 
-**TEE worker has minimal tests (1 test file for 13 source files):**
+**TEE worker has improved but incomplete test coverage (5 test files for 14 source files):**
 
-- What's not tested: IPNS signing, key management, epoch rotation, auth middleware, republish route handler. Only SSRF validation is tested.
-- Files: `tee-worker/src/__tests__/ssrf-validation.test.ts` (single test file)
-- Risk: Security-critical code (TEE key derivation, IPNS record signing) is largely untested. Regressions in epoch rotation or key decryption would silently break republishing.
-- Priority: High. The TEE worker handles decrypted IPNS private keys — correctness is security-critical.
+- What's not tested: The `migrate.ts` route handler, the `metrics.ts` middleware/route, and the production CVM code path in `tee-keys.ts`.
+- Files: Tests at `apps/tee-worker/src/__tests__/` cover ssrf-validation, key-manager, auth middleware, tee-keys (test-mode only), and republish route. The `migrate.ts` route and `migration-worker.ts` service have no test coverage.
+- Risk: The migration route handles epoch key rotation — a critical security operation. Bugs would go undetected until staging or production. The `migration-worker.ts` service is 19+ functions with no tests.
+- Priority: High for migration-worker. Medium for metrics route.
 
 **Desktop app has no TypeScript unit tests:**
 
@@ -231,7 +265,7 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 - What's not tested: Write operation implementations (create file, write data, rename, delete, mkdir, publish coordination) in both macOS and Windows variants.
 - Files: `crates/fuse/src/write_ops.rs` (976 lines), `crates/fuse/src/platform/windows/write_ops.rs` (1008 lines)
-- Status: Won't fix. FUSE callbacks are thin plumbing between OS filesystem calls and the Rust SDK — unit testing them would require mocking the entire host OS filesystem layer, which is unreliable and brittle. These code paths are exercised by the Desktop E2E test suite (`tests/desktop-e2e/`) which tests actual file operations through the mounted filesystem. That is the appropriate test level for OS integration code.
+- Status: Won't fix. FUSE callbacks are thin plumbing between OS filesystem calls and the Rust SDK — unit testing them would require mocking the entire host OS filesystem layer, which is unreliable and brittle. These code paths are exercised by the Desktop E2E test suite (`tests/desktop-e2e/`) which tests actual file operations through the mounted filesystem.
 
 **API Client package has minimal tests:**
 
@@ -240,6 +274,13 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 - Risk: Low — mostly generated code. The real validation happens through SDK E2E tests that exercise the client.
 - Priority: Low.
 
+**`useDropUpload` hook has no unit tests:**
+
+- What's not tested: The primary file drop handler including batch upload orchestration, duplicate detection, orphan CID cleanup, and quota check interactions.
+- Files: `apps/web/src/hooks/useDropUpload.ts` (283 lines)
+- Risk: Phase 37 significantly rewrote this hook to use `client.uploadFiles()` with Worker encryption. The dual-path logic (new files via SDK batch vs. duplicates via legacy encrypt+upload) has no coverage. A regression could silently break file uploads.
+- Priority: High. This is the primary upload entry point in the web app.
+
 ---
 
-<!-- Concerns audit: 2026-03-29 -->
+<!-- Concerns audit: 2026-03-30 -->

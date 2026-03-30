@@ -1,6 +1,6 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-03-27
+**Analysis Date:** 2026-03-30
 
 ## Test Framework
 
@@ -68,19 +68,19 @@ cargo test -p cipherbox-crypto --test cross_language --no-default-features  # Cr
 tests/
   web-e2e/
     playwright.config.ts         # 3 webServers: mock-ipns, API, web
-    tests/                       # Playwright spec files
+    tests/                       # 14 Playwright spec files
     page-objects/                # Page Object Model classes
       dialogs/                   # Dialog-specific POs
       file-browser/              # File browser POs
       pages/                     # Full page POs
     utils/                       # Test helpers (wallet-login, test-files, etc.)
-    fixtures/files/              # Binary test fixtures
+    fixtures/files/              # Binary test fixtures (PDF, MP4, MP3, small MP4)
   sdk-e2e/
     vitest.config.ts             # 120s timeout, sequential
     src/fixtures/test-harness.ts # Account provisioning + cleanup
     src/fixtures/multi-account.ts # Multi-user fixture for sharing tests
     src/helpers/                  # Assertion + data generator helpers
-    src/suites/                  # Test suites
+    src/suites/                  # 11 test suites
   load/
     vitest.config.ts             # 600s timeout (10 min), sequential
     src/harness/                 # Client pool, metrics, reporter, thresholds
@@ -293,6 +293,20 @@ vi.mock('@cipherbox/sdk-core', () => ({
 }));
 ```
 
+**Partial module mocking** (`importOriginal`) is used in `packages/sdk/src/__tests__/upload-batch.test.ts` to preserve non-mocked exports:
+
+```typescript
+vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
+  return {
+    ...actual,
+    loadFolderMetadata: vi.fn(),
+    uploadFile: vi.fn(),
+    // ... other specific overrides
+  };
+});
+```
+
 ### Web E2E (Playwright)
 
 **No mocking of backend.** Tests run against a real API + Postgres + IPFS + Redis stack. Authentication is mocked via:
@@ -392,12 +406,16 @@ Downloads coverage artifacts from latest successful CI run, re-uploads tagged to
 - **API:** 40 `.spec.ts` files covering all services, controllers, guards, strategies, and pipes. Uses NestJS testing module with mocked repositories.
 - **Crypto:** 7 test files covering AES-GCM, AES-CTR, ECIES, Ed25519, HKDF, key hierarchy, vault IPNS.
 - **Core:** 10 test files covering folder metadata, IPNS records, vault blob, bin metadata, file IPNS, registry.
-- **SDK-Core:** 11 test files covering download, folder, IPFS, IPNS, performance, pinning (5 providers), upload, vault.
-- **SDK:** 8 test files covering client operations, bin operations, events, share operations, shared-write, pinning, upload concurrency.
+- **SDK-Core:** 13 test files covering download, encryption-mode, folder, IPFS, IPNS, performance, pinning (5 providers), upload, vault. `upload.test.ts` covers `uploadFile()` including `encryptFn` injection, buffer-detachment safety, and `teeKeys` propagation.
+- **SDK:** 13 test files covering client operations, bin operations, context, error handling, events, integration, key-cache, share operations, shared-write, pinning, upload concurrency, and batch upload. `upload-batch.test.ts` (Phase 37) covers the `uploadFiles()` orchestration: p-limit concurrency pool, single-publish, partial failure, per-file callbacks, event emission, key cleanup, BYO pinFn, and share re-wrap.
 - **API Client:** 1 test file (`instance.test.ts`).
 - **Web:** 3 test files (sync store, upload error recovery, logout security).
 - **TEE Worker:** 1 test file (`ssrf-validation.test.ts`).
 - **Rust (inline):** 19 Rust source files with `#[cfg(test)]` modules containing 158+ tests total across crypto, core, fuse, and sdk crates.
+
+**Coverage intentional gaps:**
+
+- FUSE write operations (`crates/fuse/`) have no unit tests by design — covered by Desktop E2E instead. This is a documented won't-fix.
 
 ### Integration Tests
 
@@ -407,38 +425,44 @@ Downloads coverage artifacts from latest successful CI run, re-uploads tagged to
 
 ### SDK E2E Tests
 
-Full API-backed tests running against real Postgres + IPFS + Redis:
+Full API-backed tests running against real Postgres + IPFS + Redis. 11 suites total.
 
-| Suite            | File                                                     | Coverage                                     |
-| ---------------- | -------------------------------------------------------- | -------------------------------------------- |
-| Vault Lifecycle  | `tests/sdk-e2e/src/suites/vault-lifecycle.test.ts`       | Init, duplicate, get, export, config, quota  |
-| Folder CRUD      | `tests/sdk-e2e/src/suites/folder-crud.test.ts`           | Create, rename, move, delete folders         |
-| File Operations  | `tests/sdk-e2e/src/suites/file-operations.test.ts`       | Upload, download, rename, move, delete files |
-| Data Integrity   | `tests/sdk-e2e/src/suites/data-integrity.test.ts`        | Roundtrip verification, content checksums    |
-| IPNS Consistency | `tests/sdk-e2e/src/suites/ipns-consistency.test.ts`      | IPNS publish/resolve, sequence numbers       |
-| Error Cases      | `tests/sdk-e2e/src/suites/error-cases.test.ts`           | Invalid inputs, 404s, auth failures          |
-| Concurrent Ops   | `tests/sdk-e2e/src/suites/concurrent-operations.test.ts` | Parallel uploads, race conditions            |
-| Bin Operations   | `tests/sdk-e2e/src/suites/bin-operations.test.ts`        | Soft delete, restore, permanent delete       |
-| Share Operations | `tests/sdk-e2e/src/suites/share-operations.test.ts`      | Create share, accept, revoke (multi-account) |
-| Invite Link      | `tests/sdk-e2e/src/suites/invite-link.test.ts`           | Invite link creation and claiming            |
+| Suite            | File                                                     | Coverage                                                                                          |
+| ---------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Vault Lifecycle  | `tests/sdk-e2e/src/suites/vault-lifecycle.test.ts`       | Init, duplicate, get, export, config, quota                                                       |
+| Folder CRUD      | `tests/sdk-e2e/src/suites/folder-crud.test.ts`           | Create, rename, move, delete folders                                                              |
+| File Operations  | `tests/sdk-e2e/src/suites/file-operations.test.ts`       | Upload, download, rename, move, delete files                                                      |
+| Data Integrity   | `tests/sdk-e2e/src/suites/data-integrity.test.ts`        | Roundtrip verification, content checksums                                                         |
+| IPNS Consistency | `tests/sdk-e2e/src/suites/ipns-consistency.test.ts`      | IPNS publish/resolve, sequence numbers                                                            |
+| Error Cases      | `tests/sdk-e2e/src/suites/error-cases.test.ts`           | Invalid inputs, 404s, auth failures                                                               |
+| Concurrent Ops   | `tests/sdk-e2e/src/suites/concurrent-operations.test.ts` | Parallel uploads, race conditions                                                                 |
+| Bin Operations   | `tests/sdk-e2e/src/suites/bin-operations.test.ts`        | Soft delete, restore, permanent delete                                                            |
+| Share Operations | `tests/sdk-e2e/src/suites/share-operations.test.ts`      | Create share, accept, revoke (multi-account)                                                      |
+| Invite Link      | `tests/sdk-e2e/src/suites/invite-link.test.ts`           | Invite link creation and claiming                                                                 |
+| Batch Upload     | `tests/sdk-e2e/src/suites/batch-upload.test.ts`          | `uploadFiles()` batch: 3-file batch, mixed sizes, progress callbacks, `files:batchUploaded` event |
 
 **Config:** 120s test timeout, 60s hook timeout, sequential execution, no file parallelism.
 
 ### Web E2E Tests (Playwright)
 
-| Spec               | File                                               | Coverage                                                                              |
-| ------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Full Workflow      | `tests/web-e2e/tests/full-workflow.spec.ts`        | Login, folder hierarchy, upload 12+ files, batch actions, move, edit, rename, cleanup |
-| Recycle Bin        | `tests/web-e2e/tests/recycle-bin.spec.ts`          | Soft delete, restore, permanent delete, empty bin                                     |
-| Recovery           | `tests/web-e2e/tests/recovery.spec.ts`             | Account recovery with browser-based IPFS                                              |
-| MFA Flows          | `tests/web-e2e/tests/mfa-flows.spec.ts`            | MFA enrollment, device approval                                                       |
-| Wallet Login       | `tests/web-e2e/tests/wallet-login.spec.ts`         | Ethereum wallet authentication                                                        |
-| Sharing            | `tests/web-e2e/tests/sharing-workflow.spec.ts`     | Share folder, accept share, view shared items                                         |
-| Writable Shares    | `tests/web-e2e/tests/writable-shares.spec.ts`      | Write permissions, recipient uploads, permission changes                              |
-| Invite Link        | `tests/web-e2e/tests/invite-link-workflow.spec.ts` | Invite link creation and claiming                                                     |
-| Search             | `tests/web-e2e/tests/search-workflow.spec.ts`      | Client-side search                                                                    |
-| Conflict Detection | `tests/web-e2e/tests/conflict-detection.spec.ts`   | Concurrent edit conflict detection                                                    |
-| Journey Timing     | `tests/web-e2e/tests/journey-timing.spec.ts`       | Performance timing metrics                                                            |
+14 suites total. All use `test.describe.serial` and manage their own browser context + account lifecycle.
+
+| Spec               | File                                               | Coverage                                                                                    |
+| ------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Full Workflow      | `tests/web-e2e/tests/full-workflow.spec.ts`        | Login, folder hierarchy, upload 12+ files, batch actions, move, edit, rename, cleanup       |
+| Recycle Bin        | `tests/web-e2e/tests/recycle-bin.spec.ts`          | Soft delete, restore, permanent delete, empty bin                                           |
+| Recovery           | `tests/web-e2e/tests/recovery.spec.ts`             | Account recovery with browser-based IPFS                                                    |
+| MFA Flows          | `tests/web-e2e/tests/mfa-flows.spec.ts`            | MFA enrollment, device approval                                                             |
+| Wallet Login       | `tests/web-e2e/tests/wallet-login.spec.ts`         | Ethereum wallet authentication                                                              |
+| Sharing            | `tests/web-e2e/tests/sharing-workflow.spec.ts`     | Share folder, accept share, view shared items                                               |
+| Writable Shares    | `tests/web-e2e/tests/writable-shares.spec.ts`      | Write permissions, recipient uploads, permission changes                                    |
+| Invite Link        | `tests/web-e2e/tests/invite-link-workflow.spec.ts` | Invite link creation and claiming                                                           |
+| Search             | `tests/web-e2e/tests/search-workflow.spec.ts`      | Client-side search                                                                          |
+| Conflict Detection | `tests/web-e2e/tests/conflict-detection.spec.ts`   | Concurrent edit conflict detection                                                          |
+| Journey Timing     | `tests/web-e2e/tests/journey-timing.spec.ts`       | Performance timing metrics                                                                  |
+| Batch Download     | `tests/web-e2e/tests/batch-download.spec.ts`       | Multi-select, SelectionActionBar download button, batch context menu (Phase 34)             |
+| Media Preview      | `tests/web-e2e/tests/media-preview.spec.ts`        | PDF canvas viewer, video player, audio player, corrupt file error state (Phase 34)          |
+| AES-CTR Streaming  | `tests/web-e2e/tests/streaming-playback.spec.ts`   | Large video CTR mode via service worker, small video GCM blob URL, decrypt badge (Phase 34) |
 
 **Playwright Config highlights:**
 
@@ -447,6 +471,14 @@ Full API-backed tests running against real Postgres + IPFS + Redis:
 - No retries (`retries: 0` -- fix flakiness immediately)
 - 3 web servers auto-started: mock-ipns-routing (port 3001), API (port 3000), web app (port 5173)
 - Artifacts: screenshots, video, traces on failure only
+- Suite-level timeouts set via `test.setTimeout()` in `beforeAll` (90-180s depending on suite)
+
+**Media test fixtures** (`tests/web-e2e/fixtures/files/`):
+
+- `test-document.pdf` -- PDF for preview tests
+- `test-video.mp4` -- Large video (>256KB) for AES-CTR streaming path
+- `test-video-small.mp4` -- Small video (<256KB) for AES-GCM blob URL path
+- `test-audio.mp3` -- Audio for audio player preview
 
 ### Desktop E2E Tests
 
@@ -459,6 +491,8 @@ Shell-script-based test suite orchestrated by `tests/desktop-e2e/scripts/run-all
 5. **Recycle bin** -- Delete via FUSE, verify in bin, restore
 
 Runs on macOS (FUSE-T/SMB), Linux (FUSE3), Windows (WinFSP). Windows variant uses `run-all.ps1`.
+
+**Note:** FUSE write operations have no unit tests by design. Desktop E2E is the sole test coverage for this layer.
 
 ### Load Tests
 
@@ -524,6 +558,33 @@ afterAll(async () => {
 });
 ```
 
+### Batch Upload Unit Test Pattern
+
+Tests for `uploadFiles()` use `setupBatchMocks()` + `setupFolder()` helpers and a `makeUploadResult()` factory:
+
+```typescript
+describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
+  let client: CipherBoxClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new CipherBoxClient(createTestConfig());
+  });
+
+  it('publishes only successful files on partial failure (D-09)', async () => {
+    setupFolder(client);
+    setupBatchMocks(5, [1, 3]); // files at index 1 and 3 fail
+    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+
+    const result = await client.uploadFiles('folder-ipns', makeTestFiles(5));
+
+    expect(result.successes).toHaveLength(3);
+    expect(result.failures).toHaveLength(2);
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
+  });
+});
+```
+
 ### Page Object Model (Playwright)
 
 ```typescript
@@ -541,4 +602,4 @@ export class FileListPage {
 
 ---
 
-<!-- Testing analysis: 2026-03-27 -->
+<!-- Testing analysis: 2026-03-30 -->
