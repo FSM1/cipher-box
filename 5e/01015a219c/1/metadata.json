@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5e01015a219c",
+  "session_id": "6817d9a3-414c-41f7-a6d0-132ca86f396a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T16:53:11.917248Z",
+  "branch": "docs/worktree-e2e-env-learnings",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".learnings/2026-03-30-worktree-e2e-env-setup.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "2fb79e271836",
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 15431,
+    "cache_read_tokens": 93412,
+    "output_tokens": 734,
+    "api_call_count": 4
+  },
+  "summary": {
+    "intent": "Commit an unstaged learnings document to a dedicated docs branch rather than main.",
+    "outcome": "A docs branch was created from latest main and the learnings file was staged and committed successfully.",
+    "learnings": {
+      "repo": [
+        "The repo uses a .learnings/ directory with date-prefixed markdown files to capture session learnings (e.g., 2026-03-30-worktree-e2e-env-setup.md).",
+        "Learnings files are committed on a separate docs branch, not directly to main."
+      ],
+      "code": [
+        {
+          "path": ".learnings/2026-03-30-worktree-e2e-env-setup.md",
+          "finding": "Documents worktree-based E2E environment setup patterns discovered on 2026-03-30."
+        }
+      ],
+      "workflow": [
+        "Learnings are captured as standalone markdown files and committed separately from feature work to keep history clean.",
+        "Docs branches are branched from latest main before committing documentation-only changes."
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T16:53:05.047925Z",
+    "agent_lines": 75,
+    "human_added": 23,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 98,
+    "agent_percentage": 76.53061224489795
+  }
+}
