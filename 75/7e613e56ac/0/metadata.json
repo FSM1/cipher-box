@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "757e613e56ac",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T21:51:17.865313Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/DEFERRED.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e98fad0c0623",
+  "token_usage": {
+    "input_tokens": 3701,
+    "cache_creation_tokens": 109838,
+    "cache_read_tokens": 4469754,
+    "output_tokens": 26729,
+    "api_call_count": 60
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on PR #416, then update project documentation (deferred items, feature matrix, README, and a new filesystem specification) on a dedicated docs branch.",
+    "outcome": "All 4 review threads resolved (2 code fixes, 1 not-applicable, 1 doc fix), committed and pushed. Documentation branch created with updated DEFERRED.md, FEATURES.md, README.md, and a new FILESYSTEM_SPECIFICATION.md, plus a pending todo moved to done and stale/anti-feature deferred items cleaned up.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro is the live error tracking solution (apps/web/src/lib/faro.ts) — not Sentry, which was still listed as deferred.",
+        "Session replay is explicitly out of scope as an anti-feature for a zero-knowledge/privacy-focused product.",
+        "Phase 37 implemented Web Worker encryption but the corresponding todo in .planning/todos/pending/ was never moved to done/.",
+        "Integration tests in packages/sdk/src/__tests__/integration.test.ts require a live backend; 3 pre-existing failures there are expected in CI without a running server.",
+        "The DEFERRED.md list had drifted significantly — implemented features (error tracking, web worker encryption) and never-in-scope items (session replay, production Kubo hardening) were all still listed as deferred.",
+        "Batch upload is implemented in the JS/TS SDK but not in the Rust SDK — the feature matrix needed to reflect this gap.",
+        "E2E coverage grew: 14 web suites + 11 SDK suites + load tests (was previously noted as 11 web suites).",
+        "The filesystem spec must target the most restrictive OS (Windows) for cross-platform compatibility — case-insensitive naming is the governing constraint."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage and getWorker calls could throw, leaking pending entries — fixed with try/catch to clean up on error."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "uploadFiles() doc comment overstated memory bounding guarantees — corrected to accurately describe actual behavior."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "Batch reads all files to memory before the SDK call — known architectural limitation requiring SDK contract change (accept File objects or read callback instead of Uint8Array); deferred, not a bug fix for this PR."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit and GitHub Copilot independently flagged the same issue (lazy file reading / batch memory) — cross-referencing deferred items before responding to reviewer comments avoids duplicate work.",
+        "When replying to PR review threads via gh API, use --field (not -f) for integer parameters like in_reply_to.",
+        "Diminishing returns from automated review rounds is a real signal — after 2+ rounds of duplicate findings and doc nitpicks, merging is often the right call.",
+        "Documentation branches accumulate several categories of stale data: implemented features still listed as deferred, anti-features listed as future work, and outdated metrics (test suite counts, version numbers)."
+      ]
+    },
+    "friction": [
+      "DEFERRED.md had drifted badly — required a second pass after the initial update because several 'deferred' items were already implemented or explicitly out of scope.",
+      "The pending todos directory was not updated when Phase 37 shipped web worker encryption — required a manual catch and move after the fact.",
+      "File edit after reading produced reformatted table widths, requiring re-reading the file with raw line numbers before making precise edits.",
+      "Push required a retry (first push attempt failed, reason not shown in transcript)."
+    ],
+    "open_items": [
+      "Lazy file reading within the batch upload concurrency pool — SDK contract needs to change to accept File objects or a read callback instead of Uint8Array (tracked in DEFERRED.md, originally CodeRabbit thread 8).",
+      "Batch upload not yet implemented in the Rust SDK — noted in updated feature matrix.",
+      "Five cross-platform filesystem gaps documented in FILESYSTEM_SPECIFICATION.md that have no current resolution.",
+      "All remaining items in .planning/DEFERRED.md — observability enhancements, upload pipeline improvements, code quality, and infra hardening items from phases 28-37."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T21:50:46.610112Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 7,
+    "human_removed": 2,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
