@@ -1,5 +1,5 @@
 {
-  ".": "0.32.1",
+  ".": "0.33.0",
   "packages/core": "0.29.0",
   "packages/crypto": "0.29.0",
   "packages/api-client": "0.32.0",
