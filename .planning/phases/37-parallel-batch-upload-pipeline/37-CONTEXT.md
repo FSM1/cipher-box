@@ -129,6 +129,9 @@ Scope: TypeScript SDK (`@cipherbox/sdk`, `@cipherbox/sdk-core`) and web app (`ap
 - **Adaptive concurrency based on file size** — More concurrent slots for small files, fewer for large. Implement when fixed pool of 3 proves insufficient.
 - **FUSE write-coalescing for desktop** — Buffer all `release()` calls within a time window, then batch-publish folder metadata once. Requires FUSE architecture changes.
 - **Accumulated retry batching** — If many files fail and are retried, batch the retries into a single folder publish instead of N individual publishes. Implement if failure rates warrant it.
+- **Batch upload secondary pin warning events** — BYO-IPFS `pinFn` wrapper in `uploadFiles()` discards `secondaryWarning` from `pinWithMode()`, so `pin:secondaryFailed` events are never emitted for batch uploads in dual-pin mode. Needs per-file warning capture and a batch equivalent event. (PR #416 review — Copilot thread 3)
+- **AbortSignal support for in-flight batch uploads** — Once `client.uploadFiles()` is invoked, there is no way to cancel in-flight or not-yet-started uploads from the UI. Requires adding an `AbortSignal` parameter to `uploadFiles()` and propagating it through p-limit and `sdkCore.uploadFile()`. The pre-upload cancel check (before `arrayBuffer()`) is the only cancellation point today. (PR #416 review — Copilot thread 6, CodeRabbit thread 9)
+- **Lazy file reading within concurrency pool** — `useDropUpload` reads all file buffers into `Uint8Array` upfront before calling `uploadFiles()`. For large batches this allocates all memory simultaneously instead of pipelining reads through the p-limit pool. Fix requires changing the SDK contract to accept `File` objects (or a read callback) instead of `Uint8Array`. Bounded today by MAX_FILE_SIZE=100MB. (PR #416 review — CodeRabbit thread 8)
 
 ### Reviewed Todos (not folded)
 

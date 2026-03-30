@@ -195,6 +195,14 @@ All 12 truths verified, all 12 requirements satisfied, all key links wired, no a
 
 **Note:** Initial verifier run produced false negatives for Plan 02 artifacts due to timing (verifier ran before cherry-picked worktree commits were visible on the feature branch). Manual verification confirmed all files exist with correct content.
 
+### Deferred Items (from PR #416 review)
+
+| Item | Source | Impact | Tracking |
+|------|--------|--------|----------|
+| Batch upload secondary pin warning events | Copilot thread 3 | Low — only affects dual-pin BYO-IPFS mode | 37-CONTEXT.md deferred ideas |
+| AbortSignal support for in-flight batch uploads | Copilot thread 6, CodeRabbit thread 9 | Medium — cancel button is no-op once SDK call starts | 37-CONTEXT.md deferred ideas |
+| Lazy file reading within concurrency pool | CodeRabbit thread 8 | Medium — memory spike on large batches, bounded by 100MB MAX_FILE_SIZE | 37-CONTEXT.md deferred ideas |
+
 ---
 
 _Verified: 2026-03-30T18:55:00Z_
