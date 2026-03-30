@@ -25,8 +25,10 @@ export type PerFileUpload = {
   file: File | null; // Original File reference for retry (D-09)
 };
 
+let uploadIdSeq = 0;
 export function createUploadId(filename: string): string {
-  return `upload-${filename}-${Date.now()}`;
+  uploadIdSeq += 1;
+  return `upload-${filename}-${Date.now()}-${uploadIdSeq}`;
 }
 
 export function isActiveUpload(status: PerFileUpload['status']): boolean {
@@ -76,6 +78,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     set((state) => {
       const entry = state.files.get(id);
       if (!entry) return state;
+      if (entry.status === 'complete' || entry.status === 'error') return state;
       if (entry.status === 'uploading' && entry.progress === progress) return state;
       const next = new Map(state.files);
       next.set(id, { ...entry, status: 'uploading', progress });

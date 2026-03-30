@@ -105,7 +105,7 @@ export function useDropUpload() {
     }
     ensureFolderRegistered(parentFolder);
 
-    const uploadedCids: string[] = []; // Track for cleanup on failure
+    const orphanCids: string[] = []; // Only unregistered CIDs (duplicates staged for replacement)
     let currentUploadId: string | undefined;
 
     try {
@@ -121,7 +121,7 @@ export function useDropUpload() {
 
         const data = new Uint8Array(await file.arrayBuffer());
 
-        const result = await client.uploadFile(
+        await client.uploadFile(
           parentFolder.ipnsName,
           data,
           file.name,
@@ -129,7 +129,6 @@ export function useDropUpload() {
           (percent) => useUploadStore.getState().updateFileProgress(uploadId, percent)
         );
 
-        uploadedCids.push(result.cid);
         useUploadStore.getState().setFileStatus(uploadId, 'complete');
       }
 
@@ -171,7 +170,7 @@ export function useDropUpload() {
             cancelToken
           );
 
-          uploadedCids.push(ipfsResult.cid);
+          orphanCids.push(ipfsResult.cid);
           useUploadStore.getState().setFileStatus(uploadId, 'complete');
 
           const existingFileId = existingByName.get(file.name);
@@ -203,10 +202,10 @@ export function useDropUpload() {
         useUploadStore.getState().setFileStatus(currentUploadId, 'error', message);
       }
       // Best-effort cleanup: unpin orphaned CIDs from failed upload
-      if (uploadedCids.length > 0) {
+      if (orphanCids.length > 0) {
         import('../lib/api/ipfs')
           .then(({ unpinFromIpfs }) => {
-            for (const cid of uploadedCids) {
+            for (const cid of orphanCids) {
               unpinFromIpfs(cid).catch((err) =>
                 logger.warn('[Upload] Unpin orphaned CID failed:', err)
               );

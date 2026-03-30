@@ -116,15 +116,17 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
           )}
           {isError && (
             <>
-              <button
-                type="button"
-                className="upload-inline-btn upload-inline-btn--retry"
-                onClick={handleRetry}
-                aria-label={`Retry upload of ${file.filename}`}
-                title="Retry upload"
-              >
-                {'[R]'}
-              </button>
+              {onRetry && file.file && (
+                <button
+                  type="button"
+                  className="upload-inline-btn upload-inline-btn--retry"
+                  onClick={handleRetry}
+                  aria-label={`Retry upload of ${file.filename}`}
+                  title="Retry upload"
+                >
+                  {'[R]'}
+                </button>
+              )}
               <button
                 type="button"
                 className="upload-inline-btn"
