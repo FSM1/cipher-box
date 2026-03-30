@@ -48,3 +48,7 @@ Can any of these be batched or simplified - eg. only pinning new folder metadata
 ---
 
 Ok given that we are less constrained by IPFS infra having tested 200 concurrent users, I think the efficiency gains from this justify making these changes - please /gsd:add-phase to deal with this.
+
+---
+
+/resolve-pr-reviews
