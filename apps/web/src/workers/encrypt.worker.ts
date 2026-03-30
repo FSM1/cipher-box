@@ -49,7 +49,8 @@ self.onmessage = async (event: MessageEvent<EncryptRequest>) => {
 
     const wrappedKey = await wrapKey(fileKey, userPublicKey);
 
-    // Defensive copy of fileKey before clearing internal one
+    // Copy fileKey before clearing — clearBytes must happen before postMessage
+    // so the key material doesn't linger in Worker memory after transfer
     const fileKeyCopy = new Uint8Array(fileKey);
     clearBytes(fileKey);
 

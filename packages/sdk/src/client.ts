@@ -31,7 +31,7 @@ import type { BinState } from './bin';
 import * as shareOps from './share';
 import type { SentShareInfo } from './share';
 
-/** Maximum concurrent encrypt+pin operations for batch uploads (D-01). */
+/** Maximum concurrent encrypt+pin operations for batch uploads. */
 const UPLOAD_CONCURRENCY = 3;
 
 /** Thrown when a bin operation is attempted before loadBin() has been called. */
@@ -831,11 +831,10 @@ export class CipherBoxClient {
    * collects results, re-reads folder metadata for stale-children mitigation,
    * and publishes all successful FilePointers in one atomic update.
    *
-   * Per D-03: New batch method. Per D-01: Fixed concurrency of 3.
-   * Per D-02: Pipeline-style (encrypt -> pin -> free per file, not buffer-all).
-   * Per D-05: Re-reads folder metadata before final publish.
-   * Per D-09: Partial failures publish successes only.
-   * Per D-10: Single publish after all slots drain.
+   * Pipeline-style: each concurrency slot does encrypt -> pin -> free,
+   * so memory is bounded by UPLOAD_CONCURRENCY, not total file count.
+   * Re-reads folder metadata before final publish to avoid stale-children overwrites.
+   * Partial failures still publish successful files.
    */
   async uploadFiles(
     folderIpnsName: string,
@@ -876,7 +875,7 @@ export class CipherBoxClient {
               return { cid: result.cid, size: result.size };
             });
 
-      // Create p-limit concurrency pool (D-01)
+      // Create p-limit concurrency pool
       const limit = pLimit(UPLOAD_CONCURRENCY);
 
       type FileResult = {
@@ -885,7 +884,7 @@ export class CipherBoxClient {
         uploadResult: UploadResult;
       };
 
-      // Run all files through the pool with Promise.allSettled (D-02, D-10)
+      // Run all files through the pool with Promise.allSettled
       const settled = await Promise.allSettled(
         files.map((file) =>
           limit(async () => {
@@ -929,7 +928,7 @@ export class CipherBoxClient {
         }
       }
 
-      // If no successes, emit event and return early (D-09)
+      // If no successes, emit event and return early
       if (successes.length === 0) {
         this.emitter.emit({
           type: 'files:batchUploaded',
@@ -941,7 +940,7 @@ export class CipherBoxClient {
       }
 
       try {
-        // Re-read folder metadata to mitigate stale-children race (D-05)
+        // Re-read folder metadata to mitigate stale-children race
         const freshFolder = await sdkCore.loadFolderMetadata({
           ipnsName: folderIpnsName,
           folderKey: folder.folderKey,
@@ -962,7 +961,7 @@ export class CipherBoxClient {
           mergedChildren = updatedChildren;
         }
 
-        // Single folder publish + batch IPNS publish (concurrent) (D-10)
+        // Single folder publish + batch IPNS publish (concurrent)
         const ipnsRecords = successes.map((s) => s.uploadResult.ipnsRecord);
         const [folderResult, batchResult] = await Promise.allSettled([
           sdkCore.updateFolderMetadataAndPublish({

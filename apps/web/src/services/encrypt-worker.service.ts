@@ -16,14 +16,7 @@ export class EncryptionWorkerService {
   private pending = new Map<
     string,
     {
-      resolve: (value: {
-        ciphertext: Uint8Array;
-        wrappedKey: string;
-        iv: string;
-        fileKey: Uint8Array;
-        originalSize: number;
-        encryptedSize: number;
-      }) => void;
+      resolve: (value: Awaited<ReturnType<ExternalEncryptFn>>) => void;
       reject: (reason: Error) => void;
     }
   >();
@@ -74,18 +67,9 @@ export class EncryptionWorkerService {
    * the ciphertext ArrayBuffer back (zero-copy). After calling this, the
    * original `data` Uint8Array becomes zero-length (transferred).
    */
-  encrypt(params: {
-    data: Uint8Array;
-    userPublicKey: Uint8Array;
-    encryptionMode: 'GCM' | 'CTR';
-  }): Promise<{
-    ciphertext: Uint8Array;
-    wrappedKey: string;
-    iv: string;
-    fileKey: Uint8Array;
-    originalSize: number;
-    encryptedSize: number;
-  }> {
+  encrypt(
+    params: Parameters<ExternalEncryptFn>[0]
+  ): ReturnType<ExternalEncryptFn> {
     return new Promise((resolve, reject) => {
       this.idCounter += 1;
       const id = `enc-${this.idCounter}-${Date.now()}`;

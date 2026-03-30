@@ -23,8 +23,8 @@ export function isExternalFileDrag(dataTransfer: DataTransfer): boolean {
 /**
  * Hook for handling external file drops (from Finder/Explorer) anywhere in the app.
  *
- * Uses the SDK's uploadFiles() batch method for new files (D-03: single folder
- * publish for the entire batch) with Web Worker encryption (D-07).
+ * Uses the SDK's uploadFiles() batch method for new files (single folder
+ * publish for the entire batch) with Web Worker encryption.
  * Duplicate files use the old encrypt+upload path for the Replace dialog.
  * All IPNS state is managed by the SDK -- no dual-path conflicts.
  */
@@ -112,7 +112,7 @@ export function useDropUpload() {
     let currentDupUploadId: string | undefined; // Tracks current duplicate file for error reporting
 
     try {
-      // Upload new files via SDK batch pipeline (D-03: single folder publish for all)
+      // Upload new files via SDK batch pipeline (single folder publish for all)
       if (newFiles.length > 0) {
         // Register all files in upload store first (for UI progress rows)
         const uploadIdMap = new Map<string, string>(); // fileName -> uploadId
@@ -139,7 +139,7 @@ export function useDropUpload() {
         }
 
         if (fileEntries.length > 0) {
-          // Get encryption Worker's encryptFn for off-main-thread encryption (D-07)
+          // Get encryption Worker's encryptFn for off-main-thread encryption
           const encryptionWorker = getEncryptionWorker();
           const encryptFn = encryptionWorker.createEncryptFn();
 
@@ -170,7 +170,6 @@ export function useDropUpload() {
           );
 
           // Failures already surfaced via onFileError callback (sets upload store to 'error').
-          // Existing UploadListItem component shows retry buttons for error rows (D-11).
           if (result.failures.length > 0) {
             logger.warn(
               `[Upload] Batch upload partial failure: ${result.failures.length} file(s) failed`,
