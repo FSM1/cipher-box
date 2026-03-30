@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "7d1d62aeacc4",
+  "session_id": "66b8eabe-070d-4f34-96a8-81ed94408db2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T17:26:38.606345Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useDropUpload.ts",
+    "apps/web/src/services/encrypt-worker.service.ts",
+    "apps/web/src/workers/encrypt.worker.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b7cb8e8cf2ad",
+  "token_usage": {
+    "input_tokens": 1452,
+    "cache_creation_tokens": 141006,
+    "cache_read_tokens": 14087802,
+    "output_tokens": 39608,
+    "api_call_count": 147
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Execute Phase 37 (parallel batch upload pipeline) using the GSD wave-based execution system, then review and clean up the resulting code, create a PR, and address test coverage gaps.",
+    "outcome": "Phase 37 completed with 2 plans across 2 waves: SDK `uploadFiles()` batch method with p-limit concurrency (Wave 1) and Web Worker encryption offload with `useDropUpload` rewire (Wave 2). PR #416 created, code simplified, SDK integration/E2E tests added, worker tsconfig gap fixed, and lint warnings resolved.",
+    "learnings": {
+      "repo": [
+        "Worktree agents can commit to a detached HEAD state rather than updating the branch ref, requiring manual cherry-pick to bring commits onto the feature branch.",
+        "The gsd-verifier agent runs against filesystem state at spawn time — if cherry-picks happen after spawning, the verifier sees stale state and produces false negatives.",
+        "encrypt.worker.ts was excluded from tsconfig.json but not included in tsconfig.sw.json, leaving it unchecked by tsc in CI. The decrypt-sw.ts pattern (tsconfig.sw.json) should be followed for all workers.",
+        "The codebase uses `@typescript-eslint/no-explicit-any` as a warning (treated as error by convention) — any `as any` in test files will fail lint, even in mocks.",
+        "p-limit is a dev dependency that must be explicitly installed — it was not already present in the monorepo.",
+        "FolderMetadata type lives in packages/core/src/folder/types.ts and only requires `version` and `children` fields for minimal mock construction.",
+        "The project uses `apps/web/CLAUDE.md` for web-specific coding conventions including guidance against `Blob.buffer` usage."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "finding": "Had inline encryption result type defined 4 times; simplified to use ReturnType\u003cExternalEncryptFn\u003e from @cipherbox/sdk-core."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "Had 7+ D-0X task-reference comments (e.g. '(D-01)', '(D-07)') that are noise for future maintainers — stripped and replaced with WHY context where warranted."
+        },
+        {
+          "path": "apps/web/src/workers/encrypt.worker.ts",
+          "finding": "Defensive copy before Transferable transfer is intentional for security (clear key material from Worker memory) — comment updated to clarify security intent."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.spec.ts",
+          "line": 60,
+          "end_line": 60,
+          "finding": "Pre-existing `as any` lint warning — fixed to use proper mock type."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/upload-batch.test.ts",
+          "line": 186,
+          "end_line": 186,
+          "finding": "`as any` used in loadFolderMetadata mock return — fixed to use FolderMetadata type with explicit fields."
+        }
+      ],
+      "workflow": [
+        "Worktree isolation can cause branch ref vs HEAD divergence — always verify via `git log` on the worktree HEAD, not just the branch name, before merging.",
+        "When a verifier agent produces 'gaps_found' after cherry-picks, spot-check all claimed missing files before trusting the result — the verifier may have stale context.",
+        "After manual cherry-picks, VERIFICATION.md must be edited manually to reflect actual pass status rather than re-running the verifier.",
+        "Lint warnings in tests should be treated as errors per project convention — `as any` in mocks should always be typed properly.",
+        "All three review agents (reuse, quality, efficiency) independently flagged upfront file buffer allocation in uploadFiles as a concern but it was correctly deferred due to MAX_FILE_SIZE bounds."
+      ]
+    },
+    "friction": [
+      "Worktree agent committed to detached HEAD instead of branch ref, requiring reset + cherry-pick to recover Wave 2 commits onto the feature branch.",
+      "gsd-verifier produced false negatives for all 4 Wave 2 artifacts because it ran before cherry-picks were visible — required manual VERIFICATION.md editing to correct.",
+      "Branch context confusion: after cherry-picks, shell cwd was inside a worktree directory rather than the main repo, causing PROJECT.md edits to land on wrong branch.",
+      "pnpm lint:fix auto-formatting changes were left unstaged after the lint fix commit and required a second commit."
+    ],
+    "open_items": [
+      "Web E2E tests not updated for multi-file batch upload, progress bars during concurrent uploads, partial failure, or cancellation — deferred due to requiring a running app.",
+      "Blob.buffer usage in apps/web/src/services/upload.service.ts violates apps/web/CLAUDE.md guidance — pre-existing issue, should be fixed in a separate PR.",
+      "uploadFiles() SDK design requires callers to pre-buffer entire files as Uint8Array — should be revisited to accept File/Blob objects if batch sizes grow beyond current MAX_FILE_SIZE (100MB) bounds.",
+      "Worker build compatibility confirmed for dev/CI/staging but web E2E suite has no test exercising the Worker encryption path end-to-end in a browser context."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T17:26:03.962776Z",
+    "agent_lines": 0,
+    "human_added": 100,
+    "human_modified": 13,
+    "human_removed": 0,
+    "total_committed": 100,
+    "agent_percentage": 0
+  }
+}
