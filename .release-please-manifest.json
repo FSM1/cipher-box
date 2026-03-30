@@ -1,13 +1,13 @@
 {
-  ".": "0.31.1",
+  ".": "0.32.0",
   "packages/core": "0.29.0",
   "packages/crypto": "0.29.0",
-  "packages/api-client": "0.31.0",
-  "packages/sdk-core": "0.31.0",
-  "packages/sdk": "0.31.0",
+  "packages/api-client": "0.32.0",
+  "packages/sdk-core": "0.32.0",
+  "packages/sdk": "0.32.0",
   "crates/crypto": "0.4.0",
   "crates/core": "0.4.0",
   "crates/api-client": "0.4.0",
-  "crates/fuse": "0.4.0",
+  "crates/fuse": "0.4.1",
   "crates/sdk": "0.4.0"
 }

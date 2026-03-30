@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.4.0...cipherbox-fuse-v0.4.1) (2026-03-30)
+
+
+### Performance Improvements
+
+* **fuse:** Phase 32 async FilePointer resolution ([#388](https://github.com/FSM1/cipher-box/issues/388)) ([8cddb05](https://github.com/FSM1/cipher-box/commit/8cddb05c31e2b010dc4afb9463d0d12f48722165))
+* **WinFSP:** Phase 33 Windows Async FilePointer Resolution ([#389](https://github.com/FSM1/cipher-box/issues/389)) ([b2f6572](https://github.com/FSM1/cipher-box/commit/b2f6572212decf44c9bdedb92f8f48b37c69037c))
+
 ## [0.4.0](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.3.0...cipherbox-fuse-v0.4.0) (2026-03-26)
 
 

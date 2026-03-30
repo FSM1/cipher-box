@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.32.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.31.0...@cipherbox/sdk-core-v0.32.0) (2026-03-30)
+
+
+### Features
+
+* **sdk:** select AES-CTR encryption for streaming media uploads ([#399](https://github.com/FSM1/cipher-box/issues/399)) ([a595e4b](https://github.com/FSM1/cipher-box/commit/a595e4b53eb5c33fd68e50eb97cee1b647f595fc))
+* **tee-worker:** migrate TEE worker to Phala Cloud CVM ([#395](https://github.com/FSM1/cipher-box/issues/395)) ([a08414f](https://github.com/FSM1/cipher-box/commit/a08414fe7674b80d80b64c8dc671f5dca8143fba))
+
 ## [0.31.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.30.0...@cipherbox/sdk-core-v0.31.0) (2026-03-27)
 
 
