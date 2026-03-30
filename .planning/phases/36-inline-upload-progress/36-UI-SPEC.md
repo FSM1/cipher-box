@@ -27,17 +27,28 @@ created: 2026-03-30
 
 ## Spacing Scale
 
-Declared values (must be multiples of 4). Pre-populated from existing `index.css` design tokens:
+Declared values (must be multiples of 4 from the standard set {4, 8, 16, 24, 32, 48, 64}). This phase uses the following tokens:
 
 | Token | Value | Usage                                                             |
 | ----- | ----- | ----------------------------------------------------------------- |
 | xs    | 8px   | `var(--spacing-xs)` Row padding, icon gaps, inline button padding |
-| sm    | 12px  | `var(--spacing-sm)` File list row vertical padding                |
 | md    | 16px  | `var(--spacing-md)` File list row horizontal padding, grid gap    |
 | lg    | 24px  | `var(--spacing-lg)` Section padding                               |
 | xl    | 32px  | `var(--spacing-xl)` Not used in this phase                        |
 
-Exceptions: 6px used for icon-to-name gap within file list rows (existing pattern from `.file-list-item-row-top` gap). 3px used for progress bar height (existing pattern from `.upload-item-progress-bar`).
+Exceptions: none. This phase introduces no new spacing values outside the standard set.
+
+### Inherited Exceptions (read-only)
+
+The following non-standard spacing values exist in the codebase (`index.css`) and are referenced by existing components that this phase interacts with. This phase does NOT introduce, modify, or extend these values. They are documented here for implementor awareness only.
+
+| Token/Value | Source                        | Usage in existing code                                 |
+| ----------- | ----------------------------- | ------------------------------------------------------ |
+| 12px        | `var(--spacing-sm)` index.css | File list row vertical padding (existing `FileList`)   |
+| 6px         | `.file-list-item-row-top` gap | Icon-to-name gap within file list rows                 |
+| 3px         | `.upload-item-progress-bar` h | Progress bar height (carried forward to inline layout) |
+
+Implementors: use these values as-is where existing component patterns require them. Do not add them to the standard scale or create new usages beyond matching existing patterns.
 
 ---
 
@@ -51,7 +62,9 @@ Pre-populated from existing `index.css` design tokens. All text in this phase us
 | Label (status)  | 10px `var(--font-size-xs)` | 400 `var(--font-weight-normal)`   | 1.5         |
 | Heading         | 14px `var(--font-size-md)` | 600 `var(--font-weight-semibold)` | 1.2         |
 
-Note: Only Body and Label roles are used in this phase. The upload row filename uses the same font-size-sm (11px) as existing `FileListItem` names. No headings are introduced by this phase.
+Note: Only Body and Label roles are used in this phase. The upload row filename uses `--font-size-sm` (11px), matching existing `FileListItem` names. Action buttons (cancel, retry, dismiss) use `--font-size-xs` (10px), matching existing small interactive element patterns. No headings are introduced by this phase.
+
+Advisory: `--font-size-xs` (10px) and `--font-size-sm` (11px) are only 1px apart. Both are inherited from the existing design system where they serve distinct roles (status text vs body/buttons). Consolidating them is outside this phase's scope since it would require a codebase-wide change.
 
 ---
 
@@ -126,7 +139,7 @@ Each uploading file renders as an `UploadListItem` within the file list. The row
 
 | Property            | Value                                                            |
 | ------------------- | ---------------------------------------------------------------- |
-| Container height    | 3px                                                              |
+| Container height    | 3px (inherited from existing `.upload-item-progress-bar`)        |
 | Container color     | `var(--color-border-dim)` (`#003322`)                            |
 | Fill color (active) | `var(--color-green-primary)` (`#00D084`)                         |
 | Fill color (error)  | `var(--color-error)` (`#EF4444`)                                 |
@@ -208,7 +221,7 @@ Upload-in-progress entries are merged into the file list sorted alphabetically a
 | Error state (inline)   | No text label -- red progress bar + `[!]` icon communicates failure. Tooltip on `[!]`: "Upload failed" |
 | Cancel confirmation    | None -- cancel is immediate, no confirmation dialog (D-08)                                             |
 | Retry button tooltip   | "Retry upload"                                                                                         |
-| Dismiss button tooltip | "Dismiss"                                                                                              |
+| Dismiss button tooltip | "Dismiss error"                                                                                        |
 
 ---
 
