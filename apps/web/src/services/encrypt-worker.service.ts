@@ -72,23 +72,28 @@ export class EncryptionWorkerService {
       const id = `enc-${this.idCounter}-${Date.now()}`;
       this.pending.set(id, { resolve, reject });
 
-      const worker = this.getWorker();
-      const message: EncryptRequest = {
-        type: 'encrypt',
-        id,
-        data: params.data,
-        userPublicKey: params.userPublicKey,
-        encryptionMode: params.encryptionMode,
-      };
+      try {
+        const worker = this.getWorker();
+        const message: EncryptRequest = {
+          type: 'encrypt',
+          id,
+          data: params.data,
+          userPublicKey: params.userPublicKey,
+          encryptionMode: params.encryptionMode,
+        };
 
-      // Transfer the data buffer to worker (zero-copy, original becomes empty).
-      // If data is a subview, copy first — transferring .buffer would detach
-      // the entire underlying ArrayBuffer beyond the intended range.
-      const isFullBuffer =
-        params.data.byteOffset === 0 && params.data.byteLength === params.data.buffer.byteLength;
-      const transferData = isFullBuffer ? params.data : params.data.slice();
-      message.data = transferData;
-      worker.postMessage(message, [transferData.buffer] as Transferable[]);
+        // Transfer the data buffer to worker (zero-copy, original becomes empty).
+        // If data is a subview, copy first — transferring .buffer would detach
+        // the entire underlying ArrayBuffer beyond the intended range.
+        const isFullBuffer =
+          params.data.byteOffset === 0 && params.data.byteLength === params.data.buffer.byteLength;
+        const transferData = isFullBuffer ? params.data : params.data.slice();
+        message.data = transferData;
+        worker.postMessage(message, [transferData.buffer] as Transferable[]);
+      } catch (error) {
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 

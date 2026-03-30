@@ -831,8 +831,11 @@ export class CipherBoxClient {
    * collects results, re-reads folder metadata for stale-children mitigation,
    * and publishes all successful FilePointers in one atomic update.
    *
-   * Pipeline-style: each concurrency slot does encrypt -> pin -> free,
-   * so memory is bounded by UPLOAD_CONCURRENCY, not total file count.
+   * Pipeline-style: each concurrency slot does encrypt -> pin -> free, so
+   * in-flight ciphertext and encryption/pinning work are bounded by
+   * UPLOAD_CONCURRENCY. Overall memory usage can still include all
+   * caller-provided file buffers in the `files` array; callers handling large
+   * batches should stream or chunk inputs if end-to-end memory must be bounded.
    * Re-reads folder metadata before final publish to avoid stale-children overwrites.
    * Partial failures still publish successful files.
    */
