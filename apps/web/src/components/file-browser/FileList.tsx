@@ -144,16 +144,21 @@ export function FileList({
     _uploading: true as const,
   }));
 
-  // Filter out real files that match completing uploads to prevent duplicates (Pitfall 5)
+  // Prevent duplicate rows: when a real file already exists, hide the completing
+  // upload row instead of the real file row. This ensures the real file is never
+  // removed from the DOM during the 1-second completion flash. (Pitfall 5)
+  const realFileNames = new Set(
+    items.filter((item) => item.type === 'file').map((item) => item.name)
+  );
   const completingNames = new Set(
     uploadEntries.filter((e) => e.status === 'complete').map((e) => e.filename)
   );
-  const filteredItems = items.filter(
-    (item) => !(item.type === 'file' && completingNames.has(item.name))
+  const filteredUploadEntries = uploadVirtualEntries.filter(
+    (entry) => !(completingNames.has(entry.name) && realFileNames.has(entry.name))
   );
 
   // Merge and sort all items together
-  const allItems = [...filteredItems, ...uploadVirtualEntries];
+  const allItems = [...items, ...filteredUploadEntries];
   const sortedItems = sortItems(allItems as FolderChild[]);
 
   // Select-all uses real item count only (upload rows are not selectable)
