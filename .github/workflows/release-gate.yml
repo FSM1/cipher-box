@@ -166,19 +166,18 @@ jobs:
           echo "Waiting for CI E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
 
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
-            E2E_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
+            # Prefer a completed run over an in-progress rerun for the same SHA.
+            # Sort completed runs first so reruns don't block the gate.
+            RUN_DATA=$(gh run list --repo ${{ github.repository }} \
               --workflow=ci-e2e.yml --branch=main --limit=10 \
               --json headSha,conclusion,status,databaseId \
-              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion // empty")
+              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")] | sort_by(.status == \"completed\" | not) | .[0]")
 
-            if [ -n "$E2E_CONCLUSION" ]; then
-              echo "CI E2E completed with conclusion: ${E2E_CONCLUSION}"
+            E2E_CONCLUSION=$(echo "$RUN_DATA" | jq -r '.conclusion // empty')
 
-              # Grab the run ID for job-level checks below
-              E2E_RUN_ID=$(gh run list --repo ${{ github.repository }} \
-                --workflow=ci-e2e.yml --branch=main --limit=10 \
-                --json headSha,databaseId \
-                --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].databaseId")
+            if [ -n "$E2E_CONCLUSION" ] && [ "$E2E_CONCLUSION" != "null" ]; then
+              E2E_RUN_ID=$(echo "$RUN_DATA" | jq -r '.databaseId')
+              echo "CI E2E completed with conclusion: ${E2E_CONCLUSION} (run ${E2E_RUN_ID})"
               break
             fi
 
@@ -272,18 +271,17 @@ jobs:
           echo "Waiting for CI E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
 
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
-            E2E_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
+            # Prefer a completed run over an in-progress rerun for the same SHA.
+            RUN_DATA=$(gh run list --repo ${{ github.repository }} \
               --workflow=ci-e2e.yml --branch=main --limit=10 \
               --json headSha,conclusion,status,databaseId \
-              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion // empty")
+              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")] | sort_by(.status == \"completed\" | not) | .[0]")
 
-            if [ -n "$E2E_CONCLUSION" ]; then
-              echo "CI E2E completed (conclusion: ${E2E_CONCLUSION}) — checking Desktop E2E job"
+            E2E_CONCLUSION=$(echo "$RUN_DATA" | jq -r '.conclusion // empty')
 
-              E2E_RUN_ID=$(gh run list --repo ${{ github.repository }} \
-                --workflow=ci-e2e.yml --branch=main --limit=10 \
-                --json headSha,databaseId \
-                --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].databaseId")
+            if [ -n "$E2E_CONCLUSION" ] && [ "$E2E_CONCLUSION" != "null" ]; then
+              E2E_RUN_ID=$(echo "$RUN_DATA" | jq -r '.databaseId')
+              echo "CI E2E completed (conclusion: ${E2E_CONCLUSION}) — checking Desktop E2E job (run ${E2E_RUN_ID})"
               break
             fi
 
