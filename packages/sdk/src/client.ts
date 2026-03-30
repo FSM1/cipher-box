@@ -14,11 +14,13 @@
  */
 
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
-import type { PinningProvider } from '@cipherbox/sdk-core';
+import type { PinningProvider, ExternalEncryptFn } from '@cipherbox/sdk-core';
+import type { UploadResult } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
 import { selectEncryptionMode } from '@cipherbox/sdk-core';
 import { createAxiosInstance, ipnsControllerUnenrollBatch } from '@cipherbox/api-client';
 import { clearBytes } from '@cipherbox/crypto';
+import pLimit from 'p-limit';
 import type { FolderChild, FolderEntry, FilePointer, BinEntry } from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
@@ -28,6 +30,9 @@ import * as binOps from './bin';
 import type { BinState } from './bin';
 import * as shareOps from './share';
 import type { SentShareInfo } from './share';
+
+/** Maximum concurrent encrypt+pin operations for batch uploads (D-01). */
+const UPLOAD_CONCURRENCY = 3;
 
 /** Thrown when a bin operation is attempted before loadBin() has been called. */
 export class BinNotLoadedError extends Error {
@@ -815,6 +820,243 @@ export class CipherBoxClient {
         return { cid: uploadResult.cid };
       } finally {
         clearBytes(uploadResult.fileKey);
+      }
+    });
+  }
+
+  /**
+   * Upload multiple files to a folder in parallel with a single folder publish.
+   *
+   * Runs encrypt+pin operations concurrently (max UPLOAD_CONCURRENCY slots),
+   * collects results, re-reads folder metadata for stale-children mitigation,
+   * and publishes all successful FilePointers in one atomic update.
+   *
+   * Per D-03: New batch method. Per D-01: Fixed concurrency of 3.
+   * Per D-02: Pipeline-style (encrypt -> pin -> free per file, not buffer-all).
+   * Per D-05: Re-reads folder metadata before final publish.
+   * Per D-09: Partial failures publish successes only.
+   * Per D-10: Single publish after all slots drain.
+   */
+  async uploadFiles(
+    folderIpnsName: string,
+    files: Array<{ data: Uint8Array; fileName: string; mimeType: string }>,
+    callbacks?: {
+      onFileProgress?: (fileName: string, percent: number) => void;
+      onFileComplete?: (fileName: string) => void;
+      onFileError?: (fileName: string, error: string) => void;
+    },
+    options?: {
+      encryptFn?: ExternalEncryptFn;
+      pinFn?: (
+        ctx: SdkContext,
+        data: Uint8Array,
+        onProgress?: ProgressCallback
+      ) => Promise<{ cid: string; size: number }>;
+    }
+  ): Promise<{
+    successes: Array<{ fileName: string; cid: string }>;
+    failures: Array<{ fileName: string; error: string }>;
+  }> {
+    return this.withOperation('uploadFiles', async () => {
+      const folder = this.folderTree.get(folderIpnsName);
+      if (!folder) throw new Error('Folder not loaded');
+
+      // Build BYO-IPFS pinFn override (same pattern as uploadFile)
+      const mode = this.config.pinningConfig?.mode ?? 'cipherbox';
+      const pinFn =
+        options?.pinFn ??
+        (mode === 'cipherbox' || !this.externalProvider
+          ? undefined
+          : async (
+              ctx: SdkContext,
+              encData: Uint8Array,
+              prog?: ProgressCallback
+            ): Promise<{ cid: string; size: number }> => {
+              const result = await this.pinWithMode(encData, ctx, prog);
+              return { cid: result.cid, size: result.size };
+            });
+
+      // Create p-limit concurrency pool (D-01)
+      const limit = pLimit(UPLOAD_CONCURRENCY);
+
+      type FileResult = {
+        fileName: string;
+        fileId: string;
+        uploadResult: UploadResult;
+      };
+
+      // Run all files through the pool with Promise.allSettled (D-02, D-10)
+      const settled = await Promise.allSettled(
+        files.map((file) =>
+          limit(async () => {
+            const fileId = crypto.randomUUID();
+            const encryptionMode = selectEncryptionMode(file.mimeType, file.data.length);
+
+            const uploadResult = await sdkCore.uploadFile({
+              data: file.data,
+              fileId,
+              mimeType: file.mimeType,
+              folderKey: folder.folderKey,
+              userPublicKey: this.config.vaultKeypair.publicKey,
+              ctx: this.ctx,
+              onProgress: (percent) => callbacks?.onFileProgress?.(file.fileName, percent),
+              teeKeys: this.config.teeKeys,
+              pinFn,
+              encryptionMode,
+              encryptFn: options?.encryptFn,
+            });
+
+            callbacks?.onFileComplete?.(file.fileName);
+            return { fileName: file.fileName, fileId, uploadResult } as FileResult;
+          })
+        )
+      );
+
+      // Partition results into successes and failures
+      const successes: FileResult[] = [];
+      const failures: Array<{ fileName: string; error: string }> = [];
+
+      for (let i = 0; i < settled.length; i++) {
+        const result = settled[i];
+        const fileName = files[i].fileName;
+        if (result.status === 'fulfilled') {
+          successes.push(result.value);
+        } else {
+          const errorMsg =
+            result.reason instanceof Error ? result.reason.message : String(result.reason);
+          failures.push({ fileName, error: errorMsg });
+          callbacks?.onFileError?.(fileName, errorMsg);
+        }
+      }
+
+      // If no successes, emit event and return early (D-09)
+      if (successes.length === 0) {
+        this.emitter.emit({
+          type: 'files:batchUploaded',
+          folderId: folderIpnsName,
+          successes: [],
+          failures: failures.map((f) => ({ fileName: f.fileName, error: f.error })),
+        });
+        return { successes: [], failures };
+      }
+
+      try {
+        // Re-read folder metadata to mitigate stale-children race (D-05)
+        const freshFolder = await sdkCore.loadFolderMetadata({
+          ipnsName: folderIpnsName,
+          folderKey: folder.folderKey,
+          ctx: this.ctx,
+        });
+        let mergedChildren = freshFolder?.metadata.children ?? folder.children;
+        const freshSeq = freshFolder?.sequenceNumber ?? folder.sequenceNumber;
+
+        // Add FilePointers for all successful uploads
+        for (const success of successes) {
+          const { updatedChildren } = sdkCore.addFilePointerToFolder({
+            children: mergedChildren,
+            fileId: success.fileId,
+            fileName: success.fileName,
+            fileMetaIpnsName: success.uploadResult.fileMetaIpnsName,
+            ipnsPrivateKeyEncrypted: success.uploadResult.ipnsPrivateKeyEncrypted,
+          });
+          mergedChildren = updatedChildren;
+        }
+
+        // Single folder publish + batch IPNS publish (concurrent) (D-10)
+        const ipnsRecords = successes.map((s) => s.uploadResult.ipnsRecord);
+        const [folderResult, batchResult] = await Promise.allSettled([
+          sdkCore.updateFolderMetadataAndPublish({
+            children: mergedChildren,
+            folderKey: folder.folderKey,
+            ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+            ipnsName: folderIpnsName,
+            sequenceNumber: freshSeq,
+            ctx: this.ctx,
+          }),
+          sdkCore.batchPublishIpnsRecords(ipnsRecords, this.ctx),
+        ]);
+
+        // Folder publish failure is critical -- must succeed
+        if (folderResult.status === 'rejected') {
+          throw folderResult.reason;
+        }
+
+        // Batch IPNS publish failure is non-critical (same pattern as uploadFile)
+        if (batchResult.status === 'rejected') {
+          const batchError =
+            batchResult.reason instanceof Error
+              ? batchResult.reason
+              : new Error(String(batchResult.reason));
+          console.warn(
+            '[SDK] File IPNS batch publish failed (non-critical, will retry on next publish):',
+            batchError
+          );
+          this.emitter.emit({
+            type: 'ipns:batchPublishFailed',
+            ipnsNames: ipnsRecords.map((r) => r.ipnsName),
+            error: batchError,
+          });
+        } else if (batchResult.value?.totalFailed > 0) {
+          console.warn(
+            `[SDK] File IPNS batch publish partially failed: ${batchResult.value.totalFailed} of ${batchResult.value.totalFailed + batchResult.value.totalSucceeded} records failed`
+          );
+          this.emitter.emit({
+            type: 'ipns:batchPublishFailed',
+            ipnsNames: ipnsRecords.map((r) => r.ipnsName),
+            error: new Error(
+              `Batch publish partial failure: ${batchResult.value.totalFailed} record(s) failed`
+            ),
+          });
+        }
+
+        const { newSequenceNumber } = folderResult.value;
+
+        // Update internal state
+        folder.children = mergedChildren;
+        folder.sequenceNumber = newSequenceNumber;
+        folder.lastLoadedAt = Date.now();
+        this.folderTree.set(folderIpnsName, folder);
+
+        // Emit events
+        this.emitter.emit({
+          type: 'files:batchUploaded',
+          folderId: folderIpnsName,
+          successes: successes.map((s) => ({ fileName: s.fileName, cid: s.uploadResult.cid })),
+          failures,
+        });
+        this.emitter.emit({
+          type: 'folder:updated',
+          folderId: folderIpnsName,
+          ipnsName: folderIpnsName,
+          children: mergedChildren,
+          sequenceNumber: newSequenceNumber,
+        });
+
+        // Re-wrap file keys for share recipients (best-effort)
+        try {
+          if (this.config.shareCallbacks) {
+            await this.reWrapNewItems(
+              folderIpnsName,
+              successes.map((s) => ({
+                keyType: 'file' as const,
+                itemId: s.fileId,
+                plaintextKey: s.uploadResult.fileKey,
+              }))
+            );
+          }
+        } catch (err) {
+          console.warn('[SDK] Post-batch-upload re-wrapping failed:', err);
+        }
+
+        return {
+          successes: successes.map((s) => ({ fileName: s.fileName, cid: s.uploadResult.cid })),
+          failures,
+        };
+      } finally {
+        // Clear file keys for all successful uploads
+        for (const success of successes) {
+          clearBytes(success.uploadResult.fileKey);
+        }
       }
     });
   }
