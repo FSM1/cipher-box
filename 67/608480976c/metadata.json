@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "67608480976c",
+  "strategy": "manual-commit",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useDropUpload.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/67/608480976c/0/metadata.json",
+      "transcript": "/67/608480976c/0/full.jsonl",
+      "content_hash": "/67/608480976c/0/content_hash.txt",
+      "prompt": "/67/608480976c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1485,
+    "cache_creation_tokens": 162221,
+    "cache_read_tokens": 18923439,
+    "output_tokens": 48881,
+    "api_call_count": 177
+  }
+}

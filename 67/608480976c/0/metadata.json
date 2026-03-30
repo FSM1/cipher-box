@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "67608480976c",
+  "session_id": "66b8eabe-070d-4f34-96a8-81ed94408db2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T17:32:33.724634Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useDropUpload.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "bcfd8de8e954",
+  "token_usage": {
+    "input_tokens": 1485,
+    "cache_creation_tokens": 162221,
+    "cache_read_tokens": 18923439,
+    "output_tokens": 48881,
+    "api_call_count": 177
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Execute Phase 37 of the cipher-box project to implement a parallel batch upload pipeline, then clean up the code, add test coverage, and resolve PR review comments.",
+    "outcome": "Phase 37 completed with 2 plans: an SDK `uploadFiles()` batch method (Wave 1) and a Web Worker encryption offload + `useDropUpload` rewire (Wave 2). PR #416 created, code simplified, integration/E2E tests added, lint fixed, and 3 real bugs found in PR review were patched.",
+    "learnings": {
+      "repo": [
+        "The encrypt worker follows the same pattern as the existing `decrypt-sw.ts` service worker but needs its own entry in `tsconfig.sw.json` for CI type-checking coverage.",
+        "Vite handles `new Worker(new URL(..., import.meta.url))` natively — no extra config needed for dev/CI/prod worker builds.",
+        "`@cipherbox/crypto` uses Web Crypto API only (no Node.js crypto), making it safe to use inside Web Workers.",
+        "The codebase uses `ExternalEncryptFn` from `@cipherbox/sdk-core` as the canonical encryption function type — new code should reuse it via `ReturnType\u003c\u003e` / `Parameters\u003c\u003e` rather than redeclaring inline.",
+        "The project treats lint warnings as errors — `@typescript-eslint/no-explicit-any` warnings in test files must be fixed, not ignored.",
+        "Task-reference comments like `(D-01)` are considered noise and should be removed; only non-obvious WHY comments are acceptable.",
+        "Blob `.buffer` usage in `upload.service.ts` violates `apps/web/CLAUDE.md` guidance — pre-existing debt to fix separately."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 167,
+          "end_line": 167,
+          "finding": "Real bug: `params.data.length` becomes 0 after Transferable ArrayBuffer transfer. The byteLength must be captured before transfer."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "`addFilePointerToFolder` collision error during batch upload should not abort the entire batch — it should be caught and the file demoted to a partial success, not thrown."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "If `arrayBuffer()` or `uploadFiles()` throws inside the new-file batch path, upload rows get stuck in 'encrypting' state permanently. Needs a catch that marks all pending uploads as errored."
+        }
+      ],
+      "workflow": [
+        "Worktree merges can silently fail if the branch ref isn't updated — cherry-picking specific commits from the worktree HEAD is a reliable fallback.",
+        "GSD verifier agents can produce false negatives if they run before cherry-picked commits are fully visible; always spot-check with Grep/file existence before accepting a `gaps_found` result.",
+        "Parallel executor agents commit with `--no-verify` to avoid hook contention; the orchestrator must run hooks once post-wave.",
+        "When running three parallel review agents (reuse, quality, efficiency), aggregating findings before acting avoids redundant fixes.",
+        "p-limit must be added as an explicit dependency after the SDK plan executes — it won't be auto-installed by pnpm workspaces."
+      ]
+    },
+    "friction": [
+      "Wave 2 worktree branch ref wasn't updated after agent commits, requiring manual cherry-pick recovery.",
+      "The GSD verifier produced false negatives for all Wave 2 artifacts because it ran before cherry-picked commits were visible — required manual VERIFICATION.md correction.",
+      "Branch context confusion after cherry-picks: ended up in the worktree directory instead of the main repo, causing a bad merge that had to be reset.",
+      "PROJECT.md commit had to be retried after discovering the working directory had drifted to the wrong branch.",
+      "Stale worktree (`cipher-box-worktree-parallel`) left behind after execution and needed manual pruning during PR creation.",
+      "lint:fix run by user surfaced `any` type warnings that should have been caught before pushing — required a follow-up fix commit."
+    ],
+    "open_items": [
+      "Web E2E tests not updated — existing upload Playwright tests cover single-file serial path only; multi-file batch drag-drop flows are untested in the browser.",
+      "Upfront file buffer allocation in `uploadFiles()` — all 3 review agents flagged memory concern for large batches; bounded by MAX_FILE_SIZE (100MB) for now but worth revisiting if batch sizes grow.",
+      "Blob `.buffer` usage in `apps/web/src/services/upload.service.ts` violates CLAUDE.md guidance — pre-existing issue, not addressed in this phase.",
+      "Cancel/abort support for batch uploads (AbortSignal passthrough in `uploadFiles()`) was flagged in PR review but deferred as out of scope.",
+      "Secondary pin warning not emitted in the batch path — identified in PR review, deprioritized."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T17:31:54.800976Z",
+    "agent_lines": 0,
+    "human_added": 187,
+    "human_modified": 62,
+    "human_removed": 0,
+    "total_committed": 189,
+    "agent_percentage": 0
+  }
+}
