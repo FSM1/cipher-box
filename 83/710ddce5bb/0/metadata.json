@@ -1,0 +1,81 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "83710ddce5bb",
+  "session_id": "66b8eabe-070d-4f34-96a8-81ed94408db2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T17:07:32.881313Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "db7fa30a5041",
+  "token_usage": {
+    "input_tokens": 1401,
+    "cache_creation_tokens": 111455,
+    "cache_read_tokens": 8424755,
+    "output_tokens": 29571,
+    "api_call_count": 106
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute Phase 37 (parallel-batch-upload-pipeline) with wave-based parallel execution, then simplify/review the resulting code.",
+    "outcome": "Both plans completed successfully — SDK `uploadFiles()` batch method with p-limit concurrency (Wave 1) and Web Worker encryption offload + `useDropUpload` rewire (Wave 2). Code review fixed type duplication, task-reference comments, and a misleading worker comment.",
+    "learnings": {
+      "repo": [
+        "Project uses GSD (get-shit-done) workflow with wave-based parallel execution via worktrees — each plan runs in an isolated git worktree and results are merged back to the feature branch",
+        "p-limit is used for concurrency control in the SDK; was not yet installed as a dependency and needed `npm install` after plan execution",
+        "The codebase has a structured logger pattern — `console.warn/log/error` should be avoided in favor of the project logger",
+        "Phase 37 is the last phase in the current milestone",
+        "The SDK package requires a build step (`build sdk-core` then `build sdk`) before the web app can typecheck against new exports",
+        "ExternalEncryptFn type is defined in the SDK and should be reused rather than redeclared in web service files"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "finding": "Originally declared a duplicate encryption result type — fixed to reuse ExternalEncryptFn return type from SDK"
+        },
+        {
+          "path": "apps/web/src/workers/encrypt.worker.ts",
+          "finding": "Defensive ArrayBuffer copy before transfer IS intentional (must copy before transferring to avoid detached buffer issues), but the comment was misleading — corrected"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "D-0X task-reference comments (referencing implementation task IDs) were scattered throughout — removed as noise for future maintainers"
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 146,
+          "finding": "useDropUpload now calls client.uploadFiles() at line 146, replacing the prior sequential upload loop"
+        },
+        {
+          "path": "apps/web/src/services/upload.service.ts",
+          "finding": "Pre-existing Blob .buffer access issue noted by reviewers but out of scope for Phase 37"
+        }
+      ],
+      "workflow": [
+        "Worktree merge requires care: if the worktree HEAD detaches from the branch ref, the branch won't contain the commits — cherry-pick by commit hash is the recovery path",
+        "GSD verifier agents can produce false negatives if run before cherry-picked commits are visible on the branch — always spot-check artifact existence directly before accepting a gaps_found verdict",
+        "When multiple worktrees are active, `cd` into the wrong directory is easy — always verify CWD before git operations",
+        "Parallel executor agents use `--no-verify` on commits; orchestrator validates hooks once after wave completion",
+        "The `classifyHandoffIfNeeded is not defined` error is a Claude Code runtime bug that fires after tool calls finish — spot-check SUMMARY.md + git log to determine real success/failure"
+      ]
+    },
+    "friction": [
+      "Wave 2 worktree branch ref was not updated after agent commits — HEAD had commits but branch pointer was stale, causing a bad merge that imported no files",
+      "Recovery required: undo bad merge, identify correct commit hashes via detached HEAD inspection, then cherry-pick three commits individually",
+      "After cherry-picking, the orchestrator was accidentally operating from inside the worktree directory instead of the main repo, causing subsequent git operations to target the wrong repo",
+      "PROJECT.md commit initially failed because the working directory was the worktree, not the main repo",
+      "Verifier agent ran before cherry-picked Wave 2 commits were fully visible, producing false gaps_found verdict that required manual VERIFICATION.md correction across ~10 edits",
+      "p-limit was not installed as a dependency — discovered only after execution completed, requiring a manual `npm install`",
+      "SDK and sdk-core required explicit rebuild steps before web app typechecking would pass against new uploadFiles export"
+    ],
+    "open_items": [
+      "Upfront file buffer allocation for large batches — all three review agents flagged memory concern for large batch uploads, but fixing requires an SDK contract change; deferred because 100MB MAX_FILE_SIZE bounds worst case",
+      "Pre-existing Blob .buffer access issue in upload.service.ts — noted by code quality reviewer but out of Phase 37 scope",
+      "HUMAN-UAT.md was not created (verification passed automatically) — no human testing items were identified, but the batch upload flow should be manually tested end-to-end",
+      "Milestone is complete — `/gsd:audit-milestone` should be run before archiving"
+    ]
+  }
+}
