@@ -180,6 +180,7 @@ Recent for v1.1:
 - Phase 23 added: Rust SDK Extraction — extract shared cipherbox-core crate, replace duplicated logic in desktop FUSE code, enable unit testing parity with TypeScript
 - Phase 27 added: Writable Shares (PoC) — extend read-only sharing to read-write using existing server-coordinated conflict resolution
 - Phase 36 added: Refactor upload progress in web app, to an inline progress display and remove the popup upload progress
+- Phase 37 added: Parallel batch upload pipeline — replace sequential per-file upload loop with parallel encrypt+pin and single folder metadata update
 
 ### Open Concerns
 
