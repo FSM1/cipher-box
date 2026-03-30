@@ -491,17 +491,18 @@ Plans:
 
 ### Phase 36: Inline upload progress
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Replace the floating UploadModal popup with inline upload progress rows integrated directly into the file browser list, providing in-context upload feedback
+**Requirements**: None (UI refactor, no formal requirement IDs)
 **Depends on:** Phase 35
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 36 to break down)
+- [ ] 36-01-PLAN.md -- Upload store refactor to per-file tracking, upload loop migration to per-file actions
+- [ ] 36-02-PLAN.md -- UploadListItem component, FileList virtual entry merging, inline CSS, delete UploadModal/UploadItem
 
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-29_
+_Last updated: 2026-03-30_
 _Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases_
