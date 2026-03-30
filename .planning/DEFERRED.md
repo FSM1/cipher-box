@@ -92,7 +92,6 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 
 | Item                                    | Source Phase | Notes                                    |
 | --------------------------------------- | ------------ | ---------------------------------------- |
-| Remote log shipping (Datadog, Loki)     | 28           | Deferred to Phase 30 scope if needed     |
 | `no-console` ESLint rule enforcement    | 28           | Optional enforcement mechanism           |
 | Web Worker logging (MessagePort bridge) | 28           | Requires separate communication protocol |
 | "Report a problem" user-facing button   | 30           | Nice-to-have, not in scope               |
@@ -149,5 +148,6 @@ These were deferred but have since been completed:
 | Linux FUSE mount                          | Phase 11.3               | Phase 11.3     |
 | Per-file IPNS conflict detection          | Phase 16                 | Phase 12.6     |
 | Batch upload secondary pin warning events | Phase 37                 | Phase 37       |
+| Remote log shipping (Grafana Faro)        | Phase 28                 | Phase 30       |
 
 <!-- Deferred inventory: 2026-03-31 -->
