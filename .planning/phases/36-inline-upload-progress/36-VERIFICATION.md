@@ -80,10 +80,10 @@ No formal requirement IDs for this phase (UI refactor). `requirements: []` in bo
 
 ### Anti-Patterns Found
 
-| File                                                      | Line      | Pattern                                                                                                 | Severity | Impact                                                                                                                                                                                                                                                                                                                      |
-| --------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/web/src/components/file-browser/UploadListItem.tsx` | 47, 54-70 | `useCallback` hooks defined after `if (!file) return null` early return — violates React Rules of Hooks | BLOCKER  | Can cause "Rendered more hooks than previous render" React error when a completing upload's store entry is removed (via `removeFile`) while the component is still mounted. This momentary state transition (file becomes undefined during the 1s completion flash timer race) would trigger a React hooks order violation. |
-| `apps/web/src/services/upload.service.ts`                 | 107       | `addFile(uploadId, file.name, '', file)` — hardcoded empty `targetFolderId`                             | INFO     | Upload rows for files uploaded via `uploadFiles()` would appear in no folder's FileList. Not a blocker since `useFileUpload` (the only caller of `uploadFiles`) has zero active consumers in the current UI.                                                                                                                |
+None found. All previously identified anti-patterns have been resolved:
+
+- React Rules of Hooks violation: fixed in dfeaadf (hooks moved before early return)
+- Hardcoded empty `targetFolderId` in `uploadFiles()`: removed — `uploadFiles()` and `useFileUpload` hook deleted as dead code in d543764
 
 **Note on lint errors:** `pnpm lint` reports 50 errors in `apps/api/src/ipns/delegated-routing.client.spec.ts` and `apps/web/vite.config.js`. These are pre-existing Prettier violations unrelated to Phase 36 — verified by checking which files were touched in Phase 36 commits.
 
@@ -109,11 +109,13 @@ No formal requirement IDs for this phase (UI refactor). `requirements: []` in bo
 
 ### Gaps Summary
 
-One gap blocks full goal achievement:
+No gaps. All previously identified issues have been resolved:
 
-**React Rules of Hooks violation in UploadListItem.tsx:** The three `useCallback` declarations (`handleCancel`, `handleDismiss`, `handleRetry`) are placed after the `if (!file) return null` early return guard at line 47. React requires all hooks to be called unconditionally on every render. During the 1-second completion flash, `removeFile(fileId)` is called from the timer, making `files.get(fileId)` return `undefined`. The component re-renders with `file` undefined, hits the early return, and skips the `useCallback` calls — causing a hooks order mismatch that React will throw as an error in development mode ("Rendered more hooks than previous render").
-
-**Fix:** Move the three `useCallback` declarations to before line 47 (before the `if (!file) return null` guard). Since the callbacks reference `file?.file` in `handleRetry`, the callback itself already handles the null check with the optional chain.
+- Hooks order violation: fixed in dfeaadf (moved `useCallback` before early return)
+- Retry duplicate entries: fixed in 45eb47a (`removeFile` + `onRetry` replaces `retryFile`)
+- Upload ID collisions: fixed in caaf557 (sequence counter suffix)
+- Terminal state guard: fixed in caaf557 (skip complete/error in `updateFileProgress`)
+- Orphan CID unpin: fixed in caaf557 (only unregistered CIDs tracked for cleanup)
 
 ---
 
