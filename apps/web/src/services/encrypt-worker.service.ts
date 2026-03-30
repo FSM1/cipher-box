@@ -26,10 +26,9 @@ export class EncryptionWorkerService {
   private getWorker(): Worker {
     if (!this.worker) {
       // Static string literal required for Vite static analysis
-      this.worker = new Worker(
-        new URL('../workers/encrypt.worker.ts', import.meta.url),
-        { type: 'module' },
-      );
+      this.worker = new Worker(new URL('../workers/encrypt.worker.ts', import.meta.url), {
+        type: 'module',
+      });
       this.worker.onmessage = (event: MessageEvent<EncryptResponse>) => {
         const response = event.data;
         const entry = this.pending.get(response.id);
@@ -67,9 +66,7 @@ export class EncryptionWorkerService {
    * the ciphertext ArrayBuffer back (zero-copy). After calling this, the
    * original `data` Uint8Array becomes zero-length (transferred).
    */
-  encrypt(
-    params: Parameters<ExternalEncryptFn>[0]
-  ): ReturnType<ExternalEncryptFn> {
+  encrypt(params: Parameters<ExternalEncryptFn>[0]): ReturnType<ExternalEncryptFn> {
     return new Promise((resolve, reject) => {
       this.idCounter += 1;
       const id = `enc-${this.idCounter}-${Date.now()}`;

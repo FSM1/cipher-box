@@ -226,67 +226,76 @@ describeIf('SDK Integration (live API)', () => {
     }
   );
 
-  it(
-    'batch upload: uploadFiles() uploads multiple files with single folder publish',
-    async () => {
-      const keys = await initializeVault(SECRET, API);
-      const vault = await encryptVaultKeys(keys, API);
-      const rootIpnsName = await deriveIpnsName(vault.rootFolderIpnsPrivateKey);
+  it('batch upload: uploadFiles() uploads multiple files with single folder publish', async () => {
+    const keys = await initializeVault(SECRET, API);
+    const vault = await encryptVaultKeys(keys, API);
+    const rootIpnsName = await deriveIpnsName(vault.rootFolderIpnsPrivateKey);
 
-      const client = new CipherBoxClient({
-        apiBaseUrl: API,
-        authToken: vault.authToken,
-        vaultKeypair: { publicKey: vault.publicKey, privateKey: vault.privateKey },
-        rootFolderIpnsName: rootIpnsName,
-        rootFolderIpnsPrivateKey: vault.rootFolderIpnsPrivateKey,
-        rootFolderKey: vault.rootFolderKey,
-        teeKeys: vault.teeKeys,
+    const client = new CipherBoxClient({
+      apiBaseUrl: API,
+      authToken: vault.authToken,
+      vaultKeypair: { publicKey: vault.publicKey, privateKey: vault.privateKey },
+      rootFolderIpnsName: rootIpnsName,
+      rootFolderIpnsPrivateKey: vault.rootFolderIpnsPrivateKey,
+      rootFolderKey: vault.rootFolderKey,
+      teeKeys: vault.teeKeys,
+    });
+
+    try {
+      await client.loadFolder(rootIpnsName);
+
+      // Upload 3 files in one batch
+      const files = [
+        {
+          data: new TextEncoder().encode('file-a ' + Date.now()),
+          fileName: 'batch-a.txt',
+          mimeType: 'text/plain',
+        },
+        {
+          data: new TextEncoder().encode('file-b ' + Date.now()),
+          fileName: 'batch-b.txt',
+          mimeType: 'text/plain',
+        },
+        {
+          data: new TextEncoder().encode('file-c ' + Date.now()),
+          fileName: 'batch-c.txt',
+          mimeType: 'text/plain',
+        },
+      ];
+
+      const completedFiles: string[] = [];
+      const result = await client.uploadFiles(rootIpnsName, files, {
+        onFileComplete: (fileName) => completedFiles.push(fileName),
       });
 
-      try {
-        await client.loadFolder(rootIpnsName);
+      // All 3 should succeed
+      expect(result.successes).toHaveLength(3);
+      expect(result.failures).toHaveLength(0);
+      expect(completedFiles).toHaveLength(3);
+      console.log('  ✓ Batch upload: 3 files uploaded');
 
-        // Upload 3 files in one batch
-        const files = [
-          { data: new TextEncoder().encode('file-a ' + Date.now()), fileName: 'batch-a.txt', mimeType: 'text/plain' },
-          { data: new TextEncoder().encode('file-b ' + Date.now()), fileName: 'batch-b.txt', mimeType: 'text/plain' },
-          { data: new TextEncoder().encode('file-c ' + Date.now()), fileName: 'batch-c.txt', mimeType: 'text/plain' },
-        ];
+      // Verify all 3 appear in folder
+      const root = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
+      const names = root!.children.map((c: FolderChild) => c.name).sort();
+      expect(names).toContain('batch-a.txt');
+      expect(names).toContain('batch-b.txt');
+      expect(names).toContain('batch-c.txt');
+      console.log('  ✓ All 3 files visible in folder');
 
-        const completedFiles: string[] = [];
-        const result = await client.uploadFiles(rootIpnsName, files, {
-          onFileComplete: (fileName) => completedFiles.push(fileName),
-        });
-
-        // All 3 should succeed
-        expect(result.successes).toHaveLength(3);
-        expect(result.failures).toHaveLength(0);
-        expect(completedFiles).toHaveLength(3);
-        console.log('  ✓ Batch upload: 3 files uploaded');
-
-        // Verify all 3 appear in folder
-        const root = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
-        const names = root!.children.map((c: FolderChild) => c.name).sort();
-        expect(names).toContain('batch-a.txt');
-        expect(names).toContain('batch-b.txt');
-        expect(names).toContain('batch-c.txt');
-        console.log('  ✓ All 3 files visible in folder');
-
-        // Download one and verify content
-        const fileChild = root!.children.find(
-          (c): c is FilePointer => c.type === 'file' && c.name === 'batch-a.txt'
-        );
-        expect(fileChild).toBeTruthy();
-        const downloaded = await client.downloadFromIpns(
-          fileChild!.fileMetaIpnsName,
-          vault.rootFolderKey
-        );
-        const text = new TextDecoder().decode(downloaded);
-        expect(text).toContain('file-a');
-        console.log('  ✓ Downloaded batch-a.txt, content verified');
-      } finally {
-        client.destroy();
-      }
+      // Download one and verify content
+      const fileChild = root!.children.find(
+        (c): c is FilePointer => c.type === 'file' && c.name === 'batch-a.txt'
+      );
+      expect(fileChild).toBeTruthy();
+      const downloaded = await client.downloadFromIpns(
+        fileChild!.fileMetaIpnsName,
+        vault.rootFolderKey
+      );
+      const text = new TextDecoder().decode(downloaded);
+      expect(text).toContain('file-a');
+      console.log('  ✓ Downloaded batch-a.txt, content verified');
+    } finally {
+      client.destroy();
     }
-  );
+  });
 });

@@ -166,14 +166,14 @@ export function useDropUpload() {
                 }
               },
             },
-            { encryptFn },
+            { encryptFn }
           );
 
           // Failures already surfaced via onFileError callback (sets upload store to 'error').
           if (result.failures.length > 0) {
             logger.warn(
               `[Upload] Batch upload partial failure: ${result.failures.length} file(s) failed`,
-              result.failures,
+              result.failures
             );
           }
         }

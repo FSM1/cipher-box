@@ -66,10 +66,7 @@ self.onmessage = async (event: MessageEvent<EncryptRequest>) => {
     };
 
     // Transfer ownership of large buffers (zero-copy)
-    self.postMessage(response, [
-      ciphertext.buffer,
-      fileKeyCopy.buffer,
-    ] as Transferable[]);
+    self.postMessage(response, [ciphertext.buffer, fileKeyCopy.buffer] as Transferable[]);
   } catch (err) {
     const response: EncryptResponse = {
       type: 'error',
