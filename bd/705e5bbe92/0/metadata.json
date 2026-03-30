@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "bd705e5bbe92",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T21:36:29.015308Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "8d771301dce9",
+  "token_usage": {
+    "input_tokens": 3686,
+    "cache_creation_tokens": 99491,
+    "cache_read_tokens": 3257933,
+    "output_tokens": 23522,
+    "api_call_count": 49
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on PR #416, then update project documentation (DEFERRED.md, FEATURES.md, README.md, and a new filesystem specification) on a dedicated docs branch.",
+    "outcome": "All 4 review threads were triaged, fixed, replied to, and resolved; a docs branch was created with 4 files updated/created and merged as PR #419; a pending todo for web worker encryption was moved to done.",
+    "learnings": {
+      "repo": [
+        "cipher-box is a monorepo with apps (web, api), packages (sdk, sdk-core), crates (fuse, etc.), and tests (web-e2e, sdk-e2e, load) directories",
+        "Planning artifacts live under .planning/ with phases numbered (e.g. 37-parallel-batch-upload-pipeline), DEFERRED.md, FEATURES.md, STATE.md, and per-phase CONTEXT/PLAN/SUMMARY docs",
+        "Todos are tracked as markdown files under .planning/todos/pending/ and .planning/todos/done/",
+        "Integration tests in packages/sdk/src/__tests__/integration.test.ts require a live backend and are expected to fail in CI without one — these are pre-existing failures, not regressions",
+        "Web Worker encryption was implemented in phase 37 (encrypt-worker.service.ts, encrypt.worker.ts, encrypt.types.ts) but the pending todo was not moved to done until explicitly caught at end of session",
+        "Batch upload is implemented in the JS SDK and web app but NOT in the Rust SDK — the feature matrix needs to reflect per-SDK status",
+        "CipherBox filesystem enforces Windows-compatible naming rules (case-insensitive) as the strictest common denominator across Desktop OSes",
+        "FUSE mount rules and name validation constants are split between crates/fuse/src/ (helpers.rs, constants.rs, inode.rs) and sdk-core validation logic"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "getWorker() and postMessage() calls could throw, leaving pending entries in the map and causing memory leaks; fixed with try/catch that deletes the pending entry on error"
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "Batch reads all files into memory before SDK call — a known architectural limitation deferred because fixing it requires changing the SDK contract to accept File objects or read callbacks instead of Uint8Array"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "uploadFiles() doc comment overstated memory bounding — fixed to accurately describe actual memory behavior"
+        }
+      ],
+      "workflow": [
+        "Use gh api graphql with reviewThreads query to fetch all PR review threads including isResolved status; REST API does not expose thread resolution state",
+        "Reply to review threads via REST (repos/.../pulls/.../comments with in_reply_to as integer using --field not -f), then resolve via GraphQL mutation resolveReviewThread",
+        "When multiple reviewers flag the same issue (CodeRabbit + Copilot both flagged postMessage throw), treat as duplicate and apply one fix but reply/resolve both threads",
+        "156 unit tests passing with 3 pre-existing integration test failures is an acceptable baseline — document this distinction rather than blocking on it",
+        "Moving todos from pending to done should be part of the implementation commit/PR, not an afterthought — easy to miss without an explicit checklist step"
+      ]
+    },
+    "friction": [
+      "git push failed on first attempt for the docs branch and required a retry",
+      "Web worker encryption todo was left in pending/ after the feature shipped — required an explicit user question to catch; the review-comments workflow had no step to cross-check todos",
+      "Copilot flagged the same lazy file-read issue (useDropUpload.ts:140) that CodeRabbit had already identified and that was already tracked as a deferred item, adding noise to the review round"
+    ],
+    "open_items": [
+      "Lazy file reading within concurrency pool (useDropUpload.ts:140) — requires SDK contract change to accept File objects or read callbacks instead of Uint8Array; tracked in DEFERRED.md",
+      "Batch upload not implemented in the Rust SDK — feature parity gap documented in FEATURES.md matrix",
+      "~24 deferred items catalogued from phases 28-37 including: observability/structured logging improvements, upload pipeline enhancements (resumable uploads, server-sent progress events), FUSE cross-platform naming gap resolution, and infra hardening items",
+      "Five documented cross-platform filesystem gaps in FILESYSTEM_SPECIFICATION.md (case sensitivity behavior differences between macOS/Linux/Windows FUSE mounts)",
+      "E2E test coverage for desktop app likely incomplete — desktop E2E directory was checked but not fully inventoried during this session"
+    ]
+  }
+}
