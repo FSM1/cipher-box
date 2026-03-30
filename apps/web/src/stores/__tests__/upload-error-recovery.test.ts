@@ -2,7 +2,7 @@
  * Upload Error Recovery Tests
  *
  * Verifies:
- * 1. Upload store transitions to 'error' when addFiles fails after registering
+ * 1. Upload store transitions to 'error' via per-file setFileStatus
  * 2. Orphaned IPFS pins are cleaned up when registration fails after successful upload
  * 3. Quota is refreshed after orphan cleanup
  */
@@ -11,18 +11,21 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useUploadStore } from '../upload.store';
 import type { PendingReplacement } from '../upload.store';
 
+const TEST_FILE = new File(['test'], 'test.txt', { type: 'text/plain' });
+
 /**
- * Simulates the catch-block error recovery logic from UploadZone/EmptyState.
+ * Simulates the catch-block error recovery logic from useDropUpload.
  * Extracted here so we can test all branches without fighting TypeScript narrowing.
  */
 function simulateErrorRecovery(
+  fileId: string,
   errorMessage: string,
   uploadedFiles: { cid: string }[] | undefined,
   unpinFn: (cid: string) => Promise<void>,
   fetchQuotaFn: () => Promise<void>
 ) {
   if (errorMessage !== 'Upload cancelled by user') {
-    useUploadStore.getState().setError(errorMessage);
+    useUploadStore.getState().setFileStatus(fileId, 'error', errorMessage);
 
     if (uploadedFiles?.length) {
       uploadedFiles.forEach((f) => unpinFn(f.cid).catch(() => {}));
@@ -36,38 +39,30 @@ describe('Upload Store - Error Recovery', () => {
     useUploadStore.getState().reset();
   });
 
-  describe('setError transitions store out of registering', () => {
-    it('should transition from registering to error state', () => {
-      useUploadStore.getState().startUpload(2);
-      useUploadStore.getState().setEncrypting('file1.txt');
-      useUploadStore.getState().setUploading('file1.txt', 100);
-      useUploadStore.getState().fileComplete();
-      useUploadStore.getState().setRegistering();
+  describe('setFileStatus transitions file to error', () => {
+    it('should transition a file to error state', () => {
+      const testId = 'upload-file1-1234';
+      useUploadStore.getState().addFile(testId, 'file1.txt', 'root', TEST_FILE);
+      useUploadStore.getState().updateFileProgress(testId, 50);
 
-      expect(useUploadStore.getState().status).toBe('registering');
+      useUploadStore.getState().setFileStatus(testId, 'error', 'Duplicate filename');
 
-      useUploadStore.getState().setError('Duplicate filename');
-
-      const state = useUploadStore.getState();
-      expect(state.status).toBe('error');
-      expect(state.error).toBe('Duplicate filename');
-      expect(state.currentFile).toBeNull();
+      const file = useUploadStore.getState().files.get(testId);
+      expect(file?.status).toBe('error');
+      expect(file?.error).toBe('Duplicate filename');
     });
 
     it('should allow reset after error state', () => {
-      useUploadStore.getState().startUpload(1);
-      useUploadStore.getState().setRegistering();
-      useUploadStore.getState().setError('Network error');
+      const testId = 'upload-file1-1234';
+      useUploadStore.getState().addFile(testId, 'file1.txt', 'root', TEST_FILE);
+      useUploadStore.getState().setFileStatus(testId, 'error', 'Network error');
 
-      expect(useUploadStore.getState().status).toBe('error');
+      expect(useUploadStore.getState().files.get(testId)?.status).toBe('error');
 
       useUploadStore.getState().reset();
 
       const state = useUploadStore.getState();
-      expect(state.status).toBe('idle');
-      expect(state.error).toBeNull();
-      expect(state.progress).toBe(0);
-      expect(state.totalFiles).toBe(0);
+      expect(state.files.size).toBe(0);
     });
   });
 });
@@ -81,9 +76,13 @@ describe('Upload Error Recovery - Orphan Cleanup Logic', () => {
     const mockUnpin = vi.fn().mockResolvedValue(undefined);
     const mockFetchQuota = vi.fn().mockResolvedValue(undefined);
 
+    const testId = 'upload-a-1234';
+    useUploadStore.getState().addFile(testId, 'a.txt', 'root', TEST_FILE);
+
     const uploadedFiles = [{ cid: 'QmAAA' }, { cid: 'QmBBB' }, { cid: 'QmCCC' }];
 
     simulateErrorRecovery(
+      testId,
       'A file with name a.txt already exists',
       uploadedFiles,
       mockUnpin,
@@ -95,25 +94,32 @@ describe('Upload Error Recovery - Orphan Cleanup Logic', () => {
     expect(mockUnpin).toHaveBeenCalledWith('QmBBB');
     expect(mockUnpin).toHaveBeenCalledWith('QmCCC');
     expect(mockFetchQuota).toHaveBeenCalledTimes(1);
-    expect(useUploadStore.getState().status).toBe('error');
+    expect(useUploadStore.getState().files.get(testId)?.status).toBe('error');
   });
 
   it('should NOT unpin when upload itself failed (uploadedFiles is undefined)', () => {
     const mockUnpin = vi.fn();
     const mockFetchQuota = vi.fn();
 
-    simulateErrorRecovery('Encryption failed', undefined, mockUnpin, mockFetchQuota);
+    const testId = 'upload-fail-1234';
+    useUploadStore.getState().addFile(testId, 'fail.txt', 'root', TEST_FILE);
+
+    simulateErrorRecovery(testId, 'Encryption failed', undefined, mockUnpin, mockFetchQuota);
 
     expect(mockUnpin).not.toHaveBeenCalled();
     expect(mockFetchQuota).not.toHaveBeenCalled();
-    expect(useUploadStore.getState().status).toBe('error');
+    expect(useUploadStore.getState().files.get(testId)?.status).toBe('error');
   });
 
   it('should NOT unpin or set error when user cancels upload', () => {
     const mockUnpin = vi.fn();
     const mockFetchQuota = vi.fn();
 
+    const testId = 'upload-cancel-1234';
+    useUploadStore.getState().addFile(testId, 'cancel.txt', 'root', TEST_FILE);
+
     simulateErrorRecovery(
+      testId,
       'Upload cancelled by user',
       [{ cid: 'QmAAA' }],
       mockUnpin,
@@ -122,14 +128,24 @@ describe('Upload Error Recovery - Orphan Cleanup Logic', () => {
 
     expect(mockUnpin).not.toHaveBeenCalled();
     expect(mockFetchQuota).not.toHaveBeenCalled();
-    expect(useUploadStore.getState().status).toBe('idle');
+    // File should still be in its original 'encrypting' status (not error)
+    expect(useUploadStore.getState().files.get(testId)?.status).toBe('encrypting');
   });
 
   it('should handle unpin failures gracefully (fire-and-forget)', () => {
     const mockUnpin = vi.fn().mockRejectedValue(new Error('Unpin failed'));
     const mockFetchQuota = vi.fn().mockResolvedValue(undefined);
 
-    simulateErrorRecovery('Registration failed', [{ cid: 'QmFAIL' }], mockUnpin, mockFetchQuota);
+    const testId = 'upload-unpin-fail-1234';
+    useUploadStore.getState().addFile(testId, 'unpin-fail.txt', 'root', TEST_FILE);
+
+    simulateErrorRecovery(
+      testId,
+      'Registration failed',
+      [{ cid: 'QmFAIL' }],
+      mockUnpin,
+      mockFetchQuota
+    );
 
     expect(mockUnpin).toHaveBeenCalledWith('QmFAIL');
     expect(mockFetchQuota).toHaveBeenCalledTimes(1);
