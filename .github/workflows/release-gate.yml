@@ -67,7 +67,8 @@ jobs:
           MAIN_REF="origin/main"
           echo "Diffing ${PREV_TAG}..${MAIN_REF}"
 
-          # Desktop-related path patterns (mirrored from ci-e2e.yml)
+          # Desktop-related path patterns (based on ci-e2e.yml, excluding
+          # the ci-e2e.yml orchestrator itself)
           DESKTOP_PATTERNS=(
             'apps/desktop/src/'
             'apps/desktop/src-tauri/src/'
@@ -91,7 +92,9 @@ jobs:
 
           CHANGED_FILES=$(git diff --name-only "${PREV_TAG}..${MAIN_REF}")
 
-          # Web-related path patterns (mirrored from ci-e2e.yml)
+          # Web-related path patterns (based on ci-e2e.yml, excluding the
+          # ci-e2e.yml orchestrator itself — changes to the orchestrator
+          # workflow don't mean the web app changed)
           WEB_PATTERNS=(
             'apps/web/'
             'apps/api/'
