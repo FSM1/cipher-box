@@ -486,7 +486,7 @@ jobs:
           echo "TAG=${{ env.DEPLOY_TAG }}" >> .env.staging
 
       - name: Copy files to VPS
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
@@ -517,7 +517,7 @@ jobs:
             ln -sf /opt/cipherbox/certs /opt/cipherbox/docker/certs
 
       - name: Deploy web app files to VPS
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
