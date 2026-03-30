@@ -126,7 +126,6 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 | Item                                            | Source Phase | Notes                                                         |
 | ----------------------------------------------- | ------------ | ------------------------------------------------------------- |
 | DTS circular build dependency (crypto <-> core) | 19.1         | Workaround in place; not fixed                                |
-| Desktop FUSE automated tests                    | -            | Manual testing only (see CONCERNS.md)                         |
 | Full retirement of folder.service.ts            | 31           | Phase 31 creates barrel re-exports; full file removal pending |
 | Full retirement of bin.service.ts               | 31           | Same as above; separate cleanup phase                         |
 | `useFileOperations.ts` decomposition            | 31           | Not in the 900+ line targets; separate effort                 |

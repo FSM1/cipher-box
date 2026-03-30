@@ -227,12 +227,11 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 - Risk: Auth flow regressions, IPC communication errors.
 - Priority: Medium. Desktop E2E covers the critical paths.
 
-**FUSE write operations have no unit tests:**
+**FUSE write operations have no unit tests (won't fix):**
 
-- What's not tested: All write operation implementations (create file, write data, rename, delete, mkdir, publish coordination) in both macOS and Windows variants.
+- What's not tested: Write operation implementations (create file, write data, rename, delete, mkdir, publish coordination) in both macOS and Windows variants.
 - Files: `crates/fuse/src/write_ops.rs` (976 lines), `crates/fuse/src/platform/windows/write_ops.rs` (1008 lines)
-- Risk: FUSE bugs cause data loss or mount crashes. Desktop E2E shell scripts cover basic flows but cannot exercise edge cases.
-- Priority: High. At minimum, add unit tests for publish coordination logic and conflict merge behavior.
+- Status: Won't fix. FUSE callbacks are thin plumbing between OS filesystem calls and the Rust SDK — unit testing them would require mocking the entire host OS filesystem layer, which is unreliable and brittle. These code paths are exercised by the Desktop E2E test suite (`tests/desktop-e2e/`) which tests actual file operations through the mounted filesystem. That is the appropriate test level for OS integration code.
 
 **API Client package has minimal tests:**
 
