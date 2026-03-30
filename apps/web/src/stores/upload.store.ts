@@ -85,7 +85,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       return { files: next };
     }),
 
-  setFileStatus: (id, status, error) =>
+  setFileStatus: (id, status, error) => {
     set((state) => {
       const entry = state.files.get(id);
       if (!entry) return state;
@@ -96,7 +96,16 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       }
       next.set(id, { ...entry, ...updates });
       return { files: next };
-    }),
+    });
+    // Auto-remove completed entries after 1s flash, regardless of whether
+    // UploadListItem is mounted (e.g., user navigated away from folder)
+    if (status === 'complete') {
+      setTimeout(() => {
+        const { files, removeFile } = get();
+        if (files.has(id)) removeFile(id);
+      }, 1000);
+    }
+  },
 
   removeFile: (id) =>
     set((state) => {

@@ -114,7 +114,7 @@
   cursor: default;
 }
 
-.upload-inline-row:hover {
+.upload-inline-row:not(.upload-inline-row--error):not(.upload-inline-row--complete):hover {
   background-color: var(--color-green-darker);
 }
 

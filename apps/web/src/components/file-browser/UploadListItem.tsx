@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useUploadStore } from '../../stores/upload.store';
 
 type UploadListItemProps = {
@@ -25,22 +25,8 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
   const cancelFile = useUploadStore((s) => s.cancelFile);
   const removeFile = useUploadStore((s) => s.removeFile);
 
-  const completionTimerRef = useRef<ReturnType<typeof setTimeout>>();
-
-  // Auto-remove after 1s green flash on completion (D-05)
-  useEffect(() => {
-    if (file?.status === 'complete') {
-      completionTimerRef.current = setTimeout(() => {
-        removeFile(fileId);
-      }, 1000);
-    }
-
-    return () => {
-      if (completionTimerRef.current) {
-        clearTimeout(completionTimerRef.current);
-      }
-    };
-  }, [file?.status, fileId, removeFile]);
+  // Completion auto-removal is handled by the store (setFileStatus schedules
+  // removeFile after 1s), so no component-level timer needed.
 
   const handleCancel = useCallback(() => {
     cancelFile(fileId);
