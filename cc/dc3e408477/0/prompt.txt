@@ -67,3 +67,7 @@ Can we add the features from phase 39 to the `features` document?
 ---
 
 ok can you please go through all the files in the @docs/ folder, and make sure everything there is updated and current, based on the context on the changes in phases 28-37
+
+---
+
+the file system doc fails to mention that the cipherbox mount is accessible via terminal on macos as well, and via powershell and git bash on windows.
