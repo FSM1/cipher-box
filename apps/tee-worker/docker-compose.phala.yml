@@ -5,7 +5,7 @@
 # Never delete and recreate -- app_id changes would invalidate all epoch keys.
 services:
   tee-worker:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-OWNER}/cipherbox-tee-worker:${TAG:-latest}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/cipherbox-tee-worker:${TAG:-latest}
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
     ports:
