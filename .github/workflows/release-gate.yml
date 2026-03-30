@@ -168,10 +168,13 @@ jobs:
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             # Prefer a completed run over an in-progress rerun for the same SHA.
             # Sort completed runs first so reruns don't block the gate.
-            RUN_DATA=$(gh run list --repo ${{ github.repository }} \
+            if ! RUN_DATA=$(gh run list --repo ${{ github.repository }} \
               --workflow=ci-e2e.yml --branch=main --limit=10 \
               --json headSha,conclusion,status,databaseId \
-              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")] | sort_by(.status == \"completed\" | not) | .[0]")
+              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")] | sort_by(.status == \"completed\" | not) | .[0]"); then
+              echo "::error::Failed to query CI E2E runs (API error on attempt ${attempt}/${MAX_ATTEMPTS})"
+              exit 1
+            fi
 
             E2E_CONCLUSION=$(echo "$RUN_DATA" | jq -r '.conclusion // empty')
 
@@ -286,10 +289,13 @@ jobs:
 
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             # Prefer a completed run over an in-progress rerun for the same SHA.
-            RUN_DATA=$(gh run list --repo ${{ github.repository }} \
+            if ! RUN_DATA=$(gh run list --repo ${{ github.repository }} \
               --workflow=ci-e2e.yml --branch=main --limit=10 \
               --json headSha,conclusion,status,databaseId \
-              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")] | sort_by(.status == \"completed\" | not) | .[0]")
+              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")] | sort_by(.status == \"completed\" | not) | .[0]"); then
+              echo "::error::Failed to query CI E2E runs (API error on attempt ${attempt}/${MAX_ATTEMPTS})"
+              exit 1
+            fi
 
             E2E_CONCLUSION=$(echo "$RUN_DATA" | jq -r '.conclusion // empty')
 
