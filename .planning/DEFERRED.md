@@ -1,22 +1,21 @@
 # Deferred Items Inventory
 
-**Last updated:** 2026-03-29
+**Last updated:** 2026-03-30
 
-Items deferred across milestones v1.0 (phases 11-17.1) and v1.1 (phases 18-27).
+Items deferred across milestones v1.0 (phases 11-17.1) and v1.1 (phases 18-37).
 Cross-referenced with `.planning/todos/pending/` and security review findings.
 
 ## Active Pending Todos
 
 These are explicitly tracked in `.planning/todos/pending/`:
 
-| Date       | Item                                                                          | Priority |
-| ---------- | ----------------------------------------------------------------------------- | -------- |
-| 2026-02-07 | Offload large file encryption to Web Worker (files >= 10MB block main thread) | Medium   |
-| 2026-02-14 | ERC-1271 contract wallet authentication (Safe, Argent, Sequence)              | Low      |
-| 2026-02-22 | CRDT-based IPNS inbox for serverless share discovery                          | Research |
-| 2026-02-24 | Make search index build async/incremental for large vaults                    | Medium   |
-| 2026-02-26 | Alternative MFA factor types (passkeys, password-derived)                     | Medium   |
-| 2026-03-23 | Investigate removal of mock-ipns-routing layer (someguy works now)            | Low      |
+| Date       | Item                                                             | Priority |
+| ---------- | ---------------------------------------------------------------- | -------- |
+| 2026-02-14 | ERC-1271 contract wallet authentication (Safe, Argent, Sequence) | Low      |
+| 2026-02-22 | CRDT-based IPNS inbox for serverless share discovery             | Research |
+| 2026-02-24 | Make search index build async/incremental for large vaults       | Medium   |
+| 2026-02-26 | Alternative MFA factor types (passkeys, password-derived)        | Medium   |
+| 2026-03-23 | Investigate removal of mock-ipns-routing layer (someguy works)   | Low      |
 
 ## Security Review Findings (Deferred from Phase 14)
 
@@ -59,6 +58,7 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 | Beta/canary update channels                                      | 25           | Future if needed                                              |
 | Delta updates                                                    | 25           | Tauri supports but adds complexity                            |
 | Linux FUSE mount                                                 | 11.3         | Implemented but less tested than macOS                        |
+| Desktop adoption of new SDK exports                              | 31           | Phase 31 prepares SDK layer; desktop integration deferred     |
 
 ### Authentication & Security
 
@@ -71,14 +71,38 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 
 ### Performance & Infrastructure
 
-| Item                                 | Source Phase | Notes                                              |
-| ------------------------------------ | ------------ | -------------------------------------------------- |
-| Web Worker for large file encryption | -            | Files >= 10MB block main thread                    |
-| Async/incremental search index       | 15.1         | `buildFromFolderTree()` blocks UI for large vaults |
-| BYO IPFS provider benchmarks         | 21           | Requires external provider infrastructure          |
-| Automated CI timing gates            | 26           | Flaky due to runner variance                       |
-| Remove mock-ipns-routing             | 19           | Someguy at <docker-host>:8190 may replace it       |
-| Push notifications (WebSocket sync)  | 16           | Currently polling-only; requires backend infra     |
+| Item                                           | Source Phase | Notes                                                   |
+| ---------------------------------------------- | ------------ | ------------------------------------------------------- |
+| Async/incremental search index                 | 15.1         | `buildFromFolderTree()` blocks UI for large vaults      |
+| BYO IPFS provider benchmarks                   | 21           | Requires external provider infrastructure               |
+| Automated CI timing gates                      | 26           | Flaky due to runner variance                            |
+| Remove mock-ipns-routing                       | 19           | Someguy at `<docker-host>:8190` may replace it          |
+| Push notifications (WebSocket sync)            | 16           | Currently polling-only; requires backend infra          |
+| Batch API endpoint for IPNS resolves           | 32           | Could reduce round trips for folders with many files    |
+| Kubo API access control (reverse proxy or ACL) | 29           | Current Docker 127.0.0.1 binding sufficient for staging |
+| Production Kubo deployment hardening           | 29           | Only relevant when production environment exists        |
+
+### Upload Pipeline (Phase 37)
+
+| Item                                            | Source Phase | Notes                                                                                     |
+| ----------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------- |
+| Adaptive concurrency based on file size         | 37           | Fixed pool of 3 is sufficient; adaptive sizing adds complexity                            |
+| FUSE write-coalescing for desktop batch uploads | 37           | Desktop uploads arrive one-at-a-time via `release()`; FUSE has no batch context           |
+| Accumulated retry batching                      | 37           | Batch retries into single folder publish instead of N individual publishes                |
+| Batch upload secondary pin warning events       | 37           | BYO-IPFS `pinFn` wrapper discards `secondaryWarning`; `pin:secondaryFailed` never emitted |
+| AbortSignal support for in-flight batch uploads | 37           | No way to cancel once `uploadFiles()` invoked; needs AbortSignal through p-limit          |
+| Lazy file reading within concurrency pool       | 37           | `useDropUpload` reads all files upfront; SDK needs `File` objects or read callback        |
+
+### Observability (Phases 28, 30)
+
+| Item                                           | Source Phase | Notes                                                        |
+| ---------------------------------------------- | ------------ | ------------------------------------------------------------ |
+| Remote log shipping (Datadog, Loki)            | 28           | Deferred to Phase 30 scope if needed                         |
+| Error tracking service (Sentry or alternative) | 28, 30       | Sentry migration path available if Grafana Faro insufficient |
+| `no-console` ESLint rule enforcement           | 28           | Optional enforcement mechanism                               |
+| Web Worker logging (MessagePort bridge)        | 28           | Requires separate communication protocol                     |
+| Session replay                                 | 30           | Excluded for privacy (zero-knowledge app)                    |
+| "Report a problem" user-facing button          | 30           | Nice-to-have, not in scope                                   |
 
 ### Sync & Conflict Resolution (Deferred to Milestone 4)
 
@@ -98,13 +122,17 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 | Column DROP migration (vault v1 fields)       | 20           | After all users migrated, drop legacy columns                      |
 | User-configurable bin retention period        | 17           | Currently fixed 30-day retention                                   |
 | Retroactive TEE enrollment for existing files | 25           | New files only; existing files not enrolled                        |
+| Periodic reconciliation job for unenrollment  | 29           | Fire-and-forget pattern may be insufficient                        |
 
 ### Code Quality
 
-| Item                                            | Source Phase | Notes                                 |
-| ----------------------------------------------- | ------------ | ------------------------------------- |
-| DTS circular build dependency (crypto <-> core) | 19.1         | Workaround in place; not fixed        |
-| Desktop FUSE automated tests                    | -            | Manual testing only (see CONCERNS.md) |
+| Item                                            | Source Phase | Notes                                                         |
+| ----------------------------------------------- | ------------ | ------------------------------------------------------------- |
+| DTS circular build dependency (crypto <-> core) | 19.1         | Workaround in place; not fixed                                |
+| Desktop FUSE automated tests                    | -            | Manual testing only (see CONCERNS.md)                         |
+| Full retirement of folder.service.ts            | 31           | Phase 31 creates barrel re-exports; full file removal pending |
+| Full retirement of bin.service.ts               | 31           | Same as above; separate cleanup phase                         |
+| `useFileOperations.ts` decomposition            | 31           | Not in the 900+ line targets; separate effort                 |
 
 ## Items Implemented in Later Phases
 
@@ -125,5 +153,6 @@ These were deferred but have since been completed:
 | Link sharing                           | Phase 14                 | Phase 15       |
 | Pagination on shares endpoints (L4)    | Phase 14 security review | Phase 14       |
 | Structured logging wrapper for web app | -                        | Phase 28       |
+| Web Worker for large file encryption   | -                        | Phase 37       |
 
-<!-- Deferred inventory: 2026-03-29 -->
+<!-- Deferred inventory: 2026-03-30 -->

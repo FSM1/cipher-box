@@ -1,6 +1,6 @@
 # CipherBox Feature Matrix
 
-**Last updated:** 2026-03-28
+**Last updated:** 2026-03-30
 
 ## Platform Feature Matrix
 
@@ -22,9 +22,10 @@
 | Link/unlink auth methods        | Y   | -       | Y   | -   | -                  |
 | **File Operations**             |     |         |     |     |                    |
 | Upload (single file)            | Y   | Y       | Y   | Y   | full-workflow      |
+| Upload (batch pipeline)         | Y   | -       | Y   | Y   | batch-upload (SDK) |
 | Upload (drag-and-drop)          | Y   | -       | -   | -   | full-workflow      |
 | Download (single)               | Y   | Y       | Y   | Y   | full-workflow      |
-| Download (batch zip)            | Y   | -       | -   | -   | -                  |
+| Download (batch selection)      | Y   | -       | -   | -   | batch-download     |
 | Rename                          | Y   | Y       | -   | Y   | full-workflow      |
 | Delete (to bin)                 | Y   | Y       | -   | Y   | recycle-bin        |
 | Move (between folders)          | Y   | Y       | -   | Y   | full-workflow      |
@@ -69,10 +70,10 @@
 | Cmd/Ctrl+K shortcut             | Y   | -       | -   | -   | search-workflow    |
 | Keyboard navigation             | Y   | -       | -   | -   | search-workflow    |
 | **Media Preview**               |     |         |     |     |                    |
-| Image preview                   | Y   | -       | -   | -   | full-workflow      |
-| PDF viewer                      | Y   | -       | -   | -   | -                  |
-| Video player (streaming)        | Y   | -       | -   | -   | -                  |
-| Audio player                    | Y   | -       | -   | -   | -                  |
+| Image preview                   | Y   | -       | -   | -   | media-preview      |
+| PDF viewer                      | Y   | -       | -   | -   | media-preview      |
+| Video player (streaming CTR)    | Y   | -       | -   | -   | streaming-playback |
+| Audio player                    | Y   | -       | -   | -   | media-preview      |
 | **Sync**                        |     |         |     |     |                    |
 | IPNS polling (30s)              | Y   | Y       | -   | Y   | conflict-detection |
 | Conflict detection (409)        | Y   | Y       | Y   | Y   | conflict-detection |
@@ -84,6 +85,9 @@
 | OS keychain storage             | -   | Y       | -   | -   | -                  |
 | Auto-updater                    | -   | Y       | -   | -   | -                  |
 | Dev-key mode (headless)         | -   | Y       | -   | -   | desktop-e2e        |
+| **Encryption**                  |     |         |     |     |                    |
+| Web Worker encryption           | Y   | -       | -   | -   | -                  |
+| AES-CTR streaming decryption    | Y   | -       | -   | Y   | streaming-playback |
 | **Infrastructure**              |     |         |     |     |                    |
 | TEE IPNS republishing           | -   | -       | Y   | -   | -                  |
 | BYO IPFS node support           | -   | -       | Y   | -   | sdk-e2e            |
@@ -91,12 +95,15 @@
 | Prometheus metrics              | -   | -       | Y   | -   | -                  |
 | Vault recovery tool             | Y   | -       | -   | -   | recovery           |
 | Performance baselines           | -   | -       | Y   | -   | journey-timing     |
+| Structured logging (web)        | Y   | -       | -   | -   | -                  |
 
 ## E2E Test Suites
 
+### Web E2E (`tests/web-e2e/`)
+
 | Suite              | File                           | Coverage                                                                                            |
 | ------------------ | ------------------------------ | --------------------------------------------------------------------------------------------------- |
-| Full Workflow      | `full-workflow.spec.ts`        | Login, vault init, folders, files, edit, rename, move, delete, versioning, media preview            |
+| Full Workflow      | `full-workflow.spec.ts`        | Login, vault init, folders, files, edit, rename, move, delete, versioning                           |
 | Sharing            | `sharing-workflow.spec.ts`     | Direct shares, multi-recipient, revocation, key rotation, hide                                      |
 | Writable Shares    | `writable-shares.spec.ts`      | Write permission, recipient uploads/mkdir/rename/delete, permission upgrade/downgrade, file editing |
 | Invite Links       | `invite-link-workflow.spec.ts` | Create invite, claim, revoke, landing page                                                          |
@@ -107,17 +114,44 @@
 | Recovery           | `recovery.spec.ts`             | Vault recovery tool via IPFS-direct v2 blob path                                                    |
 | Conflict Detection | `conflict-detection.spec.ts`   | Multi-device conflicts, auto-resync                                                                 |
 | Journey Timing     | `journey-timing.spec.ts`       | Performance benchmarks for critical paths                                                           |
-| Load Test          | `load-test.spec.ts`            | Concurrent operations stress testing                                                                |
+| Batch Download     | `batch-download.spec.ts`       | Multi-file selection, sequential individual downloads                                               |
+| Media Preview      | `media-preview.spec.ts`        | Image, PDF, video, audio preview dialogs                                                            |
+| Streaming Playback | `streaming-playback.spec.ts`   | AES-CTR streaming for large videos, GCM fallback for small videos                                   |
+
+### SDK E2E (`tests/sdk-e2e/`)
+
+| Suite                 | File                            | Coverage                                      |
+| --------------------- | ------------------------------- | --------------------------------------------- |
+| Vault Lifecycle       | `vault-lifecycle.test.ts`       | Init, key derivation, destroy                 |
+| Folder CRUD           | `folder-crud.test.ts`           | Create, rename, move, delete folders          |
+| File Operations       | `file-operations.test.ts`       | Upload, download, rename, delete files        |
+| Batch Upload          | `batch-upload.test.ts`          | `uploadFiles()` multi-file pipeline           |
+| Bin Operations        | `bin-operations.test.ts`        | Soft delete, restore, permanent delete, empty |
+| Share Operations      | `share-operations.test.ts`      | Direct shares, revocation, key re-wrapping    |
+| Invite Link           | `invite-link.test.ts`           | Create, claim, revoke invite links            |
+| Concurrent Operations | `concurrent-operations.test.ts` | Parallel uploads, downloads, folder ops       |
+| Data Integrity        | `data-integrity.test.ts`        | Round-trip encryption/decryption verification |
+| Error Cases           | `error-cases.test.ts`           | Invalid inputs, network failures, edge cases  |
+| IPNS Consistency      | `ipns-consistency.test.ts`      | Sequence numbers, conflict detection          |
+
+### Load Tests (`tests/load/`)
+
+| Type           | Coverage                                   |
+| -------------- | ------------------------------------------ |
+| Spike Test     | Sudden burst of concurrent operations      |
+| Throughput     | Sustained upload/download rate measurement |
+| Mixed Workload | Combined CRUD operations under load        |
+| Sustained Load | Extended duration stability testing        |
+| BYO Ceiling    | BYO-IPFS provider capacity limits          |
 
 ## Features Without E2E Coverage
 
-- PDF viewer, video player, audio player (manual testing only)
-- Batch download (zip)
 - Link/unlink auth methods
 - Device registry sync
 - OS keychain storage
 - Auto-updater
 - TEE republishing
 - Pin migration
+- Web Worker encryption (unit tested, not E2E)
 
-<!-- Feature matrix: 2026-03-28 -->
+<!-- Feature matrix: 2026-03-30 -->
