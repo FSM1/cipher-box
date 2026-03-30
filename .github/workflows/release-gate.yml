@@ -197,14 +197,28 @@ jobs:
           # Verify the Web E2E job actually ran (not skipped due to no web changes).
           # When ci-e2e.yml calls web-e2e.yml via workflow_call, the job name is
           # composed as "Web E2E / Web E2E Tests" — contains("Web E2E") matches both.
-          if ! WEB_E2E_RAN=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
-            --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length'); then
+          #
+          # Distinguish three states: passed, failed, or skipped/absent.
+          # Only fall back to older runs when skipped — fail fast on failure.
+          if ! WEB_JOBS_JSON=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
+            --jq '[.jobs[] | select(.name | contains("Web E2E"))]'); then
             echo "::error::Failed to query jobs for CI E2E run ${E2E_RUN_ID} (API error)"
             exit 1
           fi
 
-          if [ "${WEB_E2E_RAN:-0}" -eq 0 ]; then
-            echo "CI E2E passed but Web E2E was skipped (no web changes in latest push)."
+          WEB_TOTAL=$(echo "$WEB_JOBS_JSON" | jq 'length')
+          WEB_SUCCESS=$(echo "$WEB_JOBS_JSON" | jq '[.[] | select(.conclusion == "success")] | length')
+          WEB_FAILED=$(echo "$WEB_JOBS_JSON" | jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null)] | length')
+
+          if [ "${WEB_TOTAL:-0}" -gt 0 ] && [ "${WEB_FAILED:-0}" -gt 0 ]; then
+            echo "::error::Web E2E ran but failed at HEAD (${WEB_FAILED} failed job(s) in CI E2E run ${E2E_RUN_ID})."
+            exit 1
+          fi
+
+          if [ "${WEB_SUCCESS:-0}" -gt 0 ]; then
+            echo "Web E2E: passed (at HEAD, in CI E2E run ${E2E_RUN_ID})"
+          else
+            echo "Web E2E was skipped in latest CI E2E run (no web changes in that push)."
             echo "Searching for most recent CI E2E run where Web E2E actually executed..."
 
             RECENT_RUN_ID=$(gh run list --repo ${{ github.repository }} \
@@ -212,24 +226,26 @@ jobs:
               --json databaseId,status \
               --jq '[.[] | select(.status == "completed")] | .[].databaseId' \
               | while read -r rid; do
-                  if ! WEB_COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/${rid}/jobs" \
-                    --jq '[.jobs[] | select(.name | contains("Web E2E")) | select(.conclusion == "success")] | length'); then
+                  if ! JOBS_JSON=$(gh api "repos/${{ github.repository }}/actions/runs/${rid}/jobs" \
+                    --jq '[.jobs[] | select(.name | contains("Web E2E"))]'); then
                     echo "::warning::Failed to query jobs for run ${rid}, skipping" >&2
                     continue
                   fi
-                  if [ "${WEB_COUNT:-0}" -gt 0 ]; then
+                  TOTAL=$(echo "$JOBS_JSON" | jq 'length')
+                  SUCCESS=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion == "success")] | length')
+                  FAILED=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null)] | length')
+                  # Only accept runs where Web E2E ran AND all jobs passed
+                  if [ "${TOTAL:-0}" -gt 0 ] && [ "${SUCCESS:-0}" -gt 0 ] && [ "${FAILED:-0}" -eq 0 ]; then
                     echo "$rid"
                     break
                   fi
                 done)
 
             if [ -z "$RECENT_RUN_ID" ]; then
-              echo "::error::No recent CI E2E run found where Web E2E tests actually executed."
+              echo "::error::No recent CI E2E run found where Web E2E tests passed."
               exit 1
             fi
             echo "Web E2E: passed (in CI E2E run ${RECENT_RUN_ID})"
-          else
-            echo "Web E2E: passed (at HEAD)"
           fi
 
       - name: Verify Desktop E2E (if desktop changed)
@@ -276,19 +292,29 @@ jobs:
             sleep $POLL_INTERVAL
           done
 
-          # Check for Desktop E2E jobs with successful conclusion
-          if ! DESKTOP_E2E_RAN=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
-            --jq '[.jobs[] | select(.name | contains("Desktop E2E")) | select(.conclusion == "success")] | length'); then
+          # Check Desktop E2E jobs — distinguish passed, failed, and skipped.
+          # Desktop E2E is a matrix (3 platforms). All must pass; fail fast if any failed.
+          if ! DESKTOP_JOBS_JSON=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
+            --jq '[.jobs[] | select(.name | contains("Desktop E2E"))]'); then
             echo "::error::Failed to query jobs for CI E2E run ${E2E_RUN_ID} (API error)"
             exit 1
           fi
 
-          if [ "${DESKTOP_E2E_RAN:-0}" -gt 0 ]; then
-            echo "Desktop E2E: passed (${DESKTOP_E2E_RAN} platform(s) at HEAD, in CI E2E run ${E2E_RUN_ID})"
+          DESKTOP_TOTAL=$(echo "$DESKTOP_JOBS_JSON" | jq 'length')
+          DESKTOP_SUCCESS=$(echo "$DESKTOP_JOBS_JSON" | jq '[.[] | select(.conclusion == "success")] | length')
+          DESKTOP_FAILED=$(echo "$DESKTOP_JOBS_JSON" | jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null)] | length')
+
+          if [ "${DESKTOP_TOTAL:-0}" -gt 0 ] && [ "${DESKTOP_FAILED:-0}" -gt 0 ]; then
+            echo "::error::Desktop E2E ran but ${DESKTOP_FAILED} of ${DESKTOP_TOTAL} platform(s) failed at HEAD (CI E2E run ${E2E_RUN_ID})."
+            exit 1
+          fi
+
+          if [ "${DESKTOP_SUCCESS:-0}" -gt 0 ] && [ "$DESKTOP_SUCCESS" -eq "$DESKTOP_TOTAL" ]; then
+            echo "Desktop E2E: passed (all ${DESKTOP_SUCCESS} platform(s) at HEAD, in CI E2E run ${E2E_RUN_ID})"
             exit 0
           fi
 
-          echo "CI E2E completed but Desktop E2E was skipped or failed in latest run."
+          echo "Desktop E2E was skipped in latest CI E2E run (no desktop changes in that push)."
           echo "Searching for most recent CI E2E run where Desktop E2E passed..."
 
           RECENT_RUN_ID=$(gh run list --repo ${{ github.repository }} \
@@ -296,12 +322,16 @@ jobs:
             --json databaseId,status \
             --jq '[.[] | select(.status == "completed")] | .[].databaseId' \
             | while read -r rid; do
-                if ! DESKTOP_COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/${rid}/jobs" \
-                  --jq '[.jobs[] | select(.name | contains("Desktop E2E")) | select(.conclusion == "success")] | length'); then
+                if ! JOBS_JSON=$(gh api "repos/${{ github.repository }}/actions/runs/${rid}/jobs" \
+                  --jq '[.jobs[] | select(.name | contains("Desktop E2E"))]'); then
                   echo "::warning::Failed to query jobs for run ${rid}, skipping" >&2
                   continue
                 fi
-                if [ "${DESKTOP_COUNT:-0}" -gt 0 ]; then
+                TOTAL=$(echo "$JOBS_JSON" | jq 'length')
+                SUCCESS=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion == "success")] | length')
+                FAILED=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null)] | length')
+                # Only accept runs where Desktop E2E ran, all jobs passed, none failed
+                if [ "${TOTAL:-0}" -gt 0 ] && [ "${SUCCESS:-0}" -gt 0 ] && [ "${FAILED:-0}" -eq 0 ]; then
                   echo "$rid"
                   break
                 fi
