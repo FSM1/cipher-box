@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.32.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-client-v0.31.0...@cipherbox/api-client-v0.32.0) (2026-03-30)
+
+
+### Features
+
+* Phase 29 Infrastructure Hardening ([#383](https://github.com/FSM1/cipher-box/issues/383)) ([a209337](https://github.com/FSM1/cipher-box/commit/a2093370c4bd7203a18ba028c7506387b192cd32))
+* Phase 30 Web App Observability ([#386](https://github.com/FSM1/cipher-box/issues/386)) ([c82fbe7](https://github.com/FSM1/cipher-box/commit/c82fbe7c6d37c744b372a665aea69b72046418f5))
+
+
+### Bug Fixes
+
+* **api:** add BYO status endpoint, fix load test failures, fix test type errors ([#400](https://github.com/FSM1/cipher-box/issues/400)) ([0517397](https://github.com/FSM1/cipher-box/commit/0517397a6735cc6e626ae9f6e5e05725a50075d5))
+
 ## [0.31.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-client-v0.30.0...@cipherbox/api-client-v0.31.0) (2026-03-27)
 
 

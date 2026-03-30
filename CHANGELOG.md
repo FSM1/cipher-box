@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.32.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.31.1...cipher-box-v0.32.0) (2026-03-30)
+
+
+### Features
+
+* Phase 28 Code Hygiene & Logging ([#382](https://github.com/FSM1/cipher-box/issues/382)) ([9827f49](https://github.com/FSM1/cipher-box/commit/9827f49df59a8730ef0b4ea7bf74caa59b36b055))
+* Phase 29 Infrastructure Hardening ([#383](https://github.com/FSM1/cipher-box/issues/383)) ([a209337](https://github.com/FSM1/cipher-box/commit/a2093370c4bd7203a18ba028c7506387b192cd32))
+* Phase 30 Web App Observability ([#386](https://github.com/FSM1/cipher-box/issues/386)) ([c82fbe7](https://github.com/FSM1/cipher-box/commit/c82fbe7c6d37c744b372a665aea69b72046418f5))
+* **sdk:** select AES-CTR encryption for streaming media uploads ([#399](https://github.com/FSM1/cipher-box/issues/399)) ([a595e4b](https://github.com/FSM1/cipher-box/commit/a595e4b53eb5c33fd68e50eb97cee1b647f595fc))
+* **tee-worker:** migrate TEE worker to Phala Cloud CVM ([#395](https://github.com/FSM1/cipher-box/issues/395)) ([a08414f](https://github.com/FSM1/cipher-box/commit/a08414fe7674b80d80b64c8dc671f5dca8143fba))
+
+
+### Bug Fixes
+
+* **api:** add BYO status endpoint, fix load test failures, fix test type errors ([#400](https://github.com/FSM1/cipher-box/issues/400)) ([0517397](https://github.com/FSM1/cipher-box/commit/0517397a6735cc6e626ae9f6e5e05725a50075d5))
+* **ci:** release gate skips past runs where desktop tests didn't execute ([#401](https://github.com/FSM1/cipher-box/issues/401)) ([afa288f](https://github.com/FSM1/cipher-box/commit/afa288faa453d92c449ff31b2cd8839aa862dd8a))
+* resolve E2E test failures and narrow CI cargo gate ([#398](https://github.com/FSM1/cipher-box/issues/398)) ([6e12701](https://github.com/FSM1/cipher-box/commit/6e12701e695e3a95b5ad191c2916646c3b4a9396))
+
+
+### Performance Improvements
+
+* **fuse:** Phase 32 async FilePointer resolution ([#388](https://github.com/FSM1/cipher-box/issues/388)) ([8cddb05](https://github.com/FSM1/cipher-box/commit/8cddb05c31e2b010dc4afb9463d0d12f48722165))
+* **WinFSP:** Phase 33 Windows Async FilePointer Resolution ([#389](https://github.com/FSM1/cipher-box/issues/389)) ([b2f6572](https://github.com/FSM1/cipher-box/commit/b2f6572212decf44c9bdedb92f8f48b37c69037c))
+
 ## [0.31.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.31.0...cipher-box-v0.31.1) (2026-03-27)
 
 

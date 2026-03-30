@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.32.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.31.0...@cipherbox/sdk-v0.32.0) (2026-03-30)
+
+
+### Features
+
+* Phase 28 Code Hygiene & Logging ([#382](https://github.com/FSM1/cipher-box/issues/382)) ([9827f49](https://github.com/FSM1/cipher-box/commit/9827f49df59a8730ef0b4ea7bf74caa59b36b055))
+* Phase 29 Infrastructure Hardening ([#383](https://github.com/FSM1/cipher-box/issues/383)) ([a209337](https://github.com/FSM1/cipher-box/commit/a2093370c4bd7203a18ba028c7506387b192cd32))
+* **sdk:** select AES-CTR encryption for streaming media uploads ([#399](https://github.com/FSM1/cipher-box/issues/399)) ([a595e4b](https://github.com/FSM1/cipher-box/commit/a595e4b53eb5c33fd68e50eb97cee1b647f595fc))
+
 ## [0.31.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.30.0...@cipherbox/sdk-v0.31.0) (2026-03-27)
 
 
