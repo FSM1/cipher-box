@@ -116,10 +116,11 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 
 ### Code Quality
 
-| Item                                 | Source Phase | Notes                                                                  |
-| ------------------------------------ | ------------ | ---------------------------------------------------------------------- |
-| Full retirement of folder.service.ts | 31           | 1,059 lines, 9 importers; migrate callers to SDK methods               |
-| Full retirement of bin.service.ts    | 31           | 971 lines, only `initializeBin` + `purgeExpired` still used by 2 hooks |
+| Item                                         | Source Phase | Notes                                                                  |
+| -------------------------------------------- | ------------ | ---------------------------------------------------------------------- |
+| Full retirement of folder.service.ts         | 31           | 1,059 lines, 9 importers; migrate callers to SDK methods               |
+| Full retirement of bin.service.ts            | 31           | 971 lines, only `initializeBin` + `purgeExpired` still used by 2 hooks |
+| Remove crypto -> core circular devDependency | 19.1         | Test-only import; refactor vault-ipns test to use hardcoded vectors    |
 
 ## Items Implemented in Later Phases
 

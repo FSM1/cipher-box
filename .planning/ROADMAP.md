@@ -519,7 +519,7 @@ Plans:
 
 ### Phase 38: Retire deprecated web services
 
-**Goal:** Remove `folder.service.ts` (1,059 lines) and `bin.service.ts` (971 lines) by migrating all remaining callers to `@cipherbox/sdk` methods, eliminating the deprecated service layer
+**Goal:** Remove `folder.service.ts` (1,059 lines) and `bin.service.ts` (971 lines) by migrating all remaining callers to `@cipherbox/sdk` methods, eliminating the deprecated service layer. Also remove the circular devDependency from `@cipherbox/crypto` on `@cipherbox/core` by refactoring the vault-ipns test to use hardcoded test vectors instead of cross-package imports.
 **Requirements**: None (tech debt cleanup, deferred from Phase 31)
 **Depends on:** Phase 37
 
