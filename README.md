@@ -24,7 +24,7 @@ This project is inspired by discussions and planning while working on [ChainSafe
 - **Search** — Client-side encrypted search index across file and folder names. Fuzzy matching with Cmd/Ctrl+K shortcut.
 - **Media Preview** — Image, PDF, video (streaming CTR decryption), and audio preview.
 - **Sync** — Multi-device via IPNS polling (~30s). Conflict detection and resolution (sequence-number based).
-- **Desktop** — macOS and Windows via Tauri v2 + FUSE-T/WinFsp virtual filesystem mount. Background sync with system tray. SMB backend on macOS.
+- **Desktop** — macOS, Linux, and Windows via Tauri v2 + FUSE-T/libfuse3/WinFsp virtual filesystem mount. Background sync with system tray. SMB backend on macOS.
 - **TEE Republishing** — Automatic IPNS record refresh every 6 hours via Phala Cloud. Zero-knowledge: keys decrypted only inside hardware enclaves.
 - **Data Portability** — Full vault export (JSON + encrypted blobs). Standalone recovery with private key — no CipherBox required.
 - **Observability** — Structured logging (web), Prometheus metrics endpoint (API), Grafana Faro integration, load testing infrastructure.
@@ -51,18 +51,18 @@ The client encrypts everything locally. The API is a zero-knowledge relay — it
 
 ## Tech Stack
 
-| Component          | Technology                                        |
-| :----------------- | :------------------------------------------------ |
-| **Frontend**       | React 18 + TypeScript + Tailwind CSS              |
-| **Backend**        | Node.js + NestJS + TypeScript                     |
-| **Database**       | PostgreSQL 16                                     |
-| **Job Queue**      | BullMQ + Redis                                    |
-| **Key Derivation** | Web3Auth MPC Core Kit                             |
-| **Storage**        | IPFS via Kubo                                     |
-| **Desktop**        | Tauri v2 + FUSE-T (macOS) / WinFsp (Windows)      |
-| **TEE**            | Phala Cloud (IPNS republishing)                   |
-| **Crypto**         | Web Crypto API (AES-256-GCM/CTR, ECIES secp256k1) |
-| **Observability**  | Grafana Faro (web), Prometheus (API)              |
+| Component          | Technology                                                      |
+| :----------------- | :-------------------------------------------------------------- |
+| **Frontend**       | React 18 + TypeScript + Tailwind CSS                            |
+| **Backend**        | Node.js + NestJS + TypeScript                                   |
+| **Database**       | PostgreSQL 16                                                   |
+| **Job Queue**      | BullMQ + Redis                                                  |
+| **Key Derivation** | Web3Auth MPC Core Kit                                           |
+| **Storage**        | IPFS via Kubo                                                   |
+| **Desktop**        | Tauri v2 + FUSE-T (macOS) / libfuse3 (Linux) / WinFsp (Windows) |
+| **TEE**            | Phala Cloud (IPNS republishing)                                 |
+| **Crypto**         | Web Crypto API (AES-256-GCM/CTR, ECIES secp256k1)               |
+| **Observability**  | Grafana Faro (web), Prometheus (API)                            |
 
 ## Project Structure
 

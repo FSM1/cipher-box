@@ -1,6 +1,6 @@
 # CipherBox Filesystem Specification
 
-This document defines the rules, constraints, and rationale governing the CipherBox virtual filesystem. These rules apply across all platforms (web, desktop macOS, desktop Windows) and are enforced at different layers depending on the operation.
+This document defines the rules, constraints, and rationale governing the CipherBox virtual filesystem. These rules apply across all platforms (web, desktop macOS, desktop Linux, desktop Windows) and are enforced at different layers depending on the operation.
 
 ## Design Principles
 
@@ -8,7 +8,8 @@ CipherBox must present a consistent filesystem experience across three very diff
 
 1. **Web browser** — drag-and-drop uploads, folder tree UI
 2. **macOS desktop** — FUSE-T virtual mount via SMB backend, accessed through Finder
-3. **Windows desktop** — WinFsp virtual mount, accessed through Explorer
+3. **Linux desktop** — kernel FUSE (libfuse3) virtual mount, accessed through file manager or terminal
+4. **Windows desktop** — WinFsp virtual mount, accessed through Explorer
 
 The strictest platform constraint wins. Windows is case-insensitive and has the most restricted filename rules, so CipherBox defaults to rules compatible with Windows even when accessed from other platforms. This ensures files created on any platform are accessible on every other platform.
 
@@ -20,6 +21,7 @@ The strictest platform constraint wins. Windows is case-insensitive and has the 
 | -------- | ---------- | -------------------------------- | ------------------------------------------------------------- |
 | Web      | As-entered | Case-sensitive (`===`)           | `folder.service.ts`, `sdk-core/folder`                        |
 | macOS    | As-entered | NFC-normalized                   | `inode.rs:normalize_name()` via `unicode-normalization` crate |
+| Linux    | As-entered | NFC-normalized                   | Same `fuse` feature as macOS; case-sensitive                  |
 | Windows  | As-entered | Case-insensitive (lowercase key) | `inode.rs:normalize_name()` via `.to_lowercase()`             |
 
 **Rationale:** Original casing is always preserved in the encrypted metadata (`InodeData.name` / `FolderChild.name`). The normalization only affects HashMap key lookups in the FUSE layer. On macOS, NFC normalization prevents mismatches between composed and decomposed Unicode forms (e.g., `e` + combining acute vs. precomposed `e`). On Windows, lowercase folding implements the case-insensitive semantics that Explorer and all Windows applications expect.
@@ -154,8 +156,8 @@ if (nameExists) throw new Error('An item with this name already exists');
 | Platform | Backend | Notes                                                                                                     |
 | -------- | ------- | --------------------------------------------------------------------------------------------------------- |
 | macOS    | SMB     | FUSE-T's SMB backend. NFS backend has unfixable kernel bug (WRITE RPCs never reach FUSE-T for new files). |
+| Linux    | libfuse | Kernel FUSE via libfuse3. Standard FUSE semantics, no translation layer.                                  |
 | Windows  | WinFsp  | Native user-mode filesystem driver.                                                                       |
-| Linux    | libfuse | Standard FUSE. Implemented but less tested than macOS/Windows.                                            |
 
 ### Inode Management
 

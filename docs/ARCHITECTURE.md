@@ -15,7 +15,7 @@ User Device ← Vault Data ← PostgreSQL
         ↓ Encrypted Keys
 IPFS (Kubo) ← Encrypted Files
         ↑
-TEE (Phala; Nitro fallback planned) ← IPNS Republish (every 6h)
+TEE (Phala Cloud CVM) ← IPNS Republish (every 6h)
 ```
 
 **Key Properties:**
@@ -258,7 +258,7 @@ Client holds: Private key (RAM only)
 IPNS records expire after ~24h → backend scheduler triggers republish every 6h
 Client encrypts ipnsPrivateKey with TEE public key (ECIES)
 TEE decrypts in hardware, signs, zeroes key immediately
-Providers: Phala Cloud (current) / AWS Nitro (planned fallback)
+Provider: Phala Cloud CVM (hardware-backed key derivation via dstack SDK)
 ```
 
 ## User Journey Example
@@ -274,7 +274,7 @@ Providers: Phala Cloud (current) / AWS Nitro (planned fallback)
 
 ## Further Reading
 
-- [Frozen Specifications](../00-Preliminary-R&D/Documentation/) — PRD, Technical Architecture, API Specification, Data Flows, Client Specification
+- [Frozen Specifications](../.planning/milestones/m0/Documentation/) — PRD, Technical Architecture, API Specification, Data Flows, Client Specification
 - [Authentication Architecture](AUTHENTICATION_ARCHITECTURE.md) — detailed auth flow documentation
 - [Metadata Schemas](METADATA_SCHEMAS.md) — all metadata object schemas with field tables
 - [Vault Export Format](VAULT_EXPORT_FORMAT.md) — export/recovery data format

@@ -6,14 +6,13 @@ CipherBox is a **technology demonstrator** for privacy-first encrypted cloud sto
 
 ## Documentation Structure
 
-| Document                                                     | Purpose                                    |
-| ------------------------------------------------------------ | ------------------------------------------ |
-| `00-Preliminary-R&D/Documentation/PRD.md`                    | Product requirements, user journeys, scope |
-| `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` | Encryption, key hierarchy, system design   |
-| `00-Preliminary-R&D/Documentation/API_SPECIFICATION.md`      | Backend endpoints, database schema         |
-| `00-Preliminary-R&D/Documentation/DATA_FLOWS.md`             | Sequence diagrams, test vectors            |
-| `00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md`   | Web UI, desktop app specs                  |
-| `00-Preliminary-R&D/Documentation/IMPLEMENTATION_ROADMAP.md` | Week-by-week development plan              |
+| Document                                                          | Purpose                                    |
+| ----------------------------------------------------------------- | ------------------------------------------ |
+| `.planning/milestones/m0/Documentation/PRD.md`                    | Product requirements, user journeys, scope |
+| `.planning/milestones/m0/Documentation/TECHNICAL_ARCHITECTURE.md` | Encryption, key hierarchy, system design   |
+| `.planning/milestones/m0/Documentation/API_SPECIFICATION.md`      | Backend endpoints, database schema         |
+| `.planning/milestones/m0/Documentation/DATA_FLOWS.md`             | Sequence diagrams, test vectors            |
+| `.planning/milestones/m0/Documentation/CLIENT_SPECIFICATION.md`   | Web UI, desktop app specs                  |
 
 ## Finalized Specifications
 
@@ -22,12 +21,12 @@ CipherBox is a **technology demonstrator** for privacy-first encrypted cloud sto
 
 ### ⚠️ IMPORTANT: Do Not Edit Preliminary/Documentation Files
 
-All files in `00-Preliminary-R&D/Documentation/` are **FINALIZED** specifications (version 1.10.0, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
+All files in `.planning/milestones/m0/Documentation/` are **FINALIZED** specifications (version 1.10.0, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
 **If you need to make changes:**
 
 - New implementation documentation should be created in a separate location
 - Working notes and updates belong in `.planning/` or project-specific directories
-- Do not modify version numbers or content in `00-Preliminary-R&D/Documentation/` unless explicityly authorized.
+- Do not modify version numbers or content in `.planning/milestones/m0/Documentation/` unless explicitly authorized.
 
 ## Terminology Standards
 
@@ -91,7 +90,7 @@ When generating code for CipherBox:
 - **Encryption:** Client-side only, server is zero-knowledge
 - **Sync:** IPNS polling (30s interval), no push infrastructure
 - **Desktop:** FUSE mount for transparent file access
-- **TEE Republishing:** Phala Cloud (primary) / AWS Nitro (fallback) for automatic IPNS republishing every 3 hours
+- **TEE Republishing:** Phala Cloud CVM for automatic IPNS republishing every 6 hours
 - **Key Epochs:** TEE public keys rotate with 4-week grace period for seamless migration
 
 ## Out of Scope (v1.0)
