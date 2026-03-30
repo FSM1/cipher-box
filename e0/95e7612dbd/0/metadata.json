@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e095e7612dbd",
+  "session_id": "f2707fb4-9582-4986-8999-f84ff5395978",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T11:24:54.825865Z",
+  "branch": "feat/inline-upload-progress",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/components/file-browser/UploadListItem.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1b884f189428",
+  "checkpoint_transcript_start": 168,
+  "transcript_lines_at_start": 168,
+  "token_usage": {
+    "input_tokens": 5902,
+    "cache_creation_tokens": 121137,
+    "cache_read_tokens": 7544753,
+    "output_tokens": 18399,
+    "api_call_count": 77
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Run a code quality/simplify review on PR 410 (inline upload progress feature) to eliminate redundancy, improve efficiency, and clean up the implementation.",
+    "outcome": "Multiple issues fixed: extracted shared helpers (createUploadId, isActiveUpload), added same-value guard to updateFileProgress, made cancelFile atomic (cancel+remove), removed redundant setFileComplete, deleted dead useFileUpload hook and uploadFiles function, added FileList selector equality comparator, fixed race-condition guards after cancelFile semantics changed, removed 'cancelled' from status union, and cleaned up WHAT comments. All 23 tests pass with clean type-check.",
+    "learnings": {
+      "repo": [
+        "upload.store.ts uses Zustand v5; the two-arg equality form of the bound hook has TypeScript inference issues — use useMemo + useRef for stable selector results instead of passing an equality function directly.",
+        "cancelFile previously only set status to 'cancelled' but left the entry in the Map; after refactor it atomically removes the entry, requiring all 'status === cancelled' race guards to be changed to check for missing entries instead.",
+        "useFileUpload hook and uploadFiles service function were completely dead code — no consumers outside each other.",
+        "The 'cancelled' status in PerFileUpload was never actually persisted to the store; it was only used as a transient signal via Axios CancelToken message strings.",
+        "FileList was deriving a new array every render from the Map selector with no equality comparator, causing unnecessary re-renders on every upload tick.",
+        "useDropUpload subscribed to the entire upload Map just to derive a boolean isUploading, causing broad re-renders on every progress update."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/stores/upload.store.ts",
+          "finding": "updateFileProgress cloned the entire Map on every progress tick with no same-value guard; adding an early return when loaded/total are unchanged eliminates unnecessary downstream notifications during rapid progress events."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 118,
+          "end_line": 153,
+          "finding": "Race-condition guards checking 'status === cancelled' broke silently after cancelFile became atomic (delete instead of status set); missing entry (undefined?.status) evaluates to false, not 'cancelled', so guards must check !files.get(uploadId) instead."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/FileList.tsx",
+          "finding": "Zustand v5 bound hook TypeScript overloads don't infer the two-arg equality form cleanly; idiomatic fix is useMemo with useRef-based deep equality rather than passing a comparator as second arg to the store hook."
+        },
+        {
+          "path": "apps/web/src/services/upload.service.ts",
+          "finding": "useQuotaStore import became unused after uploadFiles was removed; was only referenced inside that dead function."
+        }
+      ],
+      "workflow": [
+        "Changing the semantics of a store action (cancelFile: status-set → delete) requires auditing all call sites and guards that relied on the old behavior, including race-condition checks that are easy to miss.",
+        "Running type-check before tests surfaces import/type issues early; in this session tsc caught the Zustand equality overload problem before tests ran.",
+        "Zustand v5 shallow utilities (useShallow) help with object selectors but not with arrays of objects; useMemo + useRef is the reliable fallback for custom equality."
+      ]
+    },
+    "friction": [
+      "Zustand v5 TypeScript types don't expose a clean two-arg equality overload on the bound store hook, requiring multiple investigative steps (checking node_modules types, version, available exports) before landing on the useMemo/useRef workaround.",
+      "The second 'status === cancelled' occurrence at line 153 in useDropUpload.ts had different indentation than the first, causing the Edit tool's first replacement to silently miss it and requiring a re-read + second attempt.",
+      "cancelFile semantic change had a non-obvious ripple effect on the FileList filter (which previously filtered out 'cancelled' entries) that had to be caught separately after the main fix."
+    ],
+    "open_items": [
+      "Map cloning overhead in updateFileProgress (new Map on every set()) was noted as acceptable at current scale but could be revisited if upload concurrency increases significantly.",
+      "File object retention in the store (keeping the full File reference for retry) was intentionally left — could be replaced with a lighter metadata-only structure if memory becomes a concern.",
+      "useFileUpload dead code removal was initially skipped as 'may be intentional API surface' before being confirmed dead and removed; worth auditing other hooks/exports for similar orphaned public API surface.",
+      "'cancelled' status string still appears in Axios CancelToken message strings as a convention marker even though it's no longer in the PerFileUpload type union — the coupling is implicit and undocumented."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T11:24:19.88815Z",
+    "agent_lines": 0,
+    "human_added": 37,
+    "human_modified": 9,
+    "human_removed": 0,
+    "total_committed": 37,
+    "agent_percentage": 0
+  }
+}
