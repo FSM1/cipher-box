@@ -222,7 +222,16 @@ jobs:
           if [ "${WEB_SUCCESS:-0}" -gt 0 ]; then
             echo "Web E2E: passed (at HEAD, in CI E2E run ${E2E_RUN_ID})"
           else
-            echo "Web E2E was skipped in latest CI E2E run (no web changes in that push)."
+            # Web E2E was absent/skipped — only fall back if the CI E2E run
+            # itself succeeded (meaning detect-changes ran and found no web changes).
+            # If the run failed/was cancelled, E2E may have been skipped due to
+            # upstream failure, not because web didn't change.
+            if [ "$E2E_CONCLUSION" != "success" ]; then
+              echo "::error::Web E2E did not run and CI E2E run ${E2E_RUN_ID} did not succeed (conclusion: ${E2E_CONCLUSION}). Cannot fall back."
+              exit 1
+            fi
+
+            echo "Web E2E was skipped/absent in latest CI E2E run (run ${E2E_RUN_ID})."
             echo "Searching for most recent CI E2E run where Web E2E actually executed..."
 
             RECENT_RUN_ID=""
@@ -324,7 +333,14 @@ jobs:
           if [ "${DESKTOP_SUCCESS:-0}" -gt 0 ] && [ "${DESKTOP_SUCCESS:-0}" -eq "${DESKTOP_TOTAL:-0}" ]; then
             echo "Desktop E2E: passed (all ${DESKTOP_SUCCESS} platform(s) at HEAD, in CI E2E run ${E2E_RUN_ID})"
           else
-            echo "Desktop E2E was skipped in latest CI E2E run (no desktop changes in that push)."
+            # Desktop E2E was absent/skipped — only fall back if the CI E2E run
+            # itself succeeded (meaning detect-changes ran and found no desktop changes).
+            if [ "$E2E_CONCLUSION" != "success" ]; then
+              echo "::error::Desktop E2E did not run and CI E2E run ${E2E_RUN_ID} did not succeed (conclusion: ${E2E_CONCLUSION}). Cannot fall back."
+              exit 1
+            fi
+
+            echo "Desktop E2E was skipped/absent in latest CI E2E run (run ${E2E_RUN_ID})."
             echo "Searching for most recent CI E2E run where Desktop E2E passed..."
 
             RECENT_RUN_ID=""
