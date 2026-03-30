@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.32.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.32.0...cipher-box-v0.32.1) (2026-03-30)
+
+
+### Bug Fixes
+
+* **ci:** check E2E jobs within ci-e2e.yml orchestrator runs ([#409](https://github.com/FSM1/cipher-box/issues/409)) ([949b18e](https://github.com/FSM1/cipher-box/commit/949b18e9685898bb24744c4e42ca8ea45e099586))
+* **ci:** force all E2E suites on workflow_dispatch and re-trigger release gate ([bb87d17](https://github.com/FSM1/cipher-box/commit/bb87d17848a8ff388346a74ab313bcd5cd3b7681))
+* **ci:** skip E2E gates when web/desktop unchanged ([#407](https://github.com/FSM1/cipher-box/issues/407)) ([28d1390](https://github.com/FSM1/cipher-box/commit/28d1390d31515720f273d2f3e75337a8c9e01d27))
+* **ci:** use --cvm-id flag for Phala Cloud CVM redeployment ([#405](https://github.com/FSM1/cipher-box/issues/405)) ([10bf6fa](https://github.com/FSM1/cipher-box/commit/10bf6faf4ea725f2ee5e28debee5b70eef478274))
+
 ## [0.32.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.31.1...cipher-box-v0.32.0) (2026-03-30)
 
 
