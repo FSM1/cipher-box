@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "96c73f137fc7",
+  "strategy": "manual-commit",
+  "branch": "feat/inline-upload-progress",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/96/c73f137fc7/0/metadata.json",
+      "transcript": "/96/c73f137fc7/0/full.jsonl",
+      "content_hash": "/96/c73f137fc7/0/content_hash.txt",
+      "prompt": "/96/c73f137fc7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5995,
+    "cache_creation_tokens": 307438,
+    "cache_read_tokens": 13506195,
+    "output_tokens": 36431,
+    "api_call_count": 150
+  }
+}
