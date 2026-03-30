@@ -64,6 +64,46 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
   const isComplete = file.status === 'complete';
   const isEncrypting = file.status === 'encrypting';
 
+  const actionButtons = (
+    <>
+      {!isComplete && !isError && (
+        <button
+          type="button"
+          className="upload-inline-btn"
+          onClick={handleCancel}
+          aria-label={`Cancel upload of ${file.filename}`}
+          title="Cancel upload"
+        >
+          {'[x]'}
+        </button>
+      )}
+      {isError && (
+        <>
+          {onRetry && file.file && (
+            <button
+              type="button"
+              className="upload-inline-btn upload-inline-btn--retry"
+              onClick={handleRetry}
+              aria-label={`Retry upload of ${file.filename}`}
+              title="Retry upload"
+            >
+              {'[R]'}
+            </button>
+          )}
+          <button
+            type="button"
+            className="upload-inline-btn"
+            onClick={handleDismiss}
+            aria-label={`Dismiss failed upload of ${file.filename}`}
+            title="Dismiss error"
+          >
+            {'[x]'}
+          </button>
+        </>
+      )}
+    </>
+  );
+
   const rowClassName = [
     'file-list-item',
     'upload-inline-row',
@@ -103,42 +143,13 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
           {'--'}
         </span>
         <span className="file-list-item-date upload-inline-actions" role="gridcell">
-          {!isComplete && !isError && (
-            <button
-              type="button"
-              className="upload-inline-btn"
-              onClick={handleCancel}
-              aria-label={`Cancel upload of ${file.filename}`}
-              title="Cancel upload"
-            >
-              {'[x]'}
-            </button>
-          )}
-          {isError && (
-            <>
-              {onRetry && file.file && (
-                <button
-                  type="button"
-                  className="upload-inline-btn upload-inline-btn--retry"
-                  onClick={handleRetry}
-                  aria-label={`Retry upload of ${file.filename}`}
-                  title="Retry upload"
-                >
-                  {'[R]'}
-                </button>
-              )}
-              <button
-                type="button"
-                className="upload-inline-btn"
-                onClick={handleDismiss}
-                aria-label={`Dismiss failed upload of ${file.filename}`}
-                title="Dismiss error"
-              >
-                {'[x]'}
-              </button>
-            </>
-          )}
+          {actionButtons}
         </span>
+      </div>
+
+      {/* Mobile actions — hidden on desktop, visible on mobile (mirrors FileListItem pattern) */}
+      <div className="file-list-item-mobile-actions upload-inline-actions" role="gridcell">
+        {actionButtons}
       </div>
     </div>
   );
