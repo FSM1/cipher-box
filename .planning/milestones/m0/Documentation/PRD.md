@@ -11,7 +11,7 @@ ai_context: Product requirements for CipherBox. Tech demonstrator - not commerci
 **Type:** Technology Demonstrator
 **Status:** Specification Document
 **Created:** January 14, 2026
-**Last Updated:** January 20, 2026  
+**Last Updated:** January 20, 2026
 
 ---
 
@@ -30,16 +30,16 @@ ai_context: Product requirements for CipherBox. Tech demonstrator - not commerci
 
 ## Terminology
 
-| Term | Code/API | Prose | Notes |
-|------|----------|-------|-------|
-| Root folder encryption key | `rootFolderKey` | root folder key | AES-256 symmetric key |
-| User's ECDSA public key | `publicKey` | public key | secp256k1 curve |
-| User's ECDSA private key | `privateKey` | private key | Never stored/transmitted |
-| IPNS identifier | `ipnsName` | IPNS name | e.g., k51qzi5uqu5dlvj55... |
-| IPNS signed data structure | `ipnsRecord` | IPNS record | Contains encrypted metadata |
-| Folder encryption key | `folderKey` | folder key | Per-folder AES-256 key |
-| File encryption key | `fileKey` | file key | Per-file AES-256 key |
-| IPNS signing key | `ipnsPrivateKey` | IPNS private key | Ed25519, stored encrypted |
+| Term                       | Code/API         | Prose            | Notes                       |
+| -------------------------- | ---------------- | ---------------- | --------------------------- |
+| Root folder encryption key | `rootFolderKey`  | root folder key  | AES-256 symmetric key       |
+| User's ECDSA public key    | `publicKey`      | public key       | secp256k1 curve             |
+| User's ECDSA private key   | `privateKey`     | private key      | Never stored/transmitted    |
+| IPNS identifier            | `ipnsName`       | IPNS name        | e.g., k51qzi5uqu5dlvj55...  |
+| IPNS signed data structure | `ipnsRecord`     | IPNS record      | Contains encrypted metadata |
+| Folder encryption key      | `folderKey`      | folder key       | Per-folder AES-256 key      |
+| File encryption key        | `fileKey`        | file key         | Per-file AES-256 key        |
+| IPNS signing key           | `ipnsPrivateKey` | IPNS private key | Ed25519, stored encrypted   |
 
 ---
 
@@ -68,6 +68,7 @@ Existing cloud storage providers (Google Drive, Dropbox, OneDrive) create fundam
 CipherBox delivers **privacy-first cloud storage with decentralized persistence and zero-knowledge guarantees**.
 
 Core pillars:
+
 - **Client-side encryption:** Files encrypted before leaving device
 - **User-held keys:** Cryptographic keys generated and held client-side only
 - **Decentralized storage:** Files stored on IPFS (peer-to-peer, immutable)
@@ -80,6 +81,7 @@ Core pillars:
 **Primary:** Developers and technical users interested in cryptography, IPFS, and privacy-preserving architectures.
 
 **Characteristics:**
+
 - Technical background (understands encryption concepts, distributed systems)
 - Interest in novel cryptographic applications
 - Values privacy guarantees and decentralization
@@ -92,12 +94,14 @@ Core pillars:
 ### 2.1 Primary Persona: Privacy-Conscious Developer
 
 **Profile:**
+
 - Age: 28-45, works in tech/security/finance
 - Technical comfort: High (understands cryptography, IPFS, distributed systems)
 - Interest: Exploring zero-knowledge architectures and decentralized storage
 - Platforms: Primarily macOS/Linux, secondary web access
 
 **Needs:**
+
 - Cryptographically verifiable privacy (not just "trust us")
 - Multi-device access without sync issues
 - Clear understanding of what server can/cannot see
@@ -154,42 +158,42 @@ Core pillars:
 
 ### 4.1 In Scope (v1.0)
 
-| Feature | Description |
-|---------|-------------|
-| Multi-method auth | Email/Password, OAuth (Google/Apple/GitHub), Magic Link, External Wallet via Web3Auth |
-| File operations | Upload, download, rename, move, delete |
-| Folder operations | Create, rename, move, delete |
-| Web UI | React-based file browser with drag-drop |
-| Desktop mount | macOS FUSE mount at ~/CipherVault |
-| Multi-device sync | IPNS polling (~30s latency) |
-| E2E encryption | AES-256-GCM for files, ECIES for key wrapping |
-| Encryption mode metadata | `encryptionMode` field in file metadata (foundation for v1.1 streaming) |
-| Data portability | Vault export for independent recovery |
-| TEE IPNS republishing | Automatic IPNS record republishing via Phala TEE (3h interval) to prevent 24h expiry |
+| Feature                  | Description                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| Multi-method auth        | Email/Password, OAuth (Google/Apple/GitHub), Magic Link, External Wallet via Web3Auth |
+| File operations          | Upload, download, rename, move, delete                                                |
+| Folder operations        | Create, rename, move, delete                                                          |
+| Web UI                   | React-based file browser with drag-drop                                               |
+| Desktop mount            | macOS FUSE mount at ~/CipherVault                                                     |
+| Multi-device sync        | IPNS polling (~30s latency)                                                           |
+| E2E encryption           | AES-256-GCM for files, ECIES for key wrapping                                         |
+| Encryption mode metadata | `encryptionMode` field in file metadata (foundation for v1.1 streaming)               |
+| Data portability         | Vault export for independent recovery                                                 |
+| TEE IPNS republishing    | Automatic IPNS record republishing via Phala TEE (3h interval) to prevent 24h expiry  |
 
 ### 4.2 Out of Scope (v1.0)
 
-| Feature | Deferred To | Rationale |
-|---------|-------------|-----------|
-| CTR encryption | v1.1 | Streaming implementation complexity |
-| Streaming decryption | v1.1 | Requires CTR mode + chunk decryption |
-| Billing/payments | v1.1 | Tech demo focus |
-| File versioning | v2.0 | Complexity |
-| File/folder sharing | v2.0 | Requires key sharing infrastructure |
-| Mobile apps | v2.0 | Platform expansion |
-| Search/indexing | v2.0 | Client-side search complexity |
-| Collaborative editing | v3.0 | Real-time sync complexity |
-| Team accounts | v3.0 | Permission management |
+| Feature               | Deferred To | Rationale                            |
+| --------------------- | ----------- | ------------------------------------ |
+| CTR encryption        | v1.1        | Streaming implementation complexity  |
+| Streaming decryption  | v1.1        | Requires CTR mode + chunk decryption |
+| Billing/payments      | v1.1        | Tech demo focus                      |
+| File versioning       | v2.0        | Complexity                           |
+| File/folder sharing   | v2.0        | Requires key sharing infrastructure  |
+| Mobile apps           | v2.0        | Platform expansion                   |
+| Search/indexing       | v2.0        | Client-side search complexity        |
+| Collaborative editing | v3.0        | Real-time sync complexity            |
+| Team accounts         | v3.0        | Permission management                |
 
 ### 4.3 Constraints
 
-| Constraint | Value | Rationale |
-|------------|-------|-----------|
-| Max file size | 100 MB | Browser memory limits |
-| Max storage (free tier) | 500 MiB | Pinata cost management |
-| Max files per folder | 1,000 | UI performance |
-| Max folder depth | 20 levels | Traversal performance |
-| Sync latency | ~30 seconds | IPNS polling interval |
+| Constraint              | Value       | Rationale              |
+| ----------------------- | ----------- | ---------------------- |
+| Max file size           | 100 MB      | Browser memory limits  |
+| Max storage (free tier) | 500 MiB     | Pinata cost management |
+| Max files per folder    | 1,000       | UI performance         |
+| Max folder depth        | 20 levels   | Traversal performance  |
+| Sync latency            | ~30 seconds | IPNS polling interval  |
 
 ### 4.4 PoC Validation Harness
 
@@ -208,15 +212,15 @@ To de-risk the key hierarchy, IPNS publishing, and file system flows, the projec
 
 ### 5.1 Functional Criteria
 
-| ID | Criterion | Validation |
-|----|-----------|------------|
-| F1 | User can sign up with any of 4 auth methods | Manual test all methods |
-| F2 | User can upload and download files with correct content | Integration test |
-| F3 | Files sync across devices within 30 seconds | Multi-device test |
-| F4 | Vault export enables independent recovery | Recovery test without backend |
-| F5 | Desktop FUSE mount shows decrypted file names | macOS integration test |
-| F6 | IPNS records auto-republish every 3 hours | TEE integration test |
-| F7 | Vault remains accessible when user is offline for 24h+ | Manual offline test |
+| ID  | Criterion                                               | Validation                    |
+| --- | ------------------------------------------------------- | ----------------------------- |
+| F1  | User can sign up with any of 4 auth methods             | Manual test all methods       |
+| F2  | User can upload and download files with correct content | Integration test              |
+| F3  | Files sync across devices within 30 seconds             | Multi-device test             |
+| F4  | Vault export enables independent recovery               | Recovery test without backend |
+| F5  | Desktop FUSE mount shows decrypted file names           | macOS integration test        |
+| F6  | IPNS records auto-republish every 3 hours               | TEE integration test          |
+| F7  | Vault remains accessible when user is offline for 24h+  | Manual offline test           |
 
 ### 5.2 Security Criteria
 
@@ -224,22 +228,22 @@ See [TECHNICAL_ARCHITECTURE.md](./TECHNICAL_ARCHITECTURE.md#acceptance-criteria)
 
 ### 5.3 Performance Criteria
 
-| ID | Criterion | Target | Test Method |
-|----|-----------|--------|-------------|
-| P1 | Auth flow completion | <3s (P95) | Load test |
-| P2 | File upload (<100MB) | <5s (P95) | Integration test |
-| P3 | File download (<100MB) | <5s (P95) | Integration test |
-| P4 | IPNS resolution (cached) | <200ms | Integration test |
-| P5 | FUSE mount startup | <3s | Manual test |
+| ID  | Criterion                | Target    | Test Method      |
+| --- | ------------------------ | --------- | ---------------- |
+| P1  | Auth flow completion     | <3s (P95) | Load test        |
+| P2  | File upload (<100MB)     | <5s (P95) | Integration test |
+| P3  | File download (<100MB)   | <5s (P95) | Integration test |
+| P4  | IPNS resolution (cached) | <200ms    | Integration test |
+| P5  | FUSE mount startup       | <3s       | Manual test      |
 
 ### 5.4 PoC Validation Criteria
 
-| ID | Criterion | Validation |
-|----|-----------|------------|
-| C1 | PoC completes full flow without errors | Single-run harness test |
-| C2 | IPNS resolves to expected metadata after each publish | Poll-until-resolved check |
-| C3 | File decrypts correctly after upload, update, rename, move | Round-trip checks |
-| C4 | Teardown unpins all created CIDs | Pin audit in harness logs |
+| ID  | Criterion                                                  | Validation                |
+| --- | ---------------------------------------------------------- | ------------------------- |
+| C1  | PoC completes full flow without errors                     | Single-run harness test   |
+| C2  | IPNS resolves to expected metadata after each publish      | Poll-until-resolved check |
+| C3  | File decrypts correctly after upload, update, rename, move | Round-trip checks         |
+| C4  | Teardown unpins all created CIDs                           | Pin audit in harness logs |
 
 ---
 
@@ -290,20 +294,20 @@ See [TECHNICAL_ARCHITECTURE.md](./TECHNICAL_ARCHITECTURE.md#acceptance-criteria)
 
 ## 7. Glossary
 
-| Term | Definition |
-|------|------------|
-| **AES-256-GCM** | Symmetric encryption algorithm with authentication. Used for file and metadata encryption. |
-| **CID** | Content Identifier. Hash of content on IPFS, used as immutable reference. |
-| **E2E Encryption** | End-to-end encryption. Data encrypted on client, server never holds plaintext. |
-| **ECDSA** | Elliptic Curve Digital Signature Algorithm. Used for signing and identity. |
-| **ECIES** | Elliptic Curve Integrated Encryption Scheme. Used for asymmetric key wrapping. |
-| **FUSE** | Filesystem in Userspace. Enables mounting encrypted vault as local folder. |
-| **IPFS** | InterPlanetary File System. Peer-to-peer, content-addressed storage network. |
-| **IPNS** | IPFS Name System. Mutable pointers to immutable IPFS content. |
-| **Web3Auth** | Distributed key derivation service. Derives deterministic ECDSA keypairs from various auth methods. |
-| **Zero-Knowledge** | Architecture where server has no knowledge of user data or encryption keys. |
-| **TEE** | Trusted Execution Environment. Hardware-isolated computing environment (Phala Cloud/AWS Nitro) that can decrypt IPNS keys in hardware for republishing without exposing plaintext keys. |
-| **Key Epoch** | TEE key rotation period. Keys rotate with 4-week grace period for seamless migration. |
+| Term               | Definition                                                                                                                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **AES-256-GCM**    | Symmetric encryption algorithm with authentication. Used for file and metadata encryption.                                                                                              |
+| **CID**            | Content Identifier. Hash of content on IPFS, used as immutable reference.                                                                                                               |
+| **E2E Encryption** | End-to-end encryption. Data encrypted on client, server never holds plaintext.                                                                                                          |
+| **ECDSA**          | Elliptic Curve Digital Signature Algorithm. Used for signing and identity.                                                                                                              |
+| **ECIES**          | Elliptic Curve Integrated Encryption Scheme. Used for asymmetric key wrapping.                                                                                                          |
+| **FUSE**           | Filesystem in Userspace. Enables mounting encrypted vault as local folder.                                                                                                              |
+| **IPFS**           | InterPlanetary File System. Peer-to-peer, content-addressed storage network.                                                                                                            |
+| **IPNS**           | IPFS Name System. Mutable pointers to immutable IPFS content.                                                                                                                           |
+| **Web3Auth**       | Distributed key derivation service. Derives deterministic ECDSA keypairs from various auth methods.                                                                                     |
+| **Zero-Knowledge** | Architecture where server has no knowledge of user data or encryption keys.                                                                                                             |
+| **TEE**            | Trusted Execution Environment. Hardware-isolated computing environment (Phala Cloud/AWS Nitro) that can decrypt IPNS keys in hardware for republishing without exposing plaintext keys. |
+| **Key Epoch**      | TEE key rotation period. Keys rotate with 4-week grace period for seamless migration.                                                                                                   |
 
 ---
 

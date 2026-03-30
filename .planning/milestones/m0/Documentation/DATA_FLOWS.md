@@ -9,7 +9,7 @@ ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid 
 
 **Document Type:** Implementation Reference
 **Status:** Finalized
-**Last Updated:** January 20, 2026  
+**Last Updated:** January 20, 2026
 
 ---
 
@@ -30,15 +30,15 @@ ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid 
 
 ## Terminology
 
-| Term | Code/API | Prose |
-|------|----------|-------|
-| Root folder encryption key | `rootFolderKey` | root folder key |
-| User's ECDSA public key | `publicKey` | public key |
-| User's ECDSA private key | `privateKey` | private key |
-| IPNS identifier | `ipnsName` | IPNS name |
-| Folder encryption key | `folderKey` | folder key |
-| File encryption key | `fileKey` | file key |
-| TEE key rotation epoch | `keyEpoch` | key epoch |
+| Term                                           | Code/API                  | Prose                      |
+| ---------------------------------------------- | ------------------------- | -------------------------- |
+| Root folder encryption key                     | `rootFolderKey`           | root folder key            |
+| User's ECDSA public key                        | `publicKey`               | public key                 |
+| User's ECDSA private key                       | `privateKey`              | private key                |
+| IPNS identifier                                | `ipnsName`                | IPNS name                  |
+| Folder encryption key                          | `folderKey`               | folder key                 |
+| File encryption key                            | `fileKey`                 | file key                   |
+| TEE key rotation epoch                         | `keyEpoch`                | key epoch                  |
 | IPNS private key encrypted with TEE public key | `encryptedIpnsPrivateKey` | encrypted IPNS private key |
 
 ---
@@ -54,18 +54,18 @@ sequenceDiagram
     participant W as Web3Auth
     participant B as CipherBox Backend
     participant DB as PostgreSQL
-    
+
     U->>C: Click "Sign In"
     C->>W: Redirect to Web3Auth modal
     U->>W: Select auth method (Google/Email/Wallet)
     U->>W: Complete authentication
-    
+
     Note over W: Key Derivation
     W->>W: Verify credentials
     W->>W: Identify group connection
     W->>W: Derive ECDSA keypair (threshold crypto)
     W->>C: Return {privateKey, publicKey, idToken}
-    
+
     Note over C: Backend Authentication
     C->>B: POST /auth/login {idToken, publicKey}
     B->>B: Fetch JWKS from Web3Auth
@@ -75,13 +75,13 @@ sequenceDiagram
     B->>DB: Find or create user by publicKey
     B->>DB: Store refresh token hash
     B->>C: {accessToken, refreshToken, userId}
-    
+
     Note over C: Vault Access
     C->>B: GET /my-vault
     B->>DB: Fetch vault by userId
     B->>C: {encryptedRootFolderKey, rootIpnsName}
     C->>C: rootFolderKey = ECIES_Decrypt(encrypted, privateKey)
-    
+
     Note over C: Session Active
     C->>C: Store privateKey in RAM
     C->>C: Store rootFolderKey in RAM
@@ -94,16 +94,16 @@ sequenceDiagram
     participant C as Client
     participant B as CipherBox Backend
     participant DB as PostgreSQL
-    
+
     Note over C: After Web3Auth key derivation
-    
+
     C->>B: GET /auth/nonce
     B->>DB: Insert nonce (5min TTL)
     B->>C: {nonce, expiresAt}
-    
+
     C->>C: Construct SIWE message
     C->>C: signature = ECDSA_sign(message, privateKey)
-    
+
     C->>B: POST /auth/login {message, signature, publicKey}
     B->>DB: Find nonce, verify not expired/used
     B->>B: recoveredKey = ecrecover(message, signature)
@@ -120,9 +120,9 @@ sequenceDiagram
     participant C as Client
     participant B as CipherBox Backend
     participant DB as PostgreSQL
-    
+
     Note over C: Access token expired
-    
+
     C->>B: POST /auth/refresh {refreshToken}
     B->>DB: Find token by hash
     B->>B: Verify not expired/revoked
@@ -130,7 +130,7 @@ sequenceDiagram
     B->>DB: Create new refresh token
     B->>B: Generate new access token
     B->>C: {accessToken, refreshToken}
-    
+
     C->>C: Store new tokens
 ```
 
@@ -145,15 +145,15 @@ sequenceDiagram
     participant B as CipherBox Backend
     participant P as Pinata
     participant IPFS as IPFS Network
-    
+
     U->>C: Drag file into folder
-    
+
     Note over C: Client-side Encryption
     C->>C: fileKey = randomBytes(32)
     C->>C: iv = randomBytes(12)
     C->>C: ciphertext = AES-GCM(file, fileKey, iv)
     C->>C: encryptedFileKey = ECIES(fileKey, publicKey)
-    
+
     Note over C,B: Upload to Backend
     C->>B: POST /vault/upload {ciphertext, iv}
     B->>P: Pin encrypted file
@@ -161,12 +161,12 @@ sequenceDiagram
     P->>B: Return CID
     B->>B: Update storage quota
     B->>C: {cid, size}
-    
+
     Note over C: Update Folder Metadata
     C->>C: Add file entry to folder.children
     C->>C: encryptedMetadata = AES-GCM(metadata, folderKey)
     C->>C: Decrypt folder's ipnsPrivateKey
-    
+
     Note over C,B: Publish IPNS (Signed-Record Relay)
     C->>B: POST /ipfs/add (encrypted metadata)
     B->>IPFS: Add metadata, return CID
@@ -175,7 +175,7 @@ sequenceDiagram
     C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
-    
+
     Note over C: Update UI
     C->>U: Show file in folder with decrypted name
 ```
@@ -200,6 +200,7 @@ After upload, this entry is added to folder metadata:
 ```
 
 **Field Notes:**
+
 - `encryptionMode`: Specifies file encryption algorithm ("GCM" or "CTR"). Always "GCM" in v1.0. Required for v1.1+ streaming support.
 - Client decryption must default to "GCM" if field is missing (backward compatibility).
 
@@ -213,25 +214,25 @@ sequenceDiagram
     participant C as Client
     participant B as CipherBox Backend
     participant IPFS as IPFS Network
-    
+
     U->>C: Click download on file
-    
+
     Note over C: Extract from cached metadata
     C->>C: fileEntry = folder.children.find(file)
-    
+
     Note over C: Decrypt Keys
     C->>C: fileKey = ECIES_Decrypt(fileKeyEncrypted, privateKey)
     C->>C: fileName = AES-GCM_Decrypt(nameEncrypted, folderKey, nameIv)
-    
+
     Note over C,B: Fetch Encrypted Content
     C->>B: GET /ipfs/cat?cid={cid}
     B->>IPFS: Fetch encrypted file
     B->>C: Return encrypted file
-    
+
     Note over C: Decrypt Content
     C->>C: plaintext = AES-GCM_Decrypt(ciphertext, fileKey, fileIv)
     C->>C: Verify auth tag (tampering detection)
-    
+
     Note over C,U: Present to User
     C->>C: blob = new Blob([plaintext])
     C->>U: Trigger browser download
@@ -249,18 +250,18 @@ sequenceDiagram
     participant B as CipherBox Backend
     participant IPFS as IPFS Network
     participant D2 as Device 2
-    
+
     Note over D1: User uploads file
     D1->>B: POST /ipfs/add + POST /ipns/publish
     B->>IPFS: Relay publish
-    
+
     Note over D2: Background polling (every 30s)
     loop Every 30 seconds
       D2->>B: GET /ipns/resolve
       B->>IPFS: Resolve IPNS name
       B->>D2: Return current CID
         D2->>D2: Compare with cached CID
-        
+
         alt CID changed
         D2->>B: GET /ipfs/cat
             D2->>D2: Decrypt metadata
@@ -277,23 +278,20 @@ sequenceDiagram
 async function pollForChanges() {
   // Get root IPNS name from vault
   const vault = await api.get('/my-vault');
-  
+
   // Resolve IPNS to current CID
   const { cid: currentCid } = await api.get(`/ipns/resolve?ipnsName=${vault.rootIpnsName}`);
-  
+
   // Check if changed
   if (currentCid === cachedRootCid) {
-    console.log("No changes detected");
+    console.log('No changes detected');
     return;
   }
-  
+
   // Changes detected - fetch new metadata
   cachedRootCid = currentCid;
-  const rootMetadata = await fetchAndDecryptMetadata(
-    vault.rootIpnsName,
-    rootFolderKey
-  );
-  
+  const rootMetadata = await fetchAndDecryptMetadata(vault.rootIpnsName, rootFolderKey);
+
   // Update UI
   updateFileTree(rootMetadata);
 }
@@ -313,19 +311,19 @@ sequenceDiagram
     participant U as User
     participant C as Client
     participant B as CipherBox Backend
-    
+
     U->>C: Click "Export Vault" in Settings
     C->>B: GET /user/export-vault
-    
+
     B->>B: Gather vault data
     B->>C: Return export JSON
-    
+
     Note over C: Export contains
     C->>C: rootIpnsName
     C->>C: encryptedRootFolderKey
     C->>C: encryptedRootIpnsPrivateKey
     C->>C: List of all pinned CIDs
-    
+
     C->>U: Download vault_export.json
 ```
 
@@ -336,20 +334,20 @@ sequenceDiagram
     participant U as User
     participant R as Recovery Tool
     participant IPFS as IPFS Gateway
-    
+
     U->>R: Load vault_export.json
     U->>R: Provide privateKey (from Web3Auth backup)
-    
+
     Note over R: Decrypt Root Keys
     R->>R: rootFolderKey = ECIES_Decrypt(encrypted, privateKey)
     R->>R: ipnsPrivateKey = ECIES_Decrypt(encrypted, privateKey)
-    
+
     Note over R,IPFS: Resolve Root IPNS
     R->>IPFS: Resolve rootIpnsName
     IPFS->>R: Return root metadata CID
     R->>IPFS: Fetch root metadata
     R->>R: Decrypt with rootFolderKey
-    
+
     Note over R: Traverse All Folders
     loop For each folder
         R->>IPFS: Resolve folder IPNS
@@ -357,7 +355,7 @@ sequenceDiagram
         R->>R: Decrypt folder metadata
         R->>R: Extract subfolder keys
     end
-    
+
     Note over R: Download All Files
     loop For each file
         R->>IPFS: Fetch encrypted file by CID
@@ -365,7 +363,7 @@ sequenceDiagram
         R->>R: Decrypt file content
         R->>U: Save plaintext file locally
     end
-    
+
     U->>U: Complete vault recovered independently
 ```
 
@@ -381,18 +379,18 @@ sequenceDiagram
     participant C as Client
     participant B as CipherBox Backend
     participant IPFS as IPFS Network
-    
+
     U->>C: Create new folder "Documents"
-    
+
     Note over C: Generate Keys
     C->>C: folderKey = randomBytes(32)
     C->>C: ipnsKeypair = generateEd25519()
     C->>C: ipnsName = deriveIpnsName(ipnsKeypair.public)
-    
+
     Note over C: Encrypt Keys
     C->>C: encryptedFolderKey = ECIES(folderKey, publicKey)
     C->>C: encryptedIpnsKey = ECIES(ipnsKeypair.private, publicKey)
-    
+
     Note over C: Create Empty Folder
     C->>C: folderMetadata = { children: [] }
     C->>C: encrypted = AES-GCM(metadata, folderKey)
@@ -403,7 +401,7 @@ sequenceDiagram
     C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
-    
+
     Note over C: Update Parent
     C->>C: Add folder entry to parent.children
     C->>C: Re-encrypt parent metadata
@@ -424,9 +422,9 @@ sequenceDiagram
     participant C as Client
     participant B as CipherBox Backend
     participant IPFS as IPFS Network
-    
+
     U->>C: Rename "old.pdf" to "new.pdf"
-    
+
     C->>C: Find file entry in parent metadata
     C->>C: newNameEncrypted = AES-GCM("new.pdf", folderKey)
     C->>C: Update entry.nameEncrypted
@@ -438,7 +436,7 @@ sequenceDiagram
     C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
-    
+
     Note over C: CID unchanged (only metadata updated)
 ```
 
@@ -449,9 +447,9 @@ sequenceDiagram
     participant C as Client
     participant B as CipherBox Backend
     participant IPFS as IPFS Network
-    
+
     Note over C: Move file.pdf from /Docs to /Docs/Work
-    
+
     Note over C: Step 1: Add to destination first
     C->>C: Add file entry to destination folder
     C->>C: Re-encrypt destination metadata
@@ -462,7 +460,7 @@ sequenceDiagram
     C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
-    
+
     Note over C: Step 2: Remove from source
     C->>C: Remove file entry from source folder
     C->>C: Re-encrypt source metadata
@@ -473,7 +471,7 @@ sequenceDiagram
     C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
-    
+
     Note over C: Order ensures file always reachable
 ```
 
@@ -484,14 +482,14 @@ sequenceDiagram
     participant C as Client
     participant B as CipherBox Backend
     participant IPFS as IPFS Network
-    
+
     Note over C: Delete file.pdf
-    
+
     C->>B: POST /vault/unpin {cid}
     B->>B: Unpin from Pinata
     B->>B: Reclaim storage quota
     B->>C: {success: true}
-    
+
     C->>C: Remove file entry from parent
     C->>C: Re-encrypt parent metadata
     C->>B: POST /ipfs/add (encrypted metadata)
@@ -510,17 +508,17 @@ sequenceDiagram
     participant C as Client
     participant B as CipherBox Backend
     participant IPFS as IPFS Network
-    
+
     Note over C: Update existing file
-    
+
     C->>C: newFileKey = randomBytes(32)
     C->>C: newIv = randomBytes(12)
     C->>C: ciphertext = AES-GCM(newContent, newFileKey, newIv)
     C->>C: encryptedKey = ECIES(newFileKey, publicKey)
-    
+
     C->>B: POST /vault/upload {ciphertext, newIv}
     B->>C: {cid: newCid}
-    
+
     C->>C: Update file entry with new cid, key, iv
     C->>C: Re-encrypt parent metadata
     C->>B: POST /ipfs/add (encrypted metadata)
@@ -530,7 +528,7 @@ sequenceDiagram
     C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
-    
+
     C->>B: POST /vault/unpin {oldCid}
     Note over B: Reclaim old file storage
 ```
@@ -630,7 +628,7 @@ Encryption:
 
 Decryption:
   result = AES-256-GCM_Decrypt(ciphertext, fileKey, iv, authTag)
-  
+
 Verification:
   ✓ result == plaintext
   ✓ Modifying ciphertext causes auth failure
@@ -701,11 +699,13 @@ sequenceDiagram
 ```
 
 **Verification checkpoints:**
+
 - IPNS resolves to expected metadata CID after each publish (poll-until-resolved)
 - Metadata decrypts correctly with expected entries
 - File decrypts correctly after upload, update, rename, move
 - All created CIDs are unpinned during teardown
-```
+
+````
 
 ---
 
@@ -728,7 +728,7 @@ function selectEncryptionMode(file: File): "GCM" | "CTR" {
 
   return "GCM";  // Default: authenticated encryption
 }
-```
+````
 
 ### 9.2 Upload Flow with Mode Selection (v1.1)
 
@@ -795,12 +795,14 @@ sequenceDiagram
 ### 9.4 Security Implications
 
 **CTR Mode Considerations:**
+
 - No per-file authentication tag (unlike GCM)
 - Integrity provided by IPNS Ed25519 signature + IPFS CID hash
 - Tampering with encrypted content changes CID → IPNS signature verification fails
 - Metadata-level authentication provides integrity protection
 
 **v1.0 Backward Compatibility:**
+
 - Missing `encryptionMode` field → defaults to "GCM"
 - All v1.0 files work unchanged in v1.1
 - No data migration required
