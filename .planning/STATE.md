@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Milestone complete
-last_updated: "2026-03-29T16:46:52.980Z"
+last_updated: "2026-03-30T02:22:59.414Z"
 last_activity: 2026-03-29
 progress:
-  total_phases: 20
+  total_phases: 21
   completed_phases: 20
-  total_plans: 80
-  completed_plans: 80
+  total_plans: 84
+  completed_plans: 83
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone complete — all phases (18-35) finished
+**Current focus:** Phase 36 inline upload progress — per-file upload state refactor
 
 ## Current Position
 
-Phase: 35 (complete)
-Plan: Not started
+Phase: 36 (in progress)
+Plan: 01 of 2 complete
 
 ## Performance Metrics
 
@@ -34,59 +34,60 @@ Plan: Not started
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
-| Phase        | Plan  | Duration | Tasks   | Files |
-| ------------ | ----- | -------- | ------- | ----- |
-| 19           | 01    | 2min     | 2       | 3     |
-| 19           | 02    | 5min     | 2       | 5     |
-| 19.1         | 02    | 4min     | 2       | 133   |
-| 19.1         | 01    | 17min    | 2       | 42    |
-| 19.1         | 03    | 12min    | 3       | 18    |
-| 19.1         | 04    | 10min    | 2       | 14    |
-| 19.1         | 06    | 13min    | 3       | 52    |
-| 19.2         | 01    | 6min     | 2       | 4     |
-| 19.2         | 02    | 12min    | 3       | 3     |
-| 19.2         | 03    | 1min     | 1       | 1     |
-| 19.2         | 04    | 71min    | 2       | 1     |
-| 20           | 01    | 4min     | 2       | 5     |
-| 20           | 02    | 17min    | 3       | 16    |
-| 20           | 03    | 25min    | 2       | 6     |
-| 20           | 04    | 45min    | 3       | 15    |
-| 20           | 05    | 6min     | 2       | 13    |
-| 20           | 06    | 6min     | 2       | 4     |
-| 21           | 01    | 5min     | 2       | 9     |
-| 21           | 03    | 10min    | 3       | 13    |
-| 21           | 05    | 9min     | 2       | 13    |
-| 21           | 04    | 8min     | 3       | 9     |
-| 21           | 06    | 3min     | 2       | 4     |
-| 21           | 07    | 5min     | 3       | 5     |
-| 23           | 01    | 13min    | 2       | 26    |
-| 23           | 02    | 10min    | 2       | 33    |
-| 23           | 03    | 11min    | 2       | 23    |
-| 23           | 05    | 12min    | 2       | 24    |
-| 23           | 04    | 22min    | 2       | 17    |
-| 23           | 07    | 7min     | 2       | 5     |
-| 23           | 06    | 23min    | 2       | 7     |
-| 23           | 08    | 20min    | 2       | 7     |
-| 21           | 08    | 5min     | 2       | 6     |
-| 21           | 10    | 5min     | 2       | 7     |
-| 21           | 09    | 9min     | 3       | 17    |
-| 21           | 11    | 12min    | 2       | 3     |
-| 22           | 02    | 4min     | 2       | 2     |
-| 22           | 01    | 8min     | 2       | 7     |
-| 22           | 03    | 8min     | 2       | 8     |
-| 26           | 02    | 4min     | 2       | 5     |
-| 26           | 01    | 5min     | 2       | 6     |
-| 27           | 01    | 6min     | 2       | 23    |
-| 27           | 02    | 5min     | 2       | 4     |
-| 27           | 03    | 25min    | 3       | 15    |
-| Phase 33 P01 | 11min | 2 tasks  | 3 files |
-| Phase 33 P02 | 3min  | 1 tasks  | 3 files |
-| Phase 34 P01 | 3min  | 2 tasks  | 9 files |
-| Phase 34 P02 | 4min  | 2 tasks  | 8 files |
-| Phase 34 P03 | 2min  | 1 tasks  | 1 files |
-| Phase 35 P02 | 5min  | 4 tasks  | 6 files |
+| Phase        | Plan  | Duration | Tasks    | Files |
+| ------------ | ----- | -------- | -------- | ----- |
+| 19           | 01    | 2min     | 2        | 3     |
+| 19           | 02    | 5min     | 2        | 5     |
+| 19.1         | 02    | 4min     | 2        | 133   |
+| 19.1         | 01    | 17min    | 2        | 42    |
+| 19.1         | 03    | 12min    | 3        | 18    |
+| 19.1         | 04    | 10min    | 2        | 14    |
+| 19.1         | 06    | 13min    | 3        | 52    |
+| 19.2         | 01    | 6min     | 2        | 4     |
+| 19.2         | 02    | 12min    | 3        | 3     |
+| 19.2         | 03    | 1min     | 1        | 1     |
+| 19.2         | 04    | 71min    | 2        | 1     |
+| 20           | 01    | 4min     | 2        | 5     |
+| 20           | 02    | 17min    | 3        | 16    |
+| 20           | 03    | 25min    | 2        | 6     |
+| 20           | 04    | 45min    | 3        | 15    |
+| 20           | 05    | 6min     | 2        | 13    |
+| 20           | 06    | 6min     | 2        | 4     |
+| 21           | 01    | 5min     | 2        | 9     |
+| 21           | 03    | 10min    | 3        | 13    |
+| 21           | 05    | 9min     | 2        | 13    |
+| 21           | 04    | 8min     | 3        | 9     |
+| 21           | 06    | 3min     | 2        | 4     |
+| 21           | 07    | 5min     | 3        | 5     |
+| 23           | 01    | 13min    | 2        | 26    |
+| 23           | 02    | 10min    | 2        | 33    |
+| 23           | 03    | 11min    | 2        | 23    |
+| 23           | 05    | 12min    | 2        | 24    |
+| 23           | 04    | 22min    | 2        | 17    |
+| 23           | 07    | 7min     | 2        | 5     |
+| 23           | 06    | 23min    | 2        | 7     |
+| 23           | 08    | 20min    | 2        | 7     |
+| 21           | 08    | 5min     | 2        | 6     |
+| 21           | 10    | 5min     | 2        | 7     |
+| 21           | 09    | 9min     | 3        | 17    |
+| 21           | 11    | 12min    | 2        | 3     |
+| 22           | 02    | 4min     | 2        | 2     |
+| 22           | 01    | 8min     | 2        | 7     |
+| 22           | 03    | 8min     | 2        | 8     |
+| 26           | 02    | 4min     | 2        | 5     |
+| 26           | 01    | 5min     | 2        | 6     |
+| 27           | 01    | 6min     | 2        | 23    |
+| 27           | 02    | 5min     | 2        | 4     |
+| 27           | 03    | 25min    | 3        | 15    |
+| Phase 33 P01 | 11min | 2 tasks  | 3 files  |
+| Phase 33 P02 | 3min  | 1 tasks  | 3 files  |
+| Phase 34 P01 | 3min  | 2 tasks  | 9 files  |
+| Phase 34 P02 | 4min  | 2 tasks  | 8 files  |
+| Phase 34 P03 | 2min  | 1 tasks  | 1 files  |
+| Phase 35 P02 | 5min  | 4 tasks  | 6 files  |
 | Phase 35 P03 | 8min  | 4 tasks  | 14 files |
-| Phase 35 P05 | 5min  | 3 tasks  | 3 files |
+| Phase 35 P05 | 5min  | 3 tasks  | 3 files  |
+| Phase 36 P01 | 2min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -167,10 +168,10 @@ Recent for v1.1:
 - Shared file download/view falls back to fileKeyEncrypted from metadata when no share_key exists
 - FilePointer resolution uses FileMetadata directly (no separate ResolvedFileMetadata struct)
 - FilePointer resolution scoped to parent folder via get_unresolved_file_pointers_for_parent() to avoid wrong-folder-key decryption
-- FilePointer async resolution: 500ms base * 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
+- FilePointer async resolution: 500ms base \* 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
 - Removed custom dstack-sdk.d.ts since @phala/dstack-sdk@0.5.7 ships own TypeScript types
 - Defensive CVM key derivation handles both key (v0.5+) and asUint8Array (legacy) SDK return types
-- TEE worker Prometheus metrics use cipherbox_tee_* prefix for Grafana dashboard coexistence with API metrics
+- TEE worker Prometheus metrics use cipherbox*tee*\* prefix for Grafana dashboard coexistence with API metrics
 - TEE worker structured JSON logger has zero external dependencies (JSON.stringify to stdout/stderr)
 
 ### Roadmap Evolution
@@ -179,6 +180,7 @@ Recent for v1.1:
 - Phase 19.2 inserted after Phase 19: IPFS Upload Performance Optimization (URGENT) — concurrent pins, Kubo worker tuning, pin batching to address ~95% bottleneck in upload path identified by Phase 19 baselines
 - Phase 23 added: Rust SDK Extraction — extract shared cipherbox-core crate, replace duplicated logic in desktop FUSE code, enable unit testing parity with TypeScript
 - Phase 27 added: Writable Shares (PoC) — extend read-only sharing to read-write using existing server-coordinated conflict resolution
+- Phase 36 added: Refactor upload progress in web app, to an inline progress display and remove the popup upload progress
 
 ### Open Concerns
 

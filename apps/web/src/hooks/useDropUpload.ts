@@ -22,21 +22,22 @@ export function isExternalFileDrag(dataTransfer: DataTransfer): boolean {
 /**
  * Hook for handling external file drops (from Finder/Explorer) anywhere in the app.
  *
- * Uses the SDK's uploadFile() for atomic encrypt → upload → register flow.
- * All IPNS state is managed by the SDK — no dual-path conflicts.
+ * Uses the SDK's uploadFile() for atomic encrypt -> upload -> register flow.
+ * All IPNS state is managed by the SDK -- no dual-path conflicts.
  */
 export function useDropUpload() {
-  const uploadStatus = useUploadStore((s) => s.status);
+  const uploadFiles = useUploadStore((s) => s.files);
   const isUploading =
-    uploadStatus === 'encrypting' || uploadStatus === 'uploading' || uploadStatus === 'registering';
+    uploadFiles.size > 0 &&
+    Array.from(uploadFiles.values()).some(
+      (f) => f.status === 'encrypting' || f.status === 'uploading'
+    );
 
   const handleFileDrop = useCallback(async (files: File[], folderId: string): Promise<boolean> => {
     // Filter out oversized files
     const oversized = files.filter((f) => f.size > MAX_FILE_SIZE);
     if (oversized.length > 0) {
-      useUploadStore
-        .getState()
-        .setError(`Files exceed 100MB limit: ${oversized.map((f) => f.name).join(', ')}`);
+      logger.error(`[Upload] Files exceed 100MB limit: ${oversized.map((f) => f.name).join(', ')}`);
       return false;
     }
 
@@ -46,7 +47,7 @@ export function useDropUpload() {
     const totalSize = files.reduce((sum, f) => sum + f.size, 0);
     const quotaStore = useQuotaStore.getState();
     if (!quotaStore.canUpload(totalSize)) {
-      useUploadStore.getState().setError('Not enough storage space for these files');
+      logger.error('[Upload] Not enough storage space for these files');
       return false;
     }
 
@@ -54,7 +55,7 @@ export function useDropUpload() {
     const batchNames = new Set<string>();
     for (const f of files) {
       if (batchNames.has(f.name)) {
-        useUploadStore.getState().setError(`Duplicate file name in selection: ${f.name}`);
+        logger.error(`[Upload] Duplicate file name in selection: ${f.name}`);
         return false;
       }
       batchNames.add(f.name);
@@ -62,7 +63,7 @@ export function useDropUpload() {
 
     // Identify which files already exist in the target folder
     const folder = useFolderStore.getState().folders[folderId];
-    const existingByName = new Map<string, string>(); // name → fileId
+    const existingByName = new Map<string, string>(); // name -> fileId
     const existingFolderNames = new Set<string>();
     if (folder) {
       for (const child of folder.children) {
@@ -74,14 +75,12 @@ export function useDropUpload() {
       }
     }
 
-    // Fail fast on file–folder name collisions
+    // Fail fast on file-folder name collisions
     const folderNameConflicts = files.filter((f) => existingFolderNames.has(f.name));
     if (folderNameConflicts.length > 0) {
-      useUploadStore
-        .getState()
-        .setError(
-          `Cannot upload file(s) with the same name as an existing folder: ${folderNameConflicts.map((f) => f.name).join(', ')}`
-        );
+      logger.error(
+        `[Upload] Cannot upload file(s) with the same name as an existing folder: ${folderNameConflicts.map((f) => f.name).join(', ')}`
+      );
       return false;
     }
 
@@ -89,7 +88,7 @@ export function useDropUpload() {
     const duplicateFiles = files.filter((f) => existingByName.has(f.name));
 
     if (!hasSdkClient()) {
-      useUploadStore.getState().setError('SDK not initialized — please log in again');
+      logger.error('[Upload] SDK not initialized -- please log in again');
       return false;
     }
 
@@ -101,25 +100,24 @@ export function useDropUpload() {
     const parentFolder =
       folderId === 'root' ? getRootFolderState(vault, folders) : folders[folderId];
     if (!parentFolder) {
-      useUploadStore.getState().setError('Parent folder not found');
+      logger.error('[Upload] Parent folder not found');
       return false;
     }
     ensureFolderRegistered(parentFolder);
 
-    const uploadStore = useUploadStore.getState();
-    // Start with all files (new + duplicates) since we encrypt all upfront
-    uploadStore.startUpload(files.length);
-
     const uploadedCids: string[] = []; // Track for cleanup on failure
+    let currentUploadId: string | undefined;
 
     try {
-      // Upload new files via SDK (atomic: encrypt → IPFS → FilePointer → IPNS publish)
+      // Upload new files via SDK (atomic: encrypt -> IPFS -> FilePointer -> IPNS publish)
       for (const file of newFiles) {
-        if (useUploadStore.getState().status === 'cancelled') {
+        const uploadId = `upload-${file.name}-${Date.now()}`;
+        currentUploadId = uploadId;
+        useUploadStore.getState().addFile(uploadId, file.name, folderId, file);
+
+        if (useUploadStore.getState().files.get(uploadId)?.status === 'cancelled') {
           throw new Error('Upload cancelled by user');
         }
-
-        useUploadStore.getState().setUploading(file.name, 0);
 
         // Read File to Uint8Array
         const data = new Uint8Array(await file.arrayBuffer());
@@ -129,15 +127,15 @@ export function useDropUpload() {
           data,
           file.name,
           file.type || 'application/octet-stream',
-          (percent) => useUploadStore.getState().setUploading(file.name, percent)
+          (percent) => useUploadStore.getState().updateFileProgress(uploadId, percent)
         );
 
         uploadedCids.push(result.cid);
-        useUploadStore.getState().fileComplete();
+        useUploadStore.getState().setFileComplete(uploadId);
       }
 
       // Handle duplicate files: encrypt + upload to IPFS, then surface as pending replacements
-      // (These don't get registered in the folder — the user decides via the Replace dialog)
+      // (These don't get registered in the folder -- the user decides via the Replace dialog)
       // Duplicate files always upload to CipherBox relay (not BYO node) because
       // they're staged for the replacement dialog. Once the user confirms, the
       // replacement flow uses SDK's uploadFile() which respects pinning mode.
@@ -149,27 +147,33 @@ export function useDropUpload() {
         const { addToIpfs } = await import('../lib/api/ipfs');
 
         for (const file of duplicateFiles) {
-          if (useUploadStore.getState().status === 'cancelled') {
+          const uploadId = `upload-${file.name}-${Date.now()}`;
+          currentUploadId = uploadId;
+          useUploadStore.getState().addFile(uploadId, file.name, folderId, file);
+
+          if (useUploadStore.getState().files.get(uploadId)?.status === 'cancelled') {
             throw new Error('Upload cancelled by user');
           }
-
-          useUploadStore.getState().setUploading(file.name, 0);
 
           // For duplicates, we only encrypt + upload to IPFS (don't register in folder)
           // Use the old upload service for this since SDK's uploadFile registers in folder
           const userPublicKey = useAuthStore.getState().vaultKeypair?.publicKey;
           if (!userPublicKey) throw new Error('No keypair available');
           const encrypted = await encryptFile(file, userPublicKey);
-          // Pass a clean Uint8Array copy — never use .buffer (may include extra bytes)
+          // Pass a clean Uint8Array copy -- never use .buffer (may include extra bytes)
           const blob = new Blob([new Uint8Array(encrypted.ciphertext)], {
             type: 'application/octet-stream',
           });
-          const ipfsResult = await addToIpfs(blob, (percent) =>
-            useUploadStore.getState().setUploading(file.name, percent)
+
+          const cancelToken = useUploadStore.getState().files.get(uploadId)?.cancelSource?.token;
+          const ipfsResult = await addToIpfs(
+            blob,
+            (percent) => useUploadStore.getState().updateFileProgress(uploadId, percent),
+            cancelToken
           );
 
           uploadedCids.push(ipfsResult.cid);
-          useUploadStore.getState().fileComplete();
+          useUploadStore.getState().setFileComplete(uploadId);
 
           const existingFileId = existingByName.get(file.name);
           if (existingFileId) {
@@ -193,12 +197,11 @@ export function useDropUpload() {
         }
       }
 
-      useUploadStore.getState().setSuccess();
       return true;
     } catch (err) {
       const message = (err as Error).message;
-      if (message !== 'Upload cancelled by user') {
-        useUploadStore.getState().setError(message);
+      if (message !== 'Upload cancelled by user' && currentUploadId) {
+        useUploadStore.getState().setFileStatus(currentUploadId, 'error', message);
       }
       // Best-effort cleanup: unpin orphaned CIDs from failed upload
       if (uploadedCids.length > 0) {
