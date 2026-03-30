@@ -134,7 +134,7 @@ jobs:
     needs: detect-changes
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     steps:
       - name: Fail if detect-changes did not complete (release PR)
         if: startsWith(github.head_ref, 'release-please--') && needs.detect-changes.result != 'success'
@@ -189,6 +189,11 @@ jobs:
             echo "Attempt ${attempt}/${MAX_ATTEMPTS}: CI E2E still running, waiting ${POLL_INTERVAL}s..."
             sleep $POLL_INTERVAL
           done
+
+          if [ -z "$E2E_RUN_ID" ] || [ "$E2E_RUN_ID" = "null" ]; then
+            echo "::error::Could not determine CI E2E run ID for ${MAIN_SHA}"
+            exit 1
+          fi
 
           # Don't check overall CI E2E conclusion — it may fail due to
           # Desktop E2E issues while Web E2E passed. Check the job directly.
@@ -294,6 +299,11 @@ jobs:
             sleep $POLL_INTERVAL
           done
 
+          if [ -z "$E2E_RUN_ID" ] || [ "$E2E_RUN_ID" = "null" ]; then
+            echo "::error::Could not determine CI E2E run ID for ${MAIN_SHA}"
+            exit 1
+          fi
+
           # Check Desktop E2E jobs — distinguish passed, failed, and skipped.
           # Desktop E2E is a matrix (3 platforms). All must pass; fail fast if any failed.
           if ! DESKTOP_JOBS_JSON=$(gh api "repos/${{ github.repository }}/actions/runs/${E2E_RUN_ID}/jobs" \
@@ -311,7 +321,7 @@ jobs:
             exit 1
           fi
 
-          if [ "${DESKTOP_SUCCESS:-0}" -gt 0 ] && [ "$DESKTOP_SUCCESS" -eq "$DESKTOP_TOTAL" ]; then
+          if [ "${DESKTOP_SUCCESS:-0}" -gt 0 ] && [ "${DESKTOP_SUCCESS:-0}" -eq "${DESKTOP_TOTAL:-0}" ]; then
             echo "Desktop E2E: passed (all ${DESKTOP_SUCCESS} platform(s) at HEAD, in CI E2E run ${E2E_RUN_ID})"
           else
             echo "Desktop E2E was skipped in latest CI E2E run (no desktop changes in that push)."
