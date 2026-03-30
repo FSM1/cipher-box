@@ -233,9 +233,8 @@ jobs:
                   fi
                   TOTAL=$(echo "$JOBS_JSON" | jq 'length')
                   SUCCESS=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion == "success")] | length')
-                  FAILED=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null)] | length')
-                  # Only accept runs where Web E2E ran AND all jobs passed
-                  if [ "${TOTAL:-0}" -gt 0 ] && [ "${SUCCESS:-0}" -gt 0 ] && [ "${FAILED:-0}" -eq 0 ]; then
+                  # Only accept runs where Web E2E ran and all jobs passed
+                  if [ "${TOTAL:-0}" -gt 0 ] && [ "${SUCCESS:-0}" -eq "${TOTAL:-0}" ]; then
                     echo "$rid"
                     break
                   fi
@@ -327,9 +326,8 @@ jobs:
                   fi
                   TOTAL=$(echo "$JOBS_JSON" | jq 'length')
                   SUCCESS=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion == "success")] | length')
-                  FAILED=$(echo "$JOBS_JSON" | jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null)] | length')
-                  # Only accept runs where Desktop E2E ran, all jobs passed, none failed
-                  if [ "${TOTAL:-0}" -gt 0 ] && [ "${SUCCESS:-0}" -gt 0 ] && [ "${FAILED:-0}" -eq 0 ]; then
+                  # Only accept runs where Desktop E2E ran and all jobs passed
+                  if [ "${TOTAL:-0}" -gt 0 ] && [ "${SUCCESS:-0}" -eq "${TOTAL:-0}" ]; then
                     echo "$rid"
                     break
                   fi
