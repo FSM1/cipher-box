@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "eccd0812694c",
+  "session_id": "f2707fb4-9582-4986-8999-f84ff5395978",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T02:55:16.867839Z",
+  "branch": "feat/inline-upload-progress",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/config.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "66b9e11b75cc",
+  "token_usage": {
+    "input_tokens": 51,
+    "cache_creation_tokens": 54591,
+    "cache_read_tokens": 1983593,
+    "output_tokens": 10329,
+    "api_call_count": 38
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute Phase 36 (inline-upload-progress) using the GSD wave-based workflow, refactoring the upload store to per-file tracking and replacing the popup upload UI with inline progress indicators in the file browser.",
+    "outcome": "Both plans completed successfully across 2 waves. The upload Zustand store was refactored to Map-based per-file tracking, and a new UploadListItem component was built and wired into FileList. A React Rules of Hooks violation discovered during verification was fixed inline before phase completion.",
+    "learnings": {
+      "repo": [
+        "The upload store uses Zustand with a Map\u003cstring, PerFileUpload\u003e structure after the refactor — per-file actions are addFile, updateFileProgress, setFileStatus, setFileComplete, removeFile, cancelFile, retryFile.",
+        "FileList uses virtual entry merging to show upload rows alongside real file entries, with folder-scoped filtering and alphabetical sort.",
+        "UploadModal and UploadItem components were deleted in favor of the inline UploadListItem approach — popup CSS removed, inline upload CSS added to upload.css.",
+        "useDropUpload drives the upload loop with independent cancel tokens per file; useFileUpload derives batch-level fields from the per-file Map for backward compatibility.",
+        "The worktree at /Users/michael/Code/cipher-box-wt-phase36 was a stale artifact from a previous session — safe to remove."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/UploadListItem.tsx",
+          "line": 47,
+          "end_line": 47,
+          "finding": "Early return `if (!file) return null` was placed before three useCallback hooks (handleCancel, handleDismiss, handleRetry), causing a React Rules of Hooks violation when a file is removed from the store during the completion flash timer. All hooks must be declared before any conditional returns."
+        }
+      ],
+      "workflow": [
+        "GSD wave executors run in isolated git worktrees and commit with --no-verify; orchestrator merges worktree branches back and runs pre-commit hooks post-wave.",
+        "STATE.md merge conflicts are expected when merging worktree branches — resolved by taking the agent's version.",
+        "The verifier catches React hook ordering violations that aren't caught by TypeScript or unit tests — useful safety net before phase completion.",
+        "Minor inline fixes found during verification can bypass the full gap-closure cycle (plan-phase --gaps → execute-phase --gaps-only) when the fix is trivial and well-understood."
+      ]
+    },
+    "friction": [
+      "Stale git worktree (cipher-box-wt-phase36) left over from a previous session required manual cleanup.",
+      "STATE.md merge conflicts on every worktree merge — requires manual resolution each time.",
+      "React Rules of Hooks violation in UploadListItem was not caught by the executor agent during implementation, requiring a verifier pass and inline fix to close the phase."
+    ],
+    "open_items": [
+      "ci-debug worktree created at /Users/michael/Code/cipher-box-ci-debug on branch ci-debug — CI issue being debugged was not resolved in this session.",
+      "VERIFICATION.md was read but the transcript ends before the status was updated to 'passed' and the phase was marked complete in ROADMAP/STATE — phase completion commit may not have landed.",
+      "The upload error recovery test suite (upload-error-recovery.test.ts) was fully rewritten for the per-file API — worth a manual review pass to ensure coverage parity with the old batch-level tests."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T02:54:53.364973Z",
+    "agent_lines": 13,
+    "human_added": 884,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 897,
+    "agent_percentage": 1.4492753623188406
+  }
+}
