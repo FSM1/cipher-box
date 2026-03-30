@@ -494,12 +494,12 @@ Plans:
 **Goal:** Replace the floating UploadModal popup with inline upload progress rows integrated directly into the file browser list, providing in-context upload feedback
 **Requirements**: None (UI refactor, no formal requirement IDs)
 **Depends on:** Phase 35
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
 - [x] 36-01-PLAN.md -- Upload store refactor to per-file tracking, upload loop migration to per-file actions
-- [ ] 36-02-PLAN.md -- UploadListItem component, FileList virtual entry merging, inline CSS, delete UploadModal/UploadItem
+- [x] 36-02-PLAN.md -- UploadListItem component, FileList virtual entry merging, inline CSS, delete UploadModal/UploadItem
 
 ---
 
