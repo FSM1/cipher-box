@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "764a7c0631a9",
+  "session_id": "371bea10-4c7f-4590-b28f-59520c3cc0c4",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T16:15:26.33753Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "37e820252e17",
+  "token_usage": {
+    "input_tokens": 99,
+    "cache_creation_tokens": 121692,
+    "cache_read_tokens": 6366236,
+    "output_tokens": 22267,
+    "api_call_count": 74
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Recover Phase 37 (Parallel batch upload pipeline) from a previous session where it was added to ROADMAP.md but never committed, then run the full discuss + plan workflow to capture implementation decisions and create executable PLAN.md files.",
+    "outcome": "Phase 37 context was fully captured with all implementation decisions locked (concurrency pool of 3, new `uploadFiles()` SDK batch method, Web Worker encryption, single publish after full batch drains, TS-only scope), research was conducted, and 2 plans in 2 waves were created and verified with 0 blockers.",
+    "learnings": {
+      "repo": [
+        "Phase 37 was added to ROADMAP.md and its directory created during a prior session but was never committed — it existed only as unstaged local changes when the session resumed.",
+        "The current upload pipeline in useDropUpload.ts does N sequential uploadFile() calls, each triggering encrypt → IPFS pin → add FilePointer → publish folder IPNS, resulting in N IPNS publishes for N files.",
+        "SDK's uploadFile() is wrapped in withOperation() which serializes all SDK operations, making naive concurrent calls queue rather than run in parallel — Option C (concurrent uploadFile() calls) was ruled out as not viable.",
+        "The desktop FUSE layer receives files one-at-a-time via filesystem release() callbacks with no batch context, making a Rust upload_files() batch method useful for API parity but not directly usable by the FUSE layer without a separate write-coalescing layer.",
+        "The stale-children race window (another device publishes new children via sync during a long encrypt+pin batch) is a known foot gun in Option A — mitigation is re-read folder metadata just before final publish and merge new children.",
+        "Memory spike risk exists if all files encrypt concurrently before any are pinned — solution is pipeline-style processing: encrypt → pin → free ciphertext → next slot, not encrypt-all then pin-all."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 113,
+          "end_line": 133,
+          "finding": "Sequential file upload loop — iterates files one at a time, calling uploadFile() for each. This is the primary target for parallelization in Phase 37."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 658,
+          "end_line": 658,
+          "finding": "uploadFile() does encrypt+pin+publish as one atomic unit inside withOperation() serialization, making it impossible to batch the folder update without a new SDK method."
+        },
+        {
+          "path": "crates/fuse/src/file_handle.rs",
+          "finding": "FUSE release() callback handles one file at a time — no batch context available at this layer, so desktop cannot benefit from upload_files() without a separate write-coalescing layer."
+        },
+        {
+          "path": "crates/sdk/src/queue.rs",
+          "finding": "Rust SDK queue implementation — relevant for understanding how desktop upload operations are serialized, confirming desktop uses a different model than the web app."
+        }
+      ],
+      "workflow": [
+        "The GSD discuss mode was set to 'assumptions' — the workflow auto-routed to discuss-phase-assumptions.md which uses codebase analysis + surfaced assumptions rather than interview-style questions.",
+        "The plan-phase workflow hit a usage limit mid-execution during the planner agent spawn and required a manual 'continue please' to respawn — the planner completed successfully on retry.",
+        "A minor frontmatter issue (files_modified field) in 37-02-PLAN.md was caught by the plan checker (0 blockers, 1 warning) and fixed inline before the session completed.",
+        "The worktree was created off main for parallel work context — the plan-phase execution happened in the main working directory while the worktree was made available at ../cipher-box-worktree-parallel."
+      ]
+    },
+    "friction": [
+      "Phase 37 ROADMAP.md entry and phase directory were never committed in the prior session, requiring investigation at session start to understand what was lost vs. what was local.",
+      "The planner agent hit a usage limit mid-execution and had to be manually respawned with 'continue please' — no automatic retry or graceful handling.",
+      "The 'error \u0026 partial failure' discussion area was visited twice due to a redundant clarifying question that was already answered by the earlier 'publish successes after full batch drains' decision."
+    ],
+    "open_items": [
+      "Adaptive concurrency based on file size — deferred from Phase 37, noted for future phase.",
+      "FUSE write-coalescing for desktop batch publish optimization — separate FUSE architecture change, needs its own phase.",
+      "Accumulated retry batching — if many failures are observed, retry queue could batch-publish instead of single-file retry; deferred until failure patterns emerge.",
+      "Rust SDK upload_files() batch method for API parity — not wired into FUSE in this phase; desktop benefit requires separate write-coalescing work."
+    ]
+  }
+}
