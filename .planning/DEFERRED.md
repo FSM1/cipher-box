@@ -111,6 +111,7 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 | --------------------------------------------- | ------------ | ------------------------------------------------------------------ |
 | TEE unenrollment on file/folder delete        | 12.6, 17     | Orphaned IPNS records expire naturally (24h) but waste TEE compute |
 | TEE enrollment drift reconciliation           | 12.6         | Periodic vault scan to sync enrollment                             |
+| User-configurable bin retention period        | 17           | End-user setting; operator env var exists but no per-user control  |
 | Retroactive TEE enrollment for existing files | 25           | New files only; existing files not enrolled                        |
 | Periodic reconciliation job for unenrollment  | 29           | Fire-and-forget pattern may be insufficient                        |
 
@@ -147,7 +148,6 @@ These were deferred but have since been completed:
 | Desktop FUSE CTR streaming                | Phase 12.1               | Phase 12.1     |
 | Linux FUSE mount                          | Phase 11.3               | Phase 11.3     |
 | Per-file IPNS conflict detection          | Phase 16                 | Phase 12.6     |
-| User-configurable bin retention period    | Phase 17                 | via env var    |
 | Batch upload secondary pin warning events | Phase 37                 | Phase 37       |
 
 <!-- Deferred inventory: 2026-03-31 -->
