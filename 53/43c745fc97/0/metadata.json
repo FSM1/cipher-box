@@ -1,0 +1,117 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5343c745fc97",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T00:04:52.492635Z",
+  "branch": "fix/release-gate-desktop-skip",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "6e61951eec25",
+  "token_usage": {
+    "input_tokens": 494,
+    "cache_creation_tokens": 582372,
+    "cache_read_tokens": 77188717,
+    "output_tokens": 97902,
+    "api_call_count": 420
+  },
+  "session_metrics": {
+    "turn_count": 38
+  },
+  "summary": {
+    "intent": "Work through pending todos: wire CTR encryption into SDK uploadFile for media uploads, debug BYO-IPFS register-cid 400 errors on staging, and fix the release gate not detecting successful desktop E2E test runs.",
+    "outcome": "Shipped three PRs: CTR encryption wiring in SDK with centralized MIME type list in sdk-core (PR #399), new PATCH /vault/byo-status endpoint plus load test fixes (PR #400), and a simplified release gate that searches desktop-e2e.yml runs directly instead of via ci-e2e.yml orchestrator (PR #401). All merged to main.",
+    "learnings": {
+      "repo": [
+        "selectEncryptionMode() existed only in apps/web/src/services/streaming-crypto.service.ts — it was never called for new SDK uploads, only for the duplicate-file re-encrypt path. CTR streaming never activated for newly uploaded files.",
+        "setByoStatus() was a dead service method in the vault module with no controller endpoint — the BYO toggle was never actually wired up, so register-cid always returned 403 not 400 as suspected.",
+        "The release gate searched ci-e2e.yml orchestrator runs for desktop E2E results, but successful desktop E2E tests ran as standalone desktop-e2e.yml workflow runs. The orchestrator's desktop jobs were skipped via per-commit change detection.",
+        "pnpm api:generate lint step was scanning target/ (Rust build artifacts and rustdoc JS) producing 261 spurious ESLint errors. target/ was not in eslint.config.js ignores (only **/src-tauri/target/** was).",
+        "API spec generation (openapi:generate) requires the API server to be running — it generates from a live NestJS app, not from source. Running it against an old build produces a stale spec.",
+        "Multiple API test files used jest.Mocked\u003cPartial\u003cT\u003e\u003e then re-fetched the service via module.get(), losing mock method types. Pattern was systemic across republish, tee, shares, vault test files.",
+        "gh run list returns runs by creation time, not commit order — a re-triggered run for an older commit can appear before a newer commit's run in results.",
+        "Both .planning/todos/done/ and .planning/todos/pending/ ended up with copies of the sdk-uploadfile-hardcodes-gcm todo after the PR #399 merge brought both into main simultaneously."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "end_line": 48,
+          "finding": "New centralized module for CTR vs GCM selection: STREAMING_MIME_TYPES allowlist, CTR_SIZE_THRESHOLD (256KB), selectEncryptionMode(mimeType, size), normalizeEncryptionMode(). Both sdk/client.ts and apps/web now import from here."
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "Added optional encryptionMode param. When 'CTR': uses encryptAesCtr + generateCtrIv instead of GCM. Passes mode through to createFileMetadata."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "end_line": 691,
+          "finding": "uploadFile now calls selectEncryptionMode(mimeType, size) to determine CTR vs GCM before delegating to sdkCore.uploadFile."
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "New PATCH /vault/byo-status endpoint using SetByoStatusDto and SetByoStatusResponseDto. Calls vaultService.setByoStatus() which previously had no controller wiring."
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "createByoClientPool now enables BYO mode on each account via PATCH /vault/byo-status after pool creation, and filters out accounts where enable fails. Throws if zero accounts succeed."
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "createSdkContext was being called inside the upload loop — hoisted outside. ipns-publish was sending {ipnsName, cid} but PublishIpnsEntryDto requires a signed record; replaced with createAndPublishIpnsRecord from sdk-core."
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "line": 1,
+          "end_line": 1,
+          "finding": "Desktop E2E gate rewritten to search desktop-e2e.yml runs directly by iterating commits in range newest-first, matching against runs by headSha. Handles in-flight runs and re-triggered runs correctly. Previous approach searched ci-e2e.yml orchestrator which skipped desktop jobs via change detection."
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.spec.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "Pre-existing: used module.get() to fetch services typed as jest.Mocked\u003cPartial\u003cT\u003e\u003e, then called .mockResolvedValue() on them — TypeScript loses mock methods after module.get() return type. Fix: use the mock objects directly without re-fetching from module."
+        }
+      ],
+      "workflow": [
+        "When fixing pre-existing test errors alongside feature work, proactively update .learnings/ and CONVENTIONS.md so the pattern isn't repeated — the jest.Mocked\u003cPartial\u003cT\u003e\u003e anti-pattern affected 9 files.",
+        "gh api graphql times out occasionally on this repo — falling back to gh api (REST) for PR comment fetching is reliable.",
+        "Committing only specific files during api:generate can miss new generated files/directories that orval creates — always stage the full packages/api-client/src/ directory after regeneration.",
+        "When accidental files appear in a PR diff (e.g., apps/api/openapi.json written to wrong path), remove them with git rm --cached + commit rather than reverting.",
+        ".git/info/exclude is the right place for tool-generated files that modify tracked files locally (e.g., Entire CLI's husky hooks) — keeps them out of git status without affecting other contributors."
+      ]
+    },
+    "friction": [
+      "The merge of PR #399 into main brought both pending/ and done/ copies of the sdk-uploadfile todo — the git history had both states and both landed in the fast-forward.",
+      "api:generate runs lint as its final step, which was hitting 261 errors in Rust target/ artifacts — blocked clean generation feedback until eslint.config.js was fixed.",
+      "API spec generation requires a running API server; the locally running server was an old build without the new endpoint, producing a stale spec that missed the new byo-status models.",
+      "gh api graphql repeatedly timed out during review thread resolution, requiring fallback to REST API.",
+      "The pre-existing jest.Mocked\u003cPartial\u003cT\u003e\u003e pattern across 9 API test files required significant test cleanup unrelated to the feature being implemented.",
+      "Push operations appeared to hang (no output) but had actually completed — multiple redundant push attempts and wait loops were triggered.",
+      "The release gate bug required three rounds of iteration: (1) fixing stop-at-first-failure, (2) discovering the real issue was wrong workflow file entirely, (3) rewriting to search desktop-e2e.yml directly.",
+      ".husky/commit-msg was modified by Entire CLI locally and kept appearing in git status — required adding to .git/info/exclude after accidentally committing both the wrapper and the pre-entire hook."
+    ],
+    "open_items": [
+      "Investigate removal of mock-ipns-routing layer (api area, 7d old pending todo)",
+      "Offload large file encryption to Web Worker (ui area, 51d old pending todo)",
+      "Add ERC-1271 contract wallet authentication support (auth area, 44d old pending todo)",
+      "Research CRDT-based IPNS inbox for serverless share discovery (architecture area, 36d old pending todo)",
+      "Make search index build async/incremental for large vaults (ui area, 34d old pending todo)",
+      "Add alternative MFA factor types (auth area, 32d old pending todo)",
+      "Exclude Rust target/ from ESLint — todo captured but fix was done inline; todo moved to done",
+      "MigrationStatusDto.completedAt typed as object instead of Date — pre-existing Phase 35 DTO issue, marked not applicable in PR #400 review but not tracked as a todo",
+      "Release gate: gh run list returns by creation time not commit order — the final commit on PR #401 started addressing this but session ended mid-implementation",
+      "delegated-routing.client.spec.ts:60 has a legitimate @typescript-eslint/no-explicit-any warning that was not fixed"
+    ]
+  }
+}

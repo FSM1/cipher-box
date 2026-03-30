@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e4313ee15610",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T22:39:33.066007Z",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".planning/todos/done/2026-03-28-add-aes-ctr-streaming-playback-e2e-tests.md",
+    ".planning/todos/done/2026-03-28-add-batch-download-zip-e2e-tests.md",
+    ".planning/todos/done/2026-03-28-add-media-preview-e2e-test-suite.md",
+    ".planning/todos/done/2026-03-28-add-shared-deleteaccount-teardown-to-all-e2e-specs.md",
+    ".planning/todos/done/2026-03-28-byo-ipfs-load-test-baselines-on-staging.md",
+    ".planning/todos/done/2026-03-28-run-staging-metrics-baselines-with-new-instrumentation.md",
+    ".planning/todos/pending/2026-03-28-add-aes-ctr-streaming-playback-e2e-tests.md",
+    ".planning/todos/pending/2026-03-28-add-batch-download-zip-e2e-tests.md",
+    ".planning/todos/pending/2026-03-28-add-media-preview-e2e-test-suite.md",
+    ".planning/todos/pending/2026-03-28-add-shared-deleteaccount-teardown-to-all-e2e-specs.md",
+    ".planning/todos/pending/2026-03-28-byo-ipfs-load-test-baselines-on-staging.md",
+    ".planning/todos/pending/2026-03-28-run-staging-metrics-baselines-with-new-instrumentation.md",
+    ".planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md",
+    ".planning/todos/pending/2026-03-29-sdk-uploadfile-hardcodes-gcm-wire-ctr-encryption-for-media-uploads.md",
+    "apps/api/src/vault/dto/byo-status.dto.ts",
+    "apps/api/src/vault/vault.controller.ts",
+    "packages/api-client/openapi.json",
+    "packages/api-client/src/generated/vault/vault.ts",
+    "packages/api-client/src/models/index.ts",
+    "tests/load/src/harness/client-pool.ts",
+    "tests/load/src/workloads/byo-file-workload.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "633a96ee692a",
+  "token_usage": {
+    "input_tokens": 290,
+    "cache_creation_tokens": 215442,
+    "cache_read_tokens": 34456977,
+    "output_tokens": 58163,
+    "api_call_count": 262
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Debug BYO-IPFS register-cid 400 errors on staging by investigating the load test and API endpoint validation flow.",
+    "outcome": "Discovered two root causes: (1) no API endpoint existed to enable BYO mode on accounts, so register-cid always returned 403; (2) the load test's ipns-publish call sent wrong fields. Added PATCH /vault/byo-status endpoint, fixed load test to enable BYO mode and use sdk-core's createAndPublishIpnsRecord. Also fixed widespread pre-existing TypeScript errors in API spec files caused by jest.Mocked\u003cPartial\u003cT\u003e\u003e losing mock types after module.get().",
+    "learnings": {
+      "repo": [
+        "setByoStatus() exists in VaultService but was dead code — no controller endpoint wired it up, meaning BYO mode could never be enabled via the API.",
+        "STREAMING_MIME_TYPES is duplicated between packages/sdk/src/client.ts and apps/web/src/services/streaming-crypto.service.ts — now centralized in packages/sdk-core/src/encryption-mode.ts.",
+        "The tee-worker was moved from /tee-worker to /apps/tee-worker in the Phase 35 merge.",
+        "All roadmap phases are completed as of the Phase 35 Phala testnet TEE migration merge.",
+        "The API's OpenAPI spec generation requires the API server to be running; orval can be run separately once the spec is generated.",
+        "The load test's byo-file-workload.ts was calling the IPNS publish endpoint with {ipnsName, cid} but PublishIpnsEntryDto requires {ipnsName, record (base64 signed IPNS record), metadataCid}.",
+        "A stale pending todo copy was merged into main alongside the done copy — the merge of fix/e2e-test-failures-v2 included both the pending/ and done/ versions of the SDK GCM todo."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "finding": "New PATCH /vault/byo-status endpoint added to expose VaultService.setByoStatus()."
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "createByoClientPool never called the BYO status endpoint — accounts were never put in BYO mode, causing all register-cid calls to return 403."
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 132,
+          "end_line": 138,
+          "finding": "ipns-publish step sent wrong DTO fields ({ipnsName, cid} instead of {ipnsName, record, metadataCid}). Fixed to use sdk-core's createAndPublishIpnsRecord."
+        },
+        {
+          "path": "apps/api/src/republish/republish-health.controller.spec.ts",
+          "finding": "jest.Mocked\u003cPartial\u003cT\u003e\u003e loses mock method types after module.get() — fixed by using mock object directly instead of re-fetching from module."
+        },
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "end_line": 48,
+          "finding": "New centralized module for STREAMING_MIME_TYPES, CTR_SIZE_THRESHOLD, selectEncryptionMode(), and normalizeEncryptionMode()."
+        }
+      ],
+      "workflow": [
+        "When jest.Mocked\u003cPartial\u003cT\u003e\u003e is used, always reference the original mock variable directly rather than re-fetching via module.get() — the re-fetched value loses mock typings.",
+        "The /gsd:check-todos workflow shows stale pending copies when a PR merges both pending/ and done/ versions of a todo — need to manually clean up duplicate pending entries after pulls.",
+        "SDK test files that vi.mock('@cipherbox/sdk-core') with a bare factory need to spread importOriginal to avoid breaking when new exports are added.",
+        "GitHub GraphQL API for review threads can time out; fall back to REST (gh api repos/.../pulls/.../comments) to fetch PR review comments."
+      ]
+    },
+    "friction": [
+      "GraphQL API for fetching review threads timed out; had to fall back to REST endpoint.",
+      "API client regeneration (api:generate) failed due to unrelated Rust lint errors in the monorepo lint step — had to run orval directly.",
+      "Pre-existing TypeScript errors in 7+ API spec files (republish, shares, tee, vault) caused by the jest.Mocked\u003cPartial\u003cT\u003e\u003e pattern — these were spread across multiple files and required significant remediation time.",
+      "The sdk-core build output needed to be rebuilt before sdk typecheck could pass — stale compiled types caused false type errors.",
+      "The todo for 'SDK uploadFile hardcodes GCM' appeared in both pending/ and done/ after the Phase 35 merge, requiring manual cleanup."
+    ],
+    "open_items": [
+      "The new PATCH /vault/byo-status endpoint lacks an E2E test — only unit-level coverage via the controller spec.",
+      "integration.test.ts in the SDK package fails due to hitting a real API endpoint — pre-existing issue, not addressed.",
+      "The load test's ipns-publish step now uses createAndPublishIpnsRecord but hasn't been validated against staging to confirm the 400 errors are resolved.",
+      "FLAC streaming support was added reactively — worth auditing other lossless formats (AIFF, ALAC, WAV) to confirm they're correctly excluded from CTR mode.",
+      "The ipns-publish DTO mismatch (sending {ipnsName, cid} instead of {record, metadataCid}) suggests the load test may have never successfully exercised the IPNS publish path — staging baseline metrics for this step are likely invalid."
+    ]
+  }
+}

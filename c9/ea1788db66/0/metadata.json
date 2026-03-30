@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c9ea1788db66",
+  "session_id": "66b8eabe-070d-4f34-96a8-81ed94408db2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T20:09:08.983341Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "apps/web/src/services/encrypt-worker.service.ts",
+    "apps/web/src/workers/encrypt.worker.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8e3556721189",
+  "checkpoint_transcript_start": 874,
+  "transcript_lines_at_start": 874,
+  "token_usage": {
+    "input_tokens": 117,
+    "cache_creation_tokens": 224275,
+    "cache_read_tokens": 24506940,
+    "output_tokens": 18615,
+    "api_call_count": 99
+  },
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Investigate and fix E2E test failures caused by the batch upload feature, specifically files being pinned to IPFS but never appearing in the folder list after upload.",
+    "outcome": "Root cause identified as `eciesjs` (used by `wrapKey` in `@cipherbox/crypto`) calling `Buffer.from()` inside a Web Worker where `Buffer` is not globally available. Fixed by importing and assigning `Buffer` from the `buffer` package at the top of `encrypt.worker.ts`. 118/122 E2E tests pass; 4 remaining failures are pre-existing and unrelated to the batch upload change.",
+    "learnings": {
+      "repo": [
+        "The `@cipherbox/crypto` package is isomorphic — it uses the Web Crypto API standard (crypto.subtle) which is natively available in browser, Web Worker, and Node.js 18+ environments without polyfills.",
+        "Vite's top-level `define: { global: 'globalThis' }` and `resolve.alias` for `buffer` apply to the main thread but do NOT automatically make `Buffer` a global inside Web Workers — Workers have their own module scope.",
+        "The batch upload flow: files pinned to IPFS (quota increments) before `wrapKey` is called; if `wrapKey` fails, the file metadata is never created and `addFilePointerToFolder`/`updateFolderMetadataAndPublish` are skipped — leaving the folder empty despite quota being used.",
+        "The E2E upload tests use Playwright's `setInputFiles()` on the file input, which triggers the react-dropzone `onDrop` handler and goes through the same batch path as real user uploads.",
+        "The 4 remaining E2E failures (full-workflow 3.7 page reload timeout, mfa-flows TC-MFA-03 device approval, recovery IPFS-direct vault, writable-shares 4.1 cross-account sync) are pre-existing flaky/network-dependent tests unrelated to upload changes.",
+        "Git commit signing uses 1Password SSH agent; when the agent is locked/disconnected, commits fail with exit code 128."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/workers/encrypt.worker.ts",
+          "line": 1,
+          "end_line": 3,
+          "finding": "Added `import { Buffer } from 'buffer'; globalThis.Buffer = Buffer;` to polyfill Buffer for eciesjs inside the Worker context."
+        },
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "finding": "The `onerror` handler rejects all pending promises with 'Worker error: ...' but Worker runtime errors (e.g. Buffer not defined) were being swallowed before reaching console.error, making diagnosis difficult."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 257,
+          "end_line": 257,
+          "finding": "Returns `true` on success, which triggers `onUploadComplete` → `handleSync()` in FileBrowser. Both this callback and the SDK's `folder:updated` event should refresh the folder — but neither fires if Worker encryption fails."
+        }
+      ],
+      "workflow": [
+        "Bypassing the Worker (removing `encryptFn`) to isolate whether the batch method itself or the Worker was at fault was an effective bisection strategy — confirmed the batch upload logic was correct and the Worker was the problem.",
+        "Playwright trace files (zip) can be inspected by extracting and grepping for console messages, but Worker errors that occur before message handling may not appear in trace console output.",
+        "When a Vite dev server is started without an env var (e.g. VITE_API_URL), a stale process can persist and serve the app without the var — multiple Vite processes on different ports can coexist silently."
+      ]
+    },
+    "friction": [
+      "Worker errors were completely silent in E2E traces — only one console message (401 auth refresh) was captured, making it impossible to see the actual `Buffer is not defined` error without manual instrumentation.",
+      "The symptom (quota used, empty directory) was misleading — it looked like a folder-refresh race condition rather than an encryption failure, leading to significant time investigating event emission and store sync logic.",
+      "1Password SSH agent was locked/disconnected, blocking commit signing for an extended period requiring user intervention.",
+      "Playwright MCP browser approach for debugging was limited — the app requires login to trigger uploads, so interactive console inspection of the upload flow wasn't feasible without automating the auth flow.",
+      "Vite dev server process management: an old process on port 5174 was still running alongside the new one, and the app was not picking up the VITE_API_URL env var due to the stale process."
+    ],
+    "open_items": [
+      "The 4 remaining E2E failures (full-workflow 3.7, mfa-flows TC-MFA-03, recovery IPFS-direct, writable-shares 4.1) are pre-existing flaky tests that should be investigated separately.",
+      "Consider adding a Vite `worker` config block to explicitly set worker format/plugins, ensuring future Worker dependencies that require Node polyfills are handled consistently rather than requiring per-worker manual imports.",
+      "The `encryptFn` error path in `useDropUpload` should surface errors to the user — currently a Worker failure results in a silent empty directory rather than an error toast."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T20:08:30.504167Z",
+    "agent_lines": 6,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 6,
+    "agent_percentage": 100
+  }
+}

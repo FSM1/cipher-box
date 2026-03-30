@@ -1,0 +1,5 @@
+https://github.com/FSM1/cipher-box/actions/runs/23725025314/job/69106875562?pr=406 something is still breaking in this workflow - the web e2e verification is still check on CI E2E status, not Web E2E, and the desktop failed to find any desktop runs, even though https://github.com/FSM1/cipher-box/actions/runs/23720651610 completed successfully as part of https://github.com/FSM1/cipher-box/actions/runs/23725015687
+
+---
+
+ok thats fine, but is there any possibility of the check also picking up manually dispatched ci-e2e, web-e2e and desktop-e2e runs?

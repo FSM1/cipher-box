@@ -1,0 +1,56 @@
+ok, what were those next steps?
+
+---
+
+/gsd:ui-phase 36
+
+---
+
+<task-notification>
+<task-id>a8f6e9fe9786fea40</task-id>
+<tool-use-id>toolu_01VBvVUASogP7K2FBSupHVgd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a8f6e9fe9786fea40.output</output-file>
+<status>completed</status>
+<summary>Agent "UI Design Contract Phase 36" completed</summary>
+<result>The UI-SPEC has been written and committed. Here is the structured return:
+
+## UI-SPEC COMPLETE
+
+**Phase:** 36 - inline-upload-progress
+**Design System:** none (hand-crafted CSS with custom properties, terminal aesthetic)
+
+### Contract Summary
+
+- Spacing: 5-token scale (8, 12, 16, 24, 32px) with 3px and 6px exceptions for progress bar and icon gaps
+- Typography: 3 sizes (10px, 11px, 14px), 2 weights (400, 600), all JetBrains Mono
+- Color: black dominant / green-darker secondary / green-primary accent + error red destructive
+- Copywriting: 3 elements defined (error tooltip, retry tooltip, dismiss tooltip) -- no new CTAs or empty states
+- Registry: not applicable (no shadcn, no third-party)
+
+### File Created
+
+`/Users/michael/Code/cipher-box/.planning/phases/36-inline-upload-progress/36-UI-SPEC.md`
+
+### Pre-Populated From
+
+| Source          | Decisions Used |
+| --------------- | -------------- |
+| CONTEXT.md      | 11 (D-01 through D-11 + Claude's Discretion areas) |
+| RESEARCH.md     | 0 (not present) |
+| components.json | no (not present) |
+| User input      | 0 |
+
+### Key Design Decisions Made (Claude's Discretion)
+
+1. **Upload row icon**: `[^]` up-arrow glyph (matches terminal aesthetic, avoids emoji)
+2. **Animation timing**: 1000ms green completion flash, 200ms crossfade swap to real row, 1.5s encrypting pulse
+3. **Progress bar integration**: 3px bar positioned directly below filename text within the name grid column
+4. **Store shape**: Recommended per-file `Map<string, PerFileUpload>` extension rather than keeping single-file tracking
+5. **Error icon**: `[!]` in error red (matches existing terminal bracket pattern `[x]`, `[^]`)
+6. **Button labels**: Terminal-style bracket glyphs `[x]` cancel, `[R]` retry, `[x]` dismiss
+
+### Ready for Verification
+
+UI-SPEC complete. Checker can now validate.</result>
+<usage><total_tokens>78465</total_tokens><tool_uses>49</tool_uses><duration_ms>235484</duration_ms></usage>
+</task-notification>

@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4686e944596d",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T22:04:40.144411Z",
+  "branch": "feat/sdk-ctr-upload",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "8be42d477f88",
+  "token_usage": {
+    "input_tokens": 132,
+    "cache_creation_tokens": 102217,
+    "cache_read_tokens": 8501837,
+    "output_tokens": 26690,
+    "api_call_count": 112
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Wire CTR encryption mode into the SDK's uploadFile() so large media files use streaming-friendly AES-CTR instead of hardcoded GCM, then get a PR up and resolve review comments.",
+    "outcome": "CTR encryption is now correctly selected for large media files (\u003e256KB, streaming MIME types) through the full SDK upload path. MIME type logic was centralized into sdk-core/encryption-mode.ts, all PR review comments were resolved, and all mock-based SDK tests were fixed to survive new exports.",
+    "learnings": {
+      "repo": [
+        "selectEncryptionMode() existed only in the web app's streaming-crypto.service.ts and was never called for new SDK uploads — only for the duplicate-file re-encrypt path.",
+        "The STREAMING_MIME_TYPES set and CTR_SIZE_THRESHOLD (256KB) were duplicated between sdk/client.ts and apps/web/src/services/streaming-crypto.service.ts — now centralized in sdk-core/encryption-mode.ts.",
+        "audio/flac was missing from STREAMING_MIME_TYPES in both locations.",
+        "The web app's selectEncryptionMode takes a File object (browser API), while the centralized version takes (mimeType, size) — the web app now has a thin wrapper.",
+        "The SDK type system depends on sdk-core build output — typecheck on sdk will fail with stale sdk-core artifacts until sdk-core is rebuilt.",
+        "integration.test.ts in packages/sdk hits a real API endpoint and has pre-existing failures unrelated to local changes.",
+        "The PR targets fix/e2e-test-failures-v2, not main — will need retargeting after that branch merges."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "uploadFile() hardcoded encryptAesGcm and 'GCM' mode — now accepts optional encryptionMode param and dispatches to encryptAesCtr + generateCtrIv when 'CTR'."
+        },
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "finding": "New module centralizing STREAMING_MIME_TYPES set, CTR_SIZE_THRESHOLD (256KB), selectEncryptionMode(mimeType, size), and normalizeEncryptionMode() coercion helper."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "finding": "uploadFile() now calls selectEncryptionMode(file.type, file.size) imported from sdk-core before delegating to sdkCore.uploadFile()."
+        },
+        {
+          "path": "apps/web/src/services/streaming-crypto.service.ts",
+          "line": 53,
+          "finding": "Local selectEncryptionMode(file: File) replaced with thin wrapper delegating to sdk-core's selectEncryptionMode(file.type, file.size)."
+        },
+        {
+          "path": "tests/web-e2e/tests/streaming-playback.spec.ts",
+          "finding": "Removed test.skip from CTR encrypted badge test — now passes (319ms)."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-upload-concurrency.test.ts",
+          "finding": "vi.mock('@cipherbox/sdk-core') with explicit factory object breaks when new exports are added — fixed by spreading importActual."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/ipns.test.ts",
+          "finding": "Pre-existing: PublishIpnsResponseDto no longer has cid field; ResolveIpnsResponseDto no longer has source field — mocks were stale."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/vault.test.ts",
+          "finding": "Pre-existing: addToIpfs mock returned {cid} but IpfsAddResult type requires {cid, size, recorded}."
+        }
+      ],
+      "workflow": [
+        "SDK test mocks using explicit vi.mock factory objects (not importActual) are fragile — any new export added to sdk-core breaks all SDK tests that mock it.",
+        "Rebuilding sdk-core before typechecking sdk is required when sdk-core's public API changes.",
+        "E2E streaming tests ran successfully against local dev servers without any HMR/rebuild issues after rebuilding packages.",
+        "GSD todo workflow correctly tracked the todo through pending → done and committed the move."
+      ]
+    },
+    "friction": [
+      "sdk typecheck failed after initial implementation because sdk-core build output was stale — required an explicit rebuild step.",
+      "Five SDK test files all had the same fragile vi.mock pattern that broke on the new selectEncryptionMode export — had to fix them individually.",
+      "Push was blocked by a remote divergence requiring stash/rebase/pop before the PR review comment fixes could be pushed.",
+      "CI caught the missing mock export that local tests didn't surface because local test run excluded the concurrency test file."
+    ],
+    "open_items": [
+      "PR #399 targets fix/e2e-test-failures-v2, not main — needs retargeting or will auto-update when the parent branch merges.",
+      "integration.test.ts in packages/sdk has pre-existing failures hitting a real API endpoint — not addressed.",
+      "The streaming-crypto.service.ts selectEncryptionMode wrapper and the sdk-core version have slightly different signatures (File vs mimeType+size) — could be unified further if the web app is ever refactored.",
+      "BYO-IPFS register-cid 400 errors on staging (todo #13) still pending.",
+      "11 other pending todos remain including Web Worker offload for large file encryption, ERC-1271 support, CRDT-based IPNS inbox, and multiple other E2E test suites."
+    ]
+  }
+}

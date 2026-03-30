@@ -1,0 +1,93 @@
+ok, so 2 things to resolve:
+- https://github.com/FSM1/cipher-box/actions/runs/23750610554/job/69191385380 Web E2E is still failing on a few tests. Follow the @.learnings/2026-03-29-e2e-test-debugging-workflow.md to resolve these issues.
+- Investigate https://github.com/FSM1/cipher-box/actions/runs/23745695213/job/69186400264 grafana cloud provisioning failure
+
+---
+
+did you forget to actually run the e2e tests against the local dev web pointed at staging api?
+
+---
+
+<task-notification>
+<task-id>bhzuotpmq</task-id>
+<tool-use-id>toolu_016mm2QX1VHHXtvc8miCRhbU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-parallel/145e3aa4-0001-43a6-a9a0-bb9493a1c135/tasks/bhzuotpmq.output</output-file>
+<status>completed</status>
+<summary>Background command "Start web dev server in background" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b422to2hi</task-id>
+<tool-use-id>toolu_01Eo8b26KRyaNkNSBjABEdoW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-parallel/145e3aa4-0001-43a6-a9a0-bb9493a1c135/tasks/b422to2hi.output</output-file>
+<status>completed</status>
+<summary>Background command "Start web dev server pointed at staging API" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+unless your changes actually changed anything at the API (I doubt it for a web e2e fix), you run the web dev server locally, pointed at the staging api and execute the tests against the local web dev server.
+
+---
+
+<task-notification>
+<task-id>b2l8zoep5</task-id>
+<tool-use-id>toolu_01FHMe8conQdMQ6pRH6d97oZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-parallel/145e3aa4-0001-43a6-a9a0-bb9493a1c135/tasks/b2l8zoep5.output</output-file>
+<status>completed</status>
+<summary>Background command "Start API dev server" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bw4t0jsix</task-id>
+<tool-use-id>toolu_015THh7tRMntcyptWrLuyW93</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-parallel/145e3aa4-0001-43a6-a9a0-bb9493a1c135/tasks/bw4t0jsix.output</output-file>
+<status>completed</status>
+<summary>Background command "Start web dev server" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+just copy the env files from @../cipher-box/apps
+
+---
+
+<task-notification>
+<task-id>bh60yc295</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-parallel/145e3aa4-0001-43a6-a9a0-bb9493a1c135/tasks/bh60yc295.output</output-file>
+<status>completed</status>
+<summary>Background command "Start API dev server" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bgcp5i3oq</task-id>
+<tool-use-id>toolu_01Gkrw8horXmYSkbAxammKJR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-parallel/145e3aa4-0001-43a6-a9a0-bb9493a1c135/tasks/bgcp5i3oq.output</output-file>
+<status>completed</status>
+<summary>Background command "Start web dev server" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bdqp685pe</task-id>
+<tool-use-id>toolu_01Psbook5MinGvf2fXd4dwP9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-parallel/145e3aa4-0001-43a6-a9a0-bb9493a1c135/tasks/bdqp685pe.output</output-file>
+<status>completed</status>
+<summary>Background command "Restart web dev server with staging API" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+continue please
+
+---
+
+ok get a PR up please

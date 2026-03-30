@@ -1,0 +1,72 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6351a2482ddf",
+  "session_id": "145e3aa4-0001-43a6-a9a0-bb9493a1c135",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T16:08:38.09251Z",
+  "branch": "fix/upload-dedup-race",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/components/file-browser/FileList.tsx"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "43ebafe045b6",
+  "token_usage": {
+    "input_tokens": 1295,
+    "cache_creation_tokens": 67749,
+    "cache_read_tokens": 2542258,
+    "output_tokens": 14320,
+    "api_call_count": 57
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Fix two CI failures: flaky E2E tests in the web app and a Grafana Cloud provisioning failure in the staging pipeline.",
+    "outcome": "Fixed the upload dedup race condition in FileList.tsx and verified both originally-failing E2E tests pass locally; Grafana failure identified as a configuration issue (wrong stack URL) requiring manual action. PR raised for the code fix.",
+    "learnings": {
+      "repo": [
+        "The web E2E test suite has a learnings doc at .learnings/2026-03-29-e2e-test-debugging-workflow.md that defines the canonical debugging workflow.",
+        "The web dev server proxies /api to localhost:3000 by default; VITE_API_URL must be overridden to point at staging API for local-vs-staging E2E runs.",
+        "Web3Auth initialization requires the app origin to be trusted — running the web app on localhost pointed at staging API caused login to fail until the correct .env was in place.",
+        "The Grafana provisioning job uses GRAFANA_URL set in the GitHub 'staging' environment; the current value resolves to HTTP 404, indicating the stack URL is wrong or the instance was deprovisioned.",
+        "API .env files live in ../cipher-box/apps (the main repo), not in the worktree — they must be copied when working in a parallel worktree."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/FileList.tsx",
+          "line": 147,
+          "end_line": 153,
+          "finding": "Dedup filter previously removed real file rows when their name matched a completing upload entry (1-second green flash). Fixed by reversing the logic: filter out the upload row when a real file with the same name exists, so the real file is never removed from the DOM during the completion flash."
+        }
+      ],
+      "workflow": [
+        "For web-only fixes, run the web dev server locally with VITE_API_URL pointed at the staging API, then run Playwright tests against localhost — no local API server needed.",
+        "Copying .env files from the main repo into a parallel worktree is the fastest way to unblock local dev server startup.",
+        "When a background dev server exits immediately, check for port conflicts (e.g., port 3000 already in use by main repo's API) before investigating other causes.",
+        "Reverting .env changes before committing is important — staging API URL should not be committed as the default."
+      ]
+    },
+    "friction": [
+      "Multiple failed attempts to get the dev server running: initial CORS/auth failure when web pointed at staging without correct .env, port 3000 conflict with main repo API, and background servers silently exiting.",
+      "Playwright config auto-starts a local API server which conflicted with the manual local-web-plus-staging-API setup, causing test 17 (session restore after reload) to fail locally even though it passes in CI.",
+      "No VITE_API_URL in the worktree's web .env initially — had to grep and manually discover the env var name before overriding it.",
+      "Usage limit hit mid-session, causing an interruption before E2E results were confirmed."
+    ],
+    "open_items": [
+      "Grafana Cloud provisioning failure is unresolved — requires manually finding the correct stack URL in grafana.com and updating the GRAFANA_URL secret in the GitHub 'staging' environment, plus re-validating the GRAFANA_API_KEY.",
+      "full-workflow test 17 ('Page reload preserves session') fails locally when web is pointed at staging API — root cause not fully investigated; may be a pre-existing flake or environment-specific auth session issue.",
+      "Consider adding continue-on-error: true to the provision-dashboard CI job to unblock staging deploys while the Grafana instance issue is resolved."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T16:08:10.627366Z",
+    "agent_lines": 9,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 9,
+    "agent_percentage": 100
+  }
+}

@@ -1,0 +1,118 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a568232bfe07",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T18:22:46.803198Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/tee-worker/src/middleware/metrics.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "202bb61141a4",
+  "token_usage": {
+    "input_tokens": 355,
+    "cache_creation_tokens": 559580,
+    "cache_read_tokens": 45455425,
+    "output_tokens": 80614,
+    "api_call_count": 288
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Execute Phase 35 (Phala Testnet TEE Migration) end-to-end: restructure TEE worker into monorepo, integrate Phala SDK, deploy CVM to Phala Cloud, and ship the PR.",
+    "outcome": "All 6 plans across 4 waves executed successfully, CVM deployed and verified on Phala Cloud production infra, security review completed with all H/M findings fixed, PR #395 created and lint passing.",
+    "learnings": {
+      "repo": [
+        "Phase 35 branch is 'phase-35-phala-testnet-tee-migration' — the name is a misnomer; Phala Cloud has no separate testnet, the free tier runs on the same production nodes (Intel TDX hardware, dstack-pha-prod5)",
+        "TEE worker was relocated from root tee-worker/ to apps/tee-worker/ and now uses shared monorepo packages: @cipherbox/crypto (ECIES), @cipherbox/core (IPNS signing), @cipherbox/sdk-core (KuboProvider/PsaProvider)",
+        "Staging deploy workflow (deploy-staging.yml) has build-tee and deploy-tee-phala jobs triggered by staging-v* tags; both PHALA_CLOUD_API_KEY and STAGING_TEE_WORKER_SECRET are injected at deploy time via GitHub staging environment secrets",
+        "ROADMAP.md and STATE.md are the two files most likely to have merge conflicts when merging main into a long-running phase branch",
+        "multiformats package (CID.parse) is already a dependency in @cipherbox/crypto and should be used for CID validation instead of hand-rolled regex; tee-worker needed it added as a direct dependency",
+        "The entire/* branch stores full conversation transcripts via automatic checkpointing — any secret pasted in conversation will appear in pushed transcripts",
+        "PHALA_CLOUD_API_KEY and STAGING_TEE_WORKER_SECRET were exposed in git history (HANDOFF.json commits 607c50fec, bd265fa4f) and in entire branch transcript 86/0546ed796e/0/full.jsonl — both rotated on 2026-03-29",
+        "Live CVM endpoint: https://011f138783487e4c43ea104cfcbacf817ac4f31b-3001.dstack-pha-prod5.phala.network"
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/routes/public-key.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Originally called getKeypair() instead of getPublicKey(), leaking private key into route scope — fixed to use getPublicKey()"
+        },
+        {
+          "path": "apps/tee-worker/src/routes/health.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Was reading TEE_EPOCH env var but migrate route uses TEE_CURRENT_EPOCH — inconsistency fixed to use TEE_CURRENT_EPOCH"
+        },
+        {
+          "path": "apps/tee-worker/src/routes/republish.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "Missing MAX_BATCH_SIZE=100 limit — without it, endpoint allowed unbounded ECIES decryption; dead keyEpoch field removed; redundant successes/failures counters replaced with derived values"
+        },
+        {
+          "path": "apps/tee-worker/src/services/ssrf-validation.ts",
+          "line": 80,
+          "end_line": 85,
+          "finding": "TOCTOU DNS rebinding vulnerability — DNS lookup was separate from HTTP fetch. Fixed by merging validateResolvedIp into ssrfSafeFetch with DNS pinning: resolve once, connect directly to IP with Host header override. Headers API lowercases keys, so 'host' must be lowercase in constructed headers object."
+        },
+        {
+          "path": "apps/tee-worker/src/middleware/metrics.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "req.path used as Prometheus label on 404s causes unbounded label cardinality — fixed with '/:unmatched' fallback. PR review caught that label should be '/:unmatched' not 'unmatched' to match Express route convention."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/migrate.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Was reading TEE_CURRENT_EPOCH at module load (stale after rotation); fixed to accept currentEpoch from request body with env var fallback. CID validation uses CID.parse() from multiformats, not hand-rolled regex."
+        },
+        {
+          "path": "apps/tee-worker/src/__tests__/ssrf-validation.test.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "After DNS pinning was added to ssrfSafeFetch, tests needed dns/promises mocked for non-simulator mode. Two new DNS pinning tests added, total test count went from 56 to 58."
+        }
+      ],
+      "workflow": [
+        "GSD worktree agents can cause git config lock contention when run in parallel — running Wave 2 agents sequentially after the first parallel attempt failed avoided this",
+        "classifyHandoffIfNeeded is a known Claude Code runtime bug — agents report 'failed' but spot-checks (SUMMARY.md + commits present) confirm actual success",
+        "pause-work / resume-work handoff cycle works across machines: push branch, pull on new host, /gsd:resume-work restores full context including credentials from HANDOFF.json",
+        "Secrets in HANDOFF.json committed to git are exposed — rotate immediately after session that required them; the entire branch transcript system also captures conversation-level secrets",
+        "Security review should be run before shipping any crypto-adjacent phase; the /security:review command generates .planning/security/REVIEW-*.md with severity-tagged findings"
+      ]
+    },
+    "friction": [
+      "Wave 2 parallel agent execution failed initially due to git config lock contention between concurrent worktree agents — had to fall back to sequential",
+      "Usage limit hit mid-session during Wave 2 execution, requiring manual 'continue please' to resume",
+      "gsd-tools init runs from CWD — when invoked from the main repo root rather than the worktree, phase_found returns false; had to re-run from worktree path",
+      "Docker not available locally (runs on 192.168.133.12) — required session transfer via pause-work/resume-work to build and push the TEE worker image",
+      "PHALA_CLOUD_API_KEY and STAGING_TEE_WORKER_SECRET were committed to git in HANDOFF.json before the team realized the exposure; required credential rotation",
+      "The entire/* branch checkpoint system captures full conversation transcripts including pasted secrets — no scrubbing mechanism exists, rotation is the only mitigation",
+      "PR review comments not easily fetchable via REST for bot reviewers (Copilot); had to use GraphQL for thread resolution",
+      "merge conflicts in ROADMAP.md and STATE.md required manual resolution after merging main into the phase branch"
+    ],
+    "open_items": [
+      "CVM epoch key persistence was verified manually during this session — no automated regression test exists for this property; consider adding to the test suite",
+      "SSRF probe deduplication: connection-test.ts has similar probe logic to sdk-core — deferred as significant refactor not worth phase 35 churn",
+      "String zeroing for auth tokens (migration-worker.ts) is fundamentally ineffective in JS due to string immutability — acknowledged with comment, no real fix possible without changing provider constructor signatures",
+      "35-HUMAN-UAT.md persists with status: partial — will surface in /gsd:progress and /gsd:audit-uat until /gsd:verify-work is run against it",
+      "Phase 35 directory name 'phala-testnet-tee-migration' is a misnomer (no testnet exists) — docs updated but directory name retained to avoid breaking cross-references",
+      "Republish latency baselines (~1155ms avg) are network-bound from remote test machine to Phala Cloud; production co-location latency not yet measured"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T18:21:50.336841Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}

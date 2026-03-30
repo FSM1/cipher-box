@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8811efb34830",
+  "session_id": "66b8eabe-070d-4f34-96a8-81ed94408db2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T17:18:04.855405Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "750eed372290",
+  "checkpoint_transcript_start": 356,
+  "transcript_lines_at_start": 356,
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 20617,
+    "cache_read_tokens": 3154863,
+    "output_tokens": 7590,
+    "api_call_count": 24
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Review and improve code quality of a batch file upload feature (Phase 37), then assess and improve test coverage and build compatibility for the new encrypt worker.",
+    "outcome": "Fixed 3 code quality issues (type deduplication, removed task-reference comments, clarified worker comment), created PR #416, fixed a tsconfig gap for the encrypt worker, and added SDK integration tests and an SDK E2E batch upload test suite.",
+    "learnings": {
+      "repo": [
+        "EncryptionWorkerService had an inline encryption result type defined 4 times; the canonical type is ExternalEncryptFn from @cipherbox/sdk-core",
+        "apps/web/CLAUDE.md contains guidance against using Blob .buffer — existing upload.service.ts violates this and was pre-existing before Phase 37",
+        "The decrypt service worker has its own tsconfig.sw.json but the new encrypt worker was not included, meaning CI tsc would silently miss type errors in the worker",
+        "Vite handles new Worker(new URL(..., import.meta.url)) natively and @cipherbox/crypto uses only Web Crypto API, so no special build config is needed for dev/CI/prod",
+        "uploadFiles() (batch) had zero integration tests; only uploadFile() (singular) was covered in both integration.test.ts and sdk-e2e file-operations suite",
+        "All existing web E2E upload tests use serial single-file uploads via setInputFiles() — no batch upload E2E coverage existed"
+      ],
+      "code": [
+        {
+          "path": "apps/web/tsconfig.sw.json",
+          "finding": "Encrypt worker added to this tsconfig so tsc in CI will type-check it alongside the existing decrypt service worker"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "finding": "Batch upload integration test added after existing single-file tests"
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/batch-upload.test.ts",
+          "finding": "New file created for SDK E2E batch upload tests"
+        }
+      ],
+      "workflow": [
+        "Stale worktrees (cipher-box-worktree-parallel on docs/worktree-e2e-env-learnings) should be pruned after PR creation",
+        "Parallel subagents were used to simultaneously investigate SDK integration tests, web E2E coverage, and worker build compatibility"
+      ]
+    },
+    "friction": [
+      "The encrypt worker tsconfig gap was only discovered post-PR during the test coverage review, not during initial implementation — it should have been caught at PR authoring time"
+    ],
+    "open_items": [
+      "Upfront file buffer allocation (all files loaded as Uint8Array before upload): fixing requires changing SDK contract to accept File objects instead of Uint8Array; bounded by MAX_FILE_SIZE (100MB) but worth revisiting if batch sizes grow",
+      "Blob .buffer usage in upload.service.ts violates apps/web/CLAUDE.md guidance — pre-existing issue, should be fixed in a separate PR",
+      "Web E2E tests not updated: no coverage for multi-file batch upload, progress bars during concurrent uploads, partial failure, or cancellation flows"
+    ]
+  }
+}

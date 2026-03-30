@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e01d74f2c021",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T17:33:38.494003Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "faa2eb834301",
+  "token_usage": {
+    "input_tokens": 242,
+    "cache_creation_tokens": 522946,
+    "cache_read_tokens": 26214483,
+    "output_tokens": 61280,
+    "api_call_count": 202
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Execute Phase 35 of the cipher-box project, migrating the TEE worker to Phala Cloud CVM (testnet), including structural refactoring, unit tests, Phala SDK integration, staging infra updates, documentation, and live CVM deployment with end-to-end verification.",
+    "outcome": "All 6 plans completed across 4 waves. TEE worker relocated to apps/tee-worker/ with shared monorepo packages, 58 unit tests passing, live Phala Cloud CVM deployed and verified (epoch persistence, IPNS republish, latency baselines). Security review conducted and all 6 high/medium findings fixed. PR FSM1/cipher-box#395 created.",
+    "learnings": {
+      "repo": [
+        "Phala Cloud has no separate testnet — the free tier runs on the same production nodes (Intel TDX hardware, prod5 cluster) as paid deployments. The phase name 'phala-testnet-tee-migration' is a misnomer.",
+        "The CVM endpoint pattern is: https://{cvm-id}-{port}.dstack-pha-prod5.phala.network",
+        "Docker is not available locally — it runs on the Docker host at 192.168.133.12",
+        "The monorepo uses pnpm workspaces. TEE worker now uses @cipherbox/crypto (ECIES), @cipherbox/core (IPNS signing), @cipherbox/sdk-core (KuboProvider/PsaProvider)",
+        "GitHub staging environment uses PHALA_CLOUD_API_KEY (secret) and PHALA_TEE_WORKER_URL (variable). TEE worker secret is STAGING_TEE_WORKER_SECRET.",
+        "The deploy-staging.yml workflow has build-tee and deploy-tee-phala jobs for Phala Cloud deployment automation.",
+        "gsd-tools init requires running from within the correct working directory — running from the main repo when a worktree is active causes phase_found: false."
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/routes/public-key.ts",
+          "finding": "Was incorrectly calling getKeypair() instead of getPublicKey(), leaking private key into route scope. Fixed during /simplify review."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/health.ts",
+          "finding": "Was reading TEE_EPOCH env var but migrate route uses TEE_CURRENT_EPOCH — inconsistency fixed during /simplify."
+        },
+        {
+          "path": "apps/tee-worker/src/services/ssrf-validation.ts",
+          "line": 80,
+          "end_line": 85,
+          "finding": "TOCTOU DNS race: DNS lookup happened separately from HTTP fetch, allowing DNS rebinding attacks against cloud metadata endpoints. Fixed by merging validateResolvedIp into ssrfSafeFetch — resolves DNS once, pins the IP, connects directly with explicit Host header."
+        },
+        {
+          "path": "apps/tee-worker/src/services/ssrf-validation.ts",
+          "finding": "Headers API (new Headers().entries()) lowercases all header names when iterating. Setting 'Host' directly bypasses this. Tests must match the actual case used in the implementation."
+        },
+        {
+          "path": "apps/tee-worker/src/services/tee-keys.ts",
+          "finding": "Epoch cache had no size bound — added MAX_CACHE_SIZE=100. Public key route had no epoch bounds validation — added 1-10000 range check."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/migrate.ts",
+          "finding": "Was reading TEE_CURRENT_EPOCH once at module load time (stale after rotation). Fixed to accept currentEpoch from request body with env var fallback. Added CIDv0/CIDv1 format validation for user-provided CIDs."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/republish.ts",
+          "finding": "Had redundant mutable successes/failures counters that could be derived from results array. Dead keyEpoch field declared but never read. Added MAX_BATCH_SIZE=100 guard."
+        },
+        {
+          "path": "apps/tee-worker/src/middleware/metrics.ts",
+          "finding": "Using req.path as Prometheus label for unmatched routes causes unbounded label cardinality. Fixed to use literal 'unmatched' string for 404 fallback."
+        }
+      ],
+      "workflow": [
+        "GSD pause-work / resume-work handoff flow works well for transferring sessions between machines — HANDOFF.json is the primary resumption artifact and should be deleted after successful resumption.",
+        "When parallel gsd-executor agents encounter git config lock contention, running plans sequentially resolves the issue.",
+        "classifyHandoffIfNeeded error in Claude Code agent completion is a runtime bug, not a GSD failure — spot-check SUMMARY.md + git commits to confirm real success.",
+        "Merging agent worktrees often produces STATE.md conflicts; the agent's version is authoritative and should be taken with git checkout --theirs.",
+        "Security review should update the REVIEW .md document to mark findings as resolved after fixes are applied — it was initially skipped and needed a follow-up.",
+        "The /simplify code review caught a critical security bug (private key exposure in public-key route) that had passed all tests — running it before security:review would have reduced the security review scope."
+      ]
+    },
+    "friction": [
+      "Usage limit hit mid-execution during Wave 2 parallel run — 35-03 agent was cut off. Required manual retry after reset.",
+      "Git config lock contention when two agent worktrees ran in parallel — Wave 2 had to be retried sequentially.",
+      "gsd-tools init returning phase_found: false when run from the main repo directory instead of the worktree — required manual path debugging.",
+      "Stale HANDOFF.json reference to an 'uncommitted Dockerfile fix' that had already been committed in a previous session — caused a brief interruption.",
+      "CVM health check after restart required 5+ retry attempts with increasing waits — no structured polling mechanism in phala CLI."
+    ],
+    "open_items": [
+      "SSRF probe deduplication: connection-test.ts has its own probe logic that overlaps with sdk-core's connection testing — deferred as significant refactor.",
+      "Auth token string lifetime (HIGH-02): JS strings are immutable and persist until GC — nullification minimizes window but cannot guarantee zeroing. Fundamental JS limitation, acknowledged with comments.",
+      "Phase name 'phala-testnet-tee-migration' is a misnomer (it's production infra) — directory name kept as-is to avoid breaking cross-references, but docs updated.",
+      "Latency baselines (~1155ms avg) are network-bound from the test machine to Phala Cloud — production co-location latency not yet measured.",
+      "Human UAT file 35-HUMAN-UAT.md persists with status: partial — will surface in /gsd:progress until /gsd:verify-work is run on it.",
+      "Low-priority security findings (clearBytes vs .fill(0) consistency, hexToBytes vs Buffer.from) left as-is — trivial and not worth churn."
+    ]
+  }
+}

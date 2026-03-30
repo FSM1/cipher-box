@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "829de03af6dc",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T22:49:46.887836Z",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "c2015e603937",
+  "token_usage": {
+    "input_tokens": 318,
+    "cache_creation_tokens": 231387,
+    "cache_read_tokens": 39157083,
+    "output_tokens": 62205,
+    "api_call_count": 282
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Debug BYO-IPFS register-cid 400 errors on staging by fixing the load test workload and underlying API issues. Also wire CTR encryption for media uploads in the SDK uploadFile path.",
+    "outcome": "Fixed two root causes: missing PATCH /vault/byo-status endpoint (setByoStatus was dead code with no controller) and incorrect ipns-publish payload in load test. Also completed the CTR encryption feature (PR #399) and resolved all PR review comments including centralizing MIME type lists into sdk-core.",
+    "learnings": {
+      "repo": [
+        "setByoStatus() existed as a VaultService method but had no controller endpoint — BYO mode could never be toggled via API, making register-cid always return 403",
+        "The load test byo-file-workload sent { ipnsName, cid } to ipns-publish but PublishIpnsEntryDto requires { ipnsName, record, metadataCid } — requires a real signed IPNS record via createAndPublishIpnsRecord",
+        "STREAMING_MIME_TYPES and CTR_SIZE_THRESHOLD were duplicated between packages/sdk/src/client.ts and apps/web/src/services/streaming-crypto.service.ts — centralized into packages/sdk-core/src/encryption-mode.ts",
+        "The API openapi.json spec lives at packages/api-client/openapi.json, not apps/api/openapi.json — manual generation scripts must target the correct path",
+        "All API spec files (*.spec.ts) consistently use jest.Mocked\u003cPartial\u003cT\u003e\u003e pattern for mock services, which loses mock method types after module.get() calls — must reassign from the mock object directly",
+        "Todos moved to done/ can leave stale pending/ copies when a feature branch is merged to a base branch that itself gets merged to main — both copies can appear in main simultaneously",
+        "FLAC files (audio/flac) were missing from the streaming MIME type allowlist in both SDK and web app"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "end_line": 48,
+          "finding": "New centralized module for selectEncryptionMode(mimeType, size) and normalizeEncryptionMode() — single source of truth for CTR vs GCM selection logic"
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "uploadFile() now accepts optional encryptionMode param; uses encryptAesCtr + generateCtrIv when 'CTR', falls back to GCM for invalid/missing values via normalizeEncryptionMode"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "end_line": 691,
+          "finding": "uploadFile() now calls selectEncryptionMode(mimeType, size) from sdk-core before calling sdkCore.uploadFile() — CTR mode activates for video/audio files \u003e256KB"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "finding": "New PATCH /vault/byo-status endpoint added using ByoStatusDto — wires the previously dead setByoStatus() service method"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.spec.ts",
+          "finding": "mockVaultService was missing setByoStatus — new tests cover enable, disable, and propagated errors for the byo-status endpoint"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "createByoClientPool now calls PATCH /vault/byo-status after account creation to enable BYO mode"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "finding": "ipns-publish step replaced with createAndPublishIpnsRecord from sdk-core to produce valid signed IPNS records instead of sending wrong fields"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.spec.ts",
+          "finding": "mockRequest typed as RequestWithUser required explicit import and cast — previously used Request \u0026 { user: ... } which is not assignable"
+        }
+      ],
+      "workflow": [
+        "When centralizing shared logic, the web app's File-based API (selectEncryptionMode(file: File)) can be replaced with a thin wrapper delegating to the shared (mimeType, size) signature",
+        "Running pnpm typecheck on dependent packages after adding exports requires rebuilding the source package first so compiled types are available",
+        "GitHub Copilot review comments on new files reliably flag: (1) missing input validation, (2) duplicated constants, (3) missing unit tests — worth anticipating these proactively",
+        "GraphQL GitHub API can timeout while REST API remains available — falling back to REST /pulls/{pr}/comments is a reliable workaround for fetching review threads",
+        "When API client needs regeneration, the running API server must be the latest build — regenerating against a stale server produces stale types",
+        "Fixing jest.Mocked\u003cPartial\u003cT\u003e\u003e type errors: use the mock object directly rather than module.get() to preserve mock method types without non-null assertions"
+      ]
+    },
+    "friction": [
+      "GitHub GraphQL API timed out multiple times during PR review thread resolution — had to fall back to REST API",
+      "Manual OpenAPI generation script wrote to wrong path (apps/api/openapi.json instead of packages/api-client/openapi.json), creating a 3889-line accidental file in the PR diff",
+      "Pre-existing API test errors in 9 files required fixing before typecheck was clean — systemic jest.Mocked\u003cPartial\u003cT\u003e\u003e pattern used across all API specs loses mock method types after module.get()",
+      "sdk-core build output needed to be rebuilt before SDK typecheck would pass — stale compiled types caused false type errors",
+      "The todo for the completed SDK GCM/CTR work appeared in both pending/ and done/ after the merge from the feature branch, requiring manual cleanup",
+      "API client regeneration requires the running API server to serve the new build — the dev server was running the old build without the new endpoint"
+    ],
+    "open_items": [
+      "integration.test.ts in packages/sdk fails because it hits a real API endpoint — pre-existing issue not related to this work, needs investigation",
+      "BYO-IPFS load test baselines on staging (todo #11) still need to be run after these fixes land — the 400/403 errors were blocking meaningful baseline data",
+      "The streaming-playback E2E test was previously skipped (test.skip) — now unskipped and passing locally, but CI coverage of this test path should be monitored",
+      "PATCH /vault/byo-status endpoint is now wired but there is no integration test covering the full BYO flow (enable BYO → upload → register-cid → ipns-publish)",
+      "Remaining pending todos: Web Worker file encryption offload, ERC-1271 contract wallet auth, CRDT-based IPNS inbox research, async search index, alternative MFA factors, mock-ipns-routing removal investigation"
+    ]
+  }
+}

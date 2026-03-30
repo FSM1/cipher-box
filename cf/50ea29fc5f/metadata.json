@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cf50ea29fc5f",
+  "strategy": "manual-commit",
+  "branch": "fix/release-gate-desktop-skip",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/cf/50ea29fc5f/0/metadata.json",
+      "transcript": "/cf/50ea29fc5f/0/full.jsonl",
+      "content_hash": "/cf/50ea29fc5f/0/content_hash.txt",
+      "prompt": "/cf/50ea29fc5f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 466,
+    "cache_creation_tokens": 564428,
+    "cache_read_tokens": 70234597,
+    "output_tokens": 88385,
+    "api_call_count": 398
+  }
+}

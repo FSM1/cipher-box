@@ -1,0 +1,130 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8d1932068a64",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T23:02:18.413682Z",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".gitignore",
+    ".husky/commit-msg",
+    ".learnings/2026-03-29-e2e-test-debugging-workflow.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f621f83168ef",
+  "token_usage": {
+    "input_tokens": 368,
+    "cache_creation_tokens": 250376,
+    "cache_read_tokens": 49428060,
+    "output_tokens": 70632,
+    "api_call_count": 323
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Fix the SDK's uploadFile() hardcoding GCM encryption for all files, when media files \u003e256KB should use CTR mode for streaming playback. Also debug BYO-IPFS register-cid 400 errors on staging.",
+    "outcome": "Both issues fixed: CTR encryption now correctly selected for streaming media uploads via centralized encryption-mode module in sdk-core; BYO-IPFS 400/403 errors traced to missing PATCH /vault/byo-status endpoint (setByoStatus was dead code) and wrong ipns-publish payload in load test. Two PRs created (#399, #400), both reviewed and iteratively refined.",
+    "learnings": {
+      "repo": [
+        "selectEncryptionMode() existed only in the web app's streaming-crypto.service.ts and was never called for new SDK uploads — only for the duplicate-file re-encrypt path",
+        "setByoStatus() in VaultService was dead code — no controller endpoint exposed it, meaning BYO mode could never be enabled via the API (web app Settings UI was also non-functional for this)",
+        "The load test's ipns-publish step was sending { ipnsName, cid } but PublishIpnsEntryDto requires { ipnsName, record, metadataCid } — a signed IPNS record",
+        "tee-worker was relocated from root /tee-worker/ to /apps/tee-worker/ in Phase 35 merge",
+        "STREAMING_MIME_TYPES is an explicit allowlist (not audio/*) — not all audio formats benefit from streaming (e.g. audio/wav is uncompressed)",
+        "The .husky/commit-msg hook chains to commit-msg.pre-entire (commitlint) via the Entire CLI wrapper; both must be committed for CI to work",
+        "orval regeneration creates new model files and directories (admin/, migration/) that must all be staged — partial staging causes CI typecheck failures",
+        "API test files use jest.Mocked\u003cPartial\u003cT\u003e\u003e pattern which loses mock method types after module.get() — a systemic issue across the codebase"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "Previously hardcoded encryptAesGcm and encryptionMode: 'GCM' — now accepts optional encryptionMode param and branches to CTR path"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "end_line": 691,
+          "finding": "uploadFile() now calls selectEncryptionMode() (imported from sdk-core) before delegating to sdkCore.uploadFile()"
+        },
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "end_line": 48,
+          "finding": "New centralized module: STREAMING_MIME_TYPES set, CTR_SIZE_THRESHOLD (256KB), selectEncryptionMode(mimeType, size), normalizeEncryptionMode(value)"
+        },
+        {
+          "path": "apps/web/src/services/streaming-crypto.service.ts",
+          "line": 53,
+          "end_line": 53,
+          "finding": "Local selectEncryptionMode(file: File) replaced with thin wrapper delegating to sdk-core's selectEncryptionMode(mimeType, size)"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "New PATCH /vault/byo-status endpoint added, wiring the previously dead setByoStatus() service method"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "createByoClientPool() now enables BYO mode on each account via the new endpoint after creation; filters out failed accounts and throws if none succeed"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "ipns-publish step replaced with createAndPublishIpnsRecord() from sdk-core; createSdkContext() hoisted outside the per-iteration loop"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-upload-concurrency.test.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "vi.mock('@cipherbox/sdk-core') bare factory pattern replaced with importOriginal spread — bare factory drops all exports not explicitly re-declared"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.spec.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "mockRequest must be typed as RequestWithUser (not Request \u0026 { user }) to satisfy controller method signatures"
+        }
+      ],
+      "workflow": [
+        "When orval regenerates the API client, stage the entire packages/api-client/src/ directory — not just specific files — to avoid missing new model files/directories",
+        "After centralizing a shared utility, use importOriginal spread in Vitest mocks to prevent future export additions from silently breaking tests",
+        "CI typecheck failures from missing generated files are caused by partial staging of orval output — always check git status after generation",
+        "Pre-existing test type errors follow a pattern: jest.Mocked\u003cPartial\u003cT\u003e\u003e loses mock methods after module.get() — use the mock object directly instead",
+        "Dead service methods with no controller endpoint should be verified against the web app UI to confirm the feature is actually working end-to-end"
+      ]
+    },
+    "friction": [
+      "orval API client regeneration requires the API server to be running with the new build — can't generate from source alone",
+      "Accidentally wrote openapi.json to apps/api/ (cwd) instead of packages/api-client/ during manual generation — had to remove and push a fix",
+      "GitHub GraphQL API timed out repeatedly; had to fall back to REST for PR review threads",
+      "Pre-existing test errors in 9+ API spec files required significant cleanup before typecheck would pass — all used the same broken jest.Mocked\u003cPartial\u003cT\u003e\u003e anti-pattern",
+      ".husky/commit-msg.pre-entire was in .git/info/exclude (local-only) so force-add was needed to commit it for CI",
+      "Background agent for fixing 3 API test files ran in parallel with manual fixes — work was duplicated but harmless",
+      "Two todo copies (pending + done) for the SDK GCM fix were both merged to main due to branch timing"
+    ],
+    "open_items": [
+      "integration.test.ts in SDK hits real API endpoints — pre-existing failure, not related to this work but never fixed",
+      "FLAC and other audio formats added to STREAMING_MIME_TYPES but no E2E test coverage for FLAC specifically",
+      "BYO load test ipns-publish step now uses createAndPublishIpnsRecord but there are no load test baseline numbers yet — BYO-IPFS load test baselines on staging todo still pending",
+      "PR #399 was branched off fix/e2e-test-failures-v2, not main — PR target may need updating after that branch merges",
+      "Stale pending todo copy for SDK GCM fix remains in main (brought in by merge) — should be cleaned up"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T23:01:36.99803Z",
+    "agent_lines": 10,
+    "human_added": 49,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 59,
+    "agent_percentage": 16.94915254237288
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "eccd0812694c",
+  "strategy": "manual-commit",
+  "branch": "feat/inline-upload-progress",
+  "checkpoints_count": 9,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/config.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ec/cd0812694c/0/metadata.json",
+      "transcript": "/ec/cd0812694c/0/full.jsonl",
+      "content_hash": "/ec/cd0812694c/0/content_hash.txt",
+      "prompt": "/ec/cd0812694c/0/prompt.txt"
+    },
+    {
+      "metadata": "/ec/cd0812694c/1/metadata.json",
+      "transcript": "/ec/cd0812694c/1/full.jsonl",
+      "content_hash": "/ec/cd0812694c/1/content_hash.txt",
+      "prompt": "/ec/cd0812694c/1/prompt.txt"
+    },
+    {
+      "metadata": "/ec/cd0812694c/2/metadata.json",
+      "transcript": "/ec/cd0812694c/2/full.jsonl",
+      "content_hash": "/ec/cd0812694c/2/content_hash.txt",
+      "prompt": "/ec/cd0812694c/2/prompt.txt"
+    },
+    {
+      "metadata": "/ec/cd0812694c/3/metadata.json",
+      "transcript": "/ec/cd0812694c/3/full.jsonl",
+      "content_hash": "/ec/cd0812694c/3/content_hash.txt",
+      "prompt": "/ec/cd0812694c/3/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11468,
+    "cache_creation_tokens": 1619462,
+    "cache_read_tokens": 135893861,
+    "output_tokens": 208794,
+    "api_call_count": 723
+  }
+}

@@ -1,0 +1,201 @@
+/simplify phase 35 work
+
+---
+
+/security:review phase 35 work
+
+---
+
+I think addressing all high and medium items is important before shipping this.
+
+---
+
+ok now I think we can get a PR up for this
+
+---
+
+have the addressed security review items been marked as such in the relevant document?
+
+---
+
+<task-notification>
+<task-id>ba2dg221t</task-id>
+<tool-use-id>toolu_01BZUcpfoyYtccQP9sTv959m</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/ba2dg221t.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push updated security review" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok can you look through all the recent `entire` branch commits to make sure no api keys or tokens were exposed
+
+---
+
+<task-notification>
+<task-id>byjo6n69v</task-id>
+<tool-use-id>toolu_015y1exdSw2RE9oZBAoSmCkm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/byjo6n69v.output</output-file>
+<status>completed</status>
+<summary>Background command "Search all transcripts for secrets" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok great, let me then handle these steps, and the TEE will be rebuilt and deployed with the new credentials when the next staging release is created right?
+
+---
+
+ok and in terms of generating the worker secret, can you print out the command I need to run?
+
+---
+
+and then the cli command to set the phala api key?
+
+---
+
+ok both secrets have been rotated
+
+---
+
+you should be able to check the date these were updated on GH api
+
+---
+
+ok lets get a PR for this up if one is not already made
+
+---
+
+one of the low-confidence comments from copilot regarding the ipfs cid isValidCidFormat function: why is standard cid parsing not utilized for this rather than rolling our own?
+
+---
+
+no worries about resolving the comment - can you help resolve the merge conflicts in planning docs? these need the changes from both main and the current phase 35 branch merged.
+
+---
+
+please fix linting on the branch - its currently failing in CI
+
+---
+
+<task-notification>
+<task-id>bvxnpx73w</task-id>
+<tool-use-id>toolu_01YMoxorN6MqW54KQP7oNFdY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/bvxnpx73w.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push lint fixes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/resolve-pr-reviews
+
+---
+
+<task-notification>
+<task-id>bp8wwcxik</task-id>
+<tool-use-id>toolu_01H7fLdmf3GGT23ZYdGYFrNz</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/bp8wwcxik.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/resolve-pr-reviews
+
+---
+
+<task-notification>
+<task-id>bhmejeaax</task-id>
+<tool-use-id>toolu_019woYdxyooUwBwuXuGkW46K</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/bhmejeaax.output</output-file>
+<status>completed</status>
+<summary>Background command "Add undici as explicit dependency" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Verify each finding against the current code and only fix it if needed.
+
+In `@packages/sdk-core/src/pinning/index.ts` around lines 1 - 9, The public index
+currently re-exports types from './types' but omits the injected function type;
+add FetchFn to the export list so consumers can import FetchFn directly instead
+of using ProviderOptions['fetchFn'] or deep-importing; update the export block
+that lists PinningProvider, PinResult, PinStatus, PinningMode,
+ExternalProviderConfig, ConnectionTestResult, ProviderOptions to also include
+FetchFn.
+
+---
+
+<task-notification>
+<task-id>bd83cdx0d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/bd83cdx0d.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Verify each finding against the current code and only fix it if needed.
+
+In `@apps/tee-worker/src/routes/migrate.ts` around lines 33 - 34, The epoch
+assignment using currentEpoch ?? parseInt(process.env.TEE_CURRENT_EPOCH || '1',
+10) can yield NaN if TEE_CURRENT_EPOCH is invalid; update the logic around the
+epoch variable (where currentEpoch is used) to parse and validate the env value
+explicitly: if currentEpoch is undefined, attempt to parse
+process.env.TEE_CURRENT_EPOCH, check Number.isFinite/Number.isNaN and either use
+a safe default (e.g., 1) or throw a clear error, and ensure the final epoch
+value is a finite integer before proceeding so downstream code using epoch
+receives a valid number.
+
+---
+
+<task-notification>
+<task-id>b0bsk14id</task-id>
+<tool-use-id>toolu_014pYiEWtS6cw3sx6Mx24926</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/b0bsk14id.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Verify each finding against the current code and only fix it if needed.
+
+In `@apps/tee-worker/src/services/migration-worker.ts` around lines 40 - 43, The
+decryptEcies function currently trusts encryptedHex and can produce an incorrect
+buffer silently; before calling unwrapKey, validate that encryptedHex is a
+non-empty valid hex string (e.g. matches /^[0-9a-fA-F]+$/ and has even length)
+and throw a descriptive error if it fails; then convert to Uint8Array and call
+unwrapKey(ciphertext, teePrivateKey) as before so malformed input is rejected
+early and not passed into unwrapKey.
+
+---
+
+<task-notification>
+<task-id>bn6fu09b9</task-id>
+<tool-use-id>toolu_01HaieVNouGqhimZfVgLLFqG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/bn6fu09b9.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/resolve-pr-reviews
+
+---
+
+<task-notification>
+<task-id>bwz2herfp</task-id>
+<tool-use-id>toolu_017BKKoipgjbue6yzu7CgcWV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-worktree-general/ff0881c5-92cf-4488-b10c-fdd58e15cd21/tasks/bwz2herfp.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/resolve-pr-reviews

@@ -1,0 +1,67 @@
+<task-notification>
+<task-id>bdfd930bt</task-id>
+<tool-use-id>toolu_01VTyFAo7SrjTEVJnJnAkKD1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/bdfd930bt.output</output-file>
+<status>failed</status>
+<summary>Background command "Start web dev server with staging API" failed with exit code 143</summary>
+</task-notification>
+
+---
+
+/resolve-pr-reviews
+
+---
+
+does the web app currently handle concurrent uploads in parallel? Is the folder ipns entry update batched?
+
+---
+
+<task-notification>
+<task-id>bwqw9rp7m</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/bwqw9rp7m.output</output-file>
+<status>killed</status>
+<summary>Background command "Start web dev server on 5173 with staging API" was stopped</summary>
+</task-notification>
+
+---
+
+ok, but the folder metadata update, when does this occur, and how many times?
+
+---
+
+for #2 there, surely you mean the File IPFS metadata above
+
+---
+
+the FilePointer IPNS record points at a FileMetadata IPFS record though
+
+---
+
+ok, so now that we have that flow correct, what happens when 5 files are uploaded to a folder at the same time by a user in the web app?
+
+- How many IPFS pins
+- How many IPNS publishes
+
+Can any of these be batched or simplified - eg. only pinning new folder metadata once for the batch, and only publishing the folder ipns once.
+
+---
+
+Ok given that we are less constrained by IPFS infra having tested 200 concurrent users, I think the efficiency gains from this justify making these changes - please /gsd:add-phase to deal with this.
+
+---
+
+/resolve-pr-reviews
+
+---
+
+Verify each finding against the current code and only fix it if needed.
+
+In `@tests/web-e2e/page-objects/file-browser/file-list.page.ts` around lines 23 -
+33, The selector string '.file-list-item:not(.upload-inline-row)' is duplicated;
+extract it to a class-level constant (e.g. private static readonly ROW_SELECTOR
+= '.file-list-item:not(.upload-inline-row)') and replace the literal in
+getItem(name: string) and the other method that currently returns
+this.page.locator('.file-list-item:not(.upload-inline-row)') to use that
+constant (this.constructor.ROW_SELECTOR or ClassName.ROW_SELECTOR depending on
+instance/static choice) so both locators share a single source of truth.

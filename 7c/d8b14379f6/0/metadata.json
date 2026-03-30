@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "7cd8b14379f6",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T23:18:51.049644Z",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "e59e47a2b6aa",
+  "token_usage": {
+    "input_tokens": 421,
+    "cache_creation_tokens": 538605,
+    "cache_read_tokens": 59941081,
+    "output_tokens": 77598,
+    "api_call_count": 363
+  },
+  "session_metrics": {
+    "turn_count": 29
+  },
+  "summary": {
+    "intent": "Work through two pending todos: (1) wire CTR encryption for SDK media uploads, and (2) debug BYO-IPFS register-cid 400 errors on staging. Both required fixing root bugs, cleaning up pre-existing test debt, and getting PRs merged.",
+    "outcome": "PR #399 merged: SDK now selects CTR vs GCM based on MIME type + size, with centralized encryption-mode module. PR #400 open: added PATCH /vault/byo-status endpoint (setByoStatus was dead code), fixed load test ipns-publish wrong fields, fixed 9 API test files with broken mock patterns, and excluded Rust target/ from ESLint.",
+    "learnings": {
+      "repo": [
+        "setByoStatus() existed as a vault service method but had no controller endpoint — BYO mode was never actually togglable via the API, causing register-cid to always return 403",
+        "STREAMING_MIME_TYPES was duplicated between packages/sdk/src/client.ts and apps/web/src/services/streaming-crypto.service.ts — centralized into packages/sdk-core/src/encryption-mode.ts",
+        "SDK test files that mock @cipherbox/sdk-core with bare factory functions drop all real exports when new ones are added — must use importActual + spread pattern",
+        "jest.Mocked\u003cPartial\u003cT\u003e\u003e loses mock methods after module.get() in NestJS test modules — use the mock object directly instead of re-fetching from module",
+        "pnpm api:generate requires the API server to be running (it calls the live server to generate the OpenAPI spec)",
+        "orval generates entire src/ trees including new subdirectories — must stage all of packages/api-client/src/ not just specific files, or CI drift check fails",
+        "Rust build artifacts land in target/ at repo root and were being scanned by ESLint, causing 261 spurious errors — target/ was not in eslint.config.js ignores (only src-tauri/target/ was)",
+        "After merging a branch that moved a todo from pending/ to done/, both copies can land in main if the source branch had the pending copy committed separately"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "Was hardcoded to encryptAesGcm + encryptionMode: 'GCM' — now accepts optional encryptionMode param and branches to CTR path"
+        },
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "end_line": 48,
+          "finding": "New centralized module: selectEncryptionMode(mimeType, size) and normalizeEncryptionMode(mode) — both sdk/client.ts and streaming-crypto.service.ts now import from here"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "finding": "Added PATCH /vault/byo-status endpoint backed by existing setByoStatus() service method that was previously unreachable"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "line": 132,
+          "end_line": 138,
+          "finding": "ipns-publish step was sending { ipnsName, cid } but PublishIpnsEntryDto requires { ipnsName, record, metadataCid } — replaced with createAndPublishIpnsRecord from sdk-core"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "createByoClientPool never enabled BYO mode on test accounts — added PATCH /vault/byo-status call after account creation, with filtering of failed enables"
+        },
+        {
+          "path": "eslint.config.js",
+          "finding": "Added 'target/**' to ignores — Rust cargo build output was causing 261 spurious ESLint errors per api:generate run"
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.spec.ts",
+          "line": 60,
+          "end_line": 60,
+          "finding": "Remaining legitimate @typescript-eslint/no-explicit-any warning — cast on jest.spyOn return value"
+        }
+      ],
+      "workflow": [
+        "sdk-core must be built before typechecking sdk — sdk imports compiled types from the dist output, not source",
+        "When running orval regeneration manually, always stage the entire packages/api-client/src/ directory tree, not individual files",
+        "Entire CLI modifies .husky/commit-msg locally — add both commit-msg and commit-msg.pre-entire to .git/info/exclude so they never appear in git status",
+        "The staging API server was returning 403 (not 400) on register-cid — the todo's error code was wrong, which initially misdirected investigation toward DTO validation"
+      ]
+    },
+    "friction": [
+      "GitHub GraphQL API timed out repeatedly during resolve-review-comments workflow — had to fall back to REST for fetching threads",
+      "Accidentally created apps/api/openapi.json (in cwd) instead of packages/api-client/openapi.json during manual spec generation — had to rm and push a cleanup commit",
+      "CI typecheck failed because orval-generated model files (12 new files + 2 new dirs from Phase 35 TEE endpoints) weren't all staged — orval's output scope expanded silently after main merged",
+      "Entire CLI kept modifying .husky/commit-msg, causing it to appear in every git diff until .git/info/exclude was configured",
+      "Both pending/ and done/ copies of the SDK todo ended up in main after merge, requiring manual cleanup",
+      "Pre-existing test type errors across 9 API spec files had to be fixed before typecheck would pass — all from the same jest.Mocked\u003cPartial\u003cT\u003e\u003e anti-pattern"
+    ],
+    "open_items": [
+      "PR #400 still open — pending CI green and merge",
+      "register-cid 400 errors on staging: actual root cause was missing BYO mode on test accounts (403) + wrong ipns-publish payload — needs validation on staging after PR #400 merges",
+      "1 remaining ESLint warning: @typescript-eslint/no-explicit-any in apps/api/src/ipns/delegated-routing.client.spec.ts:60",
+      "MigrationStatusDto.completedAt typed as object instead of Date string — pre-existing issue from Phase 35 TEE migration, not addressed in this session",
+      "Todos 1-6 still pending: Web Worker file encryption, ERC-1271 contract wallet auth, CRDT IPNS inbox, async search index, alternative MFA factors, mock-ipns-routing removal",
+      "Load test ipns-publish now uses createAndPublishIpnsRecord but this requires real keypair data — verify the full BYO load test scenario works end-to-end on staging"
+    ]
+  }
+}

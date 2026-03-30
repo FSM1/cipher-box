@@ -1,0 +1,106 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ef105fc4443c",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T19:39:46.067363Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "880ea17ec202",
+  "token_usage": {
+    "input_tokens": 412,
+    "cache_creation_tokens": 585620,
+    "cache_read_tokens": 57454927,
+    "output_tokens": 89862,
+    "api_call_count": 334
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Execute Phase 35 of the cipher-box project: migrate the TEE worker to Phala Cloud CVM, including moving to apps/, integrating shared packages, adding unit tests, Phala SDK integration, staging infra updates, and deploying the CVM to Phala Cloud.",
+    "outcome": "All 6 plans completed across 4 waves. TEE worker moved to apps/tee-worker/, 56 unit tests passing, Phala SDK integrated, CVM deployed and verified on Phala Cloud production infrastructure. PR #395 created, security review conducted with all HIGH/MEDIUM findings fixed, lint and review comments resolved.",
+    "learnings": {
+      "repo": [
+        "The phase was named 'phala-testnet-tee-migration' but Phala Cloud has no separate testnet — the free tier ($20 credit) runs on the same production nodes (Intel TDX hardware, dstack-pha-prod5) as paid deployments",
+        "Secrets stored in HANDOFF.json and .continue-here.md are committed to the branch and pushed to remote — any credentials in those files are exposed in git history",
+        "The 'entire' branch stores conversation transcripts as JSONL checkpoints; secrets shared in conversation messages end up in these transcripts",
+        "CI deploy-staging.yml has build-tee and deploy-tee-phala jobs that automatically build/push image and deploy CVM when a staging-v* tag is pushed",
+        "TEE_WORKER_SECRET must be kept in sync between the API's .env on the VPS and GitHub staging secrets — both are set from STAGING_TEE_WORKER_SECRET",
+        "Git worktree agents occasionally conflict on git config lock when spawned in parallel — sequential execution avoids this",
+        "pnpm workspace hoisting can prevent TypeScript from resolving package types even after explicit install; static imports with type-only fallback resolve this"
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/routes/public-key.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Original code called getKeypair() instead of getPublicKey(), leaking the private key into route scope — security bug caught in simplify review"
+        },
+        {
+          "path": "apps/tee-worker/src/services/ssrf-validation.ts",
+          "line": 80,
+          "end_line": 130,
+          "finding": "DNS pinning via hostname rewrite in URL broke TLS SNI/certificate validation — correct fix is undici Agent with custom lookup function that resolves DNS independently and connects by IP while preserving original Host header"
+        },
+        {
+          "path": "apps/tee-worker/src/routes/migrate.ts",
+          "line": 33,
+          "end_line": 34,
+          "finding": "parseInt(process.env.TEE_CURRENT_EPOCH || '1', 10) can yield NaN if env var is non-numeric — needs Number.isFinite guard with explicit fallback to 1"
+        },
+        {
+          "path": "apps/tee-worker/src/middleware/metrics.ts",
+          "line": 51,
+          "end_line": 51,
+          "finding": "Unmatched route label should be '/:unmatched' (not 'unmatched') to match API's http-metrics.interceptor.ts:40 pattern for consistent Prometheus metrics"
+        },
+        {
+          "path": "apps/tee-worker/src/services/migration-worker.ts",
+          "line": 112,
+          "end_line": 112,
+          "finding": "SSRF check compared `endpoint` variable instead of `protocol` against 'cipherbox' — always evaluated truthy, bypassing the cipherbox protocol guard"
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/index.ts",
+          "line": 1,
+          "end_line": 9,
+          "finding": "FetchFn type was exported from types.ts but not re-exported from the public index — consumers had to use ProviderOptions['fetchFn'] or deep-import"
+        },
+        {
+          "path": "apps/tee-worker/src/routes/migrate.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Hand-rolled CID regex validation replaced with CID.parse() from multiformats package (already a dependency in @cipherbox/crypto) — standard library handles all CID versions and multibase encodings"
+        }
+      ],
+      "workflow": [
+        "GSD pause-work/resume-work enables cross-machine session handoffs — push branch, pull on target machine, /gsd:resume-work restores full context including credentials",
+        "Credentials placed in HANDOFF.json for session continuity should be rotated immediately after the handoff is consumed — the files persist in git history even after deletion",
+        "Security review should be run before shipping any crypto/TEE implementation — catching the getKeypair() vs getPublicKey() bug before merge was high value",
+        "When spawning parallel executor agents, running hooks with --no-verify and validating post-wave catches issues without blocking parallel execution",
+        "Phala CLI phala deploy reads docker-compose.yml with envsubst for environment substitution — TEE_WORKER_SECRET and other env vars must be exported before deploy"
+      ]
+    },
+    "friction": [
+      "Wave 2 parallel agents failed: 35-02 hit a git config lock conflict, 35-03 hit a usage limit mid-execution — required sequential retry after cleanup",
+      "Usage limit (extra usage reset at 11am Europe/Berlin) interrupted wave 2 execution mid-session",
+      "gsd-tools init failed when run from main repo while on phase-35 worktree branch — had to detect and switch to running from worktree path",
+      "STATE.md merge conflicts occurred when merging worktree agent changes back to phase branch — required manual conflict resolution multiple times",
+      "undici package types not resolved by TypeScript despite explicit pnpm add — required static import and tsconfig adjustment",
+      "Phala CLI phala restart returned success but CVM took 3+ minutes to come back up — required repeated health check polling",
+      "Docker not available on dev machine (runs on remote host 192.168.133.12) — required session transfer via GSD pause/resume workflow for image build"
+    ],
+    "open_items": [
+      "Phala Cloud API key (phak_y8Dc5p3u-...) and TEE worker secret exposed in git history on phase-35 branch and entire/checkpoints transcript — old values inert after rotation but history not purged",
+      "Connection probe deduplication: connection-test.ts reimplements probe logic that exists in sdk-core — deferred as significant refactor",
+      "String key material zeroing (clearBytes vs .fill(0)) is ineffective in JS due to string immutability — acknowledged limitation, no fix possible at language level",
+      "DNS rebinding protection in ssrf-validation.ts: undici Agent with custom lookup is correct fix but relies on undici being available in Node.js runtime — should verify Node version compatibility in production CVM",
+      "Security review LOW-02 (health endpoint reveals mode/epoch info) accepted as operational necessity but not hardened — could add auth to health endpoint in future",
+      "No integration tests for the full IPNS republish cycle against a running CVM — only unit tests and manual verification during checkpoint task",
+      "Phase name 'phala-testnet-tee-migration' is a misnomer — code uses production Phala infrastructure. Directory name left as-is to avoid breaking cross-references"
+    ]
+  }
+}

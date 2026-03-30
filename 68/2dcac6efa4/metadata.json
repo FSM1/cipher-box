@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "682dcac6efa4",
+  "strategy": "manual-commit",
+  "branch": "fix/e2e-test-failures-v2",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "apps/web/public/decrypt-sw-dev.js",
+    "apps/web/src/lib/sw-registration.ts",
+    "tests/web-e2e/tests/streaming-playback.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/68/2dcac6efa4/0/metadata.json",
+      "transcript": "/68/2dcac6efa4/0/full.jsonl",
+      "content_hash": "/68/2dcac6efa4/0/content_hash.txt",
+      "prompt": "/68/2dcac6efa4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1848,
+    "cache_creation_tokens": 324969,
+    "cache_read_tokens": 66810305,
+    "output_tokens": 118715,
+    "api_call_count": 306
+  }
+}

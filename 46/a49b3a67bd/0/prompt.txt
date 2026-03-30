@@ -1,0 +1,9 @@
+the `release gate` action is failing unnecessarily - the one PR that is to be released is a minor CI change to unblock the staging release, and both web and desktop e2e requirements could be skipped, since neither of these apps nor their dependencies changed.
+
+---
+
+https://github.com/FSM1/cipher-box/issues/405
+
+---
+
+the `release gate` action is failing unnecessarily (see https://github.com/FSM1/cipher-box/actions/runs/23723429062/job/69102657206?pr=406) - the one PR that is to be released is a minor CI change https://github.com/FSM1/cipher-box/pull/405 to unblock the staging release, and both web and desktop e2e requirements could be skipped, since neither of these apps nor their dependencies changed.

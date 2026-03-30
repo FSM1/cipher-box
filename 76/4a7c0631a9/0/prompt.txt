@@ -1,0 +1,49 @@
+what happened to the upload files optimization we were discussing in the previous session. a phase was added but I do not see it on main, though the branch has already been  merged.
+
+---
+
+/gsd:discuss-phase 37
+
+---
+
+If I understand this correctly, it should be fairly straightforward to change this in future. If so, I think implementing the conservative version of 3 now, followed by eventually implementing the file-size based queue size. Just need to note it as a deferred idea in the phase planning, to make sure it is not lost.
+
+---
+
+this seems like a vital architectural decision - what are the pros/cons of each approach? Are there any hidden foot guns in any of the approaches?
+
+---
+
+yeah given the above info, also inclined to go with 1. I think this sort of complexity is exactly the purpose of creating the SDK, so it naturally belongs here.
+
+---
+
+Mainly I wanted to understand whether the desktop app would also benefit from this addition to the rust SDK.
+
+---
+
+yeah please note the FUSE write-coalescing idea down in deferred items, and agreed that this phase only focuses on the TS SDK and web app updates.
+
+---
+
+so if I understand it correctly, your recommended solution will only decrease Folder Metadata pin + IPNS publish by a factor on `Number of concurrency slots` vs the originally planned 1 publish for the batch (even if the batch is bigger than the number of concurrency slots)
+
+---
+
+thats exactly how I understood it would work, but then I must be missing the point of the question and the answer being proposed. could you repeat the question?
+
+---
+
+I think for now, the retry is jsut a normal single file upload, but the retries accumulating might be a nice deferred idea, if we notice a lot of failures.
+
+---
+
+can you create a worktree off main for some parallel work
+
+---
+
+/gsd:plan-phase 37
+
+---
+
+continue please

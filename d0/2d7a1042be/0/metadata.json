@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d02d7a1042be",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T17:11:31.035969Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/security/REVIEW-phase-35.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "fa28910f7d48",
+  "token_usage": {
+    "input_tokens": 182,
+    "cache_creation_tokens": 481622,
+    "cache_read_tokens": 15722898,
+    "output_tokens": 45305,
+    "api_call_count": 148
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Execute Phase 35 (Phala Testnet TEE Migration) — restructure the TEE worker into the monorepo, integrate Phala SDK, add tests/observability, update CI/CD, deploy a live CVM to Phala Cloud, and verify end-to-end IPNS republish.",
+    "outcome": "All 6 plans completed across 4 waves, CVM deployed and live on Phala Cloud production infrastructure, epoch key determinism and IPNS republish verified, phase marked complete with a follow-up security review and code cleanup committed.",
+    "learnings": {
+      "repo": [
+        "The phase was named 'phala-testnet-tee-migration' but Phala Cloud has no separate testnet — the free tier ($20 credit) runs on the same production nodes (Intel TDX hardware, dstack-pha-prod5) as paid deployments.",
+        "The TEE worker was relocated from root `tee-worker/` to `apps/tee-worker/` and now delegates to shared monorepo packages: `@cipherbox/core` for IPNS signing, `@cipherbox/crypto` for ECIES, `@cipherbox/sdk-core` for KuboProvider/PsaProvider.",
+        "The `public-key.ts` route was calling `getKeypair()` instead of `getPublicKey()`, leaking the private key into route scope — caught and fixed during /simplify.",
+        "Health route used `TEE_EPOCH` env var while the migrate route used `TEE_CURRENT_EPOCH` — inconsistent and was reading the wrong variable.",
+        "The `/republish` endpoint had no batch size limit, allowing unbounded ECIES decryption as a DoS vector — fixed with MAX_BATCH_SIZE=100.",
+        "Prometheus metrics middleware used `req.path` as a label for unmatched routes, creating unbounded label cardinality — fixed by normalizing to `'unmatched'`.",
+        "The Docker host for the project is at `192.168.133.12` (was previously documented as `192.168.133.114`).",
+        "GitHub staging secrets/vars: `PHALA_CLOUD_API_KEY` (secret), `PHALA_TEE_WORKER_URL` (variable), `STAGING_TEE_WORKER_SECRET` (secret).",
+        "Live CVM endpoint: `https://011f138783487e4c43ea104cfcbacf817ac4f31b-3001.dstack-pha-prod5.phala.network`",
+        "TEE worker image pushed to GHCR as `ghcr.io/fsm1/cipherbox-tee-worker:v35-amd64`."
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/routes/public-key.ts",
+          "finding": "Called `getKeypair()` instead of `getPublicKey()` — was exposing private key in route scope. Fixed to use `getPublicKey()`."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/health.ts",
+          "finding": "Used `TEE_EPOCH` env var but the correct var is `TEE_CURRENT_EPOCH` (consistent with migrate route)."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/republish.ts",
+          "finding": "No batch size limit — added MAX_BATCH_SIZE=100 guard. Also removed dead `keyEpoch` field from response interface and replaced redundant mutable `successes`/`failures` counters with derived values from results array."
+        },
+        {
+          "path": "apps/tee-worker/src/middleware/metrics.ts",
+          "finding": "Used `req.path` as a Prometheus label value for 404/unmatched routes — unbounded cardinality. Fixed to use the string `'unmatched'` as fallback."
+        }
+      ],
+      "workflow": [
+        "GSD worktree-based parallel execution can produce git config lock contention when two agents run simultaneously on the same repo — running Wave 2 agents sequentially instead of in parallel resolved the issue.",
+        "The GSD `pause-work` / `resume-work` handoff workflow successfully preserved full session state (credentials, task position, blocker context) across a machine transfer from dev machine to Docker host.",
+        "The `classifyHandoffIfNeeded` Claude Code runtime bug can fire after a successful agent execution — spot-check via SUMMARY.md existence and git log rather than trusting the error signal.",
+        "After a worktree merge, STATE.md and ROADMAP.md frequently produce merge conflicts; resolving by taking the agent's version is correct since the agent updated these files last.",
+        "Phala CLI (`phala`) v1.1.13 is installable via npm and supports `deploy`, `restart`, and health-check operations against Phala Cloud CVMs.",
+        "The `@cipherbox/crypto` package must be built (`pnpm --filter @cipherbox/crypto build`) before it can be imported in ad-hoc Node scripts for testing."
+      ]
+    },
+    "friction": [
+      "Wave 2 parallel agents failed: one hit a git config lock (concurrent worktree creation), the other was interrupted by a usage limit mid-execution — required sequential retry.",
+      "Usage limit hit mid-session required a user 'continue' prompt before work could resume.",
+      "`gsd-tools init execute-phase` returned `phase_found: false` when run from the main repo because the active work was in a worktree — required detecting the worktree path and re-running from there.",
+      "The session transfer to the Docker host required multiple `git fetch \u0026\u0026 git pull` attempts before the pushed branch was visible.",
+      "The handoff HANDOFF.json noted an uncommitted Dockerfile change that was actually already committed by the Docker host session — stale data in handoff.",
+      "The `phala restart` command caused ~90+ seconds of downtime with several failed health checks before the CVM came back up, requiring multiple retry loops.",
+      "Phase name 'phala-testnet-tee-migration' is a permanent misnomer since there is no Phala testnet — cannot rename without breaking cross-references in planning artifacts."
+    ],
+    "open_items": [
+      "Probe/connection-test deduplication: `connection-test.ts` in tee-worker duplicates probe logic from `@cipherbox/sdk-core` — deferred as significant refactor.",
+      "Sequential batch processing in `/republish` is a deliberate security tradeoff (no concurrent ECIES decryption) but could be revisited for performance if needed.",
+      "String zeroing via `.fill(0)` after ECIES operations is a best-effort measure — JavaScript GC makes true memory clearing impossible; a comment exists but this is a fundamental language limitation.",
+      "Security review report generated at `.planning/security/REVIEW-phase-35.md` — findings should be triaged and addressed in a follow-up phase or gap closure.",
+      "The `PHALA_CLOUD_API_KEY` in the handoff/transcript is now committed to planning docs (HANDOFF.json) — should verify it has been rotated or is acceptable to expose in the repo.",
+      "Phase 35 branch `phase-35-phala-testnet-tee-migration` needs to be merged to main via PR — `/gsd:ship` was suggested but not executed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T17:10:45.389172Z",
+    "agent_lines": 880,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 880,
+    "agent_percentage": 100
+  }
+}

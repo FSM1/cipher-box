@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8d1932068a64",
+  "strategy": "manual-commit",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".gitignore",
+    ".husky/commit-msg",
+    ".learnings/2026-03-29-e2e-test-debugging-workflow.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8d/1932068a64/0/metadata.json",
+      "transcript": "/8d/1932068a64/0/full.jsonl",
+      "content_hash": "/8d/1932068a64/0/content_hash.txt",
+      "prompt": "/8d/1932068a64/0/prompt.txt"
+    },
+    {
+      "metadata": "/8d/1932068a64/1/metadata.json",
+      "transcript": "/8d/1932068a64/1/full.jsonl",
+      "content_hash": "/8d/1932068a64/1/content_hash.txt",
+      "prompt": "/8d/1932068a64/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 713,
+    "cache_creation_tokens": 515272,
+    "cache_read_tokens": 77840595,
+    "output_tokens": 150965,
+    "api_call_count": 582
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0c391e531f0a",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T16:47:15.967961Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/35-phala-testnet-tee-migration/35-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "85e5a0e661f0",
+  "checkpoint_transcript_start": 358,
+  "transcript_lines_at_start": 358,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 2451,
+    "cache_read_tokens": 542459,
+    "output_tokens": 1407,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Complete Phase 35 of a Phala Testnet TEE migration by deploying a CVM to Phala Cloud and verifying all success criteria.",
+    "outcome": "CVM successfully deployed to Phala Cloud prod5 node with deterministic epoch keys, validated IPNS republish cycle, latency baselines captured (~1155ms avg), and GitHub staging environment configured. Phase 35 marked complete after human UAT approval.",
+    "learnings": {
+      "repo": [
+        "Phase completion workflow involves a structured wave/plan system tracked in ROADMAP and STATE files under .planning/phases/",
+        "Human UAT checkpoints are saved to phase-specific markdown files (e.g., 35-HUMAN-UAT.md) and require explicit 'approved' confirmation before proceeding",
+        "CVM health endpoint returns JSON with fields: healthy, mode, epoch — mode:'cvm' distinguishes TEE from non-TEE deployment"
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/35-phala-testnet-tee-migration/35-VERIFICATION.md",
+          "finding": "Verification file updated to record phase completion status and human UAT results"
+        }
+      ],
+      "workflow": [
+        "GitHub staging secrets/variables set via gh CLI (gh secret set, gh variable set) during deployment sessions",
+        "A verifier agent is spawned post-execution to score must-have criteria before requesting human confirmation",
+        "Latency baselines for network-bound CVM operations are ~1155ms avg and should be treated as network-bound, not compute-bound"
+      ]
+    },
+    "friction": [
+      "2 of 24 verification items required human confirmation and could not be fully automated (CVM health check and GitHub environment secrets)"
+    ],
+    "open_items": [
+      "Human UAT items in 35-HUMAN-UAT.md were self-confirmed by the assistant based on session activity — external human verification of live CVM endpoint and GitHub secrets was deferred",
+      "Latency baseline of ~1155ms (SC-4) noted as network-bound — no optimization work undertaken, likely flagged for future investigation"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T16:47:02.257313Z",
+    "agent_lines": 144,
+    "human_added": 7,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 151,
+    "agent_percentage": 95.36423841059603
+  }
+}

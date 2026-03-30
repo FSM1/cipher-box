@@ -1,0 +1,9 @@
+approved
+
+---
+
+If I am correct, the TEE we have is not on phala testnet, it is running on phala production env.
+
+---
+
+I think it's worth noting in the docs

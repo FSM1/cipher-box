@@ -1,0 +1,88 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "be726803b8fe",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T23:04:17.020835Z",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "9270f377ef79",
+  "token_usage": {
+    "input_tokens": 378,
+    "cache_creation_tokens": 252869,
+    "cache_read_tokens": 51508766,
+    "output_tokens": 71809,
+    "api_call_count": 331
+  },
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "summary": {
+    "intent": "Debug BYO-IPFS register-cid 400 errors on staging by identifying why the load test's register-cid and ipns-publish calls were failing against the staging API.",
+    "outcome": "Discovered setByoStatus() was a dead service method with no controller endpoint (causing 403, not 400), fixed the load test's ipns-publish DTO mismatch, added PATCH /vault/byo-status endpoint, centralized encryption mode selection into sdk-core, and fixed ~9 pre-existing API test type errors.",
+    "learnings": {
+      "repo": [
+        "setByoStatus() existed as a VaultService method but had no controller endpoint and was never called — BYO mode could not be enabled via any API call",
+        "The load test's ipns-publish call was sending {ipnsName, cid} but PublishIpnsEntryDto requires {ipnsName, record, metadataCid} with a signed IPNS record",
+        "STREAMING_MIME_TYPES was duplicated between packages/sdk/src/client.ts and apps/web/src/services/streaming-crypto.service.ts — centralized to packages/sdk-core/src/encryption-mode.ts",
+        "The tee-worker was moved from /tee-worker to /apps/tee-worker in Phase 35 (merged to main during this session)",
+        "API test files systemically used jest.Mocked\u003cPartial\u003cT\u003e\u003e pattern which loses mock method types after module.get() — a recurring issue across republish, tee, shares, and vault specs",
+        "The openapi.json spec file belongs at packages/api-client/openapi.json, not apps/api/openapi.json",
+        "orval generation creates model files for all endpoints including newly merged Phase 35 TEE worker endpoints — all generated files must be staged, not just specific ones",
+        ".husky/commit-msg.pre-entire is a local Entire CLI artifact that should be in .git/info/exclude, not committed to the repo"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "line": 1,
+          "end_line": 48,
+          "finding": "New centralized module for selectEncryptionMode(mimeType, size) and normalizeEncryptionMode() — both sdk/client.ts and streaming-crypto.service.ts now import from here"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "end_line": 700,
+          "finding": "uploadFile now calls selectEncryptionMode() to pick CTR for media files \u003e256KB before calling sdkCore.uploadFile — mode is passed through the call chain"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "finding": "New PATCH /vault/byo-status endpoint wiring setByoStatus() service method, returns SetByoStatusResponseDto"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "createByoClientPool now calls PATCH /vault/byo-status to enable BYO on each test account after creation, filters out failed enables and throws if zero accounts succeed"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "finding": "ipns-publish step replaced with createAndPublishIpnsRecord from sdk-core (was sending wrong DTO fields); createSdkContext hoisted outside iteration loop"
+        },
+        {
+          "path": "apps/api/src/vault/vault.controller.spec.ts",
+          "finding": "RequestWithUser must be imported and used as the mock request type — using Request \u0026 {user:...} inline doesn't satisfy the controller's param types"
+        }
+      ],
+      "workflow": [
+        "When staging api-client generated files after orval regeneration, always git add packages/api-client/src/ entirely — partial staging causes CI typecheck failures on missing barrel exports",
+        "The jest.Mocked\u003cPartial\u003cT\u003e\u003e + module.get() pattern loses mock types — use the mock object directly instead of re-fetching from the module",
+        "Pre-existing test type errors should be fixed as part of any PR touching those modules to avoid CI noise accumulation",
+        "When an API error is described as '400' in a todo, verify it's actually validation vs auth (403) before debugging — the todo misidentified a 403 BYO check as a 400",
+        "Local Entire CLI hook artifacts (commit-msg.pre-entire) belong in .git/info/exclude, not committed to the repo"
+      ]
+    },
+    "friction": [
+      "openapi.json accidentally written to apps/api/openapi.json (cwd) instead of packages/api-client/openapi.json during manual generation — required a follow-up commit to remove",
+      "orval generation requires the API server to be running and returns the live spec — partial file staging caused CI typecheck failures on missing model barrel exports",
+      "GraphQL API for fetching PR review threads timed out repeatedly — had to fall back to REST API",
+      "Background task for api-client regeneration completed after the commit was already made, causing confusion about whether files were included",
+      ".husky/commit-msg.pre-entire was committed to the repo when it should have stayed local — required revert"
+    ],
+    "open_items": [
+      "The stale pending todo copy (sdk-uploadfile-hardcodes-gcm) ended up in both done/ and pending/ after the merge — cleanup was done but the merge process should prevent this",
+      "setByoStatus service method now has an endpoint but the web app Settings UI may still not be calling it — verify the Settings UI actually toggles BYO mode via the new endpoint",
+      "Integration tests in packages/sdk are pre-existing failures hitting a live API — not fixed in this session",
+      "FLAC added to STREAMING_MIME_TYPES but no E2E test coverage for FLAC streaming specifically"
+    ]
+  }
+}

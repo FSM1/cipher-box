@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e97b4b30fb46",
+  "session_id": "66b8eabe-070d-4f34-96a8-81ed94408db2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T17:53:02.412073Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/services/encrypt-worker.service.ts",
+    "apps/web/src/workers/encrypt.worker.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "643a1b5d1bf8",
+  "token_usage": {
+    "input_tokens": 1571,
+    "cache_creation_tokens": 208215,
+    "cache_read_tokens": 33647001,
+    "output_tokens": 72877,
+    "api_call_count": 252
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Execute Phase 37 (parallel batch upload pipeline) using GSD wave-based execution, then clean up, review, and get the PR through code review.",
+    "outcome": "Phase 37 fully executed with 2 plans across 2 waves, PR #416 created, 22 review threads resolved across two rounds, test coverage improved from ~68% to ~96.4% on uploadFiles(), and deferred items documented in planning artifacts.",
+    "learnings": {
+      "repo": [
+        "Worktree branches can diverge from their ref — agent commits land on HEAD but branch ref isn't updated, requiring cherry-pick rather than merge to recover",
+        "The verifier agent can produce false negatives when run immediately after cherry-picks before git index settles",
+        "tsconfig.sw.json covers Service Worker / Web Worker files (decrypt-sw.ts) — new workers must be added there for CI type-checking",
+        "ExternalProviderConfig requires {endpoint, authToken, protocol} — not {accessToken}",
+        "Integration tests use {apiUrl, getAccessToken, rootIpnsName, rootFolderKey} constructor shape — not apiBaseUrl",
+        "Worker types shared between the worker file and the service wrapper should live in a separate .types.ts file to avoid importing from a tsconfig-excluded file",
+        "p-limit must be added as an explicit dependency — it is not bundled automatically",
+        "@typescript-eslint/no-explicit-any warnings in tests are treated as errors in this project"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 167,
+          "end_line": 167,
+          "finding": "params.data.length becomes 0 after Transferable transfer — must capture originalSize before encryptFn call"
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "finding": "fileKeyForResult must be declared outside the try block so the catch can zero it on encryptFn/pin failure"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 967,
+          "end_line": 970,
+          "finding": "addFilePointerToFolder collision should be caught and counted as registration failure, not abort the entire batch"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 975,
+          "end_line": 982,
+          "finding": "Early return path when all registrations fail was uncovered — needs explicit test"
+        },
+        {
+          "path": "apps/web/src/workers/encrypt.worker.ts",
+          "finding": "Worker must clear fileKey in a finally block — if encryption or wrap throws the key is leaked"
+        },
+        {
+          "path": "apps/web/src/workers/encrypt.types.ts",
+          "finding": "Shared worker message types extracted here to avoid importing from tsconfig-excluded worker file in the service"
+        }
+      ],
+      "workflow": [
+        "GSD orchestrator must cherry-pick from worktree HEAD (not the branch ref) when the agent's commits land detached",
+        "Run pnpm lint:fix after any new test files — ESLint no-explicit-any catches test code too and is treated as error",
+        "Deferred items from PR review comments should be written to both CONTEXT.md Deferred Ideas and VERIFICATION.md Deferred Items table for future audit visibility",
+        "codecov patch coverage gaps are a reliable signal for untested error/edge paths — following up on the report found 7 uncovered branches in uploadFiles()",
+        "When spawning verifier immediately after cherry-picks, spot-check key files manually before trusting gaps_found status"
+      ]
+    },
+    "friction": [
+      "Worktree branch ref not updated by executor agent — required resetting bad merge and cherry-picking 3 commits manually",
+      "Verifier agent ran before cherry-picks were visible and reported false gaps_found, requiring manual VERIFICATION.md correction across ~10 edits",
+      "PROJECT.md edits were made in the worktree directory instead of the main repo, causing branch confusion mid-session",
+      "Background task reply loop failed on the last thread (thread 15) due to jq parse error on non-JSON response — required manual retry",
+      "pnpm typecheck on web required building both sdk-core and sdk first — not obvious from error messages alone"
+    ],
+    "open_items": [
+      "Lazy file reading in concurrency pool — uploadFiles() reads all ArrayBuffers upfront; should accept File objects and read lazily inside the pool to bound memory usage (bounded by MAX_FILE_SIZE=100MB today)",
+      "AbortSignal/cancel support for in-flight batch uploads — cancel button is a no-op once uploadFiles() is invoked; requires SDK contract change",
+      "Batch secondary pin warning events — BYO-IPFS pinFn wrapper discards secondaryWarning so pin:secondaryFailed never emits for batch uploads",
+      "Web E2E tests not updated for multi-file batch upload, progress bars during concurrent uploads, partial failure, or cancellation flows",
+      "Blob .buffer usage in apps/web/src/services/upload.service.ts violates CLAUDE.md guidance — pre-existing issue, not Phase 37 scope",
+      "BYO-IPFS pinFn lambda body (lines 870-876 in client.ts) remains uncovered — execution is mocked through sdkCore.uploadFile in batch tests"
+    ]
+  }
+}

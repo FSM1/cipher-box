@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "bff68032de2d",
+  "session_id": "f2707fb4-9582-4986-8999-f84ff5395978",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T14:35:55.885633Z",
+  "branch": "fix/upload-e2e-duplicate-rows",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "9c38a6ad5ad6",
+  "token_usage": {
+    "input_tokens": 6232,
+    "cache_creation_tokens": 674276,
+    "cache_read_tokens": 54671887,
+    "output_tokens": 84563,
+    "api_call_count": 350
+  },
+  "session_metrics": {
+    "turn_count": 30
+  },
+  "summary": {
+    "intent": "Execute Phase 36 (inline upload progress) to replace the upload popup modal with per-file inline progress rows in the file browser, then iterate on code quality and fix all PR review comments.",
+    "outcome": "Phase 36 fully executed and merged to main with all 14 review comments resolved across 4 rounds; also fixed Phala TEE deploy (envsubst incompatibility) and E2E test failures caused by the new upload row class; added Phase 37 for parallel batch upload pipeline.",
+    "learnings": {
+      "repo": [
+        "envsubst does not support bash default syntax (${VAR:-default}) — it treats the whole expression as a variable name or substitutes empty string, not the default value. The Phala docker-compose was relying on this broken pattern.",
+        "IPNS publish happens once per file upload in the current SDK: 1 file IPNS publish + 1 folder IPNS publish per file, meaning N files = 2N IPNS publishes and N folder metadata pins. Batching would reduce folder work to O(1).",
+        "The folder IPNS is only refreshed by a 30s polling interval — there is no immediate refresh after upload completes, which caused E2E tests to time out waiting for uploaded files to appear.",
+        "Zustand v5 does not support passing an equality function as a second argument to the bound hook directly; requires useRef-based equality or useStoreWithEqualityFn from zustand/traditional.",
+        "The E2E file-list locator .file-list-item with name text matched both real file rows and upload progress rows (both use the same class + file-list-item-name span), causing strict mode violations during the completion flash window.",
+        "cancelFile making the entry atomic (cancel + remove) broke the 'was this cancelled before upload started?' guard in useDropUpload — undefined?.status === 'cancelled' is false, not the intended guard behavior.",
+        "The retryFile store action was creating duplicate entries because both retryFile (reset to encrypting) and onRetry-\u003ehandleFileDrop (create new entry) ran on retry. Fix: use removeFile before handleFileDrop.",
+        "Completion flash timer running in the component means it doesn't fire if the component unmounts before the timeout — moved to store-level setTimeout to guarantee cleanup regardless of mount state."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/UploadListItem.tsx",
+          "line": 47,
+          "end_line": 47,
+          "finding": "React Rules of Hooks violation: three useCallback hooks were defined after an early return (if !file return null). On store removal during completion flash, component hits early return and skips hooks, causing 'Rendered more hooks than previous render'."
+        },
+        {
+          "path": "apps/web/src/stores/upload.store.ts",
+          "finding": "updateFileProgress had no same-value guard — cloned the Map and notified all subscribers on every progress tick even when value unchanged. Added early return when progress/status unchanged."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/FileList.tsx",
+          "finding": "Zustand selector returned a new array every render (map over Map values), causing full FileList re-render on every progress tick. Fixed with useRef-based equality comparator."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "uploadedCids array tracked all uploaded CIDs including SDK-registered ones, causing them to be incorrectly unpinned on partial failure. Only pre-registration (orphan) CIDs should be tracked for cleanup."
+        },
+        {
+          "path": "apps/web/src/stores/upload.store.ts",
+          "finding": "createUploadId used Date.now() suffix which is not collision-safe for rapid multi-file drops. Replaced with a module-level sequence counter."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/FileBrowser.tsx",
+          "finding": "UploadZone had onUploadComplete prop but it was not wired in FileBrowser. After connecting it to actions.handleSync, uploads trigger immediate IPNS resolution instead of waiting up to 30s for the poll interval."
+        },
+        {
+          "path": "tests/web-e2e/page-objects/file-browser/file-list.page.ts",
+          "line": 23,
+          "end_line": 33,
+          "finding": "Selector '.file-list-item:not(.upload-inline-row)' duplicated across getItem() and getItems(). Extracted to static readonly ROW_SELECTOR class constant."
+        },
+        {
+          "path": "apps/tee-worker/docker-compose.phala.yml",
+          "finding": "Image reference used ${GITHUB_REPOSITORY_OWNER:-OWNER} but envsubst doesn't understand :-default syntax. Simplified to ${GITHUB_REPOSITORY_OWNER} since CI always sets it lowercased before envsubst runs."
+        }
+      ],
+      "workflow": [
+        "GSD worktree-based parallel execution works well but requires manual merge conflict resolution on STATE.md when multiple agents write to it concurrently — standard practice is to use the agent's version.",
+        "The classifyHandoffIfNeeded Claude Code bug fires after all tool calls complete; spot-check SUMMARY.md + git commits to distinguish from real failures.",
+        "E2E tests against staging require the web dev server to be pointed at the staging API (VITE_API_URL env), not localhost — session persistence differs between local and staging environments.",
+        "Running E2E tests in isolation fails for tests that depend on prior auth state — must run from the beginning of the spec or use stored auth state.",
+        "Three parallel code review agents (reuse, quality, efficiency) is an effective pattern for catching issues that single-pass review misses, especially store-level performance issues."
+      ]
+    },
+    "friction": [
+      "Multiple rounds of PR review comments (4 rounds, 15 total threads) — several issues were interconnected (cancelFile atomicity breaking the cancellation guard, retryFile creating duplicate entries) requiring careful ordering of fixes.",
+      "Zustand v5 equality function API is not straightforward — the two-argument hook form doesn't work with create\u003cT\u003e() bound hooks, requiring a workaround with useRef.",
+      "E2E tests couldn't be run in isolation against staging due to auth state dependencies, requiring full spec runs to verify fixes.",
+      "The completion flash timer running component-side meant it silently stopped working when the component unmounted, which wasn't caught until code review.",
+      "envsubst's incompatibility with bash default syntax (:-) is a subtle gotcha that only surfaced at Phala deploy time, not in CI where the variable is always set."
+    ],
+    "open_items": [
+      "Phase 37: Parallel batch upload pipeline — replace sequential per-file upload loop with parallel encrypt+pin, single folder metadata update, and batched file IPNS publish. SDK needs new uploadFiles (plural) method.",
+      "Session persistence in E2E tests is flaky when running against staging (reload loses session) — pre-existing issue unrelated to Phase 36 changes.",
+      "EmptyState upload zone does not trigger folder refresh (onUploadComplete not wired) — only the toolbar UploadZone was fixed.",
+      "SDK uploadFile is the atomic unit for IPNS batching — the batching optimization in Phase 37 requires SDK-level changes, not just web app changes.",
+      "ci-debug branch was created during the session to investigate CI issues but the investigation didn't complete — branch was deleted without resolving the original CI issue it was created for."
+    ]
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e9226a3a0ace",
+  "session_id": "c330798c-ab40-490c-8805-6ed8f1747898",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T16:42:11.262023Z",
+  "branch": "fix/release-gate-retrigger-on-main-push",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "8f03fc3e27be",
+  "token_usage": {
+    "input_tokens": 278,
+    "cache_creation_tokens": 225383,
+    "cache_read_tokens": 17077204,
+    "output_tokens": 69078,
+    "api_call_count": 202
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Resolve final round of automated PR review comments (Copilot + CodeRabbit) on PR #392, then fix a release gate gap where test-only commits to main could merge a release-please PR without re-verifying E2E tests, and consolidate E2E change detection into a single orchestrator workflow.",
+    "outcome": "All 3 review threads on PR #392 resolved with fixes (fixture overwrite guard, missing faro_enabled field, page.isClosed() guard). PR #394 created and reviewed to fix the release gate gap via a new ci-e2e.yml orchestrator that consolidates change detection for both web and desktop E2E, plus a retrigger mechanism that re-runs the release gate after E2E completes on main.",
+    "learnings": {
+      "repo": [
+        "Release gate (release-gate.yml) only enforces E2E verification for release-please branches by default — non-release PRs auto-pass the 'Verify E2E Passed' check, making it a no-op gate for feature/test PRs",
+        "test: and chore: commit types do not trigger release-please to update the changelog or re-run the release PR gate, creating a window where stale green checks can allow a release to merge without verifying latest code",
+        "desktop-e2e.yml already used dorny/paths-filter for change detection before this session; e2e.yml did not",
+        "apps/desktop/src-tauri does NOT have its own Cargo.lock — root Cargo.lock covers all workspace crates",
+        "Committed E2E fixture files live in tests/web-e2e/fixtures/files/ — createTestMediaFile/createTestImageFile cleanup could delete them if the test name matched a fixture name",
+        "staging-journey-timing.json baseline requires a faro_enabled: true metadata field",
+        "cleanup-helpers.ts page.evaluate() in teardown needs a page.isClosed() guard to avoid errors when the page closes before teardown runs"
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/utils/test-files.ts",
+          "line": 156,
+          "end_line": 156,
+          "finding": "createTestMediaFile, createTestImageFile, createTestTextFile, createTestBinaryFile all needed a COMMITTED_FIXTURES guard to prevent cleanup from deleting actual fixture files"
+        },
+        {
+          "path": "tests/web-e2e/baselines/staging-journey-timing.json",
+          "line": 1,
+          "end_line": 19,
+          "finding": "Missing faro_enabled: true field in metadata — required by the verification plan"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 14,
+          "end_line": 16,
+          "finding": "page.evaluate() in teardown must be guarded with page.isClosed() check"
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "line": 132,
+          "end_line": 135,
+          "finding": "jq // empty on empty string causes parse error; log message incorrectly said 'Web E2E' when polling ci-e2e.yml"
+        },
+        {
+          "path": ".github/workflows/ci-e2e.yml",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Desktop patterns initially missing Cargo.lock; also fetch-depth: 1 insufficient for dorny/paths-filter diff — needs fetch-depth: 0"
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "line": 220,
+          "end_line": 220,
+          "finding": "gh run rerun on retrigger job uses stale GITHUB_SHA; release-gate diff should target origin/main not HEAD"
+        }
+      ],
+      "workflow": [
+        "dorny/paths-filter requires fetch-depth: 0 on actions/checkout to have the before commit available for accurate diffs",
+        "gh run rerun preserves original GITHUB_SHA — any path diff logic in a retriggered workflow must reference origin/main explicitly rather than HEAD",
+        "Reusable workflows inherit the vars context from the calling repository automatically — no extra configuration needed",
+        "gh api with --field (integer) vs --raw-field (string) matters for in_reply_to when replying to review comments via REST",
+        "CodeRabbit has per-hour rate limits that cause ~23 minute cooldown periods before re-review"
+      ]
+    },
+    "friction": [
+      "CodeRabbit was rate-limited for ~23 minutes, requiring extended polling with background tasks before its review arrived",
+      "Solving the wrong problem twice on the release gate issue — first proposed adding PR-level E2E triggers, then proposed re-triggering after merge, before understanding the real issue was stale checks on release-please PRs",
+      "gh api reply calls hit network timeouts requiring retries",
+      "Background polling spawned too many overlapping tasks, creating noise in task notifications",
+      "PR #393 was created for the wrong fix and had to be closed immediately"
+    ],
+    "open_items": [
+      "ci-e2e.yml retrigger-release-gate job behavior on re-runs still uses potentially stale context — the origin/main diff fix addresses detection but the broader re-run semantics should be validated in practice",
+      "Pending todo: debug BYO IPFS register-cid 400 errors on staging (added to .planning/todos/pending/)",
+      "PR #394 still open — needs merge and validation that the release gate correctly blocks on next release-please PR after a test: commit lands"
+    ]
+  }
+}

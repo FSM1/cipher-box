@@ -1,0 +1,11 @@
+https://github.com/FSM1/cipher-box/actions/runs/23717147226/job/69086023371 web e2e is still failing, and https://github.com/FSM1/cipher-box/actions/runs/23697472039/job/69086812839?pr=384 is still looking for a e2e test run that has already finished (and failed).
+
+also want to optimise @.github/workflows/ci.yml to have the `cargo` tasks grouped and gated to only run if changes in the rust codebase are detected.
+
+---
+
+or at least all the previously failing ones.
+
+---
+
+have you tried running the tests against the staging ui?

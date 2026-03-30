@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c425aa1f8e90",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T22:53:09.660135Z",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "0fec7044ef92",
+  "token_usage": {
+    "input_tokens": 338,
+    "cache_creation_tokens": 240388,
+    "cache_read_tokens": 43808812,
+    "output_tokens": 66934,
+    "api_call_count": 301
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Debug BYO-IPFS register-cid 400 errors on staging by identifying why the load test's register-cid and ipns-publish calls were failing against the staging API.",
+    "outcome": "Discovered that register-cid was returning 403 (not 400) because setByoStatus had no controller endpoint, and ipns-publish was sending wrong fields. Added PATCH /vault/byo-status endpoint, fixed the load test's ipns-publish to use createAndPublishIpnsRecord, and fixed 9 pre-existing API test files with broken mock typing patterns.",
+    "learnings": {
+      "repo": [
+        "setByoStatus() existed as a VaultService method but had no controller endpoint and was never called — BYO mode could not be toggled via the API at all",
+        "The tee-worker package was moved from /tee-worker to /apps/tee-worker in the Phase 35 merge",
+        "All roadmap phases are completed as of this session — new work items don't map to phases",
+        "The API client openapi.json lives at packages/api-client/openapi.json, not apps/api/openapi.json",
+        "The load test byo-file-workload was decomposing the BYO pipeline manually but using wrong DTO fields for ipns-publish — it sent { ipnsName, cid } but PublishIpnsEntryDto requires { ipnsName, record, metadataCid }",
+        "Pre-existing pattern across many API spec files: jest.Mocked\u003cPartial\u003cT\u003e\u003e loses mock methods after module.get() — should use mock objects directly or use importActual spread pattern",
+        "streaming-crypto.service.ts in the web app uses a File-object-based selectEncryptionMode wrapper; the centralized version in sdk-core takes (mimeType, size) primitives"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "finding": "New PATCH /vault/byo-status endpoint added with ByoStatusDto request and ByoStatusResponseDto response"
+        },
+        {
+          "path": "apps/api/src/vault/dto/byo-status.dto.ts",
+          "finding": "New file: request DTO (enabled: boolean) and response DTO (isByoUser: boolean) for byo-status endpoint"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "createByoClientPool now calls PATCH /vault/byo-status for each account and filters out accounts where enabling BYO fails"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "finding": "ipns-publish step replaced from wrong raw HTTP call to sdk-core createAndPublishIpnsRecord; createSdkContext hoisted outside iteration loop"
+        },
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "finding": "New centralized module with STREAMING_MIME_TYPES set, CTR_SIZE_THRESHOLD, selectEncryptionMode(mimeType, size), and normalizeEncryptionMode(mode)"
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "uploadFile now accepts optional encryptionMode param; uses encryptAesCtr + generateCtrIv when 'CTR', falls back to GCM"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "finding": "uploadFile now calls selectEncryptionMode imported from sdk-core instead of duplicating the MIME type set locally"
+        },
+        {
+          "path": "apps/web/src/services/streaming-crypto.service.ts",
+          "line": 53,
+          "finding": "selectEncryptionMode now delegates to sdk-core's selectEncryptionMode(file.type, file.size) instead of maintaining a duplicate MIME set"
+        },
+        {
+          "path": "tests/web-e2e/tests/streaming-playback.spec.ts",
+          "finding": "Removed test.skip from CTR encrypted badge test after SDK fix; all 6 tests pass including the previously-skipped one"
+        }
+      ],
+      "workflow": [
+        "When the mock pattern jest.Mocked\u003cPartial\u003cT\u003e\u003e is used, always reference the original mock variable directly rather than re-getting from the NestJS test module — the re-get loses the mock methods",
+        "Regenerating the API client requires the API server to be running OR building first then running orval directly — the api:generate script includes a lint step that can fail on unrelated files",
+        "When centralizing shared utilities between packages, use (mimeType: string, size: number) primitives rather than browser APIs like File so the utility works in SDK/Node contexts too",
+        "PR coverage bots flag patch coverage; adding endpoint tests for happy path + error cases is sufficient to satisfy the threshold",
+        "After a merge that brings both pending/ and done/ copies of a todo into main, the stale pending copy should be cleaned up immediately"
+      ]
+    },
+    "friction": [
+      "The todo move created duplicate pending/done copies after the PR merged — both were committed to main because the branch was based on fix/e2e-test-failures-v2 which itself had the pending copy",
+      "GraphQL API timed out during review thread resolution; had to fall back to REST for fetching and workaround for resolving",
+      "Manual openapi.json generation wrote to apps/api/openapi.json (cwd) instead of packages/api-client/openapi.json, requiring a cleanup commit",
+      "Pre-existing test errors across 9 API spec files consumed significant session time — systemic jest.Mocked\u003cPartial\u003cT\u003e\u003e pattern issue that should be fixed proactively going forward",
+      "The api:generate script failed due to Rust doc file lint errors unrelated to the API changes, blocking the normal code generation workflow",
+      "SDK typecheck failed after encryption-mode centralization because sdk-core build output was stale — required manual rebuild before sdk typecheck would pass"
+    ],
+    "open_items": [
+      "The integration.test.ts in packages/sdk fails on live API calls — pre-existing issue not related to this work, still failing",
+      "BYO load test baselines on staging still need to be run now that the 400/403 root cause is fixed (todo #11 was marked done but the actual baseline run is still pending)",
+      "The new PATCH /vault/byo-status endpoint is not yet exposed in the web app Settings UI — the service method was dead code and the web UI likely has a disconnected settings save flow",
+      "todos #1-6 (Offload encryption to Web Worker, ERC-1271 auth, CRDT IPNS inbox, async search index, MFA factors, mock-ipns-routing removal) remain pending with no phase assignment"
+    ]
+  }
+}

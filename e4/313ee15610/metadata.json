@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e4313ee15610",
+  "strategy": "manual-commit",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".planning/todos/done/2026-03-28-add-aes-ctr-streaming-playback-e2e-tests.md",
+    ".planning/todos/done/2026-03-28-add-batch-download-zip-e2e-tests.md",
+    ".planning/todos/done/2026-03-28-add-media-preview-e2e-test-suite.md",
+    ".planning/todos/done/2026-03-28-add-shared-deleteaccount-teardown-to-all-e2e-specs.md",
+    ".planning/todos/done/2026-03-28-byo-ipfs-load-test-baselines-on-staging.md",
+    ".planning/todos/done/2026-03-28-run-staging-metrics-baselines-with-new-instrumentation.md",
+    ".planning/todos/pending/2026-03-28-add-aes-ctr-streaming-playback-e2e-tests.md",
+    ".planning/todos/pending/2026-03-28-add-batch-download-zip-e2e-tests.md",
+    ".planning/todos/pending/2026-03-28-add-media-preview-e2e-test-suite.md",
+    ".planning/todos/pending/2026-03-28-add-shared-deleteaccount-teardown-to-all-e2e-specs.md",
+    ".planning/todos/pending/2026-03-28-byo-ipfs-load-test-baselines-on-staging.md",
+    ".planning/todos/pending/2026-03-28-run-staging-metrics-baselines-with-new-instrumentation.md",
+    ".planning/todos/pending/2026-03-29-debug-byo-ipfs-register-cid-400-errors-on-staging.md",
+    ".planning/todos/pending/2026-03-29-sdk-uploadfile-hardcodes-gcm-wire-ctr-encryption-for-media-uploads.md",
+    "apps/api/src/vault/dto/byo-status.dto.ts",
+    "apps/api/src/vault/vault.controller.ts",
+    "packages/api-client/openapi.json",
+    "packages/api-client/src/generated/vault/vault.ts",
+    "packages/api-client/src/models/index.ts",
+    "tests/load/src/harness/client-pool.ts",
+    "tests/load/src/workloads/byo-file-workload.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e4/313ee15610/0/metadata.json",
+      "transcript": "/e4/313ee15610/0/full.jsonl",
+      "content_hash": "/e4/313ee15610/0/content_hash.txt",
+      "prompt": "/e4/313ee15610/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 290,
+    "cache_creation_tokens": 215442,
+    "cache_read_tokens": 34456977,
+    "output_tokens": 58163,
+    "api_call_count": 262
+  }
+}

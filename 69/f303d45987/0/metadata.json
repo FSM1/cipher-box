@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "69f303d45987",
+  "session_id": "f2707fb4-9582-4986-8999-f84ff5395978",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T14:05:42.986173Z",
+  "branch": "fix/upload-e2e-duplicate-rows",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/web-e2e/page-objects/file-browser/file-list.page.ts",
+    "apps/web/src/components/file-browser/FileBrowser.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "c7be2a090a89",
+  "checkpoint_transcript_start": 715,
+  "transcript_lines_at_start": 715,
+  "token_usage": {
+    "input_tokens": 74,
+    "cache_creation_tokens": 47945,
+    "cache_read_tokens": 15970634,
+    "output_tokens": 20941,
+    "api_call_count": 72
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Fix web E2E tests that were breaking due to upload changes causing Playwright strict mode violations (locators resolving to 2 elements) and ensure all upload-related E2E test suites pass locally against the staging API.",
+    "outcome": "Fixed the strict mode violations by adding :not(.upload-inline-row) to the getItem locator in file-list.page.ts, and fixed post-upload file visibility by wiring onUploadComplete to handleSync in FileBrowser.tsx. All previously-failing upload-related E2E suites now pass; two unrelated session persistence failures remain.",
+    "learnings": {
+      "repo": [
+        "The upload progress row uses both the file-list-item class AND a file-list-item-name span with the filename, so it matches getItem(name) locators — during the completion flash window, both the upload row and the real file row coexist briefly, causing Playwright strict mode violations.",
+        "getFileItem (distinct from getItem) filters out upload rows via hasNot: .file-list-item-size with text '-', but upload rows render '--' (double dash) for size, which still contains '-' so the filter was unreliable.",
+        "UploadZone has an onUploadComplete prop that was never wired in FileBrowser, so uploaded files only appeared on the next 30s IPNS sync poll rather than immediately — E2E tests previously masked this by treating the upload progress row as the 'visible file'.",
+        "IPNS sync is driven by a 30s polling interval in useSyncPolling.ts; handleSync resolves IPNS and refreshes the folder tree.",
+        "EmptyState has its own upload handling via useDropUpload directly and does not accept an onUploadComplete prop, so it is unaffected by the FileBrowser fix."
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/page-objects/file-browser/file-list.page.ts",
+          "finding": "getItem(name) locator was updated to add :not(.upload-inline-row) filter so it only matches settled file rows, not in-progress upload rows."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/FileBrowser.tsx",
+          "finding": "UploadZone was not receiving onUploadComplete; wired it to call actions.handleSync so a folder refresh is triggered immediately after each upload completes."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/UploadListItem.tsx",
+          "finding": "Upload row renders '--' (double dash) for the size field, not '-', which is distinct from folder entries but still caused confusion in hasNot text filters."
+        },
+        {
+          "path": "apps/web/src/hooks/useSyncPolling.ts",
+          "finding": "Exposes handleSync which can be called imperatively to trigger an immediate IPNS resolution and folder refresh outside of the 30s poll cycle."
+        }
+      ],
+      "workflow": [
+        "E2E tests that depend on prior authentication steps cannot be run in isolation — they must be run as part of the full suite from the beginning.",
+        "A stale dev server pointing at localhost:3000 was already running on port 5173; it needed to be killed before starting a staging-pointed server, causing login failures mid-investigation.",
+        "Checking CI job logs for the specific failure pattern (strict mode violation: resolved to 2 elements) was enough to identify the root cause before reproducing locally."
+      ]
+    },
+    "friction": [
+      "UploadListItem.tsx was read three times in sequence, suggesting difficulty finding the relevant size rendering code.",
+      "A pre-existing dev server on port 5173 (pointing at localhost:3000) silently intercepted the E2E tests, causing login failures that looked like auth regressions until the port conflict was diagnosed.",
+      "The uploadFile helper previously resolved immediately by matching the upload progress row, masking the real problem (no post-upload folder refresh) — the fix exposed the underlying IPNS sync latency issue.",
+      "handleSync required multiple grep passes to locate because it is accessed via an actions object rather than being directly exported."
+    ],
+    "open_items": [
+      "Session persistence is lost after page reload when running E2E tests against staging — the 'Page reload preserves session and reloads root folder' test (3.7) and writable-shares tests fail with an unexpected login page.",
+      "EmptyState handles uploads via useDropUpload directly and has no onUploadComplete hook — files uploaded from an empty folder state may still not appear immediately until the next sync poll.",
+      "The upload row using the same file-list-item CSS class as real file rows is a structural ambiguity; a data-uploading attribute or a dedicated CSS class would be a cleaner long-term fix than relying on :not(.upload-inline-row) in every locator."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T14:05:04.734009Z",
+    "agent_lines": 6,
+    "human_added": 1,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7,
+    "agent_percentage": 85.71428571428571
+  }
+}

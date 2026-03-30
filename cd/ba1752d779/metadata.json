@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cdba1752d779",
+  "strategy": "manual-commit",
+  "branch": "fix/e2e-test-failures-v2",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/cd/ba1752d779/0/metadata.json",
+      "transcript": "/cd/ba1752d779/0/full.jsonl",
+      "content_hash": "/cd/ba1752d779/0/content_hash.txt",
+      "prompt": "/cd/ba1752d779/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1708,
+    "cache_creation_tokens": 237730,
+    "cache_read_tokens": 29459856,
+    "output_tokens": 81897,
+    "api_call_count": 178
+  }
+}

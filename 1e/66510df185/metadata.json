@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "1e66510df185",
+  "strategy": "manual-commit",
+  "branch": "feat/inline-upload-progress",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/components/file-browser/UploadListItem.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1e/66510df185/0/metadata.json",
+      "transcript": "/1e/66510df185/0/full.jsonl",
+      "content_hash": "/1e/66510df185/0/content_hash.txt",
+      "prompt": "/1e/66510df185/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 6627,
+    "cache_read_tokens": 2636429,
+    "output_tokens": 3134,
+    "api_call_count": 15
+  }
+}

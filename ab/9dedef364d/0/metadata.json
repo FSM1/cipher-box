@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ab9dedef364d",
+  "session_id": "66b8eabe-070d-4f34-96a8-81ed94408db2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T17:26:22.354801Z",
+  "branch": "feat/parallel-batch-upload-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "b7cb8e8cf2ad",
+  "token_usage": {
+    "input_tokens": 1450,
+    "cache_creation_tokens": 140405,
+    "cache_read_tokens": 13785845,
+    "output_tokens": 39265,
+    "api_call_count": 145
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Execute Phase 37 (parallel batch upload pipeline) using the GSD wave-based orchestration system, then review the code, create a PR, and ensure test/build coverage is solid.",
+    "outcome": "Phase 37 completed with all 2 plans across 2 waves merged, verified, and pushed as PR FSM1/cipher-box#416. Code was cleaned up, SDK integration tests and E2E batch upload tests were added, the encrypt worker was added to tsconfig type-checking, and two lint warnings were fixed.",
+    "learnings": {
+      "repo": [
+        "Worker files must be added to `apps/web/tsconfig.sw.json` to be type-checked in CI — the main tsconfig.json excludes them but doesn't include them in any tsconfig by default. The existing pattern is `decrypt-sw.ts` in tsconfig.sw.json.",
+        "The existing `@cipherbox/crypto` package uses Web Crypto API only (no Node.js crypto), making it safe to use directly inside Web Workers without any additional configuration.",
+        "Vite handles `new Worker(new URL(..., import.meta.url))` natively — no vite.config changes needed for workers.",
+        "FolderMetadata type (in packages/core/src/folder/types.ts) requires `version` and `children` fields at minimum.",
+        "The codebase uses a structured logger rather than `console.warn/log/error` — raw console calls are a code smell here.",
+        "apps/web/CLAUDE.md has guidance against using Blob `.buffer` — pre-existing violation in upload.service.ts.",
+        "Task-reference comments like `(D-01)`, `(D-03)` are considered noise and should be removed or replaced with actual WHY context.",
+        "p-limit is used for concurrency control in the SDK batch upload pipeline with a pool of 3 concurrent uploads."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "finding": "The encryption result type was defined inline 4 times; should use ReturnType\u003cExternalEncryptFn\u003e / Parameters\u003cExternalEncryptFn\u003e from @cipherbox/sdk-core for a single source of truth."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 146,
+          "finding": "useDropUpload now calls client.uploadFiles() batch method instead of the previous sequential upload loop."
+        },
+        {
+          "path": "apps/web/src/services/sdk-provider.ts",
+          "line": 66,
+          "finding": "destroyEncryptionWorker() is called here on logout for proper cleanup."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/upload-batch.test.ts",
+          "line": 186,
+          "finding": "Mock of loadFolderMetadata return value originally typed as `any` — should use the FolderMetadata shape with `version` and `children` fields."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.spec.ts",
+          "line": 60,
+          "finding": "Pre-existing `any` type in test mock — not Phase 37 code but flagged by lint:fix run."
+        }
+      ],
+      "workflow": [
+        "GSD verifier agents can produce false negatives when run immediately after cherry-picking commits — the filesystem may not reflect the new git state yet. Always spot-check key artifact existence directly after verification reports gaps_found.",
+        "Worktree branch refs don't always update automatically after agent commits — the worktree HEAD may have commits that the named branch ref doesn't point to. Requires manual cherry-pick or explicit branch reset.",
+        "When GSD executor agents run in worktree isolation with --no-verify, merging back requires care: stash local changes, merge worktree branch, resolve conflicts (e.g. STATE.md), restore stash.",
+        "The `classifyHandoffIfNeeded` Claude Code runtime bug can cause agents to report failure even when all work is complete — spot-checking SUMMARY.md existence and git log is the reliable completion signal.",
+        "Treating lint warnings as errors in tests requires explicit discipline — `@typescript-eslint/no-explicit-any` warnings in test files are easy to miss and should be treated as blockers."
+      ]
+    },
+    "friction": [
+      "Wave 2 worktree branch ref was not updated after agent commits — the branch pointed to an old commit while the actual HEAD had all the work. Required undoing a bad merge and cherry-picking 3 commits manually.",
+      "The GSD verifier produced false negatives for all 4 Wave 2 artifacts (encrypt.worker.ts, encrypt-worker.service.ts, useDropUpload rewire, destroyEncryptionWorker) because it ran before cherry-picked commits were visible. Required manually editing VERIFICATION.md to correct the status.",
+      "Phase completion (gsd-tools phase complete) and PROJECT.md update had to be re-run after fixing the branch state, since the first run happened on the wrong branch.",
+      "A stale worktree (`cipher-box-worktree-parallel` on `docs/worktree-e2e-env-learnings`) was left from a prior session and needed manual cleanup.",
+      "The orchestrator temporarily navigated into a worktree directory instead of the main repo, causing a branch confusion that required investigation."
+    ],
+    "open_items": [
+      "Web E2E tests not updated for multi-file batch upload flows — existing tests only cover serial single-file uploads. Needs browser-level drag-drop test with real app running.",
+      "Upfront file buffer allocation in uploadFiles() — all files are read into Uint8Array before upload starts, which is memory-inefficient for large batches. Fixing requires changing SDK contract to accept File objects instead of Uint8Array. Bounded by MAX_FILE_SIZE (100MB) for now.",
+      "Pre-existing Blob `.buffer` usage in apps/web/src/services/upload.service.ts violates apps/web/CLAUDE.md guidance — should be fixed separately.",
+      "uploadFiles() has no integration tests against a real server in the sdk-e2e suite's file-operations.test.ts (the main integration suite) — only a new standalone batch-upload.test.ts was added."
+    ]
+  }
+}

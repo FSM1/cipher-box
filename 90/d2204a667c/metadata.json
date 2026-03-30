@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "90d2204a667c",
+  "strategy": "manual-commit",
+  "branch": "fix/release-gate-e2e-verification",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/release-gate.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/90/d2204a667c/0/metadata.json",
+      "transcript": "/90/d2204a667c/0/full.jsonl",
+      "content_hash": "/90/d2204a667c/0/content_hash.txt",
+      "prompt": "/90/d2204a667c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 10237,
+    "cache_read_tokens": 1247498,
+    "output_tokens": 3043,
+    "api_call_count": 9
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "eccd0812694c",
+  "session_id": "73d04a0d-6c1b-4953-8636-dae034952597",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T02:53:53.534871Z",
+  "branch": "feat/inline-upload-progress",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/config.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b8edf940f94c",
+  "token_usage": {
+    "input_tokens": 9576,
+    "cache_creation_tokens": 179453,
+    "cache_read_tokens": 7816744,
+    "output_tokens": 39139,
+    "api_call_count": 69
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Plan Phase 21 (BYO-IPFS Node Support), run a pre-implementation security review of the planning docs, discuss performance benchmarking implications, add a benchmarking plan, and address the highest-priority security findings in the existing plans.",
+    "outcome": "Phase 21 planned with 7 plans across 4 waves (6 original + 1 new benchmarking plan); security review identified 1 critical, 2 high, 4 medium, 5 low findings; all critical and high-priority issues addressed in plans 01, 02, and 05; plans committed to git.",
+    "learnings": {
+      "repo": [
+        "BYO+Kubo external-only mode eliminates 3 Kubo pin calls (~4.2s) from the API path, reducing per-upload API time to ~105ms — a ~40x reduction, shifting the bottleneck from Kubo throughput to PostgreSQL writes.",
+        "The existing TEE republish.ts route correctly uses Uint8Array.fill(0) for IPNS key zeroing — this is the established pattern and must be followed in new migration worker code.",
+        "The existing load test harness (tests/load/) uses a stepped client-pool model with per-operation metric recording; new BYO scenarios should fit the same structure.",
+        "Baselines are tracked in .planning/baselines/ with named files per optimization milestone (e.g., 19.2-post-optimization-baselines.md).",
+        "Security reviews are written to .planning/security/REVIEW-[timestamp].md.",
+        "Phase plans use YAML frontmatter with requirements arrays (e.g., `- BYO-06`); indented format caused a grep false-negative during coverage check.",
+        "PSA external-only mode still routes through CipherBox as a transient relay (upload → PSA pinByCid → unpin), so it does NOT free up server capacity the way Kubo external-only does."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-02-PLAN.md",
+          "finding": "registerCid endpoint lacked BYO-user gate, CID format validation, size cap, and rate limiting — added isUserByo() check, @Matches regex for CIDv0/CIDv1, @Max(100MB) size cap, and @Throttle(100/hour)."
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-05-PLAN.md",
+          "finding": "TEE migration worker fetchFromProvider/pinToProvider accepted arbitrary user-supplied URLs post-decryption; fixed with validateEndpointUrl() (HTTPS-only, private IP block, metadata endpoint block) and validateResolvedIp() (DNS rebinding protection). Auth tokens changed from string to Uint8Array for effective zeroing."
+        },
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-01-PLAN.md",
+          "finding": "KuboProvider CID parameters in Kubo RPC URLs were not encoded; added encodeURIComponent(cid) for all CID parameters."
+        }
+      ],
+      "workflow": [
+        "The plan-checker revision loop caught 5 blockers on first pass (including a zero-knowledge violation and silent fallback behavior); the second verification pass was clean — iterating planner → checker → planner works well for catching constraint violations.",
+        "Running security review as a background agent while continuing a discussion in the main context is effective — the notification arrives mid-conversation and results are immediately actionable.",
+        "Markdownlint rejects bold emphasis used as headings (**Assessment: ...**) and must be converted to plain text or real headings before committing.",
+        "Deferring provider selection (Pinata vs Filebase vs mock) while still writing the benchmarking plan is practical — env-var-driven provider config in the test harness keeps the decision open without blocking plan creation.",
+        "Separating capacity benchmarks (mock with realistic latency) from integration benchmarks (real provider) answers different questions and should be framed as distinct test scenarios."
+      ]
+    },
+    "friction": [
+      "Markdownlint pre-commit hook failed on the security review report due to bold-as-heading anti-pattern (**Assessment: ...**), requiring multiple targeted edits to fix before commit succeeded.",
+      "BYO-06 requirement appeared uncovered during the coverage grep because the YAML frontmatter uses indented `  - BYO-06` format, causing a false negative that required a follow-up verification."
+    ],
+    "open_items": [
+      "Provider selection for BYO benchmarking tests is intentionally deferred — Pinata, Filebase, or another external provider needs to be chosen and a test account provisioned before Task 4 of Plan 07 can run.",
+      "Pinata rate limits on the existing CipherBox account need to be assessed — a dedicated test account with higher limits may be required for load testing.",
+      "Mixed workload benchmark (CB-only + BYO ratio sweep) needs to be validated once Plans 01-03 are implemented to confirm BYO traffic doesn't degrade existing users.",
+      "Medium and low security findings from the review (e.g., IPNS key expiry monitoring, key rotation handling, advisory quota race condition) are documented in the security report but not yet addressed in plans.",
+      "TEE migration worker active-migration check (Plan 05 Task 1) was added to prevent concurrent migrations but concurrent-migration behavior under load is not benchmarked in Plan 07.",
+      "DNS rebinding protection in validateResolvedIp() requires the TEE worker to perform an explicit DNS resolution — behavior in environments with custom DNS resolvers or split-horizon DNS should be tested."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T02:53:13.331044Z",
+    "agent_lines": 0,
+    "human_added": 114787,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 114788,
+    "agent_percentage": 0
+  }
+}

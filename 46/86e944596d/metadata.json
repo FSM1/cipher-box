@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4686e944596d",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-ctr-upload",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/46/86e944596d/0/metadata.json",
+      "transcript": "/46/86e944596d/0/full.jsonl",
+      "content_hash": "/46/86e944596d/0/content_hash.txt",
+      "prompt": "/46/86e944596d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 132,
+    "cache_creation_tokens": 102217,
+    "cache_read_tokens": 8501837,
+    "output_tokens": 26690,
+    "api_call_count": 112
+  }
+}

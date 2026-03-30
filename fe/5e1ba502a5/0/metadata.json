@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fe5e1ba502a5",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T23:05:19.504412Z",
+  "branch": "fix/byo-register-cid-400",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "9270f377ef79",
+  "token_usage": {
+    "input_tokens": 382,
+    "cache_creation_tokens": 253791,
+    "cache_read_tokens": 52554908,
+    "output_tokens": 72296,
+    "api_call_count": 335
+  },
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "summary": {
+    "intent": "Debug BYO-IPFS register-cid 400 errors on staging by tracing the load test workload through the API validation and BYO mode check pipeline.",
+    "outcome": "Discovered setByoStatus() was a dead service method with no controller endpoint (causing 403, not 400), added PATCH /vault/byo-status endpoint, fixed load test ipns-publish to use proper signed records via createAndPublishIpnsRecord, fixed 9 pre-existing API test files with broken mock typing, and merged PR #400. Also cleaned up a Entire CLI husky hook that shouldn't have been committed.",
+    "learnings": {
+      "repo": [
+        "setByoStatus() in VaultService was a dead code path — service method existed but no controller endpoint was ever wired up, meaning BYO mode could never be enabled via API",
+        "The load test's ipns-publish step was sending { ipnsName, cid } but PublishIpnsEntryDto requires { ipnsName, record, metadataCid } — the signed IPNS record is mandatory",
+        "API test files use jest.Mocked\u003cPartial\u003cT\u003e\u003e pattern which loses mock method types after module.get() — all must use the mock variable directly, not the module.get() result",
+        "orval generates new model files into packages/api-client/src/ that must all be staged — partial staging of api-client breaks the barrel index",
+        "The todo done/ copy and pending/ copy both made it into main because the merge brought both files; stale pending entries must be cleaned up after merges",
+        "The .husky/commit-msg.pre-entire file is a local Entire CLI artifact and should be in .git/info/exclude, not committed to the repo"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/vault/vault.controller.ts",
+          "finding": "New PATCH /vault/byo-status endpoint added; previously setByoStatus was unreachable from any HTTP route"
+        },
+        {
+          "path": "apps/api/src/vault/dto/byo-status.dto.ts",
+          "finding": "SetByoStatusRequestDto (isByoUser: boolean) and SetByoStatusResponseDto (isByoUser, vaultId) added"
+        },
+        {
+          "path": "packages/sdk-core/src/encryption-mode.ts",
+          "finding": "Centralized STREAMING_MIME_TYPES, CTR_SIZE_THRESHOLD, selectEncryptionMode(mimeType, size), and normalizeEncryptionMode() — previously duplicated in sdk/client.ts and apps/web streaming-crypto.service.ts"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "createByoClientPool must call PATCH /vault/byo-status for each account after pool creation; filter out any accounts where enablement fails and throw if zero succeed"
+        },
+        {
+          "path": "tests/load/src/workloads/byo-file-workload.ts",
+          "finding": "createSdkContext was being called inside the per-iteration loop — should be hoisted outside; ipns-publish must use createAndPublishIpnsRecord from sdk-core to produce valid signed records"
+        }
+      ],
+      "workflow": [
+        "When staging api-client generated files, always stage the entire packages/api-client/src/ directory to avoid missing barrel index references",
+        "When adding new exports to sdk-core, all SDK test files that mock @cipherbox/sdk-core with a bare factory must be updated to use importOriginal + spread, otherwise the new export is undefined at runtime",
+        "The Entire CLI modifies .husky/commit-msg locally and creates .husky/commit-msg.pre-entire; both should be in .git/info/exclude to prevent showing in diffs"
+      ]
+    },
+    "friction": [
+      "orval API client regeneration requires the API server to be running with the latest build; running it against a stale server produces incomplete model files",
+      "GraphQL review thread resolution timed out; had to fall back to REST for fetching and work around the GraphQL endpoint separately",
+      "Pre-existing API test errors across 9+ files caused significant typecheck noise unrelated to the actual feature work",
+      "Manual OpenAPI spec generation wrote to apps/api/openapi.json (cwd) instead of packages/api-client/openapi.json, adding a 3889-line file to the PR diff",
+      "Entire CLI hook committed to repo when it should have stayed local — required a follow-up commit to remove it and restore the original commitlint hook"
+    ],
+    "open_items": [
+      "integration.test.ts in packages/sdk has pre-existing failures hitting live API endpoints — not fixed, needs investigation",
+      "BYO load test baselines on staging still need to be run now that the 403 bug is fixed (todo #11 moved to done but actual baseline capture deferred)",
+      "The streaming-playback E2E test previously skipped for CTR badge is now unskipped — should monitor for flakiness in CI"
+    ]
+  }
+}

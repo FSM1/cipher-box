@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "778755365673",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T16:37:58.006063Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "f4ac390446ae",
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 446708,
+    "cache_read_tokens": 7092123,
+    "output_tokens": 32187,
+    "api_call_count": 90
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Execute Phase 35 (Phala Testnet TEE Migration) end-to-end using GSD wave-based execution, migrating the TEE worker into the apps/ monorepo structure and deploying it to Phala Cloud CVM testnet.",
+    "outcome": "All 6 plans completed across 4 waves: TEE worker restructured into apps/tee-worker/ with shared package integration, 56 unit tests passing, Phala SDK integrated with Prometheus metrics, staging CI/CD updated, docs updated, and CVM successfully deployed to Phala Cloud testnet with epoch key determinism and IPNS republish verified.",
+    "learnings": {
+      "repo": [
+        "TEE worker lives at apps/tee-worker/ (moved from root tee-worker/ in this phase)",
+        "Shared packages used by TEE worker: @cipherbox/crypto (ECIES/HKDF), @cipherbox/core (IPNS signing), @cipherbox/sdk-core (KuboProvider, PsaProvider)",
+        "Phala CVM endpoint pattern: https://{cvm-id}-{port}.dstack-pha-prod5.phala.network",
+        "CVM deployed as cipherbox-tee-staging, image ghcr.io/fsm1/cipherbox-tee-worker:v35-amd64",
+        "Docker host is at 192.168.133.12 (not 192.168.133.114 as previously recorded)",
+        "TEE worker secret env var in GitHub is STAGING_TEE_WORKER_SECRET",
+        "PHALA_TEE_WORKER_URL is set as a GitHub staging environment variable (not secret)",
+        "Epoch key determinism confirmed: same 64-byte uncompressed public key across CVM restarts",
+        "Republish latency ~1155ms avg from remote to Phala Cloud testnet — network-bound, not compute-bound"
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/routes/republish.ts",
+          "finding": "Republish route expects ECIES-encrypted IPNS key payload using wrapKey/unwrapKey from @cipherbox/crypto"
+        },
+        {
+          "path": "apps/tee-worker/src/services/key-manager.ts",
+          "finding": "Key manager uses @cipherbox/crypto for ECIES operations and HKDF-based key derivation"
+        },
+        {
+          "path": "apps/tee-worker/docker-compose.phala.yml",
+          "finding": "Phala CVM deployment config; uses envsubst for variable injection before phala deploy"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "finding": "Has build-tee and deploy-tee-phala jobs added in this phase for Phala Cloud deployment"
+        }
+      ],
+      "workflow": [
+        "GSD worktree isolation: executor agents run in git worktrees; merging requires manual conflict resolution for STATE.md/ROADMAP.md (take agent version)",
+        "Sequential wave execution needed when parallel agents cause git config lock contention — clean up stale worktrees before retrying",
+        "GSD pause-work/resume-work handoff cycle works well for cross-machine session transfer; HANDOFF.json preserves credentials and exact task state",
+        "phala CLI (v1.1.13): `phala deploy -c docker-compose.yml -n \u003cname\u003e -e KEY=VAL --wait` for initial deploy; `phala restart -n \u003cname\u003e` to restart",
+        "Phala CVM health endpoint: GET /health returns {healthy, mode, epoch}; public key at GET /public-key",
+        "@cipherbox/crypto package must be built (pnpm --filter @cipherbox/crypto build) before use in test scripts",
+        "classifyHandoffIfNeeded error in Claude Code is a runtime bug, not a GSD failure — spot-check SUMMARY.md + git commits to confirm success"
+      ]
+    },
+    "friction": [
+      "Wave 2 parallel agents failed: 35-02 hit git config lock, 35-03 hit usage quota mid-execution — required sequential retry after cleanup",
+      "gsd-tools init runs from wrong directory when in worktree context — needed explicit path adjustment",
+      "Stale HANDOFF.json listed Dockerfile as uncommitted when it had already been committed by Docker host session",
+      "CVM restart took several minutes with empty reply SSL errors before becoming healthy — required polling with increasing delays",
+      "TEE_WORKER_SECRET not available locally (only in GitHub secrets) — required generating a new one",
+      "Docker not available on dev machine (192.168.133.12 is separate Docker host) — required cross-machine handoff for image build",
+      "Two session handoffs required: once to Docker host for image build, then back for verification tasks"
+    ],
+    "open_items": [
+      "Phase 35 verification (gsd-verifier) not yet run — transcript ends after 35-06 SUMMARY commit, before verify_phase_goal step",
+      "ROADMAP.md update-plan-progress command failed (positional args issue) — may need manual verification that ROADMAP reflects plan 35-06 complete",
+      "Republish latency baselines (~1155ms) are for remote testnet; production co-located latency not yet measured",
+      "Phase 35 branch not yet merged to main/develop",
+      "HANDOFF.json cleanup (should be deleted after successful resumption per workflow spec) — may still exist"
+    ]
+  }
+}

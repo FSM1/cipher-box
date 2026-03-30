@@ -1,0 +1,117 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8d3707774abf",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T18:09:03.988483Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/tee-worker/src/routes/public-key.ts",
+    "apps/tee-worker/src/routes/republish.ts",
+    "apps/tee-worker/src/routes/connection-test.ts",
+    "apps/tee-worker/src/routes/migrate.ts",
+    "apps/tee-worker/src/__tests__/republish.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "963affc5b240",
+  "token_usage": {
+    "input_tokens": 342,
+    "cache_creation_tokens": 556196,
+    "cache_read_tokens": 43018651,
+    "output_tokens": 79200,
+    "api_call_count": 278
+  },
+  "summary": {
+    "intent": "Execute Phase 35 (Phala Testnet TEE Migration) end-to-end: restructure TEE worker into monorepo apps/, integrate shared packages, add Phala SDK, deploy to Phala Cloud CVM, verify, and ship a PR.",
+    "outcome": "All 6 plans completed across 4 waves, CVM deployed and verified on Phala Cloud production infrastructure, PR #395 opened, security review conducted with all high/medium findings resolved, lint fixed, merge conflicts resolved.",
+    "learnings": {
+      "repo": [
+        "TEE worker lives at apps/tee-worker/ (moved from root tee-worker/ in this phase)",
+        "Shared monorepo packages: @cipherbox/crypto (ECIES, clearBytes), @cipherbox/core (IPNS signing), @cipherbox/sdk-core (KuboProvider, PsaProvider)",
+        "multiformats is a dependency of @cipherbox/crypto but not tee-worker directly — must be added separately if used in tee-worker",
+        "Phala Cloud has no separate testnet — free tier ($20 credit) runs on same production nodes (Intel TDX hardware, dstack-pha-prod5.phala.network)",
+        "Phase name 35-phala-testnet-tee-migration is a misnomer — it's production Phala Cloud infrastructure",
+        "Docker host is at 192.168.133.12 (updated from stale 192.168.133.114 in memory)",
+        "Staging GitHub environment uses STAGING_TEE_WORKER_SECRET (not TEE_WORKER_SECRET) and PHALA_CLOUD_API_KEY secrets",
+        "deploy-staging.yml has build-tee and deploy-tee-phala jobs — new staging-v* tag triggers full CVM rebuild and redeploy automatically",
+        "PHALA_TEE_WORKER_URL is a GitHub staging variable (not secret) pointing to the live CVM endpoint",
+        "gsd-tools init must be run from the worktree directory, not the main repo, when using git worktrees"
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/routes/public-key.ts",
+          "finding": "Was calling getKeypair() instead of getPublicKey(), leaking private key into route scope — fixed to use getPublicKey()"
+        },
+        {
+          "path": "apps/tee-worker/src/routes/health.ts",
+          "finding": "Was reading TEE_EPOCH env var but migrate route uses TEE_CURRENT_EPOCH — inconsistency fixed to TEE_CURRENT_EPOCH"
+        },
+        {
+          "path": "apps/tee-worker/src/routes/republish.ts",
+          "finding": "Added MAX_BATCH_SIZE=100 guard to prevent unbounded ECIES decryption DoS; removed dead keyEpoch field; derived successes/failures from results array instead of mutable counters"
+        },
+        {
+          "path": "apps/tee-worker/src/middleware/metrics.ts",
+          "finding": "req.path on 404 fallback causes unbounded Prometheus label cardinality — fixed to use 'unmatched' constant"
+        },
+        {
+          "path": "apps/tee-worker/src/services/ssrf-validation.ts",
+          "finding": "TOCTOU DNS rebinding vulnerability: DNS lookup was separate from HTTP fetch. Fixed by merging validateResolvedIp into ssrfSafeFetch — resolves IP, validates it, then connects directly with pinned IP and Host header. Headers API lowercases keys so host header must be lowercase 'host' not 'Host'"
+        },
+        {
+          "path": "apps/tee-worker/src/routes/migrate.ts",
+          "finding": "Hand-rolled CID regex replaced with CID.parse() from multiformats — handles all CID versions and multibase encodings correctly. Also accepts currentEpoch from request body instead of reading stale env var at module load"
+        },
+        {
+          "path": "apps/tee-worker/src/__tests__/ssrf-validation.test.ts",
+          "finding": "Tests for ssrfSafeFetch needed dns/promises mock after DNS pinning was added — TEE_MODE=production tests now mock dns.lookup"
+        },
+        {
+          "path": "apps/tee-worker/src/__tests__/republish.test.ts",
+          "finding": "Had a require() import that failed ESLint @typescript-eslint/no-require-imports — must use ES import syntax"
+        }
+      ],
+      "workflow": [
+        "Parallel agent worktrees can cause git config lock conflicts — run wave 2+ plans sequentially if wave 1 had lock issues",
+        "Agent worktrees need explicit merge + cleanup after each wave; STATE.md conflicts should take the agent's version",
+        "Pause/resume workflow (gsd:pause-work + gsd:resume-work) works well for transferring session context across machines — HANDOFF.json carries credentials, remaining tasks, and mental model",
+        "Secrets shared in conversation appear in entire/* branch checkpoints — rotate immediately after any session where credentials were pasted or generated",
+        "gh secret set --env staging is the correct command for environment-scoped secrets; gh variable set --env staging for non-secret config",
+        "gh api repos/{owner}/{repo}/environments/{env}/secrets can verify secret update timestamps to confirm rotation",
+        "Security review should be done before PR creation, not after — found critical public-key route bug (private key exposure) post-execution",
+        "classifyHandoffIfNeeded error from Claude Code runtime is a false failure — spot-check SUMMARY.md and git commits to confirm actual success"
+      ]
+    },
+    "friction": [
+      "Usage limit hit mid-wave-2 execution, requiring manual continuation and sequential re-execution of both wave 2 plans",
+      "git config lock conflicts prevented parallel worktree execution for wave 2 — had to fall back to sequential",
+      "gsd-tools init returns phase_found:false when run from main repo instead of worktree — not obvious error",
+      "STATE.md merge conflicts on every agent worktree merge required manual conflict resolution",
+      "CVM took ~90 seconds to restart and health endpoint returned empty reply during boot — required multiple retry loops",
+      "Phala CLI phala restart command syntax unclear — had to check help before use",
+      "Docker not available on dev machine (runs on separate Docker host 192.168.133.12) — required session transfer workflow",
+      "multiformats not in tee-worker package.json despite being available via @cipherbox/crypto — caused type-check failure after CID.parse() refactor",
+      "Headers API silently lowercases all header names — caused two test failures after SSRF DNS pinning refactor",
+      "Copilot review comments not accessible via GitHub API — could not programmatically reply to review thread",
+      "Secrets (Phala API key, TEE worker secret) were committed to HANDOFF.json and .continue-here.md in git history — required rotation"
+    ],
+    "open_items": [
+      "SSRF probe deduplication: connection-test.ts has similar connectivity probe logic to sdk-core — deferred as significant refactor",
+      "Phala Cloud CVM latency is ~1155ms avg (network-bound to cloud) — production co-location with API expected to reduce significantly, but not yet measured",
+      "35-HUMAN-UAT.md persists with status:partial — needs resolution via /gsd:verify-work once CVM health and GitHub env are confirmed stable",
+      "Phase name (35-phala-testnet-tee-migration) is technically inaccurate but kept to avoid breaking cross-references — directory rename deferred",
+      "Old Phala API key and TEE worker secret remain in git history on phase-35 branch (commits 607c50fec, bd265fa4f) and entire/* transcript — harmless now that rotated but not purged",
+      "PR #395 open but not yet merged — pending CI passes after lint fix"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T18:08:11.708651Z",
+    "agent_lines": 25,
+    "human_added": 14,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 39,
+    "agent_percentage": 64.1025641025641
+  }
+}

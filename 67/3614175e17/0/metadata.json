@@ -1,0 +1,128 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "673614175e17",
+  "session_id": "3c333c42-0f2b-4725-882f-f7c9f6c38b4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T20:14:37.546277Z",
+  "branch": "phase-35-phala-testnet-tee-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "2a534a12f09b",
+  "token_usage": {
+    "input_tokens": 452,
+    "cache_creation_tokens": 608073,
+    "cache_read_tokens": 65916757,
+    "output_tokens": 97402,
+    "api_call_count": 364
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Execute Phase 35 (Phala Testnet TEE Migration) to migrate the TEE worker from a root monorepo structure into apps/tee-worker/ with Phala Cloud CVM deployment, shared package integration, unit tests, Phala SDK instrumentation, and staging CI/CD updates.",
+    "outcome": "All 6 plans across 4 waves executed successfully. TEE worker restructured, 56+ unit tests added, Phala SDK integrated, CVM deployed to Phala Cloud production (not testnet), epoch key determinism and end-to-end IPNS republish verified, PR #395 created and multiple rounds of security/code review comments addressed.",
+    "learnings": {
+      "repo": [
+        "Phala Cloud has no separate testnet — the free tier runs on the same production nodes (Intel TDX hardware, dstack-pha-prodN) as paid deployments. Phase was named 'phala-testnet' but deployed to production infrastructure.",
+        "Docker is not available on the dev machine — it runs on a separate Docker host at 192.168.133.12 (updated from 192.168.133.114).",
+        "The deploy-staging.yml workflow has build-tee and deploy-tee-phala jobs that automatically build and deploy the CVM on staging-v* tag pushes.",
+        "TEE_WORKER_SECRET is used as a shared secret between the API and TEE worker; both sides get it from STAGING_TEE_WORKER_SECRET GitHub secret during CI.",
+        "The entire branch stores full conversation transcripts as checkpoints — credentials shared in conversation will be captured there.",
+        "gsd-tools init must run from the correct worktree directory (not the main repo) when working in a worktree.",
+        "multiformats (CID.parse) is already a dependency of @cipherbox/crypto and can be added to tee-worker for standard CID validation.",
+        "undici is bundled with Node.js and can be used for DNS-pinned fetch with custom Agent lookup to prevent TOCTOU DNS rebinding attacks."
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/routes/public-key.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Originally called getKeypair() instead of getPublicKey(), leaking private key into route scope — fixed during /simplify review."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/health.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Was reading TEE_EPOCH env var but migrate route uses TEE_CURRENT_EPOCH — inconsistency fixed during /simplify review."
+        },
+        {
+          "path": "apps/tee-worker/src/services/ssrf-validation.ts",
+          "line": 1,
+          "end_line": 150,
+          "finding": "DNS pinning via hostname rewrite broke TLS SNI/certificate validation — fixed by using undici Agent with custom lookup function that validates the resolved IP before connecting."
+        },
+        {
+          "path": "apps/tee-worker/src/services/migration-worker.ts",
+          "line": 112,
+          "end_line": 115,
+          "finding": "SSRF check compared endpoint !== 'cipherbox' instead of protocol !== 'cipherbox', meaning cipherbox:// URLs were not excluded from SSRF validation."
+        },
+        {
+          "path": "apps/tee-worker/src/services/migration-worker.ts",
+          "line": 40,
+          "end_line": 43,
+          "finding": "Epoch assignment using ?? parseInt(process.env.TEE_CURRENT_EPOCH || '1', 10) could yield NaN if env var is non-numeric — fixed to fall back to 1."
+        },
+        {
+          "path": "apps/tee-worker/src/services/migration-worker.ts",
+          "line": 60,
+          "end_line": 110,
+          "finding": "teePrivateKey not zeroed if decryptEcies or validateEndpointUrl threw before the finally block — fixed by wrapping entire function body in try/finally."
+        },
+        {
+          "path": "apps/tee-worker/src/routes/migrate.ts",
+          "line": 33,
+          "end_line": 34,
+          "finding": "Kubo's pin() uses cid-version=1 and returns CIDv1, so direct string equality comparison against input CIDv0 always fails — fixed by normalizing both to CIDv1 via CID.parse().toV1().toString()."
+        },
+        {
+          "path": "apps/tee-worker/src/middleware/metrics.ts",
+          "line": 51,
+          "end_line": 51,
+          "finding": "Unmatched route label should be '/:unmatched' (matching API's http-metrics.interceptor.ts:40 pattern) not 'unmatched' — fixed per CodeRabbit review."
+        },
+        {
+          "path": "apps/tee-worker/src/services/migration-worker.ts",
+          "line": 40,
+          "end_line": 50,
+          "finding": "decryptEcies silently accepted malformed hex (Buffer.from with 'hex' encoding ignores invalid chars) — fixed with early validation checking non-empty, even-length, valid hex before Buffer conversion."
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/index.ts",
+          "line": 1,
+          "end_line": 9,
+          "finding": "FetchFn type was exported from types.ts but not re-exported from the package index, forcing consumers to deep-import or use ProviderOptions['fetchFn']."
+        }
+      ],
+      "workflow": [
+        "GSD pause-work/resume-work successfully transferred session state between machines — credentials stored in HANDOFF.json enabled seamless continuation on the Docker host.",
+        "Secrets shared in conversation (pasted by user or echoed by assistant) are captured in the entire branch checkpoints — rotate credentials immediately after any session where they appear.",
+        "The classifyHandoffIfNeeded Claude Code runtime bug fires after tool calls complete — spot-check SUMMARY.md + commits to determine real success/failure.",
+        "Parallel wave agents should use sequential fallback when git config lock contention occurs (35-02 initial attempt failed due to this).",
+        "Security reviews should be committed as planning artifacts and updated with resolution status after fixes are applied.",
+        "CID version mismatch is a common subtle bug when comparing user-supplied CIDs against Kubo-returned CIDs (Kubo normalizes to CIDv1 with cid-version=1 flag)."
+      ]
+    },
+    "friction": [
+      "Usage limits interrupted Wave 2 mid-execution (35-03 hit limit), requiring manual continuation after reset.",
+      "gsd-tools init failed initially because it ran from the main repo path instead of the worktree — needed explicit cd to worktree.",
+      "Parallel Wave 2 execution caused git config lock contention on 35-02, requiring sequential retry.",
+      "STATE.md merge conflicts occurred multiple times as agent worktrees and the main branch diverged — needed manual resolution each time.",
+      "Docker not available on dev machine required a two-machine workflow (dev machine for code, Docker host for image building), necessitating the pause/resume handoff.",
+      "undici types not automatically available despite being bundled with Node — required explicit pnpm add undici.",
+      "The entire branch checkpoint system has no secret scrubbing mechanism — credentials in conversation are permanently captured.",
+      "HANDOFF.json stale data (Dockerfile fix note) caused minor confusion on resume — stale notes not automatically cleaned up.",
+      "The Phala phase name 'phala-testnet' was a misnomer from the start — no testnet exists, but renaming would break cross-references so it was left as-is."
+    ],
+    "open_items": [
+      "Probe/connection-test deduplication: connection-test.ts reimplements probe logic that exists in sdk-core — deferred as significant refactor.",
+      "Rotate PHALA_CLOUD_API_KEY and STAGING_TEE_WORKER_SECRET — user handled rotation but old values remain in git history on the phase branch and entire branch checkpoint.",
+      "The entire branch transcript at 86/0546ed796e/0/full.jsonl contains the old (now rotated) Phala API key — inert but present.",
+      "HUMAN-UAT.md for Phase 35 has status: partial — will surface in /gsd:progress and /gsd:audit-uat until explicitly resolved.",
+      "Phase 35 branch needs merging to main — PR #395 created but not yet merged.",
+      "Sequential IPNS key processing in republish (deliberate security tradeoff, not concurrency-optimized) — documented as intentional but could be revisited for performance.",
+      "Latency baselines (~1155ms avg) are from testnet conditions (dev machine → Phala Cloud); production co-located performance unvalidated."
+    ]
+  }
+}

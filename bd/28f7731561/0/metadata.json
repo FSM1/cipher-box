@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "bd28f7731561",
+  "session_id": "464d1825-646a-4c1d-bdb4-0d9f5e55982a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T21:45:04.167938Z",
+  "branch": "feat/sdk-ctr-upload",
+  "checkpoints_count": 6,
+  "files_touched": [
+    ".planning/todos/done/2026-03-29-sdk-uploadfile-hardcodes-gcm-wire-ctr-encryption-for-media-uploads.md",
+    ".planning/todos/pending/2026-03-29-sdk-uploadfile-hardcodes-gcm-wire-ctr-encryption-for-media-uploads.md",
+    "packages/sdk-core/src/__tests__/ipns.test.ts",
+    "packages/sdk-core/src/__tests__/vault.test.ts",
+    "packages/sdk-core/src/upload/index.ts",
+    "packages/sdk/src/client.ts",
+    "tests/web-e2e/tests/streaming-playback.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d16837bd02ab",
+  "token_usage": {
+    "input_tokens": 73,
+    "cache_creation_tokens": 67491,
+    "cache_read_tokens": 3351281,
+    "output_tokens": 13237,
+    "api_call_count": 58
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Wire CTR encryption mode into the SDK's uploadFile() so large media files use AES-CTR instead of hardcoded AES-GCM, enabling the streaming playback pipeline.",
+    "outcome": "CTR encryption is now selected automatically for media files \u003e256KB in the SDK client, passed through to sdk-core and file metadata, E2E streaming playback tests pass including the previously-skipped CTR badge test, and a PR was opened.",
+    "learnings": {
+      "repo": [
+        "selectEncryptionMode() logic lived only in streaming-crypto.service.ts (web app) and was never called for new SDK uploads — the CTR path only triggered on the duplicate-file re-encrypt path.",
+        "sdk-core typecheck errors during development were often caused by stale build output; rebuilding sdk-core first resolves downstream SDK type errors.",
+        "The web E2E tests run against live local dev servers (API on one port, Vite on another); rebuilding packages is sufficient for HMR pickup before running Playwright.",
+        "Pre-existing test failures in sdk-core/__tests__ were due to DTO shape drift: PublishIpnsResponseDto lost its cid field, ResolveIpnsResponseDto lost source, and IpfsAddResult gained size and recorded fields."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "line": 88,
+          "end_line": 113,
+          "finding": "uploadFile() hardcoded encryptAesGcm and encryptionMode: 'GCM'; needed an optional encryptionMode param to branch into CTR path with encryptAesCtr + generateCtrIv."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 691,
+          "end_line": 691,
+          "finding": "Client's uploadFile() was the right place to call selectEncryptionMode() using mimeType + size, then pass the result down to sdkCore.uploadFile()."
+        },
+        {
+          "path": "apps/web/src/services/streaming-crypto.service.ts",
+          "line": 53,
+          "end_line": 53,
+          "finding": "Reference implementation for MIME type list and 256KB threshold used in selectEncryptionMode(); duplicated into sdk/client.ts."
+        },
+        {
+          "path": "tests/web-e2e/tests/streaming-playback.spec.ts",
+          "finding": "CTR encrypted badge test was skipped pending this fix; removing test.skip was part of the todo's acceptance criteria."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/ipns.test.ts",
+          "finding": "Mock objects were out of sync with current DTO shapes; PublishIpnsResponseDto and ResolveIpnsResponseDto fields had changed without test updates."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/vault.test.ts",
+          "finding": "addToIpfs mock was returning { cid } but IpfsAddResult type requires { cid, size, recorded }."
+        }
+      ],
+      "workflow": [
+        "Build sdk-core before typechecking sdk when sdk-core types have changed — the SDK imports compiled output, not source.",
+        "When running E2E tests against local dev, rebuild packages first; Vite HMR picks up workspace package changes without restarting.",
+        "GSD todo workflow: moving a todo to done/ and committing signals intent; the commit is bundled with the implementation changes at PR time."
+      ]
+    },
+    "friction": [
+      "sdk-core build output was stale, causing misleading type errors in the SDK typecheck step — required an extra build step mid-implementation.",
+      "Pre-existing test failures in sdk-core (DTO shape drift) were unrelated to the feature but had to be fixed before typecheck was clean.",
+      "selectEncryptionMode() logic had to be duplicated from streaming-crypto.service.ts into sdk/client.ts — no shared utility existed."
+    ],
+    "open_items": [
+      "selectEncryptionMode() is now duplicated between streaming-crypto.service.ts and sdk/client.ts — should be extracted to a shared crypto utility package.",
+      "13 other pending todos remain, including BYO-IPFS register-cid 400 errors on staging (api, 9h ago) which may be urgent.",
+      "The streaming-playback E2E suite only runs against local dev; no CI coverage confirmed for CTR path end-to-end."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T21:44:39.391365Z",
+    "agent_lines": 75,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 75,
+    "agent_percentage": 100
+  }
+}

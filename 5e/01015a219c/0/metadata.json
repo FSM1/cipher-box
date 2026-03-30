@@ -1,0 +1,72 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "5e01015a219c",
+  "session_id": "145e3aa4-0001-43a6-a9a0-bb9493a1c135",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T16:52:58.917476Z",
+  "branch": "docs/worktree-e2e-env-learnings",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".learnings/2026-03-30-worktree-e2e-env-setup.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "ac7b97913ac1",
+  "token_usage": {
+    "input_tokens": 1319,
+    "cache_creation_tokens": 84193,
+    "cache_read_tokens": 4228212,
+    "output_tokens": 18889,
+    "api_call_count": 76
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Fix two CI failures: intermittent E2E test failures in full-workflow and sharing-workflow specs, and a Grafana Cloud provisioning failure in the staging pipeline.",
+    "outcome": "The E2E race condition in FileList.tsx was fixed (reversed dedup logic, then improved to ID-based filtering after PR review), verified locally, and merged to main via PR #414. The Grafana issue was identified as a configuration problem (wrong stack URL) requiring manual action, not a code fix.",
+    "learnings": {
+      "repo": [
+        "Fresh git worktrees do not inherit .env files — they must be copied manually from the main repo checkout (e.g. `cp ../cipher-box/apps/web/.env apps/web/.env`).",
+        "The web dev server proxies /api to localhost:3000 by default; set VITE_API_URL to the staging API URL to test web-only changes against staging without running a local API.",
+        "The Grafana Cloud provisioning job hits https://cipherbox.grafana.net/api/health — if this returns 404, the GRAFANA_URL GitHub environment variable is stale or the stack was deprovisioned.",
+        "CodeRabbit and GitHub Copilot both reviewed PR #414 and flagged the same issue: name-based upload dedup could hide in-progress uploads with duplicate filenames. ID-based filtering is the correct approach."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/FileList.tsx",
+          "line": 147,
+          "end_line": 158,
+          "finding": "Upload dedup filter originally removed real file rows when their name matched a completing upload entry during the 1-second green flash. Fixed by (1) reversing the filter direction — hide upload rows when real files exist — then (2) switching to ID-based filtering (`completeUploadIds` Set) to avoid false matches on duplicate filenames."
+        }
+      ],
+      "workflow": [
+        "For web-only E2E fixes, run the web dev server locally pointed at the staging API (VITE_API_URL=\u003cstaging\u003e) — no local API server needed. This avoids the CORS/auth issues that appear when mixing origins.",
+        "Playwright's webServer config may auto-start a local API server, which can conflict with an already-running process on port 3000 and cause confusing test failures.",
+        "When a fix is client-side only, tests against staging-deployed code won't validate the fix — must run the local dev server with the fix applied.",
+        "After implementing PR review fixes, use `gh api graphql` to resolve threads and `gh api repos/.../pulls/.../comments` with `--field in_reply_to=\u003cint\u003e` (not `-f`) to reply.",
+        "The .learnings/ directory is the project's convention for capturing debugging workflows and setup recipes — add new files there when a novel class of problem is solved."
+      ]
+    },
+    "friction": [
+      "Multiple failed attempts to run E2E tests before realising the correct setup: local web dev server pointed at staging API, no local API required for a web-only fix.",
+      "Web3Auth fails to initialise when the app origin is localhost but the API is on a different domain — login button never renders, causing tests to fail at the auth step.",
+      "Fresh worktree had no .env files, causing both API and web dev server to exit immediately; required manual copy from the main repo checkout.",
+      "Port 3000 conflict: the main repo's API server was already running, causing the worktree API server to fail silently.",
+      "Playwright's webServer auto-start behaviour started a local API server unexpectedly, interfering with the staging-API test run and causing the session-reload test (test 17) to fail locally."
+    ],
+    "open_items": [
+      "full-workflow test 17 ('Page reload preserves session') fails locally when web is pointed at staging API — likely a pre-existing auth session timeout issue, not related to the upload fix. Needs investigation.",
+      "Grafana Cloud provisioning failure requires manual action: verify the correct stack URL at grafana.com, update GRAFANA_URL in the GitHub staging environment, and confirm GRAFANA_API_KEY is still valid. Alternatively, add `continue-on-error: true` to the provision-dashboard job to unblock deploys."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T16:52:28.96978Z",
+    "agent_lines": 75,
+    "human_added": 23,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 98,
+    "agent_percentage": 76.53061224489795
+  }
+}
