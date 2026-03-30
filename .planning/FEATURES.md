@@ -85,6 +85,11 @@
 | OS keychain storage             | -   | Y       | -   | -   | -                  |
 | Auto-updater                    | -   | Y       | -   | -   | -                  |
 | Dev-key mode (headless)         | -   | Y       | -   | -   | desktop-e2e        |
+| **Vault Settings (Phase 39)**   |     |         |     |     |                    |
+| Bin retention period            | -   | -       | -   | -   | -                  |
+| Delete behavior (soft/hard)     | -   | -       | -   | -   | -                  |
+| Max versions per file           | -   | -       | -   | -   | -                  |
+| Version cooldown period         | -   | -       | -   | -   | -                  |
 | **Encryption**                  |     |         |     |     |                    |
 | Web Worker encryption           | Y   | -       | -   | -   | -                  |
 | AES-CTR streaming decryption    | Y   | -       | -   | Y   | streaming-playback |
