@@ -10,14 +10,23 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
-      web: ${{ steps.filter.outputs.web }}
-      desktop: ${{ steps.filter.outputs.desktop }}
+      web: ${{ steps.manual.outputs.web || steps.filter.outputs.web }}
+      desktop: ${{ steps.manual.outputs.desktop || steps.filter.outputs.desktop }}
     steps:
+      - name: Force all changes on manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        id: manual
+        run: |
+          echo "web=true" >> "$GITHUB_OUTPUT"
+          echo "desktop=true" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v6
+        if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
 
       - uses: dorny/paths-filter@v4
+        if: github.event_name != 'workflow_dispatch'
         id: filter
         with:
           base: ${{ (github.event.before != '' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'HEAD~1' }}
@@ -52,9 +61,12 @@ jobs:
               - '.github/workflows/ci-e2e.yml'
 
       - name: Summary
+        env:
+          WEB: ${{ steps.manual.outputs.web || steps.filter.outputs.web }}
+          DESKTOP: ${{ steps.manual.outputs.desktop || steps.filter.outputs.desktop }}
         run: |
-          echo "Web changes: ${{ steps.filter.outputs.web }}"
-          echo "Desktop changes: ${{ steps.filter.outputs.desktop }}"
+          echo "Web changes: ${WEB}"
+          echo "Desktop changes: ${DESKTOP}"
 
   web-e2e:
     name: Web E2E
@@ -73,7 +85,7 @@ jobs:
   retrigger-release-gate:
     name: Re-trigger Release Gate
     needs: [detect-changes, web-e2e, desktop-e2e]
-    if: always() && github.event_name == 'push'
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       actions: write
