@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6351a2482ddf",
+  "strategy": "manual-commit",
+  "branch": "fix/upload-dedup-race",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/components/file-browser/FileList.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/63/51a2482ddf/0/metadata.json",
+      "transcript": "/63/51a2482ddf/0/full.jsonl",
+      "content_hash": "/63/51a2482ddf/0/content_hash.txt",
+      "prompt": "/63/51a2482ddf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1295,
+    "cache_creation_tokens": 67749,
+    "cache_read_tokens": 2542258,
+    "output_tokens": 14320,
+    "api_call_count": 57
+  }
+}
