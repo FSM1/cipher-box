@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.32.0...@cipherbox/sdk-v0.33.0) (2026-03-30)
+
+
+### Features
+
+* parallel batch upload pipeline with Web Worker encryption ([#416](https://github.com/FSM1/cipher-box/issues/416)) ([ee918ac](https://github.com/FSM1/cipher-box/commit/ee918accc1bd82339eca87d973c13ab2e0556f37))
+
 ## [0.32.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.31.0...@cipherbox/sdk-v0.32.0) (2026-03-30)
 
 
