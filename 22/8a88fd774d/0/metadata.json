@@ -1,0 +1,70 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "228a88fd774d",
+  "session_id": "f2707fb4-9582-4986-8999-f84ff5395978",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T14:33:37.838005Z",
+  "branch": "fix/upload-e2e-duplicate-rows",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "b9c3c2c3658a",
+  "checkpoint_transcript_start": 915,
+  "transcript_lines_at_start": 915,
+  "token_usage": {
+    "input_tokens": 54,
+    "cache_creation_tokens": 259231,
+    "cache_read_tokens": 8514500,
+    "output_tokens": 5409,
+    "api_call_count": 35
+  },
+  "session_metrics": {
+    "turn_count": 29
+  },
+  "summary": {
+    "intent": "Fix a bug where uploaded files weren't appearing immediately in the file browser, then analyze and plan optimization of the sequential per-file upload pipeline to use parallel batch processing.",
+    "outcome": "PR #413 created fixing the upload sync trigger and E2E locator issue; Phase 37 added to roadmap for parallel batch upload pipeline; a CodeRabbit review comment about async void callback was also resolved.",
+    "learnings": {
+      "repo": [
+        "Upload flow in useDropUpload.ts is a sequential for...of loop — each file goes through the full encrypt→IPFS pin→FileMetadata IPNS publish→folder update cycle before the next starts.",
+        "The SDK's client.uploadFile() does two concurrent operations at the end of each file: publish file IPNS record + updateFolderMetadataAndPublish. The folder IPNS is published N times for N files, but only the last publish matters.",
+        "FilePointer indirection chain: FilePointer in folder → IPNS name → resolves to IPFS CID of FileMetadata → contains IPFS CID of encrypted content.",
+        "The batch IPNS publish API endpoint already supports arrays; the SDK passes [oneRecord] each time today — batching is an SDK-side change, not an infra change.",
+        "IPFS infra has been load-tested at 200 concurrent users, so the team is less constrained by infra limits.",
+        "Per-file progress tracking (Phase 36) already supports independent progress updates, making the UI side of parallel uploads already handled."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Sequential for...of loop with await on each client.uploadFile() — no parallelism, N IPNS publishes for N files."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/FileBrowser.tsx",
+          "finding": "onUploadComplete needed to be wired to actions.handleSync for immediate IPNS refresh after upload. Also had an async callback passed where void return was expected — fixed to avoid unhandled rejections."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "uploadFile uses Promise.allSettled to concurrently publish file IPNS and update folder metadata, but is called sequentially per file from the web app."
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "finding": "Low-level uploadFile handles encrypt+IPFS upload+FileMetadata creation but not folder updates — folder update happens in the SDK client layer above."
+        }
+      ],
+      "workflow": [
+        "E2E locators need to exclude upload progress rows using :not(.upload-inline-row) when strict mode is active.",
+        "Dev server task kill notifications (exit code 143) from replaced servers are noise — no action needed.",
+        "CodeRabbit flagged async void callback anti-pattern — worth watching for this in event handler wiring."
+      ]
+    },
+    "friction": [
+      "Background dev server task kill notifications created noise (exit 143 from port 5174 after restart on 5173).",
+      "Needed multiple rounds of correction to accurately describe the IPFS/IPNS data chain — FileMetadata is an IPFS record pointed to by an IPNS name, not an IPNS record itself."
+    ],
+    "open_items": [
+      "Phase 37: Implement parallel batch upload pipeline — SDK needs uploadFiles (plural) method with parallel encrypt+pin, single folder metadata update, and batched IPNS publish. Web app useDropUpload to call the new batch method.",
+      "Per-file IPNS batch publish API call: SDK currently passes [oneRecord] arrays; needs to pass all N file records in a single call.",
+      "Wall-clock speedup analysis for parallel encrypt+upload not yet measured — expected to be significant for multi-file drops."
+    ]
+  }
+}
