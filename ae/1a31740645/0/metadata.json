@@ -1,0 +1,63 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ae1a31740645",
+  "session_id": "904e67e7-96dc-47f0-bf8f-fb6c3269412e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T12:22:23.11062Z",
+  "branch": "fix/release-gate-e2e-verification",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/release-gate.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b0e921e4a3e1",
+  "checkpoint_transcript_start": 275,
+  "transcript_lines_at_start": 275,
+  "token_usage": {
+    "input_tokens": 15,
+    "cache_creation_tokens": 9072,
+    "cache_read_tokens": 1936157,
+    "output_tokens": 3079,
+    "api_call_count": 13
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Fix a GitHub Actions release-gate workflow bug where polling incorrectly picks an in-progress rerun over a completed run, then address CodeRabbit review feedback on the same PR.",
+    "outcome": "Applied sort_by fix to prefer completed runs for both web and desktop polling, resolved 2 PR threads, pushed commit 243f6e4, then applied 3 additional CodeRabbit fixes to release-gate.yml in a follow-up commit.",
+    "learnings": {
+      "repo": [
+        "cipher-box uses a release-gate.yml workflow with separate web and desktop polling logic that share the same rerun-ordering bug pattern",
+        "PR reviews come from both GitHub Copilot and CodeRabbit; CodeRabbit may produce differently formatted output"
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "finding": "Polling logic must use sort_by(.status == \"completed\" | not) to prefer completed runs over in-progress reruns — applies to both web and desktop polling sections"
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "finding": "DESKTOP_SUCCESS vs DESKTOP_TOTAL comparison had a separate issue flagged by CodeRabbit requiring a fix alongside the sort_by changes"
+        }
+      ],
+      "workflow": [
+        "Reply-and-resolve PR threads via Bash tooling in a single session to keep review state clean",
+        "CodeRabbit reviews may arrive after Copilot and require a separate fix pass; batch all actionable items into one commit"
+      ]
+    },
+    "friction": [
+      "CodeRabbit review formatting differed from expected format, requiring the user to flag it explicitly before processing"
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T12:22:11.04637Z",
+    "agent_lines": 12,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 12,
+    "agent_percentage": 100
+  }
+}
