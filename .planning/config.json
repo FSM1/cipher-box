@@ -16,7 +16,7 @@
   },
   "git": {
     "branching_strategy": "phase",
-    "phase_branch_template": "phase-{phase}-{slug}",
-    "milestone_branch_template": "{milestone}-{slug}"
+    "phase_branch_template": "feat/{slug}",
+    "milestone_branch_template": "feat/{milestone}-{slug}"
   }
 }

@@ -1,7 +1,24 @@
-import { type DragEvent, type MouseEvent } from 'react';
+import { type DragEvent, type MouseEvent, useRef } from 'react';
 import type { FolderChild } from '@cipherbox/core';
+import { useUploadStore } from '../../stores/upload.store';
+import type { PerFileUpload } from '../../stores/upload.store';
 import { FileListItem, type DragItem } from './FileListItem';
+import { UploadListItem } from './UploadListItem';
 import { ParentDirRow } from './ParentDirRow';
+
+/**
+ * Virtual entry representing an in-progress upload in the sorted file list.
+ * The `_uploading` flag discriminates it from real FolderChild items.
+ */
+type UploadVirtualEntry = {
+  type: 'file';
+  id: string;
+  name: string;
+  fileMetaIpnsName: '';
+  createdAt: number;
+  modifiedAt: number;
+  _uploading: true;
+};
 
 type FileListProps = {
   /** Items to display (files and folders) */
@@ -33,6 +50,8 @@ type FileListProps = {
   onDropOnFolder?: (items: DragItem[], sourceParentId: string, destFolderId: string) => void;
   /** Callback when external files are dropped onto a folder */
   onExternalFileDrop?: (files: File[], destFolderId: string) => void;
+  /** Callback to re-trigger upload for a failed file (retry button in UploadListItem) */
+  onRetryUpload?: (file: File) => void;
 };
 
 /**
@@ -89,8 +108,55 @@ export function FileList({
   onDragStart,
   onDropOnFolder,
   onExternalFileDrop,
+  onRetryUpload,
 }: FileListProps) {
-  const sortedItems = sortItems(items);
+  // Subscribe to upload entries for this folder only (IDs + status, not progress).
+  // Progress updates re-render individual UploadListItem rows via their own fine-grained selectors.
+  // Custom equality via ref prevents re-renders on every progress tick.
+  type UploadEntry = { id: string; filename: string; status: PerFileUpload['status'] };
+  const prevEntriesRef = useRef<UploadEntry[]>([]);
+  const uploadEntries = useUploadStore((s) => {
+    const entries: UploadEntry[] = [];
+    for (const f of s.files.values()) {
+      if (f.targetFolderId === parentId) {
+        entries.push({ id: f.id, filename: f.filename, status: f.status });
+      }
+    }
+    const prev = prevEntriesRef.current;
+    if (
+      prev.length === entries.length &&
+      prev.every((p, i) => p.id === entries[i].id && p.status === entries[i].status)
+    ) {
+      return prev;
+    }
+    prevEntriesRef.current = entries;
+    return entries;
+  });
+
+  // Create virtual entries for sorting alongside real items
+  const uploadVirtualEntries: UploadVirtualEntry[] = uploadEntries.map((f) => ({
+    type: 'file' as const,
+    id: f.id,
+    name: f.filename,
+    fileMetaIpnsName: '' as const,
+    createdAt: 0,
+    modifiedAt: 0,
+    _uploading: true as const,
+  }));
+
+  // Filter out real files that match completing uploads to prevent duplicates (Pitfall 5)
+  const completingNames = new Set(
+    uploadEntries.filter((e) => e.status === 'complete').map((e) => e.filename)
+  );
+  const filteredItems = items.filter(
+    (item) => !(item.type === 'file' && completingNames.has(item.name))
+  );
+
+  // Merge and sort all items together
+  const allItems = [...filteredItems, ...uploadVirtualEntries];
+  const sortedItems = sortItems(allItems as FolderChild[]);
+
+  // Select-all uses real item count only (upload rows are not selectable)
   const allSelected = items.length > 0 && selectedIds.size === items.length;
 
   return (
@@ -129,27 +195,32 @@ export function FileList({
       {/* Item rows */}
       <div className="file-list-body" role="rowgroup">
         {showParentRow && onNavigateUp && <ParentDirRow onActivate={onNavigateUp} />}
-        {sortedItems.map((item) => (
-          <FileListItem
-            key={item.id}
-            item={item}
-            isSelected={selectedIds.has(item.id)}
-            parentId={parentId}
-            selectedIds={selectedIds}
-            allItems={items}
-            folderKey={folderKey}
-            onSelect={onSelect}
-            onNavigate={onNavigate}
-            onContextMenu={onContextMenu}
-            onDragStart={onDragStart}
-            onDrop={
-              onDropOnFolder && item.type === 'folder'
-                ? (dragItems, sourceParentId) => onDropOnFolder(dragItems, sourceParentId, item.id)
-                : undefined
-            }
-            onExternalFileDrop={item.type === 'folder' ? onExternalFileDrop : undefined}
-          />
-        ))}
+        {sortedItems.map((item) =>
+          '_uploading' in item ? (
+            <UploadListItem key={item.id} fileId={item.id} onRetry={onRetryUpload} />
+          ) : (
+            <FileListItem
+              key={item.id}
+              item={item}
+              isSelected={selectedIds.has(item.id)}
+              parentId={parentId}
+              selectedIds={selectedIds}
+              allItems={items}
+              folderKey={folderKey}
+              onSelect={onSelect}
+              onNavigate={onNavigate}
+              onContextMenu={onContextMenu}
+              onDragStart={onDragStart}
+              onDrop={
+                onDropOnFolder && item.type === 'folder'
+                  ? (dragItems, sourceParentId) =>
+                      onDropOnFolder(dragItems, sourceParentId, item.id)
+                  : undefined
+              }
+              onExternalFileDrop={item.type === 'folder' ? onExternalFileDrop : undefined}
+            />
+          )
+        )}
       </div>
     </div>
   );
