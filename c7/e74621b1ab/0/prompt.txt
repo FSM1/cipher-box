@@ -1,0 +1,5 @@
+is it realistic to add some test coverage to @apps/desktop/src-tauri/src/commands/auth.rs and generally improve patch coverage for this PR https://github.com/FSM1/cipher-box/pull/424#issuecomment-4162986172
+
+---
+
+yeah please add the apply versioning test
