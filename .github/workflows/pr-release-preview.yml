@@ -22,6 +22,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install script dependencies
+        run: npm install --no-save @actions/core @actions/github
+
       - name: Analyze PR commits and apply release labels
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

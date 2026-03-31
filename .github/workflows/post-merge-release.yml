@@ -38,6 +38,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install script dependencies
+        run: npm install --no-save @actions/core @actions/github
+
       - name: Compute and inject release targets
         id: inject
         env:
