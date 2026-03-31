@@ -5,8 +5,9 @@
 ## Changes Made
 
 ### apps/web/src/components/settings/VaultTab.tsx (NEW)
+
 - Created VaultTab component with four settings sections:
-  1. **Recycle Bin**: number input for retention period (1-365 days)
+  1. **Recycle Bin**: number input for retention period (0-365 days; 0 disables / immediate purge)
   2. **Delete Behavior**: radio group with 'bin' (soft delete) and 'permanent' options
   3. **File Versioning**: number inputs for max versions per file (0-100) and version cooldown (0-1440 minutes)
   4. **Actions**: [SAVE SETTINGS] and [RESET TO DEFAULTS] buttons
@@ -18,6 +19,7 @@
 - Accessibility: proper ARIA roles on radio group, labels linked via htmlFor/id, focus-visible styles
 
 ### apps/web/src/routes/SettingsPage.tsx
+
 - Added `VaultTab` import
 - Extended `SettingsTabId` type with `'vault'`
 - Extended `TAB_IDS` array with `'vault'`
@@ -25,6 +27,7 @@
 - Added vault tab panel with lazy rendering pattern
 
 ### apps/web/src/App.css
+
 - Added `.vault-settings` container styles
 - Added `.vault-settings-section` with bottom border separator
 - Added `.vault-settings-label`, `.vault-settings-input` matching terminal aesthetic
@@ -35,6 +38,7 @@
 - All interactive elements have `:focus-visible` styles per CLAUDE.md guidelines
 
 ## Verification
+
 - `pnpm typecheck` passes with zero errors
 - Settings page has four tabs: LINKED METHODS, SECURITY, STORAGE, VAULT
 - Keyboard navigation works across all four tabs (Arrow keys, Home/End)

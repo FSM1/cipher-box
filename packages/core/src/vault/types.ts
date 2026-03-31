@@ -73,7 +73,7 @@ export type ByoIpfsConfig = {
 export type VaultSettings = {
   /** Schema version for future migrations */
   version: 'v1';
-  /** Recycle bin retention period in days (default: 30, range: 1-365) */
+  /** Recycle bin retention period in days (default: 30, range: 0-365; 0 disables / immediate purge) */
   recycleBinRetentionDays: number;
   /** Delete behavior: 'bin' = soft delete to recycle bin, 'permanent' = immediate hard delete */
   deleteBehavior: 'bin' | 'permanent';
