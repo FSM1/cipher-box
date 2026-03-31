@@ -89,11 +89,14 @@ None. Scanned all phase-modified files for TODOs, FIXMEs, placeholders, empty im
 
 ### Human Verification Required
 
-None. All observable truths for this phase are verifiable programmatically (compilation, unit tests, source presence, grep checks). Runtime integration (actual IPNS resolve during login with a real vault settings entry) is out of scope for static verification and covered by the graceful fallback path.
+Two runtime checks remain outstanding (not coverable by static verification):
+
+1. **FUSE mount respects custom vault settings** — verify that user-configured values (e.g., `maxVersionsPerFile=5`) propagate to the mounted filesystem and take effect on file writes.
+2. **Defaults used when no IPNS entry exists** — verify that a fresh user (no vault settings published) gets `default_vault_settings()` and mounts successfully.
 
 ### Gaps Summary
 
-No gaps. All 9 truths verified, all 14 artifacts confirmed at all three levels (exist, substantive, wired), all 6 key links confirmed wired, all spot-checks pass.
+All 9 truths verified, all 14 artifacts confirmed, all 6 key links wired, all spot-checks pass. Two runtime integration checks (listed above) are pending manual verification.
 
 ---
 

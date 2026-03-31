@@ -119,38 +119,40 @@ pub fn apply_versioning(
         old_file_cid.as_ref().is_some_and(|c| !c.is_empty())
     };
 
-    if !should_version {
+    let mut versions = if should_version {
+        match old_file_cid {
+            Some(ref old_c) if !old_c.is_empty() => {
+                let version_entry = cipherbox_core::folder::VersionEntry {
+                    cid: old_c.clone(),
+                    file_key_encrypted: old_encrypted_key.to_string(),
+                    file_iv: old_iv.to_string(),
+                    size: old_size,
+                    timestamp: now_ms,
+                    encryption_mode: old_mode.to_string(),
+                };
+                let mut versions = vec![version_entry];
+                versions.extend(existing_versions.unwrap_or_default());
+                log::debug!("Created version entry for ino {} (total versions: {})", ino, versions.len());
+                versions
+            }
+            _ => existing_versions.unwrap_or_default(),
+        }
+    } else {
         if existing_versions.is_some() {
             log::debug!("Version cooldown active for ino {} -- skipping version creation", ino);
         }
-        return (existing_versions, vec![]);
-    }
+        existing_versions.unwrap_or_default()
+    };
 
-    match old_file_cid {
-        Some(ref old_c) if !old_c.is_empty() => {
-            let version_entry = cipherbox_core::folder::VersionEntry {
-                cid: old_c.clone(),
-                file_key_encrypted: old_encrypted_key.to_string(),
-                file_iv: old_iv.to_string(),
-                size: old_size,
-                timestamp: now_ms,
-                encryption_mode: old_mode.to_string(),
-            };
-            let mut versions = vec![version_entry];
-            versions.extend(existing_versions.unwrap_or_default());
-            let pruned: Vec<String> = if versions.len() > max_versions {
-                versions.split_off(max_versions).into_iter().map(|v| v.cid).collect()
-            } else {
-                vec![]
-            };
-            if !pruned.is_empty() {
-                log::info!("Pruned {} version(s) for ino {} (exceeded max {})", pruned.len(), ino, max_versions);
-            }
-            log::debug!("Created version entry for ino {} (total versions: {})", ino, versions.len());
-            (Some(versions), pruned)
-        }
-        _ => (existing_versions, vec![]),
+    let pruned: Vec<String> = if versions.len() > max_versions {
+        versions.split_off(max_versions).into_iter().map(|v| v.cid).collect()
+    } else {
+        vec![]
+    };
+    if !pruned.is_empty() {
+        log::info!("Pruned {} version(s) for ino {} (exceeded max {})", pruned.len(), ino, max_versions);
     }
+    (if versions.is_empty() { None } else { Some(versions) }, pruned)
 }
 
 #[cfg(test)]
@@ -288,10 +290,32 @@ mod tests {
             1000, 0, 0, 1,
         );
         // max_versions=0: the new entry is created then immediately pruned
-        let v = versions.unwrap();
-        assert!(v.is_empty());
+        assert!(versions.is_none());
         assert_eq!(pruned.len(), 1);
         assert_eq!(pruned[0], "QmOldCid");
+    }
+
+    #[test]
+    fn cooldown_still_prunes_excess_versions() {
+        // Simulate max_versions lowered from 5 to 2 — existing history has 4 entries
+        let existing: Vec<VersionEntry> = (0..4)
+            .map(|i| make_version(&format!("QmV{}", i), 1000 - i * 100))
+            .collect();
+        let (versions, pruned) = apply_versioning(
+            Some(existing),
+            &Some("QmOldCid".to_string()),
+            "k", "iv", 100, "aes-256-gcm",
+            1001,  // only 1ms since last version
+            2,     // max 2 versions (lowered)
+            500,   // cooldown active — no new version created
+            1,
+        );
+        // Should prune excess even though no new version was added
+        let v = versions.unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(pruned.len(), 2);
+        assert_eq!(pruned[0], "QmV2");
+        assert_eq!(pruned[1], "QmV3");
     }
 }
 
