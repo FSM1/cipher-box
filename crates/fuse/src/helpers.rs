@@ -153,6 +153,148 @@ pub fn apply_versioning(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cipherbox_core::folder::VersionEntry;
+
+    fn make_version(cid: &str, timestamp: u64) -> VersionEntry {
+        VersionEntry {
+            cid: cid.to_string(),
+            file_key_encrypted: "enc_key".to_string(),
+            file_iv: "iv".to_string(),
+            size: 1024,
+            timestamp,
+            encryption_mode: "aes-256-gcm".to_string(),
+        }
+    }
+
+    #[test]
+    fn no_old_cid_skips_versioning() {
+        let (versions, pruned) = apply_versioning(
+            None, &None, "k", "iv", 100, "aes-256-gcm", 1000, 10, 0, 1,
+        );
+        assert!(versions.is_none());
+        assert!(pruned.is_empty());
+    }
+
+    #[test]
+    fn empty_old_cid_skips_versioning() {
+        let (versions, pruned) = apply_versioning(
+            None, &Some(String::new()), "k", "iv", 100, "aes-256-gcm", 1000, 10, 0, 1,
+        );
+        assert!(versions.is_none());
+        assert!(pruned.is_empty());
+    }
+
+    #[test]
+    fn first_write_creates_version() {
+        let (versions, pruned) = apply_versioning(
+            None,
+            &Some("QmOldCid".to_string()),
+            "enc_key", "iv", 2048, "aes-256-gcm",
+            1000, 10, 0, 1,
+        );
+        let v = versions.unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].cid, "QmOldCid");
+        assert_eq!(v[0].size, 2048);
+        assert_eq!(v[0].timestamp, 1000);
+        assert!(pruned.is_empty());
+    }
+
+    #[test]
+    fn cooldown_active_skips_versioning() {
+        let existing = vec![make_version("QmV1", 900)];
+        let (versions, pruned) = apply_versioning(
+            Some(existing),
+            &Some("QmOldCid".to_string()),
+            "k", "iv", 100, "aes-256-gcm",
+            999,   // only 99ms since last version
+            10,
+            500,   // 500ms cooldown
+            1,
+        );
+        // Should return existing versions unchanged
+        let v = versions.unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].cid, "QmV1");
+        assert!(pruned.is_empty());
+    }
+
+    #[test]
+    fn cooldown_expired_creates_version() {
+        let existing = vec![make_version("QmV1", 500)];
+        let (versions, pruned) = apply_versioning(
+            Some(existing),
+            &Some("QmOldCid".to_string()),
+            "k", "iv", 100, "aes-256-gcm",
+            1001,  // 501ms since last version
+            10,
+            500,   // 500ms cooldown
+            1,
+        );
+        let v = versions.unwrap();
+        assert_eq!(v.len(), 2);
+        // Newest first
+        assert_eq!(v[0].cid, "QmOldCid");
+        assert_eq!(v[1].cid, "QmV1");
+        assert!(pruned.is_empty());
+    }
+
+    #[test]
+    fn exceeding_max_versions_prunes_oldest() {
+        let existing: Vec<VersionEntry> = (0..3)
+            .map(|i| make_version(&format!("QmV{}", i), 1000 - i * 100))
+            .collect();
+        let (versions, pruned) = apply_versioning(
+            Some(existing),
+            &Some("QmNew".to_string()),
+            "k", "iv", 100, "aes-256-gcm",
+            5000,  // well past cooldown
+            3,     // max 3 versions
+            0,     // no cooldown
+            1,
+        );
+        let v = versions.unwrap();
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0].cid, "QmNew");
+        // Pruned the oldest one
+        assert_eq!(pruned.len(), 1);
+        assert_eq!(pruned[0], "QmV2");
+    }
+
+    #[test]
+    fn empty_existing_versions_with_old_cid_creates_version() {
+        // Empty vec (not None) — file has version array but no entries yet
+        let (versions, pruned) = apply_versioning(
+            Some(vec![]),
+            &Some("QmOldCid".to_string()),
+            "k", "iv", 100, "aes-256-gcm",
+            1000, 10, 0, 1,
+        );
+        let v = versions.unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].cid, "QmOldCid");
+        assert!(pruned.is_empty());
+    }
+
+    #[test]
+    fn max_versions_zero_prunes_all() {
+        let (versions, pruned) = apply_versioning(
+            None,
+            &Some("QmOldCid".to_string()),
+            "k", "iv", 100, "aes-256-gcm",
+            1000, 0, 0, 1,
+        );
+        // max_versions=0: the new entry is created then immediately pruned
+        let v = versions.unwrap();
+        assert!(v.is_empty());
+        assert_eq!(pruned.len(), 1);
+        assert_eq!(pruned[0], "QmOldCid");
+    }
+}
+
 /// Convert VersionEntry list to VersionCidEntry list for bin entries.
 /// Filters out entries with empty CIDs and returns None if the result is empty.
 pub fn versions_to_bin_entries(
