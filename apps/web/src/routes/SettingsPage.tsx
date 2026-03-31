@@ -5,14 +5,15 @@ import { AppShell } from '../components/layout';
 import { LinkedMethods } from '../components/auth/LinkedMethods';
 import { SecurityTab } from '../components/mfa/SecurityTab';
 import { StorageTab } from '../components/settings/StorageTab';
+import { VaultTab } from '../components/settings/VaultTab';
 import { VaultExport } from '../components/vault/VaultExport';
 import { useAuth } from '../hooks/useAuth';
 import { useAuthStore } from '../stores/auth.store';
 import { useMfaStore } from '../stores/mfa.store';
 
-type SettingsTabId = 'linked-methods' | 'security' | 'storage';
+type SettingsTabId = 'linked-methods' | 'security' | 'storage' | 'vault';
 
-const TAB_IDS: SettingsTabId[] = ['linked-methods', 'security', 'storage'];
+const TAB_IDS: SettingsTabId[] = ['linked-methods', 'security', 'storage', 'vault'];
 
 function handleTabKeyDown(
   e: KeyboardEvent,
@@ -144,6 +145,19 @@ export function SettingsPage() {
             >
               STORAGE
             </button>
+            <button
+              type="button"
+              role="tab"
+              id="tab-vault"
+              aria-selected={activeTab === 'vault'}
+              aria-controls="panel-vault"
+              tabIndex={activeTab === 'vault' ? 0 : -1}
+              className={`settings-tab ${activeTab === 'vault' ? 'active' : ''}`}
+              onClick={() => setActiveTab('vault')}
+              onKeyDown={(e) => handleTabKeyDown(e, activeTab, setActiveTab)}
+            >
+              VAULT
+            </button>
           </div>
 
           {/* Tab panels */}
@@ -172,6 +186,15 @@ export function SettingsPage() {
             hidden={activeTab !== 'storage'}
           >
             {activeTab === 'storage' && <StorageTab />}
+          </div>
+
+          <div
+            role="tabpanel"
+            id="panel-vault"
+            aria-labelledby="tab-vault"
+            hidden={activeTab !== 'vault'}
+          >
+            {activeTab === 'vault' && <VaultTab />}
           </div>
         </section>
 
