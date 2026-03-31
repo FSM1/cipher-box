@@ -10,6 +10,34 @@ import { MAX_FOLDER_DEPTH, getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
 
 /**
+ * Delete an item using the user's preferred delete behavior.
+ * 'permanent' skips the bin; 'bin' soft-deletes with fallback to hard delete
+ * when the bin is not loaded.
+ */
+async function deleteWithBehavior(
+  client: ReturnType<typeof getSdkClient>,
+  ipnsName: string,
+  itemId: string,
+  parentPath: string,
+): Promise<void> {
+  const { deleteBehavior } = useVaultSettingsStore.getState().settings;
+
+  if (deleteBehavior === 'permanent') {
+    await client.deleteItem(ipnsName, itemId);
+  } else {
+    try {
+      await client.deleteToBin(ipnsName, itemId, parentPath);
+    } catch (binErr) {
+      if (binErr instanceof BinNotLoadedError) {
+        await client.deleteItem(ipnsName, itemId);
+      } else {
+        throw binErr;
+      }
+    }
+  }
+}
+
+/**
  * Build a breadcrumb-style path string for a folder by walking up the tree.
  * e.g., "My Vault / Documents / Reports"
  */
@@ -319,23 +347,8 @@ export function useFolderMutations() {
 
         const client = getSdkClient();
         const parentPath = buildFolderPath(parentId);
-        const { deleteBehavior } = useVaultSettingsStore.getState().settings;
 
-        if (deleteBehavior === 'permanent') {
-          // User prefers permanent deletion -- skip bin entirely
-          await client.deleteItem(parentFolder.ipnsName, itemId);
-        } else {
-          // Default: soft-delete to bin, fall back to hard delete if bin not loaded
-          try {
-            await client.deleteToBin(parentFolder.ipnsName, itemId, parentPath);
-          } catch (binErr) {
-            if (binErr instanceof BinNotLoadedError) {
-              await client.deleteItem(parentFolder.ipnsName, itemId);
-            } else {
-              throw binErr;
-            }
-          }
-        }
+        await deleteWithBehavior(client, parentFolder.ipnsName, itemId, parentPath);
 
         // SDK emits folder:updated -> store subscription updates children
         // Remove folder subtree from store if deleting a folder
@@ -405,28 +418,13 @@ export function useFolderMutations() {
         // Delete each item via SDK (sequentially to maintain consistency)
         const client = getSdkClient();
         const parentPath = buildFolderPath(parentId);
-        const { deleteBehavior } = useVaultSettingsStore.getState().settings;
 
         for (const item of items) {
           // Re-register parent between deletes since SDK updates its internal state
           const freshParent = getParentFolder(parentId);
           if (freshParent) ensureFolderRegistered(freshParent);
 
-          if (deleteBehavior === 'permanent') {
-            // User prefers permanent deletion -- skip bin entirely
-            await client.deleteItem(parentFolder.ipnsName, item.id);
-          } else {
-            // Default: soft-delete to bin, fall back to hard delete
-            try {
-              await client.deleteToBin(parentFolder.ipnsName, item.id, parentPath);
-            } catch (binErr) {
-              if (binErr instanceof BinNotLoadedError) {
-                await client.deleteItem(parentFolder.ipnsName, item.id);
-              } else {
-                throw binErr;
-              }
-            }
-          }
+          await deleteWithBehavior(client, parentFolder.ipnsName, item.id, parentPath);
         }
 
         // Remove nested folders from store

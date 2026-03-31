@@ -297,8 +297,9 @@ export async function updateFileMetadata(params: {
     const allVersions = [versionEntry, ...(params.currentMetadata.versions ?? [])];
 
     // Prune excess versions beyond limit
-    versions = allVersions.slice(0, getMaxVersionsPerFile());
-    prunedCids = allVersions.slice(getMaxVersionsPerFile()).map((v) => v.cid);
+    const maxVersions = getMaxVersionsPerFile();
+    versions = allVersions.slice(0, maxVersions);
+    prunedCids = allVersions.slice(maxVersions).map((v) => v.cid);
   } else {
     // Preserve existing versions as-is
     versions = params.currentMetadata.versions;
@@ -392,8 +393,9 @@ export async function restoreVersion(params: {
   const newVersions = [currentAsVersion, ...remainingVersions];
 
   // Prune if exceeds max
-  const prunedVersions = newVersions.slice(0, getMaxVersionsPerFile());
-  const prunedCids = newVersions.slice(getMaxVersionsPerFile()).map((v) => v.cid);
+  const maxVer = getMaxVersionsPerFile();
+  const prunedVersions = newVersions.slice(0, maxVer);
+  const prunedCids = newVersions.slice(maxVer).map((v) => v.cid);
 
   // Build updated metadata with restored version's data as current
   const updatedMetadata: FileMetadata = {
