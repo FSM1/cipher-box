@@ -240,4 +240,39 @@ mod tests {
         let result = derive_file_ipns_keypair(&test_private_key(), "123456789");
         assert!(matches!(result, Err(CryptoError::InvalidFileId)));
     }
+
+    #[test]
+    fn derive_vault_settings_returns_32_byte_keys() {
+        let (priv_key, pub_key, name) =
+            derive_vault_settings_ipns_keypair(&test_private_key()).unwrap();
+        assert_eq!(priv_key.len(), 32);
+        assert_eq!(pub_key.len(), 32);
+        assert!(name.starts_with('k'));
+    }
+
+    #[test]
+    fn derive_vault_settings_is_deterministic() {
+        let key = test_private_key();
+        let (priv1, pub1, name1) = derive_vault_settings_ipns_keypair(&key).unwrap();
+        let (priv2, pub2, name2) = derive_vault_settings_ipns_keypair(&key).unwrap();
+        assert_eq!(*priv1, *priv2);
+        assert_eq!(pub1, pub2);
+        assert_eq!(name1, name2);
+    }
+
+    #[test]
+    fn vault_settings_differs_from_other_derivations() {
+        let key = test_private_key();
+        let (_, settings_pub, settings_name) =
+            derive_vault_settings_ipns_keypair(&key).unwrap();
+        let (_, vault_pub, vault_name) = derive_vault_ipns_keypair(&key).unwrap();
+        let (_, vault_key_pub, vault_key_name) = derive_vault_key_ipns_keypair(&key).unwrap();
+        let (_, bin_pub, bin_name) = derive_bin_ipns_keypair(&key).unwrap();
+        assert_ne!(settings_pub, vault_pub);
+        assert_ne!(settings_name, vault_name);
+        assert_ne!(settings_pub, vault_key_pub);
+        assert_ne!(settings_name, vault_key_name);
+        assert_ne!(settings_pub, bin_pub);
+        assert_ne!(settings_name, bin_name);
+    }
 }
