@@ -454,3 +454,58 @@ export async function emptyBin(params: {
     },
   };
 }
+
+/**
+ * Purge expired bin entries based on retention period.
+ *
+ * Filters entries past their retention, cleans up CIDs (best-effort),
+ * and publishes updated bin metadata in a single IPNS publish.
+ *
+ * @returns Number of purged entries and updated bin state
+ */
+export async function purgeExpiredEntries(params: {
+  binState: BinState;
+  retentionDays: number;
+  binCtx: BinOperationContext;
+}): Promise<{ purgedCount: number; updatedState: BinState }> {
+  const retentionMs = params.retentionDays * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  const expired = params.binState.entries.filter((e) => now - e.deletedAt > retentionMs);
+  if (expired.length === 0) {
+    return { purgedCount: 0, updatedState: params.binState };
+  }
+
+  // Best-effort CID cleanup for expired entries
+  for (const entry of expired) {
+    if (entry.contentCid) {
+      try {
+        await sdkCore.unpinFromIpfs(params.binCtx.ctx, entry.contentCid);
+      } catch {
+        // Best-effort: CID cleanup failures are non-blocking
+      }
+    }
+  }
+
+  // Remove expired entries and publish updated bin
+  const expiredIds = new Set(expired.map((e) => e.id));
+  const remainingEntries = params.binState.entries.filter((e) => !expiredIds.has(e.id));
+  const newBinSeq = params.binState.sequenceNumber + 1;
+
+  const metadata: RecycleBinMetadata = {
+    version: BIN_METADATA_VERSION,
+    sequenceNumber: newBinSeq,
+    entries: remainingEntries,
+  };
+
+  await saveBinMetadata({ metadata, binCtx: params.binCtx });
+
+  return {
+    purgedCount: expired.length,
+    updatedState: {
+      entries: remainingEntries,
+      sequenceNumber: newBinSeq,
+      ipnsName: params.binState.ipnsName,
+    },
+  };
+}
