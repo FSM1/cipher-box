@@ -1,0 +1,1 @@
+I do find it a bit strange that the mac/linux code for this is unified, whereas the windows version required separate changes - this feels like a leaky abstraction as the versioning settings should be applied to all desktop apps equally.
