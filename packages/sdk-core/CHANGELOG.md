@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.34.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.33.0...@cipherbox/sdk-core-v0.34.0) (2026-03-31)
+
+
+### Features
+
+* **web:** user-configurable vault parameters ([#423](https://github.com/FSM1/cipher-box/issues/423)) ([fa7b443](https://github.com/FSM1/cipher-box/commit/fa7b44399f9c688783b995a2a716b6525eabeefe))
+
 ## [0.33.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.32.0...@cipherbox/sdk-core-v0.33.0) (2026-03-30)
 
 
