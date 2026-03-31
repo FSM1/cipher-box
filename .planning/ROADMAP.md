@@ -551,7 +551,12 @@ Plans:
 **Requirements**: None (follow-up to Phase 39)
 **Depends on:** Phase 39
 
-Plans: _not yet planned_
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 40-01-PLAN.md — HKDF vault settings derivation + VaultSettings type and validation in Rust crates
+- [ ] 40-02-PLAN.md — Load settings in desktop auth flow and wire into FUSE operations
 
 ---
 
