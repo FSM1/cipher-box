@@ -47,5 +47,12 @@ jobs:
           # resolves to the desktop release (marked latest by desktop-release.yml)
           ROOT_TAG="${{ steps.release.outputs['tag_name'] }}"
           if [ -n "$ROOT_TAG" ]; then
-            gh release edit "$ROOT_TAG" --repo "${{ github.repository }}" --latest=false || true
+            for attempt in 1 2 3; do
+              if gh release edit "$ROOT_TAG" --repo "${{ github.repository }}" --latest=false; then
+                exit 0
+              fi
+              sleep $((attempt * 5))
+            done
+            echo "::error::Failed to clear latest flag for $ROOT_TAG after 3 attempts"
+            exit 1
           fi

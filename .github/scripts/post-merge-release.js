@@ -103,10 +103,7 @@ function isHigherBump(base, existing, candidate) {
  * @returns {number}
  */
 function versionDelta(from, to) {
-  for (let i = 0; i < 3; i++) {
-    if (to[i] !== from[i]) return to[i] - from[i];
-  }
-  return 0;
+  return (to[0] - from[0]) * 10000 + (to[1] - from[1]) * 100 + (to[2] - from[2]);
 }
 
 /**

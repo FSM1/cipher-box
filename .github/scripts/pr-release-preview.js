@@ -387,9 +387,13 @@ async function run() {
         const existing = packageBumps.get(dependent);
         if (!existing || BUMP_LEVELS[cascadeBump] > BUMP_LEVELS[existing.bump]) {
           const wasNew = !existing;
+          const cascadeLabel = cascadeBump === 'minor' ? 'feat' : 'fix';
           packageBumps.set(dependent, {
             bump: cascadeBump,
-            label: existing?.label || bumpInfo.label,
+            label:
+              existing?.label && BUMP_LEVELS[existing.bump] >= BUMP_LEVELS[cascadeBump]
+                ? existing.label
+                : cascadeLabel,
             source: `Cascade (${PATH_TO_LABEL[pkg] || pkg} ${bumpInfo.bump})`,
           });
           if (wasNew || BUMP_LEVELS[cascadeBump] > BUMP_LEVELS[existing?.bump ?? 'none']) {
