@@ -494,15 +494,27 @@ async function run() {
   const labelsToAdd = [];
   const labelsToRemove = [];
 
+  // Label type → bump level for comparison
+  const LABEL_BUMP_LEVEL = { fix: 1, perf: 1, refactor: 1, feat: 2, breaking: 3 };
+
   for (const [component, computedLabel] of computedLabels.entries()) {
     const existing = existingByComponent.get(component);
     if (existing && existing !== computedLabel) {
-      // Manual override — keep the existing label, don't add computed one
-      manualOverrides.push({
-        component,
-        existing,
-        computed: computedLabel,
-      });
+      const existingLevel = LABEL_BUMP_LEVEL[existing.split(':')[2]] ?? 0;
+      const computedLevel = LABEL_BUMP_LEVEL[computedLabel.split(':')[2]] ?? 0;
+
+      if (computedLevel > existingLevel) {
+        // Computed bump is higher — replace existing label (e.g. fix→feat after force-push)
+        labelsToRemove.push(existing);
+        labelsToAdd.push(computedLabel);
+      } else {
+        // Existing label is higher or equal — treat as manual override
+        manualOverrides.push({
+          component,
+          existing,
+          computed: computedLabel,
+        });
+      }
     } else if (!existing) {
       labelsToAdd.push(computedLabel);
     }
