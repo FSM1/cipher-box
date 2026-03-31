@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Milestone complete
-last_updated: "2026-03-31T21:08:27.698Z"
+last_updated: '2026-03-31T21:16:05.883Z'
 last_activity: 2026-03-31
 progress:
-  total_phases: 26
+  total_phases: 25
   completed_phases: 23
-  total_plans: 101
-  completed_plans: 91
+  total_plans: 96
+  completed_plans: 90
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 39 — user-configurable-vault-parameters
+**Current focus:** Phase 41 — package-and-app-versioning-and-release-cycles
 
 ## Current Position
 
-Phase: 40
-Plan: Not started
+Phase: 41
+Plan: 2 of 5
 
 ## Performance Metrics
 
@@ -90,7 +90,7 @@ Plan: Not started
 | Phase 37 P02 | 5min  | 2 tasks  | 5 files  |
 | Phase 40 P01 | 4min  | 2 tasks  | 6 files  |
 | Phase 40 P02 | 7min  | 2 tasks  | 8 files  |
-| Phase 41 P01 | 4min | 2 tasks | 2 files |
+| Phase 41 P02 | 3min  | 2 tasks  | 2 files  |
 
 ## Accumulated Context
 
@@ -185,7 +185,6 @@ Recent for v1.1:
 - Phase 27 added: Writable Shares (PoC) — extend read-only sharing to read-write using existing server-coordinated conflict resolution
 - Phase 36 added: Refactor upload progress in web app, to an inline progress display and remove the popup upload progress
 - Phase 37 added: Parallel batch upload pipeline — replace sequential per-file upload loop with parallel encrypt+pin and single folder metadata update
-- Phase 41 added: Package and app versioning and release cycles
 
 ### Open Concerns
 
