@@ -49,9 +49,14 @@ describe('VaultSettings', () => {
       expect(result).toEqual(input);
     });
 
-    it('should clamp recycleBinRetentionDays below 1 to 1', () => {
+    it('should allow recycleBinRetentionDays of 0 (disables retention)', () => {
       const result = validateVaultSettings({ recycleBinRetentionDays: 0 });
-      expect(result.recycleBinRetentionDays).toBe(1);
+      expect(result.recycleBinRetentionDays).toBe(0);
+    });
+
+    it('should clamp negative recycleBinRetentionDays to 0', () => {
+      const result = validateVaultSettings({ recycleBinRetentionDays: -5 });
+      expect(result.recycleBinRetentionDays).toBe(0);
     });
 
     it('should clamp recycleBinRetentionDays above 365 to 365', () => {
