@@ -25,54 +25,15 @@ const core = require('@actions/core');
 const github = require('@actions/github');
 const fs = require('fs');
 const path = require('path');
+const {
+  BUMP_LEVELS,
+  LABEL_TO_PATHS,
+  LABEL_TYPE_TO_BUMP,
+  MONOTONIC_PATHS,
+} = require('./release-constants.cjs');
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/**
- * Reverse mapping from label component name to release-please config paths.
- * API lock group (D-05): one label bumps all three members.
- */
-const LABEL_TO_PATHS = {
-  api: ['apps/api', 'packages/api-client', 'crates/api-client'], // Lock group (D-05)
-  web: ['apps/web'],
-  desktop: ['apps/desktop'],
-  'tee-worker': ['apps/tee-worker'],
-  core: ['packages/core'],
-  crypto: ['packages/crypto'],
-  'sdk-core': ['packages/sdk-core'],
-  sdk: ['packages/sdk'],
-  'cipherbox-crypto': ['crates/crypto'],
-  'cipherbox-core': ['crates/core'],
-  'cipherbox-fuse': ['crates/fuse'],
-  'cipherbox-sdk': ['crates/sdk'],
-};
-
-/**
- * Label type to semver bump level mapping.
- * Higher number = bigger bump.
- */
-const BUMP_TYPE_TO_LEVEL = {
-  patch: 1,
-  minor: 2,
-  major: 3,
-};
-
-/**
- * Label type string to semver bump type.
- * Label format: release:{component}:{type}
- */
-const LABEL_TYPE_TO_BUMP = {
-  fix: 'patch',
-  perf: 'patch',
-  refactor: 'patch',
-  feat: 'minor',
-  breaking: 'major',
-};
-
-/** Monotonic versioning apps — patch bumps become minor (D-08, D-13) */
-const MONOTONIC_PATHS = new Set(['apps/web', 'apps/desktop']);
+// Alias for readability in this script
+const BUMP_TYPE_TO_LEVEL = BUMP_LEVELS;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -135,19 +96,18 @@ function isHigherBump(base, existing, candidate) {
 }
 
 /**
- * Compute a numeric delta between two version part arrays.
- * Major diff counts as 10000, minor as 100, patch as 1.
- * This allows comparing the "magnitude" of version bumps.
+ * Compare two version part arrays lexicographically (major, then minor, then patch).
+ * Returns positive if `to` is higher than `from`, negative if lower, 0 if equal.
  *
  * @param {number[]} from
  * @param {number[]} to
  * @returns {number}
  */
 function versionDelta(from, to) {
-  const majorDelta = (to[0] - from[0]) * 10000;
-  const minorDelta = (to[1] - from[1]) * 100;
-  const patchDelta = to[2] - from[2];
-  return majorDelta + minorDelta + patchDelta;
+  for (let i = 0; i < 3; i++) {
+    if (to[i] !== from[i]) return to[i] - from[i];
+  }
+  return 0;
 }
 
 /**
@@ -177,7 +137,9 @@ async function run() {
   const repoFull = process.env.GITHUB_REPOSITORY;
 
   if (!token || !commitSha || !repoFull) {
-    core.setFailed('Missing required environment variables: GITHUB_TOKEN, COMMIT_SHA, GITHUB_REPOSITORY');
+    core.setFailed(
+      'Missing required environment variables: GITHUB_TOKEN, COMMIT_SHA, GITHUB_REPOSITORY'
+    );
     return;
   }
 
@@ -233,7 +195,9 @@ async function run() {
     return;
   }
 
-  core.info(`Found ${releaseLabels.length} release label(s): ${releaseLabels.map((l) => `${l.component}:${l.type}`).join(', ')}`);
+  core.info(
+    `Found ${releaseLabels.length} release label(s): ${releaseLabels.map((l) => `${l.component}:${l.type}`).join(', ')}`
+  );
 
   // ------ Section 3: Label-to-Path Mapping ------
   // Collect the highest bump per component from labels

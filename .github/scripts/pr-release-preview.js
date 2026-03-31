@@ -17,6 +17,7 @@ const core = require('@actions/core');
 const github = require('@actions/github');
 const fs = require('fs');
 const path = require('path');
+const { BUMP_LEVELS, PATH_TO_LABEL, MONOTONIC_PATHS } = require('./release-constants.cjs');
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -28,14 +29,6 @@ const CONVENTIONAL_RE =
 
 /** Commit types that do NOT trigger a version bump (D-39) */
 const EXEMPT_TYPES = new Set(['docs', 'test', 'chore', 'ci', 'style', 'build', 'revert']);
-
-/** Bump type to semver level */
-const BUMP_LEVELS = /** @type {const} */ ({
-  major: 3,
-  minor: 2,
-  patch: 1,
-  none: 0,
-});
 
 /**
  * Map commit type to bump level and label suffix.
@@ -76,32 +69,11 @@ const RUST_DEPS = {
   'crates/sdk': ['crates/api-client', 'crates/core', 'crates/crypto'],
 };
 
-/**
- * Package path to label component name.
- * The API lock group (D-05) shares the "api" label.
- */
-const PATH_TO_LABEL = {
-  'apps/api': 'api',
-  'packages/api-client': 'api',
-  'crates/api-client': 'api',
-  'apps/web': 'web',
-  'apps/desktop': 'desktop',
-  'apps/tee-worker': 'tee-worker',
-  'packages/core': 'core',
-  'packages/crypto': 'crypto',
-  'packages/sdk-core': 'sdk-core',
-  'packages/sdk': 'sdk',
-  'crates/crypto': 'cipherbox-crypto',
-  'crates/core': 'cipherbox-core',
-  'crates/fuse': 'cipherbox-fuse',
-  'crates/sdk': 'cipherbox-sdk',
-};
-
 /** API lock group members (D-05) */
 const API_LOCK_GROUP = ['apps/api', 'packages/api-client', 'crates/api-client'];
 
 /** Monotonic versioning apps — patch bumps become minor (D-08, D-13) */
-const MONOTONIC_APPS = new Set(['apps/web', 'apps/desktop']);
+const MONOTONIC_APPS = MONOTONIC_PATHS;
 
 /** Comment marker for finding/updating the preview comment */
 const COMMENT_MARKER = '<!-- release-preview -->';
