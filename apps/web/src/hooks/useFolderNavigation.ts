@@ -243,6 +243,15 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         const MAX_RETRIES = 3;
         const RETRY_DELAY_MS = 2000;
         let folderNode: FolderNode | null = null;
+        const baseFolderNode = {
+          id: targetFolderId,
+          name: folderEntry.name,
+          ipnsName: folderEntry.ipnsName,
+          parentId,
+          isLoading: false,
+          folderKey,
+          ipnsPrivateKey,
+        };
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
           if (latestNavTarget.current !== targetFolderId) return;
@@ -252,16 +261,10 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
           if (!resolved) {
             // IPNS not propagated yet — mark as not loaded for retry
             folderNode = {
-              id: targetFolderId,
-              name: folderEntry.name,
-              ipnsName: folderEntry.ipnsName,
-              parentId,
+              ...baseFolderNode,
               children: [],
               isLoaded: false,
-              isLoading: false,
               sequenceNumber: 0n,
-              folderKey,
-              ipnsPrivateKey,
             };
           } else {
             const metadata = await fetchAndDecryptMetadata(
@@ -270,16 +273,10 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
               getSdkClient().getContext()
             );
             folderNode = {
-              id: targetFolderId,
-              name: folderEntry.name,
-              ipnsName: folderEntry.ipnsName,
-              parentId,
+              ...baseFolderNode,
               children: metadata.children ?? [],
               isLoaded: true,
-              isLoading: false,
               sequenceNumber: resolved.sequenceNumber,
-              folderKey,
-              ipnsPrivateKey,
             };
           }
 
