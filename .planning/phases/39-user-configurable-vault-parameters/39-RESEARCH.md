@@ -68,7 +68,7 @@ Follow the BYO-IPFS config pattern exactly:
 export type VaultSettings = {
   /** Schema version for future migrations */
   version: 'v1';
-  /** Recycle bin retention period in days (default: 30, range: 1-365) */
+  /** Recycle bin retention period in days (default: 30, range: 0-365; 0 disables / immediate purge) */
   recycleBinRetentionDays: number;
   /** Delete behavior: 'bin' = soft delete to recycle bin, 'permanent' = immediate hard delete */
   deleteBehavior: 'bin' | 'permanent';
@@ -110,7 +110,7 @@ Add a "Vault" tab to the existing Settings page (`apps/web/src/routes/SettingsPa
 
 - Tab joins existing tabs: LINKED METHODS | SECURITY | STORAGE | **VAULT**
 - Sections:
-  - Recycle Bin: retention slider/input (1-365 days)
+  - Recycle Bin: retention slider/input (0-365 days; 0 disables / immediate purge)
   - Delete Behavior: radio group (soft delete to bin / permanent delete)
   - File Versioning: max versions input (0-100), cooldown input (0-1440 min)
 - Save button encrypts settings JSON, uploads to IPFS, publishes to IPNS

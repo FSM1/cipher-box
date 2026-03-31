@@ -51,8 +51,8 @@ _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ## Wave 0 Requirements
 
-- [ ] `packages/core/src/__tests__/vault-settings.test.ts` — type validation, defaults, range clamping
-- [ ] `packages/crypto/src/__tests__/vault-settings-derive.test.ts` — HKDF derivation produces stable keypair
+- [x] `packages/core/src/__tests__/vault-settings.test.ts` — type validation, defaults, range clamping
+- [x] `packages/crypto/src/__tests__/vault-settings-ipns.test.ts` — HKDF derivation produces stable keypair
 
 _Existing infrastructure (vitest, IPNS test helpers) covers framework needs._
 
