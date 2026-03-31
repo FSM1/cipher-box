@@ -13,7 +13,7 @@ pub mod implementation {
     use widestring::U16CStr;
     use winfsp::FspError;
 
-    use crate::constants::{MAX_VERSIONS_PER_FILE, VERSION_COOLDOWN_MS};
+    // Versioning constants now read from CipherBoxFS fields (user-configurable)
     use crate::file_handle::OpenFileHandle;
     use crate::helpers::mime_from_extension;
     use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
@@ -747,7 +747,7 @@ pub mod implementation {
 
                     let should_version = if let Some(ref versions) = existing_versions {
                         if let Some(newest) = versions.first() {
-                            now_ms.saturating_sub(newest.timestamp) >= VERSION_COOLDOWN_MS
+                            now_ms.saturating_sub(newest.timestamp) >= fs.version_cooldown_ms
                         } else {
                             old_file_cid.as_ref().is_some_and(|c| !c.is_empty())
                         }
@@ -768,8 +768,8 @@ pub mod implementation {
                                 };
                                 let mut versions = vec![version_entry];
                                 versions.extend(existing_versions.unwrap_or_default());
-                                let pruned: Vec<String> = if versions.len() > MAX_VERSIONS_PER_FILE {
-                                    versions.split_off(MAX_VERSIONS_PER_FILE).into_iter().map(|v| v.cid).collect()
+                                let pruned: Vec<String> = if versions.len() > fs.max_versions_per_file {
+                                    versions.split_off(fs.max_versions_per_file).into_iter().map(|v| v.cid).collect()
                                 } else {
                                     vec![]
                                 };

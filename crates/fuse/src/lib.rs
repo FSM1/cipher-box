@@ -482,6 +482,10 @@ pub struct CipherBoxFS {
     pub temp_dir: PathBuf,
     pub tee_public_key: Option<Vec<u8>>,
     pub tee_key_epoch: Option<u32>,
+    /// Maximum number of past versions to keep per file (from user vault settings).
+    pub max_versions_per_file: usize,
+    /// Version creation cooldown in milliseconds (from user vault settings).
+    pub version_cooldown_ms: u64,
     pub refresh_rx: std::sync::mpsc::Receiver<PendingRefresh>,
     pub refresh_tx: std::sync::mpsc::Sender<PendingRefresh>,
     pub mutated_folders: HashMap<u64, std::time::Instant>,

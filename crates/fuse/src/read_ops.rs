@@ -15,9 +15,7 @@ pub(crate) mod implementation {
     use std::time::{Duration, SystemTime};
 
     use crate::CipherBoxFS;
-    use crate::constants::{
-        CONTENT_DOWNLOAD_TIMEOUT, MAX_VERSIONS_PER_FILE, VERSION_COOLDOWN_MS,
-    };
+    use crate::constants::CONTENT_DOWNLOAD_TIMEOUT;
 
     const FILEPOINTER_POLL_TIMEOUT: Duration = Duration::from_secs(5);
     const FILEPOINTER_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -725,7 +723,7 @@ pub(crate) mod implementation {
 
                     let should_version = if let Some(ref versions) = existing_versions {
                         if let Some(newest) = versions.first() {
-                            now_ms.saturating_sub(newest.timestamp) >= VERSION_COOLDOWN_MS
+                            now_ms.saturating_sub(newest.timestamp) >= fs.version_cooldown_ms
                         } else {
                             old_file_cid.as_ref().is_some_and(|c| !c.is_empty())
                         }
@@ -746,13 +744,13 @@ pub(crate) mod implementation {
                                 };
                                 let mut versions = vec![version_entry];
                                 versions.extend(existing_versions.unwrap_or_default());
-                                let pruned: Vec<String> = if versions.len() > MAX_VERSIONS_PER_FILE {
-                                    versions.split_off(MAX_VERSIONS_PER_FILE).into_iter().map(|v| v.cid).collect()
+                                let pruned: Vec<String> = if versions.len() > fs.max_versions_per_file {
+                                    versions.split_off(fs.max_versions_per_file).into_iter().map(|v| v.cid).collect()
                                 } else {
                                     vec![]
                                 };
                                 if !pruned.is_empty() {
-                                    log::info!("Pruned {} version(s) for ino {} (exceeded max {})", pruned.len(), ino, MAX_VERSIONS_PER_FILE);
+                                    log::info!("Pruned {} version(s) for ino {} (exceeded max {})", pruned.len(), ino, fs.max_versions_per_file);
                                 }
                                 log::debug!("Created version entry for ino {} (total versions: {})", ino, versions.len());
                                 (Some(versions), pruned)

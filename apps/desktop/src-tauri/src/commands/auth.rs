@@ -259,6 +259,13 @@ pub(crate) async fn complete_auth_setup(
         let tee_key_epoch = tee_keys.as_ref().map(|tk| tk.current_epoch);
         drop(tee_keys);
 
+        // Read vault settings for FUSE versioning parameters
+        let vault_settings = state.sdk.vault_settings.read().await;
+        let max_versions = vault_settings.max_versions_per_file as usize;
+        // CRITICAL: Convert minutes to milliseconds (per Pitfall 4 in RESEARCH.md)
+        let cooldown_ms = vault_settings.version_cooldown_minutes as u64 * 60 * 1000;
+        drop(vault_settings);
+
         let rt = tokio::runtime::Handle::current();
         match crate::fuse::mount_filesystem(
             state,
@@ -270,6 +277,8 @@ pub(crate) async fn complete_auth_setup(
             root_ipns_private_key,
             tee_public_key,
             tee_key_epoch,
+            max_versions,
+            cooldown_ms,
         ).await {
             Ok(_handle) => {
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;
