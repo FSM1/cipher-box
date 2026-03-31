@@ -1311,6 +1311,33 @@ export class CipherBoxClient {
     });
   }
 
+  /**
+   * Purge expired entries from the recycle bin.
+   *
+   * Cleans up IPFS CIDs for expired entries and removes them from bin metadata.
+   *
+   * @param retentionDays - Retention period in days. Entries older than this are purged.
+   * @returns Number of entries purged
+   */
+  async purgeExpired(retentionDays: number): Promise<number> {
+    return this.withOperation('purgeExpired', async () => {
+      if (!this.binState) throw new BinNotLoadedError();
+
+      const { purgedCount, updatedState } = await binOps.purgeExpiredEntries({
+        binState: this.binState,
+        retentionDays,
+        binCtx: this.getBinContext(),
+      });
+
+      if (purgedCount > 0) {
+        this.binState = updatedState;
+        this.emitter.emit({ type: 'bin:updated', entries: updatedState.entries });
+      }
+
+      return purgedCount;
+    });
+  }
+
   // ---- Share operations ----
 
   /**
