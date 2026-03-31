@@ -11,6 +11,7 @@ pub mod bin;
 pub mod vault_blob;
 pub mod ipns;
 pub mod decrypt;
+pub mod vault_settings;
 pub mod error;
 
 // Re-export primary types and functions
@@ -21,4 +22,5 @@ pub use bin::{RecycleBinMetadata, BinEntry, BinItemType, encrypt_bin_metadata, d
 pub use vault_blob::{serialize_vault_blob_v2, deserialize_vault_blob_v2, detect_blob_version};
 pub use ipns::{IpnsRecord, create_ipns_record, marshal_ipns_record};
 pub use decrypt::{decrypt_metadata_from_ipfs_public, decrypt_file_metadata_from_ipfs_public};
+pub use vault_settings::{VaultSettings, DeleteBehavior, default_vault_settings, validate_vault_settings};
 pub use error::CoreError;
