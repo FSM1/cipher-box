@@ -4,7 +4,13 @@ import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
-import * as folderService from '../services/folder.service';
+import {
+  addFileToFolder,
+  addFilesToFolder,
+  replaceFileInFolder,
+  updateFolderMetadataAndPublish,
+} from '@cipherbox/sdk-core';
+import { getSdkClient } from '../lib/sdk-provider';
 import { reWrapForRecipients } from '../services/share.service';
 import {
   createFileMetadata,
@@ -100,12 +106,17 @@ export function useFileOperations() {
               : freshFolders[parentId];
           if (!freshParent) throw new Error('Parent folder not found');
 
-          return folderService.addFileToFolder({
-            parentFolderState: freshParent,
+          return addFileToFolder({
+            children: freshParent.children,
+            folderKey: freshParent.folderKey,
+            ipnsPrivateKey: freshParent.ipnsPrivateKey,
+            ipnsName: freshParent.ipnsName,
+            sequenceNumber: freshParent.sequenceNumber,
             fileId,
             name: fileData.originalName,
             fileIpnsRecord: ipnsRecord,
             ipnsPrivateKeyEncrypted,
+            ctx: getSdkClient().getContext(),
           });
         };
 
@@ -249,9 +260,14 @@ export function useFileOperations() {
               : freshFolders[parentId];
           if (!freshParent) throw new Error('Parent folder not found');
 
-          return folderService.addFilesToFolder({
-            parentFolderState: freshParent,
+          return addFilesToFolder({
+            children: freshParent.children,
+            folderKey: freshParent.folderKey,
+            ipnsPrivateKey: freshParent.ipnsPrivateKey,
+            ipnsName: freshParent.ipnsName,
+            sequenceNumber: freshParent.sequenceNumber,
             files: filesWithRecords,
+            ctx: getSdkClient().getContext(),
           });
         };
 
@@ -416,10 +432,11 @@ export function useFileOperations() {
         }
 
         // 6. Publish only the file IPNS record (folder metadata untouched!)
-        await folderService.replaceFileInFolder({
+        await replaceFileInFolder({
+          children: parentFolder.children,
           fileId: fileData.fileId,
           fileIpnsRecord: ipnsRecord,
-          parentFolderState: parentFolder,
+          ctx: getSdkClient().getContext(),
         });
 
         // 7. Update local state -- touch modifiedAt and persist migrated IPNS key if applicable
@@ -441,15 +458,14 @@ export function useFileOperations() {
 
         // 7b. Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
         if (migratedIpnsPrivateKeyEncrypted) {
-          folderService
-            .updateFolderMetadata({
-              folderId: parentFolder.id,
-              children: updatedChildren,
-              folderKey: parentFolder.folderKey,
-              ipnsPrivateKey: parentFolder.ipnsPrivateKey,
-              ipnsName: parentFolder.ipnsName,
-              sequenceNumber: parentFolder.sequenceNumber,
-            })
+          updateFolderMetadataAndPublish({
+            children: updatedChildren,
+            folderKey: parentFolder.folderKey,
+            ipnsPrivateKey: parentFolder.ipnsPrivateKey,
+            ipnsName: parentFolder.ipnsName,
+            sequenceNumber: parentFolder.sequenceNumber,
+            ctx: getSdkClient().getContext(),
+          })
             .then(({ newSequenceNumber }) => {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
             })

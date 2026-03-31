@@ -517,13 +517,18 @@ Plans:
 - [x] 37-01-PLAN.md -- SDK batch uploadFiles() method with p-limit concurrency pool, stale-children re-read, partial failure handling
 - [x] 37-02-PLAN.md -- Web Worker encryption offloading, EncryptionWorkerService wrapper, useDropUpload rewire to batch API
 
-### Phase 38: Retire deprecated web services
+### Phase 38: Retire deprecated web services [COMPLETE 2026-03-31]
 
 **Goal:** Remove `folder.service.ts` (1,059 lines) and `bin.service.ts` (971 lines) by migrating all remaining callers to `@cipherbox/sdk` methods, eliminating the deprecated service layer. Also remove the circular devDependency from `@cipherbox/crypto` on `@cipherbox/core` by refactoring the vault-ipns test to use hardcoded test vectors instead of cross-package imports.
 **Requirements**: None (tech debt cleanup, deferred from Phase 31)
 **Depends on:** Phase 37
 
-Plans: _not yet planned_
+Plans:
+
+- [x] 38-01-PLAN.md -- Extract addFileToFolder/addFilesToFolder/replaceFileInFolder to sdk-core, migrate all folder.service callers
+- [x] 38-02-PLAN.md -- Add purgeExpired to SDK client, migrate bin.service callers (useBin, useAuth)
+- [x] 38-03-PLAN.md -- Remove @cipherbox/crypto circular devDependency, replace with hardcoded test vectors
+- [x] 38-04-PLAN.md -- Delete folder.service.ts (1,059 lines) and bin.service.ts (971 lines)
 
 ### Phase 39: User-configurable vault parameters
 
@@ -531,7 +536,14 @@ Plans: _not yet planned_
 **Requirements**: None (deferred items from Phases 13, 17)
 **Depends on:** Phase 38
 
-Plans: _not yet planned_
+**Plans:** 4 plans
+
+Plans:
+
+- [ ] 39-01-PLAN.md — Core VaultSettings type, defaults, validation, and HKDF derivation
+- [ ] 39-02-PLAN.md — Zustand settings store and encrypted IPNS load/save service
+- [ ] 39-03-PLAN.md — Consumer integration: wire settings into delete, versioning, and retention
+- [ ] 39-04-PLAN.md — Vault settings tab UI in Settings page
 
 ---
 

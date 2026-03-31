@@ -27,7 +27,8 @@ import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 import { resolveIpnsRecord } from '../../services/ipns.service';
-import { fetchAndDecryptMetadata } from '../../services/folder.service';
+import { fetchAndDecryptMetadata } from '@cipherbox/sdk-core';
+import { getSdkClient } from '../../lib/sdk-provider';
 import { triggerSearchIndexRebuild } from '../../hooks/useSearch';
 import { logger } from '../../lib/logger';
 
@@ -117,7 +118,11 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     if (resolved.sequenceNumber <= rootFolder.sequenceNumber) return;
 
     try {
-      const metadata = await fetchAndDecryptMetadata(resolved.cid, rootFolder.folderKey);
+      const metadata = await fetchAndDecryptMetadata(
+        resolved.cid,
+        rootFolder.folderKey,
+        getSdkClient().getContext()
+      );
       useFolderStore.getState().updateFolderChildren('root', metadata.children);
       useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
       triggerSearchIndexRebuild();

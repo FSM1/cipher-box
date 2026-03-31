@@ -3,7 +3,8 @@ import { useFolderStore } from '../stores/folder.store';
 import type { FolderNode } from '../stores/folder.store';
 import { useSyncStore } from '../stores/sync.store';
 import { withConflictRetry as sdkWithConflictRetry } from '@cipherbox/sdk';
-import * as folderService from '../services/folder.service';
+import { fetchAndDecryptMetadata, getDepth } from '@cipherbox/sdk-core';
+import { getSdkClient } from '../lib/sdk-provider';
 import { resolveIpnsRecord } from '../services/ipns.service';
 
 /**
@@ -20,9 +21,10 @@ export async function resyncFolder(folderIpnsName: string, folderId: string): Pr
   const resolved = await resolveIpnsRecord(folderIpnsName);
   if (!resolved) return;
 
-  const remoteMetadata = await folderService.fetchAndDecryptMetadata(
+  const remoteMetadata = await fetchAndDecryptMetadata(
     resolved.cid,
-    folderNode.folderKey
+    folderNode.folderKey,
+    getSdkClient().getContext()
   );
 
   store.updateFolderChildren(folderId, remoteMetadata.children ?? []);
@@ -103,5 +105,5 @@ export function calculateFolderDepth(
   folderId: string,
   folders: Record<string, FolderNode>
 ): number {
-  return folderService.getDepth(folderId, folders);
+  return getDepth(folderId, folders);
 }

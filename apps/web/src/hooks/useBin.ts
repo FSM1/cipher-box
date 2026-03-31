@@ -1,8 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useBinStore } from '../stores/bin.store';
-import { useAuthStore } from '../stores/auth.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
-import { initializeBin, purgeExpired } from '../services/bin.service';
 import type { BinEntry } from '@cipherbox/core';
 import { logger } from '../lib/logger';
 
@@ -26,39 +24,30 @@ export function useBin() {
   /**
    * Load bin metadata from IPNS and trigger auto-purge of expired entries.
    *
-   * Uses initializeBin from bin.service for initial load (populates SDK bin state
-   * via useBinStore), then triggers purge as fire-and-forget.
+   * Uses CipherBoxClient.loadBin() to load bin from IPNS and populate
+   * the SDK bin state. The SDK emits bin:updated events which the store
+   * subscription handles.
    */
   const loadBin = useCallback(async () => {
-    const auth = useAuthStore.getState();
-    if (!auth.vaultKeypair) return;
+    if (!hasSdkClient()) return;
 
     setState({ isLoading: true, error: null });
     try {
-      // Initialize bin via service (sets up bin IPNS, populates store)
-      await initializeBin({
-        userPrivateKey: auth.vaultKeypair.privateKey,
-        userPublicKey: auth.vaultKeypair.publicKey,
-      });
+      // Load bin via SDK client (handles IPNS resolve, decrypt, auto-repair)
+      const binState = await getSdkClient().loadBin();
 
-      // Also load bin into SDK client for subsequent operations
-      if (hasSdkClient()) {
-        try {
-          await getSdkClient().loadBin();
-        } catch {
-          // SDK bin load is non-blocking -- bin service already populated the store
-        }
-      }
+      // Update Zustand store from SDK-returned state
+      const binStore = useBinStore.getState();
+      binStore.setBinIpnsName(binState.ipnsName);
+      binStore.setEntries(binState.entries, binState.sequenceNumber);
 
       // Non-blocking: purge expired entries after loading
       const currentRetention = useBinStore.getState().retentionDays;
-      void purgeExpired({
-        retentionDays: currentRetention,
-        userPublicKey: auth.vaultKeypair.publicKey,
-        userPrivateKey: auth.vaultKeypair.privateKey,
-      }).catch(() => {
-        logger.error('[useBin] Auto-purge failed (non-blocking)');
-      });
+      void getSdkClient()
+        .purgeExpired(currentRetention)
+        .catch(() => {
+          logger.error('[useBin] Auto-purge failed (non-blocking)');
+        });
 
       setState({ isLoading: false, error: null });
     } catch (err) {
