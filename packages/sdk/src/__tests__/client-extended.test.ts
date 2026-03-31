@@ -42,6 +42,7 @@ vi.mock('../bin', () => ({
   restoreFromBin: vi.fn(),
   permanentDeleteFromBin: vi.fn(),
   emptyBin: vi.fn(),
+  purgeExpiredEntries: vi.fn(),
 }));
 
 // Mock share module
@@ -650,6 +651,70 @@ describe('CipherBoxClient - extended', () => {
       );
       expect(binEvent).toBeDefined();
       expect(binEvent?.entries).toEqual([]);
+    });
+
+    it('purgeExpired validates retentionDays and emits bin:updated', async () => {
+      vi.mocked(binOps.loadBin).mockResolvedValue({
+        entries: [{ id: 'e1', name: 'old.txt', deletedAt: 0, type: 'file' }],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      });
+      await client.loadBin();
+
+      vi.mocked(binOps.purgeExpiredEntries).mockResolvedValue({
+        purgedCount: 1,
+        updatedState: { entries: [], sequenceNumber: 2, ipnsName: 'k51bin' },
+      });
+
+      const events: SdkEvent[] = [];
+      client.on((e) => events.push(e));
+      const purged = await client.purgeExpired(30);
+
+      expect(purged).toBe(1);
+      expect(binOps.purgeExpiredEntries).toHaveBeenCalledWith(
+        expect.objectContaining({ retentionDays: 30 })
+      );
+      expect(events.find((e) => e.type === 'bin:updated')).toBeDefined();
+    });
+
+    it('purgeExpired throws TypeError for non-finite input', async () => {
+      vi.mocked(binOps.loadBin).mockResolvedValue({
+        entries: [],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      });
+      await client.loadBin();
+
+      await expect(client.purgeExpired(NaN)).rejects.toThrow(TypeError);
+      await expect(client.purgeExpired(Infinity)).rejects.toThrow(TypeError);
+    });
+
+    it('purgeExpired normalizes negative and fractional days', async () => {
+      vi.mocked(binOps.loadBin).mockResolvedValue({
+        entries: [],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      });
+      await client.loadBin();
+
+      vi.mocked(binOps.purgeExpiredEntries).mockResolvedValue({
+        purgedCount: 0,
+        updatedState: { entries: [], sequenceNumber: 1, ipnsName: 'k51bin' },
+      });
+
+      await client.purgeExpired(-5);
+      expect(binOps.purgeExpiredEntries).toHaveBeenCalledWith(
+        expect.objectContaining({ retentionDays: 0 })
+      );
+
+      await client.purgeExpired(7.8);
+      expect(binOps.purgeExpiredEntries).toHaveBeenCalledWith(
+        expect.objectContaining({ retentionDays: 7 })
+      );
+    });
+
+    it('purgeExpired throws BinNotLoadedError when bin not loaded', async () => {
+      await expect(client.purgeExpired(30)).rejects.toThrow(BinNotLoadedError);
     });
   });
 
