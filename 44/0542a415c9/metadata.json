@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "440542a415c9",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-38-plan",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/39-user-configurable-vault-parameters/39-01-PLAN.md",
+    ".planning/phases/39-user-configurable-vault-parameters/39-02-PLAN.md",
+    ".planning/phases/39-user-configurable-vault-parameters/39-03-PLAN.md",
+    ".planning/phases/39-user-configurable-vault-parameters/39-04-PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/44/0542a415c9/0/metadata.json",
+      "transcript": "/44/0542a415c9/0/full.jsonl",
+      "content_hash": "/44/0542a415c9/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3,
+    "cache_creation_tokens": 12443,
+    "cache_read_tokens": 386910,
+    "output_tokens": 3402,
+    "api_call_count": 3
+  }
+}
