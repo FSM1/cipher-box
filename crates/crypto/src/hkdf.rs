@@ -35,6 +35,9 @@ const REGISTRY_HKDF_INFO: &[u8] = b"cipherbox-device-registry-ipns-v1";
 /// HKDF info for recycle bin IPNS keypair derivation.
 const BIN_HKDF_INFO: &[u8] = b"cipherbox-recycle-bin-ipns-v1";
 
+/// HKDF info for vault settings IPNS keypair derivation.
+const VAULT_SETTINGS_HKDF_INFO: &[u8] = b"cipherbox-vault-settings-v1";
+
 /// HKDF info prefix for per-file IPNS keypair derivation.
 const FILE_HKDF_INFO_PREFIX: &str = "cipherbox-file-ipns-v1:";
 
@@ -122,6 +125,21 @@ pub fn derive_registry_ipns_keypair(
     user_private_key: &[u8; 32],
 ) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), CryptoError> {
     derive_ipns_keypair(user_private_key, REGISTRY_HKDF_INFO)
+}
+
+/// Derive the deterministic Ed25519 IPNS keypair for vault settings.
+///
+/// This IPNS name stores the encrypted user-configurable vault parameters
+/// (retention period, delete behavior, versioning limits). Zero-knowledge:
+/// the server never sees the plaintext settings.
+///
+/// Uses HKDF info "cipherbox-vault-settings-v1" for domain separation.
+///
+/// Returns (ed25519_private_key, ed25519_public_key, ipns_name).
+pub fn derive_vault_settings_ipns_keypair(
+    user_private_key: &[u8; 32],
+) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), CryptoError> {
+    derive_ipns_keypair(user_private_key, VAULT_SETTINGS_HKDF_INFO)
 }
 
 /// Derive the deterministic Ed25519 IPNS keypair for the recycle bin.
