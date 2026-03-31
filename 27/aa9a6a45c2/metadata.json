@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "27aa9a6a45c2",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-39-context",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/package.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/27/aa9a6a45c2/0/metadata.json",
+      "transcript": "/27/aa9a6a45c2/0/full.jsonl",
+      "content_hash": "/27/aa9a6a45c2/0/content_hash.txt",
+      "prompt": "/27/aa9a6a45c2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 1258,
+    "cache_read_tokens": 571363,
+    "output_tokens": 357,
+    "api_call_count": 4
+  }
+}
