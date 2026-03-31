@@ -77,3 +77,7 @@ yes that makes complete sense. confirmed, cascade happens at PR time.
 ---
 
 the release-as route seems really decent, could you break it down step by step for me, as we did with the cascade discussion, so that I can reason about it.
+
+---
+
+Ok this brings me on to another thought, if we are able to analyze the PR pre-merge, we can skip the manual label part entirely, as all the commits should follow conventional commitlint and the "changelog" can be created in `release-as`.
