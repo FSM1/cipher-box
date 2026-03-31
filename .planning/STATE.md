@@ -34,67 +34,105 @@ Plan: 5 of 5 complete
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
-| Plan           | Duration | Tasks   | Files     |
-| -------------- | -------- | ------- | --------- |
-| Phase 19 P01   | 2min     | 2 tasks | 3 files   |
-| Phase 19 P02   | 5min     | 2 tasks | 5 files   |
-| Phase 19.1 P02 | 4min     | 2 tasks | 133 files |
-| Phase 19.1 P01 | 17min    | 2 tasks | 42 files  |
-| Phase 19.1 P03 | 12min    | 3 tasks | 18 files  |
-| Phase 19.1 P04 | 10min    | 2 tasks | 14 files  |
-| Phase 19.1 P06 | 13min    | 3 tasks | 52 files  |
-| Phase 19.2 P01 | 6min     | 2 tasks | 4 files   |
-| Phase 19.2 P02 | 12min    | 3 tasks | 3 files   |
-| Phase 19.2 P03 | 1min     | 1 tasks | 1 files   |
-| Phase 19.2 P04 | 71min    | 2 tasks | 1 files   |
-| Phase 20 P01   | 4min     | 2 tasks | 5 files   |
-| Phase 20 P02   | 17min    | 3 tasks | 16 files  |
-| Phase 20 P03   | 25min    | 2 tasks | 6 files   |
-| Phase 20 P04   | 45min    | 3 tasks | 15 files  |
-| Phase 20 P05   | 6min     | 2 tasks | 13 files  |
-| Phase 20 P06   | 6min     | 2 tasks | 4 files   |
-| Phase 21 P01   | 5min     | 2 tasks | 9 files   |
-| Phase 21 P03   | 10min    | 3 tasks | 13 files  |
-| Phase 21 P05   | 9min     | 2 tasks | 13 files  |
-| Phase 21 P04   | 8min     | 3 tasks | 9 files   |
-| Phase 21 P06   | 3min     | 2 tasks | 4 files   |
-| Phase 21 P07   | 5min     | 3 tasks | 5 files   |
-| Phase 23 P01   | 13min    | 2 tasks | 26 files  |
-| Phase 23 P02   | 10min    | 2 tasks | 33 files  |
-| Phase 23 P03   | 11min    | 2 tasks | 23 files  |
-| Phase 23 P05   | 12min    | 2 tasks | 24 files  |
-| Phase 23 P04   | 22min    | 2 tasks | 17 files  |
-| Phase 23 P07   | 7min     | 2 tasks | 5 files   |
-| Phase 23 P06   | 23min    | 2 tasks | 7 files   |
-| Phase 23 P08   | 20min    | 2 tasks | 7 files   |
-| Phase 21 P08   | 5min     | 2 tasks | 6 files   |
-| Phase 21 P10   | 5min     | 2 tasks | 7 files   |
-| Phase 21 P09   | 9min     | 3 tasks | 17 files  |
-| Phase 21 P11   | 12min    | 2 tasks | 3 files   |
-| Phase 22 P02   | 4min     | 2 tasks | 2 files   |
-| Phase 22 P01   | 8min     | 2 tasks | 7 files   |
-| Phase 22 P03   | 8min     | 2 tasks | 8 files   |
-| Phase 26 P02   | 4min     | 2 tasks | 5 files   |
-| Phase 26 P01   | 5min     | 2 tasks | 6 files   |
-| Phase 27 P01   | 6min     | 2 tasks | 23 files  |
-| Phase 27 P02   | 5min     | 2 tasks | 4 files   |
-| Phase 27 P03   | 25min    | 3 tasks | 15 files  |
-| Phase 33 P01   | 11min    | 2 tasks | 3 files   |
-| Phase 33 P02   | 3min     | 1 tasks | 3 files   |
-| Phase 34 P01   | 3min     | 2 tasks | 9 files   |
-| Phase 34 P02   | 4min     | 2 tasks | 8 files   |
-| Phase 34 P03   | 2min     | 1 tasks | 1 files   |
-| Phase 35 P02   | 5min     | 4 tasks | 6 files   |
-| Phase 35 P03   | 8min     | 4 tasks | 14 files  |
-| Phase 35 P05   | 5min     | 3 tasks | 3 files   |
-| Phase 37 P02   | 5min     | 2 tasks | 5 files   |
-| Phase 40 P01   | 4min     | 2 tasks | 6 files   |
-| Phase 40 P02   | 7min     | 2 tasks | 8 files   |
-| Phase 41 P01   | 4min     | 2 tasks | 6 files   |
-| Phase 41 P02   | 3min     | 2 tasks | 2 files   |
-| Phase 41 P03   | 3min     | 2 tasks | 2 files   |
-| Phase 41 P04   | 2min     | 2 tasks | 2 files   |
-| Phase 41 P05   | 3min     | 2 tasks | 3 files   |
+| Plan            | Duration | Tasks   | Files     |
+| --------------- | -------- | ------- | --------- |
+| Phase 18 P01    | 7min     | 2 tasks | -         |
+| Phase 18 P02    | 5min     | 3 tasks | -         |
+| Phase 19 P01    | 2min     | 2 tasks | 3 files   |
+| Phase 19 P02    | 5min     | 2 tasks | 5 files   |
+| Phase 19.1 P01  | 17min    | 2 tasks | 42 files  |
+| Phase 19.1 P02  | 4min     | 2 tasks | 133 files |
+| Phase 19.1 P03  | 12min    | 3 tasks | 18 files  |
+| Phase 19.1 P04  | 10min    | 2 tasks | 14 files  |
+| Phase 19.1 P05  | -        | 3 tasks | -         |
+| Phase 19.1 P06  | 13min    | 3 tasks | 52 files  |
+| Phase 19.2 P01  | 6min     | 2 tasks | 4 files   |
+| Phase 19.2 P02  | 12min    | 3 tasks | 3 files   |
+| Phase 19.2 P03  | 1min     | 1 tasks | 1 files   |
+| Phase 19.2 P04  | 71min    | 2 tasks | 1 files   |
+| Phase 20 P01    | 4min     | 2 tasks | 5 files   |
+| Phase 20 P02    | 17min    | 3 tasks | 16 files  |
+| Phase 20 P03    | 25min    | 2 tasks | 6 files   |
+| Phase 20 P04    | 45min    | 3 tasks | 15 files  |
+| Phase 20 P05    | 6min     | 2 tasks | 13 files  |
+| Phase 20 P06    | 6min     | 2 tasks | 4 files   |
+| Phase 21 P01    | 5min     | 2 tasks | 9 files   |
+| Phase 21 P02    | 6min     | 2 tasks | -         |
+| Phase 21 P03    | 10min    | 3 tasks | 13 files  |
+| Phase 21 P04    | 8min     | 3 tasks | 9 files   |
+| Phase 21 P05    | 9min     | 2 tasks | 13 files  |
+| Phase 21 P06    | 3min     | 2 tasks | 4 files   |
+| Phase 21 P07    | 5min     | 4 tasks | 5 files   |
+| Phase 21 P08    | 5min     | 2 tasks | 6 files   |
+| Phase 21 P09    | 9min     | 3 tasks | 17 files  |
+| Phase 21 P10    | 5min     | 2 tasks | 7 files   |
+| Phase 21 P11    | 12min    | 2 tasks | 3 files   |
+| Phase 22 P01    | 8min     | 2 tasks | 7 files   |
+| Phase 22 P02    | 4min     | 2 tasks | 2 files   |
+| Phase 22 P03    | 8min     | 2 tasks | 8 files   |
+| Phase 23 P01    | 13min    | 2 tasks | 26 files  |
+| Phase 23 P02    | 10min    | 2 tasks | 33 files  |
+| Phase 23 P03    | 11min    | 2 tasks | 23 files  |
+| Phase 23 P04    | 22min    | 2 tasks | 17 files  |
+| Phase 23 P05    | 12min    | 2 tasks | 24 files  |
+| Phase 23 P06    | 23min    | 2 tasks | 7 files   |
+| Phase 23 P07    | 7min     | 2 tasks | 5 files   |
+| Phase 23 P08    | 20min    | 2 tasks | 7 files   |
+| Phase 24 P01    | 10min    | 2 tasks | -         |
+| Phase 24 P02    | 4min     | 2 tasks | -         |
+| Phase 24 P03    | 7min     | 2 tasks | -         |
+| Phase 25 P01    | 5min     | 2 tasks | -         |
+| Phase 25 P02    | 4min     | 2 tasks | -         |
+| Phase 25 P03    | -        | 2 tasks | -         |
+| Phase 26 P01    | 5min     | 2 tasks | 6 files   |
+| Phase 26 P02    | 4min     | 2 tasks | 5 files   |
+| Phase 27 P01    | 6min     | 2 tasks | 23 files  |
+| Phase 27 P02    | 5min     | 2 tasks | 4 files   |
+| Phase 27 P03    | 25min    | 3 tasks | 15 files  |
+| Phase 28 P01    | -        | -       | -         |
+| Phase 28 P02    | -        | -       | -         |
+| Phase 28 P03    | -        | -       | -         |
+| Phase 28 P04    | -        | -       | -         |
+| Phase 29 P01    | 5min     | 2 tasks | -         |
+| Phase 29 P02    | 8min     | 3 tasks | -         |
+| Phase 29 P03    | 3min     | 2 tasks | -         |
+| Phase 30 P01    | 5min     | 3 tasks | -         |
+| Phase 30 P02    | 3min     | 3 tasks | -         |
+| Phase 30 P03    | 3min     | 3 tasks | -         |
+| Phase 30 P04    | 3min     | 3 tasks | -         |
+| Phase 31 P01    | -        | 3 tasks | -         |
+| Phase 31 P02    | -        | 3 tasks | -         |
+| Phase 31 P03    | -        | 4 tasks | -         |
+| Phase 32 P01    | -        | 2 tasks | -         |
+| Phase 32 P02    | -        | 2 tasks | -         |
+| Phase 32 P03    | -        | 1 tasks | -         |
+| Phase 33 P01    | 11min    | 2 tasks | 3 files   |
+| Phase 33 P02    | 3min     | 1 tasks | 3 files   |
+| Phase 34 P01    | 3min     | 2 tasks | 9 files   |
+| Phase 34 P02    | 4min     | 2 tasks | 8 files   |
+| Phase 34 P03    | 2min     | 1 tasks | 1 files   |
+| Phase 34 P04    | 25min    | 2 tasks | -         |
+| Phase 35 P01    | 10min    | 8 tasks | -         |
+| Phase 35 P02    | 5min     | 4 tasks | 6 files   |
+| Phase 35 P03    | 8min     | 4 tasks | 14 files  |
+| Phase 35 P04    | 2min     | 2 tasks | -         |
+| Phase 35 P05    | 5min     | 3 tasks | 3 files   |
+| Phase 35 P06    | 45min    | 5 tasks | -         |
+| Phase 36 P01    | 2min     | 2 tasks | -         |
+| Phase 36 P02    | 5min     | 2 tasks | -         |
+| Phase 37 P01    | 8min     | 2 tasks | -         |
+| Phase 37 P02    | 5min     | 2 tasks | 5 files   |
+| Phase 38 P01-04 | -        | -       | -         |
+| Phase 39 P01-02 | -        | -       | -         |
+| Phase 39 P03    | -        | -       | -         |
+| Phase 39 P04    | -        | -       | -         |
+| Phase 40 P01    | 4min     | 2 tasks | 6 files   |
+| Phase 40 P02    | 7min     | 2 tasks | 8 files   |
+| Phase 41 P01    | 4min     | 2 tasks | 6 files   |
+| Phase 41 P02    | 3min     | 2 tasks | 2 files   |
+| Phase 41 P03    | 3min     | 2 tasks | 2 files   |
+| Phase 41 P04    | 2min     | 2 tasks | 2 files   |
+| Phase 41 P05    | 3min     | 2 tasks | 3 files   |
 
 ## Accumulated Context
 
