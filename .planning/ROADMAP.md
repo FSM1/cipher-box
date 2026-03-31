@@ -536,7 +536,14 @@ Plans:
 **Requirements**: None (deferred items from Phases 13, 17)
 **Depends on:** Phase 38
 
-Plans: _not yet planned_
+**Plans:** 4 plans
+
+Plans:
+
+- [ ] 39-01-PLAN.md — Core VaultSettings type, defaults, validation, and HKDF derivation
+- [ ] 39-02-PLAN.md — Zustand settings store and encrypted IPNS load/save service
+- [ ] 39-03-PLAN.md — Consumer integration: wire settings into delete, versioning, and retention
+- [ ] 39-04-PLAN.md — Vault settings tab UI in Settings page
 
 ---
 
