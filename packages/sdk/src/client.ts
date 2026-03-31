@@ -1320,18 +1320,31 @@ export class CipherBoxClient {
    * @returns Number of entries purged
    */
   async purgeExpired(retentionDays: number): Promise<number> {
+    if (!Number.isFinite(retentionDays)) {
+      throw new TypeError('purgeExpired: retentionDays must be a finite number');
+    }
+    const normalizedDays = Math.max(0, Math.floor(retentionDays));
+
     return this.withOperation('purgeExpired', async () => {
       if (!this.binState) throw new BinNotLoadedError();
 
+      const previousEntries = this.binState.entries;
       const { purgedCount, updatedState } = await binOps.purgeExpiredEntries({
         binState: this.binState,
-        retentionDays,
+        retentionDays: normalizedDays,
         binCtx: this.getBinContext(),
       });
 
       if (purgedCount > 0) {
+        // Unenroll IPNS names for purged entries (same as permanentDelete/emptyBin)
+        const purgedEntries = previousEntries.filter(
+          (entry) => !updatedState.entries.some((next) => next.id === entry.id)
+        );
         this.binState = updatedState;
         this.emitter.emit({ type: 'bin:updated', entries: updatedState.entries });
+        this.fireAndForgetUnenroll(
+          purgedEntries.flatMap((entry) => this.collectBinEntryIpnsNames(entry))
+        );
       }
 
       return purgedCount;

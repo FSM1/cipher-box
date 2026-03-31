@@ -476,18 +476,8 @@ export async function purgeExpiredEntries(params: {
     return { purgedCount: 0, updatedState: params.binState };
   }
 
-  // Best-effort CID cleanup for expired entries
-  for (const entry of expired) {
-    if (entry.contentCid) {
-      try {
-        await sdkCore.unpinFromIpfs(params.binCtx.ctx, entry.contentCid);
-      } catch {
-        // Best-effort: CID cleanup failures are non-blocking
-      }
-    }
-  }
-
-  // Remove expired entries and publish updated bin
+  // Remove expired entries and publish updated bin BEFORE cleanup.
+  // This ensures bin metadata is consistent even if CID unpins fail.
   const expiredIds = new Set(expired.map((e) => e.id));
   const remainingEntries = params.binState.entries.filter((e) => !expiredIds.has(e.id));
   const newBinSeq = params.binState.sequenceNumber + 1;
@@ -499,6 +489,27 @@ export async function purgeExpiredEntries(params: {
   };
 
   await saveBinMetadata({ metadata, binCtx: params.binCtx });
+
+  // Best-effort CID cleanup for expired entries (after metadata is saved)
+  for (const entry of expired) {
+    if (entry.contentCid) {
+      try {
+        await sdkCore.unpinFromIpfs(params.binCtx.ctx, entry.contentCid);
+      } catch {
+        // Best-effort: CID cleanup failures are non-blocking
+      }
+    }
+    // Also clean up version CIDs to recover quota
+    if (entry.versionCids) {
+      for (const vc of entry.versionCids) {
+        try {
+          await sdkCore.unpinFromIpfs(params.binCtx.ctx, vc.cid);
+        } catch {
+          // Best-effort
+        }
+      }
+    }
+  }
 
   return {
     purgedCount: expired.length,
