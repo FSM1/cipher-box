@@ -1,0 +1,38 @@
+<task-notification>
+<task-id>acdbc0afa60dbbf54</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/acdbc0afa60dbbf54.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 38: Retire deprecated web services" completed</summary>
+<result>The branch is pushed. Now let me present the final status.
+
+---
+
+Phase 38 planning is complete. Here is the summary:
+
+**Phase 38: Retire deprecated web services** -- 4 plans in 2 waves
+
+| Wave | Plans | What it builds |
+|------|-------|----------------|
+| 1 | 01, 02, 03 | Migrate folder.service callers (01), migrate bin.service callers (02), fix circular dependency (03) |
+| 2 | 04 | Delete deprecated files and final verification |
+
+**Research:** Completed -- identified 8 functions still called from folder.service.ts (3 are thin wrappers, 3 need SDK-core extraction, 2 need SdkContext bridging) and 2 functions from bin.service.ts (both replaceable with SDK client methods).
+
+**Verification:** Passed (self-review against quality gate -- all tasks have read_first, acceptance_criteria with grep-verifiable conditions, and concrete action blocks).
+
+**Key findings from research:**
+- `addFileToFolder`, `addFilesToFolder`, and `replaceFileInFolder` have no SDK equivalent yet -- Plan 01 extracts them to `@cipherbox/sdk-core`
+- `purgeExpired` has no public SDK method -- Plan 02 adds it to `CipherBoxClient`
+- `CipherBoxClient.getContext()` exists at line 312 of `client.ts`, enabling SdkContext bridging
+- `batchPublishIpnsRecords` is already available in sdk-core for the file registration extraction
+
+**Artifacts committed on branch `docs/phase-38-plan`:**
+- `.planning/phases/38-retire-deprecated-web-services/38-RESEARCH.md`
+- `.planning/phases/38-retire-deprecated-web-services/38-VALIDATION.md`
+- `.planning/phases/38-retire-deprecated-web-services/38-01-PLAN.md`
+- `.planning/phases/38-retire-deprecated-web-services/38-02-PLAN.md`
+- `.planning/phases/38-retire-deprecated-web-services/38-03-PLAN.md`
+- `.planning/phases/38-retire-deprecated-web-services/38-04-PLAN.md`</result>
+<usage><total_tokens>121958</total_tokens><tool_uses>117</tool_uses><duration_ms>698759</duration_ms></usage>
+</task-notification>
