@@ -181,7 +181,7 @@
   }
 }
 
-.upload-inline-progress-track--pulse {
+.upload-inline-progress-track--encrypting {
   background: linear-gradient(
     90deg,
     var(--color-border-dim) 30%,
@@ -192,7 +192,7 @@
   animation: upload-inline-shimmer 1.5s ease-in-out infinite;
 }
 
-.upload-inline-progress-track--pulse .upload-inline-progress-fill {
+.upload-inline-progress-track--encrypting .upload-inline-progress-fill {
   /* Hide the fill during encryption — the track shimmer IS the indicator */
   opacity: 0;
 }
@@ -200,11 +200,11 @@
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   .upload-inline-progress-fill,
-  .upload-inline-progress-track--pulse {
+  .upload-inline-progress-track--encrypting {
     animation: none;
     transition: none;
   }
-  .upload-inline-progress-track--pulse .upload-inline-progress-fill {
+  .upload-inline-progress-track--encrypting .upload-inline-progress-fill {
     opacity: 1;
   }
 }
