@@ -38,5 +38,13 @@
     "expected_ed25519_private_key": "ef2a6ae6d80ac927ca37898d27965ea9cb159024f8ca06a0caab1c638bf714b8",
     "expected_ed25519_public_key": "21815e843e30268e38b244610253a7f516e27134052d59d4b4a612c88cdf9620",
     "expected_ipns_name": "k51qzi5uqu5dh0nhi2flvmcl6fg4wxphm80itjhq7yvzw0jddg57q0ydw9s940"
+  },
+  {
+    "description": "HKDF vault settings IPNS keypair derivation (info: cipherbox-vault-settings-v1)",
+    "private_key": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "info": "cipherbox-vault-settings-v1",
+    "expected_ed25519_private_key": "2355be2482684b3fcdff1c1bb35cdf8ee5b7a65ae77808f7ed6aaebc3c338e79",
+    "expected_ed25519_public_key": "3a381eb24a6f872d5a08f1fb2564ad040e633346471bb639c5fcb805dae20a21",
+    "expected_ipns_name": "k51qzi5uqu5dhmts1dkbomz1yvmoez92fcpoaflg4yimqd0dz1cec7en7jx8v5"
   }
 ]

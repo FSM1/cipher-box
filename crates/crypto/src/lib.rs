@@ -21,6 +21,7 @@ pub use error::CryptoError;
 pub use hkdf::{
     derive_bin_ipns_keypair, derive_file_ipns_keypair, derive_registry_ipns_keypair,
     derive_vault_ipns_keypair, derive_vault_key_ipns_keypair,
+    derive_vault_settings_ipns_keypair,
 };
 pub use ipns_name::derive_ipns_name;
 pub use utils::{clear_bytes, generate_file_key, generate_iv, generate_random_bytes};

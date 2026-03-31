@@ -545,8 +545,21 @@ Plans:
 - [x] 39-03-PLAN.md — Consumer integration: wire settings into delete, versioning, and retention
 - [x] 39-04-PLAN.md — Vault settings tab UI in Settings page
 
+### Phase 40: Desktop vault settings integration
+
+**Goal:** Propagate user-configurable vault settings (from Phase 39) to the Rust SDK and desktop app. Add `deriveVaultSettingsIpnsKeypair()` to `crates/crypto`, add `VaultSettings` type to `crates/core`, load and decrypt settings during desktop login, and wire loaded values into FUSE operations replacing hardcoded `MAX_VERSIONS_PER_FILE` and `VERSION_COOLDOWN_MS` constants.
+**Requirements**: None (follow-up to Phase 39)
+**Depends on:** Phase 39
+
+**Plans:** 2/2 plans complete
+
+Plans:
+
+- [x] 40-01-PLAN.md — HKDF vault settings derivation + VaultSettings type and validation in Rust crates
+- [x] 40-02-PLAN.md — Load settings in desktop auth flow and wire into FUSE operations
+
 ---
 
 _Roadmap created: 2026-03-07_
 _Last updated: 2026-03-31_
-_Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 4 phases (36-39)_
+_Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 5 phases (36-40)_

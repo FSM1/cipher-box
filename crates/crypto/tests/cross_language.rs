@@ -214,6 +214,9 @@ fn hkdf_cross_language() {
                 let file_id = &info["cipherbox-file-ipns-v1:".len()..];
                 cipherbox_crypto::derive_file_ipns_keypair(&pk, file_id).unwrap()
             }
+            "cipherbox-vault-settings-v1" => {
+                cipherbox_crypto::derive_vault_settings_ipns_keypair(&pk).unwrap()
+            }
             other => panic!("Unknown HKDF info string: {}", other),
         };
 

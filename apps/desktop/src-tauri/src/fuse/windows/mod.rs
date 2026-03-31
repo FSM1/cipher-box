@@ -43,6 +43,8 @@ mod mount_impl {
         root_ipns_private_key: Option<Vec<u8>>,
         tee_public_key: Option<Vec<u8>>,
         tee_key_epoch: Option<u32>,
+        max_versions_per_file: usize,
+        version_cooldown_ms: u64,
     ) -> Result<std::thread::JoinHandle<()>, String> {
         let mount_path = crate::fuse::mount_point();
 
@@ -333,6 +335,8 @@ mod mount_impl {
             temp_dir,
             tee_public_key,
             tee_key_epoch,
+            max_versions_per_file,
+            version_cooldown_ms,
             refresh_rx,
             refresh_tx,
             prefetching: std::collections::HashSet::new(),

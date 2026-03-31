@@ -35,6 +35,9 @@ const REGISTRY_HKDF_INFO: &[u8] = b"cipherbox-device-registry-ipns-v1";
 /// HKDF info for recycle bin IPNS keypair derivation.
 const BIN_HKDF_INFO: &[u8] = b"cipherbox-recycle-bin-ipns-v1";
 
+/// HKDF info for vault settings IPNS keypair derivation.
+const VAULT_SETTINGS_HKDF_INFO: &[u8] = b"cipherbox-vault-settings-v1";
+
 /// HKDF info prefix for per-file IPNS keypair derivation.
 const FILE_HKDF_INFO_PREFIX: &str = "cipherbox-file-ipns-v1:";
 
@@ -122,6 +125,21 @@ pub fn derive_registry_ipns_keypair(
     user_private_key: &[u8; 32],
 ) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), CryptoError> {
     derive_ipns_keypair(user_private_key, REGISTRY_HKDF_INFO)
+}
+
+/// Derive the deterministic Ed25519 IPNS keypair for vault settings.
+///
+/// This IPNS name stores the encrypted user-configurable vault parameters
+/// (retention period, delete behavior, versioning limits). Zero-knowledge:
+/// the server never sees the plaintext settings.
+///
+/// Uses HKDF info "cipherbox-vault-settings-v1" for domain separation.
+///
+/// Returns (ed25519_private_key, ed25519_public_key, ipns_name).
+pub fn derive_vault_settings_ipns_keypair(
+    user_private_key: &[u8; 32],
+) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), CryptoError> {
+    derive_ipns_keypair(user_private_key, VAULT_SETTINGS_HKDF_INFO)
 }
 
 /// Derive the deterministic Ed25519 IPNS keypair for the recycle bin.
@@ -239,5 +257,40 @@ mod tests {
     fn derive_file_9_chars_fails() {
         let result = derive_file_ipns_keypair(&test_private_key(), "123456789");
         assert!(matches!(result, Err(CryptoError::InvalidFileId)));
+    }
+
+    #[test]
+    fn derive_vault_settings_returns_32_byte_keys() {
+        let (priv_key, pub_key, name) =
+            derive_vault_settings_ipns_keypair(&test_private_key()).unwrap();
+        assert_eq!(priv_key.len(), 32);
+        assert_eq!(pub_key.len(), 32);
+        assert!(name.starts_with('k'));
+    }
+
+    #[test]
+    fn derive_vault_settings_is_deterministic() {
+        let key = test_private_key();
+        let (priv1, pub1, name1) = derive_vault_settings_ipns_keypair(&key).unwrap();
+        let (priv2, pub2, name2) = derive_vault_settings_ipns_keypair(&key).unwrap();
+        assert_eq!(*priv1, *priv2);
+        assert_eq!(pub1, pub2);
+        assert_eq!(name1, name2);
+    }
+
+    #[test]
+    fn vault_settings_differs_from_other_derivations() {
+        let key = test_private_key();
+        let (_, settings_pub, settings_name) =
+            derive_vault_settings_ipns_keypair(&key).unwrap();
+        let (_, vault_pub, vault_name) = derive_vault_ipns_keypair(&key).unwrap();
+        let (_, vault_key_pub, vault_key_name) = derive_vault_key_ipns_keypair(&key).unwrap();
+        let (_, bin_pub, bin_name) = derive_bin_ipns_keypair(&key).unwrap();
+        assert_ne!(settings_pub, vault_pub);
+        assert_ne!(settings_name, vault_name);
+        assert_ne!(settings_pub, vault_key_pub);
+        assert_ne!(settings_name, vault_key_name);
+        assert_ne!(settings_pub, bin_pub);
+        assert_ne!(settings_name, bin_name);
     }
 }

@@ -57,6 +57,8 @@ pub async fn mount_filesystem(
     root_ipns_private_key: Option<Vec<u8>>,
     tee_public_key: Option<Vec<u8>>,
     tee_key_epoch: Option<u32>,
+    max_versions_per_file: usize,
+    version_cooldown_ms: u64,
 ) -> Result<std::thread::JoinHandle<()>, String> {
     let mount_path = mount_point();
 
@@ -198,6 +200,7 @@ pub async fn mount_filesystem(
         next_fh: std::sync::atomic::AtomicU64::new(1),
         open_files: HashMap::new(),
         temp_dir, tee_public_key, tee_key_epoch,
+        max_versions_per_file, version_cooldown_ms,
         refresh_rx, refresh_tx,
         prefetching: std::collections::HashSet::new(),
         content_rx, content_tx,
