@@ -25,8 +25,10 @@ import {
 } from '@cipherbox/core';
 import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
-import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../ipns';
+import { createAndPublishIpnsRecord, batchPublishIpnsRecords, resolveIpnsRecord } from '../ipns';
 import { withPerf } from '../perf';
+import { createIpnsRecord, marshalIpnsRecord } from '@cipherbox/core';
+import type { FileIpnsRecordPayload } from '../file';
 
 // Tree traversal utilities
 export { getDepth, calculateSubtreeDepth, isDescendantOf, type TreeNode } from './tree';
@@ -342,4 +344,242 @@ export function moveItem(params: {
   const updatedDestChildren = [...params.destChildren, movedItem];
 
   return { updatedSourceChildren, updatedDestChildren, movedItem };
+}
+
+// ---------------------------------------------------------------------------
+// File registration helpers (batch IPNS publish)
+// ---------------------------------------------------------------------------
+
+/** Safe base64 encoding that avoids call stack overflow from spread operator */
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Build a folder IPNS record payload for batch publishing.
+ *
+ * Creates and signs an IPNS record locally without publishing.
+ * Returns the payload for inclusion in a batch publish call.
+ */
+async function buildFolderIpnsRecord(params: {
+  children: FolderChild[];
+  folderKey: Uint8Array;
+  ipnsPrivateKey: Uint8Array;
+  ipnsName: string;
+  sequenceNumber: bigint;
+  ctx: SdkContext;
+  encryptedIpnsPrivateKey?: string;
+  keyEpoch?: number;
+}): Promise<{
+  cid: string;
+  record: FileIpnsRecordPayload & { recordType: 'folder'; expectedSequenceNumber: string };
+  newSequenceNumber: bigint;
+}> {
+  const metadata: FolderMetadata = {
+    version: 'v2',
+    children: params.children,
+  };
+
+  const encrypted = await encryptFolderMetadata(metadata, params.folderKey);
+  const jsonStr = JSON.stringify(encrypted);
+  const encryptedBytes = new TextEncoder().encode(jsonStr);
+  const { cid } = await addToIpfs(params.ctx, encryptedBytes);
+
+  const newSeq = params.sequenceNumber + 1n;
+  const record = await createIpnsRecord(
+    params.ipnsPrivateKey,
+    `/ipfs/${cid}`,
+    newSeq,
+    24 * 60 * 60 * 1000
+  );
+  const recordBytes = marshalIpnsRecord(record);
+  const recordBase64 = uint8ToBase64(recordBytes);
+
+  return {
+    cid,
+    record: {
+      ipnsName: params.ipnsName,
+      recordBase64,
+      metadataCid: cid,
+      encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+      keyEpoch: params.keyEpoch,
+      recordType: 'folder',
+      expectedSequenceNumber: params.sequenceNumber.toString(),
+    },
+    newSequenceNumber: newSeq,
+  };
+}
+
+/**
+ * Add a single file to a folder and batch-publish both IPNS records.
+ *
+ * Creates a FilePointer, builds a folder IPNS record, and publishes
+ * both the file and folder IPNS records in a single batch API call.
+ *
+ * @returns Created file pointer and new folder sequence number
+ * @throws Error if name collision exists or batch publish fails
+ */
+export async function addFileToFolder(params: {
+  children: FolderChild[];
+  folderKey: Uint8Array;
+  ipnsPrivateKey: Uint8Array;
+  ipnsName: string;
+  sequenceNumber: bigint;
+  fileId: string;
+  name: string;
+  fileIpnsRecord: FileIpnsRecordPayload;
+  ipnsPrivateKeyEncrypted: string;
+  ctx: SdkContext;
+}): Promise<{ filePointer: FilePointer; newSequenceNumber: bigint }> {
+  // 1. Check for name collision
+  const nameExists = params.children.some((c) => c.name === params.name);
+  if (nameExists) {
+    throw new Error('A file with this name already exists');
+  }
+
+  // 2. Create FilePointer
+  const now = Date.now();
+  const filePointer: FilePointer = {
+    type: 'file',
+    id: params.fileId,
+    name: params.name,
+    fileMetaIpnsName: params.fileIpnsRecord.ipnsName,
+    ipnsPrivateKeyEncrypted: params.ipnsPrivateKeyEncrypted,
+    createdAt: now,
+    modifiedAt: now,
+  };
+
+  // 3. Add FilePointer to parent's children
+  const children: FolderChild[] = [...params.children, filePointer];
+
+  // 4. Build folder IPNS record for batch publish
+  const folderResult = await buildFolderIpnsRecord({
+    children,
+    folderKey: params.folderKey,
+    ipnsPrivateKey: params.ipnsPrivateKey,
+    ipnsName: params.ipnsName,
+    sequenceNumber: params.sequenceNumber,
+    ctx: params.ctx,
+  });
+
+  // 5. Batch publish: file IPNS record + folder IPNS record
+  const publishResult = await batchPublishIpnsRecords(
+    [{ ...params.fileIpnsRecord, recordType: 'file' as const }, folderResult.record],
+    params.ctx
+  );
+
+  if (publishResult.totalFailed > 0) {
+    throw new Error('Failed to publish one or more IPNS records');
+  }
+
+  return { filePointer, newSequenceNumber: folderResult.newSequenceNumber };
+}
+
+/**
+ * Add multiple files to a folder and batch-publish all IPNS records.
+ *
+ * Creates FilePointers for each file, builds a single folder IPNS record,
+ * and publishes all N file + 1 folder IPNS records in a single batch API call.
+ *
+ * @returns Created file pointers and new folder sequence number
+ * @throws Error if any name collision exists or batch publish fails
+ */
+export async function addFilesToFolder(params: {
+  children: FolderChild[];
+  folderKey: Uint8Array;
+  ipnsPrivateKey: Uint8Array;
+  ipnsName: string;
+  sequenceNumber: bigint;
+  files: Array<{
+    fileId: string;
+    name: string;
+    fileIpnsRecord: FileIpnsRecordPayload;
+    ipnsPrivateKeyEncrypted: string;
+  }>;
+  ctx: SdkContext;
+}): Promise<{ filePointers: FilePointer[]; newSequenceNumber: bigint }> {
+  // 1. Build a set of existing child names for collision detection
+  const existingNames = new Set(params.children.map((c) => c.name));
+
+  // 2. Create FilePointer for each file, checking collisions
+  const filePointers: FilePointer[] = [];
+  const now = Date.now();
+
+  for (const file of params.files) {
+    if (existingNames.has(file.name)) {
+      throw new Error(`A file with name "${file.name}" already exists`);
+    }
+    existingNames.add(file.name);
+
+    const filePointer: FilePointer = {
+      type: 'file',
+      id: file.fileId,
+      name: file.name,
+      fileMetaIpnsName: file.fileIpnsRecord.ipnsName,
+      ipnsPrivateKeyEncrypted: file.ipnsPrivateKeyEncrypted,
+      createdAt: now,
+      modifiedAt: now,
+    };
+    filePointers.push(filePointer);
+  }
+
+  // 3. Build updated children array
+  const children: FolderChild[] = [...params.children, ...filePointers];
+
+  // 4. Build folder IPNS record
+  const folderResult = await buildFolderIpnsRecord({
+    children,
+    folderKey: params.folderKey,
+    ipnsPrivateKey: params.ipnsPrivateKey,
+    ipnsName: params.ipnsName,
+    sequenceNumber: params.sequenceNumber,
+    ctx: params.ctx,
+  });
+
+  // 5. Batch publish: all N file IPNS records + 1 folder IPNS record
+  const allRecords = [
+    ...params.files.map((f) => ({ ...f.fileIpnsRecord, recordType: 'file' as const })),
+    folderResult.record,
+  ];
+  const publishResult = await batchPublishIpnsRecords(allRecords, params.ctx);
+
+  if (publishResult.totalFailed > 0) {
+    throw new Error('Failed to publish one or more IPNS records');
+  }
+
+  return { filePointers, newSequenceNumber: folderResult.newSequenceNumber };
+}
+
+/**
+ * Replace file content in v2 metadata (content update).
+ *
+ * Publishes ONLY the file's IPNS record. The folder metadata is NOT
+ * touched because the FilePointer still points to the same fileMetaIpnsName,
+ * which now resolves to the updated content.
+ *
+ * @throws Error if file not found or publish fails
+ */
+export async function replaceFileInFolder(params: {
+  children: FolderChild[];
+  fileId: string;
+  fileIpnsRecord: FileIpnsRecordPayload;
+  ctx: SdkContext;
+}): Promise<void> {
+  // 1. Verify file exists in parent's children
+  const fileExists = params.children.some((c) => c.type === 'file' && c.id === params.fileId);
+  if (!fileExists) throw new Error('File not found');
+
+  // 2. Publish ONLY the file IPNS record (folder metadata untouched!)
+  const publishResult = await batchPublishIpnsRecords(
+    [{ ...params.fileIpnsRecord, recordType: 'file' as const }],
+    params.ctx
+  );
+
+  if (publishResult.totalFailed > 0) {
+    throw new Error('Failed to publish file IPNS record');
+  }
 }
