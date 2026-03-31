@@ -1,0 +1,114 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e15e26ca9481",
+  "session_id": "69f88499-e5aa-4534-b350-933b498d34a2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-31T12:07:51.746021Z",
+  "branch": "docs/phase-39-context",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "5197c45ac692",
+  "token_usage": {
+    "input_tokens": 206,
+    "cache_creation_tokens": 437156,
+    "cache_read_tokens": 18563285,
+    "output_tokens": 41322,
+    "api_call_count": 179
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on the phase-39 branch (user-configurable vault parameters), then clean up follow-on issues raised by subsequent review rounds.",
+    "outcome": "All 15 review threads across 3 review passes were resolved; fixes were committed and pushed, tests pass, and dead code (useBinStore.retentionDays) was fully removed. A pinned axios lockfile was also committed to address a poisoned-version security incident.",
+    "learnings": {
+      "repo": [
+        "Phase 39 introduces user-configurable vault parameters: recycleBinRetentionDays (0-365, where 0 = immediate purge), maxVersionsPerFile, versionCooldownMinutes, deleteBehavior.",
+        "TEE IPNS key enrollment must follow the pattern in StorageTab.tsx when saving vault settings — wrap keypair in TEE enrollment before calling createAndPublishIpnsRecord.",
+        "DEFAULT_VAULT_SETTINGS in packages/core/src/vault/settings.ts is the canonical source of truth for defaults; validators should reference it instead of using literals.",
+        "useBinStore.retentionDays was a dead write-only field — the actual source of truth is now useVaultSettingsStore.settings.recycleBinRetentionDays.",
+        "The monorepo has a YAML formatting inconsistency in pnpm-lock.yaml between inline {key: value} and expanded block styles depending on which pnpm version regenerated it — functionally identical but produces large noisy diffs.",
+        "commit 560c871fe on docs/phase-38-context fixed a circular @cipherbox/core import in vault-ipns.test.ts that had not yet been merged into phase-39 branch."
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/vault/settings.ts",
+          "line": 35,
+          "end_line": 57,
+          "finding": "Hardcoded default literals (30, 10, 15, 'bin') duplicated DEFAULT_VAULT_SETTINGS; fixed to reference canonical object."
+        },
+        {
+          "path": "packages/core/src/vault/settings.ts",
+          "line": 41,
+          "end_line": 41,
+          "finding": "min clamp for recycleBinRetentionDays was 1; changed to 0 to allow immediate-purge semantics per D-03."
+        },
+        {
+          "path": "packages/core/src/vault/types.ts",
+          "line": 76,
+          "end_line": 77,
+          "finding": "JSDoc said 'range: 1-365'; corrected to '0-365; 0 disables / immediate purge'."
+        },
+        {
+          "path": "apps/web/src/hooks/useBin.ts",
+          "line": 23,
+          "end_line": 23,
+          "finding": "Now reads retentionDays directly from useVaultSettingsStore, making the bin store field redundant."
+        },
+        {
+          "path": "apps/web/src/stores/bin.store.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "retentionDays field and setRetentionDays setter removed entirely — dead code after vault settings store became source of truth."
+        },
+        {
+          "path": "apps/web/src/components/settings/VaultTab.tsx",
+          "line": 73,
+          "end_line": 73,
+          "finding": "setTimeout leak on unmount fixed with useRef + cleanup in useEffect return."
+        },
+        {
+          "path": "apps/web/src/services/file-metadata.service.ts",
+          "line": 238,
+          "end_line": 245,
+          "finding": "JSDoc still referenced hardcoded VERSION_COOLDOWN_MS; updated to document configurable cooldown via getVersionCooldownMs()."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/vault-settings-ipns.test.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "New test file created for deriveVaultSettingsIpnsKeypair (5 tests) rather than adding to vault-ipns.test.ts which had a pre-existing @cipherbox/core import resolution failure."
+        },
+        {
+          "path": "packages/core/src/__tests__/vault-settings.test.ts",
+          "line": 52,
+          "end_line": 55,
+          "finding": "Test was asserting clamp(0) =\u003e 1; updated to expect 0 and renamed to reflect 0-is-valid semantics."
+        }
+      ],
+      "workflow": [
+        "When merging main into a feature branch, always verify STATE.md and ROADMAP.md weren't overwritten with stale main values — merge doesn't know about in-progress phase state.",
+        "Stashing before merging main avoids losing unstaged review fixes during conflict resolution.",
+        "Verify all findings against current code before implementing — multiple rounds of review left several 'findings' already addressed by earlier commits in the same session.",
+        "CI failures on updated tests (min boundary changes) are expected when changing validation constraints — always update existing tests that assert old behavior.",
+        "pnpm lockfile YAML formatting churn from merges is cosmetic; only real content diff to check is package version specifiers (e.g., ^1.13.2 vs 1.13.2).",
+        "Use a separate test file rather than extending a file with a broken import, to unblock test runs without fixing unrelated issues."
+      ]
+    },
+    "friction": [
+      "pnpm lockfile generated 15k lines of formatting churn after merging main, requiring manual investigation to confirm it was safe.",
+      "vault-ipns.test.ts had a pre-existing @cipherbox/core circular import failure that blocked running new tests in the same file — required creating a separate test file as workaround.",
+      "The fix for the circular import existed on phase-38 branch but wasn't merged into phase-39, causing confusion about whether the test failure was new.",
+      "Three consecutive review passes with overlapping/duplicate findings (setRetentionDays flagged in round 1, 2, and 3; min=0 range flagged in rounds 2 and 3) added overhead.",
+      "User had to manually interrupt a commit mid-flow to run pnpm lint:fix, suggesting linting should happen before commit automatically.",
+      "Axios poisoned-version incident required manual lockfile pinning (^1.13.2 → 1.13.2) outside normal workflow."
+    ],
+    "open_items": [
+      "vault-ipns.test.ts circular import from @cipherbox/core is a pre-existing issue not fixed in this session — the workaround (separate test file) leaves the original file still broken.",
+      "keypair.privateKey zeroing after deriveVaultSettingsIpnsKeypair use was flagged but deferred as 'not applicable' — worth revisiting if a formal secrets-in-memory audit is done.",
+      "pnpm lockfile YAML formatting inconsistency between branches will continue producing noisy diffs until all contributors are on the same pnpm version.",
+      "Presets for vault parameter quick-select (VaultTab thread 5) explicitly deferred as a design simplification — may be revisited in a later phase."
+    ]
+  }
+}
