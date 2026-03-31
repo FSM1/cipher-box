@@ -158,7 +158,7 @@
 .upload-inline-progress-fill {
   height: 100%;
   background-color: var(--color-green-primary);
-  transition: width 0.2s ease;
+  transition: width 0.2s ease, opacity 0.15s ease;
 }
 
 .upload-inline-progress-fill[data-status='complete'] {
@@ -169,28 +169,43 @@
   background-color: var(--color-error);
 }
 
-/* Encrypting pulse animation */
-@keyframes upload-inline-pulse {
-  0%,
-  100% {
-    opacity: 1;
+/* Encrypting shimmer animation — indeterminate progress on the track, not the fill.
+   The fill stays at width:0% during encryption so there's no jarring 100%→0% jump
+   when the first real progress event arrives. */
+@keyframes upload-inline-shimmer {
+  0% {
+    background-position: -200% 0;
   }
-  50% {
-    opacity: 0.4;
+  100% {
+    background-position: 200% 0;
   }
 }
 
+.upload-inline-progress-track--pulse {
+  background: linear-gradient(
+    90deg,
+    var(--color-border-dim) 30%,
+    var(--color-green-primary) 50%,
+    var(--color-border-dim) 70%
+  );
+  background-size: 200% 100%;
+  animation: upload-inline-shimmer 1.5s ease-in-out infinite;
+}
+
 .upload-inline-progress-track--pulse .upload-inline-progress-fill {
-  width: 100% !important;
-  animation: upload-inline-pulse 1.5s ease-in-out infinite;
+  /* Hide the fill during encryption — the track shimmer IS the indicator */
+  opacity: 0;
 }
 
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   .upload-inline-progress-fill,
-  .upload-inline-progress-track--pulse .upload-inline-progress-fill {
+  .upload-inline-progress-track--pulse {
     animation: none;
     transition: none;
+  }
+  .upload-inline-progress-track--pulse .upload-inline-progress-fill {
+    opacity: 1;
   }
 }
 
