@@ -1,5 +1,4 @@
 // @ts-check
-/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * Post-Merge Release Target Injection — reads final release labels from
  * the merged PR, computes target versions via semver bumps, and writes
@@ -21,16 +20,16 @@
  *   D-30: RP consumes and clears release-as in release PR
  */
 
-const core = require('@actions/core');
-const github = require('@actions/github');
-const fs = require('fs');
-const path = require('path');
-const {
+import * as core from '@actions/core';
+import * as github from '@actions/github';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
   BUMP_LEVELS,
   LABEL_TO_PATHS,
   LABEL_TYPE_TO_BUMP,
   MONOTONIC_PATHS,
-} = require('./release-constants.cjs');
+} from './release-constants.js';
 
 // Alias for readability in this script
 const BUMP_TYPE_TO_LEVEL = BUMP_LEVELS;
@@ -214,11 +213,11 @@ async function run() {
   }
 
   // ------ Section 4 & 5: Read manifest, config, compute versions, handle existing release-as ------
-  const configPath = path.join(process.cwd(), 'release-please-config.json');
-  const manifestPath = path.join(process.cwd(), '.release-please-manifest.json');
+  const configPath = join(process.cwd(), 'release-please-config.json');
+  const manifestPath = join(process.cwd(), '.release-please-manifest.json');
 
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 
   /** @type {Array<{path: string, component: string, currentVersion: string, targetVersion: string, bumpType: string}>} */
   const bumped = [];
@@ -284,7 +283,7 @@ async function run() {
 
   // ------ Section 6: Write updated config ------
   // Write updated config back to disk
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8'); // release-please-config.json
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8'); // release-please-config.json
   core.info(`Updated release-please-config.json with ${bumped.length} release-as entries`);
 
   // ------ Section 7: Output Summary ------

@@ -1,5 +1,4 @@
 // @ts-check
-/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * PR Release Preview — analyzes individual PR commits (before squash),
  * maps changed files to packages, determines bump level per package,
@@ -13,11 +12,11 @@
  * Uses only @actions/core and @actions/github (pre-installed on runners).
  */
 
-const core = require('@actions/core');
-const github = require('@actions/github');
-const fs = require('fs');
-const path = require('path');
-const { BUMP_LEVELS, PATH_TO_LABEL, MONOTONIC_PATHS } = require('./release-constants.cjs');
+import * as core from '@actions/core';
+import * as github from '@actions/github';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { BUMP_LEVELS, PATH_TO_LABEL, MONOTONIC_PATHS } from './release-constants.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -88,8 +87,8 @@ const COMMENT_MARKER = '<!-- release-preview -->';
  * @returns {string[]}
  */
 function getPackagePaths() {
-  const configPath = path.join(process.cwd(), 'release-please-config.json');
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const configPath = join(process.cwd(), 'release-please-config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
   return Object.keys(config.packages).filter((p) => p !== '.');
 }
 

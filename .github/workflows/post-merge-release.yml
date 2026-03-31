@@ -39,18 +39,14 @@ jobs:
           node-version: '22'
 
       - name: Install script dependencies
-        run: |
-          mkdir -p /tmp/actions-deps && cd /tmp/actions-deps
-          npm init -y > /dev/null 2>&1
-          npm install @actions/core @actions/github > /dev/null 2>&1
+        run: npm install --no-save @actions/core @actions/github
 
       - name: Compute and inject release targets
         id: inject
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           COMMIT_SHA: ${{ github.sha }}
-          NODE_PATH: /tmp/actions-deps/node_modules
-        run: node .github/scripts/post-merge-release.cjs
+        run: node .github/scripts/post-merge-release.js
 
       - name: Commit release targets
         if: steps.inject.outputs.packages_bumped != '[]' && steps.inject.outputs.packages_bumped != ''
