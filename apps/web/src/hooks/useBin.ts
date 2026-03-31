@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useBinStore } from '../stores/bin.store';
+import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import type { BinEntry } from '@cipherbox/core';
 import { logger } from '../lib/logger';
@@ -19,7 +20,7 @@ export function useBin() {
 
   const entries = useBinStore((s) => s.entries);
   const isLoaded = useBinStore((s) => s.isLoaded);
-  const retentionDays = useBinStore((s) => s.retentionDays);
+  const retentionDays = useVaultSettingsStore((s) => s.settings.recycleBinRetentionDays);
 
   /**
    * Load bin metadata from IPNS and trigger auto-purge of expired entries.
@@ -42,7 +43,8 @@ export function useBin() {
       binStore.setEntries(binState.entries, binState.sequenceNumber);
 
       // Non-blocking: purge expired entries after loading
-      const currentRetention = useBinStore.getState().retentionDays;
+      // Use vault settings store as single source of truth for retention
+      const currentRetention = useVaultSettingsStore.getState().settings.recycleBinRetentionDays;
       void getSdkClient()
         .purgeExpired(currentRetention)
         .catch(() => {

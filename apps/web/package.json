@@ -27,7 +27,7 @@
     "@toruslabs/tss-dkls-lib": "^4.1.0",
     "@web3auth/ethereum-mpc-provider": "^9.7.0",
     "@web3auth/mpc-core-kit": "^3.5.0",
-    "axios": "^1.13.2",
+    "axios": "1.13.2",
     "bn.js": "^5.2.1",
     "buffer": "^6.0.3",
     "minisearch": "^7.2.0",

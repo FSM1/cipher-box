@@ -540,10 +540,10 @@ Plans:
 
 Plans:
 
-- [ ] 39-01-PLAN.md — Core VaultSettings type, defaults, validation, and HKDF derivation
-- [ ] 39-02-PLAN.md — Zustand settings store and encrypted IPNS load/save service
-- [ ] 39-03-PLAN.md — Consumer integration: wire settings into delete, versioning, and retention
-- [ ] 39-04-PLAN.md — Vault settings tab UI in Settings page
+- [x] 39-01-PLAN.md — Core VaultSettings type, defaults, validation, and HKDF derivation
+- [x] 39-02-PLAN.md — Zustand settings store and encrypted IPNS load/save service
+- [x] 39-03-PLAN.md — Consumer integration: wire settings into delete, versioning, and retention
+- [x] 39-04-PLAN.md — Vault settings tab UI in Settings page
 
 ---
 

@@ -9,4 +9,5 @@ export {
   deriveVaultIpnsKeypair,
   deriveVaultKeyIpnsKeypair,
   deriveByoConfigIpnsKeypair,
+  deriveVaultSettingsIpnsKeypair,
 } from './derive-ipns';

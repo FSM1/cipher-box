@@ -15,15 +15,11 @@ type BinState = {
   sequenceNumber: number;
   /** IPNS name for the bin record (display/debug) */
   binIpnsName: string | null;
-  /** Retention period from API config (days) */
-  retentionDays: number;
-
   // Actions
   setEntries: (entries: BinEntry[], seq: number) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   setBinIpnsName: (name: string) => void;
-  setRetentionDays: (days: number) => void;
   clearBin: () => void;
 
   // SDK event subscription
@@ -52,7 +48,6 @@ export const useBinStore = create<BinState>((set) => ({
   error: null,
   sequenceNumber: 0,
   binIpnsName: null,
-  retentionDays: 30,
 
   // Actions
   setEntries: (entries, seq) =>
@@ -70,11 +65,6 @@ export const useBinStore = create<BinState>((set) => ({
 
   setBinIpnsName: (name) => set({ binIpnsName: name }),
 
-  setRetentionDays: (days) =>
-    set({
-      retentionDays: Number.isFinite(days) ? Math.max(0, Math.floor(days)) : 30,
-    }),
-
   clearBin: () => {
     // Unsubscribe from SDK events before clearing
     if (_binSdkUnsubscribe) {
@@ -89,7 +79,6 @@ export const useBinStore = create<BinState>((set) => ({
       error: null,
       sequenceNumber: 0,
       binIpnsName: null,
-      retentionDays: 30,
     });
   },
 

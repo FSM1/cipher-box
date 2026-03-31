@@ -29,6 +29,7 @@ const VAULT_HKDF_SALT = new TextEncoder().encode('CipherBox-v1');
 const VAULT_HKDF_INFO = new TextEncoder().encode('cipherbox-vault-ipns-v1');
 const VAULT_KEY_HKDF_INFO = new TextEncoder().encode('cipherbox-vault-key-ipns-v1');
 const BYO_CONFIG_HKDF_INFO = new TextEncoder().encode('cipherbox-byo-ipfs-config-v1');
+const VAULT_SETTINGS_HKDF_INFO = new TextEncoder().encode('cipherbox-vault-settings-v1');
 
 /**
  * Derive the deterministic Ed25519 IPNS keypair for the user's vault.
@@ -137,6 +138,48 @@ export async function deriveByoConfigIpnsKeypair(userPrivateKey: Uint8Array): Pr
     inputKey: userPrivateKey,
     salt: VAULT_HKDF_SALT,
     info: BYO_CONFIG_HKDF_INFO,
+    outputLength: 32,
+  });
+
+  const ed25519PublicKey = await ed.getPublicKeyAsync(ed25519Seed);
+  const ipnsName = await deriveIpnsName(ed25519PublicKey);
+
+  return {
+    privateKey: ed25519Seed,
+    publicKey: ed25519PublicKey,
+    ipnsName,
+  };
+}
+
+/**
+ * Derive a dedicated Ed25519 IPNS keypair for vault settings storage.
+ *
+ * This IPNS name stores the encrypted user-configurable vault parameters
+ * (retention period, delete behavior, versioning limits). Zero-knowledge:
+ * the server never sees the plaintext settings.
+ *
+ * Uses "cipherbox-vault-settings-v1" info for domain separation.
+ *
+ * @param userPrivateKey - 32-byte secp256k1 private key
+ * @returns Ed25519 keypair and IPNS name for vault settings
+ * @throws CryptoError if the private key is not 32 bytes
+ */
+export async function deriveVaultSettingsIpnsKeypair(userPrivateKey: Uint8Array): Promise<{
+  privateKey: Uint8Array;
+  publicKey: Uint8Array;
+  ipnsName: string;
+}> {
+  if (userPrivateKey.length !== SECP256K1_PRIVATE_KEY_SIZE) {
+    throw new CryptoError(
+      'Invalid private key size for vault settings derivation',
+      'INVALID_KEY_SIZE'
+    );
+  }
+
+  const ed25519Seed = await deriveKey({
+    inputKey: userPrivateKey,
+    salt: VAULT_HKDF_SALT,
+    info: VAULT_SETTINGS_HKDF_INFO,
     outputLength: 32,
   });
 

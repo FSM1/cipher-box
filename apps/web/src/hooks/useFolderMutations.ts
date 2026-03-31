@@ -5,8 +5,37 @@ import { getDepth, isDescendantOf, calculateSubtreeDepth } from '@cipherbox/sdk-
 import type { FolderNode } from '../stores/folder.store';
 import { getSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
 import { BinNotLoadedError } from '@cipherbox/sdk';
+import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { MAX_FOLDER_DEPTH, getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
+
+/**
+ * Delete an item using the user's preferred delete behavior.
+ * 'permanent' skips the bin; 'bin' soft-deletes with fallback to hard delete
+ * when the bin is not loaded.
+ */
+async function deleteWithBehavior(
+  client: ReturnType<typeof getSdkClient>,
+  ipnsName: string,
+  itemId: string,
+  parentPath: string
+): Promise<void> {
+  const { deleteBehavior } = useVaultSettingsStore.getState().settings;
+
+  if (deleteBehavior === 'permanent') {
+    await client.deleteItem(ipnsName, itemId);
+  } else {
+    try {
+      await client.deleteToBin(ipnsName, itemId, parentPath);
+    } catch (binErr) {
+      if (binErr instanceof BinNotLoadedError) {
+        await client.deleteItem(ipnsName, itemId);
+      } else {
+        throw binErr;
+      }
+    }
+  }
+}
 
 /**
  * Build a breadcrumb-style path string for a folder by walking up the tree.
@@ -319,17 +348,7 @@ export function useFolderMutations() {
         const client = getSdkClient();
         const parentPath = buildFolderPath(parentId);
 
-        // Try soft-delete (move to bin) first; fall back to hard delete if bin not loaded
-        try {
-          await client.deleteToBin(parentFolder.ipnsName, itemId, parentPath);
-        } catch (binErr) {
-          // Bin not loaded -- fall back to hard metadata delete
-          if (binErr instanceof BinNotLoadedError) {
-            await client.deleteItem(parentFolder.ipnsName, itemId);
-          } else {
-            throw binErr;
-          }
-        }
+        await deleteWithBehavior(client, parentFolder.ipnsName, itemId, parentPath);
 
         // SDK emits folder:updated -> store subscription updates children
         // Remove folder subtree from store if deleting a folder
@@ -405,16 +424,7 @@ export function useFolderMutations() {
           const freshParent = getParentFolder(parentId);
           if (freshParent) ensureFolderRegistered(freshParent);
 
-          // Try soft-delete (bin) first; fall back to hard delete
-          try {
-            await client.deleteToBin(parentFolder.ipnsName, item.id, parentPath);
-          } catch (binErr) {
-            if (binErr instanceof BinNotLoadedError) {
-              await client.deleteItem(parentFolder.ipnsName, item.id);
-            } else {
-              throw binErr;
-            }
-          }
+          await deleteWithBehavior(client, parentFolder.ipnsName, item.id, parentPath);
         }
 
         // Remove nested folders from store

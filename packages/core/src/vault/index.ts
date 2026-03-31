@@ -12,4 +12,5 @@ export {
   detectBlobVersion,
   BLOB_V2_VERSION,
 } from './blob';
-export type { VaultInit, EncryptedVaultKeys, ByoIpfsConfig } from './types';
+export { DEFAULT_VAULT_SETTINGS, validateVaultSettings } from './settings';
+export type { VaultInit, EncryptedVaultKeys, ByoIpfsConfig, VaultSettings } from './types';
