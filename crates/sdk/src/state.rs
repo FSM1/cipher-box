@@ -9,6 +9,7 @@ use zeroize::Zeroize;
 
 use cipherbox_api_client::ApiClient;
 use cipherbox_api_client::TeeKeysResponse;
+use cipherbox_core::VaultSettings;
 
 /// Sync status for external notification via generic callback.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +50,10 @@ pub struct KeyState {
     /// Current and previous TEE public keys for IPNS key encryption.
     pub tee_keys: RwLock<Option<TeeKeysResponse>>,
 
+    /// User-configurable vault settings (retention, versioning, delete behavior).
+    /// Non-optional: defaults to default_vault_settings() when not loaded from IPNS.
+    pub vault_settings: RwLock<VaultSettings>,
+
     /// Whether the user is fully authenticated with vault keys decrypted.
     pub is_authenticated: RwLock<bool>,
 }
@@ -65,6 +70,7 @@ impl KeyState {
             root_ipns_private_key: RwLock::new(None),
             user_id: RwLock::new(None),
             tee_keys: RwLock::new(None),
+            vault_settings: RwLock::new(cipherbox_core::default_vault_settings()),
             is_authenticated: RwLock::new(false),
         }
     }
@@ -113,6 +119,7 @@ impl KeyState {
         *self.root_ipns_name.write().await = None;
         *self.user_id.write().await = None;
         *self.tee_keys.write().await = None;
+        *self.vault_settings.write().await = cipherbox_core::default_vault_settings();
         *self.is_authenticated.write().await = false;
 
         // Clear access token from API client
@@ -139,6 +146,7 @@ mod tests {
         assert!(state.root_ipns_private_key.read().await.is_none());
         assert!(state.user_id.read().await.is_none());
         assert!(state.tee_keys.read().await.is_none());
+        assert_eq!(*state.vault_settings.read().await, cipherbox_core::default_vault_settings());
         assert!(!*state.is_authenticated.read().await);
     }
 
@@ -176,9 +184,18 @@ mod tests {
         *state.user_id.write().await = Some("user-abc".to_string());
         *state.is_authenticated.write().await = true;
 
+        // Set vault settings to non-default values
+        *state.vault_settings.write().await = cipherbox_core::VaultSettings {
+            version: "v1".to_string(),
+            recycle_bin_retention_days: 60,
+            delete_behavior: cipherbox_core::DeleteBehavior::Permanent,
+            max_versions_per_file: 50,
+            version_cooldown_minutes: 30,
+        };
+
         state.clear().await;
 
-        // All fields should be None / false after clear.
+        // All fields should be None / false / defaults after clear.
         assert!(state.private_key.read().await.is_none());
         assert!(state.public_key.read().await.is_none());
         assert!(state.root_folder_key.read().await.is_none());
@@ -186,6 +203,7 @@ mod tests {
         assert!(state.root_ipns_name.read().await.is_none());
         assert!(state.user_id.read().await.is_none());
         assert!(state.tee_keys.read().await.is_none());
+        assert_eq!(*state.vault_settings.read().await, cipherbox_core::default_vault_settings());
         assert!(!*state.is_authenticated.read().await);
     }
 

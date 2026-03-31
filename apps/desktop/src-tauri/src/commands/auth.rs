@@ -87,6 +87,61 @@ pub async fn handle_auth_complete(
     .await
 }
 
+/// Load user-configurable vault settings from encrypted IPNS entry.
+///
+/// Pattern: derive IPNS keypair -> resolve IPNS -> fetch IPFS -> ECIES unwrap -> parse JSON -> validate.
+/// Returns default settings on any failure (IPNS not found, decrypt error, parse error).
+/// Per D-03 and D-05: graceful fallback, desktop is read-only for settings.
+async fn load_vault_settings(
+    api: &std::sync::Arc<cipherbox_api_client::ApiClient>,
+    private_key: &[u8; 32],
+) -> cipherbox_core::VaultSettings {
+    let result: Result<cipherbox_core::VaultSettings, String> = async {
+        // 1. Derive IPNS keypair for vault settings
+        let (_priv_key, _pub_key, ipns_name) =
+            cipherbox_crypto::hkdf::derive_vault_settings_ipns_keypair(private_key)
+                .map_err(|e| format!("HKDF derivation failed: {:?}", e))?;
+
+        // 2. Resolve IPNS name to CID
+        let resolved = cipherbox_api_client::ipns::resolve_ipns(api, &ipns_name)
+            .await
+            .map_err(|e| format!("IPNS resolve failed: {}", e))?;
+
+        // 3. Fetch encrypted blob from IPFS
+        let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &resolved.cid)
+            .await
+            .map_err(|e| format!("IPFS fetch failed: {}", e))?;
+
+        // 4. ECIES decrypt with user's private key (NOT AES-GCM - vault settings use ECIES wrapKey)
+        let plaintext = cipherbox_crypto::ecies::unwrap_key(&encrypted, private_key)
+            .map_err(|e| format!("ECIES unwrap failed: {:?}", e))?;
+
+        // 5. Parse JSON and validate
+        let parsed: serde_json::Value = serde_json::from_slice(&plaintext)
+            .map_err(|e| format!("JSON parse failed: {}", e))?;
+
+        Ok(cipherbox_core::validate_vault_settings(&parsed))
+    }
+    .await;
+
+    match result {
+        Ok(settings) => {
+            log::info!(
+                "Vault settings loaded: maxVersions={}, cooldown={}min, retention={}d, delete={:?}",
+                settings.max_versions_per_file,
+                settings.version_cooldown_minutes,
+                settings.recycle_bin_retention_days,
+                settings.delete_behavior
+            );
+            settings
+        }
+        Err(e) => {
+            log::warn!("Vault settings load failed (using defaults): {}", e);
+            cipherbox_core::default_vault_settings()
+        }
+    }
+}
+
 /// Shared post-auth setup used by both `handle_auth_complete` and `handle_test_login_complete`.
 ///
 /// Stores tokens and keys, initializes/fetches vault, registers device, mounts FUSE,
@@ -136,6 +191,17 @@ pub(crate) async fn complete_auth_setup(
             fetch_and_decrypt_vault(state).await?;
         }
         Err(e) => return Err(e),
+    }
+
+    // 5b. Load vault settings (non-blocking, graceful fallback to defaults)
+    {
+        let pk_slice: &[u8] = &private_key_bytes;
+        if let Ok(pk_arr) = <[u8; 32]>::try_from(pk_slice) {
+            let settings = load_vault_settings(&state.sdk.api, &pk_arr).await;
+            *state.sdk.vault_settings.write().await = settings;
+        } else {
+            log::warn!("Private key not 32 bytes, using default vault settings");
+        }
     }
 
     // 6. Mark as authenticated
