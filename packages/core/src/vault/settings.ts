@@ -32,11 +32,9 @@ export function validateVaultSettings(input: unknown): VaultSettings {
   if (!input || typeof input !== 'object') return { ...DEFAULT_VAULT_SETTINGS };
   const raw = input as Record<string, unknown>;
 
-  const recycleBinRetentionDays = clamp(toNumber(raw.recycleBinRetentionDays, 30), 1, 365);
+  const recycleBinRetentionDays = clamp(toNumber(raw.recycleBinRetentionDays, 30), 0, 365);
   const deleteBehavior =
-    raw.deleteBehavior === 'bin' || raw.deleteBehavior === 'permanent'
-      ? raw.deleteBehavior
-      : 'bin';
+    raw.deleteBehavior === 'bin' || raw.deleteBehavior === 'permanent' ? raw.deleteBehavior : 'bin';
   const maxVersionsPerFile = clamp(toNumber(raw.maxVersionsPerFile, 10), 0, 100);
   const versionCooldownMinutes = clamp(toNumber(raw.versionCooldownMinutes, 15), 0, 1440);
 

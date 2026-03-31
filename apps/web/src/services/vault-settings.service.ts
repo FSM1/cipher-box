@@ -5,7 +5,14 @@
  * ECIES encrypt with user's publicKey, upload to IPFS, publish IPNS record.
  */
 
-import { wrapKey, unwrapKey, clearBytes, deriveVaultSettingsIpnsKeypair } from '@cipherbox/crypto';
+import {
+  wrapKey,
+  unwrapKey,
+  clearBytes,
+  deriveVaultSettingsIpnsKeypair,
+  hexToBytes,
+  bytesToHex,
+} from '@cipherbox/crypto';
 import { type VaultSettings, DEFAULT_VAULT_SETTINGS, validateVaultSettings } from '@cipherbox/core';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
@@ -52,7 +59,7 @@ export async function loadVaultSettings(userPrivateKey: Uint8Array): Promise<Vau
     const result = await Promise.race([
       inner(),
       new Promise<VaultSettings>((resolve) =>
-        setTimeout(() => resolve({ ...DEFAULT_VAULT_SETTINGS }), LOAD_TIMEOUT_MS),
+        setTimeout(() => resolve({ ...DEFAULT_VAULT_SETTINGS }), LOAD_TIMEOUT_MS)
       ),
     ]);
     return result;
@@ -79,8 +86,9 @@ export async function saveVaultSettings(params: {
   settings: VaultSettings;
   userPublicKey: Uint8Array;
   userPrivateKey: Uint8Array;
+  teeKeys?: { currentEpoch: number; currentPublicKey: string } | null;
 }): Promise<void> {
-  const { settings, userPublicKey, userPrivateKey } = params;
+  const { settings, userPublicKey, userPrivateKey, teeKeys } = params;
 
   // 1. Serialize and encrypt
   const plaintext = new TextEncoder().encode(JSON.stringify(settings));
@@ -109,12 +117,24 @@ export async function saveVaultSettings(params: {
     // First publish -- start from 0
   }
 
-  // 5. Create and publish IPNS record
+  // 5. Wrap IPNS private key for TEE republishing (if available)
+  let encryptedIpnsPrivateKey: string | undefined;
+  let keyEpoch: number | undefined;
+  if (teeKeys?.currentPublicKey) {
+    const teePublicKey = hexToBytes(teeKeys.currentPublicKey);
+    const wrappedKey = await wrapKey(keypair.privateKey, teePublicKey);
+    encryptedIpnsPrivateKey = bytesToHex(wrappedKey);
+    keyEpoch = teeKeys.currentEpoch;
+  }
+
+  // 6. Create and publish IPNS record
   const result = await createAndPublishIpnsRecord({
     ipnsPrivateKey: keypair.privateKey,
     ipnsName: keypair.ipnsName,
     metadataCid: cid,
     sequenceNumber,
+    encryptedIpnsPrivateKey,
+    keyEpoch,
   });
 
   if (!result.success) {

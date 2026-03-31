@@ -52,7 +52,8 @@ export function useBin() {
       }
 
       // Non-blocking: purge expired entries after loading
-      const currentRetention = useBinStore.getState().retentionDays;
+      // Use vault settings store as single source of truth for retention
+      const currentRetention = useVaultSettingsStore.getState().settings.recycleBinRetentionDays;
       void purgeExpired({
         retentionDays: currentRetention,
         userPublicKey: auth.vaultKeypair.publicKey,

@@ -1,9 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import {
-  type VaultSettings,
-  DEFAULT_VAULT_SETTINGS,
-  validateVaultSettings,
-} from '@cipherbox/core';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { type VaultSettings, DEFAULT_VAULT_SETTINGS, validateVaultSettings } from '@cipherbox/core';
 import { useVaultSettingsStore } from '../../stores/vault-settings.store';
 import { saveVaultSettings } from '../../services/vault-settings.service';
 import { useAuthStore } from '../../stores/auth.store';
@@ -20,6 +16,7 @@ export function VaultTab() {
   const storeSettings = useVaultSettingsStore((s) => s.settings);
   const isLoaded = useVaultSettingsStore((s) => s.isLoaded);
   const vaultKeypair = useAuthStore((s) => s.vaultKeypair);
+  const teeKeys = useAuthStore((s) => s.teeKeys);
 
   // Local form state
   const [retentionDays, setRetentionDays] = useState(storeSettings.recycleBinRetentionDays);
@@ -32,6 +29,14 @@ export function VaultTab() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Cleanup success timer on unmount
+  useEffect(() => {
+    return () => {
+      if (successTimerRef.current) clearTimeout(successTimerRef.current);
+    };
+  }, []);
 
   // Sync local form when store updates (e.g., after initial load)
   useEffect(() => {
@@ -62,6 +67,7 @@ export function VaultTab() {
         settings: newSettings,
         userPublicKey: vaultKeypair.publicKey,
         userPrivateKey: vaultKeypair.privateKey,
+        teeKeys,
       });
 
       useVaultSettingsStore.getState().setSettings(newSettings);
@@ -69,13 +75,22 @@ export function VaultTab() {
       useBinStore.getState().setRetentionDays(newSettings.recycleBinRetentionDays);
 
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
+      if (successTimerRef.current) clearTimeout(successTimerRef.current);
+      successTimerRef.current = setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save settings');
     } finally {
       setIsSaving(false);
     }
-  }, [vaultKeypair, isSaving, retentionDays, deleteBehavior, maxVersions, cooldownMinutes]);
+  }, [
+    vaultKeypair,
+    isSaving,
+    retentionDays,
+    deleteBehavior,
+    maxVersions,
+    cooldownMinutes,
+    teeKeys,
+  ]);
 
   const handleReset = useCallback(() => {
     setRetentionDays(DEFAULT_VAULT_SETTINGS.recycleBinRetentionDays);
@@ -107,7 +122,7 @@ export function VaultTab() {
           id="vault-retention-days"
           type="number"
           className="vault-settings-input"
-          min={1}
+          min={0}
           max={365}
           step={1}
           value={retentionDays}
