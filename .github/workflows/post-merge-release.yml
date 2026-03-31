@@ -43,7 +43,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           COMMIT_SHA: ${{ github.sha }}
-        run: node .github/scripts/post-merge-release.js
+        run: node .github/scripts/post-merge-release.cjs
 
       - name: Commit release targets
         if: steps.inject.outputs.packages_bumped != '[]' && steps.inject.outputs.packages_bumped != ''
