@@ -235,8 +235,10 @@ export async function resolveFileMetadata(
  *
  * - If `forceVersion` is true, always returns true (web re-upload always versions).
  * - If no versions exist yet, returns true (first version always created).
- * - If the newest version is older than VERSION_COOLDOWN_MS, returns true.
+ * - If the newest version is older than the configurable cooldown, returns true.
  * - If the newest version is within cooldown, returns false (overwrite without versioning).
+ *
+ * Cooldown is configurable via vault settings and obtained through getVersionCooldownMs().
  *
  * @param currentMetadata - Current file metadata (may have existing versions)
  * @param forceVersion - Whether to force version creation (e.g., explicit re-upload)
