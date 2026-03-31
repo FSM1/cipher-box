@@ -1,5 +1,5 @@
 ---
-status: diagnosed
+status: resolved
 trigger: 'Email OTP login fails with "Verification failed" in macOS desktop app (GitHub release build) but works fine in web app'
 created: 2026-03-31T00:00:00Z
 updated: 2026-03-31T00:30:00Z
