@@ -172,7 +172,7 @@ export async function deriveVaultSettingsIpnsKeypair(userPrivateKey: Uint8Array)
   if (userPrivateKey.length !== SECP256K1_PRIVATE_KEY_SIZE) {
     throw new CryptoError(
       'Invalid private key size for vault settings derivation',
-      'INVALID_KEY_SIZE',
+      'INVALID_KEY_SIZE'
     );
   }
 
