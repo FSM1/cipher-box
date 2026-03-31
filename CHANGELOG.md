@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.35.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.34.0...cipher-box-v0.35.0) (2026-03-31)
+
+
+### Features
+
+* desktop vault settings integration - phase 40 ([#424](https://github.com/FSM1/cipher-box/issues/424)) ([0d37d71](https://github.com/FSM1/cipher-box/commit/0d37d710bc1c57061433a992c020fc8951aba1ad))
+* **web:** user-configurable vault parameters ([#423](https://github.com/FSM1/cipher-box/issues/423)) ([fa7b443](https://github.com/FSM1/cipher-box/commit/fa7b44399f9c688783b995a2a716b6525eabeefe))
+
+
+### Bug Fixes
+
+* **desktop:** use compile-time API URL fallback for release builds ([#425](https://github.com/FSM1/cipher-box/issues/425)) ([e5384c0](https://github.com/FSM1/cipher-box/commit/e5384c0afe7f0590edc8c9b7e754eebe8325f58f))
+* **web:** replace encrypting pulse with shimmer to prevent progress flash ([#420](https://github.com/FSM1/cipher-box/issues/420)) ([0300eac](https://github.com/FSM1/cipher-box/commit/0300eace7425c8a1a77763351f0e93f6eef1a86f))
+
 ## [0.34.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.33.0...cipher-box-v0.34.0) (2026-03-30)
 
 

@@ -1,6 +1,6 @@
 [package]
 name = "cipherbox-core"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "CipherBox domain types, metadata schemas, IPNS records, and vault blob"
 
