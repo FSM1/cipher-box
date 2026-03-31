@@ -191,7 +191,7 @@ Format: `{prefix}{table_name}_{column(s) or description}`
 
 ## 6. Current Schema Reference
 
-12 tables as of Phase 14 (version 0.15.0):
+14 tables as of Phase 37:
 
 | #   | Table                     | Entity File                                 | Purpose                                   | Foreign Keys                              |
 | --- | ------------------------- | ------------------------------------------- | ----------------------------------------- | ----------------------------------------- |
@@ -207,6 +207,8 @@ Format: `{prefix}{table_name}_{column(s) or description}`
 | 10  | `shares`                  | `shares/entities/share.entity.ts`           | User-to-user share grants                 | `sharer_id`, `recipient_id` -> `users.id` |
 | 11  | `share_keys`              | `shares/entities/share-key.entity.ts`       | Per-item encrypted keys for shares        | `share_id` -> `shares.id`                 |
 | 12  | `device_approvals`        | `device-approval/device-approval.entity.ts` | MFA device approval requests              | -- (uses `user_id` varchar, not FK)       |
+| 13  | `share_invites`           | `shares/entities/share-invite.entity.ts`    | Invite link tokens for sharing            | `sharer_id` -> `users.id`                 |
+| 14  | `pin_migrations`          | `migration/migration.entity.ts`             | BYO-IPFS pin migration tracking           | `user_id` -> `users.id`                   |
 
 All entity files are relative to `apps/api/src/`.
 
@@ -214,16 +216,22 @@ All entity files are relative to `apps/api/src/`.
 
 ### Migration File Inventory
 
-| Timestamp       | File                                 | Type               | Tables Affected                           |
-| --------------- | ------------------------------------ | ------------------ | ----------------------------------------- |
-| `1700000000000` | `FullSchema.ts`                      | Baseline           | 11 tables (all except `device_approvals`) |
-| `1737520000000` | `MakeFolderIpnsTeeFieldsNullable.ts` | Alter column       | `folder_ipns`                             |
-| `1738972800000` | `AddTokenPrefix.ts`                  | Add column + index | `refresh_tokens`                          |
-| `1739800000000` | `AddRecordTypeToFolderIpns.ts`       | Add column         | `folder_ipns`                             |
-| `1740000000000` | `AddDeviceApprovals.ts`              | Create table       | `device_approvals`                        |
-| `1740200000000` | `AddAuthMethodsUniqueConstraint.ts`  | Replace index      | `auth_methods`                            |
-| `1740250000000` | `AddSharesTables.ts`                 | Create table       | `shares`, `share_keys`                    |
-| `1740300000000` | `SharesPartialUniqueIndex.ts`        | Replace constraint | `shares`                                  |
+| Timestamp       | File                                 | Type               | Tables Affected                                                              |
+| --------------- | ------------------------------------ | ------------------ | ---------------------------------------------------------------------------- |
+| `1700000000000` | `FullSchema.ts`                      | Baseline           | 11 tables (all except `device_approvals`, `share_invites`, `pin_migrations`) |
+| `1737520000000` | `MakeFolderIpnsTeeFieldsNullable.ts` | Alter column       | `folder_ipns`                                                                |
+| `1738972800000` | `AddTokenPrefix.ts`                  | Add column + index | `refresh_tokens`                                                             |
+| `1739800000000` | `AddRecordTypeToFolderIpns.ts`       | Add column         | `folder_ipns`                                                                |
+| `1740000000000` | `AddDeviceApprovals.ts`              | Create table       | `device_approvals`                                                           |
+| `1740200000000` | `AddAuthMethodsUniqueConstraint.ts`  | Replace index      | `auth_methods`                                                               |
+| `1740250000000` | `AddSharesTables.ts`                 | Create table       | `shares`, `share_keys`                                                       |
+| `1740300000000` | `SharesPartialUniqueIndex.ts`        | Replace constraint | `shares`                                                                     |
+| `1740400000000` | `AddShareInvites.ts`                 | Create table       | `share_invites`                                                              |
+| `1740500000000` | `BackfillIpnsSequenceNumbers.ts`     | Data migration     | `folder_ipns`                                                                |
+| `1740600000000` | `AddByoUserFlag.ts`                  | Add column         | `vaults`                                                                     |
+| `1742000000000` | `AddPinMigrations.ts`                | Create table       | `pin_migrations`                                                             |
+| `1743000000000` | `AddWritableShares.ts`               | Add columns        | `shares`                                                                     |
+| `1743100000000` | `WidenShareKeyType.ts`               | Alter column       | `share_keys`                                                                 |
 
 ---
 
@@ -347,6 +355,6 @@ During the creation of this protocol, the `device_approvals` table was identifie
 
 ---
 
-_Protocol version: 1.0_
-_Last updated: 2026-02-22_
+_Protocol version: 1.1_
+_Last updated: 2026-03-31_
 _Applies to: All database entities and migrations in `apps/api/src/`_

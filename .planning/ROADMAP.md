@@ -466,6 +466,10 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete | 2026-03-28 |
 | 34. E2E Test Expansion & Baselines        | v1.1      | 4/4            | Complete | 2026-03-29 |
 | 35. Phala Testnet TEE Migration           | v1.1      | 6/6            | Complete | 2026-03-29 |
+| 36. Inline Upload Progress                | post-v1.1 | 2/2            | Complete | 2026-03-29 |
+| 37. Parallel Batch Upload Pipeline        | post-v1.1 | 2/2            | Complete | 2026-03-30 |
+| 38. Retire Deprecated Web Services        | post-v1.1 | -              | Planned  | -          |
+| 39. User-Configurable Vault Parameters    | post-v1.1 | -              | Planned  | -          |
 
 ### Phase 27: Writable Shares (PoC)
 
@@ -513,8 +517,24 @@ Plans:
 - [x] 37-01-PLAN.md -- SDK batch uploadFiles() method with p-limit concurrency pool, stale-children re-read, partial failure handling
 - [x] 37-02-PLAN.md -- Web Worker encryption offloading, EncryptionWorkerService wrapper, useDropUpload rewire to batch API
 
+### Phase 38: Retire deprecated web services
+
+**Goal:** Remove `folder.service.ts` (1,059 lines) and `bin.service.ts` (971 lines) by migrating all remaining callers to `@cipherbox/sdk` methods, eliminating the deprecated service layer. Also remove the circular devDependency from `@cipherbox/crypto` on `@cipherbox/core` by refactoring the vault-ipns test to use hardcoded test vectors instead of cross-package imports.
+**Requirements**: None (tech debt cleanup, deferred from Phase 31)
+**Depends on:** Phase 37
+
+Plans: _not yet planned_
+
+### Phase 39: User-configurable vault parameters
+
+**Goal:** Add end-user vault settings stored in encrypted vault metadata, giving users control over: recycle bin retention period (default 30 days), delete behavior (soft delete to bin vs hard delete), and file versioning defaults (max versions per file, version cooldown period). Settings UI in the web app with sensible defaults matching current hardcoded values.
+**Requirements**: None (deferred items from Phases 13, 17)
+**Depends on:** Phase 38
+
+Plans: _not yet planned_
+
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-30_
-_Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases_
+_Last updated: 2026-03-31_
+_Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 4 phases (36-39)_
