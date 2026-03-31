@@ -142,4 +142,4 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 
 ---
 
-Last updated: 2026-03-30 after Phase 37 Parallel Batch Upload Pipeline completed
+Last updated: 2026-03-31 after Phase 40 Desktop Vault Settings Integration completed
