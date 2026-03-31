@@ -278,7 +278,10 @@ function renderLoginForm(appDiv: HTMLElement): void {
       }
       handleAuthSuccess(appDiv);
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Verification failed', '#ef4444');
+      setStatus(
+        err instanceof Error ? err.message : String(err) || 'Verification failed',
+        '#ef4444'
+      );
       disableButtons(false);
     }
   });
@@ -446,7 +449,7 @@ function renderRequiredShareUI(appDiv: HTMLElement): void {
       handleAuthSuccess(appDiv);
     } catch (err) {
       mfaStatus.style.color = '#ef4444';
-      mfaStatus.textContent = err instanceof Error ? err.message : 'Recovery failed';
+      mfaStatus.textContent = err instanceof Error ? err.message : String(err) || 'Recovery failed';
     }
   });
 

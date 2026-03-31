@@ -78,10 +78,18 @@ fn main() {
     #[cfg(not(debug_assertions))]
     let dev_key: Option<String> = None;
 
-    // API base URL: CIPHERBOX_API_URL > VITE_API_URL > localhost default
+    // API base URL resolution order:
+    // 1. Runtime env CIPHERBOX_API_URL (manual override)
+    // 2. Runtime env VITE_API_URL (local dev with `VITE_API_URL=... pnpm dev`)
+    // 3. Compile-time VITE_API_URL (baked by CI/GitHub Actions into release builds)
+    // 4. Fallback to localhost (pure local dev)
     let api_base_url = std::env::var("CIPHERBOX_API_URL")
         .or_else(|_| std::env::var("VITE_API_URL"))
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+        .unwrap_or_else(|_| {
+            option_env!("VITE_API_URL")
+                .unwrap_or("http://localhost:3000")
+                .to_string()
+        });
 
     let app_state = AppState::new(&api_base_url, dev_key);
 
