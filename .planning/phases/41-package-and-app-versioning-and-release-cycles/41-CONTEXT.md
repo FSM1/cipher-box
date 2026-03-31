@@ -165,6 +165,9 @@ Restructure how all monorepo components (apps, JS packages, Rust crates) are ver
 - Smart dispatch for staging (conditional job skipping based on change detection) — Phase 2 of the staging flow, implement when deploy time becomes a problem
 - Spec-anchored API versioning (decouple API, TS client, Rust client versions) — consider when external SDK consumers arrive
 - Coordinated 1.0 version milestone — decide when 1.0 is actually on the horizon
+- Extract "Build shared packages" composite action — identical 5-step pnpm build sequence appears 12 times across 6 workflow files; extract to `.github/actions/build-shared-packages/action.yml`
+- Extract desktop platform build jobs into reusable workflow — macOS/Windows/Linux build jobs are near-identical in both `desktop-release.yml` and `deploy-staging.yml`; could use matrix strategy or reusable workflow
+- PR release preview N+1 API calls — `pr-release-preview.js` fetches commit file details one-by-one (GitHub PR commits endpoint doesn't include files); would need GraphQL batch query to optimize
 
 </deferred>
 

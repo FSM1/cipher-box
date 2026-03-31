@@ -218,3 +218,6 @@ Required (blocking) — not informational.
 - Smart staging dispatch (conditional job skipping) — future phase
 - Spec-anchored API versioning — when external consumers arrive
 - Coordinated 1.0 milestone — when 1.0 is on the horizon
+- Extract "Build shared packages" composite action — 12 identical occurrences across 6 workflows
+- Extract desktop platform build jobs into reusable workflow — near-identical macOS/Windows/Linux jobs in desktop-release.yml and deploy-staging.yml
+- PR release preview N+1 API optimization — GitHub REST API limitation, needs GraphQL batch query
