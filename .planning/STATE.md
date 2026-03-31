@@ -34,63 +34,63 @@ Plan: Not started
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
-| Phase        | Plan  | Duration | Tasks    | Files |
-| ------------ | ----- | -------- | -------- | ----- |
-| 19           | 01    | 2min     | 2        | 3     |
-| 19           | 02    | 5min     | 2        | 5     |
-| 19.1         | 02    | 4min     | 2        | 133   |
-| 19.1         | 01    | 17min    | 2        | 42    |
-| 19.1         | 03    | 12min    | 3        | 18    |
-| 19.1         | 04    | 10min    | 2        | 14    |
-| 19.1         | 06    | 13min    | 3        | 52    |
-| 19.2         | 01    | 6min     | 2        | 4     |
-| 19.2         | 02    | 12min    | 3        | 3     |
-| 19.2         | 03    | 1min     | 1        | 1     |
-| 19.2         | 04    | 71min    | 2        | 1     |
-| 20           | 01    | 4min     | 2        | 5     |
-| 20           | 02    | 17min    | 3        | 16    |
-| 20           | 03    | 25min    | 2        | 6     |
-| 20           | 04    | 45min    | 3        | 15    |
-| 20           | 05    | 6min     | 2        | 13    |
-| 20           | 06    | 6min     | 2        | 4     |
-| 21           | 01    | 5min     | 2        | 9     |
-| 21           | 03    | 10min    | 3        | 13    |
-| 21           | 05    | 9min     | 2        | 13    |
-| 21           | 04    | 8min     | 3        | 9     |
-| 21           | 06    | 3min     | 2        | 4     |
-| 21           | 07    | 5min     | 3        | 5     |
-| 23           | 01    | 13min    | 2        | 26    |
-| 23           | 02    | 10min    | 2        | 33    |
-| 23           | 03    | 11min    | 2        | 23    |
-| 23           | 05    | 12min    | 2        | 24    |
-| 23           | 04    | 22min    | 2        | 17    |
-| 23           | 07    | 7min     | 2        | 5     |
-| 23           | 06    | 23min    | 2        | 7     |
-| 23           | 08    | 20min    | 2        | 7     |
-| 21           | 08    | 5min     | 2        | 6     |
-| 21           | 10    | 5min     | 2        | 7     |
-| 21           | 09    | 9min     | 3        | 17    |
-| 21           | 11    | 12min    | 2        | 3     |
-| 22           | 02    | 4min     | 2        | 2     |
-| 22           | 01    | 8min     | 2        | 7     |
-| 22           | 03    | 8min     | 2        | 8     |
-| 26           | 02    | 4min     | 2        | 5     |
-| 26           | 01    | 5min     | 2        | 6     |
-| 27           | 01    | 6min     | 2        | 23    |
-| 27           | 02    | 5min     | 2        | 4     |
-| 27           | 03    | 25min    | 3        | 15    |
-| Phase 33 P01 | 11min | 2 tasks  | 3 files  |
-| Phase 33 P02 | 3min  | 1 tasks  | 3 files  |
-| Phase 34 P01 | 3min  | 2 tasks  | 9 files  |
-| Phase 34 P02 | 4min  | 2 tasks  | 8 files  |
-| Phase 34 P03 | 2min  | 1 tasks  | 1 files  |
-| Phase 35 P02 | 5min  | 4 tasks  | 6 files  |
-| Phase 35 P03 | 8min  | 4 tasks  | 14 files |
-| Phase 35 P05 | 5min  | 3 tasks  | 3 files  |
-| Phase 37 P02 | 5min  | 2 tasks  | 5 files  |
-| Phase 40 P01 | 4min  | 2 tasks  | 6 files  |
-| Phase 40 P02 | 7min  | 2 tasks  | 8 files  |
-| Phase 41 P04 | 2min  | 2 tasks  | 2 files  |
+| Plan           | Duration | Tasks   | Files     |
+| -------------- | -------- | ------- | --------- |
+| Phase 19 P01   | 2min     | 2 tasks | 3 files   |
+| Phase 19 P02   | 5min     | 2 tasks | 5 files   |
+| Phase 19.1 P02 | 4min     | 2 tasks | 133 files |
+| Phase 19.1 P01 | 17min    | 2 tasks | 42 files  |
+| Phase 19.1 P03 | 12min    | 3 tasks | 18 files  |
+| Phase 19.1 P04 | 10min    | 2 tasks | 14 files  |
+| Phase 19.1 P06 | 13min    | 3 tasks | 52 files  |
+| Phase 19.2 P01 | 6min     | 2 tasks | 4 files   |
+| Phase 19.2 P02 | 12min    | 3 tasks | 3 files   |
+| Phase 19.2 P03 | 1min     | 1 tasks | 1 files   |
+| Phase 19.2 P04 | 71min    | 2 tasks | 1 files   |
+| Phase 20 P01   | 4min     | 2 tasks | 5 files   |
+| Phase 20 P02   | 17min    | 3 tasks | 16 files  |
+| Phase 20 P03   | 25min    | 2 tasks | 6 files   |
+| Phase 20 P04   | 45min    | 3 tasks | 15 files  |
+| Phase 20 P05   | 6min     | 2 tasks | 13 files  |
+| Phase 20 P06   | 6min     | 2 tasks | 4 files   |
+| Phase 21 P01   | 5min     | 2 tasks | 9 files   |
+| Phase 21 P03   | 10min    | 3 tasks | 13 files  |
+| Phase 21 P05   | 9min     | 2 tasks | 13 files  |
+| Phase 21 P04   | 8min     | 3 tasks | 9 files   |
+| Phase 21 P06   | 3min     | 2 tasks | 4 files   |
+| Phase 21 P07   | 5min     | 3 tasks | 5 files   |
+| Phase 23 P01   | 13min    | 2 tasks | 26 files  |
+| Phase 23 P02   | 10min    | 2 tasks | 33 files  |
+| Phase 23 P03   | 11min    | 2 tasks | 23 files  |
+| Phase 23 P05   | 12min    | 2 tasks | 24 files  |
+| Phase 23 P04   | 22min    | 2 tasks | 17 files  |
+| Phase 23 P07   | 7min     | 2 tasks | 5 files   |
+| Phase 23 P06   | 23min    | 2 tasks | 7 files   |
+| Phase 23 P08   | 20min    | 2 tasks | 7 files   |
+| Phase 21 P08   | 5min     | 2 tasks | 6 files   |
+| Phase 21 P10   | 5min     | 2 tasks | 7 files   |
+| Phase 21 P09   | 9min     | 3 tasks | 17 files  |
+| Phase 21 P11   | 12min    | 2 tasks | 3 files   |
+| Phase 22 P02   | 4min     | 2 tasks | 2 files   |
+| Phase 22 P01   | 8min     | 2 tasks | 7 files   |
+| Phase 22 P03   | 8min     | 2 tasks | 8 files   |
+| Phase 26 P02   | 4min     | 2 tasks | 5 files   |
+| Phase 26 P01   | 5min     | 2 tasks | 6 files   |
+| Phase 27 P01   | 6min     | 2 tasks | 23 files  |
+| Phase 27 P02   | 5min     | 2 tasks | 4 files   |
+| Phase 27 P03   | 25min    | 3 tasks | 15 files  |
+| Phase 33 P01   | 11min    | 2 tasks | 3 files   |
+| Phase 33 P02   | 3min     | 1 tasks | 3 files   |
+| Phase 34 P01   | 3min     | 2 tasks | 9 files   |
+| Phase 34 P02   | 4min     | 2 tasks | 8 files   |
+| Phase 34 P03   | 2min     | 1 tasks | 1 files   |
+| Phase 35 P02   | 5min     | 4 tasks | 6 files   |
+| Phase 35 P03   | 8min     | 4 tasks | 14 files  |
+| Phase 35 P05   | 5min     | 3 tasks | 3 files   |
+| Phase 37 P02   | 5min     | 2 tasks | 5 files   |
+| Phase 40 P01   | 4min     | 2 tasks | 6 files   |
+| Phase 40 P02   | 7min     | 2 tasks | 8 files   |
+| Phase 41 P04   | 2min     | 2 tasks | 2 files   |
 
 ## Accumulated Context
 
@@ -189,11 +189,8 @@ Recent for v1.1:
 
 ### Open Concerns
 
-- 9 LOW-priority tech debt items from M2 audit (see `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`)
-- rootFolderKey migration dual-write window duration TBD (forced migration strategy for dormant accounts)
-- BYO-IPFS auth token storage model needs explicit acceptance (server sees token but not plaintext content)
-- Kubo v0.34.0 -> v0.40.1 upgrade decision (recommended before Phase 19, not blocking)
-- Recovery tool independence verified for v2 blobs (root-level works; subfolder limited by IPNS DHT propagation)
+- 6 LOW-priority tech debt items remain from M2 audit: Settings URL param parsing, OCC coverage, addManyFiles atomicity, conflict telemetry, lazy rotation, desktop E2E (see `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`)
+- Recovery tool subfolder recovery limited by IPNS DHT propagation (root-level fully operational; per-file IPNS records may not be resolvable if not propagated — architectural limitation, not a bug)
 
 ### Pending Todos
 
