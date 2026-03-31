@@ -5,7 +5,9 @@ import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
-import { loadFolder } from '../services/folder.service';
+import { fetchAndDecryptMetadata } from '@cipherbox/sdk-core';
+import { getSdkClient } from '../lib/sdk-provider';
+import { resolveIpnsRecord } from '../services/ipns.service';
 import { logger } from '../lib/logger';
 
 /**
@@ -240,19 +242,46 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         // Load folder metadata from IPNS (retry if IPNS hasn't propagated yet)
         const MAX_RETRIES = 3;
         const RETRY_DELAY_MS = 2000;
-        let folderNode: Awaited<ReturnType<typeof loadFolder>> | null = null;
+        let folderNode: FolderNode | null = null;
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
           if (latestNavTarget.current !== targetFolderId) return;
 
-          folderNode = await loadFolder(
-            targetFolderId,
-            folderKey,
-            ipnsPrivateKey,
-            folderEntry.ipnsName,
-            parentId,
-            folderEntry.name
-          );
+          const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
+
+          if (!resolved) {
+            // IPNS not propagated yet — mark as not loaded for retry
+            folderNode = {
+              id: targetFolderId,
+              name: folderEntry.name,
+              ipnsName: folderEntry.ipnsName,
+              parentId,
+              children: [],
+              isLoaded: false,
+              isLoading: false,
+              sequenceNumber: 0n,
+              folderKey,
+              ipnsPrivateKey,
+            };
+          } else {
+            const metadata = await fetchAndDecryptMetadata(
+              resolved.cid,
+              folderKey,
+              getSdkClient().getContext()
+            );
+            folderNode = {
+              id: targetFolderId,
+              name: folderEntry.name,
+              ipnsName: folderEntry.ipnsName,
+              parentId,
+              children: metadata.children ?? [],
+              isLoaded: true,
+              isLoading: false,
+              sequenceNumber: resolved.sequenceNumber,
+              folderKey,
+              ipnsPrivateKey,
+            };
+          }
 
           // If loaded successfully or this is the last attempt, stop retrying
           if (folderNode.isLoaded || attempt === MAX_RETRIES) break;
