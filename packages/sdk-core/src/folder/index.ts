@@ -17,6 +17,8 @@ import {
 import {
   encryptFolderMetadata,
   decryptFolderMetadata,
+  createIpnsRecord,
+  marshalIpnsRecord,
   type FolderMetadata,
   type EncryptedFolderMetadata,
   type FolderEntry,
@@ -27,7 +29,6 @@ import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord, batchPublishIpnsRecords, resolveIpnsRecord } from '../ipns';
 import { withPerf } from '../perf';
-import { createIpnsRecord, marshalIpnsRecord } from '@cipherbox/core';
 import type { FileIpnsRecordPayload } from '../file';
 
 // Tree traversal utilities

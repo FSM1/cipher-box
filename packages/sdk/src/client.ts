@@ -1320,12 +1320,11 @@ export class CipherBoxClient {
    * @returns Number of entries purged
    */
   async purgeExpired(retentionDays: number): Promise<number> {
-    if (!Number.isFinite(retentionDays)) {
-      throw new TypeError('purgeExpired: retentionDays must be a finite number');
-    }
-    const normalizedDays = Math.max(0, Math.floor(retentionDays));
-
     return this.withOperation('purgeExpired', async () => {
+      if (!Number.isFinite(retentionDays)) {
+        throw new TypeError('purgeExpired: retentionDays must be a finite number');
+      }
+      const normalizedDays = Math.max(0, Math.floor(retentionDays));
       if (!this.binState) throw new BinNotLoadedError();
 
       const previousEntries = this.binState.entries;
