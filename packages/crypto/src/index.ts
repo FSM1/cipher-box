@@ -43,6 +43,7 @@ export {
   deriveVaultIpnsKeypair,
   deriveVaultKeyIpnsKeypair,
   deriveByoConfigIpnsKeypair,
+  deriveVaultSettingsIpnsKeypair,
 } from './vault';
 
 // Key hierarchy and derivation

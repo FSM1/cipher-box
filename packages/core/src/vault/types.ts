@@ -61,3 +61,24 @@ export type ByoIpfsConfig = {
     providerName?: string;
   } | null;
 };
+
+/**
+ * User-configurable vault parameters stored as encrypted IPNS entry.
+ * Encrypted with user's key, decrypted client-side only.
+ * Server never sees this data (zero-knowledge preserved).
+ *
+ * Default when absent: { version: 'v1', recycleBinRetentionDays: 30,
+ *   deleteBehavior: 'bin', maxVersionsPerFile: 10, versionCooldownMinutes: 15 }
+ */
+export type VaultSettings = {
+  /** Schema version for future migrations */
+  version: 'v1';
+  /** Recycle bin retention period in days (default: 30, range: 1-365) */
+  recycleBinRetentionDays: number;
+  /** Delete behavior: 'bin' = soft delete to recycle bin, 'permanent' = immediate hard delete */
+  deleteBehavior: 'bin' | 'permanent';
+  /** Maximum number of past versions retained per file (default: 10, range: 0-100) */
+  maxVersionsPerFile: number;
+  /** Cooldown period for automatic version creation in minutes (default: 15, range: 0-1440) */
+  versionCooldownMinutes: number;
+};

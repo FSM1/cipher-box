@@ -55,7 +55,7 @@ export {
   type RecycleBinMetadata,
 } from './bin';
 
-// Vault init + key blob v2 format
+// Vault init + key blob v2 format + vault settings
 export {
   initializeVault,
   encryptVaultKeys,
@@ -64,9 +64,12 @@ export {
   deserializeVaultBlobV2,
   detectBlobVersion,
   BLOB_V2_VERSION,
+  DEFAULT_VAULT_SETTINGS,
+  validateVaultSettings,
   type VaultInit,
   type EncryptedVaultKeys,
   type ByoIpfsConfig,
+  type VaultSettings,
 } from './vault';
 
 // IPNS records
