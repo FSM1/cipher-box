@@ -1,0 +1,114 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "74a72014c69a",
+  "session_id": "69f88499-e5aa-4534-b350-933b498d34a2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-31T12:20:02.250328Z",
+  "branch": "docs/phase-39-context",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "96c5463548a7",
+  "token_usage": {
+    "input_tokens": 227,
+    "cache_creation_tokens": 445237,
+    "cache_read_tokens": 21702575,
+    "output_tokens": 44227,
+    "api_call_count": 197
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on the phase-39 branch (user-configurable vault parameters), keep the branch current with main, and maintain code quality.",
+    "outcome": "All 15+ review threads across 4 review rounds were triaged and resolved; fixes included allowing 0-day retention, TEE IPNS key enrollment, setTimeout cleanup, new unit tests, bin store dead-code removal, validation defaults referencing canonical constants, and docs updates. Branch was merged with main and a poisoned axios version was pinned.",
+    "learnings": {
+      "repo": [
+        "cipher-box is a pnpm monorepo with workspaces: packages/core, packages/crypto, apps/web, apps/desktop, apps/tee-worker",
+        "Phase planning docs live in .planning/phases/\u003cn\u003e-\u003cname\u003e/ with CONTEXT, RESEARCH, VALIDATION, and SUMMARY markdown files that must be kept in sync with implementation",
+        "The BYO (bring-your-own) config pattern in StorageTab is the canonical reference for how IPNS keypair derivation + TEE enrollment should work in service layer code",
+        "recycleBinRetentionDays: 0 is intentionally valid (means immediate purge / disabled retention) per Phase 39 D-03 requirement",
+        "vault-settings.service.ts uses deriveVaultSettingsIpnsKeypair to load/save settings via IPNS; TEE enrollment must wrap the IPNS key before publishing",
+        "The pnpm lockfile formatting (inline vs expanded YAML blocks) differs between branches due to pnpm version differences at time of install, causing large cosmetic diffs on merge",
+        "commit 560c871fe on phase-38 branch removed an @cipherbox/core circular import from vault-ipns.test.ts that had not yet been merged to phase-39 branch",
+        "DEFAULT_VAULT_SETTINGS in packages/core/src/vault/settings.ts is the single source of truth for default values; validators should reference it rather than duplicating literals"
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/vault/settings.ts",
+          "line": 35,
+          "end_line": 57,
+          "finding": "validateVaultSettings was using hardcoded literals (30, 10, 15, 'bin') instead of DEFAULT_VAULT_SETTINGS fields; also unknown schema versions were silently coerced to v1 instead of returning defaults"
+        },
+        {
+          "path": "packages/core/src/vault/types.ts",
+          "line": 76,
+          "end_line": 77,
+          "finding": "JSDoc for recycleBinRetentionDays said range 1-365; corrected to 0-365"
+        },
+        {
+          "path": "apps/web/src/hooks/useBin.ts",
+          "line": 23,
+          "end_line": 23,
+          "finding": "retentionDays now sourced from useVaultSettingsStore, making useBinStore.retentionDays field and setRetentionDays setter dead code (removed)"
+        },
+        {
+          "path": "apps/web/src/stores/bin.store.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "retentionDays field and setRetentionDays setter were write-only dead code after useBin.ts was updated; fully removed"
+        },
+        {
+          "path": "apps/web/src/components/settings/VaultTab.tsx",
+          "line": 73,
+          "end_line": 80,
+          "finding": "setTimeout without cleanup caused a leak on unmount; fixed using useRef + useEffect cleanup"
+        },
+        {
+          "path": "apps/web/src/services/vault-settings.service.ts",
+          "line": 122,
+          "end_line": 130,
+          "finding": "saveVaultSettings was missing TEE IPNS key enrollment; pattern from StorageTab (BYO config) was the reference"
+        },
+        {
+          "path": "apps/web/src/services/file-metadata.service.ts",
+          "line": 238,
+          "end_line": 253,
+          "finding": "Variable named prunedVersions actually held the kept versions (slice(0, maxVer)), not the pruned ones — misleading name, renamed to keptVersions. JSDoc also still referenced hardcoded VERSION_COOLDOWN_MS instead of configurable getVersionCooldownMs()"
+        },
+        {
+          "path": "packages/crypto/src/__tests__/vault-ipns.test.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Pre-existing circular import of @cipherbox/core caused test file to fail; fixed inline using test vectors instead. New deriveVaultSettingsIpnsKeypair tests placed in separate vault-settings-ipns.test.ts file"
+        },
+        {
+          "path": "packages/core/src/__tests__/vault-settings.test.ts",
+          "line": 52,
+          "end_line": 55,
+          "finding": "Test 'should clamp recycleBinRetentionDays below 1 to 1' was asserting old min=1 behavior; updated to expect 0 and renamed to reflect that 0 is valid"
+        }
+      ],
+      "workflow": [
+        "When merging main into a feature branch via git merge, resolve lockfile conflicts by running pnpm install after to regenerate canonical format",
+        "Background task race condition: running git push manually after launching a background commit+push task causes the background push to fail with 'already up to date' — harmless but noisy",
+        "The resolve-PR-comments workflow: triage first (valid/already-addressed/not-applicable), verify against current code before implementing, run typecheck + tests before committing, then reply and resolve threads via REST + GraphQL",
+        "Copilot review comments often lag behind commits on the same PR — always verify findings against current code state before acting on them",
+        "For axios supply-chain poisoning incident: pinning without caret (1.13.2 vs ^1.13.2) in lockfile is the fix; the diff is minimal and safe to push quickly"
+      ]
+    },
+    "friction": [
+      "pnpm lockfile YAML formatting churn (15k lines) from branch/main merge made it hard to identify real content changes; had to grep specifically for axios to find the only substantive diff",
+      "Background task push raced with foreground git push, causing a confusing exit code 1 failure from the background task even though everything was already pushed",
+      "vault-ipns.test.ts had a pre-existing circular import bug (@cipherbox/core) that was fixed on phase-38 but not merged to phase-39, blocking new tests from running in the existing file",
+      "User interrupted a commit operation mid-flow, then ran pnpm lint:fix manually, requiring re-checking what changed before continuing",
+      "Multiple rounds of Copilot review comments on the same already-fixed issues (setRetentionDays, JSDoc range) because Copilot reviewed before fixes landed"
+    ],
+    "open_items": [
+      "Keypair (privateKey buffer) clearing after use in vault-settings.service.ts was flagged by review but skipped — BYO config reference impl also doesn't clear it; acceptable for now but worth revisiting if threat model changes",
+      "VaultTab.tsx preset retention values (thread 5) were marked not-applicable as a deliberate design simplification — presets may be added in a future phase",
+      "Desktop client and other non-web consumers still call the recyclebin purge API endpoint that was noted as potentially redundant for web — left intact since other clients depend on it",
+      "The pnpm lockfile YAML formatting inconsistency between branches (inline vs expanded) will recur on future merges until all branches are rebased on the same pnpm version base"
+    ]
+  }
+}
