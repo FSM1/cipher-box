@@ -108,7 +108,7 @@ export function UploadListItem({ fileId, onRetry }: UploadListItemProps) {
         <div className="upload-inline-name-wrapper">
           <span className="file-list-item-name">{file.filename}</span>
           <div
-            className={`upload-inline-progress-track ${isEncrypting ? 'upload-inline-progress-track--pulse' : ''}`}
+            className={`upload-inline-progress-track ${isEncrypting ? 'upload-inline-progress-track--encrypting' : ''}`}
           >
             <div
               className="upload-inline-progress-fill"

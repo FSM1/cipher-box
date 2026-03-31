@@ -61,10 +61,14 @@ describe('deriveVaultIpnsKeypair', () => {
     const result = await deriveVaultIpnsKeypair(KNOWN_PRIVATE_KEY);
 
     expect(result.ipnsName).toBe(EXPECTED_VAULT_IPNS_NAME);
+    // Public key check ensures derivation algorithm hasn't changed
     expect(Buffer.from(result.publicKey).toString('hex')).toBe(EXPECTED_VAULT_PUBLIC_KEY);
   });
 
   it('produces a different IPNS name than registry derivation (domain separation)', async () => {
+    // Domain separation: vault derivation uses a different HKDF context
+    // than registry derivation, so the same private key produces different
+    // IPNS names. We verify against pre-computed registry IPNS name.
     const result = await deriveVaultIpnsKeypair(KNOWN_PRIVATE_KEY);
     expect(result.ipnsName).not.toBe(EXPECTED_REGISTRY_IPNS_NAME);
   });
@@ -91,6 +95,9 @@ describe('deriveVaultIpnsKeypair', () => {
 
 describe('vault IPNS determinism (replaces initializeVault tests)', () => {
   it('deriveVaultIpnsKeypair is deterministic — same key always produces same result', async () => {
+    // This replaces the initializeVault determinism test.
+    // initializeVault delegates IPNS derivation to deriveVaultIpnsKeypair,
+    // so testing the crypto primitive directly is sufficient.
     const privateKey = randomPrivateKey();
     const result1 = await deriveVaultIpnsKeypair(privateKey);
     const result2 = await deriveVaultIpnsKeypair(privateKey);

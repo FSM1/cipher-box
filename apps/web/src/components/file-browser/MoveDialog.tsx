@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, type KeyboardEvent } from 'r
 import type { FolderChild } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useFolderStore, type FolderNode } from '../../stores/folder.store';
-import { getDepth, isDescendantOf } from '../../services/folder.service';
+import { getDepth, isDescendantOf } from '@cipherbox/sdk-core';
 import '../../styles/dialogs.css';
 
 /** Maximum folder nesting depth per FOLD-03 */

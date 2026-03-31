@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
-import * as folderService from '../services/folder.service';
+import { getDepth, isDescendantOf, calculateSubtreeDepth } from '@cipherbox/sdk-core';
 import type { FolderNode } from '../stores/folder.store';
 import { getSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
 import { BinNotLoadedError } from '@cipherbox/sdk';
@@ -18,7 +18,7 @@ async function deleteWithBehavior(
   client: ReturnType<typeof getSdkClient>,
   ipnsName: string,
   itemId: string,
-  parentPath: string,
+  parentPath: string
 ): Promise<void> {
   const { deleteBehavior } = useVaultSettingsStore.getState().settings;
 
@@ -98,7 +98,7 @@ export function useFolderMutations() {
         const folders = useFolderStore.getState().folders;
 
         // Validate depth limit before creating (FOLD-03)
-        const parentDepth = folderService.getDepth(parentId, folders);
+        const parentDepth = getDepth(parentId, folders);
         if (parentDepth >= MAX_FOLDER_DEPTH) {
           throw new Error(`Cannot create folder: maximum depth of ${MAX_FOLDER_DEPTH} exceeded`);
         }
@@ -273,13 +273,13 @@ export function useFolderMutations() {
         for (const item of items) {
           if (item.type === 'folder') {
             // Prevent moving folder into itself or descendant
-            if (folderService.isDescendantOf(destFolder.id, item.id, folders)) {
+            if (isDescendantOf(destFolder.id, item.id, folders)) {
               throw new Error(`Cannot move folder into itself or its subfolder`);
             }
 
             // Depth limit check
-            const destDepth = folderService.getDepth(destFolder.id, folders);
-            const subtreeDepth = folderService.calculateSubtreeDepth(item.id, folders);
+            const destDepth = getDepth(destFolder.id, folders);
+            const subtreeDepth = calculateSubtreeDepth(item.id, folders);
             if (destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH) {
               throw new Error(
                 `Cannot move: would exceed maximum folder depth of ${MAX_FOLDER_DEPTH}`

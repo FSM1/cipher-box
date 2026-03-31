@@ -28,6 +28,9 @@ export {
   deleteFromFolder,
   addFilePointerToFolder,
   moveItem,
+  addFileToFolder,
+  addFilesToFolder,
+  replaceFileInFolder,
 } from './folder';
 
 // Tree traversal utilities

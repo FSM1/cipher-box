@@ -35,7 +35,6 @@ import type { PinningConfig } from '@cipherbox/sdk';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo, computeIpHash } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
-import { initializeBin } from '../services/bin.service';
 import { useBinStore } from '../stores/bin.store';
 import { loadVaultSettings } from '../services/vault-settings.service';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
@@ -361,17 +360,16 @@ export function useAuth() {
       })();
 
       // Non-blocking bin initialization (fire-and-forget)
-      // After old service creates/loads bin, also load into SDK for deleteToBin support
+      // SDK loadBin handles IPNS resolve, decrypt, and auto-repair if no record exists
       void (async () => {
         try {
-          await initializeBin({
-            userPrivateKey: userKeypair.privateKey,
-            userPublicKey: userKeypair.publicKey,
-          });
-          // Now load bin into SDK (old service ensures bin IPNS record exists)
           const { getSdkClient, hasSdkClient } = await import('../lib/sdk-provider');
           if (hasSdkClient()) {
-            await getSdkClient().loadBin();
+            const binState = await getSdkClient().loadBin();
+            // Populate Zustand store from SDK-returned state
+            const binStore = useBinStore.getState();
+            binStore.setBinIpnsName(binState.ipnsName);
+            binStore.setEntries(binState.entries, binState.sequenceNumber);
           }
         } catch (error) {
           logger.error('[Auth] Bin initialization failed (non-blocking):', error);
