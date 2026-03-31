@@ -23,10 +23,14 @@ jobs:
           node-version: '22'
 
       - name: Install script dependencies
-        run: npm install --no-save @actions/core @actions/github
+        run: |
+          mkdir -p /tmp/actions-deps && cd /tmp/actions-deps
+          npm init -y > /dev/null 2>&1
+          npm install @actions/core @actions/github > /dev/null 2>&1
 
       - name: Analyze PR commits and apply release labels
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          NODE_PATH: /tmp/actions-deps/node_modules
         run: node .github/scripts/pr-release-preview.cjs
