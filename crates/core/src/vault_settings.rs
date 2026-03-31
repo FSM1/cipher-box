@@ -66,7 +66,7 @@ pub fn validate_vault_settings(input: &serde_json::Value) -> VaultSettings {
     let recycle_bin_retention_days = obj
         .get("recycleBinRetentionDays")
         .and_then(|v| v.as_u64())
-        .map(|v| clamp(v as u32, 0, 365))
+        .map(|v| (v as u32).clamp(0, 365))
         .unwrap_or(defaults.recycle_bin_retention_days);
 
     let delete_behavior = obj
@@ -82,13 +82,13 @@ pub fn validate_vault_settings(input: &serde_json::Value) -> VaultSettings {
     let max_versions_per_file = obj
         .get("maxVersionsPerFile")
         .and_then(|v| v.as_u64())
-        .map(|v| clamp(v as u32, 0, 100))
+        .map(|v| (v as u32).clamp(0, 100))
         .unwrap_or(defaults.max_versions_per_file);
 
     let version_cooldown_minutes = obj
         .get("versionCooldownMinutes")
         .and_then(|v| v.as_u64())
-        .map(|v| clamp(v as u32, 0, 1440))
+        .map(|v| (v as u32).clamp(0, 1440))
         .unwrap_or(defaults.version_cooldown_minutes);
 
     VaultSettings {
@@ -98,10 +98,6 @@ pub fn validate_vault_settings(input: &serde_json::Value) -> VaultSettings {
         max_versions_per_file,
         version_cooldown_minutes,
     }
-}
-
-fn clamp(value: u32, min: u32, max: u32) -> u32 {
-    value.min(max).max(min)
 }
 
 #[cfg(test)]

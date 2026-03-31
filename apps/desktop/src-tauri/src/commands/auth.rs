@@ -97,26 +97,22 @@ async fn load_vault_settings(
     private_key: &[u8; 32],
 ) -> cipherbox_core::VaultSettings {
     let result: Result<cipherbox_core::VaultSettings, String> = async {
-        // 1. Derive IPNS keypair for vault settings
         let (_priv_key, _pub_key, ipns_name) =
             cipherbox_crypto::hkdf::derive_vault_settings_ipns_keypair(private_key)
                 .map_err(|e| format!("HKDF derivation failed: {:?}", e))?;
 
-        // 2. Resolve IPNS name to CID
         let resolved = cipherbox_api_client::ipns::resolve_ipns(api, &ipns_name)
             .await
             .map_err(|e| format!("IPNS resolve failed: {}", e))?;
 
-        // 3. Fetch encrypted blob from IPFS
         let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &resolved.cid)
             .await
             .map_err(|e| format!("IPFS fetch failed: {}", e))?;
 
-        // 4. ECIES decrypt with user's private key (NOT AES-GCM - vault settings use ECIES wrapKey)
+        // NOT AES-GCM — vault settings use ECIES wrapKey
         let plaintext = cipherbox_crypto::ecies::unwrap_key(&encrypted, private_key)
             .map_err(|e| format!("ECIES unwrap failed: {:?}", e))?;
 
-        // 5. Parse JSON and validate
         let parsed: serde_json::Value = serde_json::from_slice(&plaintext)
             .map_err(|e| format!("JSON parse failed: {}", e))?;
 
@@ -193,15 +189,12 @@ pub(crate) async fn complete_auth_setup(
         Err(e) => return Err(e),
     }
 
-    // 5b. Load vault settings (non-blocking, graceful fallback to defaults)
-    {
-        let pk_slice: &[u8] = &private_key_bytes;
-        if let Ok(pk_arr) = <[u8; 32]>::try_from(pk_slice) {
-            let settings = load_vault_settings(&state.sdk.api, &pk_arr).await;
-            *state.sdk.vault_settings.write().await = settings;
-        } else {
-            log::warn!("Private key not 32 bytes, using default vault settings");
-        }
+    // 5b. Load vault settings (graceful fallback to defaults)
+    if let Ok(pk_arr) = <[u8; 32]>::try_from(private_key_bytes.as_slice()) {
+        let settings = load_vault_settings(&state.sdk.api, &pk_arr).await;
+        *state.sdk.vault_settings.write().await = settings;
+    } else {
+        log::warn!("Private key not 32 bytes, using default vault settings");
     }
 
     // 6. Mark as authenticated
