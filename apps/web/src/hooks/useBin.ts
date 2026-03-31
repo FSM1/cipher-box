@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useBinStore } from '../stores/bin.store';
 import { useAuthStore } from '../stores/auth.store';
+import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { initializeBin, purgeExpired } from '../services/bin.service';
 import type { BinEntry } from '@cipherbox/core';
@@ -21,7 +22,7 @@ export function useBin() {
 
   const entries = useBinStore((s) => s.entries);
   const isLoaded = useBinStore((s) => s.isLoaded);
-  const retentionDays = useBinStore((s) => s.retentionDays);
+  const retentionDays = useVaultSettingsStore((s) => s.settings.recycleBinRetentionDays);
 
   /**
    * Load bin metadata from IPNS and trigger auto-purge of expired entries.

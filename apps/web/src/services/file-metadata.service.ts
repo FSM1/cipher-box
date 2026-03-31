@@ -22,15 +22,20 @@ import { wrapKey, unwrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { resolveIpnsRecord } from './ipns.service';
 import { useAuthStore } from '../stores/auth.store';
+import { useVaultSettingsStore } from '../stores/vault-settings.store';
 
 /** IPNS record lifetime: 24 hours in milliseconds */
 const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
-/** Maximum number of past versions retained per file (VER-04) */
-const MAX_VERSIONS_PER_FILE = 10;
+/** Read max versions from user settings (falls back to default 10 if store not loaded) */
+function getMaxVersionsPerFile(): number {
+  return useVaultSettingsStore.getState().settings.maxVersionsPerFile;
+}
 
-/** Cooldown period for automatic version creation (15 minutes in ms) */
-const VERSION_COOLDOWN_MS = 15 * 60 * 1000;
+/** Read version cooldown from user settings, converted to milliseconds */
+function getVersionCooldownMs(): number {
+  return useVaultSettingsStore.getState().settings.versionCooldownMinutes * 60 * 1000;
+}
 
 /** Safe base64 encoding that avoids call stack overflow from spread operator */
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -244,7 +249,7 @@ export function shouldCreateVersion(currentMetadata: FileMetadata, forceVersion:
   if (!versions || versions.length === 0) return true;
 
   const newestTimestamp = versions[0].timestamp;
-  return Date.now() - newestTimestamp >= VERSION_COOLDOWN_MS;
+  return Date.now() - newestTimestamp >= getVersionCooldownMs();
 }
 
 /**
@@ -292,8 +297,8 @@ export async function updateFileMetadata(params: {
     const allVersions = [versionEntry, ...(params.currentMetadata.versions ?? [])];
 
     // Prune excess versions beyond limit
-    versions = allVersions.slice(0, MAX_VERSIONS_PER_FILE);
-    prunedCids = allVersions.slice(MAX_VERSIONS_PER_FILE).map((v) => v.cid);
+    versions = allVersions.slice(0, getMaxVersionsPerFile());
+    prunedCids = allVersions.slice(getMaxVersionsPerFile()).map((v) => v.cid);
   } else {
     // Preserve existing versions as-is
     versions = params.currentMetadata.versions;
@@ -387,8 +392,8 @@ export async function restoreVersion(params: {
   const newVersions = [currentAsVersion, ...remainingVersions];
 
   // Prune if exceeds max
-  const prunedVersions = newVersions.slice(0, MAX_VERSIONS_PER_FILE);
-  const prunedCids = newVersions.slice(MAX_VERSIONS_PER_FILE).map((v) => v.cid);
+  const prunedVersions = newVersions.slice(0, getMaxVersionsPerFile());
+  const prunedCids = newVersions.slice(getMaxVersionsPerFile()).map((v) => v.cid);
 
   // Build updated metadata with restored version's data as current
   const updatedMetadata: FileMetadata = {

@@ -5,6 +5,7 @@ import * as folderService from '../services/folder.service';
 import type { FolderNode } from '../stores/folder.store';
 import { getSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
 import { BinNotLoadedError } from '@cipherbox/sdk';
+import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { MAX_FOLDER_DEPTH, getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
 
@@ -318,16 +319,21 @@ export function useFolderMutations() {
 
         const client = getSdkClient();
         const parentPath = buildFolderPath(parentId);
+        const { deleteBehavior } = useVaultSettingsStore.getState().settings;
 
-        // Try soft-delete (move to bin) first; fall back to hard delete if bin not loaded
-        try {
-          await client.deleteToBin(parentFolder.ipnsName, itemId, parentPath);
-        } catch (binErr) {
-          // Bin not loaded -- fall back to hard metadata delete
-          if (binErr instanceof BinNotLoadedError) {
-            await client.deleteItem(parentFolder.ipnsName, itemId);
-          } else {
-            throw binErr;
+        if (deleteBehavior === 'permanent') {
+          // User prefers permanent deletion -- skip bin entirely
+          await client.deleteItem(parentFolder.ipnsName, itemId);
+        } else {
+          // Default: soft-delete to bin, fall back to hard delete if bin not loaded
+          try {
+            await client.deleteToBin(parentFolder.ipnsName, itemId, parentPath);
+          } catch (binErr) {
+            if (binErr instanceof BinNotLoadedError) {
+              await client.deleteItem(parentFolder.ipnsName, itemId);
+            } else {
+              throw binErr;
+            }
           }
         }
 
@@ -399,20 +405,26 @@ export function useFolderMutations() {
         // Delete each item via SDK (sequentially to maintain consistency)
         const client = getSdkClient();
         const parentPath = buildFolderPath(parentId);
+        const { deleteBehavior } = useVaultSettingsStore.getState().settings;
 
         for (const item of items) {
           // Re-register parent between deletes since SDK updates its internal state
           const freshParent = getParentFolder(parentId);
           if (freshParent) ensureFolderRegistered(freshParent);
 
-          // Try soft-delete (bin) first; fall back to hard delete
-          try {
-            await client.deleteToBin(parentFolder.ipnsName, item.id, parentPath);
-          } catch (binErr) {
-            if (binErr instanceof BinNotLoadedError) {
-              await client.deleteItem(parentFolder.ipnsName, item.id);
-            } else {
-              throw binErr;
+          if (deleteBehavior === 'permanent') {
+            // User prefers permanent deletion -- skip bin entirely
+            await client.deleteItem(parentFolder.ipnsName, item.id);
+          } else {
+            // Default: soft-delete to bin, fall back to hard delete
+            try {
+              await client.deleteToBin(parentFolder.ipnsName, item.id, parentPath);
+            } catch (binErr) {
+              if (binErr instanceof BinNotLoadedError) {
+                await client.deleteItem(parentFolder.ipnsName, item.id);
+              } else {
+                throw binErr;
+              }
             }
           }
         }

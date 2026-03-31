@@ -37,7 +37,8 @@ import { detectDeviceInfo, computeIpHash } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
 import { initializeBin } from '../services/bin.service';
 import { useBinStore } from '../stores/bin.store';
-import { vaultControllerGetConfig } from '@cipherbox/api-client';
+import { loadVaultSettings } from '../services/vault-settings.service';
+import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../services/ipns.service';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { logger } from '../lib/logger';
@@ -285,8 +286,17 @@ export function useAuth() {
           return state.accessToken || '';
         };
 
-        // Load BYO config before initializing SDK client
-        const pinningConfig = await loadByoConfig(userKeypair.privateKey);
+        // Load BYO config and vault settings in parallel before initializing SDK client
+        const [pinningConfig, vaultSettings] = await Promise.all([
+          loadByoConfig(userKeypair.privateKey),
+          loadVaultSettings(userKeypair.privateKey),
+        ]);
+
+        // Populate vault settings store
+        useVaultSettingsStore.getState().setSettings(vaultSettings);
+
+        // Update bin store retention from user settings
+        useBinStore.getState().setRetentionDays(vaultSettings.recycleBinRetentionDays);
 
         // @cipherbox/api-client is configured in lib/api-config.ts at module load time.
 
@@ -368,17 +378,8 @@ export function useAuth() {
         }
       })();
 
-      // Non-blocking: fetch retention config from API
-      void (async () => {
-        try {
-          const config = await vaultControllerGetConfig();
-          if (config.recycleBinRetentionDays != null) {
-            useBinStore.getState().setRetentionDays(config.recycleBinRetentionDays);
-          }
-        } catch (error) {
-          logger.error('[Auth] Failed to fetch vault config (non-blocking):', error);
-        }
-      })();
+      // Vault settings (retention, delete behavior, versioning) are loaded above
+      // in parallel with BYO config and populated into useVaultSettingsStore.
     };
     vaultInitPromise = doInit().finally(() => {
       vaultInitPromise = null;
