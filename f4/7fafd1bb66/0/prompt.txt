@@ -1,0 +1,79 @@
+/gsd:debug issue logging in on macos desktop app, using package built by github during release. I am trying to log in via email otp, and receive the email but when I submit the received otp, I see a `verification failed` message. I have tested this same flow in the web app with the exact same account, and this works fine, so this problem seems related only to the desktop app.
+
+I have not tested a locally built instance of the app, but this is next on the cards.
+
+---
+
+yeah please push and create a PR
+
+---
+
+/gsd:add-phase package and app versioning and release cycles @temp/plan-packageVersioningStrategy.prompt.md
+
+---
+
+/gsd:discuss-phase 41
+
+---
+
+How closely do you think we will be able to match the existing release job with gates, CI, etc and tagging if we go for the full changesets route?
+
+---
+
+Why does the lack of native cargo.toml support kinda have me feeling like we are approaching this entire problem wrong? Release Please works, its just the squash commits that are causing problems. What about adding some other heuristics to the squashed commits to main, to allow release please to figure out which packages changed and by how much (patch/minor/major)...
+
+---
+
+Initially I thought that keeping web/api/desktop versions in sync made sense, but I am reconsidering that decision. There is also the TEE worker code that should probably be versioned separately and given this sprawl (web-ui, desktop, api, tee-worker, 5 js packages, 5 rust crates) I am starting to think that individually versioning each item might be the most sensible thing to do.
+
+---
+
+autodetecting cascades seems like a great idea. how difficult do you think it is to implement?
+
+---
+
+This question actually brought up a thought that I have been wanting to discuss - the actual versioning strategy for the individual packages/apps
+
+For packages its fairly obvious, stuck with what we have: semver works and makes sense. 
+
+For the web and desktop, these should be either monotonically increasing (basically just a release number) or a simple v1.0, v1.1 etc.
+
+For the API, should this also just be monotonically increasing, or does semver make sense in terms of a REST api?
+
+---
+
+You say that the API doesnt have external consumers, but technically the web app, desktop app and SDK are all external consumers. At some point there will be other apps built using the SDK, so it should be treated as such. One important distinction here is that technically all api consumers are consuming the api through the api based on the version in the openapi.json, which is used to generate the rust and typescript api clients. The api-client version would need to target a specific api version, or these should be versioned together.
+
+---
+
+are you able to provide some expanded info on all three options, but mainly the 1st and 3rd. Are there any reasons to choose one over another?
+
+---
+
+the tee worker docker image is built by the staging release workflow, and as such, the package version should feed through to the docker image version.
+
+---
+
+is there any disadvantage to using release please as the single source of truth?
+
+---
+
+how long do you think this workflow run will take?
+
+---
+
+so just to make sure I understand correctly:
+
+User opens a PR which contains API changes
+PR Action auto-adds `cipherbox-api:minor` tag to the PR
+post merge action cascades that tag in to commits to bump api -> Rust/TS Api Client
+
+Is that right?
+
+---
+
+yes that makes complete sense. confirmed, cascade happens at PR time.
+
+---
+
+the release-as route seems really decent, could you break it down step by step for me, as we did with the cascade discussion, so that I can reason about it.

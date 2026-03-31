@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f47fafd1bb66",
+  "session_id": "78235caf-48bb-4e41-be17-7d7c7f939639",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-31T18:28:43.105932Z",
+  "branch": "feat/package-and-app-versioning-and-release-cycles",
+  "checkpoints_count": 16,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "40c27d8233d7",
+  "token_usage": {
+    "input_tokens": 149,
+    "cache_creation_tokens": 140833,
+    "cache_read_tokens": 10583253,
+    "output_tokens": 51702,
+    "api_call_count": 112
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Debug and fix a failing email OTP login flow in the macOS desktop app (GitHub release build), then plan the versioning and release cycle strategy for all packages, apps, and crates in the monorepo.",
+    "outcome": "Root cause identified (split-brain API URL between Vite compile-time env and Rust runtime env), fix implemented and PR #425 created. Phase 41 added to roadmap and CONTEXT.md written capturing a full versioning strategy: PR-commit-analysis-driven release labels, `release-as` injection into Release Please config, locked API/api-client versioning, independent semver/monotonic per component, and a cascade detection action.",
+    "learnings": {
+      "repo": [
+        "Tauri desktop app has a split configuration problem: JS reads VITE_API_URL at Vite compile time, Rust reads it via std::env::var() at runtime — in release builds the Rust side falls back to localhost:3000",
+        "Tauri invoke rejections are plain strings, not Error objects — `err instanceof Error` is always false for Tauri errors, causing generic fallback messages to mask real errors",
+        "VITE_API_URL is set as an env var in the GitHub Actions tauri-actions step for all four platforms (web, macOS, Windows, Linux) but was not baked into the Rust binary at compile time",
+        "The project uses Release Please in manifest mode with path-based package detection; squash merges collapse per-package bump granularity into a single commit type",
+        "API, TS api-client, and Rust api-client are tightly coupled via OpenAPI spec — api-client is generated from the spec, so they should be locked to the same version",
+        "Web and desktop apps should use monotonic versioning (v1, v2); API, TEE worker, SDK packages, and Rust crates should use semver",
+        "Staging deploys are triggered by staging-v* tags; proposed new format is date-based: staging-YYYYMMDD-release-N",
+        "Docker images for API and TEE worker should use dual tags: component version (pinnable) + latest-staging (rolling)",
+        "release-please-config.json already contains the path→component mapping needed for CI label validation — no separate config needed"
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src-tauri/src/main.rs",
+          "line": 82,
+          "end_line": 84,
+          "finding": "Rust runtime env fallback uses std::env::var() which resolves at runtime — returns localhost:3000 in release builds where env vars are not set at launch; fixed with option_env!(\"VITE_API_URL\") for compile-time baking"
+        },
+        {
+          "path": "apps/desktop/src/main.ts",
+          "line": 281,
+          "end_line": 281,
+          "finding": "catch block used `err instanceof Error` which is false for Tauri invoke rejections (plain strings), causing 'Verification failed' to always show instead of the real error"
+        },
+        {
+          "path": "apps/desktop/src/main.ts",
+          "line": 449,
+          "end_line": 449,
+          "finding": "Identical instanceof Error masking pattern exists for MFA recovery flow — fixed alongside the OTP fix"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 231,
+          "end_line": 231,
+          "finding": "VITE_API_URL set for macOS build step"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 329,
+          "end_line": 329,
+          "finding": "VITE_API_URL set for Windows build step — all four platform build steps confirmed to have the var set"
+        }
+      ],
+      "workflow": [
+        "option_env!() in Rust reads environment variables at compile time (like Vite's import.meta.env), making it safe to bake URLs into release binaries without runtime env var requirements",
+        "PR-commit-analysis approach: read all commits in a PR via GitHub API before squash merge to extract per-package conventional commit types, auto-generate release labels, then use post-merge action to write release-as into RP config — eliminates manual labeling while preserving precision",
+        "release-as in release-please-config.json forces exact version targets per package, bypassing commit-type analysis — one-shot directives consumed when RP creates the release PR",
+        "Cascade detection should happen at PR time (not post-merge) so labels are visible for review before merge",
+        "When multiple PRs contribute to the same package bump before RP's release PR merges, post-merge action must take the highest bump level (minor wins over patch)"
+      ]
+    },
+    "friction": [
+      "Tauri's string-based invoke rejection format is not documented prominently — the instanceof Error pattern is a natural mistake that silently masks all Tauri-side errors",
+      "The split between Vite compile-time env vars and Rust runtime env vars is architecturally invisible — no type system or config validation catches the mismatch",
+      "Release Please's path-based bump detection conflicts with the desired label-driven precision — requires the release-as injection workaround rather than a clean native solution",
+      "No native Release Please support for Cargo.toml version bumping beyond extra-files pattern — a known limitation that influenced the versioning strategy discussion"
+    ],
+    "open_items": [
+      "Implement PR-commit-analysis GitHub Action that reads PR commits, maps to packages via RP config paths, auto-adds release labels, and computes cascades",
+      "Implement post-merge GitHub Action that reads final PR labels and writes release-as into release-please-config.json",
+      "Implement cascade detection logic using pnpm list --json and cargo metadata for dependency graph traversal",
+      "Update staging tag format from staging-v* to staging-YYYYMMDD-release-N",
+      "Add change-detection step to deploy-staging.yml (logging only first, conditional skipping later)",
+      "Update Docker image tagging to use dual tags: component semver version + latest-staging",
+      "Configure API, TS api-client, and Rust api-client as a locked version group in RP config",
+      "Define monotonic versioning strategy for web and desktop apps in RP config",
+      "Pre-create ~70 GitHub labels for release:component:type combinations to enable autocomplete",
+      "Test locally built desktop app to confirm the OTP fix resolves the issue before the next staging release",
+      "Push new staging tag (e.g. staging-v0.34.0-rc-2 or date-based equivalent) to trigger a release build for verification after PR #425 merges"
+    ]
+  }
+}
