@@ -12,6 +12,8 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
       - uses: actions/create-github-app-token@v3
         id: app-token
@@ -20,7 +22,30 @@ jobs:
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
 
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           token: ${{ steps.app-token.outputs.token }}
+
+      - name: Release summary
+        if: steps.release.outputs.releases_created == 'true'
+        env:
+          RELEASES_OUTPUT: ${{ toJSON(steps.release.outputs) }}
+        run: |
+          echo "## Releases Created" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          echo "$RELEASES_OUTPUT" | jq '{releases_created, paths_released}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure batched release is not marked as latest
+        if: steps.release.outputs.releases_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Un-mark the batched root release as latest so /releases/latest/
+          # resolves to the desktop release (marked latest by desktop-release.yml)
+          ROOT_TAG="${{ steps.release.outputs['tag_name'] }}"
+          if [ -n "$ROOT_TAG" ]; then
+            gh release edit "$ROOT_TAG" --repo "${{ github.repository }}" --latest=false || true
+          fi
