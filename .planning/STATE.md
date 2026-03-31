@@ -184,6 +184,7 @@ Recent for v1.1:
 - Phase 27 added: Writable Shares (PoC) — extend read-only sharing to read-write using existing server-coordinated conflict resolution
 - Phase 36 added: Refactor upload progress in web app, to an inline progress display and remove the popup upload progress
 - Phase 37 added: Parallel batch upload pipeline — replace sequential per-file upload loop with parallel encrypt+pin and single folder metadata update
+- Phase 41 added: Package and app versioning and release cycles
 
 ### Open Concerns
 
