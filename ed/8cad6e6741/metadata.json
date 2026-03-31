@@ -3,7 +3,7 @@
   "checkpoint_id": "ed8cad6e6741",
   "strategy": "manual-commit",
   "branch": "feat/desktop-vault-settings-integration",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     ".husky/commit-msg",
     "Cargo.lock",
@@ -17,13 +17,19 @@
       "transcript": "/ed/8cad6e6741/0/full.jsonl",
       "content_hash": "/ed/8cad6e6741/0/content_hash.txt",
       "prompt": "/ed/8cad6e6741/0/prompt.txt"
+    },
+    {
+      "metadata": "/ed/8cad6e6741/1/metadata.json",
+      "transcript": "/ed/8cad6e6741/1/full.jsonl",
+      "content_hash": "/ed/8cad6e6741/1/content_hash.txt",
+      "prompt": "/ed/8cad6e6741/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 20,
-    "cache_creation_tokens": 63355,
-    "cache_read_tokens": 735304,
-    "output_tokens": 10579,
-    "api_call_count": 15
+    "input_tokens": 117,
+    "cache_creation_tokens": 159793,
+    "cache_read_tokens": 7126221,
+    "output_tokens": 30947,
+    "api_call_count": 98
   }
 }
