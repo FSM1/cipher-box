@@ -721,51 +721,18 @@ pub(crate) mod implementation {
                         .unwrap_or_default()
                         .as_millis() as u64;
 
-                    let should_version = if let Some(ref versions) = existing_versions {
-                        if let Some(newest) = versions.first() {
-                            now_ms.saturating_sub(newest.timestamp) >= fs.version_cooldown_ms
-                        } else {
-                            old_file_cid.as_ref().is_some_and(|c| !c.is_empty())
-                        }
-                    } else {
-                        old_file_cid.as_ref().is_some_and(|c| !c.is_empty())
-                    };
-
-                    let (new_versions, pruned_cids) = if should_version {
-                        if let Some(ref old_c) = old_file_cid {
-                            if !old_c.is_empty() {
-                                let version_entry = cipherbox_core::folder::VersionEntry {
-                                    cid: old_c.clone(),
-                                    file_key_encrypted: old_encrypted_key.clone(),
-                                    file_iv: old_iv.clone(),
-                                    size: old_size,
-                                    timestamp: now_ms,
-                                    encryption_mode: old_mode.clone(),
-                                };
-                                let mut versions = vec![version_entry];
-                                versions.extend(existing_versions.unwrap_or_default());
-                                let pruned: Vec<String> = if versions.len() > fs.max_versions_per_file {
-                                    versions.split_off(fs.max_versions_per_file).into_iter().map(|v| v.cid).collect()
-                                } else {
-                                    vec![]
-                                };
-                                if !pruned.is_empty() {
-                                    log::info!("Pruned {} version(s) for ino {} (exceeded max {})", pruned.len(), ino, fs.max_versions_per_file);
-                                }
-                                log::debug!("Created version entry for ino {} (total versions: {})", ino, versions.len());
-                                (Some(versions), pruned)
-                            } else {
-                                (existing_versions, vec![])
-                            }
-                        } else {
-                            (existing_versions, vec![])
-                        }
-                    } else {
-                        if existing_versions.is_some() {
-                            log::debug!("Version cooldown active for ino {} -- skipping version creation", ino);
-                        }
-                        (existing_versions, vec![])
-                    };
+                    let (new_versions, pruned_cids) = crate::helpers::apply_versioning(
+                        existing_versions,
+                        &old_file_cid,
+                        &old_encrypted_key,
+                        &old_iv,
+                        old_size,
+                        &old_mode,
+                        now_ms,
+                        fs.max_versions_per_file,
+                        fs.version_cooldown_ms,
+                        ino,
+                    );
 
                     let versions_for_meta = new_versions.as_ref()
                         .filter(|v| !v.is_empty())

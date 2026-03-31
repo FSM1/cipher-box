@@ -90,6 +90,69 @@ pub fn build_folder_path(fs: &crate::CipherBoxFS, folder_ino: u64) -> String {
     parts.join(" / ")
 }
 
+/// Evaluate whether a new version should be created and prune excess versions.
+///
+/// Shared across all platforms (macOS, Linux, Windows) to ensure consistent
+/// versioning behavior regardless of the FUSE/WinFSP backend.
+///
+/// Returns `(versions, pruned_cids)` where `pruned_cids` contains CIDs of
+/// versions that exceeded `max_versions` and should be unpinned.
+pub fn apply_versioning(
+    existing_versions: Option<Vec<cipherbox_core::folder::VersionEntry>>,
+    old_file_cid: &Option<String>,
+    old_encrypted_key: &str,
+    old_iv: &str,
+    old_size: u64,
+    old_mode: &str,
+    now_ms: u64,
+    max_versions: usize,
+    cooldown_ms: u64,
+    ino: u64,
+) -> (Option<Vec<cipherbox_core::folder::VersionEntry>>, Vec<String>) {
+    let should_version = if let Some(ref versions) = existing_versions {
+        if let Some(newest) = versions.first() {
+            now_ms.saturating_sub(newest.timestamp) >= cooldown_ms
+        } else {
+            old_file_cid.as_ref().is_some_and(|c| !c.is_empty())
+        }
+    } else {
+        old_file_cid.as_ref().is_some_and(|c| !c.is_empty())
+    };
+
+    if !should_version {
+        if existing_versions.is_some() {
+            log::debug!("Version cooldown active for ino {} -- skipping version creation", ino);
+        }
+        return (existing_versions, vec![]);
+    }
+
+    match old_file_cid {
+        Some(ref old_c) if !old_c.is_empty() => {
+            let version_entry = cipherbox_core::folder::VersionEntry {
+                cid: old_c.clone(),
+                file_key_encrypted: old_encrypted_key.to_string(),
+                file_iv: old_iv.to_string(),
+                size: old_size,
+                timestamp: now_ms,
+                encryption_mode: old_mode.to_string(),
+            };
+            let mut versions = vec![version_entry];
+            versions.extend(existing_versions.unwrap_or_default());
+            let pruned: Vec<String> = if versions.len() > max_versions {
+                versions.split_off(max_versions).into_iter().map(|v| v.cid).collect()
+            } else {
+                vec![]
+            };
+            if !pruned.is_empty() {
+                log::info!("Pruned {} version(s) for ino {} (exceeded max {})", pruned.len(), ino, max_versions);
+            }
+            log::debug!("Created version entry for ino {} (total versions: {})", ino, versions.len());
+            (Some(versions), pruned)
+        }
+        _ => (existing_versions, vec![]),
+    }
+}
+
 /// Convert VersionEntry list to VersionCidEntry list for bin entries.
 /// Filters out entries with empty CIDs and returns None if the result is empty.
 pub fn versions_to_bin_entries(
