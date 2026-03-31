@@ -396,7 +396,7 @@ export async function restoreVersion(params: {
 
   // Prune if exceeds max
   const maxVer = getMaxVersionsPerFile();
-  const prunedVersions = newVersions.slice(0, maxVer);
+  const retainedVersions = newVersions.slice(0, maxVer);
   const prunedCids = newVersions.slice(maxVer).map((v) => v.cid);
 
   // Build updated metadata with restored version's data as current
@@ -407,7 +407,7 @@ export async function restoreVersion(params: {
     fileIv: versionToRestore.fileIv,
     size: versionToRestore.size,
     encryptionMode: versionToRestore.encryptionMode,
-    versions: prunedVersions.length > 0 ? prunedVersions : undefined,
+    versions: retainedVersions.length > 0 ? retainedVersions : undefined,
     modifiedAt: Date.now(),
   };
 

@@ -31,6 +31,9 @@ export const DEFAULT_VAULT_SETTINGS: VaultSettings = {
 export function validateVaultSettings(input: unknown): VaultSettings {
   if (!input || typeof input !== 'object') return { ...DEFAULT_VAULT_SETTINGS };
   const raw = input as Record<string, unknown>;
+  if (raw.version !== undefined && raw.version !== DEFAULT_VAULT_SETTINGS.version) {
+    return { ...DEFAULT_VAULT_SETTINGS };
+  }
 
   const recycleBinRetentionDays = clamp(
     toNumber(raw.recycleBinRetentionDays, DEFAULT_VAULT_SETTINGS.recycleBinRetentionDays),
