@@ -55,6 +55,9 @@ reproduction:
 ## Resolution
 
 root_cause: The Rust backend in the Tauri app reads the API base URL from runtime environment variables (`CIPHERBOX_API_URL` or `VITE_API_URL`) at `apps/desktop/src-tauri/src/main.rs:82-84`, falling back to `http://localhost:3000`. In a release build installed from a GitHub Actions DMG, these runtime env vars don't exist. The JavaScript side (webview) correctly uses the staging API URL because Vite bakes `import.meta.env.VITE_API_URL` at compile time. But after OTP verification succeeds in JS, `invoke('handle_auth_complete')` triggers the Rust side to POST to `http://localhost:3000/auth/login`, which fails with connection refused. Tauri's invoke rejects with a plain string (not an Error object), so the catch block at `apps/desktop/src/main.ts:281` falls through to the generic "Verification failed" message. The split between JS compile-time env vars (Vite) and Rust runtime env vars (std::env::var) is the fundamental mismatch.
-fix:
-verification:
-files_changed: []
+fix: Added `option_env!("VITE_API_URL")` as compile-time fallback in Rust API URL resolution at `apps/desktop/src-tauri/src/main.rs`. CI already sets `VITE_API_URL` during Tauri builds, so `option_env!` captures it at compile time — matching how Vite bakes it for the JS side. Also improved error handling in `apps/desktop/src/main.ts` to surface the actual Tauri invoke rejection string instead of the generic "Verification failed" fallback. Merged in PR #425 (commit e5384c0).
+verification: Built a release DMG via the same GitHub Actions staging workflow, installed the app, performed the full email OTP flow, and confirmed `handle_auth_complete` POSTed to the staging API URL with no connection-refused error.
+files_changed:
+
+- apps/desktop/src-tauri/src/main.rs
+- apps/desktop/src/main.ts

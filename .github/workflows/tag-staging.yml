@@ -48,7 +48,7 @@ jobs:
           STAGING_PREFIX="staging-${DATE}-release"
 
           # Find existing tags for today and get the highest release number
-          LAST_N=$(git tag -l "${STAGING_PREFIX}-*" | sed "s/${STAGING_PREFIX}-//" | sort -n | tail -1)
+          LAST_N=$(git tag -l "${STAGING_PREFIX}-*" | sed "s/${STAGING_PREFIX}-//" | grep -E '^[0-9]+$' | sort -n | tail -1)
           if [ -z "$LAST_N" ]; then
             NEXT_N=1
           else
