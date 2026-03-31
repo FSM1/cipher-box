@@ -237,15 +237,9 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 ## Test Coverage Gaps
 
-**Web app has minimal unit tests (3 test files for 163 source files):**
+**Web app has minimal unit tests (won't fix):**
 
-- What's not tested: All React components, most hooks, all services except sync store and upload error recovery.
-- Files: Only 3 test files exist:
-  - `apps/web/src/stores/__tests__/sync-store.test.ts`
-  - `apps/web/src/stores/__tests__/upload-error-recovery.test.ts`
-  - `apps/web/src/stores/__tests__/logout-security.test.ts`
-- Risk: Regressions in folder operations, file uploads, auth flows, sharing, and bin operations go undetected until E2E tests or manual testing. The 1059-line `folder.service.ts`, 971-line `bin.service.ts`, 791-line `SharedFileBrowser.tsx`, 623-line `useFileBrowserActions.ts`, and 515-line `useFileOperations.ts` have zero unit test coverage.
-- Priority: High. Focus first on services (`folder.service.ts`, `bin.service.ts`, `share.service.ts`) and critical hooks (`useAuth.ts`, `useFolderMutations.ts`, `useFileOperations.ts`).
+- Status: Won't fix. The web app layer is primarily thin wrappers around `@cipherbox/sdk` and React UI components. The 14 Playwright E2E suites in `tests/web-e2e/` cover all critical user flows end-to-end (upload, download, sharing, bin, search, auth, media preview, etc.). Unit testing these wrappers would duplicate E2E coverage with high mocking overhead and low marginal value. The SDK and SDK-core packages — where the actual logic lives — have comprehensive unit test suites (13 files each).
 
 **TEE worker has improved but incomplete test coverage (5 test files for 14 source files):**
 
