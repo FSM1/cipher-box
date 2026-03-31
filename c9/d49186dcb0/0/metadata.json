@@ -1,0 +1,113 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c9d49186dcb0",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-31T00:08:47.314215Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "2a941edc38f3",
+  "token_usage": {
+    "input_tokens": 3927,
+    "cache_creation_tokens": 255737,
+    "cache_read_tokens": 39443564,
+    "output_tokens": 70168,
+    "api_call_count": 237
+  },
+  "session_metrics": {
+    "turn_count": 28
+  },
+  "summary": {
+    "intent": "Resolve PR review comments on a docs branch, then perform a comprehensive documentation audit and update covering DEFERRED.md, FEATURES.md, README.md, codebase maps, and a new filesystem specification document.",
+    "outcome": "PR #419 was created and merged with 15 commits across 10 files. DEFERRED.md was thoroughly audited and pruned of implemented/out-of-scope items. Phases 38 (retire folder.service.ts/bin.service.ts) and 39 (user-configurable vault parameters) were added to the roadmap. A new FILESYSTEM_SPECIFICATION.md was created. All docs/ files were updated to reflect phases 28-37 changes.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro is the error tracking and remote log shipping solution — not Sentry. Configured in apps/web/src/lib/faro.ts with beforeSend scrubbing.",
+        "RECYCLE_BIN_RETENTION_DAYS is an operator env var, not a user-facing setting — the deferred item for user-configurable bin retention is still valid.",
+        "TEE republish uses Phala Cloud CVM (Phase 35). Pre-migration enrollments fail with 'ECIES decryption failed for all available epochs' because they were wrapped with the old TEE public key. 477 new enrollments are correct; 15 stale ones will use DB-cached CID fallback.",
+        "FUSE unit tests are intentionally absent — the FUSE layer is pure OS plumbing between macOS/Linux/Windows and the Rust SDK. Coverage comes from Desktop E2E test suite instead.",
+        "folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines, 2 functions actually used) are the primary retirement targets for Phase 38.",
+        "@cipherbox/crypto has @cipherbox/core as a devDependency only for a test in vault-ipns.test.ts that compares key derivation. This was meant to be removed during Phase 19.1 restructuring.",
+        "Duplicate file upload path (replace/duplicate branch) still uses encryptFile() on main thread — Phase 37 moved new file encryption to Web Worker but missed this code path.",
+        "SDK packages (sdk, sdk-core) use console.warn bypassing the Faro transport since they are zero-dependency packages. 11+ console.warn calls exist that don't go through structured logging.",
+        "IPNS keys republish on a 6-hour cycle (not 3h as previously documented). The TEE batch runs at scheduled intervals and TEE health endpoint at /health returns epoch info.",
+        "The CipherBox filesystem enforces Windows-compatible naming as the strictest common denominator (case-insensitive, 255-char limit, reserved names like CON/PRN/AUX). macOS and Linux FUSE mounts are case-sensitive but the naming rules enforce the Windows-safe subset.",
+        "AES-CTR is used for large files (audio and video), not just video. AES-GCM is used for smaller files. The FUSE layer streams CTR decryption; uploads also use CTR for large files client-side.",
+        "Linux FUSE uses the same fuse feature flag as macOS — NFC-normalized, case-sensitive. Accessible via terminal. Windows mount accessible via PowerShell and Git Bash.",
+        "share_invites and pin_migrations are tables that exist in the DB but were missing from DATABASE_EVOLUTION_PROTOCOL.md. Total is 14 tables, not 12.",
+        "Phase 35 removed the Docker TEE simulator entirely, leaving Phala Cloud CVM as the single TEE provider with no fallback option."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "line": 1,
+          "finding": "Grafana Faro implementation — handles error tracking, structured logging, and remote log shipping to Grafana Cloud with beforeSend scrubbing for PII"
+        },
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "finding": "Added try/catch around getWorker()/postMessage() to prevent pending map leaks on throw"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "finding": "uploadFiles() doc comment was updated to clarify memory bounding — large files use streaming CTR, only small files are fully buffered"
+        },
+        {
+          "path": "packages/crypto/src/__tests__/vault-ipns.test.ts",
+          "line": 1,
+          "finding": "Imports @cipherbox/core only to compare deriveRegistryIpnsKeypair vs deriveVaultIpnsKeypair for domain separation test. This devDependency was supposed to be cleaned up in Phase 19.1 — scheduled for Phase 38."
+        },
+        {
+          "path": "apps/api/src/tee/tee.service.ts",
+          "line": 1,
+          "finding": "TEE republish failures return HTTP 200 with success:false in result objects — the error detail (ECIES decryption failed) is not logged at service level, only visible in the republish_schedule table"
+        },
+        {
+          "path": "crates/fuse/src/helpers.rs",
+          "line": 1,
+          "finding": "Contains is_platform_special() and is_windows_special() for reserved name enforcement across platforms"
+        },
+        {
+          "path": "crates/fuse/src/constants.rs",
+          "line": 1,
+          "finding": "Filesystem constants including name length limits and reserved character sets"
+        },
+        {
+          "path": "docs/FILESYSTEM_SPECIFICATION.md",
+          "line": 1,
+          "finding": "New document created this session. Covers naming rules, per-platform case handling, reserved names, size/quota/depth limits, versioning constraints, FUSE mount specifics, encryption modes (GCM vs CTR), and cross-platform gaps."
+        }
+      ],
+      "workflow": [
+        "When asked to audit and prune a list, do each item systematically rather than relying on spot-checks triggered by user corrections. Shallow passes waste multiple rounds of follow-up.",
+        "gh api GraphQL reviewThreads returns isResolved status. REST endpoint for replies requires --field in_reply_to=INT (not -f), then GraphQL resolveReviewThread mutation to mark resolved.",
+        "gsd-codebase-mapper agents write documents directly and return only line counts + confirmation — orchestrator never receives document contents, keeping context minimal.",
+        "The Task tool supports run_in_background=true for parallel agent spawning; use TaskOutput with block:true to wait for completion.",
+        "gh pr create returns URL directly; gh pr edit --body can update existing PR descriptions.",
+        "When a devDependency creates a conceptual circular dependency in a monorepo, check whether it's test-only before flagging as an issue — test devDeps are generally fine but may indicate a test organization smell."
+      ]
+    },
+    "friction": [
+      "Multiple rounds of user correction needed for DEFERRED.md audit — the first pass removed only 3 items user explicitly mentioned, missing many others that were obviously implemented (Grafana Faro, Linux FUSE, CTR streaming, etc.).",
+      "RECYCLE_BIN_RETENTION_DAYS was incorrectly identified as implementing the user-facing retention preference, then had to be reverted — operator config vs user-facing settings are distinct.",
+      "The Edit tool reformatted table cell widths in markdown tables, requiring extra verification steps to confirm the actual file content before making subsequent edits.",
+      "Committing required multiple retries due to commit message format issues (parentheses in subject line failing hooks, requiring dashes instead).",
+      "TEE republish failure root cause was not logged at the TeeService level — had to query the republish_schedule table directly via psql to find the ECIES decryption error.",
+      "useDropUpload.ts hook has no unit tests despite being significantly rewritten in Phase 37 as the primary upload entry point — a gap noted in CONCERNS.md but not addressed this session."
+    ],
+    "open_items": [
+      "Phase 38: Retire folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines) by migrating callers to SDK methods. Also includes removing @cipherbox/crypto devDependency on @cipherbox/core by refactoring vault-ipns.test.ts to use hardcoded test vectors.",
+      "Phase 39: User-configurable vault parameters — bin retention period (user-chosen days, default 30), delete behavior (soft vs hard delete), versioning defaults (max versions per file, version cooldown period).",
+      "15 stale TEE republish entries failing with ECIES decryption error — wrapped for old TEE public key pre-Phase 35. Left as-is; DB-cached CID fallback handles resolution until clients reconnect and re-enroll.",
+      "Duplicate file upload path (replace/duplicate branch in useDropUpload.ts) still encrypts on main thread — Phase 37 moved new file encryption to Web Worker but missed this branch. Noted in CONCERNS.md.",
+      "SDK packages (sdk, sdk-core) use console.warn bypassing Faro transport — 11+ calls need structured logging migration. Noted in CONCERNS.md.",
+      "useDropUpload.ts hook has no unit tests despite Phase 37 making it the primary upload entry point. Noted in CONCERNS.md.",
+      "Phala Cloud CVM is single TEE provider with no fallback — Docker simulator was removed in Phase 35. Noted in CONCERNS.md as fragile.",
+      "@phala/dstack-sdk single-provider lock-in noted as dependency at risk in CONCERNS.md.",
+      "Faro telemetry scrub relies on key-name allow-list — new attack surface from Phase 30, noted in CONCERNS.md as security concern."
+    ]
+  }
+}
