@@ -294,9 +294,6 @@ export function useAuth() {
         // Populate vault settings store
         useVaultSettingsStore.getState().setSettings(vaultSettings);
 
-        // Update bin store retention from user settings
-        useBinStore.getState().setRetentionDays(vaultSettings.recycleBinRetentionDays);
-
         // @cipherbox/api-client is configured in lib/api-config.ts at module load time.
 
         const sdkClient = initSdkClient({

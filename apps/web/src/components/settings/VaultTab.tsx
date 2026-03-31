@@ -3,7 +3,6 @@ import { type VaultSettings, DEFAULT_VAULT_SETTINGS, validateVaultSettings } fro
 import { useVaultSettingsStore } from '../../stores/vault-settings.store';
 import { saveVaultSettings } from '../../services/vault-settings.service';
 import { useAuthStore } from '../../stores/auth.store';
-import { useBinStore } from '../../stores/bin.store';
 
 /**
  * VAULT tab for the Settings page.
@@ -71,8 +70,6 @@ export function VaultTab() {
       });
 
       useVaultSettingsStore.getState().setSettings(newSettings);
-      // Also update bin store retention for immediate effect
-      useBinStore.getState().setRetentionDays(newSettings.recycleBinRetentionDays);
 
       setSaveSuccess(true);
       if (successTimerRef.current) clearTimeout(successTimerRef.current);
