@@ -1,10 +1,10 @@
-# CipherBox - Claude AI Rules
+# CipherBox - AI Agent Instructions
 
 ## Project Context
 
 CipherBox is a **technology demonstrator** for privacy-first encrypted cloud storage using IPFS/IPNS and Web3Auth. It is not a commercial product.
 
-## Documentation Structure
+## Documentation
 
 The single source of truth for project documentation is the `docs/` folder:
 
@@ -39,9 +39,9 @@ Always use consistent terminology:
 
 ## Critical Security Rules
 
-1. **Never** suggest storing `privateKey` in localStorage/sessionStorage
-2. **Never** suggest logging sensitive keys
-3. **Never** suggest sending unencrypted keys to server
+1. **Never** store `privateKey` in localStorage/sessionStorage
+2. **Never** log sensitive keys
+3. **Never** send unencrypted keys to the server
 4. **Always** use ECIES for key wrapping
 5. **Always** use AES-256-GCM for content encryption
 6. The server NEVER has access to plaintext or unencrypted keys
@@ -52,21 +52,19 @@ Always use consistent terminology:
 
 When working on `apps/api` code:
 
-1. **After modifying API endpoints, DTOs, or controllers**, regenerate the API client to keep the web app in sync:
+1. **After modifying API endpoints, DTOs, or controllers**, regenerate the API client:
 
    ```bash
    pnpm api:generate
    ```
 
-   This command generates the OpenAPI spec from the API, regenerates the typed client in `@cipherbox/api-client`, builds the package, and runs lint fixes.
+   This generates the OpenAPI spec, regenerates the typed client in `@cipherbox/api-client`, builds the package, and runs lint fixes.
 
 2. **Always run `pnpm api:generate` before completing a feature** that touches the API to ensure type safety across the monorepo.
 
 3. **Commit the regenerated client files** (`packages/api-client/src/generated/` and `packages/api-client/src/models/`) along with your API changes.
 
 ## Code Generation Guidelines
-
-When generating code for CipherBox:
 
 1. Use TypeScript for all JavaScript code
 2. Use `Uint8Array` for binary data, not strings
@@ -97,72 +95,6 @@ Do not implement or suggest implementations for:
 - Collaborative editing
 - Team accounts
 
-## Verification with MCP Tools
-
-### Playwright MCP Verification (REQUIRED)
-
-**ALWAYS attempt to verify application changes using Playwright MCP** when it is available. This ensures implemented features work correctly at runtime.
-
-**When to use Playwright MCP:**
-
-- After implementing UI components
-- After modifying styles or layouts
-- After adding new pages or routes
-- After any user-facing changes
-- During GSD verification phase
-
-**Verification workflow:**
-
-```typescript
-// 1. Navigate to the app
-await mcp__playwright__navigate({ url: 'http://localhost:5173' });
-
-// 2. Wait for page to load
-await mcp__playwright__wait({ selector: '[data-testid="app-loaded"]' });
-
-// 3. Capture screenshot for visual verification
-await mcp__playwright__screenshot({ fullPage: true, name: 'verification' });
-
-// 4. Verify element existence
-const exists = await mcp__playwright__evaluate({
-  script: `!!document.querySelector('.expected-element')`,
-});
-
-// 5. Verify computed styles (for UI work)
-const styles = await mcp__playwright__evaluate({
-  script: `
-    const el = document.querySelector('.target');
-    const s = getComputedStyle(el);
-    return { backgroundColor: s.backgroundColor, color: s.color };
-  `,
-});
-
-// 6. Test interactions
-await mcp__playwright__click({ selector: 'button.action' });
-await mcp__playwright__wait({ selector: '.result-element' });
-```
-
-**If Playwright MCP is not available:**
-
-- Document what needs human verification
-- Provide manual test steps
-- Flag items in VERIFICATION.md
-
-### Pencil MCP for Design Work
-
-**When working on UI phases**, use Pencil MCP (if available) or parse `.pen` files directly to extract design specifications as the source of truth.
-
-**Design files location:** `designs/*.pen`
-
-**Verification against design:**
-
-1. Extract design specs from Pencil file
-2. Verify CSS values match exactly (hex codes, pixel values)
-3. Use Playwright MCP to verify computed styles at runtime
-4. Document any discrepancies with file/line references
-
-**Reference:** See `.claude/get-shit-done/references/pencil-design-workflow.md`
-
 ## Git Workflow
 
 **Branch Protection Rules:**
@@ -170,7 +102,6 @@ await mcp__playwright__wait({ selector: '.result-element' });
 - **NEVER push directly to `main` branch** - all changes must go through feature branches and PRs
 - Create feature branches with descriptive names (e.g., `feat/add-auth`, `fix/ipns-publish`)
 - All commits should be made on feature branches first
-- Merge to main only via pull requests
 
 **Branch Naming:**
 
@@ -182,7 +113,7 @@ await mcp__playwright__wait({ selector: '.result-element' });
 
 **Commit Messages:**
 
-Commits must follow the [Conventional Commits](https://www.conventionalcommits.org/) format. This is enforced by commitlint via a husky `commit-msg` hook.
+Commits must follow the [Conventional Commits](https://www.conventionalcommits.org/) format. Enforced by commitlint via a husky `commit-msg` hook.
 
 ```text
 type(optional-scope): description
@@ -190,13 +121,16 @@ type(optional-scope): description
 [optional body]
 ```
 
-Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Any scope string is allowed (e.g., `feat(api): add health endpoint`).
+Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
 
 **Releases & Versioning:**
 
-- All packages share a single unified version (currently tracked in `.release-please-manifest.json`)
+- All packages share a single unified version (tracked in `.release-please-manifest.json`)
 - [Release Please](https://github.com/googleapis/release-please) automates changelog generation, version bumping, and GitHub Releases
-- On push to `main`, the `release-please.yml` workflow creates/updates a release PR with accumulated changes
-- When that PR is merged, Release Please creates a GitHub Release and `cipher-box-vX.Y.Z` tag (root package uses `include-component-in-tag: true` because release-please's multi-package release scanner cannot match bare `v{version}` tags to the root path)
 - Version bumps propagate to all `package.json` files, `Cargo.toml`, and `tauri.conf.json` via `release-please-config.json`
-- Staging deploys are triggered by pushing a tag matching `staging-v*` (e.g., `staging-v0.26.0-rc-1`). The `staging-` prefix avoids collision with release-please's `v{version}` tag pattern — previous `v*-staging*` format caused release-please to match staging pre-releases to the root package path, blocking tag creation. The `rc-N` suffix is a sequential counter allowing multiple staging deploys per version.
+
+## Database Migration Discipline
+
+- Every new `@Entity()` MUST have a `CREATE TABLE` migration with `IF NOT EXISTS`
+- `synchronize: true` in dev/test hides missing migrations
+- Full protocol: `docs/DATABASE_EVOLUTION_PROTOCOL.md`
