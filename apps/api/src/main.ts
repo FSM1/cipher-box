@@ -2,6 +2,8 @@ import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -49,10 +51,14 @@ async function bootstrap() {
     credentials: true,
   });
 
+  const apiVersion =
+    process.env.npm_package_version ||
+    JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')).version;
+
   const config = new DocumentBuilder()
     .setTitle('CipherBox API')
     .setDescription('Zero-knowledge encrypted cloud storage API')
-    .setVersion('0.1.0')
+    .setVersion(apiVersion)
     .addBearerAuth()
     .build();
   const document = SwaggerModule.createDocument(app, config);

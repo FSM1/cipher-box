@@ -199,6 +199,13 @@ const mockConfigService = {
 class OpenApiGeneratorModule {}
 
 async function generateOpenApiSpec() {
+  const openApiVersion = process.env.npm_package_version;
+  if (!openApiVersion) {
+    throw new Error(
+      'npm_package_version is required. Run via pnpm script: pnpm --filter @cipherbox/api openapi:generate'
+    );
+  }
+
   // Create app without starting HTTP server
   const app = await NestFactory.create(OpenApiGeneratorModule, {
     logger: false,
@@ -207,7 +214,7 @@ async function generateOpenApiSpec() {
   const config = new DocumentBuilder()
     .setTitle('CipherBox API')
     .setDescription('Zero-knowledge encrypted cloud storage API')
-    .setVersion('0.1.0')
+    .setVersion(openApiVersion)
     .addBearerAuth()
     .addTag('Health', 'Health check endpoints')
     .addTag('Root', 'API root endpoints')

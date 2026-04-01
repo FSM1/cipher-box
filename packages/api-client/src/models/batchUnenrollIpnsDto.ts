@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.1.0
+ * OpenAPI spec version: 0.35.0
  */
 
 export interface BatchUnenrollIpnsDto {
