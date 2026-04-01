@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.36.0...@cipherbox/web-v0.37.0) (2026-04-01)
+
+
+### Bug Fixes
+
+* **web:** replace emoji sidebar icons with consistent inline SVGs ([#436](https://github.com/FSM1/cipher-box/issues/436)) ([c7f72b6](https://github.com/FSM1/cipher-box/commit/c7f72b6131d0b840841697c0328cec6603dd5e00))
+
 ## [0.36.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.35.0...@cipherbox/web-v0.36.0) (2026-04-01)
 
 
