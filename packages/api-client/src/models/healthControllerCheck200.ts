@@ -6,9 +6,13 @@
  * OpenAPI spec version: 0.35.0
  */
 import type { HealthControllerCheck200Info } from './healthControllerCheck200Info';
+import type { HealthControllerCheck200Error } from './healthControllerCheck200Error';
+import type { HealthControllerCheck200Details } from './healthControllerCheck200Details';
 
 export type HealthControllerCheck200 = {
-  status?: string;
+  status: string;
   info?: HealthControllerCheck200Info;
-  version?: string;
+  error?: HealthControllerCheck200Error;
+  details: HealthControllerCheck200Details;
+  version: string;
 };

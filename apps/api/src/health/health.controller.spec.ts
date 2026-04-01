@@ -30,16 +30,20 @@ describe('HealthController', () => {
     controller = module.get(HealthController);
   });
 
-  it('should return version field matching semver pattern', async () => {
+  it('should return version field from package.json', async () => {
     const result = await controller.check();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const packageJson = require('../../package.json');
+    const expectedVersion = process.env.npm_package_version ?? packageJson.version;
     expect(result.version).toBeDefined();
-    expect(result.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(result.version).toBe(expectedVersion);
   });
 
   it('should preserve existing health check fields', async () => {
     const result = await controller.check();
     expect(result.status).toBe('ok');
     expect(result.info).toEqual({ database: { status: 'up' } });
+    expect(result.error).toEqual({});
     expect(result.details).toEqual({ database: { status: 'up' } });
   });
 });

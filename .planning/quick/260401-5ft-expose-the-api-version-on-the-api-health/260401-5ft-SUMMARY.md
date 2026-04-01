@@ -12,4 +12,4 @@
 ## Verification
 
 - Unit tests pass: `pnpm --filter @cipherbox/api exec jest --testPathPattern health.controller.spec --no-coverage`
-- No API client regeneration needed (health endpoint not in generated client)
+- OpenAPI spec and generated API client updated: `packages/api-client/openapi.json`, `packages/api-client/src/models/healthControllerCheck200.ts`

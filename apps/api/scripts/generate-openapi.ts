@@ -248,9 +248,25 @@ async function generateOpenApiSpec() {
             'application/json': {
               schema: {
                 type: 'object',
+                required: ['status', 'details', 'version'],
                 properties: {
                   status: { type: 'string', example: 'ok' },
                   info: {
+                    type: 'object',
+                    properties: {
+                      database: {
+                        type: 'object',
+                        properties: {
+                          status: { type: 'string', example: 'up' },
+                        },
+                      },
+                    },
+                  },
+                  error: {
+                    type: 'object',
+                    additionalProperties: true,
+                  },
+                  details: {
                     type: 'object',
                     properties: {
                       database: {
