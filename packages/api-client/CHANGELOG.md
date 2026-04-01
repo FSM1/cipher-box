@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-client-v0.35.0...@cipherbox/api-client-v0.36.0) (2026-04-01)
+
+
+### Features
+
+* **api:** expose API version on /health endpoint ([#429](https://github.com/FSM1/cipher-box/issues/429)) ([6abf87e](https://github.com/FSM1/cipher-box/commit/6abf87e68fea82bbddaf51f29c07f2091e402e7d))
+
 ## [0.33.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-client-v0.32.0...@cipherbox/api-client-v0.33.0) (2026-03-31)
 
 
