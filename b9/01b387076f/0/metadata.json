@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b901b387076f",
+  "session_id": "cc39d5c2-08a5-413e-b836-9b88f6149fff",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-01T15:10:05.945686Z",
+  "branch": "docs/backfill-phase-38-39-summaries",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/38-retire-deprecated-web-services/38-01-SUMMARY.md",
+    ".planning/phases/38-retire-deprecated-web-services/38-02-SUMMARY.md",
+    ".planning/phases/38-retire-deprecated-web-services/38-03-SUMMARY.md",
+    ".planning/phases/38-retire-deprecated-web-services/38-04-SUMMARY.md",
+    ".planning/phases/38-retire-deprecated-web-services/38-CONTEXT.md",
+    ".planning/phases/39-user-configurable-vault-parameters/39-01-SUMMARY.md",
+    ".planning/phases/39-user-configurable-vault-parameters/39-02-SUMMARY.md",
+    ".planning/phases/39-user-configurable-vault-parameters/39-CONTEXT.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d3a87adecc57",
+  "checkpoint_transcript_start": 100,
+  "transcript_lines_at_start": 100,
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 17889,
+    "cache_read_tokens": 1082378,
+    "output_tokens": 5607,
+    "api_call_count": 23
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Backfill GSD tracking state for phases 38 and 39 that were shipped outside the GSD workflow, then commit and PR the planning doc changes.",
+    "outcome": "Created 6 stub SUMMARY files and updated 2 CONTEXT files to mark both phases complete, committed on a docs branch with a PR targeting main.",
+    "learnings": {
+      "repo": [
+        "Phases 38 (Retire deprecated web services) and 39 (User-configurable vault parameters) were shipped via PRs #422 and #423 without going through the GSD execution workflow, leaving planning state stale.",
+        "GSD completion tracking is driven by the presence of SUMMARY.md files alongside PLAN.md files — no summary means the plan is counted as incomplete regardless of actual ship state.",
+        "The tag-staging.yml workflow was updated in the same main sync (fb90ceb..df6824af) that landed the staging-20260401-release-1 tag, adding the cipherbox-.*-v regex fix from the earlier PR."
+      ],
+      "code": [],
+      "workflow": [
+        "When work is done outside the GSD workflow, stub SUMMARY files must be manually created to keep /gsd:stats accurate — the tool has no way to infer completion from git history.",
+        "Phase CONTEXT.md files also need their status field updated independently from SUMMARY creation; the two are not linked automatically.",
+        "PR descriptions were used as the authoritative source of truth for what each plan accomplished when writing stub summaries."
+      ]
+    },
+    "friction": [
+      "GSD stats showed phases 38 and 39 as incomplete/planned even though both were already shipped, requiring manual backfill rather than automatic reconciliation with git/PR history.",
+      "Phase 38 had no summaries at all (plans existed but were never executed through GSD), making the discrepancy invisible until the user noticed the stats were wrong."
+    ],
+    "open_items": [
+      "The docs branch and PR were created but not yet merged — needs review/merge to land the planning state fixes.",
+      "v1.1 milestone is at 92% phases / 94% plans with 4 requirements still open — some cleanup may remain before milestone close."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-01T15:09:47.802606Z",
+    "agent_lines": 68,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 68,
+    "agent_percentage": 100
+  }
+}

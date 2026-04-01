@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b901b387076f",
+  "strategy": "manual-commit",
+  "branch": "docs/backfill-phase-38-39-summaries",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/38-retire-deprecated-web-services/38-01-SUMMARY.md",
+    ".planning/phases/38-retire-deprecated-web-services/38-02-SUMMARY.md",
+    ".planning/phases/38-retire-deprecated-web-services/38-03-SUMMARY.md",
+    ".planning/phases/38-retire-deprecated-web-services/38-04-SUMMARY.md",
+    ".planning/phases/38-retire-deprecated-web-services/38-CONTEXT.md",
+    ".planning/phases/39-user-configurable-vault-parameters/39-01-SUMMARY.md",
+    ".planning/phases/39-user-configurable-vault-parameters/39-02-SUMMARY.md",
+    ".planning/phases/39-user-configurable-vault-parameters/39-CONTEXT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b9/01b387076f/0/metadata.json",
+      "transcript": "/b9/01b387076f/0/full.jsonl",
+      "content_hash": "/b9/01b387076f/0/content_hash.txt",
+      "prompt": "/b9/01b387076f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 17889,
+    "cache_read_tokens": 1082378,
+    "output_tokens": 5607,
+    "api_call_count": 23
+  }
+}

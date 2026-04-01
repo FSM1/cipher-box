@@ -1,0 +1,11 @@
+/gsd:stats
+
+---
+
+I think that list is a little bit out of date - both 38 and 39 have been shipped already
+
+---
+
+yeah please create the stub summaries
+phase 38: https://github.com/FSM1/cipher-box/pull/422
+phase 39: https://github.com/FSM1/cipher-box/pull/423
