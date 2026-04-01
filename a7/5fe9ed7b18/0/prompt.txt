@@ -1,0 +1,1 @@
+/gsd:quick fix sidebar icons to be consisten - either all custom svg, or all actual icons, but not a mix of both [Image #7]
