@@ -248,6 +248,7 @@ async function generateOpenApiSpec() {
             'application/json': {
               schema: {
                 type: 'object',
+                required: ['status', 'details', 'version'],
                 properties: {
                   status: { type: 'string', example: 'ok' },
                   info: {
@@ -261,6 +262,22 @@ async function generateOpenApiSpec() {
                       },
                     },
                   },
+                  error: {
+                    type: 'object',
+                    additionalProperties: true,
+                  },
+                  details: {
+                    type: 'object',
+                    properties: {
+                      database: {
+                        type: 'object',
+                        properties: {
+                          status: { type: 'string', example: 'up' },
+                        },
+                      },
+                    },
+                  },
+                  version: { type: 'string', example: openApiVersion },
                 },
               },
             },

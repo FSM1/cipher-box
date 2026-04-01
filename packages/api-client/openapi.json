@@ -2104,6 +2104,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "required": ["status", "details", "version"],
                   "properties": {
                     "status": {
                       "type": "string",
@@ -2122,6 +2123,28 @@
                           }
                         }
                       }
+                    },
+                    "error": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "details": {
+                      "type": "object",
+                      "properties": {
+                        "database": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "example": "up"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "version": {
+                      "type": "string",
+                      "example": "0.35.0"
                     }
                   }
                 }

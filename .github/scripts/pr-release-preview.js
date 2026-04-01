@@ -247,6 +247,9 @@ async function run() {
   const packageCommitTypes = new Map();
 
   for (const commit of commits) {
+    // Skip merge commits — they have 2+ parents and carry no release intent
+    if (commit.parents && commit.parents.length > 1) continue;
+
     const message = commit.commit.message;
     const firstLine = message.split('\n')[0];
     const sha = commit.sha;

@@ -168,6 +168,7 @@ Restructure how all monorepo components (apps, JS packages, Rust crates) are ver
 - Extract "Build shared packages" composite action — identical 5-step pnpm build sequence appears 12 times across 6 workflow files; extract to `.github/actions/build-shared-packages/action.yml`
 - Extract desktop platform build jobs into reusable workflow — macOS/Windows/Linux build jobs are near-identical in both `desktop-release.yml` and `deploy-staging.yml`; could use matrix strategy or reusable workflow
 - PR release preview N+1 API calls — `pr-release-preview.js` fetches commit file details one-by-one (GitHub PR commits endpoint doesn't include files); would need GraphQL batch query to optimize
+- Preserve manually-added release labels across runs — currently the script removes labels for non-computed components on each run, so manual overrides (D-18) must be reapplied after the last commit; could track auto-applied vs manual provenance to preserve them
 
 </deferred>
 
