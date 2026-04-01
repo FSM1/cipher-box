@@ -614,13 +614,30 @@ async function run() {
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 
+  // Snapshot base branch release-as entries to avoid clearing inherited targets
+  // that were set by previously merged PRs but not yet consumed by release-please
+  /** @type {Record<string, string|undefined>} */
+  const baseReleaseAs = {};
+  try {
+    const { execSync } = await import('node:child_process');
+    const baseConfig = JSON.parse(
+      execSync('git show origin/main:release-please-config.json', { encoding: 'utf8' })
+    );
+    for (const [p, c] of Object.entries(baseConfig.packages || {})) {
+      baseReleaseAs[p] = c['release-as'];
+    }
+  } catch {
+    core.info('Could not read base branch config — skipping inherited release-as preservation');
+  }
+
   /** @type {Array<{path: string, currentVersion: string, targetVersion: string, bumpType: string}>} */
   const releaseAsEntries = [];
   let configChanged = false;
 
-  // First, clear any stale release-as entries for packages NOT being bumped in this PR
+  // Clear release-as entries that THIS PR added (not inherited from base) for packages
+  // no longer being bumped. Inherited entries from base branch are preserved.
   for (const [pkgPath, pkgConfig] of Object.entries(config.packages)) {
-    if (pkgConfig['release-as'] && !packageBumps.has(pkgPath)) {
+    if (pkgConfig['release-as'] && !packageBumps.has(pkgPath) && !baseReleaseAs[pkgPath]) {
       delete pkgConfig['release-as'];
       configChanged = true;
       core.info(`Cleared stale release-as for ${pkgPath}`);
@@ -633,11 +650,16 @@ async function run() {
 
     const isMonotonic = MONOTONIC_PATHS.has(pkgPath);
     const bumpType = bumpInfo.bump;
-    const effectiveBump = isMonotonic && bumpType === 'patch' ? 'minor' : bumpType;
+    let effectiveBump = isMonotonic && bumpType === 'patch' ? 'minor' : bumpType;
 
+    // Respect bump-minor-pre-major: treat breaking as minor while pre-1.0
+    const bumpMinorPreMajor = config.packages[pkgPath]['bump-minor-pre-major'] === true;
     const parts = currentVersion.split('.').map(Number);
     while (parts.length < 3) parts.push(0);
     const [major, minor, patch] = parts;
+    if (major === 0 && effectiveBump === 'major' && bumpMinorPreMajor) {
+      effectiveBump = 'minor';
+    }
 
     let targetVersion;
     switch (effectiveBump) {
