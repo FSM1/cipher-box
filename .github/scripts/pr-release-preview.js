@@ -521,13 +521,12 @@ async function run() {
     // If existing matches computed, no action needed
   }
 
-  // Labels for components no longer computed are treated as manual overrides (D-18).
-  // We cannot reliably distinguish auto-applied from manually-added, so keep them.
+  // Remove labels for components no longer computed.
+  // Manual overrides (D-18) still work but must be reapplied after the final commit.
+  // TODO(deferred): preserve manually-added labels by tracking auto-applied state.
   for (const [component, existingLabel] of existingByComponent.entries()) {
     if (!computedLabels.has(component)) {
-      core.info(
-        `Keeping label "${existingLabel}" for "${component}" (no computed bump — treating as manual override)`
-      );
+      labelsToRemove.push(existingLabel);
     }
   }
 
