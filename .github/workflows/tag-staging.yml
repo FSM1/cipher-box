@@ -13,23 +13,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve-main:
+    name: Resolve main SHA
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.main.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - id: main
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   web-e2e:
+    needs: resolve-main
     name: Web E2E
     uses: ./.github/workflows/web-e2e.yml
     with:
-      ref: main
+      ref: ${{ needs.resolve-main.outputs.sha }}
     secrets: inherit
 
   desktop-e2e:
+    needs: resolve-main
     name: Desktop E2E
     uses: ./.github/workflows/desktop-e2e.yml
     with:
-      ref: main
+      ref: ${{ needs.resolve-main.outputs.sha }}
     secrets: inherit
 
   tag-staging:
     name: Create Staging Tag
-    needs: [web-e2e, desktop-e2e]
+    needs: [resolve-main, web-e2e, desktop-e2e]
     runs-on: ubuntu-latest
     environment: staging-approval
     permissions:
@@ -39,10 +54,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.resolve-main.outputs.sha }}
           fetch-depth: 0
 
       - name: Calculate staging tag
         id: tag
+        env:
+          MAIN_SHA: ${{ needs.resolve-main.outputs.sha }}
+          DESCRIPTION: ${{ inputs.description }}
         run: |
           DATE=$(date -u +%Y%m%d)
           STAGING_PREFIX="staging-${DATE}-release"
@@ -59,17 +78,18 @@ jobs:
           echo "staging_tag=${STAGING_TAG}" >> "$GITHUB_OUTPUT"
 
           echo "## Staging Tag" >> "$GITHUB_STEP_SUMMARY"
-          echo "Creating **${STAGING_TAG}** from main HEAD" >> "$GITHUB_STEP_SUMMARY"
-          if [ -n "${{ inputs.description }}" ]; then
+          echo "Creating **${STAGING_TAG}** from main at ${MAIN_SHA:0:7}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$DESCRIPTION" ]; then
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Description: ${{ inputs.description }}" >> "$GITHUB_STEP_SUMMARY"
+            printf 'Description: %s\n' "$DESCRIPTION" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Create and push staging tag
         env:
           STAGING_TAG: ${{ steps.tag.outputs.staging_tag }}
+          MAIN_SHA: ${{ needs.resolve-main.outputs.sha }}
         run: |
-          git tag "${STAGING_TAG}" HEAD
+          git tag "${STAGING_TAG}" "${MAIN_SHA}"
           git push origin "${STAGING_TAG}"
 
   deploy:

@@ -23,7 +23,7 @@ jobs:
           node-version: '22'
 
       - name: Install script dependencies
-        run: npm install --no-save @actions/core @actions/github
+        run: npm install --no-save --no-package-lock --ignore-scripts @actions/core@1.11.1 @actions/github@6.0.0
 
       - name: Analyze PR commits and apply release labels
         env:
