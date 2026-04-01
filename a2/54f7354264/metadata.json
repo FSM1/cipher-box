@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a254f7354264",
+  "strategy": "manual-commit",
+  "branch": "feat/health-api-version",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/api-client/src/models/healthControllerCheck200Details.ts",
+    "packages/api-client/src/models/healthControllerCheck200DetailsDatabase.ts",
+    "packages/api-client/src/models/healthControllerCheck200Error.ts",
+    "packages/api-client/src/models/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a2/54f7354264/0/metadata.json",
+      "transcript": "/a2/54f7354264/0/full.jsonl",
+      "content_hash": "/a2/54f7354264/0/content_hash.txt",
+      "prompt": "/a2/54f7354264/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 198,
+    "cache_creation_tokens": 139158,
+    "cache_read_tokens": 12517671,
+    "output_tokens": 27322,
+    "api_call_count": 157
+  }
+}
