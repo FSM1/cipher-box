@@ -26,14 +26,7 @@
       "release-type": "node",
       "component": "@cipherbox/api",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "extra-files": [
-        {
-          "type": "json",
-          "path": "../../packages/api-client/openapi.json",
-          "jsonpath": "$.info.version"
-        }
-      ]
+      "bump-minor-pre-major": true
     },
     "apps/web": {
       "release-type": "node",
@@ -70,7 +63,14 @@
       "release-type": "node",
       "component": "@cipherbox/api-client",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "openapi.json",
+          "jsonpath": "$.info.version"
+        }
+      ]
     },
     "packages/sdk-core": {
       "release-type": "node",
