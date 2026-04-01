@@ -165,7 +165,7 @@ jobs:
             exit 1
           fi
           # Compare generated TS files (ignore version comment — differs on release PRs)
-          git diff --exit-code -I 'OpenAPI spec version' packages/api-client/src/generated/ packages/api-client/src/models/ \
+          git diff --exit-code -I '^ \* OpenAPI spec version: [0-9]' packages/api-client/src/generated/ packages/api-client/src/models/ \
             || (echo "Generated API client is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)
 
   migration-check:
