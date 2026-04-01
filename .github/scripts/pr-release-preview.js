@@ -16,7 +16,12 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BUMP_LEVELS, PATH_TO_LABEL, MONOTONIC_PATHS } from './release-constants.js';
+import {
+  BUMP_LEVELS,
+  PATH_TO_LABEL,
+  LABEL_TO_PATHS,
+  MONOTONIC_PATHS,
+} from './release-constants.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -536,6 +541,23 @@ async function run() {
           existing,
           computed: computedLabel,
         });
+
+        // Feed the manual override back into packageBumps so release-as
+        // derivation uses the higher label, not the lower commit-derived bump
+        const overrideType = existing.split(':')[2]; // e.g. 'feat', 'breaking'
+        const overrideBump =
+          overrideType === 'breaking' ? 'major' : overrideType === 'feat' ? 'minor' : 'patch';
+        const overridePaths = LABEL_TO_PATHS[component] || [];
+        for (const p of overridePaths) {
+          const current = packageBumps.get(p);
+          if (!current || BUMP_LEVELS[overrideBump] > BUMP_LEVELS[current.bump]) {
+            packageBumps.set(p, {
+              bump: overrideBump,
+              label: overrideType,
+              source: `Manual override (${existing})`,
+            });
+          }
+        }
       }
     } else if (!existing) {
       labelsToAdd.push(computedLabel);
