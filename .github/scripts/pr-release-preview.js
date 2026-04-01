@@ -9,7 +9,7 @@
  *   PR_NUMBER     — Pull request number
  *   GITHUB_REPOSITORY — owner/repo
  *
- * Uses only @actions/core and @actions/github (pre-installed on runners).
+ * Uses @actions/core and @actions/github (installed by the workflow).
  */
 
 import * as core from '@actions/core';
@@ -521,13 +521,13 @@ async function run() {
     // If existing matches computed, no action needed
   }
 
-  // Remove labels for components no longer computed
-  // (but only if they appear to be auto-applied, not manual overrides)
+  // Labels for components no longer computed are treated as manual overrides (D-18).
+  // We cannot reliably distinguish auto-applied from manually-added, so keep them.
   for (const [component, existingLabel] of existingByComponent.entries()) {
     if (!computedLabels.has(component)) {
-      // Component no longer has a computed bump — check if it was auto-applied
-      // Heuristic: remove it (force-push may have changed commits)
-      labelsToRemove.push(existingLabel);
+      core.info(
+        `Keeping label "${existingLabel}" for "${component}" (no computed bump — treating as manual override)`
+      );
     }
   }
 

@@ -10,7 +10,7 @@
  *   COMMIT_SHA          — The merge commit SHA on main
  *   GITHUB_REPOSITORY   — owner/repo
  *
- * Uses only @actions/core, @actions/github, and fs (pre-installed on runners).
+ * Uses @actions/core, @actions/github, and fs (deps installed by the workflow).
  *
  * Design decisions:
  *   D-25: Find originating PR from commit SHA

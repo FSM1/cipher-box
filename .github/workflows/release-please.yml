@@ -38,21 +38,41 @@ jobs:
           echo "$RELEASES_OUTPUT" | jq '{releases_created, paths_released}' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Ensure batched release is not marked as latest
+      - name: Ensure batched releases are not marked as latest
         if: steps.release.outputs.releases_created == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASES_OUTPUT: ${{ toJSON(steps.release.outputs) }}
         run: |
-          # Un-mark the batched root release as latest so /releases/latest/
-          # resolves to the desktop release (marked latest by desktop-release.yml)
-          ROOT_TAG="${{ steps.release.outputs['tag_name'] }}"
-          if [ -n "$ROOT_TAG" ]; then
+          # Un-mark ALL manifest releases as latest so /releases/latest/
+          # resolves to the desktop release (marked latest by desktop-release.yml).
+          # In manifest mode, release-please outputs tag_name (root) and
+          # {path}--tag_name (per-package), so we match all keys ending with tag_name.
+          TAGS=$(echo "$RELEASES_OUTPUT" | jq -r '
+            to_entries
+            | map(select(.key | test("tag_name$")))
+            | map(.value)
+            | unique[]
+          ')
+
+          if [ -z "$TAGS" ]; then
+            echo "No tag outputs found — nothing to clear."
+            exit 0
+          fi
+
+          for TAG in $TAGS; do
+            [ -z "$TAG" ] && continue
+            echo "Clearing latest flag for release: $TAG"
+            SUCCESS=false
             for attempt in 1 2 3; do
-              if gh release edit "$ROOT_TAG" --repo "${{ github.repository }}" --latest=false; then
-                exit 0
+              if gh release edit "$TAG" --repo "${{ github.repository }}" --latest=false; then
+                SUCCESS=true
+                break
               fi
               sleep $((attempt * 5))
             done
-            echo "::error::Failed to clear latest flag for $ROOT_TAG after 3 attempts"
-            exit 1
-          fi
+            if [ "$SUCCESS" != "true" ]; then
+              echo "::error::Failed to clear latest flag for $TAG after 3 attempts"
+              exit 1
+            fi
+          done
