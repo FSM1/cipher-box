@@ -24,7 +24,13 @@ jobs:
           ref: main
           fetch-depth: 0
       - id: main
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          SHA=$(git rev-parse HEAD)
+          if ! git tag --points-at "$SHA" | grep -qE '^(cipher-box-v|@cipherbox/)'; then
+            echo "::error::No release tag found on main HEAD (${SHA:0:7}). Wait for release-please to merge before tagging staging."
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
   web-e2e:
     needs: resolve-main
