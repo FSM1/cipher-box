@@ -26,7 +26,7 @@ jobs:
       - id: main
         run: |
           SHA=$(git rev-parse HEAD)
-          if ! git tag --points-at "$SHA" | grep -qE '^(cipher-box-v|@cipherbox/)'; then
+          if ! git tag --points-at "$SHA" | grep -qE '^(cipher-box-v|cipherbox-.*-v|@cipherbox/)'; then
             echo "::error::No release tag found on main HEAD (${SHA:0:7}). Wait for release-please to merge before tagging staging."
             exit 1
           fi
