@@ -10,4 +10,5 @@ import type { HealthControllerCheck200Info } from './healthControllerCheck200Inf
 export type HealthControllerCheck200 = {
   status?: string;
   info?: HealthControllerCheck200Info;
+  version?: string;
 };
