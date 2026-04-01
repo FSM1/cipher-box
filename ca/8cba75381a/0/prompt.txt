@@ -1,0 +1,1 @@
+/gsd:fast @.claude/claude.md still references the @.planning/milestones/m0 docs as the source of truth, even though these have just been archived and the single source of truth is the @docs/ folder. please update this, in a `docs/` branch. also I need to make the repo ready for multiple agents, so need to set up a root AGENTS.md, based on the @.claude/claude.md
