@@ -201,6 +201,25 @@ async function run() {
 
   if (existingLabels.includes('release:none')) {
     core.info('release:none label present — skipping enforcement and label computation');
+
+    // Clear any previously injected release-as entries
+    const configPath = join(process.cwd(), 'release-please-config.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    let cleaned = false;
+    for (const pkgConfig of Object.values(config.packages)) {
+      if (pkgConfig['release-as']) {
+        delete pkgConfig['release-as'];
+        cleaned = true;
+      }
+    }
+    if (cleaned) {
+      writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+      core.info('Cleared stale release-as entries from release-please-config.json');
+      core.setOutput('config_changed', 'true');
+    } else {
+      core.setOutput('config_changed', 'false');
+    }
+
     // Post a minimal comment
     await postOrUpdateComment(
       octokit,
@@ -613,7 +632,22 @@ async function run() {
         continue;
     }
 
+    // Don't downgrade an existing higher release-as (e.g. from manual label override)
     const existingReleaseAs = config.packages[pkgPath]['release-as'];
+    if (existingReleaseAs && existingReleaseAs !== targetVersion) {
+      const existingParts = existingReleaseAs.split('.').map(Number);
+      const targetParts = targetVersion.split('.').map(Number);
+      while (existingParts.length < 3) existingParts.push(0);
+      while (targetParts.length < 3) targetParts.push(0);
+      const existingVal = existingParts[0] * 10000 + existingParts[1] * 100 + existingParts[2];
+      const targetVal = targetParts[0] * 10000 + targetParts[1] * 100 + targetParts[2];
+      if (existingVal > targetVal) {
+        core.info(
+          `Keeping higher existing release-as ${existingReleaseAs} for ${pkgPath} (computed ${targetVersion})`
+        );
+        targetVersion = existingReleaseAs;
+      }
+    }
     if (existingReleaseAs !== targetVersion) {
       config.packages[pkgPath]['release-as'] = targetVersion;
       configChanged = true;

@@ -5,6 +5,10 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
+concurrency:
+  group: release-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   pull-requests: write
@@ -36,7 +40,9 @@ jobs:
         run: node .github/scripts/pr-release-preview.js
 
       - name: Commit release-as targets
-        if: steps.preview.outputs.config_changed == 'true'
+        if: >-
+          steps.preview.outputs.config_changed == 'true'
+          && github.event.pull_request.head.repo.full_name == github.repository
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
