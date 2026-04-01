@@ -3,7 +3,7 @@
   "checkpoint_id": "d0a10cbb36bf",
   "strategy": "manual-commit",
   "branch": "feat/health-api-version",
-  "checkpoints_count": 2,
+  "checkpoints_count": 9,
   "files_touched": [
     ".planning/phases/41-package-and-app-versioning-and-release-cycles/41-CONTEXT.md"
   ],
@@ -13,13 +13,19 @@
       "transcript": "/d0/a10cbb36bf/0/full.jsonl",
       "content_hash": "/d0/a10cbb36bf/0/content_hash.txt",
       "prompt": "/d0/a10cbb36bf/0/prompt.txt"
+    },
+    {
+      "metadata": "/d0/a10cbb36bf/1/metadata.json",
+      "transcript": "/d0/a10cbb36bf/1/full.jsonl",
+      "content_hash": "/d0/a10cbb36bf/1/content_hash.txt",
+      "prompt": "/d0/a10cbb36bf/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 162,
-    "cache_creation_tokens": 118324,
-    "cache_read_tokens": 8515697,
-    "output_tokens": 21491,
-    "api_call_count": 125
+    "input_tokens": 264,
+    "cache_creation_tokens": 145097,
+    "cache_read_tokens": 10921341,
+    "output_tokens": 26324,
+    "api_call_count": 152
   }
 }
