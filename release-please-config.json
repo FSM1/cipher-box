@@ -30,7 +30,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "packages/api-client/openapi.json",
+          "path": "../../packages/api-client/openapi.json",
           "jsonpath": "$.info.version"
         }
       ]
