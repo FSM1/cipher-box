@@ -248,7 +248,8 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 | ---------- | ------------------------------------------------------------- | ---------- | ---------- | ------------------------------------------------------------------------------------------------------------------- |
 | 260327-2ab | Extract shared-write operations from web UI into SDK packages | 2026-03-27 | see branch | [260327-2ab-extract-shared-write-operations-from-web](./quick/260327-2ab-extract-shared-write-operations-from-web/) |
 | 260401-5ft | Expose the API version on the /health endpoint                | 2026-04-01 | ba5e9de    | [260401-5ft-expose-the-api-version-on-the-api-health](./quick/260401-5ft-expose-the-api-version-on-the-api-health/) |
+| 260401-kyv | Fix sidebar icons to be consistent                            | 2026-04-01 | 749065d    | [260401-kyv-fix-sidebar-icons-to-be-consistent](./quick/260401-kyv-fix-sidebar-icons-to-be-consistent/)             |
 
 ---
 
-Last activity: 2026-04-01 - Completed quick task 260401-5ft: expose the api version on the api /health endpoint
+Last activity: 2026-04-01 - Completed quick task 260401-kyv: fix sidebar icons to be consistent
