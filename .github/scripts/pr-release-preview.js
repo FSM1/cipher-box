@@ -14,9 +14,14 @@
 
 import * as core from '@actions/core';
 import * as github from '@actions/github';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BUMP_LEVELS, PATH_TO_LABEL, MONOTONIC_PATHS } from './release-constants.js';
+import {
+  BUMP_LEVELS,
+  PATH_TO_LABEL,
+  LABEL_TO_PATHS,
+  MONOTONIC_PATHS,
+} from './release-constants.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -201,6 +206,25 @@ async function run() {
 
   if (existingLabels.includes('release:none')) {
     core.info('release:none label present — skipping enforcement and label computation');
+
+    // Clear any previously injected release-as entries
+    const configPath = join(process.cwd(), 'release-please-config.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    let cleaned = false;
+    for (const pkgConfig of Object.values(config.packages)) {
+      if (pkgConfig['release-as']) {
+        delete pkgConfig['release-as'];
+        cleaned = true;
+      }
+    }
+    if (cleaned) {
+      writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+      core.info('Cleared stale release-as entries from release-please-config.json');
+      core.setOutput('config_changed', 'true');
+    } else {
+      core.setOutput('config_changed', 'false');
+    }
+
     // Post a minimal comment
     await postOrUpdateComment(
       octokit,
@@ -517,6 +541,23 @@ async function run() {
           existing,
           computed: computedLabel,
         });
+
+        // Feed the manual override back into packageBumps so release-as
+        // derivation uses the higher label, not the lower commit-derived bump
+        const overrideType = existing.split(':')[2]; // e.g. 'feat', 'breaking'
+        const overrideBump =
+          overrideType === 'breaking' ? 'major' : overrideType === 'feat' ? 'minor' : 'patch';
+        const overridePaths = LABEL_TO_PATHS[component] || [];
+        for (const p of overridePaths) {
+          const current = packageBumps.get(p);
+          if (!current || BUMP_LEVELS[overrideBump] > BUMP_LEVELS[current.bump]) {
+            packageBumps.set(p, {
+              bump: overrideBump,
+              label: overrideType,
+              source: `Manual override (${existing})`,
+            });
+          }
+        }
       }
     } else if (!existing) {
       labelsToAdd.push(computedLabel);
@@ -564,6 +605,115 @@ async function run() {
       }
     }
   }
+
+  // ------ Section 7.5: Release-As Injection ------
+  // Write release-as targets into release-please-config.json on the PR branch.
+  // When the PR merges, these land on main and release-please picks them up.
+  const configPath = join(process.cwd(), 'release-please-config.json');
+  const manifestPath = join(process.cwd(), '.release-please-manifest.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+
+  // Snapshot base branch release-as entries to avoid clearing inherited targets
+  // that were set by previously merged PRs but not yet consumed by release-please
+  /** @type {Record<string, string|undefined>} */
+  const baseReleaseAs = {};
+  try {
+    const { execSync } = await import('node:child_process');
+    const baseConfig = JSON.parse(
+      execSync('git show origin/main:release-please-config.json', { encoding: 'utf8' })
+    );
+    for (const [p, c] of Object.entries(baseConfig.packages || {})) {
+      baseReleaseAs[p] = c['release-as'];
+    }
+  } catch {
+    core.info('Could not read base branch config — skipping inherited release-as preservation');
+  }
+
+  /** @type {Array<{path: string, currentVersion: string, targetVersion: string, bumpType: string}>} */
+  const releaseAsEntries = [];
+  let configChanged = false;
+
+  // Clear release-as entries that THIS PR added (not inherited from base) for packages
+  // no longer being bumped. Inherited entries from base branch are preserved.
+  for (const [pkgPath, pkgConfig] of Object.entries(config.packages)) {
+    if (pkgConfig['release-as'] && !packageBumps.has(pkgPath) && !baseReleaseAs[pkgPath]) {
+      delete pkgConfig['release-as'];
+      configChanged = true;
+      core.info(`Cleared stale release-as for ${pkgPath}`);
+    }
+  }
+
+  for (const [pkgPath, bumpInfo] of packageBumps.entries()) {
+    const currentVersion = manifest[pkgPath];
+    if (!currentVersion || !config.packages[pkgPath]) continue;
+
+    const isMonotonic = MONOTONIC_PATHS.has(pkgPath);
+    const bumpType = bumpInfo.bump;
+    let effectiveBump = isMonotonic && bumpType === 'patch' ? 'minor' : bumpType;
+
+    // Respect bump-minor-pre-major: treat breaking as minor while pre-1.0
+    const bumpMinorPreMajor = config.packages[pkgPath]['bump-minor-pre-major'] === true;
+    const parts = currentVersion.split('.').map(Number);
+    while (parts.length < 3) parts.push(0);
+    const [major, minor, patch] = parts;
+    if (major === 0 && effectiveBump === 'major' && bumpMinorPreMajor) {
+      effectiveBump = 'minor';
+    }
+
+    let targetVersion;
+    switch (effectiveBump) {
+      case 'major':
+        targetVersion = `${major + 1}.0.0`;
+        break;
+      case 'minor':
+        targetVersion = `${major}.${minor + 1}.0`;
+        break;
+      case 'patch':
+        targetVersion = `${major}.${minor}.${patch + 1}`;
+        break;
+      default:
+        continue;
+    }
+
+    // Don't downgrade an existing higher release-as (e.g. from manual label override)
+    const existingReleaseAs = config.packages[pkgPath]['release-as'];
+    if (existingReleaseAs && existingReleaseAs !== targetVersion) {
+      const existingParts = existingReleaseAs.split('.').map(Number);
+      const targetParts = targetVersion.split('.').map(Number);
+      while (existingParts.length < 3) existingParts.push(0);
+      while (targetParts.length < 3) targetParts.push(0);
+      const existingVal = existingParts[0] * 10000 + existingParts[1] * 100 + existingParts[2];
+      const targetVal = targetParts[0] * 10000 + targetParts[1] * 100 + targetParts[2];
+      if (existingVal > targetVal) {
+        core.info(
+          `Keeping higher existing release-as ${existingReleaseAs} for ${pkgPath} (computed ${targetVersion})`
+        );
+        targetVersion = existingReleaseAs;
+      }
+    }
+    if (existingReleaseAs !== targetVersion) {
+      config.packages[pkgPath]['release-as'] = targetVersion;
+      configChanged = true;
+    }
+
+    releaseAsEntries.push({
+      path: pkgPath,
+      currentVersion,
+      targetVersion,
+      bumpType: effectiveBump,
+    });
+  }
+
+  if (configChanged) {
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+    core.info(
+      `Updated release-please-config.json with ${releaseAsEntries.length} release-as entries`
+    );
+  } else {
+    core.info('release-please-config.json unchanged — no commit needed');
+  }
+  core.setOutput('config_changed', String(configChanged));
 
   // ------ Section 8: PR Comment (D-23) ------
   const commentLines = [COMMENT_MARKER, '## Release Preview', ''];
