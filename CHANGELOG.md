@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.36.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.35.0...cipher-box-v0.36.0) (2026-04-01)
+
+
+### Features
+
+* **api:** expose API version on /health endpoint ([#429](https://github.com/FSM1/cipher-box/issues/429)) ([6abf87e](https://github.com/FSM1/cipher-box/commit/6abf87e68fea82bbddaf51f29c07f2091e402e7d))
+
+
+### Bug Fixes
+
+* **ci:** correct openapi.json extra-files path for release-please ([#432](https://github.com/FSM1/cipher-box/issues/432)) ([88a12a0](https://github.com/FSM1/cipher-box/commit/88a12a005305e362534b27940d671a53fc66c4db))
+* **ci:** exclude openapi.json version from spec verification ([#434](https://github.com/FSM1/cipher-box/issues/434)) ([4471b1b](https://github.com/FSM1/cipher-box/commit/4471b1bc8c2145d5fb32639c57791b184e049bdb))
+* **ci:** ignore OpenAPI version comment in generated TS file diff ([#438](https://github.com/FSM1/cipher-box/issues/438)) ([c19c501](https://github.com/FSM1/cipher-box/commit/c19c5017c2b2a60fe156c2d003afc6d092a81a2e))
+* **ci:** move release-as injection from post-merge to PR branch ([#431](https://github.com/FSM1/cipher-box/issues/431)) ([e8c4ef3](https://github.com/FSM1/cipher-box/commit/e8c4ef351e88166e85c576403127ca624f110695))
+* **ci:** remove openapi.json from release-please extra-files ([4471b1b](https://github.com/FSM1/cipher-box/commit/4471b1bc8c2145d5fb32639c57791b184e049bdb))
+* **web:** replace emoji sidebar icons with consistent inline SVGs ([#436](https://github.com/FSM1/cipher-box/issues/436)) ([c7f72b6](https://github.com/FSM1/cipher-box/commit/c7f72b6131d0b840841697c0328cec6603dd5e00))
+
 ## [0.35.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.34.0...cipher-box-v0.35.0) (2026-03-31)
 
 
