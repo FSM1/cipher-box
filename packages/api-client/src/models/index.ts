@@ -42,6 +42,7 @@ export * from './googleLoginDto';
 export * from './googleLoginDtoIntent';
 export * from './healthControllerCheck200';
 export * from './healthControllerCheck200Details';
+export * from './healthControllerCheck200DetailsDatabase';
 export * from './healthControllerCheck200Error';
 export * from './healthControllerCheck200Info';
 export * from './healthControllerCheck200InfoDatabase';

@@ -6,4 +6,6 @@
  * OpenAPI spec version: 0.35.0
  */
 
-export type HealthControllerCheck200Error = { [key: string]: unknown };
+export type HealthControllerCheck200DetailsDatabase = {
+  status?: string;
+};
