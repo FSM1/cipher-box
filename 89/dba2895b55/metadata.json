@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "89dba2895b55",
+  "strategy": "manual-commit",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/DEFERRED.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/89/dba2895b55/0/metadata.json",
+      "transcript": "/89/dba2895b55/0/full.jsonl",
+      "content_hash": "/89/dba2895b55/0/content_hash.txt",
+      "prompt": "/89/dba2895b55/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3758,
+    "cache_creation_tokens": 168503,
+    "cache_read_tokens": 10978251,
+    "output_tokens": 41644,
+    "api_call_count": 105
+  }
+}

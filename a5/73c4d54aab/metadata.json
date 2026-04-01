@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a573c4d54aab",
+  "strategy": "manual-commit",
+  "branch": "feat/package-and-app-versioning-and-release-cycles",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/debug/desktop-email-otp-verification-failed.md",
+    ".planning/debug/resolved/desktop-email-otp-verification-failed.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a5/73c4d54aab/0/metadata.json",
+      "transcript": "/a5/73c4d54aab/0/full.jsonl",
+      "content_hash": "/a5/73c4d54aab/0/content_hash.txt",
+      "prompt": "/a5/73c4d54aab/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 131,
+    "cache_creation_tokens": 93836,
+    "cache_read_tokens": 2780833,
+    "output_tokens": 17227,
+    "api_call_count": 38
+  }
+}

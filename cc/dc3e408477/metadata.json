@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ccdc3e408477",
+  "strategy": "manual-commit",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/cc/dc3e408477/0/metadata.json",
+      "transcript": "/cc/dc3e408477/0/full.jsonl",
+      "content_hash": "/cc/dc3e408477/0/content_hash.txt",
+      "prompt": "/cc/dc3e408477/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3831,
+    "cache_creation_tokens": 207774,
+    "cache_read_tokens": 22330000,
+    "output_tokens": 54217,
+    "api_call_count": 164
+  }
+}

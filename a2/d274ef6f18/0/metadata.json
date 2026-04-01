@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a2d274ef6f18",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T23:12:08.848198Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "c8f31f383096",
+  "token_usage": {
+    "input_tokens": 3838,
+    "cache_creation_tokens": 210063,
+    "cache_read_tokens": 23390442,
+    "output_tokens": 54863,
+    "api_call_count": 169
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Resolve open PR review comments on a batch upload pipeline PR, then update all project documentation (DEFERRED.md, FEATURES.md, README.md, docs/) to reflect the current state of phases 28-37, and plan the next two development phases.",
+    "outcome": "All 4 PR review threads resolved and committed; documentation branch created with comprehensive updates to DEFERRED.md, FEATURES.md, README.md, and all docs/ files; Phases 38 (service retirement + circular dep cleanup) and 39 (user-configurable vault parameters) added to roadmap.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro (apps/web/src/lib/faro.ts) is the observability/error tracking and remote log shipping solution — not Sentry or Datadog.",
+        "FUSE layer (crates/fuse/) is intentionally not unit-tested; Desktop E2E suite provides the coverage. Unit mocking of host OS FUSE APIs would be unreliable.",
+        "Vault v1 legacy columns were fully removed when staging was reset; the baseline migration 1700000000000-FullSchema.ts does not include them.",
+        "Linux FUSE is implemented under the same `fuse` feature flag as macOS (crates/fuse/src/platform/linux.rs), using NFC normalization and case-sensitive lookups — not a deferred item.",
+        "TEE environment is Phala Cloud CVM, not AWS Nitro (the Nitro fallback plan was superseded).",
+        "IPNS republish interval is 6h, not 3h — CLAUDE.md had a stale value.",
+        "folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines, 2 functions actually used) are the remaining deprecated web services not yet migrated to SDK.",
+        "@cipherbox/crypto has @cipherbox/core as a devDependency only for one test (vault-ipns.test.ts) that cross-checks IPNS key derivation; this should have been cleaned up in Phase 19.1.",
+        "The database has grown to 14 tables including share_invites and pin_migrations which were missing from DATABASE_EVOLUTION_PROTOCOL.md.",
+        "AES-256-CTR streaming mode is used for both large video AND audio files in the FUSE layer, not video only.",
+        "RECYCLE_BIN_RETENTION_DAYS is an operator-level env var, not a user-facing setting — the user-configurable retention period is still a deferred item.",
+        "Session replay is explicitly out of scope as an anti-feature for a zero-knowledge privacy product."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage/getWorker can throw without cleanup, leaking pending entries — fixed with try/catch that deletes the pending map entry on error."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "uploadFiles() doc comment overstated memory bounding — fixed to accurately describe the concurrency pool behavior."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "Batch reads all files to memory before SDK call — intentionally not fixed; architectural change (SDK accepting File objects instead of Uint8Array) is out of scope for this PR and tracked as a deferred item."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/vault-ipns.test.ts",
+          "line": 1,
+          "finding": "Only file in @cipherbox/crypto that imports @cipherbox/core — creates a test-only cross-package dependency that should be refactored to hardcoded test vectors or moved to an integration test directory."
+        }
+      ],
+      "workflow": [
+        "When asked to audit and prune a list, do every item systematically — not just the ones the user explicitly calls out. A shallow pass that only removes flagged items will require multiple correction rounds.",
+        "Resolving GraphQL review threads requires the threadId (not commentId); replies use REST with integer in_reply_to comment ID.",
+        "Pre-existing integration test failures (live API tests requiring a running backend) should be distinguished from test failures caused by changes before committing.",
+        "DEFERRED.md requires active maintenance as items get implemented; it drifts quickly and needs to be cross-referenced against the codebase rather than trusted at face value."
+      ]
+    },
+    "friction": [
+      "Multiple rounds of DEFERRED.md correction were needed because the initial audit pass was too shallow — implemented items (Faro log shipping, Linux FUSE, CTR streaming, pin:secondaryFailed events, per-file IPNS) were left in the deferred list.",
+      "Edit tool reformatted markdown table whitespace, obscuring exact file content and requiring a raw Bash read to get precise line content for subsequent edits.",
+      "The RECYCLE_BIN_RETENTION_DAYS env var was initially misidentified as implementing the user-facing retention setting and had to be restored to deferred after the distinction was clarified.",
+      "CLAUDE.md had stale paths (00-Preliminary-R\u0026D/ instead of .planning/milestones/m0/) and a stale IPNS republish interval (3h instead of 6h) that were not caught until a full docs audit.",
+      "DATABASE_EVOLUTION_PROTOCOL.md was missing 6 migrations and 2 tables, requiring careful cross-referencing of migration files against the documented inventory."
+    ],
+    "open_items": [
+      "Phase 38: Retire folder.service.ts and bin.service.ts, migrate remaining callers to SDK, and remove @cipherbox/crypto devDependency on @cipherbox/core.",
+      "Phase 39: User-configurable vault parameters — bin retention period, soft vs hard delete toggle, versioning defaults (max versions, cooldown period).",
+      "Lazy file reading in useDropUpload.ts — SDK API change needed to accept File objects or read callbacks instead of Uint8Array to avoid reading all files to memory before the SDK call.",
+      "PR #419 (docs branch) pending review and merge.",
+      "SDK batch upload is not implemented in the Rust SDK — feature matrix reflects this gap."
+    ]
+  }
+}

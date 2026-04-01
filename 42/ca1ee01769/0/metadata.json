@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "42ca1ee01769",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T21:56:39.985653Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "105834edc209",
+  "token_usage": {
+    "input_tokens": 3710,
+    "cache_creation_tokens": 119039,
+    "cache_read_tokens": 5315110,
+    "output_tokens": 28017,
+    "api_call_count": 67
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Resolve open PR review comments on PR #416, then after merging update project documentation (DEFERRED.md, FEATURES.md, README.md, and a new filesystem spec) on a docs branch to reflect the state after phases 28-37.",
+    "outcome": "All 4 review threads were triaged, 2 code fixes and 1 doc fix were committed and pushed, threads replied to and resolved. A docs PR (#419) was created with updated DEFERRED.md, FEATURES.md, README.md, and a new FILESYSTEM_SPECIFICATION.md; the web worker encryption todo was moved to done; and DEFERRED.md was further cleaned up to remove already-implemented, out-of-scope, and premature items.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro (not Sentry) is the live error tracking solution, implemented in apps/web/src/lib/faro.ts.",
+        "FUSE write-op coverage is intentionally not unit-tested due to host-OS mocking complexity; coverage comes from the Desktop E2E suite instead. This is a deliberate architectural choice, not a gap.",
+        "Session replay is explicitly out-of-scope as an anti-feature for a zero-knowledge privacy product.",
+        "Production Kubo hardening is premature — no production environment exists yet.",
+        "Batch upload is implemented in the JS SDK and web app but NOT in the Rust SDK.",
+        "The 'lazy file reading' issue (useDropUpload.ts:140) was independently flagged by both CodeRabbit (phase 37 review round 1) and GitHub Copilot — it's tracked as a deferred item requiring an SDK API contract change to accept File objects or read callbacks instead of Uint8Array.",
+        "Web Worker encryption (Phase 37) was shipped but the corresponding todo file was never moved from .planning/todos/pending/ to done/ — required a manual cleanup step.",
+        "The project uses release-please for versioning; manifest is at .release-please-manifest.json."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "getWorker() and postMessage() can throw, leaking entries from the pending map. Fix: wrap in try/catch and clean up pending entry on error."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "Batch reads all files to memory before passing to SDK — architectural limitation since SDK accepts Uint8Array not File objects. Deferred; requires SDK contract change."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "uploadFiles() doc comment overstated memory bounding guarantees; corrected to accurately describe concurrency-pool behavior."
+        }
+      ],
+      "workflow": [
+        "Use gh api graphql with resolveReviewThread mutation to batch-resolve PR review threads.",
+        "When replying to PR review comments via REST, use --field (not -f) for in_reply_to since it must be an integer.",
+        "Integration tests that require a live backend will fail in CI/local without a running server — distinguish these from unit test failures before acting on them.",
+        "After a PR merges, always check pending todos for items that were implemented in the merged work and move them to done/.",
+        "When auditing a deferred items list, cross-check against actual codebase state — items can silently become implemented, out-of-scope, or premature without the list being updated."
+      ]
+    },
+    "friction": [
+      "The web worker encryption todo was left in pending/ after Phase 37 shipped it — required a separate discovery and manual move step.",
+      "DEFERRED.md contained stale/incorrect entries: error tracking already implemented as Faro, session replay never in scope, production Kubo hardening premature — required a second audit pass after initial update.",
+      "CONCERNS.md had a misleading entry about FUSE lacking automated tests, which required clarification and a 'won't fix' annotation.",
+      "git commit with parentheses in the message failed (likely shell quoting issue); had to retry with dashes instead."
+    ],
+    "open_items": [
+      "Lazy file reading in useDropUpload.ts — requires SDK API change to accept File objects or read callbacks instead of Uint8Array (tracked in DEFERRED.md, originally CodeRabbit thread 8).",
+      "Batch upload not implemented in Rust SDK — noted in FEATURES.md feature matrix.",
+      "All remaining deferred items in .planning/DEFERRED.md across Upload Pipeline, Observability, Code Quality, and Infra Hardening categories.",
+      "E2E test coverage for Desktop FUSE components is via Desktop E2E suite only — no unit tests by design, but suite coverage should be maintained as FUSE plumbing evolves.",
+      "docs/FILESYSTEM_SPECIFICATION.md documents 5 cross-platform gaps (case sensitivity, reserved names, path length, etc.) that may need resolution as the desktop client matures on Windows."
+    ]
+  }
+}

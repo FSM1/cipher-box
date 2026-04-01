@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "89dba2895b55",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T22:32:35.292426Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/DEFERRED.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d4acfd024863",
+  "token_usage": {
+    "input_tokens": 3758,
+    "cache_creation_tokens": 168503,
+    "cache_read_tokens": 10978251,
+    "output_tokens": 41644,
+    "api_call_count": 105
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Resolve open PR review comments, then update project documentation (DEFERRED.md, FEATURES.md, README.md, new filesystem spec) on a dedicated docs branch after merging PR #416.",
+    "outcome": "PR review comments resolved and merged. Docs branch created with updated DEFERRED.md (thoroughly audited), FEATURES.md, README.md, and a new FILESYSTEM_SPECIFICATION.md. Phases 38 (service retirement) and 39 (user-configurable vault params) added to roadmap.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro (apps/web/src/lib/faro.ts) is the observability/error tracking solution — not Sentry or Datadog. It handles remote log shipping to Grafana Cloud with beforeSend scrubbing.",
+        "FUSE desktop layer is intentionally not unit tested — it is OS integration plumbing tested via Desktop E2E suite instead. Unit mocking of host OS is unreliable.",
+        "Session replay is an explicit anti-feature for this privacy-focused product and should never appear in deferred/planned lists.",
+        "Vault v1 legacy columns were removed when staging was reset; the baseline migration (1700000000000-FullSchema.ts) was written after the reset and contains no v1 fields.",
+        "RECYCLE_BIN_RETENTION_DAYS is an operator-level env var, not a user-facing setting — user-configurable retention period remains a valid deferred item.",
+        "folder.service.ts (1,059 lines) still has 9 importers and bin.service.ts (971 lines) has 2 functions actively used — both are candidates for retirement in Phase 38.",
+        "DTS circular dependency between crypto and core packages is by design (devDependency vs production dep) — not a real runtime concern.",
+        "useFileOperations.ts at 515 lines with 3 cohesive callbacks sharing state is considered reasonable and not a decomposition target.",
+        "Phase 37 introduced per-file IPNS, pin:secondaryFailed events, and Web Worker encryption — multiple items that were still listed as deferred post-merge.",
+        "Linux FUSE mount support (crates/fuse/src/platform/linux.rs) and CTR streaming in FUSE ops were implemented but still listed as deferred."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage/getWorker can throw, leaking pending entries — fixed with try/catch wrapping both calls"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "uploadFiles() doc comment overstated memory bounding — corrected to accurately describe actual behavior"
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "Batch reads all files to memory before SDK call — architectural issue requiring SDK API change (accept File objects instead of Uint8Array); intentionally deferred"
+        },
+        {
+          "path": "crates/fuse/src/helpers.rs",
+          "finding": "Contains filesystem naming/path validation rules that form the basis of the CipherBox filesystem specification"
+        },
+        {
+          "path": "crates/fuse/src/constants.rs",
+          "finding": "Defines filesystem constants (name length, depth limits, etc.) referenced in FILESYSTEM_SPECIFICATION.md"
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "finding": "Faro initialization with beforeSend scrubbing and registerFaroTransport — this IS the remote log shipping implementation"
+        }
+      ],
+      "workflow": [
+        "When asked to audit and prune a list, do every item systematically in one pass — not just the items the user explicitly calls out, then stop.",
+        "Integration tests that require a live backend (integration.test.ts) will fail in CI without backend — pre-existing, unrelated to code changes.",
+        "GraphQL batch mutation pattern for resolving multiple review threads in one API call is more efficient than sequential calls.",
+        "gh api --field (not -f) must be used for integer parameters like in_reply_to when replying to PR review comments.",
+        "When moving todos from pending to done, verify the file path exists before using git mv."
+      ]
+    },
+    "friction": [
+      "First deferred audit pass was shallow — only verified 3 items explicitly called out by user rather than auditing every item. Required 3 additional correction rounds.",
+      "DEFERRED.md edits were complicated by markdown table formatting (column widths) making exact string matching for Edit tool unreliable — had to read raw file content with line numbers.",
+      "Git push failed on first attempt for the docs branch — required a retry.",
+      "Multiple items that were implemented in Phase 37 were still listed as deferred immediately after that phase merged, indicating no systematic deferred-list cleanup was done post-phase."
+    ],
+    "open_items": [
+      "Phase 38: Retire folder.service.ts and bin.service.ts — migrate 9 importers of folder.service.ts and 2 active callers of bin.service.ts to SDK equivalents",
+      "Phase 39: Add user-configurable vault parameters (bin retention period UI, etc.)",
+      "useDropUpload.ts lazy file reading — requires SDK API contract change to accept File objects or read callbacks instead of Uint8Array; architectural, intentionally deferred",
+      "Batch upload not implemented in Rust SDK — feature matrix gap noted in FEATURES.md",
+      "Cross-platform filesystem gaps documented in FILESYSTEM_SPECIFICATION.md: case sensitivity on macOS/Linux vs Windows, reserved name handling, path separator encoding",
+      "docs/update-project-documentation PR #419 still open — needs review and merge"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T22:31:52.75997Z",
+    "agent_lines": 0,
+    "human_added": 20,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 20,
+    "agent_percentage": 0
+  }
+}

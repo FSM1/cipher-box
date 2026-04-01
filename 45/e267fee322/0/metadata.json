@@ -1,0 +1,62 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "45e267fee322",
+  "session_id": "9c4d622b-d13e-4838-88a9-da54b05b2056",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-01T00:31:50.077406Z",
+  "branch": "feat/package-and-app-versioning-and-release-cycles",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/scripts/pr-release-preview.js"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1d8160960055",
+  "checkpoint_transcript_start": 76,
+  "transcript_lines_at_start": 76,
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 23258,
+    "cache_read_tokens": 346562,
+    "output_tokens": 4667,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Address all 6 PR review threads (from Copilot and CodeRabbit) on a CI/release workflow, then fix a bug where the release preview comment was overwriting CodeRabbit's comment instead of posting separately.",
+    "outcome": "All 6 review threads were resolved in commit f7ebcbb. The comment-overwrite bug was then fixed by filtering comments by author in postOrUpdateComment, committed as a follow-up.",
+    "learnings": {
+      "repo": [
+        "cipher-box uses a pr-release-preview.js script to post/update PR comments with a COMMENT_MARKER sentinel.",
+        "CI workflows had unpinned npm deps (@actions/core, @actions/github) that needed explicit version pinning.",
+        "A resolve-main job pattern is used to ensure SHA consistency across parallel CI jobs.",
+        "Shell injection was present via inputs.description — fixed by moving to env var + printf."
+      ],
+      "code": [
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "finding": "postOrUpdateComment searched for existing comments by COMMENT_MARKER alone, without filtering by author — causing it to match and overwrite CodeRabbit's comment if it contained the marker string. Fix: also filter by comment author (the bot identity)."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit and Copilot review bots can both comment on the same PR; scripts that search comments by content marker must also filter by author to avoid cross-bot collisions.",
+        "Resolving review threads via gh CLI after replying is a clean way to close out bot review comments in bulk."
+      ]
+    },
+    "friction": [
+      "Release preview comment was posted on top of CodeRabbit's comment instead of as a separate comment — a subtle bug only caught after visual inspection of the PR.",
+      "One assistant response was interrupted mid-execution by the user."
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-01T00:31:32.684118Z",
+    "agent_lines": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "agent_percentage": 100
+  }
+}

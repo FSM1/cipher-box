@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c49b84391852",
+  "session_id": "9892ee25-59c3-432b-96cd-76ee5f3ee45a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-31T21:24:19.29119Z",
+  "branch": "feat/package-and-app-versioning-and-release-cycles",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "dc483d3e389b",
+  "token_usage": {
+    "input_tokens": 120,
+    "cache_creation_tokens": 95352,
+    "cache_read_tokens": 7313576,
+    "output_tokens": 27435,
+    "api_call_count": 97
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Execute Phase 41 (Package and App Versioning and Release Cycles) using wave-based parallel execution across 5 plans covering Release Please config, PR release preview, staging tag format, and batched releases.",
+    "outcome": "Waves 1 and 2 completed (plans 41-01, 41-02, 41-04). All three worktrees were merged into the feature branch after resolving lint errors and cherry-pick conflicts. Wave 3 (41-03) is next.",
+    "learnings": {
+      "repo": [
+        "The monorepo has 15 packages requiring independent versioning via release-please-config.json — root extra-files cascade was removed, desktop extra-files retained",
+        "release-please-manifest.json needs all 15 entries with correct initial versions",
+        "GitHub Actions scripts use Node 22 and trigger on PR events to main with release-please PR exclusion",
+        "The API and TEE service form a lock group (D-05) — they version together",
+        "Web and desktop packages use monotonic versioning rules (D-08, D-13)",
+        "Dependency cascade detection uses hardcoded JS_DEPS and RUST_DEPS graphs (D-21-24)",
+        "rootFolderKey migration is fully complete — dual-write window concern is outdated, DB crypto columns are dropped",
+        "BYO-IPFS auth token is implemented as encrypted IPNS entry; server stores only boolean isByoUser flag",
+        "Kubo is already at v0.40.0 in docker/docker-compose.yml — upgrade concern is outdated",
+        "Subfolder recovery is implemented but limited by IPNS DHT propagation — architectural, not a bug"
+      ],
+      "code": [
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 1,
+          "end_line": 746,
+          "finding": "746-line script with dead code: maxBump function was defined but never called, directBumps and computedLabelSet were assigned but never read — removed during merge lint fix"
+        },
+        {
+          "path": ".github/workflows/tag-staging.yml",
+          "line": 1,
+          "finding": "Rewritten to create date-based staging tags (staging-YYYYMMDD-release-N) from main HEAD with sequential counter per date; removed release_tag input"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 1,
+          "finding": "Updated tag trigger to staging-*, triple-tags Docker images (component version + latest-staging + deploy tag), adds API_VERSION/TEE_VERSION to .env.staging"
+        },
+        {
+          "path": ".github/scripts/create-release-labels.sh",
+          "line": 1,
+          "finding": "Creates 61 GitHub labels — must use bash 3.2 compatible syntax (no declare -A associative arrays) for macOS compatibility"
+        }
+      ],
+      "workflow": [
+        "Executor subagents run in isolated git worktrees branched from main, not from the feature branch — worktree commits must be cherry-picked onto the feature branch, not merged",
+        "lint-staged's stash-restore cycle during pre-commit hooks clobbers in-flight file edits — must re-stage after making lint fixes",
+        "529 API throttling caused ~25 min of dead time on wave 1 (43 min wall clock vs 4 min actual work); wave 2 was much faster (~4 min wall clock)",
+        "The GSD orchestrator's working directory can drift into a worktree path if bash is run from that context — always verify cwd before git operations",
+        "Merging worktree branches with 'git merge' returns 'Already up to date' when the worktree branched from main and the feature branch has diverged — cherry-pick is the correct approach",
+        "Conventional commit format is required by pre-commit hooks — merge commits with non-conventional messages will be rejected",
+        "STATE.md performance metrics table had a format mismatch: rows 39-81 used 5-column format while newer rows used 4-column Phase XX PYY format"
+      ]
+    },
+    "friction": [
+      "529 API overload errors caused ~25 minutes of retry backoff during Wave 1 execution",
+      "Executor worktrees branch from main, not the feature branch — this was not anticipated and required cherry-picking instead of merging",
+      "lint-staged stash-restore cycle silently clobbered file edits during commit attempts, causing multiple failed commit attempts before the root cause was identified",
+      "The orchestrator's cwd drifted into a worktree directory, causing git commands to operate on the wrong repo context",
+      "STATE.md had merge conflicts on every cherry-pick due to all three agents independently updating it",
+      "Dead code in the agent-generated pr-release-preview.js (maxBump, directBumps, computedLabelSet) triggered eslint failures that blocked the merge commit"
+    ],
+    "open_items": [
+      "Wave 3 (plan 41-03: post-merge release-as injection) not yet executed",
+      "Wave 4 (plan 41-05: batched releases + desktop updater workflow) not yet executed",
+      "Phase verification and ROADMAP/STATE completion pending all 5 plans",
+      "6 remaining LOW-priority M2 tech debt items are still open (device registry, desktop vault HKDF, and get_public_key zeroization were already fixed; 6 others remain)",
+      "Subfolder recovery limitation due to IPNS DHT propagation is a known architectural constraint — no fix planned but worth documenting"
+    ]
+  }
+}

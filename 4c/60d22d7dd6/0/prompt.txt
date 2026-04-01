@@ -1,0 +1,13 @@
+https://github.com/FSM1/cipher-box/pull/427 changelog seems a little bit excessive.
+
+---
+
+ok, so just creating the tags and rerunning the release please action should fix things up?
+
+---
+
+so one thing I think needs to be done is to set the cipherbox-api-client version to the same as the api, and @cipherbox/api-client should also be set to the api version
+
+---
+
+yeah do this on a chore branch

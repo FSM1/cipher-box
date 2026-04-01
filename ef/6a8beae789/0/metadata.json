@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ef6a8beae789",
+  "session_id": "446ec0ad-5bd5-479d-b0ad-ea5831cc0cd6",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-01T03:25:50.09025Z",
+  "branch": "fix/release-as-on-pr-branch",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "90d3c196a964",
+  "token_usage": {
+    "input_tokens": 271,
+    "cache_creation_tokens": 179580,
+    "cache_read_tokens": 20668681,
+    "output_tokens": 41759,
+    "api_call_count": 209
+  },
+  "session_metrics": {
+    "turn_count": 28
+  },
+  "summary": {
+    "intent": "Bootstrap the release-please system (from phase 41) with correct version tags, align api-client versions with the API, and test the new release pipeline with a quick task exposing the API version on the /health endpoint.",
+    "outcome": "Bootstrap tags created, api-client versions aligned to 0.35.0, /health endpoint now returns version field with full OpenAPI schema coverage, and the post-merge release-as injection was refactored from a direct-to-main push into a PR-branch commit via the preview workflow — eliminating the branch protection bypass requirement.",
+    "learnings": {
+      "repo": [
+        "release-please treats the entire commit history as unreleased when no prior tags exist; bootstrap tags at the last known-good SHA are required to get a clean initial changelog",
+        "The OpenAPI spec is generated manually in apps/api/scripts/generate-openapi.ts (not from HealthController directly) because HealthController depends on TypeOrmHealthIndicator and cannot be instantiated without a real DB connection",
+        "The project uses 15 release-please packages across JS (apps/api, apps/web, apps/desktop, packages/*) and Rust crates",
+        "API version is now read from npm_package_version / package.json and shared via apps/api/src/version.ts to avoid duplication between main.ts and health.controller.ts",
+        "release-please only tracks commits to main; committing release-as targets to the release-please branch has no effect on its behavior",
+        "Merge commits from the release-please PR were being parsed by the pr-release-preview script, causing false positive bump labels across many packages — fixed by filtering commits with 2+ parents",
+        "fix: commit type triggers a patch bump in release-please; CI-only changes that touch workflow files should use chore(ci): to avoid unnecessary version bumps",
+        "The repo uses legacy branch protection rules (not rulesets), which lack per-actor bypass — making direct pushes to main from GitHub Actions difficult without granting broad bypass"
+      ],
+      "code": [
+        {
+          "path": "apps/api/scripts/generate-openapi.ts",
+          "line": 237,
+          "end_line": 264,
+          "finding": "Health endpoint is manually defined in the OpenAPI spec here rather than auto-generated; the version and schema fields must be maintained manually when health response shape changes"
+        },
+        {
+          "path": "apps/api/src/version.ts",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Shared version module created to centralize package.json version reading, used by both main.ts and health.controller.ts"
+        },
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 249,
+          "end_line": 249,
+          "finding": "Merge commit filtering added here — commits with 2+ parents are skipped to prevent false bump labels from release-please version PRs"
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "openapi.json added as an extra file with jsonpath $.info.version so release-please bumps it alongside apps/api version"
+        },
+        {
+          "path": ".github/workflows/pr-release-preview.yml",
+          "finding": "Workflow now commits release-as targets back to the PR branch during preview, replacing the post-merge push approach. Fork PRs are guarded. Concurrency group added to prevent races."
+        }
+      ],
+      "workflow": [
+        "Squash merging to main means the squash commit message type (feat/fix/chore) determines release-please bump — all commits on a PR must be considered when choosing the squash message type",
+        "When force-rewriting commits to change message type, soft reset + re-commit is cleaner than interactive rebase in this context",
+        "pnpm api:generate must be run after any OpenAPI schema changes and the result committed; the generated openapi.json and api-client dist are checked in",
+        "Committing with GITHUB_TOKEN does not trigger new workflow runs — GitHub's built-in recursion prevention handles the infinite loop concern when workflows commit back to branches",
+        "CodeRabbit and GitHub Copilot automated review is active; fix: commits used to address their comments can themselves trigger unwanted version bumps — use chore(fix): or similar scoped messages for review fixes on CI-only PRs"
+      ]
+    },
+    "friction": [
+      "Branch protection (legacy rules) blocked the post-merge GitHub Actions push to main — no per-actor bypass option available, requiring a full architecture change to the release-as injection approach",
+      "Cargo.lock regeneration pulled in many unrelated dependency updates when only the crate version was changed; had to manually restore and patch only the specific entry",
+      "git index.lock stale file left by a crashed process blocked git operations mid-session",
+      "Auto-merge on PR #428 showed as enabled in UI but GITHUB_TOKEN reported autoMergeRequest as null — had to manually merge",
+      "Unused import in pr-release-preview.js caused a lint failure on commit",
+      "Background task failure notification for an already-handled commit caused confusion"
+    ],
+    "open_items": [
+      "PR #430 (release-please) changelog should be verified after PR #431 merges — the post-merge release-as injection is now handled via the preview workflow and this needs end-to-end validation",
+      "Phase 41 discussion log specified monotonic (major.minor) versioning for web and desktop apps, but semver is in use — deferred for now, documented as a future revisit",
+      "The generate-openapi.ts script still instantiates a manual health schema — if new fields are added to the health response, the manual spec definition at line ~250 must be kept in sync manually",
+      "Bootstrap tags were created but the release-please workflow re-run after PR #428 merge was not explicitly verified — PR #430 changelog should be reviewed for completeness after the new preview workflow lands"
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "98188cdeaf41",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-otp-api-url",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src/main.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/98/188cdeaf41/0/metadata.json",
+      "transcript": "/98/188cdeaf41/0/full.jsonl",
+      "content_hash": "/98/188cdeaf41/0/content_hash.txt",
+      "prompt": "/98/188cdeaf41/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 35564,
+    "cache_read_tokens": 919053,
+    "output_tokens": 6355,
+    "api_call_count": 24
+  }
+}

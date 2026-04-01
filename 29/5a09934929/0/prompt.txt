@@ -1,0 +1,168 @@
+is the issue picked up by GH copilot (#3 in the table above) the same issue as already identified by coderabbit previously and noted in the deferred items?
+
+---
+
+ok I think we are getting close to the point of diminishing returns with these reviews on this PR. What are your thoughts, one more round or lets merge this sucker and deploy?
+
+---
+
+ok, take a look through @.planning/DEFERRED.md, as well as the phase docs from the last ~10 phases (28 -> 37) and identify if any deferred items exist.
+
+also, update the @.planning/FEATURES.md tables with the latest features as well as update the feature matrix (batch uploads are not implemented in the rust SDK for example). 
+
+The E2E test coverage in the feature matrix probably also needs an update.
+
+You can also update the @README.md since it seems like a lot of that is now out of date.
+
+One more piece of documentation to be added is the actual CipherBox file system specification which has not previously been documented, but should be done so now, for future reference. This doc should include both the various file system rules as well as the rationale for why these rules were implemented. Overall I am guessing we will need to stick with the strictest Desktop OS format (windows with its case insensitive naming).
+
+All if this is to be done on a docs branch.
+
+---
+
+has the web worker encryption todo been moved to done?
+
+---
+
+A lot of those `deferred` items have been implemented already - for example the error tracking service, possible sentry migration path, session replay should not be in deferred, it is an anti-feature in a privacy focused product. Please go through the list again and make sure that the items in the list are actually deferred and not either already implemented, or not ever in scope.
+
+---
+
+The mention of lack of Desktop FUSE automated tests is also misleading - there aren't unit tests as these would require mocking too much of the host OS to be reliable. Those are intentionally not tested at a unit level, since it is mostly jsut plumbing between the OS and the rust SDK. These components are recularly tested in the `Desktop E2E` test suite, so saying there is no automated testing is false, its just not unit testing.
+
+The source for this in @.planning/codebase/CONCERNS.md should also be updated as irrelevant (wont fix) with the details of the above note.
+
+---
+
+Ok, then in data management there is mention of vault v1 fields in the database, from my understanding, these have been removed from the codebase when staging was reset and all data cleared.
+
+---
+
+so when I asked you to go through the deferred items and prune any that have already been implemented, what did you actually do? why do I keep finding more irrelevant items?
+
+---
+
+Why does the Obeservability table still list remote log shipping as deferred - this was configured as part of phase 30 most likely?
+
+---
+
+Ok, now can you please take a look at the code quality items and make sure these are all still valid. if any are, then I think this should be the next phase, followed by a phase to `add user-configurable vault parameters` which takes care of the one `deferred` item.
+
+---
+
+is this circular dependency necessary though? I thought it was meant to have been removed at the end of the restructuring phase when it was raised, and likely just never removed.
+
+---
+
+yeah add it to phase 38
+
+---
+
+For the user configurable vault phase, it should include things like versioning defaults, bin retention and delete settings (soft delete or hard delete).
+
+---
+
+Can we add the features from phase 39 to the `features` document?
+
+---
+
+ok can you please go through all the files in the @docs/ folder, and make sure everything there is updated and current, based on the context on the changes in phases 28-37
+
+---
+
+the file system doc fails to mention that the cipherbox mount is accessible via terminal on macos as well, and via powershell and git bash on windows.
+
+---
+
+the filesystem doc mentions AES-CTR for large files, but then goes on to mention only video, AES CTR is also used for audio files.
+
+---
+
+also, in the same doc, there is mention of uploads always using AES GCM - this is false, large files are encrypted using AES-CTR client side.
+
+---
+
+ok, can you please create a PR for these updates
+
+---
+
+I wanted to ask - is staging currently configured to use the phala TEE ? can you check the logs to see if the republishing is actually going correctly?
+
+---
+
+no please leave the stale entries as is for now. will see if the client ever reconnects and updates the keys, otherwise I guess the db fallback it is for looking up where these ipns names point at.
+
+---
+
+great stuff, looking forward to it.
+
+---
+
+/gsd:map-codebase
+
+---
+
+2
+
+---
+
+2,7
+
+---
+
+<task-notification>
+<task-id>a719039eb962c1ba8</task-id>
+<tool-use-id>toolu_01WAHK5nCwupzkWXMREjj7oX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a719039eb962c1ba8.output</output-file>
+<status>completed</status>
+<summary>Agent "Map codebase testing" completed</summary>
+<result>## Mapping Complete
+
+**Focus:** quality (TESTING.md update only)
+**Documents written:**
+- `/Users/michael/Code/cipher-box/.planning/codebase/TESTING.md` (343 lines)
+
+**Key changes from previous version (2026-03-27):**
+
+- Web E2E suite count updated from 11 to **14** — added `batch-download.spec.ts`, `media-preview.spec.ts`, `streaming-playback.spec.ts` with coverage details for each
+- SDK E2E suite count updated from 10 to **11** — added `batch-upload.test.ts` with its 5-test coverage description
+- SDK unit test count updated from 8 to **13** — `upload-batch.test.ts` added, full list now current
+- SDK-Core unit test count updated from 11 to **13** — `upload.test.ts` and `encryption-mode.test.ts` added
+- Added partial module mocking pattern (`importOriginal`) used in `upload-batch.test.ts`
+- Added batch upload unit test pattern section with `setupBatchMocks` / `setupFolder` helper pattern
+- Added media test fixtures inventory (`tests/web-e2e/fixtures/files/`)
+- Added explicit note on FUSE write op coverage gap (intentional, Desktop E2E covers it)
+- Added Playwright suite-level timeout note
+
+Ready for orchestrator summary.</result>
+<usage><total_tokens>61549</total_tokens><tool_uses>15</tool_uses><duration_ms>201203</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a067fd8bbdc248250</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/a067fd8bbdc248250.output</output-file>
+<status>completed</status>
+<summary>Agent "Map codebase concerns" completed</summary>
+<result>## Mapping Complete
+
+**Focus:** concerns
+**Documents written:**
+- `/Users/michael/Code/cipher-box/.planning/codebase/CONCERNS.md` (244 lines)
+
+**Key changes from previous version (2026-03-29):**
+
+- **Resolved:** TEE worker "minimal tests" concern updated — Phase 35 added 4 more test files (key-manager, auth, tee-keys, republish); now 5 test files for 14 source files, with remaining gap narrowed to `migration-worker.ts` specifically
+- **Added (Tech Debt):** Residual `console.warn` calls in SDK packages — Phase 28 structured logging didn't cover SDK/SDK-core (zero-dependency packages), so 11+ `console.warn` calls bypass the Faro transport
+- **Added (Tech Debt):** Duplicate file upload path bypasses Web Worker encryption — Phase 37 moved new file encryption to the Worker but the duplicate/replacement branch still uses `encryptFile()` on the main thread
+- **Added (Tech Debt → Performance):** Duplicate upload path buffers full file on main thread — consequence of the Worker gap above
+- **Added (Security):** Faro telemetry scrub relies on key-name allow-list — new surface from Phase 30
+- **Added (Fragile):** Phala Cloud CVM as single TEE provider — Phase 35 removed the Docker simulator but also removed any fallback provider option
+- **Added (Dependencies at Risk):** `@phala/dstack-sdk` single-provider lock-in
+- **Added (Test Coverage):** `useDropUpload` hook has no unit tests — Phase 37 significantly rewrote this as the primary upload entry point
+- **Updated:** FUSE write ops "won't fix" status made explicit in both Fragile Areas and Test Coverage Gaps sections
+- **Updated:** File size limit entry updated to reflect Phase 37's Worker + CTR improvements for new files</result>
+<usage><total_tokens>75127</total_tokens><tool_uses>84</tool_uses><duration_ms>416809</duration_ms></usage>
+</task-notification>

@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a54f4806c128",
+  "session_id": "446ec0ad-5bd5-479d-b0ad-ea5831cc0cd6",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-01T03:29:16.582159Z",
+  "branch": "fix/release-as-on-pr-branch",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "bd393fb6a08e",
+  "token_usage": {
+    "input_tokens": 284,
+    "cache_creation_tokens": 192691,
+    "cache_read_tokens": 22678398,
+    "output_tokens": 44101,
+    "api_call_count": 220
+  },
+  "session_metrics": {
+    "turn_count": 29
+  },
+  "summary": {
+    "intent": "Bootstrap the release-please system (phase 41) with correct version tags, align api-client versions with the API, expose the API version on the /health endpoint, and fix the release preview workflow to commit release-as targets on the PR branch instead of pushing directly to main.",
+    "outcome": "All 15 bootstrap tags created and pushed, api-client versions aligned to 0.35.0, /health endpoint now returns version from package.json, and the pr-release-preview workflow was restructured to write release-as config to the PR branch on merge (eliminating the post-merge push-to-main approach that was blocked by branch protection).",
+    "learnings": {
+      "repo": [
+        "release-please treats the entire commit history as unreleased when no prior tags exist — bootstrap tags must be created manually on the pre-phase commit to scope changelogs correctly",
+        "The OpenAPI spec in packages/api-client/openapi.json had a hardcoded version '0.1.0' in both apps/api/src/main.ts and apps/api/scripts/generate-openapi.ts that was never updated",
+        "HealthController is excluded from the OpenApiGeneratorModule because it depends on TypeOrmHealthIndicator which requires a real DB connection — the health endpoint spec is defined manually in generate-openapi.ts instead",
+        "Phase 41 discussion log (41-DISCUSSION-LOG.md line 106) explicitly decided monotonic major.minor versioning for web and desktop apps, but the implementation used release-please's default semver — this decision was revisited and semver accepted as-is",
+        "The post-merge-release workflow tried to push release-as config directly to main, which is blocked by branch protection rules (12 required status checks); legacy branch protection rules don't support per-actor bypass unlike the newer Rulesets system",
+        "Merge commits with 2+ parents were being parsed as conventional commits by the PR release preview script, producing false-positive release labels across many packages",
+        "release-as targets in release-please-config.json must land on main before release-please runs — committing them to the release-please branch has no effect"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/main.ts",
+          "line": 56,
+          "end_line": 56,
+          "finding": "Version reading was duplicated here and in health.controller.ts — extracted to shared src/version.ts module"
+        },
+        {
+          "path": "apps/api/scripts/generate-openapi.ts",
+          "line": 237,
+          "end_line": 264,
+          "finding": "Health endpoint spec is manually defined here (not via controller introspection) because TypeOrmHealthIndicator can't be instantiated without a DB; the version property was missing from this manual spec initially"
+        },
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 249,
+          "end_line": 249,
+          "finding": "Commit loop originally processed merge commits — needed parent count check to skip them"
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "openapi.json requires jsonpath specification for release-please to bump nested info.version field, not just a plain file path"
+        },
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 503,
+          "end_line": 538,
+          "finding": "Manual override labels (existing higher-or-equal label) were preserved in computedLabels but packageBumps was not updated, so release-as derivation in section 7.5 used the lower computed bump instead of the manual override"
+        }
+      ],
+      "workflow": [
+        "Using 'fix:' commit prefix triggers patch version bumps via release-please — CI/tooling fixes that shouldn't affect versioning should use 'chore(ci):' or 'chore:' prefix",
+        "Squashing multiple commits into one 'chore(ci):' before force-pushing prevents unintended release-please version bumps from earlier 'fix:' prefixed commits",
+        "PR review comment resolution: reply via REST API using --field for integer in_reply_to, resolve via GraphQL mutation — these are separate operations",
+        "GitHub Actions GITHUB_TOKEN pushes don't trigger new workflow runs (built-in recursion prevention), so there's no infinite loop risk when a workflow commits back to the PR branch",
+        "Conventional commit scopes (feat(api):, chore(ci):) are critical for release-please to correctly attribute changes to packages in a monorepo"
+      ]
+    },
+    "friction": [
+      "Legacy branch protection rules don't have per-actor bypass — had to uncheck 'Do not allow bypassing' broadly, which was still insufficient for the GitHub App to push to main",
+      "Cargo.lock regeneration pulled in unrelated dependency updates when bumping crate version — had to use targeted cargo update to update only workspace crates",
+      "git index.lock file left behind by a crashed git process required manual removal before switching branches",
+      "The executor agent was interrupted mid-run (classifyHandoffIfNeeded bug risk), requiring manual execution of the plan steps",
+      "Auto-merge wasn't actually enabled on PR #428 despite the user believing it was — PR had to be merged manually",
+      "PR #431's self-test (release preview running on itself) was a good validation but also slightly awkward — the workflow was modifying the branch it was triggered on"
+    ],
+    "open_items": [
+      "The remaining open tags push step: after PR #429 and #431 merge, bootstrap tags for newly aligned api-client versions (0.35.0) still need to be created if any are missing",
+      "Monotonic versioning for web/desktop apps was deferred — accepted semver for now but the original design decision (phase 41 discussion log) prefers major.minor for user-facing apps",
+      "The pr-release-preview.js packageBumps/manual override sync fix (lines 503-538) was applied at end of session — needs verification that release-as generation now correctly reflects manual label overrides",
+      "Re-enable 'Do not allow bypassing the above settings' in branch protection after the post-merge workflow was removed (user confirmed done for 'Do not allow bypassing' but worth noting)",
+      "The release-please config has openapi.json as an extra file with jsonpath — this should be verified to work correctly on the next actual API version bump"
+    ]
+  }
+}

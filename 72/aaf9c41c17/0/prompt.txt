@@ -1,0 +1,9 @@
+/gsd:quick fix sidebar icons to be consisten - either all custom svg, or all actual icons, but not a mix of both [Image #7]
+
+---
+
+ok please get a PR up for this change.
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23851892351 verify api spec is still failing on the release please branch

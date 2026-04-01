@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3203effbcecf",
+  "strategy": "manual-commit",
+  "branch": "feat/health-api-version",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/api/scripts/generate-openapi.ts",
+    "packages/api-client/openapi.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/32/03effbcecf/0/metadata.json",
+      "transcript": "/32/03effbcecf/0/full.jsonl",
+      "content_hash": "/32/03effbcecf/0/content_hash.txt",
+      "prompt": "/32/03effbcecf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 144,
+    "cache_creation_tokens": 112762,
+    "cache_read_tokens": 6963866,
+    "output_tokens": 19655,
+    "api_call_count": 111
+  }
+}

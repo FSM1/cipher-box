@@ -1,0 +1,7 @@
+/gsd:debug issue logging in on macos desktop app, using package built by github during release. I am trying to log in via email otp, and receive the email but when I submit the received otp, I see a `verification failed` message. I have tested this same flow in the web app with the exact same account, and this works fine, so this problem seems related only to the desktop app.
+
+I have not tested a locally built instance of the app, but this is next on the cards.
+
+---
+
+yeah please push and create a PR

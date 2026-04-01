@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0b7ec066c79a",
+  "session_id": "591737e6-fa62-4db1-b5f9-b2c00225301a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-31T03:09:51.7682Z",
+  "branch": "docs/phase-38-context",
+  "checkpoints_count": 4,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "f9589217b3e6",
+  "token_usage": {
+    "input_tokens": 297,
+    "cache_creation_tokens": 532203,
+    "cache_read_tokens": 38160947,
+    "output_tokens": 67690,
+    "api_call_count": 247
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Complete the final two phases of a milestone (Phase 38: retire deprecated web services, Phase 39: add user-configurable vault settings) using the GSD manager as a command center, while also fixing an inline upload progress bar flashing bug.",
+    "outcome": "All work completed: Phase 38 removed 2,030 lines of deprecated service code (folder.service.ts + bin.service.ts), Phase 39 added a configurable VaultTab to Settings with encrypted IPNS-backed storage, the upload flash was fixed with a CSS shimmer approach, and three PRs were created (#420 merged, #422 open, #423 open) with review comments resolved.",
+    "learnings": {
+      "repo": [
+        "The established SDK migration pattern (useSharedWriteOps.ts) is: hooks import SDK functions directly, extract state from stores, and pass as explicit params — no adapter layer.",
+        "BYO-IPFS config pattern (ECIES encrypt, IPNS publish, 10s timeout fallback) is the canonical template for storing user settings in encrypted vault metadata.",
+        "@cipherbox/crypto had a circular devDependency on @cipherbox/core only for vault-ipns.test.ts — fixed by replacing with hardcoded test vectors.",
+        "getSdkClient().getContext() is an O(1) field access on a singleton — not expensive despite 11 call sites, not worth caching.",
+        "vault-settings.store.ts Zustand store had 5 unused state fields and 4 unused actions (isLoading, isSaving, error etc.) because VaultTab manages saving state locally.",
+        "The recycle bin retention was previously a server-side env var (RECYCLE_BIN_RETENTION_DAYS); Phase 39 moved ownership to the client's encrypted vault settings.",
+        "Tree utilities (getDepth, isDescendantOf, calculateSubtreeDepth) live in packages/sdk-core/src/folder/tree.ts as pure functions — easily unit-testable without mocks."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/styles/upload.css",
+          "finding": "Encrypting state used `width: 100% !important` on the fill bar; when first progress event arrived and removed the pulse class, the fill snapped from 100% to 0% causing a visible flash. Fixed by applying shimmer gradient to the track and hiding the fill (opacity: 0) during encryption."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "finding": "FolderNode construction was duplicated across two branches with 7 shared fields — simplified to extract shared fields into a variable."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "versionCids is Array\u003c{cid: string; size: number}\u003e, not string[] — extracting .cid is required when building the unpinning list. Also: metadata should be saved before pruning versionCids, not after."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "retentionDays validation should be inside withOperation (not before it) so errors are properly surfaced. Duplicate @cipherbox/core imports needed merging after Phase 38 migration."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "finding": "Phase 39 introduced identical 12-line delete logic in both handleDelete and handleDeleteItems — extracted to a shared deleteWithBehavior() helper."
+        },
+        {
+          "path": "apps/web/src/services/file-metadata.service.ts",
+          "finding": "getMaxVersionsPerFile() was called twice per prune site (once for .slice(0,N) and once for .slice(N)) — should be captured in a local variable."
+        }
+      ],
+      "workflow": [
+        "Background execution agents must run in isolated worktrees — without isolation they fight over the working tree and commit to whichever branch happens to be checked out, causing mis-targeted commits.",
+        "When two background agents commit to different branches (plan vs context), branch divergence requires manual merge with conflict resolution before the GSD init tool can accurately detect phase status.",
+        "The GSD init manager tool determines phase status from disk state (plan files, context files) not from git branch — branches can diverge without affecting the dashboard accuracy as long as files exist on the checked-out branch.",
+        "CodeRabbit/Copilot review threads take a few minutes to appear after PR creation — checking immediately after creation yields no threads.",
+        "The /simplify skill runs three parallel agents (reuse, quality, efficiency) — launching them all in one message is correct; they should receive the full diff as context."
+      ]
+    },
+    "friction": [
+      "Phase 38 planner and executor each committed to different branches (docs/phase-38-plan vs docs/phase-38-context), requiring manual merge and conflict resolution.",
+      "Phase 39 executor (pre-worktree) committed on docs/phase-38-context instead of docs/phase-39-context, contaminating the working tree with Phase 39 changes that had to be cleaned up with git restore.",
+      "Usage limits hit mid-session, interrupting both the Phase 39 executor and the Phase 38 simplify agents — had to relaunch after reset.",
+      "Cherry-picking the upload CSS fix to fix/upload-progress-flash got confused by stash state and empty cherry-picks from the background executor's branch switching.",
+      "The worktree executor for Phase 39 started fresh instead of continuing from Wave 1 (which was already committed by the earlier executor), requiring a targeted Wave 2-only continuation prompt.",
+      "Simplify agents were initially launched against the wrong branch (docs/phase-39-context instead of docs/phase-38-context) after a failed stash+checkout sequence."
+    ],
+    "open_items": [
+      "Server-side RECYCLE_BIN_RETENTION_DAYS env var should be formally deprecated with a migration guide now that client-side vault settings own retention.",
+      "3-second setTimeout in VaultTab lacks cleanup on unmount — skipped as negligible but is technically a leak.",
+      "uint8ToBase64 is duplicated across sdk-core/src/file/index.ts and other files — pre-existing, not addressed in this session.",
+      "purgeExpired() in CipherBoxClient has no dedicated unit tests — delegated to existing client-extended.test.ts coverage but not actually verified.",
+      "PR #423 (Phase 39) had no review threads at session end — review comments may appear later and need resolution.",
+      "Phase 39 executor's worktree branch (worktree-agent-acddc7e3) was cleaned up but confirmed the earlier non-worktree executor got further — the worktree approach needs the prompt to explicitly specify which wave to continue from."
+    ]
+  }
+}

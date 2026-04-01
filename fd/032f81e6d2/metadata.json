@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fd032f81e6d2",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-38-plan",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/hooks/useBin.ts",
+    "packages/sdk/src/bin/index.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fd/032f81e6d2/0/metadata.json",
+      "transcript": "/fd/032f81e6d2/0/full.jsonl",
+      "content_hash": "/fd/032f81e6d2/0/content_hash.txt",
+      "prompt": "/fd/032f81e6d2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 7414,
+    "cache_read_tokens": 953029,
+    "output_tokens": 1194,
+    "api_call_count": 8
+  }
+}

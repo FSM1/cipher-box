@@ -1,0 +1,1 @@
+yeah, I think that the preservation approach can be added to `deferred items`, as the tag override will still work, but the developer would need to reapply the manual tag changes after the last commit.

@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "87f9989c7972",
+  "strategy": "manual-commit",
+  "branch": "feat/package-and-app-versioning-and-release-cycles",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/87/f9989c7972/0/metadata.json",
+      "transcript": "/87/f9989c7972/0/full.jsonl",
+      "content_hash": "/87/f9989c7972/0/content_hash.txt",
+      "prompt": "/87/f9989c7972/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 99,
+    "cache_creation_tokens": 74391,
+    "cache_read_tokens": 1043099,
+    "output_tokens": 9021,
+    "api_call_count": 20
+  }
+}

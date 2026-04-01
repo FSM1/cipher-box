@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ed8cad6e6741",
+  "strategy": "manual-commit",
+  "branch": "feat/desktop-vault-settings-integration",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".husky/commit-msg",
+    "Cargo.lock",
+    "apps/desktop/src-tauri/src/commands/auth.rs",
+    "crates/core/src/vault_settings.rs",
+    "crates/fuse/src/constants.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ed/8cad6e6741/0/metadata.json",
+      "transcript": "/ed/8cad6e6741/0/full.jsonl",
+      "content_hash": "/ed/8cad6e6741/0/content_hash.txt",
+      "prompt": "/ed/8cad6e6741/0/prompt.txt"
+    },
+    {
+      "metadata": "/ed/8cad6e6741/1/metadata.json",
+      "transcript": "/ed/8cad6e6741/1/full.jsonl",
+      "content_hash": "/ed/8cad6e6741/1/content_hash.txt",
+      "prompt": "/ed/8cad6e6741/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 117,
+    "cache_creation_tokens": 159793,
+    "cache_read_tokens": 7126221,
+    "output_tokens": 30947,
+    "api_call_count": 98
+  }
+}

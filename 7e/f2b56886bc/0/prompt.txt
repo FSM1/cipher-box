@@ -1,0 +1,25 @@
+ok the unnecessary release labels are gone and no new comments from coderabbit and copilot. auto merge is on.
+
+---
+
+ok its merged.
+
+---
+
+already done
+
+---
+
+Ok, now only 2 changes being picked up and these are both pretty recent, so I can excuse it. I did want to ask why we went with semver based versioning for the web and desktop apps. I thought the original discussion implied we would use monotonic or simple major.minor versioning for these since semver doesn't make much sense for these sorts of apps.
+
+---
+
+I guess semver is fine for now.
+
+---
+
+ok, now to test this whole system out. lets go with a /gsd:quick expose the api version on the api /health endpoint
+
+---
+
+please use `feat(api):` in commit message to accurately attribute the commit to the right component

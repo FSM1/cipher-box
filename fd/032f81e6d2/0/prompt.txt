@@ -1,0 +1,1 @@
+can we also handle a /gsd:quick task - the new inline upload progress bar has a very weird flashing effect when uploading. you can get a sample of this by reviewing @~/Desktop/Screen Recording 2026-03-31 at 02.06.51.mov showing the flashing progress clearly.

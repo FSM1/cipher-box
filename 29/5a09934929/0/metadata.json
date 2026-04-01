@@ -1,0 +1,106 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "295a09934929",
+  "session_id": "3ee61331-fe2b-4102-bdef-078c3a278915",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T23:50:44.931073Z",
+  "branch": "docs/update-project-documentation",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/codebase/CONCERNS.md",
+    ".planning/codebase/TESTING.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "33e341bdde00",
+  "token_usage": {
+    "input_tokens": 3905,
+    "cache_creation_tokens": 243839,
+    "cache_read_tokens": 34372914,
+    "output_tokens": 64956,
+    "api_call_count": 217
+  },
+  "session_metrics": {
+    "turn_count": 27
+  },
+  "summary": {
+    "intent": "Resolve PR review comments on a batch upload pipeline PR, then perform comprehensive documentation maintenance: prune stale deferred items, update feature matrix, refresh README, create a filesystem specification, audit all docs/ files for staleness, and refresh the codebase map.",
+    "outcome": "All 4 PR review threads resolved (2 fixed, 1 not applicable, 1 doc fix), PR #419 created with 15 commits updating DEFERRED.md, FEATURES.md, README.md, ROADMAP.md, CLAUDE.md, ARCHITECTURE.md, DATABASE_EVOLUTION_PROTOCOL.md, FILESYSTEM_SPECIFICATION.md (new), and codebase maps (TESTING.md, CONCERNS.md) refreshed via parallel mapper agents.",
+    "learnings": {
+      "repo": [
+        "Grafana Faro (apps/web/src/lib/faro.ts) is the live error tracking and remote log shipping solution — replaces any prior Sentry/Datadog/Loki plans.",
+        "FUSE write ops intentionally have no unit tests; coverage is provided by the Desktop E2E suite because unit testing would require mocking too much of the host OS.",
+        "15 republish schedule entries are failing with 'ECIES decryption failed for all available epochs' — these were enrolled before the Phala CVM migration (Phase 35) and are wrapped with an old TEE public key. The 477 newer entries are correctly enrolled.",
+        "The duplicate file upload path (replace/copy branch) still encrypts on the main thread via encryptFile() — Phase 37's Web Worker encryption only covers new file uploads.",
+        "folder.service.ts (1,059 lines, 9 importers) and bin.service.ts (971 lines) are still active despite SDK equivalents existing; migration is deferred to Phase 38.",
+        "The crypto package has @cipherbox/core as a devDependency only used in vault-ipns.test.ts to compare keypair derivation — a leftover from Phase 19.1 restructuring that should be removed.",
+        "Database has 14 tables total (not 12 as previously documented): includes share_invites and pin_migrations added in phases 28-37.",
+        "AES-256-CTR is used for large files (video AND audio) in both FUSE reads and client-side upload encryption; AES-256-GCM is for small files only.",
+        "Bin retention period: RECYCLE_BIN_RETENTION_DAYS is an operator env var, not user-configurable — user-facing setting is planned for Phase 39.",
+        "Phala CVM TEE republish cycle runs every 6 hours (not 3h as previously documented in CLAUDE.md).",
+        "Old preliminary R\u0026D docs moved from 00-Preliminary-R\u0026D/ to .planning/milestones/m0/ as part of the main merge."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/encrypt-worker.service.ts",
+          "line": 92,
+          "end_line": 92,
+          "finding": "postMessage/getWorker can throw, causing pending entries to leak — fixed with try/catch that cleans up the pending map on error."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 835,
+          "end_line": 835,
+          "finding": "Doc comment on uploadFiles() overstated memory bounding — fixed to clarify actual behavior."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 140,
+          "end_line": 140,
+          "finding": "Batch reads all files to memory before SDK call — architectural limitation requiring SDK contract change (File objects vs Uint8Array), deferred as lazy file reading item."
+        },
+        {
+          "path": "apps/api/src/tee/tee.service.ts",
+          "finding": "Individual result failures (success: false) from TEE are not logged at the TeeService level — error detail only visible via direct DB query on the republish schedule table."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/vault-ipns.test.ts",
+          "finding": "Only consumer of @cipherbox/core devDependency in the crypto package — test could use hardcoded test vectors instead, eliminating the cross-package test dependency."
+        }
+      ],
+      "workflow": [
+        "When asked to prune a list, do every item systematically — not just the ones the user explicitly calls out. Shallow passes that miss items require multiple correction rounds.",
+        "GraphQL reviewThreads query with isResolved filter is the reliable way to fetch unresolved PR threads; REST comment replies require --field (integer) not -f for in_reply_to.",
+        "Operator env vars and user-facing settings are distinct concepts — don't conflate them when triaging deferred items.",
+        "The gsd-codebase-mapper agents write documents directly and return only confirmations with line counts — orchestrator should not request document contents back.",
+        "Parallel mapper agents (run_in_background=true) complete independently; handle task notifications as they arrive rather than waiting for all before proceeding."
+      ]
+    },
+    "friction": [
+      "Multiple rounds needed to properly clean DEFERRED.md — initial pass only removed items the user explicitly flagged rather than systematically verifying every item.",
+      "Edit tool reformatted table whitespace, making exact-string matching for subsequent edits fail — required reading the raw file content via bash to get exact formatting before editing.",
+      "DEFERRED.md required 6+ separate editing sessions due to incremental user corrections rather than one thorough audit upfront.",
+      "Commit subject line rejected by pre-commit hook when using parentheses — had to retry with dashes (e.g. 'fix - fuse' instead of 'fix(fuse)').",
+      "PR already existed when trying to create it — had to update description instead of creating new."
+    ],
+    "open_items": [
+      "Phase 38: Retire folder.service.ts and bin.service.ts (migrate 9 importers to SDK), remove @cipherbox/core devDependency from crypto package.",
+      "Phase 39: User-configurable vault parameters — bin retention period, soft vs hard delete toggle, versioning defaults (max versions, cooldown period).",
+      "15 stale republish entries with old TEE public key — will keep failing until those clients reconnect and re-enroll, DB-cached CID fallback covers resolution in the meantime.",
+      "Duplicate file upload path (replace/copy branch) still encrypts on main thread — needs migration to Web Worker path started in Phase 37.",
+      "useDropUpload.ts has no unit tests despite being significantly rewritten in Phase 37 as the primary upload entry point.",
+      "SDK and SDK-core packages have 11+ console.warn calls that bypass Faro transport — structured logging from Phase 28 didn't cover zero-dependency packages.",
+      "Lazy file reading within concurrency pool (useDropUpload.ts:140) — requires SDK contract change to accept File objects or read callbacks instead of Uint8Array.",
+      "Phala Cloud CVM is single TEE provider with no fallback — Docker simulator removed in Phase 35 along with any alternative provider path.",
+      "Faro telemetry scrub relies on key-name allow-list — new attack surface introduced in Phase 30 that warrants ongoing review as new fields are added."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T23:49:58.576001Z",
+    "agent_lines": 0,
+    "human_added": 102,
+    "human_modified": 86,
+    "human_removed": 0,
+    "total_committed": 102,
+    "agent_percentage": 0
+  }
+}

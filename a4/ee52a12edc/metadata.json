@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a4ee52a12edc",
+  "strategy": "manual-commit",
+  "branch": "feat/desktop-vault-settings-integration",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/40-desktop-vault-settings-integration/40-VERIFICATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a4/ee52a12edc/0/metadata.json",
+      "transcript": "/a4/ee52a12edc/0/full.jsonl",
+      "content_hash": "/a4/ee52a12edc/0/content_hash.txt",
+      "prompt": "/a4/ee52a12edc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 43,
+    "cache_creation_tokens": 40740,
+    "cache_read_tokens": 2818223,
+    "output_tokens": 8204,
+    "api_call_count": 36
+  }
+}

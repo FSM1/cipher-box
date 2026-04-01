@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "98188cdeaf41",
+  "session_id": "78235caf-48bb-4e41-be17-7d7c7f939639",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-31T15:31:01.180697Z",
+  "branch": "fix/desktop-otp-api-url",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src/main.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "aa21bf24e7e3",
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 35564,
+    "cache_read_tokens": 919053,
+    "output_tokens": 6355,
+    "api_call_count": 24
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Debug why email OTP login fails with 'Verification failed' in the macOS desktop app (GitHub release build) when the same flow works fine in the web app.",
+    "outcome": "Root cause identified as a split-brain API URL configuration between the JS (compile-time Vite env var) and Rust (runtime env var falling back to localhost) sides of the Tauri app. Two fixes applied: bake the API URL into the Rust binary at compile time using option_env!, and surface actual Tauri invoke error strings instead of swallowing them.",
+    "learnings": {
+      "repo": [
+        "The desktop app is a Tauri app (Rust + JS). JS reads VITE_API_URL at Vite compile time; Rust reads it via std::env::var() at runtime — these are different moments in the build/run lifecycle.",
+        "GitHub Actions CI sets VITE_API_URL for the Vite build but that env var is also available to cargo build within the same tauri-action step, making option_env!() viable for baking the URL into the Rust binary.",
+        "All four build targets (web, macOS, Windows, Linux) in deploy-staging.yml already have VITE_API_URL set.",
+        "Tauri invoke rejections are plain strings, not Error objects — instanceof Error checks silently swallow them."
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src-tauri/src/main.rs",
+          "line": 82,
+          "end_line": 84,
+          "finding": "Rust reads API URL via std::env::var() at runtime with a hardcoded localhost:3000 fallback. Fixed by prepending option_env!(\"VITE_API_URL\") as a compile-time fallback so release builds bake in the correct staging URL."
+        },
+        {
+          "path": "apps/desktop/src/main.ts",
+          "line": 281,
+          "end_line": 281,
+          "finding": "OTP verify catch block used instanceof Error check before showing error message. Tauri invoke errors are plain strings, so this always evaluated false and showed the generic 'Verification failed' string instead of the real error."
+        },
+        {
+          "path": "apps/desktop/src/main.ts",
+          "line": 449,
+          "end_line": 449,
+          "finding": "Identical instanceof Error masking pattern in the MFA recovery flow — fixed alongside the OTP flow."
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 231,
+          "end_line": 231,
+          "finding": "VITE_API_URL is set as an env var during tauri-action, which means it is present when cargo build runs — option_env!() in Rust will capture it at compile time."
+        }
+      ],
+      "workflow": [
+        "The GSD debugger subagent pattern isolates expensive investigation (file reads, hypothesis formation) into a fresh 200k context, keeping the orchestrator context lean.",
+        "option_env!() in Rust is the correct macro for optionally baking environment variables into a binary at compile time, with a graceful fallback when the var is absent (e.g. local dev)."
+      ]
+    },
+    "friction": [
+      "The real Tauri invoke error was completely invisible to the user because of the instanceof Error guard — the bug masked its own diagnostic information, making the symptom ('Verification failed') uninformative.",
+      "The split between compile-time (Vite) and runtime (Rust std::env) env var consumption is non-obvious and not documented anywhere in the repo, requiring the debugger to trace the full auth flow to discover it."
+    ],
+    "open_items": [
+      "Fix not verified against an actual staging release build — a new CI build must be triggered and the OTP flow manually tested to confirm the fix.",
+      "User had not yet tested a locally built instance of the app, which was the planned next step before this debugging session.",
+      "The release-please workflow was checked for VITE_API_URL but the transcript does not confirm whether production release builds also set it correctly."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-31T15:30:35.387821Z",
+    "agent_lines": 11,
+    "human_added": 3,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 15,
+    "agent_percentage": 73.33333333333333
+  }
+}

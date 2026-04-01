@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d1d44edfbdda",
+  "strategy": "manual-commit",
+  "branch": "feat/package-and-app-versioning-and-release-cycles",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/scripts/post-merge-release.js",
+    ".github/scripts/pr-release-preview.js",
+    ".github/workflows/release-please.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d1/d44edfbdda/0/metadata.json",
+      "transcript": "/d1/d44edfbdda/0/full.jsonl",
+      "content_hash": "/d1/d44edfbdda/0/content_hash.txt",
+      "prompt": "/d1/d44edfbdda/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 9846,
+    "cache_read_tokens": 543929,
+    "output_tokens": 4176,
+    "api_call_count": 8
+  }
+}

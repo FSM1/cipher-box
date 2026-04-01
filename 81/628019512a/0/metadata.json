@@ -1,0 +1,93 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "81628019512a",
+  "session_id": "591737e6-fa62-4db1-b5f9-b2c00225301a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-31T02:49:34.113871Z",
+  "branch": "docs/phase-38-context",
+  "checkpoints_count": 6,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "17e21b452a69",
+  "token_usage": {
+    "input_tokens": 262,
+    "cache_creation_tokens": 508197,
+    "cache_read_tokens": 31555371,
+    "output_tokens": 61618,
+    "api_call_count": 219
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Use the GSD manager to discuss, plan, and execute the final two phases (38: retire deprecated web services, 39: user-configurable vault parameters) of a milestone, while also fixing an upload progress bar flashing bug.",
+    "outcome": "Both phases fully discussed, planned, executed, and simplified. Phase 38 PR (#422) opened with review comments resolved. Upload fix PR (#420) created and merged. Phase 39 pushed and simplified, ready for PR.",
+    "learnings": {
+      "repo": [
+        "folder.service.ts (1,059 LOC) and bin.service.ts (971 LOC) were deprecated service files; SDK equivalents already existed in packages/sdk and packages/sdk-core",
+        "Established SDK migration pattern: hooks import SDK methods directly and pass store-extracted state as explicit params — see useSharedWriteOps.ts as canonical example",
+        "BYO-IPFS config pattern (ByoIpfsConfig in packages/core/src/vault/types.ts) is the proven pattern for storing user settings in encrypted vault metadata on IPFS",
+        "@cipherbox/crypto had a circular devDependency on @cipherbox/core only for vault-ipns.test.ts; fixed by replacing imports with hardcoded test vectors",
+        "CipherBoxClient.getContext() exists at client.ts:312 and is a trivial field accessor (returns this.ctx) — not worth caching",
+        "Settings page has 3 tabs (Linked Methods, Security, Storage); Phase 39 added a 4th Vault tab",
+        "Bin retention was previously a server-side env var (RECYCLE_BIN_RETENTION_DAYS); Phase 39 moves it to user-controlled vault metadata",
+        "addFileToFolder, addFilesToFolder, replaceFileInFolder had no SDK equivalent before Phase 38 — extracted to packages/sdk-core/src/folder/index.ts",
+        "purgeExpired had no public SDK method before Phase 38 — added to CipherBoxClient and packages/sdk/src/bin/index.ts",
+        "versionCids is Array\u003c{ cid: string; size: number }\u003e not string[] — must extract .cid when passing to CID-based APIs"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/styles/upload.css",
+          "finding": "Encrypting state forced width: 100% !important on progress fill bar; first real progress event snapped it to 0%, causing visible flash. Fixed by shimmer on track + opacity: 0 on fill during encryption."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "finding": "FolderNode construction was duplicated across two branches in the same function — extracted shared buildNode() helper"
+        },
+        {
+          "path": "apps/web/src/stores/vault-settings.store.ts",
+          "finding": "Had 5 unused state fields (isLoading, isSaving, error) and 4 unused actions; VaultTab manages its own local state. All removed."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "finding": "Identical 12-line delete-with-behavior block was copy-pasted for handleDelete and handleDeleteItems; extracted to deleteWithBehavior() helper"
+        },
+        {
+          "path": "apps/web/src/services/file-metadata.service.ts",
+          "finding": "getMaxVersionsPerFile() was called twice per prune site (once for each .slice()); cached into local variable"
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "purgeExpired was missing IPNS unenrollment for purged entries and was not validating retentionDays input"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/tree.ts",
+          "finding": "getDepth, isDescendantOf, calculateSubtreeDepth are pure sync utility functions suitable for direct unit testing"
+        }
+      ],
+      "workflow": [
+        "Background executor agents must run in isolated git worktrees to avoid fighting over the working tree with the main thread",
+        "GSD plan agents may commit on differently-named branches than expected (e.g. docs/phase-38-plan vs docs/phase-38-context), requiring manual cherry-pick or merge to consolidate",
+        "Background agents hit usage limits mid-session; work can be resumed by re-launching with context about what wave/plan was last completed",
+        "Phase 39 executor committed to the main worktree before worktree isolation was enforced, leaking uncommitted changes into the Phase 38 branch working tree",
+        "Cherry-pick of the upload CSS fix initially appeared to land on the wrong branch due to a background agent switching branches; the stash mechanism caused confusion about what was committed where",
+        "Simplify agents should receive the full git diff from the correct branch before being launched — launching from the wrong branch produces irrelevant findings"
+      ]
+    },
+    "friction": [
+      "Background agents committed on different branch names than expected (docs/phase-38-plan vs docs/phase-38-context), requiring a merge to consolidate artifacts",
+      "Phase 39 executor ran in the main worktree initially, polluting the Phase 38 branch working tree with Phase 39 changes — had to restore files before typecheck",
+      "Simplify agents were initially launched while on the wrong branch (docs/phase-39-context instead of docs/phase-38-context)",
+      "Cherry-pick of upload CSS fix was confusing due to stash state and background agent branch switching",
+      "Usage limits hit mid-session, causing both the Phase 39 executor and a simplify agent to terminate early and require relaunch",
+      "GSD dashboard init tool showed 'no_directory' after branch divergence because planning artifacts lived on different branches"
+    ],
+    "open_items": [
+      "Phase 39 PR not yet created — branch pushed and simplified, ready for PR",
+      "Tests for new SDK folder helper functions (addFileToFolder, addFilesToFolder, replaceFileInFolder) and purgeExpired were noted as valid but the async versions remain untested",
+      "Server-side RECYCLE_BIN_RETENTION_DAYS env var should be deprecated and removed from infrastructure config now that it's user-controlled",
+      "uint8ToBase64 duplication exists across multiple packages but was not addressed (pre-existing, not introduced by Phase 38)",
+      "3-second setTimeout in VaultTab lacks unmount cleanup — noted as negligible but technically a minor leak"
+    ]
+  }
+}

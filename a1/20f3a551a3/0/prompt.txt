@@ -1,0 +1,11 @@
+ok pr got merged and I finally managed to tag the release and now preparing to test the `tag staging release` workflow. this workflow previously used to validate that a release tag had already been created for the commit, whereas now it seems to just take the latest commit to main in the `resolve main sha` action
+
+---
+
+I really did appreciate the previous workflow of choosing a release tag to promote to staging, though given that the ful e2e test run is executed against the code before creating the staging deployment does allow for some certainty regarding code quality being released, the staging pipeline is not as stringent as the CI pipeline. 
+
+What are your thoughts on the matter? is it worth the churn?
+
+---
+
+ok yeah that makes a lot of sense - lets implement the lightweight `check for release tag` step in `tag staging release` as a `chore(ci)`

@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "478f466a481d",
+  "session_id": "446ec0ad-5bd5-479d-b0ad-ea5831cc0cd6",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-01T04:28:25.807783Z",
+  "branch": "fix/openapi-version-check",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "75c0684d6f9a",
+  "token_usage": {
+    "input_tokens": 381,
+    "cache_creation_tokens": 236118,
+    "cache_read_tokens": 38820761,
+    "output_tokens": 59324,
+    "api_call_count": 296
+  },
+  "session_metrics": {
+    "turn_count": 38
+  },
+  "summary": {
+    "intent": "Bootstrap the newly-configured release-please system (Phase 41), align api-client versions with the API, expose the API version on the /health endpoint, and fix various CI/CD issues that emerged during the first real use of the release pipeline.",
+    "outcome": "Bootstrap tags created to fix excessive PR #427 changelog, api-client packages aligned to v0.35.0, health endpoint now returns version field, post-merge workflow replaced with pre-merge PR branch injection, merge commit filtering added to release preview, and openapi.json extra-files misconfiguration fixed. PR #430 release gate still blocked at session end due to openapi.json version comparison issue.",
+    "learnings": {
+      "repo": [
+        "Release-please treats the entire commit history as unreleased when no prior tags exist — bootstrap tags must be created at the pre-phase commit SHA to establish a starting point",
+        "The health endpoint is manually defined in generate-openapi.ts (not via HealthController) because TypeORM dependency prevents controller instantiation in the script context",
+        "openapi.json is a generated file under packages/api-client/ — it should not be managed by release-please extra-files because release-please reformats the entire JSON (~700 line diff) instead of doing a surgical version bump",
+        "release-please extra-files jsonpath config resolves paths relative to the package directory — packages/api-client/openapi.json listed under apps/api resolved to the nonexistent apps/api/packages/api-client/openapi.json",
+        "The PR release preview script processed merge commits as conventional commits, causing false release labels across unrelated packages whenever a branch was merged before the PR",
+        "commit message type matters for release-please bump logic: fix: triggers patch bump and adds release labels; chore(ci): is the correct type for CI-only changes that should not trigger version bumps",
+        "npm_package_version env var is unreliable for reading package version — must read package.json explicitly via fs.readFileSync with a fallback",
+        "Branch protection rules (legacy UI) lack per-actor bypass; the newer Rulesets UI supports bypass actors but has had stability issues on this repo"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/main.ts",
+          "line": 56,
+          "end_line": 60,
+          "finding": "Version reading moved to shared src/version.ts module; originally used npm_package_version which is unreliable, now reads package.json via readFileSync with __dirname resolution"
+        },
+        {
+          "path": "apps/api/src/health/health.controller.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Health endpoint now returns version field sourced from shared API_VERSION constant in src/version.ts"
+        },
+        {
+          "path": "apps/api/scripts/generate-openapi.ts",
+          "line": 237,
+          "end_line": 264,
+          "finding": "Health endpoint is manually spec-defined here (not auto-generated from controller) due to TypeORM dependency preventing controller instantiation; version field and error/details fields added to the manual schema"
+        },
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 249,
+          "end_line": 255,
+          "finding": "Merge commits (2+ parents) must be filtered before conventional commit parsing to prevent false release labels from version bump merge commits"
+        },
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 503,
+          "end_line": 538,
+          "finding": "Manual override labels (existing higher-or-equal release label) must feed back into packageBumps map so release-as derivation uses the reconciled bump level, not the computed lower level"
+        },
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 620,
+          "end_line": 650,
+          "finding": "release-as injection must: (1) snapshot base branch config to avoid clearing entries from prior merged PRs, (2) never downgrade an existing release-as to a lower bump, (3) apply bump-minor-pre-major logic for 0.x packages on breaking changes"
+        },
+        {
+          "path": ".github/workflows/pr-release-preview.yml",
+          "line": 1,
+          "end_line": 60,
+          "finding": "Concurrency group per PR number prevents overlapping runs; fork guard on commit step prevents forks from pushing back to origin"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "finding": "OpenAPI spec comparison must exclude info.version field — the version is dynamic from package.json and release-please does not reliably update it in the generated spec"
+        }
+      ],
+      "workflow": [
+        "When release-please has no prior tags, bootstrap by creating tags at the last known stable commit SHA and pushing them — the next workflow run will regenerate the release PR with only commits since those tags",
+        "The post-merge workflow pattern (push release-as to main after merge) breaks with branch protection; pre-merge injection (compute and commit release-as targets onto the feature branch before it merges) is the correct architecture",
+        "Squashing a PR with the wrong commit prefix (fix: instead of chore:) propagates through release-please and adds unintended version bump labels — always verify commit message type before force-pushing",
+        "When resolving stale git index.lock, remove the file manually: rm .git/index.lock, then retry the git operation",
+        "Generated files should be excluded from release-please extra-files management; version comparison in CI should normalize away version fields that are dynamically derived at generation time"
+      ]
+    },
+    "friction": [
+      "Branch protection blocked the post-merge release workflow from pushing release-as config to main — required a full architecture change from post-merge push to pre-merge PR branch injection",
+      "release-please extra-files jsonpath reformatted the entire openapi.json (~700 lines) instead of doing a surgical version field update, causing the CI spec comparison to fail",
+      "Stale .git/index.lock from a background process blocked branch switching",
+      "fix: commit message on a CI-only change accidentally triggered version bump labels across multiple packages — required squash/force-push to correct",
+      "Extra-files path in release-please-config.json was resolved relative to the package directory (apps/api/), making packages/api-client/openapi.json resolve to a nonexistent path — took three PR iterations to diagnose and fix",
+      "Release-please PR #430 required multiple rerun cycles because fixes landed in separate PRs that each triggered a re-evaluation",
+      "npm_package_version was unreliable in the OpenAPI generation context, requiring a switch to explicit fs.readFileSync — flagged by automated reviewers"
+    ],
+    "open_items": [
+      "PR #430 (release PR for v0.36.0) still has failing Verify API Spec \u0026 Client check at session end — fix is in-flight via openapi.json version exclusion from CI comparison",
+      "Versioning strategy for web and desktop apps: discussion log says monotonic (major.minor) but semver was implemented; user deferred with 'semver is fine for now'",
+      "openapi.json should have release-please extra-files entry removed (done) and CI check should exclude info.version from semantic comparison (in-flight at session end)",
+      "Bootstrap tags were created but release PR #430 still needs to be merged to complete the first real release cycle end-to-end verification"
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "26107ce29db7",
+  "strategy": "manual-commit",
+  "branch": "fix/ci-api-spec-version-diff",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/26/107ce29db7/0/metadata.json",
+      "transcript": "/26/107ce29db7/0/full.jsonl",
+      "content_hash": "/26/107ce29db7/0/content_hash.txt",
+      "prompt": "/26/107ce29db7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 51,
+    "cache_creation_tokens": 56061,
+    "cache_read_tokens": 2343641,
+    "output_tokens": 10458,
+    "api_call_count": 43
+  }
+}
