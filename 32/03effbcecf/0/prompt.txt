@@ -27,3 +27,7 @@ please use `feat(api):` in commit message to accurately attribute the commit to 
 ---
 
 ok now commit the api client (not sure if this should be a chore/feat commit though - a new property is being added.
+
+---
+
+why is the health endpoint not a part of the openapi spec though?
