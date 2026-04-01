@@ -648,7 +648,9 @@ async function postOrUpdateComment(octokit, owner, repo, prNumber, body) {
     { owner, repo, issue_number: prNumber }
   );
 
-  const existing = comments.find((c) => c.body && c.body.includes(COMMENT_MARKER));
+  const existing = comments.find(
+    (c) => c.body && c.body.includes(COMMENT_MARKER) && c.user?.login === 'github-actions[bot]'
+  );
 
   if (existing) {
     await octokit.rest.issues.updateComment({
