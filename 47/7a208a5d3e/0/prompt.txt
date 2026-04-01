@@ -1,0 +1,15 @@
+<task-notification>
+<task-id>bql0q35vc</task-id>
+<tool-use-id>toolu_01UBMP78w7JfiuwRqBBJ7Uv9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/9e367a0f-780f-408b-8cb7-2c378e3aadfb/tasks/bql0q35vc.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait 5 min then check reviews" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/resolve-pr-reviews
+
+---
+
+sorry to interrupt there, you getting 529s again?
