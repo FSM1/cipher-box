@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "1ea7be33c29f",
+  "strategy": "manual-commit",
+  "branch": "fix/openapi-extra-files-path",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "release-please-config.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1e/a7be33c29f/0/metadata.json",
+      "transcript": "/1e/a7be33c29f/0/full.jsonl",
+      "content_hash": "/1e/a7be33c29f/0/content_hash.txt",
+      "prompt": "/1e/a7be33c29f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 320,
+    "cache_creation_tokens": 216741,
+    "cache_read_tokens": 28497951,
+    "output_tokens": 51250,
+    "api_call_count": 249
+  }
+}
