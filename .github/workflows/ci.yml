@@ -153,6 +153,9 @@ jobs:
             const {execSync} = require('child_process');
             const committed = JSON.parse(execSync('git show HEAD:packages/api-client/openapi.json', {encoding:'utf8'}));
             const generated = JSON.parse(fs.readFileSync('packages/api-client/openapi.json', 'utf8'));
+            // Exclude info.version — it's dynamic from package.json and differs on release PRs
+            if (committed.info) delete committed.info.version;
+            if (generated.info) delete generated.info.version;
             if (JSON.stringify(committed) !== JSON.stringify(generated)) {
               console.error('openapi.json schema has changed');
               process.exit(1);
