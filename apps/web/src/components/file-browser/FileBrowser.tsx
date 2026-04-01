@@ -10,6 +10,7 @@ import { useDropUpload } from '../../hooks/useDropUpload';
 import { isFilePointer, isPreviewableFile, isTextFile } from '../../utils/fileTypes';
 import { useVaultStore } from '../../stores/vault.store';
 import { useSyncStore } from '../../stores/sync.store';
+import { useUploadStore } from '../../stores/upload.store';
 import { FileList } from './FileList';
 import { EmptyState } from './EmptyState';
 import { ContextMenu } from './ContextMenu';
@@ -93,6 +94,15 @@ export function FileBrowser() {
   const children = currentFolder?.children ?? [];
   const hasChildren = children.length > 0;
 
+  // Show FileList (with progress rows) instead of EmptyState when uploads are
+  // actively targeting this folder, even if the folder has no committed children yet.
+  const hasUploadsForFolder = useUploadStore((s) => {
+    for (const f of s.files.values()) {
+      if (f.targetFolderId === currentFolderId) return true;
+    }
+    return false;
+  });
+
   const deleteMessage =
     actions.confirmDialog.item?.type === 'folder'
       ? `Are you sure you want to delete "${actions.confirmDialog.item?.name}"? This will also delete all files and subfolders inside. This cannot be undone.`
@@ -168,7 +178,7 @@ export function FileBrowser() {
         </div>
       )}
 
-      {!isLoading && hasChildren && (
+      {!isLoading && (hasChildren || hasUploadsForFolder) && (
         <FileList
           items={children}
           selectedIds={actions.selectedIds}
@@ -187,9 +197,10 @@ export function FileBrowser() {
         />
       )}
 
-      {!isLoading && (initialSyncComplete || currentFolderId !== 'root') && !hasChildren && (
-        <EmptyState folderId={currentFolderId} />
-      )}
+      {!isLoading &&
+        (initialSyncComplete || currentFolderId !== 'root') &&
+        !hasChildren &&
+        !hasUploadsForFolder && <EmptyState folderId={currentFolderId} />}
 
       {actions.multiSelectActive && actions.selectedIds.size > 1 && (
         <SelectionActionBar
