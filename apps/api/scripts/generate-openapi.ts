@@ -277,7 +277,7 @@ async function generateOpenApiSpec() {
                       },
                     },
                   },
-                  version: { type: 'string', example: openApiVersion },
+                  version: { type: 'string', example: '1.0.0' },
                 },
               },
             },
