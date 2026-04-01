@@ -72,7 +72,7 @@
       "component": "@cipherbox/web",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.37.0"
+      "release-as": "0.38.0"
     },
     "apps/desktop": {
       "release-type": "node",
