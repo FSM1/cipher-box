@@ -1,0 +1,32 @@
+name: PR Release Preview
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  release-preview:
+    name: Release Preview
+    runs-on: ubuntu-latest
+    # Skip release-please's own PRs — they don't need release labels
+    if: "!startsWith(github.head_ref, 'release-please--')"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install script dependencies
+        run: npm install --no-save --no-package-lock --ignore-scripts @actions/core@1.11.1 @actions/github@6.0.0
+
+      - name: Analyze PR commits and apply release labels
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node .github/scripts/pr-release-preview.js

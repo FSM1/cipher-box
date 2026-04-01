@@ -12,6 +12,8 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
       - uses: actions/create-github-app-token@v3
         id: app-token
@@ -20,7 +22,57 @@ jobs:
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
 
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           token: ${{ steps.app-token.outputs.token }}
+
+      - name: Release summary
+        if: steps.release.outputs.releases_created == 'true'
+        env:
+          RELEASES_OUTPUT: ${{ toJSON(steps.release.outputs) }}
+        run: |
+          echo "## Releases Created" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          echo "$RELEASES_OUTPUT" | jq '{releases_created, paths_released}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure batched releases are not marked as latest
+        if: steps.release.outputs.releases_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASES_OUTPUT: ${{ toJSON(steps.release.outputs) }}
+        run: |
+          # Un-mark ALL manifest releases as latest so /releases/latest/
+          # resolves to the desktop release (marked latest by desktop-release.yml).
+          # In manifest mode, release-please outputs tag_name (root) and
+          # {path}--tag_name (per-package), so we match all keys ending with tag_name.
+          TAGS=$(echo "$RELEASES_OUTPUT" | jq -r '
+            to_entries
+            | map(select(.key | test("tag_name$")))
+            | map(.value)
+            | unique[]
+          ')
+
+          if [ -z "$TAGS" ]; then
+            echo "No tag outputs found — nothing to clear."
+            exit 0
+          fi
+
+          for TAG in $TAGS; do
+            [ -z "$TAG" ] && continue
+            echo "Clearing latest flag for release: $TAG"
+            SUCCESS=false
+            for attempt in 1 2 3; do
+              if gh release edit "$TAG" --repo "${{ github.repository }}" --latest=false; then
+                SUCCESS=true
+                break
+              fi
+              sleep $((attempt * 5))
+            done
+            if [ "$SUCCESS" != "true" ]; then
+              echo "::error::Failed to clear latest flag for $TAG after 3 attempts"
+              exit 1
+            fi
+          done

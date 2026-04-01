@@ -3,85 +3,93 @@ name: Tag Staging Release
 on:
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: 'Release tag to deploy (e.g. cipher-box-v0.26.4)'
-        required: true
+      description:
+        description: 'Optional description for this staging release'
+        required: false
         type: string
 
+concurrency:
+  group: tag-staging
+  cancel-in-progress: false
+
 jobs:
-  validate-tag:
-    name: Validate Release Tag
+  resolve-main:
+    name: Resolve main SHA
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.main.outputs.sha }}
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: main
           fetch-depth: 0
-
-      - name: Validate release tag exists
-        env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          if ! git rev-parse "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-            echo "::error::Tag '${RELEASE_TAG}' does not exist"
-            exit 1
-          fi
-          echo "Tag ${RELEASE_TAG} validated"
+      - id: main
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   web-e2e:
+    needs: resolve-main
     name: Web E2E
-    needs: validate-tag
     uses: ./.github/workflows/web-e2e.yml
     with:
-      ref: ${{ inputs.release_tag }}
+      ref: ${{ needs.resolve-main.outputs.sha }}
     secrets: inherit
 
   desktop-e2e:
+    needs: resolve-main
     name: Desktop E2E
-    needs: validate-tag
     uses: ./.github/workflows/desktop-e2e.yml
     with:
-      ref: ${{ inputs.release_tag }}
+      ref: ${{ needs.resolve-main.outputs.sha }}
     secrets: inherit
 
   tag-staging:
     name: Create Staging Tag
-    needs: [web-e2e, desktop-e2e]
+    needs: [resolve-main, web-e2e, desktop-e2e]
     runs-on: ubuntu-latest
     environment: staging-approval
     permissions:
       contents: write
     outputs:
-      staging_tag: ${{ steps.rc.outputs.staging_tag }}
+      staging_tag: ${{ steps.tag.outputs.staging_tag }}
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.resolve-main.outputs.sha }}
           fetch-depth: 0
 
-      - name: Calculate next RC number
-        id: rc
+      - name: Calculate staging tag
+        id: tag
         env:
-          TAG: ${{ inputs.release_tag }}
+          MAIN_SHA: ${{ needs.resolve-main.outputs.sha }}
+          DESCRIPTION: ${{ inputs.description }}
         run: |
-          # Find existing staging RCs for this version
-          # New format: staging-v0.26.0-rc-N (avoids collision with release-please v{version} pattern)
-          STAGING_PREFIX="staging-${TAG}-rc"
-          LAST_RC=$(git tag -l "${STAGING_PREFIX}-*" | sed "s/${STAGING_PREFIX}-//" | sort -n | tail -1)
-          if [ -z "$LAST_RC" ]; then
-            NEXT_RC=1
+          DATE=$(date -u +%Y%m%d)
+          STAGING_PREFIX="staging-${DATE}-release"
+
+          # Find existing tags for today and get the highest release number
+          LAST_N=$(git tag -l "${STAGING_PREFIX}-*" | sed "s/${STAGING_PREFIX}-//" | grep -E '^[0-9]+$' | sort -n | tail -1)
+          if [ -z "$LAST_N" ]; then
+            NEXT_N=1
           else
-            NEXT_RC=$((LAST_RC + 1))
+            NEXT_N=$((LAST_N + 1))
           fi
-          STAGING_TAG="${STAGING_PREFIX}-${NEXT_RC}"
+
+          STAGING_TAG="${STAGING_PREFIX}-${NEXT_N}"
           echo "staging_tag=${STAGING_TAG}" >> "$GITHUB_OUTPUT"
+
           echo "## Staging Tag" >> "$GITHUB_STEP_SUMMARY"
-          echo "Creating **${STAGING_TAG}** from ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Creating **${STAGING_TAG}** from main at ${MAIN_SHA:0:7}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$DESCRIPTION" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            printf 'Description: %s\n' "$DESCRIPTION" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Create and push staging tag
         env:
-          STAGING_TAG: ${{ steps.rc.outputs.staging_tag }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          STAGING_TAG: ${{ steps.tag.outputs.staging_tag }}
+          MAIN_SHA: ${{ needs.resolve-main.outputs.sha }}
         run: |
-          git tag "${STAGING_TAG}" "${RELEASE_TAG}"
+          git tag "${STAGING_TAG}" "${MAIN_SHA}"
           git push origin "${STAGING_TAG}"
 
   deploy:

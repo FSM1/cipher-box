@@ -1,0 +1,257 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'cipherbox-desktop-v*'
+
+permissions:
+  contents: write
+
+env:
+  DESKTOP_TAG: ${{ github.ref_name }}
+
+jobs:
+  build-desktop-macos:
+    name: Build Desktop (macOS)
+    runs-on: macos-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Install FUSE-T
+        run: |
+          brew install --cask fuse-t
+          sudo mkdir -p /usr/local/lib/pkgconfig
+          sudo ln -sf "/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc" /usr/local/lib/pkgconfig/fuse.pc
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared packages
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_API_URL: ${{ vars.PRODUCTION_API_URL }}
+          VITE_ENVIRONMENT: production
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
+          GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
+          GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          tagName: ${{ env.DESKTOP_TAG }}
+          releaseName: 'CipherBox Desktop ${{ env.DESKTOP_TAG }}'
+          releaseBody: 'Desktop release ${{ env.DESKTOP_TAG }}.'
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+
+  build-desktop-windows:
+    name: Build Desktop (Windows)
+    runs-on: windows-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Install WinFsp
+        shell: powershell
+        run: |
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
+          $resourceDir = Join-Path "${{ github.workspace }}" "apps\desktop\src-tauri\resources"
+          $out = Join-Path $resourceDir "winfsp-2.1.25156.msi"
+          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
+          New-Item -ItemType Directory -Force -Path $resourceDir
+          Invoke-WebRequest -Uri $url -OutFile $out
+          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
+          $proc = Start-Process msiexec.exe -ArgumentList "/i","`"$out`"","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow -PassThru
+          if ($proc.ExitCode -ne 0) { throw "msiexec failed with exit code $($proc.ExitCode)" }
+          $installDir = "C:\Program Files (x86)\WinFsp"
+          if (!(Test-Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp")) {
+            New-Item -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Force | Out-Null
+          }
+          New-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -Value $installDir -PropertyType String -Force | Out-Null
+          $regVal = Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -ErrorAction Stop
+          if (-not $regVal.InstallDir -or $regVal.InstallDir -ne $installDir) {
+            throw "WinFsp InstallDir registry mismatch: expected '$installDir', got '$($regVal.InstallDir)'"
+          }
+          Write-Host "WinFsp InstallDir registry: $($regVal.InstallDir)"
+          if (!(Test-Path "$installDir\lib")) { throw "WinFsp lib directory not found at $installDir\lib" }
+          if (!(Test-Path "$installDir\inc")) { throw "WinFsp inc directory not found at $installDir\inc" }
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared packages
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_API_URL: ${{ vars.PRODUCTION_API_URL }}
+          VITE_ENVIRONMENT: production
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
+          GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
+          GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          tagName: ${{ env.DESKTOP_TAG }}
+          releaseName: 'CipherBox Desktop ${{ env.DESKTOP_TAG }}'
+          releaseBody: 'Desktop release ${{ env.DESKTOP_TAG }}.'
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          args: -- --no-default-features --features winfsp
+
+  build-desktop-linux:
+    name: Build Desktop (Linux)
+    runs-on: ubuntu-22.04
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            libfuse3-dev \
+            pkg-config \
+            build-essential
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: linux-cargo-
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared packages
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_API_URL: ${{ vars.PRODUCTION_API_URL }}
+          VITE_ENVIRONMENT: production
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
+          GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
+          GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          tagName: ${{ env.DESKTOP_TAG }}
+          releaseName: 'CipherBox Desktop ${{ env.DESKTOP_TAG }}'
+          releaseBody: 'Desktop release ${{ env.DESKTOP_TAG }}.'
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          args: -- --no-default-features --features fuse
+
+  mark-latest:
+    name: Mark Desktop Release as Latest
+    needs: [build-desktop-macos, build-desktop-windows, build-desktop-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark as latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DESKTOP_TAG: ${{ github.ref_name }}
+        run: gh release edit "$DESKTOP_TAG" --repo "${{ github.repository }}" --latest

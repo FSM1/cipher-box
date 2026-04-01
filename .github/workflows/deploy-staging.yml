@@ -3,7 +3,7 @@ name: Deploy Staging
 on:
   push:
     tags:
-      - 'staging-v*'
+      - 'staging-*'
   workflow_call:
     inputs:
       staging_tag:
@@ -30,6 +30,12 @@ jobs:
       - name: Set lowercase image name
         run: echo "API_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-api" >> "$GITHUB_ENV"
 
+      - name: Extract component versions
+        id: versions
+        run: |
+          API_VERSION=$(node -e "console.log(require('./apps/api/package.json').version)")
+          echo "api=${API_VERSION}" >> "$GITHUB_OUTPUT"
+
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -42,8 +48,9 @@ jobs:
           file: apps/api/Dockerfile
           push: true
           tags: |
+            ${{ env.API_IMAGE }}:${{ steps.versions.outputs.api }}
+            ${{ env.API_IMAGE }}:latest-staging
             ${{ env.API_IMAGE }}:${{ env.DEPLOY_TAG }}
-            ${{ env.API_IMAGE }}:latest
 
   build-tee:
     name: Build & Push TEE Worker Image
@@ -59,6 +66,12 @@ jobs:
       - name: Set lowercase image name
         run: echo "TEE_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-tee-worker" >> "$GITHUB_ENV"
 
+      - name: Extract component versions
+        id: versions
+        run: |
+          TEE_VERSION=$(node -e "console.log(require('./apps/tee-worker/package.json').version)")
+          echo "tee=${TEE_VERSION}" >> "$GITHUB_OUTPUT"
+
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -71,8 +84,9 @@ jobs:
           file: apps/tee-worker/Dockerfile
           push: true
           tags: |
+            ${{ env.TEE_IMAGE }}:${{ steps.versions.outputs.tee }}
+            ${{ env.TEE_IMAGE }}:latest-staging
             ${{ env.TEE_IMAGE }}:${{ env.DEPLOY_TAG }}
-            ${{ env.TEE_IMAGE }}:latest
 
   deploy-tee-phala:
     name: Deploy TEE Worker to Phala Cloud
@@ -481,10 +495,14 @@ jobs:
           GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
           IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
           ENVEOF
-          # Append image tag and lowercase owner (can't use shell vars in quoted heredoc)
+          # Append image tag, lowercase owner, and component versions (can't use shell vars in quoted heredoc)
           OWNER="${{ github.repository_owner }}"
           echo "GITHUB_REPOSITORY_OWNER=${OWNER,,}" >> .env.staging
           echo "TAG=${{ env.DEPLOY_TAG }}" >> .env.staging
+          API_VER=$(node -e "console.log(require('./apps/api/package.json').version)")
+          TEE_VER=$(node -e "console.log(require('./apps/tee-worker/package.json').version)")
+          echo "API_VERSION=${API_VER}" >> .env.staging
+          echo "TEE_VERSION=${TEE_VER}" >> .env.staging
 
       - name: Copy files to VPS
         uses: appleboy/scp-action@v1.0.0
