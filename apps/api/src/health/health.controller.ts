@@ -1,12 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { HealthCheck, HealthCheckService, TypeOrmHealthIndicator } from '@nestjs/terminus';
-import { readFileSync } from 'fs';
-import { join } from 'path';
-
-const apiVersion =
-  process.env.npm_package_version ||
-  JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf-8')).version;
+import { API_VERSION } from '../version';
 
 @ApiTags('Health')
 @Controller('health')
@@ -23,6 +18,6 @@ export class HealthController {
   @ApiResponse({ status: 503, description: 'Health check failed' })
   async check() {
     const result = await this.health.check([() => this.db.pingCheck('database')]);
-    return { ...result, version: apiVersion };
+    return { ...result, version: API_VERSION };
   }
 }
