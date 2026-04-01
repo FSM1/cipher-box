@@ -1,0 +1,93 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4cbfd6e7ba39",
+  "session_id": "446ec0ad-5bd5-479d-b0ad-ea5831cc0cd6",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-01T03:32:24.600269Z",
+  "branch": "fix/release-as-on-pr-branch",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "5d50e24d2235",
+  "token_usage": {
+    "input_tokens": 294,
+    "cache_creation_tokens": 202764,
+    "cache_read_tokens": 24394529,
+    "output_tokens": 48049,
+    "api_call_count": 229
+  },
+  "session_metrics": {
+    "turn_count": 30
+  },
+  "summary": {
+    "intent": "Bootstrap release-please with proper version tags after phase 41 setup, align api-client versions with the API, and implement a new feature exposing API version on the /health endpoint — while iteratively fixing the CI release preview workflow.",
+    "outcome": "Successfully bootstrapped 15 release-please tags, aligned api-client versions to 0.35.0, added version to /health endpoint with shared version module, and significantly improved the PR release preview workflow to write release-as targets directly to the PR branch (eliminating the post-merge push-to-main approach that failed due to branch protection).",
+    "learnings": {
+      "repo": [
+        "release-please treats entire commit history as unreleased when no prior tags exist — bootstrap tags must be created at the pre-history SHA to get clean changelogs",
+        "The health endpoint spec is manually defined in generate-openapi.ts (not via NestJS decorators) because HealthController depends on TypeOrmHealthIndicator which requires a real DB connection",
+        "Phase 41 discussion log (41-DISCUSSION-LOG.md:106) explicitly decided monotonic versioning for web/desktop, but semver was implemented — decision was consciously deferred",
+        "The project uses conventional commits for release-please bump computation; commit type (feat/fix/chore) directly determines which packages get version bumps",
+        "pnpm api:generate regenerates openapi.json via ts-node generate-openapi.ts, then runs orval to generate the typed client, then builds with tsup",
+        "GitHub Actions push tokens do not trigger new workflow runs (recursion prevention) — useful for the PR branch commit-back approach",
+        "Legacy branch protection rules lack per-actor bypass support; only rulesets support that feature"
+      ],
+      "code": [
+        {
+          "path": "apps/api/scripts/generate-openapi.ts",
+          "line": 102,
+          "end_line": 114,
+          "finding": "HealthController is excluded from the NestJS OpenAPI generator module; health endpoint schema is manually defined further down in the script"
+        },
+        {
+          "path": "apps/api/src/main.ts",
+          "line": 56,
+          "end_line": 56,
+          "finding": "API version reading was refactored to use a shared src/version.ts module instead of inline process.env.npm_package_version with fallback to reading package.json"
+        },
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 249,
+          "end_line": 249,
+          "finding": "Merge commits (2+ parents) must be filtered before conventional commit parsing — without this, merge commits trigger false bump labels across all packages"
+        },
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 503,
+          "end_line": 520,
+          "finding": "Manual label overrides must be fed back into packageBumps map; otherwise release-as derivation uses the computed (lower) bump instead of the manual (higher) label"
+        },
+        {
+          "path": ".release-please-manifest.json",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Contains 15 package version entries; crates/api-client was at 0.4.0 and packages/api-client at 0.33.0 — both misaligned with apps/api at 0.35.0"
+        }
+      ],
+      "workflow": [
+        "release-please bootstrap: create tags at the last-known-good SHA using manifest versions, push them, then re-run the workflow — no config changes needed",
+        "Using chore(ci): commit prefix instead of fix: prevents release-please from triggering unwanted patch version bumps",
+        "The post-merge push-to-main CI pattern is fundamentally incompatible with branch protection requiring status checks — prefer writing config changes to the PR branch before merge",
+        "Squashing multiple commits into one chore(ci): requires soft reset to the branch divergence point, restaging all changes, and force pushing",
+        "npm_package_version env var is unreliable in all contexts; always fall back to reading package.json from disk",
+        "When resolving PR review threads: reply via REST API using --field for integer in_reply_to, then resolve via GraphQL mutation"
+      ]
+    },
+    "friction": [
+      "cargo update pulled in unrelated dependency churn when updating crate version — required manually patching only the workspace crate entries in Cargo.lock",
+      "git index.lock file left by a background agent prevented switching branches",
+      "post-merge-release workflow failed because GitHub App token cannot bypass branch protection required status checks — required significant redesign",
+      "Legacy branch protection UI lacks per-actor bypass (only rulesets support it), discovered only after attempting option 1",
+      "release-please workflow showed incomplete changelog on PR #430 because post-merge job never ran — appeared like a bug but was actually expected given the job failure",
+      "Background agent task failure notification appeared after the fix was already committed manually — caused confusion",
+      "auto-merge was reported as enabled by user but gh pr view showed autoMergeRequest: null — required manual merge"
+    ],
+    "open_items": [
+      "release:none early-return now clears stale release-as entries but must compare against base branch config to avoid clearing entries set by previously merged PRs — partial fix applied, thread 1 of final review round",
+      "bump-minor-pre-major: true is set on all packages in release-please-config.json but the version computation in pr-release-preview.js doesn't account for it — would produce 1.0.0 on breaking change instead of 0.x+1.0",
+      "Monotonic versioning for web and desktop apps was the original design intent (per 41-DISCUSSION-LOG.md) but semver is in use — consciously deferred",
+      "PR #430 (release PR) changelog may still be incomplete if post-release targets were never applied — needs verification after PR #431 merges and release-please re-runs",
+      "The release preview workflow self-test on PR #431 should confirm the commit-back approach works end-to-end"
+    ]
+  }
+}
