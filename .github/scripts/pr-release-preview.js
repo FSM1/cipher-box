@@ -14,7 +14,7 @@
 
 import * as core from '@actions/core';
 import * as github from '@actions/github';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BUMP_LEVELS, PATH_TO_LABEL, MONOTONIC_PATHS } from './release-constants.js';
 
@@ -564,6 +564,78 @@ async function run() {
       }
     }
   }
+
+  // ------ Section 7.5: Release-As Injection ------
+  // Write release-as targets into release-please-config.json on the PR branch.
+  // When the PR merges, these land on main and release-please picks them up.
+  const configPath = join(process.cwd(), 'release-please-config.json');
+  const manifestPath = join(process.cwd(), '.release-please-manifest.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+
+  /** @type {Array<{path: string, currentVersion: string, targetVersion: string, bumpType: string}>} */
+  const releaseAsEntries = [];
+  let configChanged = false;
+
+  // First, clear any stale release-as entries for packages NOT being bumped in this PR
+  for (const [pkgPath, pkgConfig] of Object.entries(config.packages)) {
+    if (pkgConfig['release-as'] && !packageBumps.has(pkgPath)) {
+      delete pkgConfig['release-as'];
+      configChanged = true;
+      core.info(`Cleared stale release-as for ${pkgPath}`);
+    }
+  }
+
+  for (const [pkgPath, bumpInfo] of packageBumps.entries()) {
+    const currentVersion = manifest[pkgPath];
+    if (!currentVersion || !config.packages[pkgPath]) continue;
+
+    const isMonotonic = MONOTONIC_PATHS.has(pkgPath);
+    const bumpType = bumpInfo.bump;
+    const effectiveBump = isMonotonic && bumpType === 'patch' ? 'minor' : bumpType;
+
+    const parts = currentVersion.split('.').map(Number);
+    while (parts.length < 3) parts.push(0);
+    const [major, minor, patch] = parts;
+
+    let targetVersion;
+    switch (effectiveBump) {
+      case 'major':
+        targetVersion = `${major + 1}.0.0`;
+        break;
+      case 'minor':
+        targetVersion = `${major}.${minor + 1}.0`;
+        break;
+      case 'patch':
+        targetVersion = `${major}.${minor}.${patch + 1}`;
+        break;
+      default:
+        continue;
+    }
+
+    const existingReleaseAs = config.packages[pkgPath]['release-as'];
+    if (existingReleaseAs !== targetVersion) {
+      config.packages[pkgPath]['release-as'] = targetVersion;
+      configChanged = true;
+    }
+
+    releaseAsEntries.push({
+      path: pkgPath,
+      currentVersion,
+      targetVersion,
+      bumpType: effectiveBump,
+    });
+  }
+
+  if (configChanged) {
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+    core.info(
+      `Updated release-please-config.json with ${releaseAsEntries.length} release-as entries`
+    );
+  } else {
+    core.info('release-please-config.json unchanged — no commit needed');
+  }
+  core.setOutput('config_changed', String(configChanged));
 
   // ------ Section 8: PR Comment (D-23) ------
   const commentLines = [COMMENT_MARKER, '## Release Preview', ''];
