@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "449f63212296",
+  "session_id": "9c4d622b-d13e-4838-88a9-da54b05b2056",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-01T00:43:56.476425Z",
+  "branch": "feat/package-and-app-versioning-and-release-cycles",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/scripts/pr-release-preview.js"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "10dfdbe365fb",
+  "checkpoint_transcript_start": 154,
+  "transcript_lines_at_start": 154,
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 3125,
+    "cache_read_tokens": 531166,
+    "output_tokens": 1483,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Resolve PR review threads and refine label handling logic in the pr-release-preview.js script.",
+    "outcome": "All 4 PR threads were replied to and resolved; the label preservation approach was reverted in favor of the simpler original removal logic.",
+    "learnings": {
+      "repo": [
+        "pr-release-preview.js handles label logic for PR release previews, including manual tag overrides.",
+        "The repo uses GitHub Actions scripts under .github/scripts/."
+      ],
+      "code": [
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "finding": "Label preservation logic was added to handle manual tag overrides, but was reverted because the simpler removal approach is preferred — developers can reapply manual tags after the last commit if needed."
+        }
+      ],
+      "workflow": [
+        "PR review threads were resolved programmatically via Bash commands.",
+        "Design decisions with low frequency use cases (like manual tag override preservation) are being deferred rather than adding complexity to the current implementation."
+      ]
+    },
+    "friction": [
+      "The label preservation fix was initially applied but then deemed unnecessary complexity for a rare scenario, requiring a revert."
+    ],
+    "open_items": [
+      "Label preservation on manual tag overrides: after the last commit, developers must reapply manual tag changes since the removal logic clears them. This behavior could be improved in a future iteration."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-01T00:43:45.458047Z",
+    "agent_lines": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 100
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "449f63212296",
+  "strategy": "manual-commit",
+  "branch": "feat/package-and-app-versioning-and-release-cycles",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/scripts/pr-release-preview.js"
+  ],
+  "sessions": [
+    {
+      "metadata": "/44/9f63212296/0/metadata.json",
+      "transcript": "/44/9f63212296/0/full.jsonl",
+      "content_hash": "/44/9f63212296/0/content_hash.txt",
+      "prompt": "/44/9f63212296/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 3125,
+    "cache_read_tokens": 531166,
+    "output_tokens": 1483,
+    "api_call_count": 7
+  }
+}
