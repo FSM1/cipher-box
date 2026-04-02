@@ -63,12 +63,27 @@ export class IpnsService {
         throw new BadRequestException('Invalid base64-encoded record');
       }
 
+      let publicKeyBytes: Uint8Array | undefined;
+      if (dto.publicKey !== undefined) {
+        try {
+          publicKeyBytes = Uint8Array.from(atob(dto.publicKey), (c) => c.charCodeAt(0));
+        } catch {
+          throw new BadRequestException('Invalid base64-encoded publicKey');
+        }
+
+        if (publicKeyBytes.length !== 32) {
+          throw new BadRequestException('publicKey must be a raw 32-byte Ed25519 public key');
+        }
+      }
+
       // Save to DB first so resolve always has a fallback, even if delegated
       // routing fails (e.g. rate-limited, network error, DHT propagation delay).
       const folder = await this.upsertFolderIpns(
         userId,
         dto.ipnsName,
         dto.metadataCid,
+        recordBytes,
+        publicKeyBytes,
         dto.encryptedIpnsPrivateKey,
         dto.keyEpoch,
         recordType,
@@ -174,6 +189,8 @@ export class IpnsService {
     userId: string,
     ipnsName: string,
     metadataCid: string,
+    signedRecord: Uint8Array,
+    publicKey?: Uint8Array,
     encryptedIpnsPrivateKey?: string,
     keyEpoch?: number,
     recordType: 'folder' | 'file' = 'folder',
@@ -213,9 +230,15 @@ export class IpnsService {
     }
 
     if (existing) {
+      if (publicKey && existing.publicKey && !existing.publicKey.equals(Buffer.from(publicKey))) {
+        throw new BadRequestException('publicKey does not match the existing IPNS entry');
+      }
+
       // Update existing entry
       existing.latestCid = metadataCid;
       existing.sequenceNumber = (BigInt(existing.sequenceNumber) + 1n).toString();
+      existing.signedRecord = Buffer.from(signedRecord);
+      existing.publicKey = publicKey ? Buffer.from(publicKey) : existing.publicKey;
       existing.recordType = recordType;
       existing.updatedAt = new Date();
 
@@ -259,6 +282,8 @@ export class IpnsService {
       ipnsName,
       latestCid: metadataCid,
       sequenceNumber: '1',
+      signedRecord: Buffer.from(signedRecord),
+      publicKey: publicKey ? Buffer.from(publicKey) : null,
       encryptedIpnsPrivateKey: encryptedIpnsPrivateKey
         ? Buffer.from(encryptedIpnsPrivateKey, 'hex')
         : null,
@@ -386,19 +411,24 @@ export class IpnsService {
       const cached = await this.folderIpnsRepository.findOne({
         where: { ipnsName },
       });
+      const cachedResult = this.parseCachedRecord(cached);
 
-      if (result && cached?.latestCid) {
+      if (result && cached?.publicKey) {
+        result = this.withCachedPublicKey(result, cached.publicKey);
+      }
+
+      if (result && cachedResult) {
         // Both sources available — prefer the one with the higher sequence number
         const networkSeq = BigInt(result.sequenceNumber);
-        const dbSeq = BigInt(cached.sequenceNumber);
+        const dbSeq = BigInt(cachedResult.sequenceNumber);
         if (dbSeq > networkSeq) {
           this.logger.log(
-            `DB cache has newer sequence (${dbSeq} > ${networkSeq}) for ${ipnsName}, using DB: ${cached.latestCid}`
+            `DB cache has newer sequence (${dbSeq} > ${networkSeq}) for ${ipnsName}, using DB: ${cachedResult.cid}`
           );
           timerSource = 'db';
           source = 'network_stale';
           resolveFound = true;
-          return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
+          return cachedResult;
         }
         timerSource = 'network';
         resolveFound = true;
@@ -412,12 +442,12 @@ export class IpnsService {
       }
 
       // Delegated routing returned null (404) or threw BAD_GATEWAY — try DB cache
-      if (cached?.latestCid) {
-        this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
+      if (cachedResult) {
+        this.logger.log(`Resolved ${ipnsName} from DB cache: ${cachedResult.cid}`);
         timerSource = 'db';
         source = 'db_cache';
         resolveFound = true;
-        return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
+        return cachedResult;
       }
 
       return null;
@@ -474,5 +504,57 @@ export class IpnsService {
       this.logger.error(`Failed to parse IPNS record: ${error}`);
       throw new HttpException('Invalid IPNS record format', HttpStatus.BAD_GATEWAY);
     }
+  }
+
+  private parseCachedRecord(cached: FolderIpns | null): {
+    cid: string;
+    sequenceNumber: string;
+    signatureV2?: string;
+    data?: string;
+    pubKey?: string;
+  } | null {
+    if (!cached?.latestCid) {
+      return null;
+    }
+
+    if (cached.signedRecord) {
+      try {
+        return this.withCachedPublicKey(
+          this.parseIpnsRecordBytes(cached.signedRecord),
+          cached.publicKey ?? undefined
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Failed to parse cached signed record for ${cached.ipnsName}: ${message}`);
+      }
+    }
+
+    return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
+  }
+
+  private withCachedPublicKey(
+    result: {
+      cid: string;
+      sequenceNumber: string;
+      signatureV2?: string;
+      data?: string;
+      pubKey?: string;
+    },
+    publicKey?: Buffer
+  ): {
+    cid: string;
+    sequenceNumber: string;
+    signatureV2?: string;
+    data?: string;
+    pubKey?: string;
+  } {
+    if (result.pubKey || !result.signatureV2 || !result.data || !publicKey) {
+      return result;
+    }
+
+    return {
+      ...result,
+      pubKey: publicKey.toString('base64'),
+    };
   }
 }

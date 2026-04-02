@@ -8,12 +8,12 @@
  *   field 8 (SignatureV2) – length-delimited, Ed25519 signature bytes
  *   field 9 (Data)        – length-delimited, CBOR-encoded signed data
  *
- * Signature fields (7/8/9) are returned as an all-or-nothing bundle:
- * if any field is missing or pubKey extraction fails, all are omitted.
+ * SignatureV2 (field 8) and data (field 9) are returned independently.
+ * The public key (field 7) may be omitted by some publishers, in which case
+ * callers can supplement it from trusted cached metadata.
  *
  * Wire format reference: https://protobuf.dev/programming-guides/encoding/
  */
-
 export interface ParsedIpnsRecord {
   value: string;
   sequence: bigint;
@@ -117,14 +117,11 @@ export function parseIpnsRecord(buf: Uint8Array): ParsedIpnsRecord {
     throw new Error('IPNS record missing Value field');
   }
 
-  // If signatureV2 and data are present but pubKey extraction failed,
-  // drop all signature fields — partial signature data is unverifiable
-  const hasCompleteSigData = signatureV2 && data && rawPubKey;
   return {
     value,
     sequence,
-    signatureV2: hasCompleteSigData ? signatureV2 : undefined,
-    data: hasCompleteSigData ? data : undefined,
-    pubKey: hasCompleteSigData ? rawPubKey : undefined,
+    signatureV2,
+    data,
+    pubKey: rawPubKey,
   };
 }

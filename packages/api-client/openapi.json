@@ -2161,7 +2161,7 @@
   "info": {
     "title": "CipherBox API",
     "description": "Zero-knowledge encrypted cloud storage API",
-    "version": "0.35.0",
+    "version": "0.36.1",
     "contact": {}
   },
   "tags": [
@@ -2807,6 +2807,11 @@
             "description": "Base64-encoded marshaled IPNS record",
             "example": "CiQBqKAFp..."
           },
+          "publicKey": {
+            "type": "string",
+            "description": "Base64-encoded raw 32-byte Ed25519 public key for this IPNS name",
+            "example": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
+          },
           "metadataCid": {
             "type": "string",
             "description": "CID of the encrypted metadata this record points to",
@@ -2863,6 +2868,11 @@
             "type": "string",
             "description": "Base64-encoded marshaled IPNS record",
             "example": "CiQBqKAFp..."
+          },
+          "publicKey": {
+            "type": "string",
+            "description": "Base64-encoded raw 32-byte Ed25519 public key for this IPNS name",
+            "example": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
           },
           "metadataCid": {
             "type": "string",

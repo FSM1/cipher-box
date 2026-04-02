@@ -204,7 +204,10 @@ describe('RepublishService', () => {
       // Verify FolderIpns sync
       expect(folderIpnsRepository.update).toHaveBeenCalledWith(
         { userId: 'user-uuid-1', ipnsName: 'k51test123' },
-        { sequenceNumber: '6' }
+        {
+          sequenceNumber: '6',
+          signedRecord: Buffer.from('signed-record-bytes'),
+        }
       );
     });
 

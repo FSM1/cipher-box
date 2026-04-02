@@ -158,7 +158,8 @@ export class RepublishService {
             await this.syncFolderIpnsSequence(
               entry.userId,
               entry.ipnsName,
-              result.newSequenceNumber
+              result.newSequenceNumber,
+              result.signedRecord
             );
 
             totalSucceeded++;
@@ -371,12 +372,16 @@ export class RepublishService {
   private async syncFolderIpnsSequence(
     userId: string,
     ipnsName: string,
-    newSequenceNumber: string
+    newSequenceNumber: string,
+    signedRecordBase64: string
   ): Promise<void> {
     try {
       await this.folderIpnsRepository.update(
         { userId, ipnsName },
-        { sequenceNumber: newSequenceNumber }
+        {
+          sequenceNumber: newSequenceNumber,
+          signedRecord: Buffer.from(signedRecordBase64, 'base64'),
+        }
       );
     } catch (error) {
       // Non-fatal: log and continue

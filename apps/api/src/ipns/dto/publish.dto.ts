@@ -43,6 +43,17 @@ export class PublishIpnsDto {
   record!: string;
 
   @ApiProperty({
+    description: 'Base64-encoded raw 32-byte Ed25519 public key for this IPNS name',
+    required: false,
+    example: 'AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=',
+  })
+  @IsString()
+  @IsOptional()
+  @IsBase64()
+  @MaxLength(100)
+  publicKey?: string;
+
+  @ApiProperty({
     description: 'CID of the encrypted metadata this record points to',
     example: 'bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4',
   })
@@ -142,6 +153,17 @@ export class PublishIpnsEntryDto {
   @IsBase64()
   @MaxLength(10000)
   record!: string;
+
+  @ApiProperty({
+    description: 'Base64-encoded raw 32-byte Ed25519 public key for this IPNS name',
+    required: false,
+    example: 'AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=',
+  })
+  @IsString()
+  @IsOptional()
+  @IsBase64()
+  @MaxLength(100)
+  publicKey?: string;
 
   @ApiProperty({
     description: 'CID of the encrypted metadata this record points to',

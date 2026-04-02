@@ -46,6 +46,20 @@ export class FolderIpns {
   sequenceNumber!: string; // TypeORM returns bigint as string
 
   /**
+   * Canonical signed IPNS record bytes for the latest publish.
+   * Used to return verifiable signature data on DB-cached resolves.
+   */
+  @Column({ type: 'bytea', name: 'signed_record', nullable: true })
+  signedRecord!: Buffer | null;
+
+  /**
+   * Raw 32-byte Ed25519 public key for this IPNS name.
+   * Used to complete signature verification when published records omit field 7.
+   */
+  @Column({ type: 'bytea', name: 'public_key', nullable: true })
+  publicKey!: Buffer | null;
+
+  /**
    * ECIES-wrapped Ed25519 private key for TEE republishing
    * Encrypted with TEE public key, only decryptable by TEE
    * Nullable until TEE integration is implemented (Phase 7+)

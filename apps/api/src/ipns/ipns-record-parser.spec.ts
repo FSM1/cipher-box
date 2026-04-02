@@ -253,7 +253,7 @@ describe('parseIpnsRecord', () => {
       expect(result.pubKey).toEqual(rawKey);
     });
 
-    it('should drop all sig fields when pubKey extraction fails (non-Ed25519 key)', () => {
+    it('should keep signatureV2 and data when pubKey extraction fails (non-Ed25519 key)', () => {
       // Wrong prefix — not a standard libp2p Ed25519 key
       const badKey = new Uint8Array(36).fill(0xff);
       const sig = new Uint8Array(64).fill(0xaa);
@@ -267,13 +267,12 @@ describe('parseIpnsRecord', () => {
       ]);
       const result = parseIpnsRecord(buf);
 
-      // All-or-nothing: pubKey failed so all sig fields dropped
       expect(result.pubKey).toBeUndefined();
-      expect(result.signatureV2).toBeUndefined();
-      expect(result.data).toBeUndefined();
+      expect(result.signatureV2).toEqual(sig);
+      expect(result.data).toEqual(data);
     });
 
-    it('should drop all sig fields when wrapped key has wrong length', () => {
+    it('should keep signatureV2 and data when wrapped key has wrong length', () => {
       // Too short (20 bytes instead of 36)
       const shortKey = new Uint8Array([0x08, 0x01, 0x12, 0x20, ...new Uint8Array(16)]);
       const sig = new Uint8Array(64).fill(0xcc);
@@ -288,8 +287,25 @@ describe('parseIpnsRecord', () => {
       const result = parseIpnsRecord(buf);
 
       expect(result.pubKey).toBeUndefined();
-      expect(result.signatureV2).toBeUndefined();
-      expect(result.data).toBeUndefined();
+      expect(result.signatureV2).toEqual(sig);
+      expect(result.data).toEqual(data);
+    });
+
+    it('should keep signatureV2 and data when field 7 is absent', () => {
+      const sig = new Uint8Array(64).fill(0x22);
+      const data = new Uint8Array(48).fill(0x33);
+
+      const buf = new Uint8Array([
+        ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmDerived')),
+        ...encodeVarintField(5, 7n),
+        ...encodeLengthDelimited(8, sig),
+        ...encodeLengthDelimited(9, data),
+      ]);
+      const result = parseIpnsRecord(buf);
+
+      expect(result.pubKey).toBeUndefined();
+      expect(result.signatureV2).toEqual(sig);
+      expect(result.data).toEqual(data);
     });
 
     it('should parse all signature fields together', () => {
