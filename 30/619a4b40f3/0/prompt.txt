@@ -1,0 +1,13 @@
+/security-review of all changes on this branch
+
+---
+
+What is the purpose of the ipns service? I would have expected most of the functionality to already be in the lower level dependencies. or is it just a thin wrapper around the sdk?
+
+---
+
+ok can you implement the pubKey -> ipns name binding fix please
+
+---
+
+do not currently enforce signatureVerified=true
