@@ -7,7 +7,12 @@
  */
 
 import { createIpnsRecord, marshalIpnsRecord, IPNS_SIGNATURE_PREFIX } from '@cipherbox/core';
-import { verifyEd25519, concatBytes, deriveEd25519PublicKey } from '@cipherbox/crypto';
+import {
+  verifyEd25519,
+  concatBytes,
+  deriveEd25519PublicKey,
+  deriveIpnsName,
+} from '@cipherbox/crypto';
 import {
   ipnsControllerPublishRecord,
   ipnsControllerPublishBatch,
@@ -198,6 +203,16 @@ export async function resolveIpnsRecord(
         if (!valid) {
           throw new Error('IPNS signature verification failed - record may be tampered');
         }
+
+        // Verify the returned public key derives to the requested IPNS name
+        const pubKeyBytes = Uint8Array.from(atob(response.pubKey), (c) => c.charCodeAt(0));
+        const derivedName = await deriveIpnsName(pubKeyBytes);
+        if (derivedName !== ipnsName) {
+          throw new Error(
+            'IPNS public key does not match requested name - possible key substitution'
+          );
+        }
+
         signatureVerified = true;
       } else {
         console.warn('IPNS resolve returned without signature data, skipping verification');
