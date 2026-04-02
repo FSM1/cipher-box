@@ -126,7 +126,7 @@ pub fn next_file_publish_sequence(
     current_sequence: Option<u64>,
 ) -> Result<u64, String> {
     if is_first_publish {
-        return Ok(1);
+        return Ok(0);
     }
 
     current_sequence
@@ -787,9 +787,9 @@ mod tests {
     use super::next_file_publish_sequence;
 
     #[test]
-    fn next_file_publish_sequence_starts_new_records_at_one() {
-        assert_eq!(next_file_publish_sequence(true, None).unwrap(), 1);
-        assert_eq!(next_file_publish_sequence(true, Some(99)).unwrap(), 1);
+    fn next_file_publish_sequence_starts_new_records_at_zero() {
+        assert_eq!(next_file_publish_sequence(true, None).unwrap(), 0);
+        assert_eq!(next_file_publish_sequence(true, Some(99)).unwrap(), 0);
     }
 
     #[test]
