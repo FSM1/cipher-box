@@ -26,13 +26,13 @@ function parseArgs(argv) {
   }
 
   const apiUrl = values.get('api-url');
-  const secret = values.get('secret');
+  const secret = values.get('secret') || process.env.TEST_SECRET;
   const email = values.get('email');
   const fileName = values.get('file-name');
 
-  if (!apiUrl || !secret || !email || !fileName) {
+  if (!apiUrl || !email || !fileName) {
     throw new Error(
-      'Usage: verify-filepointer.mjs --api-url <url> --secret <secret> --email <email> --file-name <name> [--expected-content <text>]'
+      'Usage: verify-filepointer.mjs --api-url <url> --email <email> --file-name <name> [--expected-content <text>]'
     );
   }
 

@@ -76,7 +76,6 @@ function Invoke-FilePointerVerifier {
     $verifierPath = Join-Path $RepoRoot "packages/sdk-core/scripts/verify-filepointer.mjs"
     $output = & node $verifierPath `
         --api-url $ApiUrl `
-        --secret $TestSecret `
         --email $TestEmail `
         --file-name $TestFile `
         --expected-content $TestContent 2>&1 | Out-String
