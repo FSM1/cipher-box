@@ -18,6 +18,7 @@ vi.mock('@cipherbox/core', () => ({
 // Mock crypto functions
 vi.mock('@cipherbox/crypto', () => ({
   verifyEd25519: vi.fn().mockResolvedValue(true),
+  deriveEd25519PublicKey: vi.fn().mockReturnValue(new Uint8Array(32).fill(7)),
   concatBytes: vi.fn((...args: Uint8Array[]) => {
     const total = args.reduce((sum, a) => sum + a.length, 0);
     const result = new Uint8Array(total);
@@ -55,6 +56,7 @@ describe('IPNS operations', () => {
         expect.objectContaining({
           ipnsName: 'k51testname',
           metadataCid: 'QmMetaCid',
+          publicKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(7))),
         }),
         undefined
       );
@@ -83,6 +85,7 @@ describe('IPNS operations', () => {
         expect.objectContaining({
           encryptedIpnsPrivateKey: 'aabbccdd',
           keyEpoch: 3,
+          publicKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(7))),
         }),
         undefined
       );

@@ -7,7 +7,7 @@
  */
 
 import { createIpnsRecord, marshalIpnsRecord, IPNS_SIGNATURE_PREFIX } from '@cipherbox/core';
-import { verifyEd25519, concatBytes } from '@cipherbox/crypto';
+import { verifyEd25519, concatBytes, deriveEd25519PublicKey } from '@cipherbox/crypto';
 import {
   ipnsControllerPublishRecord,
   ipnsControllerPublishBatch,
@@ -33,6 +33,7 @@ import { withPerf } from '../perf';
  */
 export async function createAndPublishIpnsRecord(params: {
   ipnsPrivateKey: Uint8Array;
+  ipnsPublicKey?: Uint8Array;
   ipnsName: string;
   metadataCid: string;
   sequenceNumber: bigint;
@@ -53,6 +54,7 @@ export async function createAndPublishIpnsRecord(params: {
 
     // 2. Marshal to bytes for transport
     const recordBytes = marshalIpnsRecord(record);
+    const publicKeyBytes = params.ipnsPublicKey ?? deriveEd25519PublicKey(params.ipnsPrivateKey);
 
     // 3. Base64 encode for API transmission (loop-based to avoid call stack overflow on large records)
     let binary = '';
@@ -60,6 +62,11 @@ export async function createAndPublishIpnsRecord(params: {
       binary += String.fromCharCode(recordBytes[i]);
     }
     const recordBase64 = btoa(binary);
+    binary = '';
+    for (let i = 0; i < publicKeyBytes.length; i++) {
+      binary += String.fromCharCode(publicKeyBytes[i]);
+    }
+    const publicKey = btoa(binary);
 
     // 4. Call backend API to relay to IPFS network
     const apiOptions = params.ctx?.axiosInstance
@@ -69,6 +76,7 @@ export async function createAndPublishIpnsRecord(params: {
       {
         ipnsName: params.ipnsName,
         record: recordBase64,
+        publicKey,
         metadataCid: params.metadataCid,
         encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
         keyEpoch: params.keyEpoch,
@@ -98,6 +106,7 @@ export async function batchPublishIpnsRecords(
   records: Array<{
     ipnsName: string;
     recordBase64: string;
+    publicKey?: string;
     metadataCid: string;
     encryptedIpnsPrivateKey?: string;
     keyEpoch?: number;
@@ -114,6 +123,7 @@ export async function batchPublishIpnsRecords(
         records: records.map((r) => ({
           ipnsName: r.ipnsName,
           record: r.recordBase64,
+          publicKey: r.publicKey,
           metadataCid: r.metadataCid,
           encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
           keyEpoch: r.keyEpoch,
