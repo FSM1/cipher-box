@@ -88,5 +88,16 @@ describe('JwtIssuerService', () => {
 
       expect(jwt).toBe('mock-jwt-token');
     });
+
+    it('should sign JWT with providerSubject when provided', async () => {
+      configService.get.mockReturnValue(undefined);
+      await service.onModuleInit();
+
+      const jwt = await service.signIdentityJwt('link-verification', 'test@example.com', {
+        providerSubject: 'google-sub-123',
+      });
+
+      expect(jwt).toBe('mock-jwt-token');
+    });
   });
 });

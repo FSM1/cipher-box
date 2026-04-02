@@ -71,6 +71,13 @@ const RUST_DEPS = {
   'crates/core': ['crates/crypto'],
   'crates/fuse': ['crates/api-client', 'crates/core', 'crates/crypto'],
   'crates/sdk': ['crates/api-client', 'crates/core', 'crates/crypto'],
+  'apps/desktop': [
+    'crates/api-client',
+    'crates/core',
+    'crates/crypto',
+    'crates/fuse',
+    'crates/sdk',
+  ],
 };
 
 /** API lock group members (D-05) */

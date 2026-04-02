@@ -115,7 +115,7 @@ export class AuthMethodService {
    */
   private async verifyCipherBoxJwt(
     idToken: string
-  ): Promise<{ sub?: string; verifierId?: string; email?: string }> {
+  ): Promise<{ sub?: string; verifierId?: string; email?: string; providerSubject?: string }> {
     try {
       const jwksData = this.jwtIssuerService.getJwksData();
       const jwks = jose.createLocalJWKSet(jwksData);
@@ -128,6 +128,7 @@ export class AuthMethodService {
         sub: payload.sub,
         verifierId: payload.sub,
         email: payload.email as string | undefined,
+        providerSubject: payload.providerSubject as string | undefined,
       };
     } catch (error) {
       this.logger.warn(
@@ -149,9 +150,14 @@ export class AuthMethodService {
 
     // 2. Determine type and identifier, hash for lookup
     const authMethodType = linkDto.loginType;
-    const identifier = payload.email || payload.sub;
+    const identifier =
+      authMethodType === 'google' ? payload.providerSubject : (payload.email ?? payload.sub);
     if (!identifier) {
-      throw new BadRequestException('Cannot determine identifier from JWT');
+      throw new BadRequestException(
+        authMethodType === 'google'
+          ? 'Cannot determine Google subject from JWT'
+          : 'Cannot determine identifier from JWT'
+      );
     }
     const identifierHash = this.siweService.hashIdentifier(identifier);
 

@@ -154,7 +154,9 @@ describe('IdentityController', () => {
       expect(googleOAuthService.verifyGoogleToken).toHaveBeenCalledWith('google-token');
       // Verify hashIdentifier was called with sub (NOT email)
       expect(siweService.hashIdentifier).toHaveBeenCalledWith(googleSub);
-      expect(jwtIssuerService.signIdentityJwt).toHaveBeenCalledWith('new-user-id', googleEmail);
+      expect(jwtIssuerService.signIdentityJwt).toHaveBeenCalledWith('new-user-id', googleEmail, {
+        providerSubject: 'google-123',
+      });
       // Verify auth method created with hash + display
       expect(authMethodRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -196,6 +198,32 @@ describe('IdentityController', () => {
           }),
         })
       );
+    });
+
+    it('should include google sub in link verification JWT claims', async () => {
+      googleOAuthService.verifyGoogleToken.mockResolvedValue({
+        email: 'user@gmail.com',
+        sub: 'google-123',
+      });
+      jwtIssuerService.signIdentityJwt.mockResolvedValue('cipherbox-link-jwt');
+
+      const result = await controller.googleLogin({
+        idToken: 'google-token',
+        intent: 'link',
+      });
+
+      expect(result).toEqual({
+        idToken: 'cipherbox-link-jwt',
+        userId: '',
+        isNewUser: false,
+        email: 'user@gmail.com',
+      });
+      expect(jwtIssuerService.signIdentityJwt).toHaveBeenCalledWith(
+        'link-verification',
+        'user@gmail.com',
+        { providerSubject: 'google-123' }
+      );
+      expect(authMethodRepository.findOne).not.toHaveBeenCalled();
     });
   });
 
