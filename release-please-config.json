@@ -65,7 +65,8 @@
       "release-type": "node",
       "component": "@cipherbox/api",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.36.1"
     },
     "apps/web": {
       "release-type": "node",
@@ -88,7 +89,8 @@
       "release-type": "node",
       "component": "cipherbox-tee-worker",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.31.2"
     },
     "packages/core": {
       "release-type": "node",
@@ -106,19 +108,22 @@
       "release-type": "node",
       "component": "@cipherbox/api-client",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.36.1"
     },
     "packages/sdk-core": {
       "release-type": "node",
       "component": "@cipherbox/sdk-core",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.34.1"
     },
     "packages/sdk": {
       "release-type": "node",
       "component": "@cipherbox/sdk",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.33.1"
     },
     "crates/crypto": {
       "release-type": "rust",
@@ -136,19 +141,22 @@
       "release-type": "rust",
       "component": "cipherbox-api-client",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.35.1"
     },
     "crates/fuse": {
       "release-type": "rust",
       "component": "cipherbox-fuse",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.5.1"
     },
     "crates/sdk": {
       "release-type": "rust",
       "component": "cipherbox-sdk",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.5.1"
     }
   }
 }
