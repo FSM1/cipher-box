@@ -121,6 +121,19 @@ pub struct PublishQueueEntry {
     pub pending_uploads: usize,
 }
 
+pub fn next_file_publish_sequence(
+    is_first_publish: bool,
+    current_sequence: Option<u64>,
+) -> Result<u64, String> {
+    if is_first_publish {
+        return Ok(1);
+    }
+
+    current_sequence
+        .map(|seq| seq + 1)
+        .ok_or_else(|| "Missing current sequence for existing file IPNS record".to_string())
+}
+
 /// Coordinates IPNS publish operations to prevent sequence number races.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct PublishCoordinator {
@@ -767,4 +780,26 @@ fn uuid_from_ino(ino: u64) -> String {
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub fn mount_point() -> PathBuf {
     dirs::home_dir().expect("Could not determine home directory").join("CipherBox")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_file_publish_sequence;
+
+    #[test]
+    fn next_file_publish_sequence_starts_new_records_at_one() {
+        assert_eq!(next_file_publish_sequence(true, None).unwrap(), 1);
+        assert_eq!(next_file_publish_sequence(true, Some(99)).unwrap(), 1);
+    }
+
+    #[test]
+    fn next_file_publish_sequence_increments_existing_records() {
+        assert_eq!(next_file_publish_sequence(false, Some(0)).unwrap(), 1);
+        assert_eq!(next_file_publish_sequence(false, Some(7)).unwrap(), 8);
+    }
+
+    #[test]
+    fn next_file_publish_sequence_rejects_missing_existing_sequence() {
+        assert!(next_file_publish_sequence(false, None).is_err());
+    }
 }

@@ -149,11 +149,15 @@ pub(crate) mod implementation {
         let file_meta_cid = cipherbox_api_client::ipfs::upload_content(api, &json_bytes)
             .await.map_err(|e| format!("{}", e))?;
 
-        let seq = coordinator.resolve_sequence(api, file_ipns_name).await?;
+        let current_seq = if is_first_publish {
+            None
+        } else {
+            Some(coordinator.resolve_sequence(api, file_ipns_name).await?)
+        };
 
         let ipns_key_arr: [u8; 32] = file_ipns_private_key.as_slice().try_into()
             .map_err(|_| "Invalid file IPNS private key length".to_string())?;
-        let new_seq = seq + 1;
+        let new_seq = crate::next_file_publish_sequence(is_first_publish, current_seq)?;
         let value = format!("/ipfs/{}", file_meta_cid);
         let record = cipherbox_core::create_ipns_record(&ipns_key_arr, &value, new_seq, 86_400_000)
             .map_err(|e| format!("File IPNS record creation failed: {}", e))?;
