@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.37.0...@cipherbox/web-v0.38.0) (2026-04-02)
+
+
+### Bug Fixes
+
+* **web:** improve file browser empty state handling during uploads ([#443](https://github.com/FSM1/cipher-box/issues/443)) ([03fe1e4](https://github.com/FSM1/cipher-box/commit/03fe1e47a86af13eb0bca84373ecd5f7ac1715bd))
+
 ## [0.37.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.36.0...@cipherbox/web-v0.37.0) (2026-04-01)
 
 
