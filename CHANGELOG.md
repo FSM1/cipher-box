@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.36.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.36.0...cipher-box-v0.36.1) (2026-04-02)
+
+
+### Bug Fixes
+
+* **api:** use Google sub for linked account resolution ([#445](https://github.com/FSM1/cipher-box/issues/445)) ([3908f65](https://github.com/FSM1/cipher-box/commit/3908f65751e7fd064360855decc9030de75e7c8c))
+* **web:** improve file browser empty state handling during uploads ([#443](https://github.com/FSM1/cipher-box/issues/443)) ([03fe1e4](https://github.com/FSM1/cipher-box/commit/03fe1e47a86af13eb0bca84373ecd5f7ac1715bd))
+
 ## [0.36.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.35.0...cipher-box-v0.36.0) (2026-04-01)
 
 
