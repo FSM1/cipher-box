@@ -5,7 +5,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { generateEd25519Keypair, signEd25519, verifyEd25519 } from '../ed25519';
+import {
+  generateEd25519Keypair,
+  deriveEd25519PublicKey,
+  signEd25519,
+  verifyEd25519,
+} from '../ed25519';
 import {
   ED25519_PUBLIC_KEY_SIZE,
   ED25519_PRIVATE_KEY_SIZE,
@@ -30,6 +35,12 @@ describe('Ed25519 Key Generation', () => {
     expect(keypair1.publicKey).not.toEqual(keypair2.publicKey);
     // Private keys should be different
     expect(keypair1.privateKey).not.toEqual(keypair2.privateKey);
+  });
+
+  it('derives the same public key from a private key seed', () => {
+    const keypair = generateEd25519Keypair();
+
+    expect(deriveEd25519PublicKey(keypair.privateKey)).toEqual(keypair.publicKey);
   });
 });
 

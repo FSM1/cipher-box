@@ -36,3 +36,10 @@ export function generateEd25519Keypair(): Ed25519Keypair {
     privateKey,
   };
 }
+
+/**
+ * Derives the Ed25519 public key from a 32-byte private key seed.
+ */
+export function deriveEd25519PublicKey(privateKey: Uint8Array): Uint8Array {
+  return ed.getPublicKey(privateKey);
+}
