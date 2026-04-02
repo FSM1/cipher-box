@@ -143,6 +143,12 @@ type(optional-scope): description
 
 Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
 
+Commitlint setup details:
+
+- `commitlint.config.js` extends `@commitlint/config-conventional`.
+- A custom `subject-no-parens` rule rejects parenthesized text in the commit subject because Release Please can misparse it as a malformed scope and silently skip the commit.
+- The husky `commit-msg` hook enforces these rules locally before commits are created.
+
 **Releases & Versioning:**
 
 - All packages share a single unified version (tracked in `.release-please-manifest.json`)
