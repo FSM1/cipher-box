@@ -154,7 +154,9 @@ describe('IdentityController', () => {
       expect(googleOAuthService.verifyGoogleToken).toHaveBeenCalledWith('google-token');
       // Verify hashIdentifier was called with sub (NOT email)
       expect(siweService.hashIdentifier).toHaveBeenCalledWith(googleSub);
-      expect(jwtIssuerService.signIdentityJwt).toHaveBeenCalledWith('new-user-id', googleEmail);
+      expect(jwtIssuerService.signIdentityJwt).toHaveBeenCalledWith('new-user-id', googleEmail, {
+        providerSubject: 'google-123',
+      });
       // Verify auth method created with hash + display
       expect(authMethodRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
