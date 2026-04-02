@@ -106,7 +106,9 @@ export class IdentityController {
     );
 
     // 5. Sign CipherBox identity JWT for the Core Kit login handoff.
-    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, normalizedEmail);
+    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, normalizedEmail, {
+      providerSubject: googlePayload.sub,
+    });
 
     this.logger.log(`Google login: userId=${user.id}, isNew=${isNewUser}`);
 
