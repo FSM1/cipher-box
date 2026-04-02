@@ -64,6 +64,26 @@ When working on `apps/api` code:
 
 3. **Commit the regenerated client files** (`packages/api-client/src/generated/` and `packages/api-client/src/models/`) along with your API changes.
 
+## Dependency Bootstrapping
+
+- Agents should treat missing workspace dependencies as routine setup, not a user decision point.
+- If validation, code generation, builds, or tests fail because dependencies are missing (`node_modules` absent, `jest`/`tsup`/`tsc` not found, workspace packages unavailable), agents should proactively run the appropriate install command from the repo root before asking the user anything.
+- For this monorepo, default to:
+
+  ```bash
+  pnpm install
+  ```
+
+- After installing, run the repo-wide build when downstream tests or packages depend on built workspace outputs:
+
+  ```bash
+  pnpm build
+  ```
+
+- If the full repo build is unnecessarily heavy for the task, agents should at minimum build the shared `/packages` workspace outputs required by the failing command before retrying it.
+- After installing/building, retry the command that was previously blocked.
+- If package-manager security prompts block native/build scripts, agents should surface that clearly and then request user guidance only if approval is actually required to continue.
+
 ## Code Generation Guidelines
 
 1. Use TypeScript for all JavaScript code

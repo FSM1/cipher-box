@@ -88,7 +88,8 @@ export class IdentityController {
     if (dto.intent === 'link') {
       const idToken = await this.jwtIssuerService.signIdentityJwt(
         'link-verification',
-        normalizedEmail
+        normalizedEmail,
+        { providerSubject: googlePayload.sub }
       );
       this.logger.log(`Google link verification: email=${normalizedEmail}`);
       return { idToken, userId: '', isNewUser: false, email: normalizedEmail };
@@ -104,7 +105,7 @@ export class IdentityController {
       'google'
     );
 
-    // 5. Sign CipherBox identity JWT (include email for auth method identifier)
+    // 5. Sign CipherBox identity JWT for the Core Kit login handoff.
     const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, normalizedEmail);
 
     this.logger.log(`Google login: userId=${user.id}, isNew=${isNewUser}`);

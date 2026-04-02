@@ -193,8 +193,12 @@ describe('AuthMethodService', () => {
 
     it('should verify CipherBox JWT and create new auth method with identifierHash', async () => {
       const mockUser = { id: 'user-id', publicKey: 'pub-key' };
-      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
-      const identifierHash = sha256Hex('user@example.com');
+      const mockPayload = {
+        sub: 'link-verification',
+        email: 'user@example.com',
+        providerSubject: 'google-sub-123',
+      };
+      const identifierHash = sha256Hex('google-sub-123');
       const mockMethod = {
         id: 'new-am',
         type: 'google',
@@ -230,8 +234,12 @@ describe('AuthMethodService', () => {
 
     it('should use identifierHash for duplicate check', async () => {
       const mockUser = { id: 'user-id', publicKey: 'pub-key' };
-      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
-      const identifierHash = sha256Hex('user@example.com');
+      const mockPayload = {
+        sub: 'link-verification',
+        email: 'user@example.com',
+        providerSubject: 'google-sub-123',
+      };
+      const identifierHash = sha256Hex('google-sub-123');
       const existingMethod = {
         id: 'existing',
         type: 'google',
@@ -252,8 +260,12 @@ describe('AuthMethodService', () => {
 
     it('should use identifierHash for cross-account collision check', async () => {
       const mockUser = { id: 'user-id', publicKey: 'pub-key' };
-      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
-      const identifierHash = sha256Hex('user@example.com');
+      const mockPayload = {
+        sub: 'link-verification',
+        email: 'user@example.com',
+        providerSubject: 'google-sub-123',
+      };
+      const identifierHash = sha256Hex('google-sub-123');
       const otherAccountMethod = {
         id: 'other-am',
         type: 'google',
@@ -280,7 +292,11 @@ describe('AuthMethodService', () => {
 
     it('should include "Google account" in cross-account collision message for google type', async () => {
       const mockUser = { id: 'user-id', publicKey: 'pub-key' };
-      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
+      const mockPayload = {
+        sub: 'link-verification',
+        email: 'user@example.com',
+        providerSubject: 'google-sub-123',
+      };
 
       jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
       (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
@@ -289,11 +305,26 @@ describe('AuthMethodService', () => {
       authMethodRepository.findOne.mockResolvedValueOnce({
         id: 'other-am',
         type: 'google',
-        identifierHash: sha256Hex('user@example.com'),
+        identifierHash: sha256Hex('google-sub-123'),
         userId: 'other-user-id',
       });
 
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow('Google account');
+    });
+
+    it('should reject google linking when providerSubject is missing', async () => {
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'link-verification', email: 'user@example.com' },
+      });
+      userRepository.findOne.mockResolvedValue(mockUser);
+
+      await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(
+        'Cannot determine Google subject from JWT'
+      );
     });
 
     it('should include "email" in cross-account collision message for email type', async () => {
