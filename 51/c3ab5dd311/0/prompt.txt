@@ -3,3 +3,7 @@
 ---
 
 sorry about the interruption - please can you compile the report now
+
+---
+
+yeah commit the report as is, then please fix the high and medium issues, and mark them as resolved (together with the fix commit) and push this to remote.
