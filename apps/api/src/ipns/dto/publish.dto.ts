@@ -29,7 +29,7 @@ export class PublishIpnsDto {
   @Matches(/^(k51qzi5uqu5[a-z0-9]{40,60}|bafzaa[a-z2-7]{50,70})$/, {
     message: 'ipnsName must be a valid CIDv1 libp2p-key (k51qzi5uqu5... or bafzaa...)',
   })
-  @MaxLength(70)
+  @MaxLength(76)
   ipnsName!: string;
 
   @ApiProperty({
@@ -141,7 +141,7 @@ export class PublishIpnsEntryDto {
   @Matches(/^(k51qzi5uqu5[a-z0-9]{40,60}|bafzaa[a-z2-7]{50,70})$/, {
     message: 'ipnsName must be a valid CIDv1 libp2p-key (k51qzi5uqu5... or bafzaa...)',
   })
-  @MaxLength(70)
+  @MaxLength(76)
   ipnsName!: string;
 
   @ApiProperty({

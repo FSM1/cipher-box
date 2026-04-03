@@ -58,6 +58,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@cipherbox/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@nestjs/bullmq':
         specifier: ^11.0.4
         version: 11.0.4(@nestjs/common@11.1.12(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.12)(bullmq@5.67.3)

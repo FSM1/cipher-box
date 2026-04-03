@@ -105,9 +105,11 @@ export function parseIpnsRecord(buf: Uint8Array): ParsedIpnsRecord {
       }
       pos = end;
     } else if (wireType === 5) {
-      pos += 4; // 32-bit
+      if (pos + 4 > buf.length) throw new Error('Buffer underflow reading 32-bit field');
+      pos += 4;
     } else if (wireType === 1) {
-      pos += 8; // 64-bit
+      if (pos + 8 > buf.length) throw new Error('Buffer underflow reading 64-bit field');
+      pos += 8;
     } else {
       throw new Error(`Unsupported wire type ${wireType}`);
     }

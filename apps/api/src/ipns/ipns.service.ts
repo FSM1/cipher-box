@@ -24,6 +24,7 @@ import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { parseIpnsRecord } from './ipns-record-parser';
 import { SharesService } from '../shares/shares.service';
+import { deriveIpnsName } from '@cipherbox/crypto';
 
 @Injectable()
 export class IpnsService {
@@ -73,6 +74,12 @@ export class IpnsService {
 
         if (publicKeyBytes.length !== 32) {
           throw new BadRequestException('publicKey must be a raw 32-byte Ed25519 public key');
+        }
+
+        // Verify the public key cryptographically derives to the claimed IPNS name
+        const derivedName = await deriveIpnsName(publicKeyBytes);
+        if (derivedName !== dto.ipnsName) {
+          throw new BadRequestException('publicKey does not correspond to the given ipnsName');
         }
       }
 
