@@ -437,6 +437,15 @@ export class IpnsService {
           resolveFound = true;
           return cachedResult;
         }
+        // Equal sequence: enrich network result with cached signature fields if missing
+        if (dbSeq === networkSeq && !result.signatureV2 && cachedResult.signatureV2) {
+          result = {
+            ...result,
+            signatureV2: cachedResult.signatureV2,
+            data: cachedResult.data,
+            pubKey: result.pubKey ?? cachedResult.pubKey,
+          };
+        }
         timerSource = 'network';
         resolveFound = true;
         return result;

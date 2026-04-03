@@ -834,6 +834,52 @@ describe('IpnsService', () => {
       expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
     });
 
+    it('should enrich network result with cached signature fields when sequences are equal', async () => {
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      const cachedSigBytes = new Uint8Array(64).fill(0xaa);
+      const cachedDataBytes = new Uint8Array(48).fill(0xbb);
+
+      // Network returns record WITHOUT signature fields
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafyNETWORK',
+        sequence: 10n,
+      });
+
+      // DB cache has same sequence WITH signedRecord containing signature data
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyNETWORK',
+        sequenceNumber: '10',
+        signedRecord: signedRecordBytes,
+        publicKey: testPublicKeyBytes,
+      });
+
+      // parseCachedRecord will call parseIpnsRecordBytes on the signedRecord
+      // Second call to mockParseIpnsRecord is for the cached signedRecord
+      mockParseIpnsRecord
+        .mockReturnValueOnce({
+          value: '/ipfs/bafyNETWORK',
+          sequence: 10n,
+        })
+        .mockReturnValueOnce({
+          value: '/ipfs/bafyNETWORK',
+          sequence: 10n,
+          signatureV2: cachedSigBytes,
+          data: cachedDataBytes,
+        });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe('bafyNETWORK');
+      expect(result!.sequenceNumber).toBe('10');
+      expect(result!.signatureV2).toBe(Buffer.from(cachedSigBytes).toString('base64'));
+      expect(result!.data).toBe(Buffer.from(cachedDataBytes).toString('base64'));
+      expect(result!.pubKey).toBe(testPublicKey);
+    });
+
     describe('resolve latency metrics', () => {
       it('should observe ipnsResolveDuration with source=network on successful network resolution', async () => {
         const mockRecordBytes = new Uint8Array([1, 2, 3]);
