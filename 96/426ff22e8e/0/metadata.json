@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "96426ff22e8e",
+  "session_id": "935ce0d9-d394-4d48-a311-aa3527efc0ef",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-03T21:49:33.156032Z",
+  "branch": "feat/store-ipns-crypto-data-in-db",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "2a3a5ae186e1",
+  "token_usage": {
+    "input_tokens": 688,
+    "cache_creation_tokens": 361541,
+    "cache_read_tokens": 10894276,
+    "output_tokens": 37058,
+    "api_call_count": 101
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Perform a security review of the feat/store-ipns-crypto-data-in-db branch (IPNS signature storage feature), fix all identified vulnerabilities, and merge via PR.",
+    "outcome": "Security review completed, 6 of 8 findings resolved (2 deferred by design), PR #448 created and pushed, though CI build failures due to ESM/CJS compatibility issues in @cipherbox/crypto required additional fix commits.",
+    "learnings": {
+      "repo": [
+        "@cipherbox/crypto uses tsup to dual-build ESM+CJS, but its dependencies (@libp2p/crypto, @noble/ed25519, @noble/hashes, ipns) are ESM-only, causing ERR_PACKAGE_PATH_NOT_EXPORTED when NestJS (CJS) requires the CJS build",
+        "The NestJS API is a CommonJS environment; any @cipherbox/* package it depends on must have all ESM-only transitive deps bundled into the CJS output via tsup noExternal",
+        "IPNS names are cryptographically derived from Ed25519 public keys via deriveIpnsName(); clients must verify this binding on resolve to prevent key substitution attacks from a compromised server",
+        "The web app's ipns.service.ts did not send publicKey on publish, making server-side and client-side signature verification dead code for web-published records",
+        "signatureVerified is intentionally informational — callers do not gate on it (design decision, not a bug)",
+        "The server-side pubKey validation requires @cipherbox/crypto in the API package, which was not previously a dependency"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "line": 54,
+          "end_line": 54,
+          "finding": "Used spread operator Array.from(atob(...)) to convert base64 to Uint8Array — can cause call-stack overflow on large IPNS records; should use a loop-based approach instead"
+        },
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "line": 57,
+          "end_line": 64,
+          "finding": "publicKey was not derived and sent on publish, meaning the new server-side signature storage had no public key to store for web-originated records"
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 190,
+          "end_line": 204,
+          "finding": "resolveIpnsRecord verified the Ed25519 signature but never checked that the returned pubKey actually corresponds to the requested ipnsName — allows key substitution attack by compromised server"
+        },
+        {
+          "path": "apps/api/src/ipns/dto/publish.dto.ts",
+          "line": 163,
+          "end_line": 163,
+          "finding": "publicKey field had @MaxLength(100) but a base64-encoded 32-byte key is 44 chars; MaxLength(70) is a tighter and correct bound"
+        },
+        {
+          "path": "packages/crypto/tsup.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "noExternal must list ALL ESM-only transitive deps (@libp2p/crypto, @libp2p/peer-id, multiformats, @noble/ed25519, @noble/hashes, ipns) to produce a working CJS bundle; bundleAll is the safest default"
+        }
+      ],
+      "workflow": [
+        "tsup noExternal is the correct fix for ESM-only deps in a dual-build package — preferable to dynamic import() workarounds which hurt readability",
+        "When adding a workspace package as a new API dependency, pnpm install must be run and the package.json updated before the API build will succeed in CI",
+        "Security review reports should be committed separately from the fixes so the report-as-written is preserved and fixes can reference it"
+      ]
+    },
+    "friction": [
+      "CI revealed the ESM/CJS issue only after push — not caught by local build because local Jest config likely uses ESM transform",
+      "First noExternal fix only listed 3 packages; a second CI failure revealed @noble/ed25519, @noble/hashes, and ipns were also ESM-only, requiring a second fix commit",
+      "The full diff was 109KB and had to be read from a persisted file path rather than inline, adding a lookup step",
+      "WebFetch of the GitHub Actions URL did not return useful log content; had to use gh CLI to get actual error messages"
+    ],
+    "open_items": [
+      "Finding #4 (signature verification downgrade — server can omit signature fields to bypass verification) deferred as a design decision; callers never enforce signatureVerified=true",
+      "Finding #5 (inconsistent key zeroization across crypto functions) deferred as a convention issue rather than a concrete vulnerability",
+      "The @cipherbox/crypto bundleAll approach may increase bundle size for ESM consumers — worth revisiting if tree-shaking becomes important",
+      "Server-side pubKey-to-ipnsName binding check (Medium finding #3) was added but relies on @cipherbox/crypto being available in the API at runtime — should be covered by an integration test"
+    ]
+  }
+}
