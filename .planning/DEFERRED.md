@@ -126,11 +126,12 @@ From `.planning/security/REVIEW-20260402-172126.md`:
 
 ### Code Quality
 
-| Item                                         | Source Phase | Notes                                                                  |
-| -------------------------------------------- | ------------ | ---------------------------------------------------------------------- |
-| Full retirement of folder.service.ts         | 31           | 1,059 lines, 9 importers; migrate callers to SDK methods               |
-| Full retirement of bin.service.ts            | 31           | 971 lines, only `initializeBin` + `purgeExpired` still used by 2 hooks |
-| Remove crypto -> core circular devDependency | 19.1         | Test-only import; refactor vault-ipns test to use hardcoded vectors    |
+| Item                                         | Source Phase | Notes                                                                                                                              |
+| -------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Full retirement of folder.service.ts         | 31           | 1,059 lines, 9 importers; migrate callers to SDK methods                                                                           |
+| Full retirement of bin.service.ts            | 31           | 971 lines, only `initializeBin` + `purgeExpired` still used by 2 hooks                                                             |
+| Remove crypto -> core circular devDependency | 19.1         | Test-only import; refactor vault-ipns test to use hardcoded vectors                                                                |
+| Deduplicate `uint8ToBase64` helper           | PR #448      | Duplicated in sdk-core/file, sdk-core/folder, web/ipns.service; extract to shared util in `@cipherbox/crypto` or `@cipherbox/core` |
 
 ## Items Implemented in Later Phases
 
