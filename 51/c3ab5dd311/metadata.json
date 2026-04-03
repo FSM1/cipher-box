@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "51c3ab5dd311",
+  "strategy": "manual-commit",
+  "branch": "feat/store-ipns-crypto-data-in-db",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/security/REVIEW-20260402-172126.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/51/c3ab5dd311/0/metadata.json",
+      "transcript": "/51/c3ab5dd311/0/full.jsonl",
+      "content_hash": "/51/c3ab5dd311/0/content_hash.txt",
+      "prompt": "/51/c3ab5dd311/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 572,
+    "cache_creation_tokens": 101457,
+    "cache_read_tokens": 335393,
+    "output_tokens": 8244,
+    "api_call_count": 7
+  }
+}
