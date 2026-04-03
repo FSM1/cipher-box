@@ -28,10 +28,10 @@ import { withPerf } from '../perf';
  * The record is signed locally using the Ed25519 private key, then
  * the backend relays it to the IPFS network via delegated routing.
  *
- * @param params.ipnsPrivateKey - Ed25519 private key (64 bytes in libp2p format)
+ * @param params.ipnsPrivateKey - 32-byte Ed25519 private key seed
  * @param params.ipnsName - IPNS name (k51.../bafzaa... format)
  * @param params.metadataCid - CID of the encrypted metadata blob
- * @param params.sequenceNumber - Current sequence number (will be incremented before publish)
+ * @param params.sequenceNumber - Sequence number for this publish
  * @param params.encryptedIpnsPrivateKey - Hex ECIES-wrapped key for TEE (first publish only)
  * @param params.keyEpoch - TEE key epoch (required with encryptedIpnsPrivateKey)
  * @param params.expectedSequenceNumber - Pre-increment sequence number for conflict detection (folder records only)
