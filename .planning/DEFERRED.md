@@ -28,6 +28,16 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 | L1  | Low      | `/shares/lookup` enables public key enumeration -- always return 200    | Open        |
 | L4  | Low      | No pagination on shares endpoints -- add limit/offset                   | Implemented |
 
+## Security Review Findings (Deferred from IPNS Signature Storage PR #448)
+
+From `.planning/security/REVIEW-20260402-172126.md`:
+
+| ID  | Severity | Item                                                                                                       | Status   |
+| --- | -------- | ---------------------------------------------------------------------------------------------------------- | -------- |
+| S1  | Medium   | Validate signedRecord on publish: parse embedded CID/sequence and reject mismatches with dto fields        | Open     |
+| S2  | Medium   | Signature verification silently skipped when server omits fields (downgrade) -- enforce once data is ready | Deferred |
+| S3  | Medium   | Inconsistent private key zeroization -- establish caller-owns-key convention across SDK                    | Deferred |
+
 ## Deferred by Category
 
 ### Sharing & Collaboration
