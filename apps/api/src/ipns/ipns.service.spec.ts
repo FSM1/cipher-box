@@ -45,7 +45,8 @@ describe('IpnsService', () => {
 
   // Test data
   const testUserId = '550e8400-e29b-41d4-a716-446655440000';
-  const testIpnsName = 'k51qzi5uqu5dg12345abcdef67890';
+  // Derived from testPublicKeyBytes via deriveIpnsName (must match for server-side validation)
+  const testIpnsName = 'k51qzi5uqu5dg7hrs1jyr49oygapxsw71v7pv43rk8lemejo9h2m3hkzvww8io';
   const testMetadataCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
   const testRecord = btoa('test-ipns-record-bytes'); // base64 encoded
   const testRecordBytes = Buffer.from('test-ipns-record-bytes');
