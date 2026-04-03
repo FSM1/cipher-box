@@ -49,3 +49,7 @@ https://github.com/FSM1/cipher-box/actions/runs/23963340184/job/69898024682?pr=4
 ---
 
 web build is still failing even locally. please ensure that the api starts up locally before pushing to ci
+
+---
+
+please try committing again
