@@ -25,14 +25,18 @@ function parseArgs(argv) {
     i += 1;
   }
 
+  if (values.has('secret')) {
+    throw new Error('Do not pass --secret on CLI. Set TEST_SECRET in environment.');
+  }
+
   const apiUrl = values.get('api-url');
-  const secret = values.get('secret') || process.env.TEST_SECRET;
+  const secret = process.env.TEST_SECRET;
   const email = values.get('email');
   const fileName = values.get('file-name');
 
-  if (!apiUrl || !email || !fileName) {
+  if (!apiUrl || !email || !fileName || !secret) {
     throw new Error(
-      'Usage: verify-filepointer.mjs --api-url <url> --email <email> --file-name <name> [--expected-content <text>]'
+      'Usage: verify-filepointer.mjs --api-url <url> --email <email> --file-name <name> [--expected-content <text>] (requires TEST_SECRET env var)'
     );
   }
 

@@ -202,6 +202,16 @@ describe('IpnsService', () => {
       );
     });
 
+    it('should throw BadRequestException when publicKey does not derive to ipnsName', async () => {
+      // Use a valid 32-byte key that does NOT derive to testIpnsName
+      const wrongPublicKey = Buffer.from(new Uint8Array(32).fill(0xff)).toString('base64');
+      const invalidDto = createDto({ publicKey: wrongPublicKey });
+
+      await expect(service.publishRecord(testUserId, invalidDto)).rejects.toThrow(
+        'publicKey does not correspond to the given ipnsName'
+      );
+    });
+
     it('should allow publishing without encryptedIpnsPrivateKey for new folder (Phase 6 - TEE optional)', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
       mockFolderIpnsRepo.create.mockReturnValue({

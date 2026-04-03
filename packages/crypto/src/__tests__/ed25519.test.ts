@@ -42,6 +42,15 @@ describe('Ed25519 Key Generation', () => {
 
     expect(deriveEd25519PublicKey(keypair.privateKey)).toEqual(keypair.publicKey);
   });
+
+  it('throws on invalid private key length for public key derivation', () => {
+    expect(() => deriveEd25519PublicKey(new Uint8Array(31))).toThrow(
+      'Invalid private key size for public key derivation'
+    );
+    expect(() => deriveEd25519PublicKey(new Uint8Array(64))).toThrow(
+      'Invalid private key size for public key derivation'
+    );
+  });
 });
 
 describe('Ed25519 Signing', () => {

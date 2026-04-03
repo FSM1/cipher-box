@@ -19,6 +19,7 @@ vi.mock('@cipherbox/core', () => ({
 vi.mock('@cipherbox/crypto', () => ({
   verifyEd25519: vi.fn().mockResolvedValue(true),
   deriveEd25519PublicKey: vi.fn().mockReturnValue(new Uint8Array(32).fill(7)),
+  deriveIpnsName: vi.fn().mockResolvedValue('k51resolve'),
   concatBytes: vi.fn((...args: Uint8Array[]) => {
     const total = args.reduce((sum, a) => sum + a.length, 0);
     const result = new Uint8Array(total);
@@ -137,6 +138,64 @@ describe('IPNS operations', () => {
       vi.mocked(ipnsControllerResolveRecord).mockRejectedValue(new Error('Server error'));
 
       await expect(resolveIpnsRecord('k51error')).rejects.toThrow('Server error');
+    });
+
+    it('verifies signature and pubKey-to-ipnsName binding when signature fields present', async () => {
+      const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+      const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+      vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+        success: true,
+        cid: 'QmSignedCid',
+        sequenceNumber: '10',
+        signatureV2: btoa('fake-sig-bytes'),
+        data: btoa('fake-cbor-data'),
+        pubKey: btoa('fake-pubkey-bytes'),
+      });
+      vi.mocked(deriveIpnsName).mockResolvedValue('k51verified');
+
+      const result = await resolveIpnsRecord('k51verified');
+
+      expect(verifyEd25519).toHaveBeenCalled();
+      expect(deriveIpnsName).toHaveBeenCalled();
+      expect(result).not.toBeNull();
+      expect(result!.signatureVerified).toBe(true);
+      expect(result!.cid).toBe('QmSignedCid');
+    });
+
+    it('throws when pubKey does not derive to requested ipnsName', async () => {
+      const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+      const { deriveIpnsName } = await import('@cipherbox/crypto');
+      vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+        success: true,
+        cid: 'QmFakedCid',
+        sequenceNumber: '1',
+        signatureV2: btoa('sig'),
+        data: btoa('data'),
+        pubKey: btoa('wrongkey'),
+      });
+      vi.mocked(deriveIpnsName).mockResolvedValue('k51different-name');
+
+      await expect(resolveIpnsRecord('k51requested-name')).rejects.toThrow(
+        'IPNS public key does not match requested name'
+      );
+    });
+
+    it('throws when signature verification fails', async () => {
+      const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+      const { verifyEd25519 } = await import('@cipherbox/crypto');
+      vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+        success: true,
+        cid: 'QmTampered',
+        sequenceNumber: '1',
+        signatureV2: btoa('bad-sig'),
+        data: btoa('data'),
+        pubKey: btoa('key'),
+      });
+      vi.mocked(verifyEd25519).mockResolvedValue(false);
+
+      await expect(resolveIpnsRecord('k51tampered')).rejects.toThrow(
+        'IPNS signature verification failed'
+      );
     });
   });
 });

@@ -99,6 +99,7 @@ export async function batchPublishIpnsRecords(
   records: Array<{
     ipnsName: string;
     recordBase64: string;
+    publicKey?: string;
     metadataCid: string;
     encryptedIpnsPrivateKey?: string;
     keyEpoch?: number;
@@ -111,6 +112,7 @@ export async function batchPublishIpnsRecords(
     records: records.map((r) => ({
       ipnsName: r.ipnsName,
       record: r.recordBase64,
+      publicKey: r.publicKey,
       metadataCid: r.metadataCid,
       encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
       keyEpoch: r.keyEpoch,
