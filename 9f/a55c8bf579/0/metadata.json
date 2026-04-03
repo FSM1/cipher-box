@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "9fa55c8bf579",
+  "session_id": "935ce0d9-d394-4d48-a311-aa3527efc0ef",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-03T21:57:26.022205Z",
+  "branch": "feat/store-ipns-crypto-data-in-db",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/crypto/tsup.config.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "c9363433da91",
+  "token_usage": {
+    "input_tokens": 712,
+    "cache_creation_tokens": 372198,
+    "cache_read_tokens": 13823715,
+    "output_tokens": 40239,
+    "api_call_count": 119
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Conduct a security review of the feat/store-ipns-crypto-data-in-db branch (IPNS signature/pubkey storage in DB), fix all identified vulnerabilities, and merge via PR.",
+    "outcome": "Security review completed with 8 findings (2 HIGH, 3 MEDIUM, 3 LOW); all HIGH/MEDIUM issues fixed and pushed to PR #448, though a tsup build config regression (noExternal bundling Node builtins into ESM) caused a desktop build failure that required a follow-up fix splitting CJS/ESM configs.",
+    "learnings": {
+      "repo": [
+        "@cipherbox/crypto depends on ESM-only packages (@libp2p/crypto, @noble/ed25519, @noble/hashes, ipns) that cannot be require()'d by NestJS (CommonJS) or Jest without bundling them into the CJS output.",
+        "The API (NestJS) runs in CommonJS; the desktop/web apps use Vite which handles ESM externals itself — so @cipherbox/crypto needs separate CJS (fully bundled) and ESM (externals kept) outputs.",
+        "IPNS names are cryptographically derived from the public key via deriveIpnsName(); without binding pubKey→ipnsName on resolve, a server can substitute its own keypair and the client accepts the forged record.",
+        "The web app (apps/web/src/services/ipns.service.ts) was not sending publicKey on publish, making the server-side and client-side signature verification dead code for web-published records.",
+        "Security review reports go in .planning/security/REVIEW-[timestamp].md."
+      ],
+      "code": [
+        {
+          "path": "packages/crypto/tsup.config.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Must use two separate defineConfig entries: CJS with noExternal: [/.*/ ] to bundle all ESM-only deps, and ESM without noExternal so Vite can resolve browser-compatible versions. Using clean: true only on CJS (first) entry prevents wiping the CJS output when ESM builds."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 190,
+          "end_line": 209,
+          "finding": "resolveIpnsRecord verified signature validity but never bound pubKey to ipnsName — needed deriveIpnsName() check after signature verification to prevent key substitution attacks."
+        },
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "line": 54,
+          "end_line": 64,
+          "finding": "Used spread operator for base64 encoding (String.fromCharCode(...bytes)) which causes call-stack overflow on large records; also was not deriving or sending publicKey on publish."
+        },
+        {
+          "path": "apps/api/src/ipns/dto/publish.dto.ts",
+          "line": 50,
+          "end_line": 62,
+          "finding": "MaxLength(100) on publicKey field but a 32-byte key base64-encodes to 44 chars — MaxLength should be 70 (with padding headroom). Applied to both PublishIpnsDto and PublishIpnsEntryDto."
+        },
+        {
+          "path": "packages/crypto/src/ed25519/keygen.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "deriveEd25519PublicKey lacked input validation; added check that private key is exactly 32 bytes before passing to noble/ed25519."
+        }
+      ],
+      "workflow": [
+        "When fixing an ESM/CJS compatibility issue, verify the fix doesn't break other consumers (Vite-based browser builds) before pushing to CI.",
+        "Always do a full local pnpm build before pushing dependency/build-config changes to CI.",
+        "Start the API locally (even without all services) to confirm require() of new dependencies works before pushing.",
+        "Security review workflow: identify → parallel false-positive filter → fix → update report with RESOLVED status → commit report and fixes separately."
+      ]
+    },
+    "friction": [
+      "1Password SSH signing agent caused a transient commit failure that required a retry.",
+      "Two CI iterations wasted on the ESM-only bundling issue: first iteration only bundled @libp2p/* but missed @noble/* and ipns; second used noExternal: [/.*/ ] which broke Vite by bundling Node builtins into ESM output.",
+      "The full build was not run locally before pushing the noExternal fix, which would have caught the Vite regression immediately.",
+      "CI log fetching via gh CLI required multiple attempts to locate the actual error message."
+    ],
+    "open_items": [
+      "Finding #4 (signature verification downgrade — server can omit signature fields and signatureVerified returns false but callers never check it) was deferred as a design decision; callers should be audited to enforce signatureVerified === true.",
+      "Finding #5 (inconsistent key zeroization in crypto functions) was deferred as a convention issue rather than fixed.",
+      "The tsup config split fix (CJS bundled, ESM external) was committed but the commit failed due to 1Password SSH agent error at end of session — needs verification that it was actually pushed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-03T21:56:52.206862Z",
+    "agent_lines": 20,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 20,
+    "agent_percentage": 100
+  }
+}
