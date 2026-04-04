@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "2b690f04c0ad",
+  "session_id": "935ce0d9-d394-4d48-a311-aa3527efc0ef",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T00:45:34.954725Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/desktop/src-tauri/src/fuse/mod.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "35b7804d0bd1",
+  "checkpoint_transcript_start": 745,
+  "transcript_lines_at_start": 745,
+  "token_usage": {
+    "input_tokens": 140,
+    "cache_creation_tokens": 96550,
+    "cache_read_tokens": 35718050,
+    "output_tokens": 27914,
+    "api_call_count": 123
+  },
+  "session_metrics": {
+    "turn_count": 35
+  },
+  "summary": {
+    "intent": "Debug desktop E2E test failures in CI after merging IPNS signed record storage changes, identify root cause, and fix it.",
+    "outcome": "Identified two bugs: (1) `parseCachedRecord` in the API was returning the sequence number from inside the record bytes (client-submitted, could be 0) instead of the authoritative DB column value, causing stale sequence numbers to be returned on resolve; (2) the Rust FUSE `PublishCoordinator` cache was never seeded from the pre-populate resolve at mount time. Both fixes were applied and verified by running the full local desktop E2E suite (5/5 tests passing, no conflicts).",
+    "learnings": {
+      "repo": [
+        "The desktop client publishes root folder IPNS at sequence 0 (record bytes), but upsertFolderIpns always increments the DB column to 1 — so the DB sequence and the embedded record sequence are intentionally out of sync by 1 after init.",
+        "Desktop E2E only runs on main pushes, not on PR branches, which means regressions can slip through PR CI.",
+        "The FUSE `PublishCoordinator` seq_cache is the authoritative local source for expected sequence numbers during background metadata publishes; if empty, it re-resolves from the API.",
+        "vault.service.ts initVault creates a FolderIpns placeholder at seq 0; the actual first publish from the desktop increments it to 1 before vault/init is called, so the duplicate key catch in vault.service.ts only updates isRoot.",
+        "The desktop init flow order: IPNS publish (seq 0 record → DB seq 1) → /vault/init (duplicate key → just sets isRoot) → FUSE mount.",
+        "CI uses `vite preview --port 1420` to serve the frontend so the Tauri webview can complete the dev-key auth flow in headless mode."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 539,
+          "end_line": 545,
+          "finding": "parseCachedRecord was extracting sequenceNumber from the signedRecord bytes (client-submitted value, e.g. 0) rather than using cached.sequenceNumber (the authoritative DB column, e.g. 1). Fixed to use the DB column."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "line": 212,
+          "end_line": 212,
+          "finding": "PublishCoordinator was initialized with an empty seq_cache and never seeded from the pre-populate IPNS resolve responses at mount time, causing first background publishes to use expected_sequence_number=0."
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 281,
+          "end_line": 303,
+          "finding": "resolve_sequence checks cache first, then resolves from API; if cache is empty and API returns seq 0 (due to parseCachedRecord bug), the publish sends expected=0 but server has 1 → 409 → persistent conflict."
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "line": 80,
+          "end_line": 101,
+          "finding": "initVault creates FolderIpns with sequenceNumber '0' as a placeholder; if the desktop IPNS publish already ran (which it does first), the save() hits duplicate key and only updates isRoot — sequence is preserved at 1."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 99,
+          "end_line": 111,
+          "finding": "Desktop publishes root folder IPNS at sequence 0 with no expectedSequenceNumber (None), which is why record bytes always contain sequence=0 while the DB stores sequence=1."
+        }
+      ],
+      "workflow": [
+        "Before concluding a test failure is a pre-existing flaky issue, check the last N CI runs — 10 consecutive passes is strong evidence of a regression.",
+        "When a new API code path parses stored bytes, verify that the bytes' embedded values are not used as authoritative sources when a separate DB column tracks the canonical value.",
+        "Local desktop E2E reproduction requires: Docker stack, API running with .env, vite preview on port 1420, and the Rust binary built with FUSE feature — all must be up before running the test script.",
+        "1Password SSH signing agent can block automated git commits; keep commits manual or ensure the signing agent is running before automation attempts to commit."
+      ]
+    },
+    "friction": [
+      "1Password SSH signing agent blocked automated git commit twice, requiring manual user intervention to commit.",
+      "No .env file existed locally for the API — had to reconstruct from .env.example with a placeholder JWT_SECRET.",
+      "Desktop Rust binary requires a full Tauri build (slow) and a running vite preview server to complete dev-key auth — not obvious from reading the test script alone.",
+      "Desktop E2E only runs on main, not PRs, so the regression wasn't caught before merge.",
+      "Significant time spent ruling out non-causes (publicKey validation, delegated routing mock, vault init sequence) before identifying parseCachedRecord as the root cause."
+    ],
+    "open_items": [
+      "The desktop client publishes root folder IPNS with sequence=0 in record bytes while the server stores sequence=1 — this fundamental mismatch is papered over by the fix but the client could be updated to publish at the correct sequence.",
+      "Subfolder IPNS sequence seeding was added to the coordinator but the root cause fix on the API side means it may not be strictly necessary — the Rust-side fix is defense-in-depth.",
+      "Consider running a subset of desktop E2E (or at least a smoke test) on PR branches to catch regressions before merge.",
+      "The mock IPNS routing service showed as 'unhealthy' locally — worth investigating whether the mock is reliable in CI."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-04T00:44:58.17662Z",
+    "agent_lines": 28,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 28,
+    "agent_percentage": 100
+  }
+}
