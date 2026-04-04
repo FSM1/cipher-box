@@ -496,14 +496,20 @@ jobs:
 
       # --- Failure artifacts ---
 
+      - name: Collect logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          mkdir -p failure-logs
+          cp /tmp/cipherbox-desktop.log failure-logs/ 2>/dev/null || true
+          cp "$RUNNER_TEMP/cipherbox-desktop.log" failure-logs/ 2>/dev/null || true
+          cp ~/Library/Logs/fuse-t/fuse-t.log failure-logs/ 2>/dev/null || true
+          cp apps/api/*.log failure-logs/ 2>/dev/null || true
+
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: desktop-e2e-logs-${{ matrix.platform }}
-          path: |
-            apps/api/*.log
-            ~/Library/Logs/fuse-t/fuse-t.log
-            /tmp/cipherbox-desktop.log
-            ${{ runner.temp }}/cipherbox-desktop.log
+          path: failure-logs/
           retention-days: 7
