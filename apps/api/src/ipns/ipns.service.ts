@@ -535,10 +535,14 @@ export class IpnsService {
 
     if (cached.signedRecord) {
       try {
-        return this.withCachedPublicKey(
+        const parsed = this.withCachedPublicKey(
           this.parseIpnsRecordBytes(cached.signedRecord),
           cached.publicKey ?? undefined
         );
+        // Use the DB column's sequenceNumber as authoritative — it is always
+        // incremented by upsertFolderIpns, while the record bytes may contain
+        // the client's pre-increment value (e.g. sequence 0 on first publish).
+        return { ...parsed, sequenceNumber: cached.sequenceNumber };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.warn(`Failed to parse cached signed record for ${cached.ipnsName}: ${message}`);

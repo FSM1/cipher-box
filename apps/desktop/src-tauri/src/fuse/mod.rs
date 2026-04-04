@@ -115,14 +115,19 @@ pub async fn mount_filesystem(
     // Pre-populate root folder
     let mut metadata_cache = cipherbox_fuse::cache::MetadataCache::new();
     log::info!("Pre-populating root folder from IPNS...");
-    let fetch_result: Result<(Vec<u8>, String), String> = async {
+    let fetch_result: Result<(Vec<u8>, String, u64), String> = async {
         let resolve_resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, &root_ipns_name).await.map_err(|e| format!("{}", e))?;
         let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resolve_resp.cid).await.map_err(|e| format!("{}", e))?;
-        Ok((encrypted_bytes, resolve_resp.cid))
+        let seq = resolve_resp.sequence_number.parse::<u64>().unwrap_or(0);
+        Ok((encrypted_bytes, resolve_resp.cid, seq))
     }.await;
 
+    // Track resolved sequence numbers to seed the PublishCoordinator after creation
+    let mut initial_sequences: Vec<(String, u64)> = Vec::new();
+
     match fetch_result {
-        Ok((encrypted_bytes, cid)) => {
+        Ok((encrypted_bytes, cid, root_seq)) => {
+            initial_sequences.push((root_ipns_name.clone(), root_seq));
             match cipherbox_core::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
                 Ok(metadata) => {
                     metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
@@ -154,12 +159,14 @@ pub async fn mount_filesystem(
                                 } else { None }
                             }).collect();
                         for (sub_ino, sub_ipns, sub_key) in &subfolder_infos {
-                            let sub_result: Result<(Vec<u8>, String), String> = async {
+                            let sub_result: Result<(Vec<u8>, String, u64), String> = async {
                                 let resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, sub_ipns).await.map_err(|e| format!("{}", e))?;
                                 let bytes = cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resp.cid).await.map_err(|e| format!("{}", e))?;
-                                Ok((bytes, resp.cid))
+                                let seq = resp.sequence_number.parse::<u64>().unwrap_or(0);
+                                Ok((bytes, resp.cid, seq))
                             }.await;
-                            if let Ok((enc_bytes, sub_cid)) = sub_result {
+                            if let Ok((enc_bytes, sub_cid, sub_seq)) = sub_result {
+                                initial_sequences.push((sub_ipns.clone(), sub_seq));
                                 if let Ok(sub_meta) = cipherbox_core::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
                                     metadata_cache.set(sub_ipns, sub_meta.clone(), sub_cid);
                                     if let Ok(()) = inodes.populate_folder(*sub_ino, &sub_meta, &private_key, &public_key, false) {
@@ -209,7 +216,16 @@ pub async fn mount_filesystem(
         pending_content: HashMap::new(),
         upload_rx, upload_tx,
         mutated_folders: HashMap::new(),
-        publish_coordinator: Arc::new(PublishCoordinator::new()),
+        publish_coordinator: {
+            let coord = Arc::new(PublishCoordinator::new());
+            for (name, seq) in &initial_sequences {
+                coord.record_publish(name, *seq);
+            }
+            if !initial_sequences.is_empty() {
+                log::info!("PublishCoordinator seeded with {} sequence(s) from pre-populate", initial_sequences.len());
+            }
+            coord
+        },
         publish_queue: HashMap::new(),
     };
 
