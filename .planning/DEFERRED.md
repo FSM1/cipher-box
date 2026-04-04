@@ -28,6 +28,16 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 | L1  | Low      | `/shares/lookup` enables public key enumeration -- always return 200    | Open        |
 | L4  | Low      | No pagination on shares endpoints -- add limit/offset                   | Implemented |
 
+## Security Review Findings (Deferred from IPNS Signature Storage PR #448)
+
+From `.planning/security/REVIEW-20260402-172126.md`:
+
+| ID  | Severity | Item                                                                                                       | Status   |
+| --- | -------- | ---------------------------------------------------------------------------------------------------------- | -------- |
+| S1  | Medium   | Validate signedRecord on publish: parse embedded CID/sequence and reject mismatches with dto fields        | Open     |
+| S2  | Medium   | Signature verification silently skipped when server omits fields (downgrade) -- enforce once data is ready | Deferred |
+| S3  | Medium   | Inconsistent private key zeroization -- establish caller-owns-key convention across SDK                    | Deferred |
+
 ## Deferred by Category
 
 ### Sharing & Collaboration
@@ -116,11 +126,12 @@ From `.planning/todos/done/2026-02-21-phase14-security-review-deferred.md`:
 
 ### Code Quality
 
-| Item                                         | Source Phase | Notes                                                                  |
-| -------------------------------------------- | ------------ | ---------------------------------------------------------------------- |
-| Full retirement of folder.service.ts         | 31           | 1,059 lines, 9 importers; migrate callers to SDK methods               |
-| Full retirement of bin.service.ts            | 31           | 971 lines, only `initializeBin` + `purgeExpired` still used by 2 hooks |
-| Remove crypto -> core circular devDependency | 19.1         | Test-only import; refactor vault-ipns test to use hardcoded vectors    |
+| Item                                         | Source Phase | Notes                                                                                                                              |
+| -------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Full retirement of folder.service.ts         | 31           | 1,059 lines, 9 importers; migrate callers to SDK methods                                                                           |
+| Full retirement of bin.service.ts            | 31           | 971 lines, only `initializeBin` + `purgeExpired` still used by 2 hooks                                                             |
+| Remove crypto -> core circular devDependency | 19.1         | Test-only import; refactor vault-ipns test to use hardcoded vectors                                                                |
+| Deduplicate `uint8ToBase64` helper           | PR #448      | Duplicated in sdk-core/file, sdk-core/folder, web/ipns.service; extract to shared util in `@cipherbox/crypto` or `@cipherbox/core` |
 
 ## Items Implemented in Later Phases
 

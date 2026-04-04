@@ -37,6 +37,7 @@ export async function publishVaultKeyBlob(params: {
   const { cid } = await addToIpfs(params.ctx, new Uint8Array(v2Blob));
   const result = await createAndPublishIpnsRecord({
     ipnsPrivateKey: vaultKeyKeypair.privateKey,
+    ipnsPublicKey: vaultKeyKeypair.publicKey,
     ipnsName: vaultKeyKeypair.ipnsName,
     metadataCid: cid,
     sequenceNumber: 0n,

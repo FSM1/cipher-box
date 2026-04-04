@@ -9,6 +9,7 @@
 import {
   generateEd25519Keypair,
   deriveIpnsName,
+  deriveEd25519PublicKey,
   generateRandomBytes,
   wrapKey,
   bytesToHex,
@@ -174,6 +175,7 @@ export async function updateFolderMetadataAndPublish(params: {
   children: FolderChild[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
+  ipnsPublicKey?: Uint8Array;
   ipnsName: string;
   sequenceNumber: bigint;
   ctx: SdkContext;
@@ -204,6 +206,7 @@ export async function updateFolderMetadataAndPublish(params: {
       try {
         await createAndPublishIpnsRecord({
           ipnsPrivateKey: params.ipnsPrivateKey,
+          ipnsPublicKey: params.ipnsPublicKey,
           ipnsName: params.ipnsName,
           metadataCid: cid,
           sequenceNumber: newSeq,
@@ -370,6 +373,7 @@ async function buildFolderIpnsRecord(params: {
   children: FolderChild[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
+  ipnsPublicKey?: Uint8Array;
   ipnsName: string;
   sequenceNumber: bigint;
   ctx: SdkContext;
@@ -399,12 +403,16 @@ async function buildFolderIpnsRecord(params: {
   );
   const recordBytes = marshalIpnsRecord(record);
   const recordBase64 = uint8ToBase64(recordBytes);
+  const publicKey = uint8ToBase64(
+    params.ipnsPublicKey ?? deriveEd25519PublicKey(params.ipnsPrivateKey)
+  );
 
   return {
     cid,
     record: {
       ipnsName: params.ipnsName,
       recordBase64,
+      publicKey,
       metadataCid: cid,
       encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
       keyEpoch: params.keyEpoch,
@@ -428,6 +436,7 @@ export async function addFileToFolder(params: {
   children: FolderChild[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
+  ipnsPublicKey?: Uint8Array;
   ipnsName: string;
   sequenceNumber: bigint;
   fileId: string;
@@ -462,6 +471,7 @@ export async function addFileToFolder(params: {
     children,
     folderKey: params.folderKey,
     ipnsPrivateKey: params.ipnsPrivateKey,
+    ipnsPublicKey: params.ipnsPublicKey,
     ipnsName: params.ipnsName,
     sequenceNumber: params.sequenceNumber,
     ctx: params.ctx,
@@ -493,6 +503,7 @@ export async function addFilesToFolder(params: {
   children: FolderChild[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
+  ipnsPublicKey?: Uint8Array;
   ipnsName: string;
   sequenceNumber: bigint;
   files: Array<{
@@ -536,6 +547,7 @@ export async function addFilesToFolder(params: {
     children,
     folderKey: params.folderKey,
     ipnsPrivateKey: params.ipnsPrivateKey,
+    ipnsPublicKey: params.ipnsPublicKey,
     ipnsName: params.ipnsName,
     sequenceNumber: params.sequenceNumber,
     ctx: params.ctx,

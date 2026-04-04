@@ -8,12 +8,12 @@
  *   field 8 (SignatureV2) – length-delimited, Ed25519 signature bytes
  *   field 9 (Data)        – length-delimited, CBOR-encoded signed data
  *
- * Signature fields (7/8/9) are returned as an all-or-nothing bundle:
- * if any field is missing or pubKey extraction fails, all are omitted.
+ * SignatureV2 (field 8) and data (field 9) are returned independently.
+ * The public key (field 7) may be omitted by some publishers, in which case
+ * callers can supplement it from trusted cached metadata.
  *
  * Wire format reference: https://protobuf.dev/programming-guides/encoding/
  */
-
 export interface ParsedIpnsRecord {
   value: string;
   sequence: bigint;
@@ -105,9 +105,11 @@ export function parseIpnsRecord(buf: Uint8Array): ParsedIpnsRecord {
       }
       pos = end;
     } else if (wireType === 5) {
-      pos += 4; // 32-bit
+      if (pos + 4 > buf.length) throw new Error('Buffer underflow reading 32-bit field');
+      pos += 4;
     } else if (wireType === 1) {
-      pos += 8; // 64-bit
+      if (pos + 8 > buf.length) throw new Error('Buffer underflow reading 64-bit field');
+      pos += 8;
     } else {
       throw new Error(`Unsupported wire type ${wireType}`);
     }
@@ -117,14 +119,11 @@ export function parseIpnsRecord(buf: Uint8Array): ParsedIpnsRecord {
     throw new Error('IPNS record missing Value field');
   }
 
-  // If signatureV2 and data are present but pubKey extraction failed,
-  // drop all signature fields — partial signature data is unverifiable
-  const hasCompleteSigData = signatureV2 && data && rawPubKey;
   return {
     value,
     sequence,
-    signatureV2: hasCompleteSigData ? signatureV2 : undefined,
-    data: hasCompleteSigData ? data : undefined,
-    pubKey: hasCompleteSigData ? rawPubKey : undefined,
+    signatureV2,
+    data,
+    pubKey: rawPubKey,
   };
 }

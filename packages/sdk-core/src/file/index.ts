@@ -40,6 +40,7 @@ function uint8ToBase64(bytes: Uint8Array): string {
 export type FileIpnsRecordPayload = {
   ipnsName: string;
   recordBase64: string;
+  publicKey?: string;
   metadataCid: string;
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
@@ -128,6 +129,7 @@ export async function createFileMetadata(params: {
       ipnsRecord: {
         ipnsName: ipnsKeypair.ipnsName,
         recordBase64,
+        publicKey: uint8ToBase64(ipnsKeypair.publicKey),
         metadataCid,
         encryptedIpnsPrivateKey: teeEncryptedIpnsPrivateKey,
         keyEpoch,

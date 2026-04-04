@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.35.0
+ * OpenAPI spec version: 0.36.1
  */
 
 export type HealthControllerCheck200InfoDatabase = {

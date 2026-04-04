@@ -45,9 +45,13 @@ describe('IpnsService', () => {
 
   // Test data
   const testUserId = '550e8400-e29b-41d4-a716-446655440000';
-  const testIpnsName = 'k51qzi5uqu5dg12345abcdef67890';
+  // Derived from testPublicKeyBytes via deriveIpnsName (must match for server-side validation)
+  const testIpnsName = 'k51qzi5uqu5dg7hrs1jyr49oygapxsw71v7pv43rk8lemejo9h2m3hkzvww8io';
   const testMetadataCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
   const testRecord = btoa('test-ipns-record-bytes'); // base64 encoded
+  const testRecordBytes = Buffer.from('test-ipns-record-bytes');
+  const testPublicKeyBytes = Buffer.from(new Uint8Array(32).map((_, index) => index + 1));
+  const testPublicKey = testPublicKeyBytes.toString('base64');
   const testEncryptedIpnsPrivateKey = 'a'.repeat(128); // 64 bytes hex
   const testKeyEpoch = 1;
 
@@ -57,6 +61,8 @@ describe('IpnsService', () => {
     ipnsName: testIpnsName,
     latestCid: testMetadataCid,
     sequenceNumber: '5',
+    signedRecord: null,
+    publicKey: testPublicKeyBytes,
     encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
     keyEpoch: testKeyEpoch,
     isRoot: false,
@@ -129,6 +135,7 @@ describe('IpnsService', () => {
     const createDto = (overrides?: Partial<PublishIpnsDto>): PublishIpnsDto => ({
       ipnsName: testIpnsName,
       record: testRecord,
+      publicKey: testPublicKey,
       metadataCid: testMetadataCid,
       encryptedIpnsPrivateKey: testEncryptedIpnsPrivateKey,
       keyEpoch: testKeyEpoch,
@@ -149,6 +156,12 @@ describe('IpnsService', () => {
         testIpnsName,
         expect.any(Uint8Array)
       );
+      expect(mockFolderIpnsRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          signedRecord: testRecordBytes,
+          publicKey: testPublicKeyBytes,
+        })
+      );
     });
 
     it('should publish record for existing folder and increment sequence', async () => {
@@ -162,6 +175,12 @@ describe('IpnsService', () => {
 
       expect(result.success).toBe(true);
       expect(result.sequenceNumber).toBe('6');
+      expect(mockFolderIpnsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          signedRecord: testRecordBytes,
+          publicKey: testPublicKeyBytes,
+        })
+      );
     });
 
     it('should throw BadRequestException for invalid base64 record', async () => {
@@ -172,6 +191,24 @@ describe('IpnsService', () => {
       );
       await expect(service.publishRecord(testUserId, invalidDto)).rejects.toThrow(
         'Invalid base64-encoded record'
+      );
+    });
+
+    it('should throw BadRequestException for invalid publicKey size', async () => {
+      const invalidDto = createDto({ publicKey: Buffer.from([1, 2, 3]).toString('base64') });
+
+      await expect(service.publishRecord(testUserId, invalidDto)).rejects.toThrow(
+        'publicKey must be a raw 32-byte Ed25519 public key'
+      );
+    });
+
+    it('should throw BadRequestException when publicKey does not derive to ipnsName', async () => {
+      // Use a valid 32-byte key that does NOT derive to testIpnsName
+      const wrongPublicKey = Buffer.from(new Uint8Array(32).fill(0xff)).toString('base64');
+      const invalidDto = createDto({ publicKey: wrongPublicKey });
+
+      await expect(service.publishRecord(testUserId, invalidDto)).rejects.toThrow(
+        'publicKey does not correspond to the given ipnsName'
       );
     });
 
@@ -369,16 +406,19 @@ describe('IpnsService', () => {
         keyEpoch: testKeyEpoch,
       });
 
-      expect(mockFolderIpnsRepo.create).toHaveBeenCalledWith({
-        userId: testUserId,
-        ipnsName: testIpnsName,
-        latestCid: testMetadataCid,
-        sequenceNumber: '1',
-        encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
-        keyEpoch: testKeyEpoch,
-        isRoot: false,
-        recordType: 'folder',
-      });
+      expect(mockFolderIpnsRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: testUserId,
+          ipnsName: testIpnsName,
+          latestCid: testMetadataCid,
+          sequenceNumber: '1',
+          signedRecord: testRecordBytes,
+          encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
+          keyEpoch: testKeyEpoch,
+          isRoot: false,
+          recordType: 'folder',
+        })
+      );
     });
 
     it('should increment sequence number for existing folder', async () => {
@@ -618,10 +658,21 @@ describe('IpnsService', () => {
       mockDelegatedRoutingClient.resolve.mockRejectedValue(
         new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
       );
+      const sigBytes = new Uint8Array(64).fill(0xab);
+      const dataBytes = new Uint8Array(48).fill(0xcd);
+      const pubKeyBytes = new Uint8Array(32).fill(0xef);
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafyCACHED',
+        sequence: 42n,
+        signatureV2: sigBytes,
+        data: dataBytes,
+        pubKey: pubKeyBytes,
+      });
       const cachedFolder = {
         ...mockFolderEntity,
         latestCid: 'bafyCACHED',
         sequenceNumber: '42',
+        signedRecord: Buffer.from([9, 9, 9]),
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(cachedFolder);
 
@@ -630,6 +681,9 @@ describe('IpnsService', () => {
       expect(result).not.toBeNull();
       expect(result!.cid).toBe('bafyCACHED');
       expect(result!.sequenceNumber).toBe('42');
+      expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
+      expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
+      expect(result!.pubKey).toBe(Buffer.from(pubKeyBytes).toString('base64'));
       expect(mockFolderIpnsRepo.findOne).toHaveBeenCalledWith({
         where: { ipnsName: testIpnsName },
       });
@@ -700,16 +754,25 @@ describe('IpnsService', () => {
       // Network returns stale record (seq 3)
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
       mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
-      mockParseIpnsRecord.mockReturnValue({
-        value: '/ipfs/bafySTALE',
-        sequence: 3n,
-      });
+      mockParseIpnsRecord
+        .mockReturnValueOnce({
+          value: '/ipfs/bafySTALE',
+          sequence: 3n,
+        })
+        .mockReturnValueOnce({
+          value: '/ipfs/bafyFRESH',
+          sequence: 10n,
+          signatureV2: new Uint8Array(64).fill(1),
+          data: new Uint8Array(48).fill(2),
+          pubKey: new Uint8Array(32).fill(3),
+        });
 
       // DB has newer record (seq 10)
       mockFolderIpnsRepo.findOne.mockResolvedValue({
         ...mockFolderEntity,
         latestCid: 'bafyFRESH',
         sequenceNumber: '10',
+        signedRecord: Buffer.from([4, 5, 6]),
       });
 
       const result = await service.resolveRecord(testIpnsName);
@@ -717,6 +780,7 @@ describe('IpnsService', () => {
       expect(result).not.toBeNull();
       expect(result!.cid).toBe('bafyFRESH');
       expect(result!.sequenceNumber).toBe('10');
+      expect(result!.signatureV2).toBeDefined();
     });
 
     it('should prefer network result when it has equal or higher sequence than DB', async () => {
@@ -739,6 +803,81 @@ describe('IpnsService', () => {
       expect(result).not.toBeNull();
       expect(result!.cid).toBe('bafyNETWORK');
       expect(result!.sequenceNumber).toBe('10');
+    });
+
+    it('should enrich network signature data with cached publicKey when field 7 is absent', async () => {
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      const sigBytes = new Uint8Array(64).fill(0x12);
+      const dataBytes = new Uint8Array(48).fill(0x34);
+
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafyNETWORK',
+        sequence: 10n,
+        signatureV2: sigBytes,
+        data: dataBytes,
+      });
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyDB',
+        sequenceNumber: '10',
+        signedRecord: null,
+        publicKey: testPublicKeyBytes,
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe('bafyNETWORK');
+      expect(result!.pubKey).toBe(testPublicKey);
+      expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
+      expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
+    });
+
+    it('should enrich network result with cached signature fields when sequences are equal', async () => {
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      const cachedSigBytes = new Uint8Array(64).fill(0xaa);
+      const cachedDataBytes = new Uint8Array(48).fill(0xbb);
+
+      // Network returns record WITHOUT signature fields
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafyNETWORK',
+        sequence: 10n,
+      });
+
+      // DB cache has same sequence WITH signedRecord containing signature data
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyNETWORK',
+        sequenceNumber: '10',
+        signedRecord: signedRecordBytes,
+        publicKey: testPublicKeyBytes,
+      });
+
+      // parseCachedRecord will call parseIpnsRecordBytes on the signedRecord
+      // Second call to mockParseIpnsRecord is for the cached signedRecord
+      mockParseIpnsRecord
+        .mockReturnValueOnce({
+          value: '/ipfs/bafyNETWORK',
+          sequence: 10n,
+        })
+        .mockReturnValueOnce({
+          value: '/ipfs/bafyNETWORK',
+          sequence: 10n,
+          signatureV2: cachedSigBytes,
+          data: cachedDataBytes,
+        });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe('bafyNETWORK');
+      expect(result!.sequenceNumber).toBe('10');
+      expect(result!.signatureV2).toBe(Buffer.from(cachedSigBytes).toString('base64'));
+      expect(result!.data).toBe(Buffer.from(cachedDataBytes).toString('base64'));
+      expect(result!.pubKey).toBe(testPublicKey);
     });
 
     describe('resolve latency metrics', () => {
@@ -788,6 +927,7 @@ describe('IpnsService', () => {
           ...mockFolderEntity,
           latestCid: 'bafyFRESH',
           sequenceNumber: '10',
+          signedRecord: null,
         });
 
         await service.resolveRecord(testIpnsName);
@@ -901,6 +1041,7 @@ describe('IpnsService', () => {
         ...mockFolderEntity,
         latestCid: 'bafyFRESH',
         sequenceNumber: '10',
+        signedRecord: null,
       });
 
       await service.resolveRecord(testIpnsName);

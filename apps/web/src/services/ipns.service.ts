@@ -6,7 +6,12 @@
  */
 
 import { createIpnsRecord, marshalIpnsRecord, IPNS_SIGNATURE_PREFIX } from '@cipherbox/core';
-import { verifyEd25519, concatBytes } from '@cipherbox/crypto';
+import {
+  verifyEd25519,
+  concatBytes,
+  deriveIpnsName,
+  deriveEd25519PublicKey,
+} from '@cipherbox/crypto';
 import {
   ipnsControllerPublishRecord,
   ipnsControllerPublishBatch,
@@ -21,10 +26,10 @@ import { logger } from '../lib/logger';
  * The record is signed locally using the Ed25519 private key, then
  * the backend relays it to the IPFS network via delegated routing.
  *
- * @param params.ipnsPrivateKey - Ed25519 private key (64 bytes in libp2p format)
+ * @param params.ipnsPrivateKey - 32-byte Ed25519 private key seed
  * @param params.ipnsName - IPNS name (k51.../bafzaa... format)
  * @param params.metadataCid - CID of the encrypted metadata blob
- * @param params.sequenceNumber - Current sequence number (will be incremented before publish)
+ * @param params.sequenceNumber - Sequence number for this publish
  * @param params.encryptedIpnsPrivateKey - Hex ECIES-wrapped key for TEE (first publish only)
  * @param params.keyEpoch - TEE key epoch (required with encryptedIpnsPrivateKey)
  * @param params.expectedSequenceNumber - Pre-increment sequence number for conflict detection (folder records only)
@@ -49,14 +54,25 @@ export async function createAndPublishIpnsRecord(params: {
 
   // 2. Marshal to bytes for transport
   const recordBytes = marshalIpnsRecord(record);
+  const publicKeyBytes = deriveEd25519PublicKey(params.ipnsPrivateKey);
 
-  // 3. Base64 encode for API transmission
-  const recordBase64 = btoa(String.fromCharCode(...recordBytes));
+  // 3. Base64 encode for API transmission (loop-based to avoid call stack overflow on large records)
+  let recordBinary = '';
+  for (let i = 0; i < recordBytes.length; i++) {
+    recordBinary += String.fromCharCode(recordBytes[i]);
+  }
+  const recordBase64 = btoa(recordBinary);
+  let pkBinary = '';
+  for (let i = 0; i < publicKeyBytes.length; i++) {
+    pkBinary += String.fromCharCode(publicKeyBytes[i]);
+  }
+  const publicKey = btoa(pkBinary);
 
   // 4. Call backend API to relay to IPFS network
   const response = await ipnsControllerPublishRecord({
     ipnsName: params.ipnsName,
     record: recordBase64,
+    publicKey,
     metadataCid: params.metadataCid,
     encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
     keyEpoch: params.keyEpoch,
@@ -83,6 +99,7 @@ export async function batchPublishIpnsRecords(
   records: Array<{
     ipnsName: string;
     recordBase64: string;
+    publicKey?: string;
     metadataCid: string;
     encryptedIpnsPrivateKey?: string;
     keyEpoch?: number;
@@ -95,6 +112,7 @@ export async function batchPublishIpnsRecords(
     records: records.map((r) => ({
       ipnsName: r.ipnsName,
       record: r.recordBase64,
+      publicKey: r.publicKey,
       metadataCid: r.metadataCid,
       encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
       keyEpoch: r.keyEpoch,
@@ -159,6 +177,16 @@ export async function resolveIpnsRecord(
       if (!valid) {
         throw new Error('IPNS signature verification failed - record may be tampered');
       }
+
+      // Verify the returned public key derives to the requested IPNS name
+      const pubKeyBytes = Uint8Array.from(atob(response.pubKey), (c) => c.charCodeAt(0));
+      const derivedName = await deriveIpnsName(pubKeyBytes);
+      if (derivedName !== ipnsName) {
+        throw new Error(
+          'IPNS public key does not match requested name - possible key substitution'
+        );
+      }
+
       signatureVerified = true;
     } else {
       logger.warn('[IPNS] IPNS resolve returned without signature data, skipping verification');

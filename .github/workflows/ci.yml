@@ -129,6 +129,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build packages (needed for API dependency on @cipherbox/crypto)
+        run: pnpm --filter @cipherbox/crypto build
+
       - name: Generate OpenAPI spec and API client
         run: pnpm api:generate
         env:

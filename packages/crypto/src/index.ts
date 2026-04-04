@@ -59,7 +59,7 @@ export { encryptAesCtr, decryptAesCtr, decryptAesCtrRange } from './aes';
 export { wrapKey, unwrapKey, reWrapKey } from './ecies';
 
 // Ed25519 signing for IPNS
-export { generateEd25519Keypair, type Ed25519Keypair } from './ed25519';
+export { generateEd25519Keypair, deriveEd25519PublicKey, type Ed25519Keypair } from './ed25519';
 export { signEd25519, verifyEd25519 } from './ed25519/sign';
 
 // IPNS name derivation (kept in crypto as a pure crypto utility)

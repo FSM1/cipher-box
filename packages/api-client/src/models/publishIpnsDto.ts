@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.35.0
+ * OpenAPI spec version: 0.36.1
  */
 
 export interface PublishIpnsDto {
@@ -11,6 +11,8 @@ export interface PublishIpnsDto {
   ipnsName: string;
   /** Base64-encoded marshaled IPNS record */
   record: string;
+  /** Base64-encoded raw 32-byte Ed25519 public key for this IPNS name */
+  publicKey?: string;
   /** CID of the encrypted metadata this record points to */
   metadataCid: string;
   /** Hex-encoded ECIES-wrapped Ed25519 private key for TEE republishing (required on first publish) */

@@ -29,7 +29,7 @@ export class PublishIpnsDto {
   @Matches(/^(k51qzi5uqu5[a-z0-9]{40,60}|bafzaa[a-z2-7]{50,70})$/, {
     message: 'ipnsName must be a valid CIDv1 libp2p-key (k51qzi5uqu5... or bafzaa...)',
   })
-  @MaxLength(70)
+  @MaxLength(76)
   ipnsName!: string;
 
   @ApiProperty({
@@ -41,6 +41,17 @@ export class PublishIpnsDto {
   @IsBase64()
   @MaxLength(10000) // IPNS records should be small
   record!: string;
+
+  @ApiProperty({
+    description: 'Base64-encoded raw 32-byte Ed25519 public key for this IPNS name',
+    required: false,
+    example: 'AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=',
+  })
+  @IsString()
+  @IsOptional()
+  @IsBase64()
+  @MaxLength(100)
+  publicKey?: string;
 
   @ApiProperty({
     description: 'CID of the encrypted metadata this record points to',
@@ -130,7 +141,7 @@ export class PublishIpnsEntryDto {
   @Matches(/^(k51qzi5uqu5[a-z0-9]{40,60}|bafzaa[a-z2-7]{50,70})$/, {
     message: 'ipnsName must be a valid CIDv1 libp2p-key (k51qzi5uqu5... or bafzaa...)',
   })
-  @MaxLength(70)
+  @MaxLength(76)
   ipnsName!: string;
 
   @ApiProperty({
@@ -142,6 +153,17 @@ export class PublishIpnsEntryDto {
   @IsBase64()
   @MaxLength(10000)
   record!: string;
+
+  @ApiProperty({
+    description: 'Base64-encoded raw 32-byte Ed25519 public key for this IPNS name',
+    required: false,
+    example: 'AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=',
+  })
+  @IsString()
+  @IsOptional()
+  @IsBase64()
+  @MaxLength(100)
+  publicKey?: string;
 
   @ApiProperty({
     description: 'CID of the encrypted metadata this record points to',

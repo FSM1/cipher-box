@@ -52,7 +52,6 @@ ensure_verifier_runtime() {
 run_filepointer_verifier() {
   TEST_SECRET="$SECRET" node "$REPO_ROOT/packages/sdk-core/scripts/verify-filepointer.mjs" \
     --api-url "$API_URL" \
-    --secret "$SECRET" \
     --email "$TEST_EMAIL" \
     --file-name "$TEST_FILE" \
     --expected-content "$TEST_CONTENT"
