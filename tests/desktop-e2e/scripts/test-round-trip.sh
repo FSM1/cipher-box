@@ -121,6 +121,11 @@ echo "--- Test 3: Verify FilePointer and per-file IPNS metadata ---"
 FILE_VERIFY_OUTPUT=""
 FILE_VERIFY_OK=0
 for attempt in $(seq 1 24); do
+  # Touch the FUSE mount each iteration to trigger drain_upload_completions()
+  # via lookup/getattr/readdir callbacks. FUSE-T's SMB backend may cache
+  # directory listings, so we stat the specific file to force a lookup.
+  stat "$MP/$TEST_FILE" > /dev/null 2>&1 || true
+  ls "$MP" > /dev/null 2>&1 || true
   sleep 5
   if FILE_VERIFY_OUTPUT=$(run_filepointer_verifier 2>&1); then
     FILE_VERIFY_OK=1
