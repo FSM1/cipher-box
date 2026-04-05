@@ -1,0 +1,1 @@
+ok the latest run clearly fixed the web issues, but desktop is still failing https://github.com/FSM1/cipher-box/actions/runs/24001462113
