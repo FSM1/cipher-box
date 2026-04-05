@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "1f8bfeb29bb0",
+  "session_id": "935ce0d9-d394-4d48-a311-aa3527efc0ef",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-03T22:10:28.027961Z",
+  "branch": "feat/store-ipns-crypto-data-in-db",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3cdd5e30747f",
+  "token_usage": {
+    "input_tokens": 754,
+    "cache_creation_tokens": 390065,
+    "cache_read_tokens": 19884127,
+    "output_tokens": 44649,
+    "api_call_count": 153
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Conduct a security review of the feat/store-ipns-crypto-data-in-db branch, implement identified fixes, and get the PR merged through CI.",
+    "outcome": "Security review completed with report written, all HIGH/MEDIUM findings fixed and committed, PR #448 created, and CI failures resolved (ESM/CJS bundling conflict, test fixture mismatch, missing dependency build step in CI workflow).",
+    "learnings": {
+      "repo": [
+        "@cipherbox/crypto uses @libp2p/crypto, @noble/ed25519, @noble/hashes, and multiformats which are all ESM-only packages — they cannot be require()'d in CJS environments like NestJS without bundling",
+        "The NestJS API runs as CommonJS; any workspace package consumed by it must either ship a self-contained CJS bundle or use dynamic import()",
+        "IPNS names are cryptographically derived from Ed25519 public keys via deriveIpnsName() from @cipherbox/crypto — the pubKey-to-ipnsName binding was not being verified on resolve",
+        "The web app (apps/web/src/services/ipns.service.ts) was not sending publicKey on publish, making the new server-side binding check dead code for web-published records",
+        "The web app used spread operator for base64 encoding (String.fromCharCode(...bytes)) which causes call-stack overflow on large IPNS records",
+        "The CI 'Verify API Spec' job ran pnpm api:generate without first building @cipherbox/crypto, causing build failures after the new dependency was added"
+      ],
+      "code": [
+        {
+          "path": "packages/crypto/tsup.config.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Must use split CJS/ESM build configs: CJS uses noExternal: [/.*/] to bundle all deps inline (for NestJS/Jest), ESM keeps deps external (for Vite/Rollup browser builds). A single config with noExternal breaks the desktop Vite build due to Buffer not being available in browser."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 202,
+          "end_line": 209,
+          "finding": "After verifying Ed25519 signature, must also derive IPNS name from returned pubKey and compare to requested ipnsName — otherwise a compromised server can substitute its own keypair and pass signature verification."
+        },
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "line": 54,
+          "end_line": 64,
+          "finding": "Must use loop-based base64 encoding (not spread operator) and must derive + send publicKey on publish. Both were missing before this session."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Test fixtures must use IPNS names that actually derive from the test public keys — dummy ipnsName values like 'k51qzi5uqu5dg12345abcdef67890' will fail once server-side pubKey-to-ipnsName binding validation is enforced."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 1,
+          "end_line": 50,
+          "finding": "The 'Verify API Spec' job needs an explicit 'pnpm build --filter @cipherbox/crypto' step before building the API, since the API now depends on @cipherbox/crypto which is not built by default in that job."
+        }
+      ],
+      "workflow": [
+        "When adding an ESM-only package as a dependency to a CJS-consuming workspace package, always verify the full build works (API start + desktop Vite build) before pushing to CI",
+        "Verify the API actually starts locally (not just compiles) before pushing — runtime require() failures don't appear at compile time",
+        "Security review findings should be cross-checked: the same vulnerability (missing pubKey binding) existed in both sdk-core and the web app service layer",
+        "When updating server-side validation that checks against persisted data, update test fixtures to use real derived values rather than arbitrary dummy strings"
+      ]
+    },
+    "friction": [
+      "Three separate CI failures required three fix commits: (1) @libp2p/crypto ESM-only, (2) @noble/ed25519 also ESM-only requiring noExternal: [/.*/], (3) desktop Vite build broken by noExternal on ESM output — each was only discoverable by running CI",
+      "1Password SSH agent caused intermittent commit signing failures requiring retry",
+      "The 'verify api spec' CI job failure was only discoverable after pushing — no local equivalent of that job exists to run beforehand",
+      "Security review was interrupted mid-session by usage limits, requiring the report compilation to be restarted"
+    ],
+    "open_items": [
+      "Signature verification downgrade attack (Finding #4): callers of resolveIpnsRecord don't enforce signatureVerified===true — server can omit signature fields and bypass verification entirely. Deferred as a design decision.",
+      "Inconsistent key zeroization (Finding #5): private key bytes are not cleared from memory after use in crypto functions. Deferred as a convention issue rather than concrete vulnerability.",
+      "The security review report at .planning/security/REVIEW-20260402-172126.md marks these as deferred with notes, but they remain unaddressed technical debt."
+    ]
+  }
+}

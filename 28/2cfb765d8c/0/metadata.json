@@ -1,0 +1,103 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "282cfb765d8c",
+  "session_id": "935ce0d9-d394-4d48-a311-aa3527efc0ef",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-03T22:42:20.252827Z",
+  "branch": "feat/store-ipns-crypto-data-in-db",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/ipns/index.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "245f536cc6d7",
+  "token_usage": {
+    "input_tokens": 846,
+    "cache_creation_tokens": 432002,
+    "cache_read_tokens": 28901430,
+    "output_tokens": 58357,
+    "api_call_count": 196
+  },
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "summary": {
+    "intent": "Perform a security review of the `feat/store-ipns-crypto-data-in-db` branch (IPNS signature/public key storage in DB), then implement all identified fixes and get the PR merged.",
+    "outcome": "Security review completed, all HIGH/MEDIUM findings fixed (pubKey-to-ipnsName binding, web app base64 overflow, missing publicKey on publish, server-side validation, DTO MaxLength mismatch, protobuf bounds checks), PR #448 created, all CI failures resolved, and all automated review threads addressed.",
+    "learnings": {
+      "repo": [
+        "@cipherbox/crypto is ESM-only (uses @libp2p/crypto, @noble/ed25519, ipns — all ESM-only packages) which breaks NestJS/Jest CJS require() — requires special tsup bundling config",
+        "tsup config must use separate CJS (noExternal: [/.*/]) and ESM (external deps) build definitions to avoid breaking Vite browser builds while fixing Node.js CJS compatibility",
+        "IPNS names are cryptographically derived from Ed25519 public keys via deriveIpnsName() — the binding check was missing on resolve, allowing key substitution attacks",
+        "The 'Verify API Spec' CI job was missing a build step for @cipherbox/crypto, causing it to fail after the new dependency was added",
+        "The API (NestJS/CJS) cannot statically import ESM-only packages — bundling all deps into the CJS artifact via noExternal is the preferred pattern over dynamic import()",
+        "Deferred items are tracked in .planning/DEFERRED.md"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 202,
+          "end_line": 209,
+          "finding": "pubKey-to-ipnsName binding check added after signature verification — decodes pubKey, derives IPNS name, throws if mismatch"
+        },
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "line": 54,
+          "end_line": 75,
+          "finding": "Spread operator on Uint8Array for base64 encoding causes call-stack overflow on large records — replaced with loop-based String.fromCharCode; also publicKey now derived and sent on publish"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 83,
+          "end_line": 90,
+          "finding": "Server-side pubKey-to-ipnsName binding validation added on publish — rejects requests where supplied publicKey does not derive to the claimed ipnsName"
+        },
+        {
+          "path": "packages/crypto/tsup.config.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Split into two defineConfig entries: CJS with noExternal:[/.*/] (bundles all deps) and ESM with external deps; clean:true only on CJS to avoid wiping CJS artifacts"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Test fixture ipnsName was a dummy string — must be derived from the test public key via deriveIpnsName() or server-side validation rejects it"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Verify API Spec job needed explicit `pnpm --filter @cipherbox/crypto build` step before pnpm api:generate after new dependency was added"
+        }
+      ],
+      "workflow": [
+        "Always verify the API starts locally (nest start) before pushing crypto-related dependency changes to CI",
+        "When bundling ESM-only deps into CJS, use noExternal:[/.*/] in tsup — but keep ESM config with external deps or Vite/Rollup browser builds will fail on Buffer/Node builtins",
+        "Derive correct test fixture values programmatically (e.g. IPNS name from public key) rather than using arbitrary dummy strings when validation logic is being added"
+      ]
+    },
+    "friction": [
+      "Two CI iteration cycles needed for the @cipherbox/crypto CJS compatibility issue: first attempt (noExternal on both CJS+ESM) broke Vite browser builds; second attempt (split config) worked",
+      "1Password SSH signing agent caused intermittent commit failures requiring manual retry",
+      "CI 'Verify API Spec' job failure was a missing build step not caught locally — required a separate fix commit",
+      "The base64 Uint8Array spread bug in the web app was not caught during the original PR development, only surfaced in the security review"
+    ],
+    "open_items": [
+      "S1: Validate signedRecord CID/sequence against DTO on publish (CodeRabbit comment — deferred, needs design decision on strictness)",
+      "S2: Enforce signatureVerified===true once all existing IPNS records in DB have signature data (requires migration/backfill first)",
+      "S3: Consistent private key zeroization (fill with zeros after use) convention across SDK crypto operations",
+      "CQ1: Extract shared bytesToBase64(Uint8Array) helper and deduplicate across apps/web/src/services/ipns.service.ts, packages/sdk-core/src/file/index.ts, and packages/sdk-core/src/folder/index.ts"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-03T22:41:46.129364Z",
+    "agent_lines": 0,
+    "human_added": 2,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 0
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "2d0d04e68084",
+  "session_id": "935ce0d9-d394-4d48-a311-aa3527efc0ef",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T00:48:50.103452Z",
+  "branch": "fix/desktop-e2e-sequence-mismatch",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "63549de34adf",
+  "token_usage": {
+    "input_tokens": 1026,
+    "cache_creation_tokens": 775440,
+    "cache_read_tokens": 72570189,
+    "output_tokens": 93264,
+    "api_call_count": 349
+  },
+  "session_metrics": {
+    "turn_count": 37
+  },
+  "summary": {
+    "intent": "Conduct a security review of the feat/store-ipns-crypto-data-in-db branch, implement identified fixes, and get the PR merged to main — including resolving all CI failures and reviewer comments.",
+    "outcome": "All high/medium security findings were fixed and verified, the PR was merged to main, a post-merge desktop E2E regression was diagnosed and fixed (sequence number mismatch in parseCachedRecord + unseeded PublishCoordinator cache), and a follow-up PR #449 was created for the regression fix.",
+    "learnings": {
+      "repo": [
+        "IPNS names are cryptographically derived from Ed25519 public keys via deriveIpnsName() — client-side verification must bind pubKey to ipnsName to prevent key substitution attacks",
+        "The @cipherbox/crypto package has ESM-only transitive dependencies (@libp2p/crypto, @noble/ed25519, multiformats) that break NestJS (CJS) unless bundled with noExternal in tsup CJS config",
+        "tsup must use separate CJS and ESM build configs — noExternal on CJS only; ESM must keep deps external for Vite/Rollup browser builds",
+        "The desktop FUSE client's PublishCoordinator initializes with an empty seq_cache and never seeds from the pre-populate IPNS resolve at mount, causing first-write conflicts if resolve_sequence returns stale data",
+        "upsertFolderIpns always increments the DB sequenceNumber by 1 regardless of what sequence is embedded in the published record bytes — parseCachedRecord must use cached.sequenceNumber (the DB column) as authoritative, not the sequence parsed from signedRecord bytes",
+        "The Verify API Spec CI job needs @cipherbox/crypto built before pnpm api:generate because the NestJS bootstrap imports it",
+        "Desktop vault init: the Rust client publishes root folder IPNS at sequence 0 (record bytes), but upsertFolderIpns stores sequence 1 in the DB — this discrepancy was masked before parseCachedRecord was introduced",
+        "The desktop E2E test passes --secret as TEST_SECRET env var (not CLI arg) after the security fix — CI uses TEST_LOGIN_SECRET which maps to TEST_SECRET in the shell script via ${TEST_SECRET:-e2e-test-secret-ci-only}"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 202,
+          "end_line": 209,
+          "finding": "pubKey-to-ipnsName binding check: after verifying Ed25519 signature, derive expected IPNS name from returned pubKey bytes and compare to requested ipnsName"
+        },
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "line": 54,
+          "end_line": 69,
+          "finding": "Replaced spread-operator base64 (stack overflow risk on large records) with String.fromCharCode loop + btoa; also added publicKey derivation and forwarding on publish"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 80,
+          "end_line": 95,
+          "finding": "Server-side pubKey-to-ipnsName validation: if dto.publicKey provided, derive IPNS name from it and reject if it doesn't match dto.ipnsName"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 530,
+          "end_line": 545,
+          "finding": "parseCachedRecord must use cached.sequenceNumber (DB column) as the returned sequenceNumber, not the sequence embedded in the signedRecord bytes — the DB column is always incremented by upsertFolderIpns and is authoritative"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 421,
+          "end_line": 446,
+          "finding": "Equal-sequence cache enrichment: when networkSeq === dbSeq, merge cached signatureV2/data/pubKey into network result before returning so signature verification works for network-resolved records"
+        },
+        {
+          "path": "apps/api/src/ipns/dto/publish.dto.ts",
+          "line": 46,
+          "end_line": 55,
+          "finding": "MaxLength(100) for publicKey field — base64-encoded 32-byte Ed25519 key is 44 chars; 100 gives headroom without allowing arbitrary large strings"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "line": 212,
+          "end_line": 220,
+          "finding": "PublishCoordinator must be seeded with sequence numbers from pre-populate IPNS resolves at mount time; added record_publish calls for root and subfolder sequences"
+        },
+        {
+          "path": "packages/crypto/tsup.config.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "Split into two defineConfig entries: CJS with noExternal: [/.*/ ] (fully self-contained bundle), ESM with default externals (Vite-compatible)"
+        }
+      ],
+      "workflow": [
+        "1Password SSH agent intermittently fails to sign commits — retrying usually works after a few seconds",
+        "When ESM-only deps are in the dependency tree of a package consumed by both NestJS (CJS) and Vite (ESM), the package needs split tsup configs rather than a single noExternal that breaks browser builds",
+        "Desktop E2E only runs on main push, not PR branches — regressions from merged code are only caught post-merge",
+        "Before reproducing locally, simulate the API flow with curl to quickly verify sequence/state assumptions rather than building the full desktop binary",
+        "upload-artifact@v7 on Windows cannot upload files outside the repo root (e.g. runner.temp) without explicit root-directory configuration"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent repeatedly failed to sign git commits, requiring multiple retry attempts throughout the session",
+      "noExternal: [/.*/ ] on tsup broke the desktop Vite build — required a second iteration to discover the CJS/ESM split config approach",
+      "The @cipherbox/crypto CJS bundle was missing index.d.ts because the ESM config with clean: true was wiping the CJS output — required careful build ordering",
+      "Desktop E2E only runs on main, so the sequence number regression was only discovered post-merge, requiring a separate hotfix PR",
+      "The Verify API Spec CI job didn't build @cipherbox/crypto first, causing it to fail — required an additional CI workflow fix commit",
+      "Main branch is protected — the post-merge regression fix required creating a new branch and PR rather than pushing directly"
+    ],
+    "open_items": [
+      "S1: Validate signedRecord CID/sequence against dto values on publish (CodeRabbit comment) — deferred to follow-up PR",
+      "S2: Enforce signatureVerified === true once all records include signature data — deferred until rollout is complete",
+      "S3: Consistent private key zeroization convention across SDK packages",
+      "CQ1: Extract bytesToBase64 utility shared across sdk-core/file, sdk-core/folder, apps/web/ipns.service — currently duplicated in 3 places",
+      "Fix upload-artifact Windows path issue in desktop-e2e.yml (copy log to workspace before uploading) — committed to branch but pending PR #449 merge"
+    ]
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "4f850e7156ce",
+  "session_id": "935ce0d9-d394-4d48-a311-aa3527efc0ef",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-03T22:32:08.759228Z",
+  "branch": "feat/store-ipns-crypto-data-in-db",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "ad207a5f2509",
+  "token_usage": {
+    "input_tokens": 836,
+    "cache_creation_tokens": 426822,
+    "cache_read_tokens": 27328898,
+    "output_tokens": 56577,
+    "api_call_count": 189
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Perform a security review of the feat/store-ipns-crypto-data-in-db branch, fix identified vulnerabilities, and get the PR merged with all review comments resolved.",
+    "outcome": "All HIGH and MEDIUM security findings were fixed (pubKey-to-ipnsName binding check, web app base64 overflow, missing publicKey on publish, server-side validation, DTO MaxLength fixes, protobuf bounds checks), the @cipherbox/crypto package was fixed to support both CJS and ESM consumers, all 8 PR review threads were resolved, and a security review report plus deferred backlog were committed.",
+    "learnings": {
+      "repo": [
+        "@cipherbox/crypto depends on ESM-only packages (@libp2p/crypto, @noble/ed25519, @noble/hashes, ipns) which break NestJS (CJS) consumers when left as external requires",
+        "The NestJS API is CommonJS; @cipherbox/crypto must bundle ESM-only deps into its CJS output via tsup noExternal, while keeping ESM output external for Vite/Rollup browser builds",
+        "IPNS names are cryptographically derived from the Ed25519 public key via deriveIpnsName(); the client must verify this binding on resolve to prevent key substitution attacks",
+        "The web app ipns.service.ts used spread operator for Uint8Array-to-base64 (String.fromCharCode(...bytes)) which crashes on large IPNS records; sdk-core already used a loop-based approach",
+        "The web app was not sending publicKey on publish despite the API supporting it, making server-side pubKey-to-ipnsName validation dead code for web-published records",
+        "Deferred items are tracked in .planning/DEFERRED.md; security-specific deferred items from this PR include signedRecord validation on write, enforcing signatureVerified=true, and key zeroization convention",
+        "The 'Verify API Spec' CI job was missing a build step for @cipherbox/crypto before running pnpm api:generate"
+      ],
+      "code": [
+        {
+          "path": "packages/crypto/tsup.config.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Must use split config: CJS build with noExternal=[/.*/] to bundle all ESM-only deps inline; ESM build leaves deps external for Vite compatibility. Single config with noExternal breaks desktop/web Vite builds."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 202,
+          "end_line": 209,
+          "finding": "pubKey-to-ipnsName binding check added after signature verification: decode pubKey bytes, call deriveIpnsName(), compare to requested ipnsName — prevents server key substitution"
+        },
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "line": 54,
+          "end_line": 75,
+          "finding": "Base64 encoding uses loop-based String.fromCharCode (not spread operator) for both recordBytes and publicKeyBytes; publicKey is now derived and sent on publish for both single and batch"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 83,
+          "end_line": 95,
+          "finding": "Server-side pubKey-to-ipnsName binding validation added: derive IPNS name from submitted publicKey, compare to ipnsName in request, throw BadRequestException on mismatch"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Test fixture ipnsName must be the actual IPNS name derived from the test public key, not a dummy string — validation now rejects mismatches"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 1,
+          "end_line": 30,
+          "finding": "verify-api-spec job needs explicit 'pnpm --filter @cipherbox/crypto build' step before pnpm api:generate"
+        }
+      ],
+      "workflow": [
+        "Always run a full local API startup check (not just build) before pushing to CI when adding new package dependencies",
+        "When tsup bundles ESM-only deps into CJS, verify the resulting ESM output doesn't also bundle them (breaks browser/Vite builds)",
+        "Security review findings should be committed to .planning/security/REVIEW-[timestamp].md; deferred items go to .planning/DEFERRED.md",
+        "Use gh api graphql for batch-resolving PR review threads; REST for posting replies (in_reply_to requires integer comment ID, not string)"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent caused intermittent commit signing failures requiring retry",
+      "Three separate CI iterations needed to fix @cipherbox/crypto CJS compatibility: first attempt (noExternal for specific packages) missed @noble/ed25519; second attempt (noExternal: [/.*/] globally) broke Vite desktop build; third attempt (split CJS/ESM configs) worked",
+      "tsup clean:true on ESM config wiped CJS output — had to sequence builds carefully",
+      "CI 'Verify API Spec' job missing dependency build step wasn't caught until after push"
+    ],
+    "open_items": [
+      "S1: Validate signedRecord CID/sequence against DTO on publish (CodeRabbit comment #5 — deferred to follow-up PR)",
+      "S2: Enforce signatureVerified=true once all records in DB include signature data (currently informational only)",
+      "S3: Consistent private key zeroization convention across all SDK packages",
+      "Refactor repeated Uint8Array-to-base64 loops into a shared bytesToBase64 helper across apps/web/ipns.service.ts, sdk-core/file/index.ts, and sdk-core/folder/index.ts"
+    ]
+  }
+}
