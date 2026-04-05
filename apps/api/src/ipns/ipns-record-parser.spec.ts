@@ -150,13 +150,16 @@ describe('parseIpnsRecord', () => {
     expect(() => parseIpnsRecord(new Uint8Array(0))).toThrow('IPNS record missing Value field');
   });
 
-  it('should throw on unsupported wire type', () => {
+  it('should skip deprecated group wire types (3 and 4)', () => {
+    // Wire type 3 = start group, 4 = end group (deprecated but must not crash)
     const buf = new Uint8Array([
-      ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmBad')),
-      ...encodeTag(6, 3), // wire type 3 = start group (deprecated/unsupported)
+      ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmTest')),
+      ...encodeTag(6, 3), // start group for field 6
+      ...encodeTag(6, 4), // end group for field 6
     ]);
 
-    expect(() => parseIpnsRecord(buf)).toThrow('Unsupported wire type 3');
+    const result = parseIpnsRecord(buf);
+    expect(result.value).toBe('/ipfs/QmTest');
   });
 
   it('should throw when length-delimited field exceeds buffer', () => {
