@@ -725,6 +725,9 @@ pub(crate) mod implementation {
 
         let now = SystemTime::now();
 
+        // Remove from publish queue before removing inode — a queued folder
+        // that no longer exists would cause "Folder inode not found" on flush.
+        fs.publish_queue.remove(&child_ino);
         fs.inodes.remove(child_ino);
 
         if let Some(parent_inode) = fs.inodes.get_mut(parent) {
@@ -911,6 +914,7 @@ pub(crate) mod implementation {
                     _ => {}
                 }
             }
+            fs.publish_queue.remove(&dest_ino);
             fs.inodes.remove(dest_ino);
         }
 
