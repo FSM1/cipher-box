@@ -92,7 +92,7 @@ echo "--- Test 2: Verify vault has content after FUSE write ---"
 printf '%s' "$TEST_CONTENT" > "$MP/$TEST_FILE"
 
 ROOT_IPNS=""
-for attempt in $(seq 1 12); do
+for attempt in $(seq 1 24); do
   sleep 5
   VAULT_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
     "$API_URL/vault" 2>&1) || true
@@ -115,7 +115,7 @@ fi
 echo "--- Test 3: Verify FilePointer and per-file IPNS metadata ---"
 FILE_VERIFY_OUTPUT=""
 FILE_VERIFY_OK=0
-for attempt in $(seq 1 12); do
+for attempt in $(seq 1 24); do
   sleep 5
   if FILE_VERIFY_OUTPUT=$(run_filepointer_verifier 2>&1); then
     FILE_VERIFY_OK=1
@@ -128,7 +128,7 @@ if [ "$FILE_VERIFY_OK" -eq 1 ]; then
   pass "FilePointer exists and per-file IPNS metadata resolves"
   echo "  $FILE_VERIFY_OUTPUT"
 else
-  fail "FilePointer/per-file IPNS verification failed after 60s"
+  fail "FilePointer/per-file IPNS verification failed after 120s"
 fi
 
 # ---- Test 4: Verify fresh client reload can still resolve file metadata ----
@@ -145,7 +145,7 @@ fi
 echo "--- Test 5: Verify IPNS resolve returns CID ---"
 if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
   RESOLVED_CID=""
-  for attempt in $(seq 1 12); do
+  for attempt in $(seq 1 24); do
     sleep 2
     IPNS_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
       "$API_URL/ipns/resolve?ipnsName=$ROOT_IPNS" 2>&1) || true

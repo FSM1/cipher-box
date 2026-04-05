@@ -135,7 +135,7 @@ try {
 }
 if ($FuseWriteSucceeded) {
     $RootIpns = $null
-    for ($attempt = 1; $attempt -le 12 -and -not $RootIpns; $attempt++) {
+    for ($attempt = 1; $attempt -le 24 -and -not $RootIpns; $attempt++) {
         Start-Sleep -Seconds 5
         try {
             $VaultResponse = Invoke-RestMethod -Uri "$ApiUrl/vault" -Headers $Headers
@@ -147,7 +147,7 @@ if ($FuseWriteSucceeded) {
     if ($RootIpns) {
         Test-Pass "Vault has rootIpnsName after FUSE write ($RootIpns)"
     } else {
-        Test-Fail "Vault has no rootIpnsName after 60s polling"
+        Test-Fail "Vault has no rootIpnsName after 120s polling"
     }
 } else {
     Test-Fail "Vault verification skipped (FUSE write failed)"
@@ -158,7 +158,7 @@ if ($FuseWriteSucceeded) {
 Write-Host "--- Test 3: Verify FilePointer and per-file IPNS metadata ---"
 $VerifySucceeded = $false
 $VerifyOutput = ""
-for ($attempt = 1; $attempt -le 12 -and -not $VerifySucceeded; $attempt++) {
+for ($attempt = 1; $attempt -le 24 -and -not $VerifySucceeded; $attempt++) {
     Start-Sleep -Seconds 5
     $verifyResult = Invoke-FilePointerVerifier
     $verifyExit = [int]$verifyResult[0]
@@ -174,7 +174,7 @@ if ($VerifySucceeded) {
     Test-Pass "FilePointer exists and per-file IPNS metadata resolves"
     Write-Host "  $VerifyOutput"
 } else {
-    Test-Fail "FilePointer/per-file IPNS verification failed after 60s"
+    Test-Fail "FilePointer/per-file IPNS verification failed after 120s"
 }
 
 # ---- Test 4: Verify fresh client reload can still resolve file metadata ----
@@ -194,7 +194,7 @@ if ($reloadExit -eq 0) {
 Write-Host "--- Test 5: Verify IPNS resolve returns CID ---"
 if ($RootIpns) {
     $ResolvedCid = $null
-    for ($attempt = 1; $attempt -le 12 -and -not $ResolvedCid; $attempt++) {
+    for ($attempt = 1; $attempt -le 24 -and -not $ResolvedCid; $attempt++) {
         Start-Sleep -Seconds 2
         try {
             $IpnsResponse = Invoke-RestMethod -Uri "$ApiUrl/ipns/resolve?ipnsName=$RootIpns" -Headers $Headers
