@@ -90,6 +90,11 @@ fi
 # ---- Test 2: Desktop writes file, API verifies vault exists ----
 echo "--- Test 2: Verify vault has content after FUSE write ---"
 printf '%s' "$TEST_CONTENT" > "$MP/$TEST_FILE"
+# Force a FUSE readdir to drain upload completions — without this, the
+# background upload finishes but the publish queue never flushes because
+# no FUSE callbacks trigger drain_upload_completions() in CI.
+sleep 2
+ls "$MP" > /dev/null 2>&1 || true
 
 ROOT_IPNS=""
 for attempt in $(seq 1 24); do

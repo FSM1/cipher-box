@@ -130,6 +130,11 @@ try {
     Set-Content -Path "$MountPoint\$TestFile" -Value $TestContent -NoNewline -ErrorAction Stop
     if (-not (Test-Path "$MountPoint\$TestFile")) { throw "FUSE write did not materialize at mount path" }
     $FuseWriteSucceeded = $true
+    # Force a directory listing to drain upload completions — without this,
+    # the background upload finishes but the publish queue never flushes
+    # because no FUSE callbacks trigger drain_upload_completions() in CI.
+    Start-Sleep -Seconds 2
+    Get-ChildItem -Path $MountPoint -ErrorAction SilentlyContinue | Out-Null
 } catch {
     Test-Fail "FUSE write failed ($_)"
 }
