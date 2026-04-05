@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4b4659a70a7b",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-sequence-mismatch",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/ipns/ipns-record-parser.spec.ts",
+    "apps/api/src/ipns/ipns-record-parser.ts",
+    "apps/web/src/services/ipns.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4b/4659a70a7b/0/metadata.json",
+      "transcript": "/4b/4659a70a7b/0/full.jsonl",
+      "content_hash": "/4b/4659a70a7b/0/content_hash.txt",
+      "prompt": "/4b/4659a70a7b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 174,
+    "cache_creation_tokens": 634655,
+    "cache_read_tokens": 21725011,
+    "output_tokens": 69633,
+    "api_call_count": 157
+  }
+}
