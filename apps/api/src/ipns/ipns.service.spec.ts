@@ -880,6 +880,43 @@ describe('IpnsService', () => {
       expect(result!.pubKey).toBe(testPublicKey);
     });
 
+    it('should use DB sequenceNumber and CID when signed record contains stale values', async () => {
+      // Network fails, so we fall back to DB cache with signedRecord
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
+
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
+      const cachedSigBytes = new Uint8Array(64).fill(0xcc);
+      const cachedDataBytes = new Uint8Array(48).fill(0xdd);
+
+      // DB has sequence 5 and a newer CID, but signedRecord bytes contain stale seq 0 and old CID
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyNEWER',
+        sequenceNumber: '5',
+        signedRecord: signedRecordBytes,
+        publicKey: testPublicKeyBytes,
+      });
+
+      // parseCachedRecord will parse the signedRecord bytes — they embed the stale values
+      mockParseIpnsRecord.mockReturnValueOnce({
+        value: '/ipfs/bafyOLDER',
+        sequence: 0n,
+        signatureV2: cachedSigBytes,
+        data: cachedDataBytes,
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      // DB columns are authoritative, not the parsed signed record
+      expect(result!.cid).toBe('bafyNEWER');
+      expect(result!.sequenceNumber).toBe('5');
+      // Signature fields still come from the parsed record
+      expect(result!.signatureV2).toBe(Buffer.from(cachedSigBytes).toString('base64'));
+      expect(result!.data).toBe(Buffer.from(cachedDataBytes).toString('base64'));
+      expect(result!.pubKey).toBe(testPublicKey);
+    });
+
     describe('resolve latency metrics', () => {
       it('should observe ipnsResolveDuration with source=network on successful network resolution', async () => {
         const mockRecordBytes = new Uint8Array([1, 2, 3]);

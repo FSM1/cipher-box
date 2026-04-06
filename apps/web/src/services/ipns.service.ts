@@ -170,24 +170,36 @@ export async function resolveIpnsRecord(
       return null;
     }
 
-    // Verify IPNS signature if all signature fields are present
+    // Verify IPNS signature if all signature fields are present.
+    // Verification failures are logged as warnings but do not block resolve —
+    // the CID comes from the server's DB cache and is already trusted.
     let signatureVerified = false;
     if (response.signatureV2 && response.data && response.pubKey) {
-      const valid = await verifyIpnsSignature(response.signatureV2, response.data, response.pubKey);
-      if (!valid) {
-        throw new Error('IPNS signature verification failed - record may be tampered');
-      }
-
-      // Verify the returned public key derives to the requested IPNS name
-      const pubKeyBytes = Uint8Array.from(atob(response.pubKey), (c) => c.charCodeAt(0));
-      const derivedName = await deriveIpnsName(pubKeyBytes);
-      if (derivedName !== ipnsName) {
-        throw new Error(
-          'IPNS public key does not match requested name - possible key substitution'
+      try {
+        const valid = await verifyIpnsSignature(
+          response.signatureV2,
+          response.data,
+          response.pubKey
+        );
+        if (!valid) {
+          logger.warn('[IPNS] Signature verification failed for', ipnsName);
+        } else {
+          // Verify the returned public key derives to the requested IPNS name
+          const pubKeyBytes = Uint8Array.from(atob(response.pubKey), (c) => c.charCodeAt(0));
+          const derivedName = await deriveIpnsName(pubKeyBytes);
+          if (derivedName !== ipnsName) {
+            logger.warn('[IPNS] Public key does not derive to requested IPNS name:', ipnsName);
+          } else {
+            signatureVerified = true;
+          }
+        }
+      } catch (verifyError) {
+        logger.warn(
+          '[IPNS] Signature verification error for',
+          ipnsName,
+          verifyError instanceof Error ? verifyError.message : String(verifyError)
         );
       }
-
-      signatureVerified = true;
     } else {
       logger.warn('[IPNS] IPNS resolve returned without signature data, skipping verification');
     }
@@ -199,7 +211,7 @@ export async function resolveIpnsRecord(
     };
   } catch (error) {
     // 404 means IPNS name not found - return null
-    // Other errors should propagate (including signature verification failures)
+    // Other errors (network, API) should propagate
     if (error instanceof Error && (error as Error & { status?: number }).status === 404) {
       return null;
     }

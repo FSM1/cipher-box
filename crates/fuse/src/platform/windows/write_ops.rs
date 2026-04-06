@@ -606,6 +606,7 @@ pub mod implementation {
                     None
                 };
 
+            fs.publish_queue.remove(&ino);
             fs.inodes.remove(ino);
 
             if let Some(parent_inode) = fs.inodes.get_mut(parent_ino) {
@@ -910,6 +911,7 @@ pub mod implementation {
                     _ => {}
                 }
             }
+            fs.publish_queue.remove(&dest_ino);
             fs.inodes.remove(dest_ino);
         }
 

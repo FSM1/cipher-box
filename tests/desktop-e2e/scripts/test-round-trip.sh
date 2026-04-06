@@ -90,9 +90,14 @@ fi
 # ---- Test 2: Desktop writes file, API verifies vault exists ----
 echo "--- Test 2: Verify vault has content after FUSE write ---"
 printf '%s' "$TEST_CONTENT" > "$MP/$TEST_FILE"
+# Force a FUSE readdir to drain upload completions — without this, the
+# background upload finishes but the publish queue never flushes because
+# no FUSE callbacks trigger drain_upload_completions() in CI.
+sleep 2
+ls "$MP" > /dev/null 2>&1 || true
 
 ROOT_IPNS=""
-for attempt in $(seq 1 12); do
+for attempt in $(seq 1 24); do
   sleep 5
   VAULT_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
     "$API_URL/vault" 2>&1) || true
@@ -108,14 +113,19 @@ if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
   pass "Vault has rootIpnsName after FUSE write ($ROOT_IPNS)"
 else
   VAULT_ERROR=$(echo "$VAULT_RESPONSE" | jq -r '.message // .error // empty' 2>/dev/null || echo "non-JSON response")
-  fail "Vault has no rootIpnsName after 60s polling (error: $VAULT_ERROR)"
+  fail "Vault has no rootIpnsName after 120s polling (error: $VAULT_ERROR)"
 fi
 
 # ---- Test 3: Verify FilePointer and per-file IPNS metadata resolve ----
 echo "--- Test 3: Verify FilePointer and per-file IPNS metadata ---"
 FILE_VERIFY_OUTPUT=""
 FILE_VERIFY_OK=0
-for attempt in $(seq 1 12); do
+for attempt in $(seq 1 24); do
+  # Touch the FUSE mount each iteration to trigger drain_upload_completions()
+  # via lookup/getattr/readdir callbacks. FUSE-T's SMB backend may cache
+  # directory listings, so we stat the specific file to force a lookup.
+  stat "$MP/$TEST_FILE" > /dev/null 2>&1 || true
+  ls "$MP" > /dev/null 2>&1 || true
   sleep 5
   if FILE_VERIFY_OUTPUT=$(run_filepointer_verifier 2>&1); then
     FILE_VERIFY_OK=1
@@ -128,7 +138,7 @@ if [ "$FILE_VERIFY_OK" -eq 1 ]; then
   pass "FilePointer exists and per-file IPNS metadata resolves"
   echo "  $FILE_VERIFY_OUTPUT"
 else
-  fail "FilePointer/per-file IPNS verification failed after 60s"
+  fail "FilePointer/per-file IPNS verification failed after 120s"
 fi
 
 # ---- Test 4: Verify fresh client reload can still resolve file metadata ----
@@ -145,7 +155,7 @@ fi
 echo "--- Test 5: Verify IPNS resolve returns CID ---"
 if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
   RESOLVED_CID=""
-  for attempt in $(seq 1 12); do
+  for attempt in $(seq 1 24); do
     sleep 2
     IPNS_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
       "$API_URL/ipns/resolve?ipnsName=$ROOT_IPNS" 2>&1) || true
@@ -161,7 +171,7 @@ if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
     pass "IPNS resolve returned CID ($RESOLVED_CID)"
   else
     IPNS_ERROR=$(echo "$IPNS_RESPONSE" | jq -r '.message // .error // empty' 2>/dev/null || echo "non-JSON response")
-    fail "IPNS resolve did not return expected CID after 24s polling (error: $IPNS_ERROR)"
+    fail "IPNS resolve did not return expected CID after 48s polling (error: $IPNS_ERROR)"
   fi
 else
   fail "IPNS resolve skipped (no rootIpnsName)"

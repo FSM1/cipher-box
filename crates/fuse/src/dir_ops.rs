@@ -24,7 +24,8 @@ pub(crate) mod implementation {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        // 1. Drain any pending background refresh results (non-blocking)
+        // 1. Drain any pending background results (non-blocking)
+        fs.drain_upload_completions();
         fs.drain_refresh_completions();
         fs.drain_filepointer_completions();
 
