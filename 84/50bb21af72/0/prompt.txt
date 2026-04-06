@@ -21,3 +21,11 @@ latest run was more successful but there was still a failure in the macos test h
 ---
 
 ok, that fixed the macos test, but broke the windows test. can we undo the changes to the windows script, since this was passing before the changes.
+
+---
+
+by original state, do you mean just the latest commit right?
+
+---
+
+no, I didn't mean that the `main` script was correct, I meant the state of the script at commit 5670444208c8cedd8d6e867a2f81a9f31068f520 was the right one.
