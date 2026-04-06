@@ -113,7 +113,7 @@ if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
   pass "Vault has rootIpnsName after FUSE write ($ROOT_IPNS)"
 else
   VAULT_ERROR=$(echo "$VAULT_RESPONSE" | jq -r '.message // .error // empty' 2>/dev/null || echo "non-JSON response")
-  fail "Vault has no rootIpnsName after 60s polling (error: $VAULT_ERROR)"
+  fail "Vault has no rootIpnsName after 120s polling (error: $VAULT_ERROR)"
 fi
 
 # ---- Test 3: Verify FilePointer and per-file IPNS metadata resolve ----
@@ -171,7 +171,7 @@ if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
     pass "IPNS resolve returned CID ($RESOLVED_CID)"
   else
     IPNS_ERROR=$(echo "$IPNS_RESPONSE" | jq -r '.message // .error // empty' 2>/dev/null || echo "non-JSON response")
-    fail "IPNS resolve did not return expected CID after 24s polling (error: $IPNS_ERROR)"
+    fail "IPNS resolve did not return expected CID after 48s polling (error: $IPNS_ERROR)"
   fi
 else
   fail "IPNS resolve skipped (no rootIpnsName)"

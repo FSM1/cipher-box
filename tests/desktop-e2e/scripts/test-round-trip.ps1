@@ -211,7 +211,7 @@ if ($RootIpns) {
     if ($ResolvedCid) {
         Test-Pass "IPNS resolve returned CID ($ResolvedCid)"
     } else {
-        Test-Fail "IPNS resolve did not return expected CID after 24s polling"
+        Test-Fail "IPNS resolve did not return expected CID after 48s polling"
     }
 } else {
     Test-Fail "IPNS resolve skipped (no rootIpnsName)"
