@@ -5,7 +5,11 @@
   "branch": "fix/desktop-e2e-sequence-mismatch",
   "checkpoints_count": 1,
   "files_touched": [
-    "apps/api/src/ipns/ipns-record-parser.ts"
+    ".github/workflows/desktop-e2e.yml",
+    "apps/api/src/ipns/ipns-record-parser.ts",
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/desktop/src-tauri/src/fuse/mod.rs"
   ],
   "sessions": [
     {
@@ -13,13 +17,19 @@
       "transcript": "/b7/341cfae98b/0/full.jsonl",
       "content_hash": "/b7/341cfae98b/0/content_hash.txt",
       "prompt": "/b7/341cfae98b/0/prompt.txt"
+    },
+    {
+      "metadata": "/b7/341cfae98b/1/metadata.json",
+      "transcript": "/b7/341cfae98b/1/full.jsonl",
+      "content_hash": "/b7/341cfae98b/1/content_hash.txt",
+      "prompt": "/b7/341cfae98b/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 301,
-    "cache_creation_tokens": 1541265,
-    "cache_read_tokens": 49297731,
-    "output_tokens": 91414,
-    "api_call_count": 262
+    "input_tokens": 328,
+    "cache_creation_tokens": 1597530,
+    "cache_read_tokens": 50351898,
+    "output_tokens": 99517,
+    "api_call_count": 288
   }
 }
