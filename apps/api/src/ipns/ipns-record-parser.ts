@@ -125,12 +125,24 @@ export function parseIpnsRecord(buf: Uint8Array): ParsedIpnsRecord {
           pos = np2;
         } else if (innerWire === 2) {
           const [len, np2] = readVarint(buf, pos);
-          pos = np2 + Number(len);
-        } else if (innerWire === 5) pos += 4;
-        else if (innerWire === 1) pos += 8;
+          const end = np2 + Number(len);
+          if (end > buf.length) throw new Error('Length-delimited field exceeds buffer');
+          pos = end;
+        } else if (innerWire === 5) {
+          if (pos + 4 > buf.length)
+            throw new Error('Buffer underflow reading 32-bit field in group');
+          pos += 4;
+        } else if (innerWire === 1) {
+          if (pos + 8 > buf.length)
+            throw new Error('Buffer underflow reading 64-bit field in group');
+          pos += 8;
+        } else {
+          throw new Error(`Unsupported wire type ${innerWire} inside group`);
+        }
       }
+      if (depth !== 0) throw new Error('Unterminated group');
     } else if (wireType === 4) {
-      // End group — should only appear inside group scanning above; skip
+      throw new Error('Unexpected end group at top level');
     } else {
       throw new Error(`Unsupported wire type ${wireType}`);
     }

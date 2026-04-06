@@ -539,10 +539,15 @@ export class IpnsService {
           this.parseIpnsRecordBytes(cached.signedRecord),
           cached.publicKey ?? undefined
         );
-        // Use the DB column's sequenceNumber as authoritative — it is always
+        // Use the DB columns as authoritative — sequenceNumber is always
         // incremented by upsertFolderIpns, while the record bytes may contain
         // the client's pre-increment value (e.g. sequence 0 on first publish).
-        return { ...parsed, sequenceNumber: cached.sequenceNumber };
+        if (parsed.cid !== cached.latestCid) {
+          this.logger.warn(
+            `Cached signed record CID mismatch for ${cached.ipnsName}: signedRecord=${parsed.cid}, latestCid=${cached.latestCid}`
+          );
+        }
+        return { ...parsed, cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.warn(`Failed to parse cached signed record for ${cached.ipnsName}: ${message}`);

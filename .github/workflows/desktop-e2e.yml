@@ -310,7 +310,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd apps/api
-          node dist/main.js &
+          node dist/main.js > "$RUNNER_TEMP/api.log" 2>&1 &
           # Wait for API readiness
           READY=0
           for i in $(seq 1 30); do
@@ -348,7 +348,7 @@ jobs:
         shell: bash
         run: |
           cd apps/api
-          node dist/main.js &
+          node dist/main.js > "$RUNNER_TEMP/api.log" 2>&1 &
           # Wait for API readiness
           READY=0
           for i in $(seq 1 30); do
@@ -504,7 +504,7 @@ jobs:
           cp /tmp/cipherbox-desktop.log failure-logs/ 2>/dev/null || true
           cp "$RUNNER_TEMP/cipherbox-desktop.log" failure-logs/ 2>/dev/null || true
           cp ~/Library/Logs/fuse-t/fuse-t.log failure-logs/ 2>/dev/null || true
-          cp apps/api/*.log failure-logs/ 2>/dev/null || true
+          cp "$RUNNER_TEMP/api.log" failure-logs/ 2>/dev/null || true
 
       - name: Upload logs on failure
         if: failure()

@@ -118,7 +118,10 @@ pub async fn mount_filesystem(
     let fetch_result: Result<(Vec<u8>, String, u64), String> = async {
         let resolve_resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, &root_ipns_name).await.map_err(|e| format!("{}", e))?;
         let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resolve_resp.cid).await.map_err(|e| format!("{}", e))?;
-        let seq = resolve_resp.sequence_number.parse::<u64>().unwrap_or(0);
+        let seq = resolve_resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
+            log::warn!("Failed to parse root IPNS sequence '{}': {}", resolve_resp.sequence_number, e);
+            0
+        });
         Ok((encrypted_bytes, resolve_resp.cid, seq))
     }.await;
 
@@ -162,7 +165,10 @@ pub async fn mount_filesystem(
                             let sub_result: Result<(Vec<u8>, String, u64), String> = async {
                                 let resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, sub_ipns).await.map_err(|e| format!("{}", e))?;
                                 let bytes = cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resp.cid).await.map_err(|e| format!("{}", e))?;
-                                let seq = resp.sequence_number.parse::<u64>().unwrap_or(0);
+                                let seq = resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
+                                    log::warn!("Failed to parse subfolder IPNS sequence '{}' for {}: {}", resp.sequence_number, sub_ipns, e);
+                                    0
+                                });
                                 Ok((bytes, resp.cid, seq))
                             }.await;
                             if let Ok((enc_bytes, sub_cid, sub_seq)) = sub_result {
