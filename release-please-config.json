@@ -66,14 +66,14 @@
       "component": "@cipherbox/api",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.37.0"
+      "release-as": "0.37.1"
     },
     "apps/web": {
       "release-type": "node",
       "component": "@cipherbox/web",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.39.0"
+      "release-as": "0.40.0"
     },
     "apps/desktop": {
       "release-type": "node",
@@ -84,7 +84,7 @@
         "src-tauri/tauri.conf.json",
         "src-tauri/Cargo.toml"
       ],
-      "release-as": "0.37.0"
+      "release-as": "0.38.0"
     },
     "apps/tee-worker": {
       "release-type": "node",
@@ -112,14 +112,14 @@
       "component": "@cipherbox/api-client",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.37.0"
+      "release-as": "0.37.1"
     },
     "packages/sdk-core": {
       "release-type": "node",
       "component": "@cipherbox/sdk-core",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.35.0"
+      "release-as": "0.35.1"
     },
     "packages/sdk": {
       "release-type": "node",
@@ -152,7 +152,7 @@
       "component": "cipherbox-fuse",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.5.1"
+      "release-as": "0.5.2"
     },
     "crates/sdk": {
       "release-type": "rust",
