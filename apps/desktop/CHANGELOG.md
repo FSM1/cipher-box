@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.36.0...cipherbox-desktop-v0.37.0) (2026-04-06)
+
+
+### Bug Fixes
+
+* **api,desktop:** fix sequence number mismatch in cached IPNS resolves ([#449](https://github.com/FSM1/cipher-box/issues/449)) ([18b4e26](https://github.com/FSM1/cipher-box/commit/18b4e2600df804924461d967787408268c1f798c))
+
 ## [0.36.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.35.0...cipherbox-desktop-v0.36.0) (2026-04-01)
 
 

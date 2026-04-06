@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.30.0...@cipherbox/crypto-v0.31.0) (2026-04-06)
+
+
+### Features
+
+* IPNS signature storage and verification ([#448](https://github.com/FSM1/cipher-box/issues/448)) ([9b80833](https://github.com/FSM1/cipher-box/commit/9b80833ffd7d2dbe0c4cef5b24825b611cd97879))
+
 ## [0.30.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.29.0...@cipherbox/crypto-v0.30.0) (2026-03-31)
 
 
