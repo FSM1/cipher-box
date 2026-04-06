@@ -164,9 +164,6 @@ Write-Host "--- Test 3: Verify FilePointer and per-file IPNS metadata ---"
 $VerifySucceeded = $false
 $VerifyOutput = ""
 for ($attempt = 1; $attempt -le 24 -and -not $VerifySucceeded; $attempt++) {
-    # Touch the FUSE mount each iteration to trigger drain_upload_completions()
-    Get-Item -Path "$MountPoint\$TestFile" -ErrorAction SilentlyContinue | Out-Null
-    Get-ChildItem -Path $MountPoint -ErrorAction SilentlyContinue | Out-Null
     Start-Sleep -Seconds 5
     $verifyResult = Invoke-FilePointerVerifier
     $verifyExit = [int]$verifyResult[0]
