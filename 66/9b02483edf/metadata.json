@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "669b02483edf",
+  "strategy": "manual-commit",
+  "branch": "chore/api-docker-crypto-dep",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/Dockerfile"
+  ],
+  "sessions": [
+    {
+      "metadata": "/66/9b02483edf/0/metadata.json",
+      "transcript": "/66/9b02483edf/0/full.jsonl",
+      "content_hash": "/66/9b02483edf/0/content_hash.txt",
+      "prompt": "/66/9b02483edf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 313,
+    "cache_creation_tokens": 33176,
+    "cache_read_tokens": 299080,
+    "output_tokens": 2800,
+    "api_call_count": 11
+  }
+}

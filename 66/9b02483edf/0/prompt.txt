@@ -1,0 +1,3 @@
+something in the latest release is preventing the api docker build from finishing in the tag-staging-release workflow: https://github.com/FSM1/cipher-box/actions/runs/24040804267/job/70119753751
+
+This is likely related to the new dependency on the crypto library in the api not being handled by the build script.
