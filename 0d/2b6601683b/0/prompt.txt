@@ -1,0 +1,10 @@
+Verify each finding against the current code and only fix it if needed.
+
+In `@tests/desktop-e2e/scripts/test-round-trip.ps1` around lines 202 - 214, The
+failure message incorrectly states "24s polling" even though the for loop does
+24 attempts with a 2-second Start-Sleep (≈48 seconds); update the Test-Fail call
+so it reports the correct total polling duration (e.g., "48s polling") or
+compute it dynamically from the loop variables ($attempt count * 2) before
+calling Test-Fail; locate the loop using $attempt and $ResolvedCid and change
+the string passed to Test-Fail (or replace it with a computed value) so the
+reported duration matches the actual polling time.
