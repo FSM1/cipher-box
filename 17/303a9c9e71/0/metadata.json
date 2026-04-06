@@ -1,0 +1,59 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "17303a9c9e71",
+  "session_id": "d9143aca-83b1-4499-b87c-acdd279d1cf2",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-06T20:11:40.719523Z",
+  "branch": "chore/api-docker-crypto-dep",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/Dockerfile"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "678d6a56ea27",
+  "checkpoint_transcript_start": 55,
+  "transcript_lines_at_start": 55,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 21901,
+    "cache_read_tokens": 112066,
+    "output_tokens": 552,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Push a CI-related change to a remote branch and create a pull request for the cipher-box repository.",
+    "outcome": "PR #450 was created, then the commit type was amended from 'chore(ci)' to 'fix(ci)' to ensure release-please triggers a version bump and new tag for deployment.",
+    "learnings": {
+      "repo": [
+        "The repo uses release-please for versioning; 'chore' commits do not trigger a version bump or new release tag, while 'fix' commits trigger a patch bump.",
+        "Deployment retries depend on a new release tag being present, so the commit type directly affects CI/CD retry capabilities."
+      ],
+      "code": [
+        {
+          "path": "apps/api/Dockerfile",
+          "finding": "File was modified as part of this CI-related change."
+        }
+      ],
+      "workflow": [
+        "Commit type selection (chore vs fix vs feat) has downstream consequences on release automation — always verify whether a change needs to be deployable before choosing 'chore'.",
+        "Amending a commit after PR creation is needed when the conventional commit type is wrong and release automation depends on it."
+      ]
+    },
+    "friction": [
+      "Commit type was initially chosen as 'chore(ci)' without considering the release-please versioning impact, requiring an amend after the PR was already created."
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-06T20:11:27.531887Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}

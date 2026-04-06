@@ -1,0 +1,1 @@
+ok I just realised that having this as a `chore(ci)` might be a bit of a problem, as then a new release wont be tagged, I wont be able to retry only the parts of the deployment that failed previously with the new Deploy action.
