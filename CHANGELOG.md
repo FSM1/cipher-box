@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.37.0...cipher-box-v0.37.1) (2026-04-06)
+
+
+### Bug Fixes
+
+* **api:** include @cipherbox/crypto in API Docker build ([#450](https://github.com/FSM1/cipher-box/issues/450)) ([3a7f886](https://github.com/FSM1/cipher-box/commit/3a7f8863e2be2bc62f615c871077e34d25365d53))
+
 ## [0.37.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.36.1...cipher-box-v0.37.0) (2026-04-06)
 
 
