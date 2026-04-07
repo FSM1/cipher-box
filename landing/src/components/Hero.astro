@@ -1,0 +1,93 @@
+---
+import logoSrc from '../assets/logo.png';
+---
+
+<section class="hero">
+  <div class="hero-inner">
+    <img src={logoSrc.src} alt="CipherBox Logo" class="hero-logo" width="320" height="auto" />
+    <h1 class="hero-title">
+      <span class="prompt">{'>'}</span> CIPHERBOX
+    </h1>
+    <p class="hero-tagline">
+      Privacy-first encrypted cloud storage<br />with decentralized persistence
+    </p>
+    <p class="hero-subtitle">
+      Client-side encryption. Zero-knowledge server. Your keys, your data.
+    </p>
+    <div class="hero-actions">
+      <a href="https://app.cipherbox.cc" class="btn btn-primary" target="_blank" rel="noopener">
+        Launch App
+      </a>
+      <a href="https://github.com/FSM1/cipher-box" class="btn btn-secondary" target="_blank" rel="noopener">
+        View on GitHub
+      </a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: var(--spacing-xl);
+  }
+
+  .hero-inner {
+    max-width: 700px;
+  }
+
+  .hero-logo {
+    max-width: 320px;
+    margin-bottom: var(--spacing-xl);
+    filter: drop-shadow(0 0 20px rgb(0 208 132 / 30%));
+  }
+
+  .hero-title {
+    font-size: var(--font-size-3xl);
+    font-weight: var(--font-weight-bold);
+    letter-spacing: 2px;
+    margin-bottom: var(--spacing-md);
+  }
+
+  .prompt {
+    color: var(--color-text-secondary);
+  }
+
+  .hero-tagline {
+    font-size: var(--font-size-lg);
+    color: var(--color-text-primary);
+    line-height: 1.6;
+    margin-bottom: var(--spacing-md);
+  }
+
+  .hero-subtitle {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    letter-spacing: 0.08em;
+    margin-bottom: var(--spacing-2xl);
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: var(--spacing-md);
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 768px) {
+    .hero-logo {
+      max-width: 220px;
+    }
+
+    .hero-title {
+      font-size: var(--font-size-2xl);
+    }
+
+    .hero-tagline {
+      font-size: var(--font-size-md);
+    }
+  }
+</style>

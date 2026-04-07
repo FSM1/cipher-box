@@ -1,0 +1,96 @@
+---
+---
+
+<section class="section canvas-section" id="encryption-flow">
+  <h2 class="section-title">Encryption Flow</h2>
+  <p class="section-desc">
+    Every file is encrypted client-side before leaving your device. Each file gets a unique random key.
+  </p>
+  <div class="canvas-container">
+    <canvas
+      id="encrypt-canvas"
+      data-animate-canvas
+      width="1200"
+      height="320"
+    ></canvas>
+  </div>
+  <div class="flow-legend">
+    <div class="legend-item">
+      <span class="legend-step">01</span>
+      <span class="legend-label">Generate unique fileKey (32 bytes) + IV (12 bytes) per file</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-step">02</span>
+      <span class="legend-label">AES-256-GCM encrypt with authentication tag for tamper detection</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-step">03</span>
+      <span class="legend-label">ECIES-wrap the fileKey with your secp256k1 public key</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-step">04</span>
+      <span class="legend-label">Upload encrypted blob to IPFS, publish signed IPNS record</span>
+    </div>
+  </div>
+</section>
+
+<style>
+  .section-desc {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    margin-bottom: var(--spacing-xl);
+    max-width: 600px;
+  }
+
+  .canvas-container {
+    border: 1px solid var(--color-border-dim);
+    background: rgb(0 0 0 / 60%);
+    margin-bottom: var(--spacing-xl);
+  }
+
+  #encrypt-canvas {
+    width: 100%;
+    height: 320px;
+  }
+
+  .flow-legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--spacing-md);
+  }
+
+  .legend-item {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: flex-start;
+  }
+
+  .legend-step {
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-green-primary);
+    min-width: 28px;
+    text-shadow: var(--glow-green);
+  }
+
+  .legend-label {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    line-height: 1.5;
+  }
+
+  @media (max-width: 768px) {
+    #encrypt-canvas {
+      height: 280px;
+    }
+  }
+</style>
+
+<script>
+  import { initEncryptFlow } from '../scripts/encrypt-flow';
+
+  const canvas = document.getElementById('encrypt-canvas') as HTMLCanvasElement;
+  if (canvas) {
+    initEncryptFlow(canvas);
+  }
+</script>

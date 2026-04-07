@@ -1,0 +1,98 @@
+---
+---
+
+<section class="section canvas-section" id="decryption-flow">
+  <h2 class="section-title">Decryption Flow</h2>
+  <p class="section-desc">
+    All decryption happens in your browser. Streaming media uses AES-256-CTR for seekable playback without downloading the entire file.
+  </p>
+  <div class="canvas-container">
+    <canvas
+      id="decrypt-canvas"
+      data-animate-canvas
+      width="1200"
+      height="380"
+    ></canvas>
+  </div>
+  <div class="flow-legend">
+    <div class="legend-item">
+      <span class="legend-step">01</span>
+      <span class="legend-label">Resolve IPNS name to latest IPFS CID via signed Ed25519 record</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-step">02</span>
+      <span class="legend-label">ECIES-unwrap the fileKey using your private key (RAM only)</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-step">03</span>
+      <span class="legend-label">AES-256-GCM decrypt and verify authentication tag integrity</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-step">04</span>
+      <span class="legend-label">
+        <span style="color: #00BCD4;">{'// streaming'}</span> AES-256-CTR enables random-access byte range decryption
+      </span>
+    </div>
+  </div>
+</section>
+
+<style>
+  .section-desc {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    margin-bottom: var(--spacing-xl);
+    max-width: 600px;
+  }
+
+  .canvas-container {
+    border: 1px solid var(--color-border-dim);
+    background: rgb(0 0 0 / 60%);
+    margin-bottom: var(--spacing-xl);
+  }
+
+  #decrypt-canvas {
+    width: 100%;
+    height: 380px;
+  }
+
+  .flow-legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--spacing-md);
+  }
+
+  .legend-item {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: flex-start;
+  }
+
+  .legend-step {
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-green-primary);
+    min-width: 28px;
+    text-shadow: var(--glow-green);
+  }
+
+  .legend-label {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    line-height: 1.5;
+  }
+
+  @media (max-width: 768px) {
+    #decrypt-canvas {
+      height: 340px;
+    }
+  }
+</style>
+
+<script>
+  import { initDecryptFlow } from '../scripts/decrypt-flow';
+
+  const canvas = document.getElementById('decrypt-canvas') as HTMLCanvasElement;
+  if (canvas) {
+    initDecryptFlow(canvas);
+  }
+</script>

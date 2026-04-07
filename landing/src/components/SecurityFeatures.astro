@@ -1,0 +1,91 @@
+---
+const features = [
+  {
+    icon: '&#x1F6E1;',
+    title: 'Zero-Knowledge Server',
+    description:
+      'The server never sees plaintext data, file names, folder structure, timestamps, or encryption keys. It operates purely as an encrypted relay.',
+  },
+  {
+    icon: '&#x1F512;',
+    title: 'Hardware TEE Republishing',
+    description:
+      'IPNS records refreshed every 6 hours via Phala Cloud hardware enclaves. Keys decrypted only inside TEE, then immediately zeroed.',
+  },
+  {
+    icon: '&#x1F511;',
+    title: 'MPC Authentication',
+    description:
+      'Web3Auth distributes key shares across network nodes. No single party ever holds the complete private key. Device factor + recovery phrase.',
+  },
+  {
+    icon: '&#x1F4F1;',
+    title: 'Multi-Device Sync',
+    description:
+      'Sequence-number based conflict resolution with ~30 second polling. Same keypair derived on every device via Web3Auth.',
+  },
+  {
+    icon: '&#x1F4BE;',
+    title: 'Self-Sovereign Recovery',
+    description:
+      'BIP39 recovery phrase + vault export. Recover your entire vault independently using only your private key and any IPFS gateway.',
+  },
+  {
+    icon: '&#x1F9C5;',
+    title: 'Layered Encryption',
+    description:
+      'Per-file random AES keys, ECIES key wrapping, per-folder keys, authentication tags. Multiple layers must be broken to access any file.',
+  },
+];
+---
+
+<section class="section" id="security">
+  <h2 class="section-title">Security Features</h2>
+  <div class="features-grid">
+    {features.map((f) => (
+      <div class="card feature-card">
+        <div class="feature-icon" set:html={f.icon} />
+        <h3 class="feature-title">{f.title}</h3>
+        <p class="feature-desc">{f.description}</p>
+      </div>
+    ))}
+  </div>
+</section>
+
+<style>
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: var(--spacing-md);
+  }
+
+  .feature-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+  }
+
+  .feature-icon {
+    font-size: 24px;
+    filter: grayscale(1) brightness(1.5);
+    margin-bottom: var(--spacing-xs);
+  }
+
+  .feature-title {
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-bold);
+    letter-spacing: 0.03em;
+  }
+
+  .feature-desc {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    line-height: 1.6;
+  }
+
+  @media (max-width: 768px) {
+    .features-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

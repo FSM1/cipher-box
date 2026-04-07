@@ -1,0 +1,264 @@
+/* ==========================================================================
+   Design Tokens - Terminal/Hacker Aesthetic (mirrored from web app)
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+
+:root {
+  /* Color Primitives */
+  --color-black: #000000;
+  --color-green-primary: #00D084;
+  --color-green-dim: #006644;
+  --color-green-darker: #003322;
+  --color-green-glow: #00D08466;
+  --color-toolbar-bg: #001108;
+  --color-nav-active: #001a11;
+
+  /* Semantic Colors */
+  --color-background: var(--color-black);
+  --color-border: var(--color-green-primary);
+  --color-border-dim: var(--color-green-darker);
+  --color-text-primary: var(--color-green-primary);
+  --color-text-secondary: var(--color-green-dim);
+  --color-text-muted: #8b9a8f;
+  --color-text-dim: #4a5a4e;
+
+  /* Typography */
+  --font-family-mono: "JetBrains Mono", monospace;
+  --font-size-xs: 10px;
+  --font-size-sm: 11px;
+  --font-size-md: 14px;
+  --font-size-lg: 18px;
+  --font-size-xl: 24px;
+  --font-size-2xl: 36px;
+  --font-size-3xl: 48px;
+
+  /* Font Weights */
+  --font-weight-normal: 400;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Spacing */
+  --spacing-xs: 8px;
+  --spacing-sm: 12px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-2xl: 48px;
+  --spacing-3xl: 64px;
+  --spacing-4xl: 96px;
+
+  /* Effects */
+  --glow-green: 0 0 10px var(--color-green-glow);
+  --glow-green-strong: 0 0 20px var(--color-green-glow), 0 0 40px rgb(0 208 132 / 20%);
+  --border-thickness: 1px;
+
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   Global Resets
+   ========================================================================== */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ==========================================================================
+   Base Styles
+   ========================================================================== */
+
+html {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-md);
+  line-height: 1.6;
+  font-weight: var(--font-weight-normal);
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+a {
+  color: var(--color-text-primary);
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+
+a:hover {
+  text-shadow: var(--glow-green);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 2px;
+}
+
+::selection {
+  background-color: var(--color-green-primary);
+  color: var(--color-black);
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ==========================================================================
+   Layout
+   ========================================================================== */
+
+.page-container {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+}
+
+.section {
+  position: relative;
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--spacing-4xl) var(--spacing-lg);
+}
+
+.section-title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.05em;
+  margin-bottom: var(--spacing-xl);
+  text-transform: uppercase;
+}
+
+.section-title::before {
+  content: "> ";
+  color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
+   Shared Components
+   ========================================================================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm) var(--spacing-lg);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: var(--border-thickness) solid var(--color-border);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-decoration: none;
+}
+
+.btn-primary {
+  background: var(--color-green-primary);
+  color: var(--color-black);
+}
+
+.btn-primary:hover {
+  box-shadow: var(--glow-green-strong);
+  transform: translateY(-1px);
+  text-shadow: none;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--color-text-primary);
+}
+
+.btn-secondary:hover {
+  background: var(--color-green-darker);
+  box-shadow: var(--glow-green);
+  transform: translateY(-1px);
+  text-shadow: none;
+}
+
+.card {
+  border: var(--border-thickness) solid var(--color-border-dim);
+  padding: var(--spacing-lg);
+  background: rgb(0 0 0 / 80%);
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  border-color: var(--color-green-primary);
+  box-shadow: var(--glow-green);
+}
+
+/* ==========================================================================
+   Canvas containers
+   ========================================================================== */
+
+.canvas-section {
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+.canvas-container {
+  width: 100%;
+  position: relative;
+}
+
+.canvas-container canvas {
+  display: block;
+  width: 100%;
+}
+
+/* ==========================================================================
+   Animations
+   ========================================================================== */
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-in {
+  animation: fadeInUp 0.6s ease forwards;
+}
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  .section {
+    padding: var(--spacing-2xl) var(--spacing-md);
+  }
+
+  .section-title {
+    font-size: var(--font-size-lg);
+  }
+
+  .btn {
+    padding: var(--spacing-xs) var(--spacing-md);
+    font-size: var(--font-size-xs);
+  }
+}
