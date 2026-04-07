@@ -221,11 +221,13 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
     cancelAnimationFrame(animationId);
   }
 
+  const onResize = () => {
+    if (running) layoutTree();
+  };
+
   canvas.addEventListener('canvas:enter', start);
   canvas.addEventListener('canvas:leave', stop);
-  window.addEventListener('resize', () => {
-    if (running) layoutTree();
-  });
+  window.addEventListener('resize', onResize);
 
   if (canvas.dataset.visible === 'true') start();
 
@@ -233,5 +235,6 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
     stop();
     canvas.removeEventListener('canvas:enter', start);
     canvas.removeEventListener('canvas:leave', stop);
+    window.removeEventListener('resize', onResize);
   };
 }

@@ -258,13 +258,13 @@ export function initEncryptFlow(canvas: HTMLCanvasElement): () => void {
     cancelAnimationFrame(animationId);
   }
 
+  const onResize = () => {
+    if (running) layoutNodes();
+  };
+
   canvas.addEventListener('canvas:enter', start);
   canvas.addEventListener('canvas:leave', stop);
-  window.addEventListener('resize', () => {
-    if (running) {
-      layoutNodes();
-    }
-  });
+  window.addEventListener('resize', onResize);
 
   // Auto-start if visible
   if (canvas.dataset.visible === 'true') {
@@ -275,5 +275,6 @@ export function initEncryptFlow(canvas: HTMLCanvasElement): () => void {
     stop();
     canvas.removeEventListener('canvas:enter', start);
     canvas.removeEventListener('canvas:leave', stop);
+    window.removeEventListener('resize', onResize);
   };
 }

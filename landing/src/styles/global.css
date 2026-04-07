@@ -244,6 +244,20 @@ img {
   animation: fadeInUp 0.6s ease forwards;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .animate-in {
+    animation: none;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+  }
+}
+
 /* ==========================================================================
    Responsive
    ========================================================================== */

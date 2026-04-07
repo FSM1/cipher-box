@@ -4,7 +4,6 @@
  */
 export function observeCanvasAnimations(): () => void {
   const canvases = document.querySelectorAll<HTMLCanvasElement>('[data-animate-canvas]');
-  const activeAnimations = new Map<HTMLCanvasElement, number>();
 
   const observer = new IntersectionObserver(
     (entries) => {
@@ -26,6 +25,5 @@ export function observeCanvasAnimations(): () => void {
 
   return () => {
     observer.disconnect();
-    activeAnimations.forEach((id) => cancelAnimationFrame(id));
   };
 }

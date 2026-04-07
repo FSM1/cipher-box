@@ -18,9 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
+          cache: 'npm'
+          cache-dependency-path: landing/package-lock.json
 
       - name: Install and build
         working-directory: landing
@@ -48,14 +50,12 @@ jobs:
           script: |
             set -euo pipefail
 
-            IPFS_API="http://localhost:5001"
-
-            # Add directory to IPFS via Kubo API
-            CID=$(curl -sS -X POST \
-              "${IPFS_API}/api/v0/add?recursive=true&wrap-with-directory=true&pin=true" \
-              -H "Content-Type: multipart/form-data" \
-              -F "file=@/tmp/cipherbox-landing" \
-              | tail -1 | jq -r '.Hash')
+            # Add directory to IPFS recursively and return the root CID
+            CID=$(ipfs add -Qr --pin /tmp/cipherbox-landing)
+            if [ -z "${CID}" ]; then
+              echo "Failed to pin landing page directory to IPFS"
+              exit 1
+            fi
 
             echo "Pinned landing page to IPFS: ${CID}"
             echo "CID=${CID}" >> "$GITHUB_OUTPUT"
