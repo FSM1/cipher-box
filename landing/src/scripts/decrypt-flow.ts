@@ -4,12 +4,7 @@
  * Includes a branch for CTR streaming mode.
  */
 
-const GREEN = '#00D084';
-const GREEN_DIM = '#006644';
-const GREEN_DARK = '#003322';
-const GREEN_GLOW = 'rgba(0, 208, 132, 0.4)';
-const CYAN = '#00BCD4';
-const FONT = '"JetBrains Mono", monospace';
+import { GREEN, GREEN_DIM, GREEN_DARK, GREEN_GLOW, CYAN, CYAN_DIM, CYAN_GLOW, FONT, NODE_BG, setupCanvasDPR } from './canvas-theme';
 
 interface FlowNode {
   x: number;
@@ -53,16 +48,16 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
 
   let nodes: FlowNode[] = [];
   let streamNodes: FlowNode[] = [];
+  let canvasW = 0;
+  let canvasH = 0;
 
   function layoutNodes() {
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { width, height } = setupCanvasDPR(canvas, ctx!);
+    canvasW = width;
+    canvasH = height;
 
-    const w = rect.width;
-    const h = rect.height;
+    const w = width;
+    const h = height;
     const isMobile = w < 600;
     const nodeW = isMobile ? 130 : 160;
     const nodeH = isMobile ? 50 : 56;
@@ -112,8 +107,8 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
     c.globalAlpha = alpha;
 
     const color = node.color;
-    const dimColor = color === CYAN ? '#00838F' : GREEN_DIM;
-    const glowColor = color === CYAN ? 'rgba(0, 188, 212, 0.4)' : GREEN_GLOW;
+    const dimColor = color === CYAN ? CYAN_DIM : GREEN_DIM;
+    const glowColor = color === CYAN ? CYAN_GLOW : GREEN_GLOW;
 
     c.strokeStyle = color;
     c.lineWidth = 1;
@@ -122,7 +117,7 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
     c.strokeRect(node.x, node.y, node.w, node.h);
     c.shadowBlur = 0;
 
-    c.fillStyle = 'rgba(0, 17, 8, 0.9)';
+    c.fillStyle = NODE_BG;
     c.fillRect(node.x + 1, node.y + 1, node.w - 2, node.h - 2);
 
     c.fillStyle = color;
@@ -146,7 +141,7 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
     color: string
   ) {
     const c = ctx!;
-    c.strokeStyle = color === CYAN ? '#00838F' : GREEN_DARK;
+    c.strokeStyle = color === CYAN ? CYAN_DIM : GREEN_DARK;
     c.lineWidth = 1;
     c.beginPath();
     c.moveTo(fromX, fromY);
@@ -154,7 +149,7 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
     c.stroke();
 
     const angle = Math.atan2(toY - fromY, toX - fromX);
-    c.fillStyle = color === CYAN ? '#00838F' : GREEN_DIM;
+    c.fillStyle = color === CYAN ? CYAN_DIM : GREEN_DIM;
     c.beginPath();
     c.moveTo(toX, toY);
     c.lineTo(
@@ -187,7 +182,6 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
   }
 
   function drawParticle(p: Particle) {
-    const allNodes = [...nodes, ...streamNodes];
     const fromIdx = p.path[p.segment];
     const toIdx = p.path[p.segment + 1];
     if (fromIdx == null || toIdx == null) return;
@@ -220,7 +214,7 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
     }
 
     const c = ctx!;
-    const glowColor = p.color === CYAN ? 'rgba(0, 188, 212, 0.5)' : GREEN_GLOW;
+    const glowColor = p.color === CYAN ? CYAN_GLOW : GREEN_GLOW;
     c.shadowColor = glowColor;
     c.shadowBlur = 12;
     c.fillStyle = p.color;
@@ -233,10 +227,9 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
   function draw() {
     if (!running) return;
     const c = ctx!;
-    const rect = canvas.getBoundingClientRect();
     const elapsed = (performance.now() - startTime) / 1000;
 
-    c.clearRect(0, 0, rect.width, rect.height);
+    c.clearRect(0, 0, canvasW, canvasH);
 
     // Main flow connections
     for (let i = 0; i < nodes.length - 1; i++) {

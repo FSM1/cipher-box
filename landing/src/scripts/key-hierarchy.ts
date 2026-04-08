@@ -3,13 +3,7 @@
  * Shows the VaultKey derivation tree with color-coded key types.
  */
 
-const GREEN = '#00D084';
-const GREEN_DIM = '#006644';
-const GREEN_DARK = '#003322';
-const GREEN_GLOW = 'rgba(0, 208, 132, 0.4)';
-const CYAN = '#00BCD4';
-const AMBER = '#F59E0B';
-const FONT = '"JetBrains Mono", monospace';
+import { GREEN, GREEN_DIM, GREEN_DARK, GREEN_GLOW, CYAN, CYAN_GLOW, AMBER, AMBER_DIM, AMBER_GLOW, FONT, NODE_BG, setupCanvasDPR } from './canvas-theme';
 
 interface TreeNode {
   label: string;
@@ -44,16 +38,16 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
   ];
 
   let treeNodes: TreeNode[] = [];
+  let canvasW = 0;
+  let canvasH = 0;
 
   function layoutTree() {
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { width, height } = setupCanvasDPR(canvas, ctx!);
+    canvasW = width;
+    canvasH = height;
 
-    const w = rect.width;
-    const h = rect.height;
+    const w = width;
+    const h = height;
     const isMobile = w < 600;
     const nodeW = isMobile ? 120 : 150;
     const nodeH = isMobile ? 44 : 50;
@@ -109,8 +103,8 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
     c.globalAlpha = alpha;
 
     const glowColor =
-      node.color === CYAN ? 'rgba(0, 188, 212, 0.4)' :
-      node.color === AMBER ? 'rgba(245, 158, 11, 0.4)' :
+      node.color === CYAN ? CYAN_GLOW :
+      node.color === AMBER ? AMBER_GLOW :
       GREEN_GLOW;
 
     c.strokeStyle = node.color;
@@ -120,7 +114,7 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
     c.strokeRect(node.x, node.y, node.w, node.h);
     c.shadowBlur = 0;
 
-    c.fillStyle = 'rgba(0, 17, 8, 0.9)';
+    c.fillStyle = NODE_BG;
     c.fillRect(node.x + 1, node.y + 1, node.w - 2, node.h - 2);
 
     c.fillStyle = node.color;
@@ -130,8 +124,8 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
     c.fillText(node.label, node.x + node.w / 2, node.y + node.h / 2 - 7, node.w - 8);
 
     const dimColor =
-      node.color === CYAN ? '#00838F' :
-      node.color === AMBER ? '#92400E' :
+      node.color === CYAN ? CYAN_GLOW :
+      node.color === AMBER ? AMBER_DIM :
       GREEN_DIM;
     c.fillStyle = dimColor;
     c.font = `8px ${FONT}`;
@@ -162,10 +156,9 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
   function draw() {
     if (!running) return;
     const c = ctx!;
-    const rect = canvas.getBoundingClientRect();
     const elapsed = (performance.now() - startTime) / 1000;
 
-    c.clearRect(0, 0, rect.width, rect.height);
+    c.clearRect(0, 0, canvasW, canvasH);
 
     // Draw edges first (behind nodes)
     for (let i = 0; i < treeNodes.length; i++) {
@@ -187,7 +180,7 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
     }
 
     // Legend
-    const legendY = rect.height - 30;
+    const legendY = canvasH - 30;
     c.font = `9px ${FONT}`;
     c.textAlign = 'left';
 
@@ -205,7 +198,11 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
       lx += c.measureText(l.label).width + 30;
     }
 
-    animationId = requestAnimationFrame(draw);
+    // Stop rAF once all nodes have fully faded in (no ongoing animation)
+    const maxDelay = (treeNodes.length - 1) * 0.2 + 0.4;
+    if (elapsed < maxDelay) {
+      animationId = requestAnimationFrame(draw);
+    }
   }
 
   function start() {

@@ -60,12 +60,23 @@ export function initMatrixRain(canvas: HTMLCanvasElement): () => void {
     animationId = requestAnimationFrame(draw);
   }
 
+  function onVisibilityChange() {
+    if (document.hidden) {
+      cancelAnimationFrame(animationId);
+    } else {
+      lastFrameTime = 0;
+      animationId = requestAnimationFrame(draw);
+    }
+  }
+
   resize();
   window.addEventListener('resize', resize);
+  document.addEventListener('visibilitychange', onVisibilityChange);
   animationId = requestAnimationFrame(draw);
 
   return () => {
     window.removeEventListener('resize', resize);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
     cancelAnimationFrame(animationId);
   };
 }

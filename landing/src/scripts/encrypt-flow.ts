@@ -3,12 +3,7 @@
  * Shows: File -> Generate Key -> AES-256-GCM -> ECIES Wrap -> IPFS Upload -> IPNS Publish
  */
 
-const GREEN = '#00D084';
-const GREEN_DIM = '#006644';
-const GREEN_DARK = '#003322';
-const GREEN_GLOW = 'rgba(0, 208, 132, 0.4)';
-const BLACK = '#000000';
-const FONT = '"JetBrains Mono", monospace';
+import { GREEN, GREEN_DIM, GREEN_DARK, GREEN_GLOW, FONT, NODE_BG, setupCanvasDPR } from './canvas-theme';
 
 interface FlowNode {
   x: number;
@@ -17,7 +12,6 @@ interface FlowNode {
   h: number;
   label: string;
   sublabel: string;
-  progress: number;
 }
 
 interface Particle {
@@ -46,16 +40,16 @@ export function initEncryptFlow(canvas: HTMLCanvasElement): () => void {
   ];
 
   let nodes: FlowNode[] = [];
+  let canvasW = 0;
+  let canvasH = 0;
 
   function layoutNodes() {
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { width, height } = setupCanvasDPR(canvas, ctx!);
+    canvasW = width;
+    canvasH = height;
 
-    const w = rect.width;
-    const h = rect.height;
+    const w = width;
+    const h = height;
     const isMobile = w < 600;
     const nodeW = isMobile ? 130 : 160;
     const nodeH = isMobile ? 50 : 56;
@@ -74,7 +68,6 @@ export function initEncryptFlow(canvas: HTMLCanvasElement): () => void {
         h: nodeH,
         label: n.label,
         sublabel: n.sublabel,
-        progress: 0,
       };
     });
   }
@@ -103,7 +96,7 @@ export function initEncryptFlow(canvas: HTMLCanvasElement): () => void {
     c.shadowBlur = 0;
 
     // Background
-    c.fillStyle = 'rgba(0, 17, 8, 0.9)';
+    c.fillStyle = NODE_BG;
     c.fillRect(node.x + 1, node.y + 1, node.w - 2, node.h - 2);
 
     // Label
@@ -209,10 +202,9 @@ export function initEncryptFlow(canvas: HTMLCanvasElement): () => void {
   function draw() {
     if (!running) return;
     const c = ctx!;
-    const rect = canvas.getBoundingClientRect();
     const elapsed = (performance.now() - startTime) / 1000;
 
-    c.clearRect(0, 0, rect.width, rect.height);
+    c.clearRect(0, 0, canvasW, canvasH);
 
     // Draw connections
     for (let i = 0; i < nodes.length - 1; i++) {

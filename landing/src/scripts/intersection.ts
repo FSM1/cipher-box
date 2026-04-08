@@ -1,8 +1,7 @@
 /**
  * Observe elements and trigger canvas animations when they scroll into view.
- * Returns a cleanup function.
  */
-export function observeCanvasAnimations(): () => void {
+export function observeCanvasAnimations(): void {
   const canvases = document.querySelectorAll<HTMLCanvasElement>('[data-animate-canvas]');
 
   const observer = new IntersectionObserver(
@@ -22,8 +21,4 @@ export function observeCanvasAnimations(): () => void {
   );
 
   canvases.forEach((canvas) => observer.observe(canvas));
-
-  return () => {
-    observer.disconnect();
-  };
 }
