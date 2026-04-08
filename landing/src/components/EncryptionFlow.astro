@@ -1,0 +1,61 @@
+---
+---
+
+<section class="section canvas-section" id="encryption-flow">
+  <h2 class="section-title">Encryption Flow</h2>
+  <p class="section-desc">
+    Every file is encrypted client-side before leaving your device. Each file gets a unique random key.
+  </p>
+  <div class="canvas-container">
+    <canvas
+      id="encrypt-canvas"
+      data-animate-canvas
+      width="1200"
+      height="320"
+    ></canvas>
+  </div>
+  <div class="flow-legend">
+    <div class="legend-item">
+      <span class="legend-step">01</span>
+      <span class="legend-label">Generate unique fileKey (32 bytes) + IV (12 bytes) per file</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-step">02</span>
+      <span class="legend-label">AES-256-GCM encrypt with authentication tag for tamper detection</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-step">03</span>
+      <span class="legend-label">ECIES-wrap the fileKey with your secp256k1 public key</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-step">04</span>
+      <span class="legend-label">Upload encrypted blob to IPFS, publish signed IPNS record</span>
+    </div>
+  </div>
+</section>
+
+<style>
+  .canvas-container {
+    margin-bottom: var(--spacing-xl);
+  }
+
+  #encrypt-canvas {
+    width: 100%;
+    height: 320px;
+  }
+
+  @media (max-width: 768px) {
+    #encrypt-canvas {
+      height: 280px;
+    }
+  }
+</style>
+
+<script>
+  import { initEncryptFlow } from '../scripts/encrypt-flow';
+
+  const canvas = document.getElementById('encrypt-canvas') as HTMLCanvasElement;
+  if (canvas) {
+    initEncryptFlow(canvas);
+  }
+</script>

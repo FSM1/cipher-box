@@ -1,0 +1,168 @@
+---
+const neverSees = [
+  'File contents',
+  'File names',
+  'Folder names',
+  'Folder structure',
+  'Timestamps (creation, modification)',
+  'Encryption keys',
+  'IPNS private keys',
+  'Plaintext file sizes',
+  'File-to-folder relationships',
+];
+
+const isVisible = [
+  'IPFS CIDs (content-addressed hashes)',
+  'IPNS names (public identifiers)',
+  'Encrypted blob sizes',
+  'Encryption IVs (not secret)',
+  'User public key (secp256k1)',
+  'Device IDs and approval status',
+  'IPNS update frequency (usage patterns)',
+];
+---
+
+<section class="section" id="privacy">
+  <h2 class="section-title">Privacy Model</h2>
+  <p class="privacy-intro">
+    With full access to IPFS and the CipherBox server but <strong>without</strong> your private key:
+  </p>
+  <div class="privacy-grid">
+    <div class="privacy-col privacy-hidden">
+      <h3 class="col-title">
+        <span class="lock-icon">&#x1F512;</span> Server Never Sees
+      </h3>
+      <ul class="privacy-list">
+        {neverSees.map((item) => (
+          <li class="privacy-item hidden-item">
+            <span class="item-marker">{'x'}</span>
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+
+    <div class="privacy-divider" aria-hidden="true">
+      <div class="divider-line"></div>
+    </div>
+
+    <div class="privacy-col privacy-visible">
+      <h3 class="col-title">
+        <span class="eye-icon">&#x1F441;</span> What Is Visible
+      </h3>
+      <ul class="privacy-list">
+        {isVisible.map((item) => (
+          <li class="privacy-item visible-item">
+            <span class="item-marker visible-marker">{'>'}</span>
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+</section>
+
+<style>
+  .privacy-intro {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .privacy-intro strong {
+    color: var(--color-green-primary);
+  }
+
+  .privacy-grid {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: var(--spacing-lg);
+    align-items: start;
+  }
+
+  .privacy-col {
+    padding: var(--spacing-lg);
+    border: 1px solid var(--color-border-dim);
+    background: rgb(0 0 0 / 60%);
+  }
+
+  .privacy-hidden {
+    border-color: var(--color-green-primary);
+  }
+
+  .col-title {
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-bold);
+    margin-bottom: var(--spacing-md);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+  }
+
+  .lock-icon, .eye-icon {
+    filter: grayscale(1) brightness(1.5);
+  }
+
+  .privacy-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+  }
+
+  .privacy-item {
+    font-size: var(--font-size-sm);
+    display: flex;
+    gap: var(--spacing-xs);
+    align-items: flex-start;
+    line-height: 1.5;
+  }
+
+  .item-marker {
+    color: var(--color-green-primary);
+    font-weight: var(--font-weight-bold);
+    min-width: 14px;
+  }
+
+  .hidden-item {
+    color: var(--color-text-primary);
+  }
+
+  .visible-item {
+    color: var(--color-text-dim);
+  }
+
+  .visible-marker {
+    color: var(--color-text-dim);
+  }
+
+  .privacy-divider {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    padding: var(--spacing-lg) 0;
+  }
+
+  .divider-line {
+    width: 1px;
+    background: var(--color-green-darker);
+    min-height: 100%;
+  }
+
+  @media (max-width: 768px) {
+    .privacy-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .privacy-divider {
+      padding: 0;
+      height: 1px;
+    }
+
+    .divider-line {
+      width: 100%;
+      height: 1px;
+      min-height: auto;
+    }
+  }
+</style>

@@ -1,0 +1,169 @@
+---
+---
+
+<section class="section" id="interactive-demo">
+  <h2 class="section-title">Interactive Vault Explorer</h2>
+  <p class="section-desc">
+    Explore how CipherBox encrypts data layer by layer. Click through IPNS names,
+    fetch encrypted blobs, and decrypt each layer to reveal the plaintext underneath.
+  </p>
+  <div class="demo-container" id="demo-container">
+    <div class="demo-log" id="demo-log"></div>
+  </div>
+</section>
+
+<style>
+  .demo-container {
+    border: 1px solid var(--color-border-dim);
+    background: rgb(0 0 0 / 80%);
+    max-height: 700px;
+    overflow-y: auto;
+    scrollbar-color: var(--color-green-darker) transparent;
+  }
+
+  .demo-log {
+    padding: var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+  }
+</style>
+
+<style is:global>
+  /* Demo entry types */
+  .demo-entry { margin-bottom: 2px; }
+  .demo-spacer { height: 8px; }
+  .demo-info { color: var(--color-text-muted); }
+  .demo-data { padding-left: 16px; }
+  .demo-command { color: var(--color-text-primary); margin-top: 4px; }
+  .demo-result { padding-left: 16px; }
+  .demo-error { color: var(--color-error); padding-left: 16px; }
+  .demo-action { padding-left: 16px; }
+
+  .demo-ipns-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: 4px 0 4px 16px;
+  }
+
+  /* Token colors */
+  .demo-prompt { color: var(--color-text-secondary); }
+  .demo-key { color: #F59E0B; font-weight: 600; }
+  .demo-cipher { color: #8b9a8f; word-break: break-all; }
+  .demo-ipns-name { color: #00BCD4; }
+  .demo-cid { color: var(--color-green-primary); }
+  .demo-dim { color: var(--color-text-dim); font-size: 10px; }
+  .demo-muted { color: var(--color-text-muted); }
+  .demo-label { color: var(--color-text-secondary); min-width: 80px; display: inline-block; }
+  .demo-label-tag {
+    color: var(--color-text-muted);
+    font-size: 10px;
+    min-width: 140px;
+    display: inline-block;
+  }
+  .demo-prop { color: var(--color-green-dim); }
+  .demo-string { color: var(--color-text-muted); }
+  .demo-number { color: #F59E0B; }
+  .demo-bool { color: #00BCD4; }
+  .demo-plaintext {
+    color: var(--color-green-primary);
+    font-weight: 600;
+    padding: var(--spacing-sm);
+    border: 1px solid var(--color-green-primary);
+    background: rgb(0 208 132 / 5%);
+  }
+
+  /* Clickable elements */
+  .demo-clickable {
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 2px;
+  }
+  .demo-clickable:hover {
+    text-shadow: 0 0 8px currentColor;
+  }
+
+  /* Buttons */
+  .demo-btn {
+    font-family: var(--font-family-mono);
+    font-size: 10px;
+    color: var(--color-green-primary);
+    background: transparent;
+    border: 1px solid var(--color-green-darker);
+    padding: 2px 8px;
+    cursor: pointer;
+    letter-spacing: 0.03em;
+    transition: all 0.15s ease;
+  }
+  .demo-btn:hover {
+    border-color: var(--color-green-primary);
+    box-shadow: var(--glow-green);
+  }
+  .demo-btn-used {
+    color: var(--color-text-dim);
+    border-color: transparent;
+    cursor: default;
+    pointer-events: none;
+  }
+  .demo-btn-decrypt {
+    margin-top: 8px;
+    color: #F59E0B;
+    border-color: #78350F;
+  }
+  .demo-btn-decrypt:hover {
+    border-color: #F59E0B;
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
+  }
+
+  /* Blob/result boxes */
+  .demo-blob, .demo-decrypted {
+    border: 1px solid var(--color-green-darker);
+    padding: var(--spacing-sm);
+    margin: 4px 0 4px 16px;
+    background: rgb(0 0 0 / 60%);
+  }
+  .demo-blob-header {
+    color: var(--color-text-secondary);
+    font-weight: 600;
+    font-size: 11px;
+    margin-bottom: 6px;
+    letter-spacing: 0.03em;
+  }
+  .demo-blob-row {
+    margin-bottom: 2px;
+    word-break: break-all;
+  }
+
+  .demo-decrypted {
+    border-color: var(--color-green-primary);
+    box-shadow: 0 0 8px rgb(0 208 132 / 15%);
+  }
+  .demo-decrypted pre {
+    font-family: var(--font-family-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .demo-result-box { padding-left: 0; }
+
+  @media (max-width: 768px) {
+    .demo-ipns-row {
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .demo-label-tag { min-width: auto; }
+  }
+</style>
+
+<script>
+  import { initInteractiveDemo } from '../scripts/interactive-demo';
+
+  const container = document.getElementById('demo-container');
+  if (container) {
+    initInteractiveDemo(container);
+  }
+</script>

@@ -1,0 +1,85 @@
+---
+const stack = [
+  { component: 'Frontend', tech: 'React 18 + TypeScript + Vite' },
+  { component: 'Backend', tech: 'Node.js + NestJS + TypeScript' },
+  { component: 'Database', tech: 'PostgreSQL 16' },
+  { component: 'Job Queue', tech: 'BullMQ + Redis' },
+  { component: 'Auth', tech: 'Web3Auth MPC Core Kit' },
+  { component: 'Storage', tech: 'IPFS via Kubo' },
+  { component: 'Desktop', tech: 'Tauri v2 + FUSE / WinFsp' },
+  { component: 'TEE', tech: 'Phala Cloud CVM' },
+  { component: 'Crypto', tech: 'Web Crypto API + eciesjs' },
+  { component: 'Monitoring', tech: 'Grafana Faro + Prometheus' },
+];
+---
+
+<section class="section" id="tech-stack">
+  <h2 class="section-title">Tech Stack</h2>
+  <div class="stack-grid">
+    {stack.map((s) => (
+      <div class="stack-row">
+        <span class="stack-component">{s.component}</span>
+        <span class="stack-divider">{'//  '}</span>
+        <span class="stack-tech">{s.tech}</span>
+      </div>
+    ))}
+  </div>
+</section>
+
+<style>
+  .stack-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border: 1px solid var(--color-border-dim);
+    background: rgb(0 0 0 / 60%);
+    padding: var(--spacing-lg);
+  }
+
+  .stack-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-xs) 0;
+    border-bottom: 1px solid rgb(0 51 34 / 30%);
+  }
+
+  .stack-row:last-child {
+    border-bottom: none;
+  }
+
+  .stack-component {
+    font-weight: var(--font-weight-bold);
+    font-size: var(--font-size-sm);
+    color: var(--color-green-primary);
+    min-width: 120px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .stack-divider {
+    color: var(--color-text-dim);
+    font-size: var(--font-size-xs);
+  }
+
+  .stack-tech {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+  }
+
+  @media (max-width: 768px) {
+    .stack-row {
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .stack-divider {
+      display: none;
+    }
+
+    .stack-component {
+      min-width: auto;
+      font-size: var(--font-size-xs);
+    }
+  }
+</style>

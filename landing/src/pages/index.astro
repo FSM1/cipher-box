@@ -1,0 +1,35 @@
+---
+import Base from '../layouts/Base.astro';
+import MatrixRain from '../components/MatrixRain.astro';
+import Hero from '../components/Hero.astro';
+import EncryptionFlow from '../components/EncryptionFlow.astro';
+import DecryptionFlow from '../components/DecryptionFlow.astro';
+import KeyHierarchy from '../components/KeyHierarchy.astro';
+import InteractiveDemo from '../components/InteractiveDemo.astro';
+import SharingDemo from '../components/SharingDemo.astro';
+import SecurityFeatures from '../components/SecurityFeatures.astro';
+import PrivacyModel from '../components/PrivacyModel.astro';
+import ReleaseNotes from '../components/ReleaseNotes.astro';
+import TechStack from '../components/TechStack.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<Base>
+  <MatrixRain />
+  <Hero />
+  <EncryptionFlow />
+  <DecryptionFlow />
+  <KeyHierarchy />
+  <InteractiveDemo />
+  <SharingDemo />
+  <SecurityFeatures />
+  <PrivacyModel />
+  <TechStack />
+  <ReleaseNotes />
+  <Footer />
+
+  <script>
+    import { observeCanvasAnimations } from '../scripts/intersection';
+    observeCanvasAnimations();
+  </script>
+</Base>
