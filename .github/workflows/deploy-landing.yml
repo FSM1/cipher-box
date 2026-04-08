@@ -40,28 +40,28 @@ jobs:
           target: /tmp/cipherbox-landing
           strip_components: 2
 
-      - name: Pin to Kubo and update DNSLink
+      - name: Pin to IPFS via Kubo
         id: ipfs
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
+          capture_stdout: true
           script: |
-            set -euo pipefail
-
-            # Add directory to IPFS recursively and return the root CID
             CID=$(ipfs add -Qr --pin /tmp/cipherbox-landing)
-            if [ -z "${CID}" ]; then
-              echo "Failed to pin landing page directory to IPFS"
-              exit 1
-            fi
-
-            echo "Pinned landing page to IPFS: ${CID}"
-            echo "CID=${CID}" >> "$GITHUB_OUTPUT"
-
-            # Clean up temp files
             rm -rf /tmp/cipherbox-landing
+            echo "${CID}"
+
+      - name: Validate CID
+        run: |
+          CID="${{ steps.ipfs.outputs.stdout }}"
+          if [ -z "${CID}" ]; then
+            echo "::error::No CID returned from IPFS pin step"
+            exit 1
+          fi
+          echo "CID=${CID}" >> "$GITHUB_ENV"
+          echo "Pinned landing page to IPFS: ${CID}"
 
       - name: Update DNSLink
         if: github.ref == 'refs/heads/main'
@@ -70,12 +70,6 @@ jobs:
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           DNSLINK_RECORD_ID: ${{ secrets.DNSLINK_RECORD_ID }}
         run: |
-          CID="${{ steps.ipfs.outputs.CID }}"
-          if [ -z "${CID}" ]; then
-            echo "::error::No CID from IPFS pin step"
-            exit 1
-          fi
-
           curl -sS -X PUT \
             "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/dns_records/${DNSLINK_RECORD_ID}" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
@@ -87,7 +81,6 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          CID="${{ steps.ipfs.outputs.CID }}"
           echo "## Landing Page Deployed" >> $GITHUB_STEP_SUMMARY
           echo "- **CID:** ${CID}" >> $GITHUB_STEP_SUMMARY
           echo "- **IPFS Gateway:** https://ipfs.io/ipfs/${CID}" >> $GITHUB_STEP_SUMMARY

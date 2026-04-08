@@ -3,7 +3,15 @@
  * Shows: File -> Generate Key -> AES-256-GCM -> ECIES Wrap -> IPFS Upload -> IPNS Publish
  */
 
-import { GREEN, GREEN_DIM, GREEN_DARK, GREEN_GLOW, FONT, NODE_BG, setupCanvasDPR } from './canvas-theme';
+import {
+  GREEN,
+  GREEN_DIM,
+  GREEN_DARK,
+  GREEN_GLOW,
+  FONT,
+  NODE_BG,
+  setupCanvasDPR,
+} from './canvas-theme';
 
 interface FlowNode {
   x: number;
@@ -118,8 +126,8 @@ export function initEncryptFlow(canvas: HTMLCanvasElement): () => void {
     const c = ctx!;
     const fromX = from.x + from.w;
     const fromY = from.y + from.h / 2;
-    let toX = to.x;
-    let toY = to.y + to.h / 2;
+    const toX = to.x;
+    const toY = to.y + to.h / 2;
 
     // If wrapping to next row
     if (to.x <= from.x) {

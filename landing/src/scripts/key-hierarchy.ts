@@ -3,7 +3,20 @@
  * Shows the VaultKey derivation tree with color-coded key types.
  */
 
-import { GREEN, GREEN_DIM, GREEN_DARK, GREEN_GLOW, CYAN, CYAN_GLOW, AMBER, AMBER_DIM, AMBER_GLOW, FONT, NODE_BG, setupCanvasDPR } from './canvas-theme';
+import {
+  GREEN,
+  GREEN_DIM,
+  GREEN_DARK,
+  GREEN_GLOW,
+  CYAN,
+  CYAN_GLOW,
+  AMBER,
+  AMBER_DIM,
+  AMBER_GLOW,
+  FONT,
+  NODE_BG,
+  setupCanvasDPR,
+} from './canvas-theme';
 
 interface TreeNode {
   label: string;
@@ -72,7 +85,7 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
 
     const levelH = h / (levels.length + 0.5);
 
-    treeNodes = treeDef.map((def, idx) => ({
+    treeNodes = treeDef.map((def) => ({
       label: def.label,
       sublabel: def.sublabel,
       color: def.color,
@@ -88,7 +101,7 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
     for (let lvl = 0; lvl < levels.length; lvl++) {
       const nodesInLevel = levels[lvl];
       const totalW = nodesInLevel.length * nodeW + (nodesInLevel.length - 1) * 16;
-      let startX = (w - totalW) / 2;
+      const startX = (w - totalW) / 2;
 
       for (let i = 0; i < nodesInLevel.length; i++) {
         const idx = nodesInLevel[i];

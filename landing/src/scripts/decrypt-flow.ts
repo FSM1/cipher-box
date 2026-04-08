@@ -4,7 +4,18 @@
  * Includes a branch for CTR streaming mode.
  */
 
-import { GREEN, GREEN_DIM, GREEN_DARK, GREEN_GLOW, CYAN, CYAN_DIM, CYAN_GLOW, FONT, NODE_BG, setupCanvasDPR } from './canvas-theme';
+import {
+  GREEN,
+  GREEN_DIM,
+  GREEN_DARK,
+  GREEN_GLOW,
+  CYAN,
+  CYAN_DIM,
+  CYAN_GLOW,
+  FONT,
+  NODE_BG,
+  setupCanvasDPR,
+} from './canvas-theme';
 
 interface FlowNode {
   x: number;
@@ -240,9 +251,11 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
     if (streamNodes.length >= 2 && nodes[3]) {
       const fork = nodes[3];
       drawArrow(
-        fork.x + fork.w / 2, fork.y + fork.h,
-        streamNodes[0].x + streamNodes[0].w / 2, streamNodes[0].y,
-        CYAN
+        fork.x + fork.w / 2,
+        fork.y + fork.h,
+        streamNodes[0].x + streamNodes[0].w / 2,
+        streamNodes[0].y,
+        CYAN,
       );
       drawArrow(
         streamNodes[0].x + streamNodes[0].w,

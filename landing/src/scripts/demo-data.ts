@@ -15,7 +15,7 @@ export const VAULT_PUBLIC_KEY =
 
 export const ROOT_FOLDER_KEY = '9f8e7d6c5b4a39281706f5e4d3c2b1a00a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d';
 export const DOCS_FOLDER_KEY = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809';
-export const FILE_KEY = 'deadbeef0123456789abcdef01234567fedcba9876543210abcdef0123456789ab';
+export const FILE_KEY = 'deadbeef0123456789abcdef01234567fedcba9876543210abcdef01234567';
 
 // ---- IPNS names ----
 
@@ -44,7 +44,7 @@ export const DOCS_FOLDER_KEY_ECIES =
 
 export const FILE_KEY_ECIES =
   '04a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8' +
-  'deadbeef0123456789abcdef01234567fedcba9876543210abcdef0123456789ab' +
+  'deadbeef0123456789abcdef01234567fedcba9876543210abcdef01234567' +
   '00112233445566778899aabbccddeeff00112233445566';
 
 export const DOCS_IPNS_KEY_ECIES =
