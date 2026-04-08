@@ -117,7 +117,10 @@ export function initInteractiveDemo(container: HTMLElement): void {
   }
 
   add('spacer', '');
-  add('info', '<span class="demo-dim">Click "resolve" on any IPNS name to begin exploring the encryption layers.</span>');
+  add(
+    'info',
+    '<span class="demo-dim">Click "resolve" on any IPNS name to begin exploring the encryption layers.</span>'
+  );
 
   log.addEventListener('click', handleClick);
 }
@@ -150,7 +153,10 @@ function doResolve(ipns: string): void {
   const label = ipnsLabels[ipns] || '';
 
   add('spacer', '');
-  add('command', `<span class="demo-prompt">&gt;</span> ipns resolve <span class="demo-ipns-name">${truncHex(ipns, 20)}</span>`);
+  add(
+    'command',
+    `<span class="demo-prompt">&gt;</span> ipns resolve <span class="demo-ipns-name">${truncHex(ipns, 20)}</span>`
+  );
 
   if (!cid) {
     add('error', 'IPNS name not found');
@@ -173,7 +179,10 @@ function doFetch(cid: string): void {
   }
 
   add('spacer', '');
-  add('command', `<span class="demo-prompt">&gt;</span> ipfs cat <span class="demo-cid">${truncHex(cid, 20)}</span>`);
+  add(
+    'command',
+    `<span class="demo-prompt">&gt;</span> ipfs cat <span class="demo-cid">${truncHex(cid, 20)}</span>`
+  );
 
   if (entry.type === 'encrypted-metadata') {
     const meta = entry.encrypted as { iv: string; data: string };
@@ -245,19 +254,25 @@ function esc(s: string): string {
 
 function highlightJson(json: string): string {
   return esc(json)
-    .replace(/"([^"]+)"(?=\s*[,\]\}])/g, (_match, val: string) => {
+    .replace(/"([^"]+)"(?=\s*[,\]}])/g, (_match, val: string) => {
       if (val.startsWith('k51')) {
         const label = ipnsLabels[val];
-        return `"<span class="demo-ipns-name demo-clickable" data-action="resolve" data-ipns="${val}">${val}</span>"` +
-          (label ? ` <span class="demo-dim">&larr; ${label}</span>` : '');
+        return (
+          `"<span class="demo-ipns-name demo-clickable" data-action="resolve" data-ipns="${val}">${val}</span>"` +
+          (label ? ` <span class="demo-dim">&larr; ${label}</span>` : '')
+        );
       }
       if (val.startsWith('bafy')) {
-        return `"<span class="demo-cid demo-clickable" data-action="fetch" data-cid="${val}">${val}</span>"` +
-          (cidToContent[val] ? ` <span class="demo-dim">&larr; click to fetch</span>` : '');
+        return (
+          `"<span class="demo-cid demo-clickable" data-action="fetch" data-cid="${val}">${val}</span>"` +
+          (cidToContent[val] ? ` <span class="demo-dim">&larr; click to fetch</span>` : '')
+        );
       }
       if (val.startsWith('04') && val.length > 100) {
-        return `"<span class="demo-cipher" title="${val}">${val.slice(0, 16)}...${val.slice(-8)}</span>"` +
-          ` <span class="demo-dim">&larr; ECIES-wrapped</span>`;
+        return (
+          `"<span class="demo-cipher" title="${val}">${val.slice(0, 16)}...${val.slice(-8)}</span>"` +
+          ` <span class="demo-dim">&larr; ECIES-wrapped</span>`
+        );
       }
       if (/^[0-9a-f]{16,}$/.test(val)) {
         return `"<span class="demo-cipher">${val}</span>"`;

@@ -144,13 +144,7 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
     c.globalAlpha = 1;
   }
 
-  function drawArrow(
-    fromX: number,
-    fromY: number,
-    toX: number,
-    toY: number,
-    color: string
-  ) {
+  function drawArrow(fromX: number, fromY: number, toX: number, toY: number, color: string) {
     const c = ctx!;
     c.strokeStyle = color === CYAN ? CYAN_DIM : GREEN_DARK;
     c.lineWidth = 1;
@@ -163,14 +157,8 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
     c.fillStyle = color === CYAN ? CYAN_DIM : GREEN_DIM;
     c.beginPath();
     c.moveTo(toX, toY);
-    c.lineTo(
-      toX - 8 * Math.cos(angle - 0.3),
-      toY - 8 * Math.sin(angle - 0.3)
-    );
-    c.lineTo(
-      toX - 8 * Math.cos(angle + 0.3),
-      toY - 8 * Math.sin(angle + 0.3)
-    );
+    c.lineTo(toX - 8 * Math.cos(angle - 0.3), toY - 8 * Math.sin(angle - 0.3));
+    c.lineTo(toX - 8 * Math.cos(angle + 0.3), toY - 8 * Math.sin(angle + 0.3));
     c.closePath();
     c.fill();
   }
@@ -255,7 +243,7 @@ export function initDecryptFlow(canvas: HTMLCanvasElement): () => void {
         fork.y + fork.h,
         streamNodes[0].x + streamNodes[0].w / 2,
         streamNodes[0].y,
-        CYAN,
+        CYAN
       );
       drawArrow(
         streamNodes[0].x + streamNodes[0].w,

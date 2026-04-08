@@ -39,15 +39,69 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
   let startTime = 0;
 
   const treeDef = [
-    { label: 'VaultKey', sublabel: 'secp256k1 Keypair', color: GREEN, children: [1, 2, 3, 6, 7], parent: -1 },
-    { label: 'rootFolderKey', sublabel: 'Random 32B, ECIES-wrapped', color: AMBER, children: [4, 5], parent: 0 },
-    { label: 'rootIpnsKey', sublabel: 'HKDF-derived Ed25519', color: CYAN, children: [], parent: 0 },
-    { label: 'Per-Folder Keys', sublabel: 'Random, ECIES-wrapped', color: AMBER, children: [8], parent: 0 },
-    { label: 'Folder Metadata', sublabel: 'AES-256-GCM Encrypted', color: GREEN, children: [], parent: 1 },
-    { label: 'File Pointers', sublabel: 'Encrypted Names + CIDs', color: GREEN, children: [], parent: 1 },
-    { label: 'Device Registry', sublabel: 'HKDF-derived IPNS Key', color: CYAN, children: [], parent: 0 },
-    { label: 'Vault Settings', sublabel: 'HKDF-derived IPNS Key', color: CYAN, children: [], parent: 0 },
-    { label: 'Per-File Keys', sublabel: 'Random 32B per file', color: AMBER, children: [], parent: 3 },
+    {
+      label: 'VaultKey',
+      sublabel: 'secp256k1 Keypair',
+      color: GREEN,
+      children: [1, 2, 3, 6, 7],
+      parent: -1,
+    },
+    {
+      label: 'rootFolderKey',
+      sublabel: 'Random 32B, ECIES-wrapped',
+      color: AMBER,
+      children: [4, 5],
+      parent: 0,
+    },
+    {
+      label: 'rootIpnsKey',
+      sublabel: 'HKDF-derived Ed25519',
+      color: CYAN,
+      children: [],
+      parent: 0,
+    },
+    {
+      label: 'Per-Folder Keys',
+      sublabel: 'Random, ECIES-wrapped',
+      color: AMBER,
+      children: [8],
+      parent: 0,
+    },
+    {
+      label: 'Folder Metadata',
+      sublabel: 'AES-256-GCM Encrypted',
+      color: GREEN,
+      children: [],
+      parent: 1,
+    },
+    {
+      label: 'File Pointers',
+      sublabel: 'Encrypted Names + CIDs',
+      color: GREEN,
+      children: [],
+      parent: 1,
+    },
+    {
+      label: 'Device Registry',
+      sublabel: 'HKDF-derived IPNS Key',
+      color: CYAN,
+      children: [],
+      parent: 0,
+    },
+    {
+      label: 'Vault Settings',
+      sublabel: 'HKDF-derived IPNS Key',
+      color: CYAN,
+      children: [],
+      parent: 0,
+    },
+    {
+      label: 'Per-File Keys',
+      sublabel: 'Random 32B per file',
+      color: AMBER,
+      children: [],
+      parent: 3,
+    },
   ];
 
   let treeNodes: TreeNode[] = [];
@@ -116,9 +170,7 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
     c.globalAlpha = alpha;
 
     const glowColor =
-      node.color === CYAN ? CYAN_GLOW :
-      node.color === AMBER ? AMBER_GLOW :
-      GREEN_GLOW;
+      node.color === CYAN ? CYAN_GLOW : node.color === AMBER ? AMBER_GLOW : GREEN_GLOW;
 
     c.strokeStyle = node.color;
     c.lineWidth = 1;
@@ -136,10 +188,7 @@ export function initKeyHierarchy(canvas: HTMLCanvasElement): () => void {
     c.textBaseline = 'middle';
     c.fillText(node.label, node.x + node.w / 2, node.y + node.h / 2 - 7, node.w - 8);
 
-    const dimColor =
-      node.color === CYAN ? CYAN_GLOW :
-      node.color === AMBER ? AMBER_DIM :
-      GREEN_DIM;
+    const dimColor = node.color === CYAN ? CYAN_GLOW : node.color === AMBER ? AMBER_DIM : GREEN_DIM;
     c.fillStyle = dimColor;
     c.font = `8px ${FONT}`;
     c.fillText(node.sublabel, node.x + node.w / 2, node.y + node.h / 2 + 9, node.w - 8);
