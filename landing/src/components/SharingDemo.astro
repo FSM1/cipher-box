@@ -1,0 +1,38 @@
+---
+---
+
+<section class="section" id="sharing-demo">
+  <h2 class="section-title">Sharing Flow</h2>
+  <p class="section-desc">
+    See how Alice shares a file with Bob without the server ever seeing the encryption key.
+    The fileKey is unwrapped and re-wrapped using ECIES &mdash; the server only stores opaque envelopes.
+  </p>
+  <div class="demo-container" id="sharing-container">
+    <div class="demo-log" id="sharing-log"></div>
+  </div>
+</section>
+
+<style>
+  .demo-container {
+    border: 1px solid var(--color-border-dim);
+    background: rgb(0 0 0 / 80%);
+    max-height: 700px;
+    overflow-y: auto;
+    scrollbar-color: var(--color-green-darker) transparent;
+  }
+
+  .demo-log {
+    padding: var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+  }
+</style>
+
+<script>
+  import { initSharingDemo } from '../scripts/sharing-demo';
+
+  const container = document.getElementById('sharing-container');
+  if (container) {
+    initSharingDemo(container);
+  }
+</script>
