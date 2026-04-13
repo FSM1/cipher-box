@@ -7,3 +7,7 @@ error message has changed, but lint is still failing. seems like a conflict in t
 ---
 
 the windows desktop build is failing after the most recent changes:  https://github.com/FSM1/cipher-box/actions/runs/24370310939/job/71172287861?pr=456
+
+---
+
+yes please
