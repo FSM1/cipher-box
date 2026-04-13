@@ -66,7 +66,7 @@
       "component": "@cipherbox/api",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.37.1"
+      "release-as": "0.38.0"
     },
     "apps/web": {
       "release-type": "node",
@@ -112,14 +112,14 @@
       "component": "@cipherbox/api-client",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.37.1"
+      "release-as": "0.38.0"
     },
     "packages/sdk-core": {
       "release-type": "node",
       "component": "@cipherbox/sdk-core",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.35.1"
+      "release-as": "0.36.0"
     },
     "packages/sdk": {
       "release-type": "node",
