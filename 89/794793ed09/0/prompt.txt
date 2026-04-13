@@ -1,0 +1,5 @@
+the latest PR which was merged to `main` contains a new test which seems to be failing the desktop e2e tests on macos and linux https://github.com/FSM1/cipher-box/actions/runs/24358620188
+
+---
+
+ok this all makes sense, but having the user do a manual `ls` to view the latest file contents seems a bit unnecessary, unless this is only a test script limitation. I would have expected the automatic sync to handle all of this.

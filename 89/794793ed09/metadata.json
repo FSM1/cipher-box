@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "89794793ed09",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-cross-client-sync-poll",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "Cargo.lock",
+    "crates/fuse/src/platform/windows/read_ops.rs",
+    "crates/fuse/src/read_ops.rs",
+    "tests/desktop-e2e/scripts/run-all.ps1",
+    "tests/desktop-e2e/scripts/test-cross-client-sync.ps1",
+    "tests/desktop-e2e/scripts/test-cross-client-sync.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/89/794793ed09/0/metadata.json",
+      "transcript": "/89/794793ed09/0/full.jsonl",
+      "content_hash": "/89/794793ed09/0/content_hash.txt",
+      "prompt": "/89/794793ed09/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4898,
+    "cache_creation_tokens": 103026,
+    "cache_read_tokens": 3225313,
+    "output_tokens": 23032,
+    "api_call_count": 46
+  }
+}
