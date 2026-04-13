@@ -112,6 +112,26 @@ if ($BinExitCode -eq 0) {
 }
 Write-Host ""
 
+# ---- Step 6: Cross-client sync ----
+Write-Host "--- Step 6: Cross-client sync ---"
+$SyncExitCode = 0
+try {
+    $env:TEST_SECRET = $TestSecret
+    & "$PSScriptRoot\test-cross-client-sync.ps1" -MountPoint $MountPoint -ApiUrl $ApiUrl
+    $SyncExitCode = $LASTEXITCODE
+} catch {
+    Write-Host "Cross-client sync script error: $($_.Exception.Message)"
+    $SyncExitCode = 1
+}
+
+if ($SyncExitCode -eq 0) {
+    Write-Host "Cross-client sync: ALL PASSED"
+} else {
+    Write-Host "Cross-client sync: $SyncExitCode FAILURE(S)"
+    $TotalFail += $SyncExitCode
+}
+Write-Host ""
+
 # ---- Summary ----
 Write-Host "============================================"
 Write-Host "  Summary"

@@ -108,10 +108,71 @@ pub mod implementation {
 
         fs.drain_upload_completions();
         fs.drain_content_prefetches();
+        fs.drain_refresh_completions();
         fs.drain_filepointer_completions();
 
-        let (ino, _parent_ino) = resolve_path(&fs, &path)
+        let (ino, parent_ino) = resolve_path(&fs, &path)
             .ok_or(status_object_name_not_found())?;
+
+        // Check if parent folder metadata is stale and fire background refresh.
+        // This mirrors read_directory's staleness check so that file opens also
+        // trigger metadata refresh, not only directory listings.
+        let stale_info: Option<(u64, String, zeroize::Zeroizing<Vec<u8>>)> = {
+            if let Some(parent_inode) = fs.inodes.get(parent_ino) {
+                match &parent_inode.kind {
+                    InodeKind::Root { ipns_name, .. } => {
+                        ipns_name.as_ref().and_then(|name| {
+                            if fs.metadata_cache.get(name).is_none() {
+                                Some((parent_ino, name.clone(), fs.root_folder_key.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                    }
+                    InodeKind::Folder { ipns_name, folder_key, .. } => {
+                        if fs.metadata_cache.get(ipns_name).is_none() {
+                            Some((parent_ino, ipns_name.clone(), folder_key.clone()))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some((refresh_ino, ipns_name, folder_key)) = stale_info {
+            let api = fs.api.clone();
+            let rt = fs.rt.clone();
+            let tx = fs.refresh_tx.clone();
+            rt.spawn(async move {
+                match cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name).await {
+                    Ok(resolve_resp) => {
+                        match cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid).await {
+                            Ok(encrypted_bytes) => {
+                                match cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
+                                    &encrypted_bytes, &folder_key,
+                                ) {
+                                    Ok(metadata) => {
+                                        let _ = tx.send(crate::PendingRefresh {
+                                            ino: refresh_ino,
+                                            ipns_name,
+                                            metadata,
+                                            cid: resolve_resp.cid,
+                                        });
+                                    }
+                                    Err(e) => log::warn!("Open refresh decrypt failed: {}", e),
+                                }
+                            }
+                            Err(e) => log::warn!("Open refresh fetch failed: {}", e),
+                        }
+                    }
+                    Err(e) => log::debug!("Open refresh resolve failed for {}: {}", ipns_name, e),
+                }
+            });
+        }
 
         let inode = fs
             .inodes
