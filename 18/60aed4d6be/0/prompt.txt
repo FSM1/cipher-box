@@ -1,0 +1,9 @@
+ok can you create a seaparate worktree for PR 455 please
+
+---
+
+error message has changed, but lint is still failing. seems like a conflict in the versions specified by packageManager and the action yaml https://github.com/FSM1/cipher-box/actions/runs/24371067488/job/71174615869?pr=455
+
+---
+
+the windows desktop build is failing after the most recent changes:  https://github.com/FSM1/cipher-box/actions/runs/24370310939/job/71172287861?pr=456
