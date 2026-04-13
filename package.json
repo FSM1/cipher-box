@@ -3,6 +3,7 @@
   "version": "0.37.1",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "concurrently --kill-others -n api,web -c blue,green \"pnpm --filter @cipherbox/api dev\" \"pnpm --filter @cipherbox/web dev\"",
     "build": "pnpm -r run build",
@@ -38,6 +39,8 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "@scarf/scarf",
       "argon2",
       "bufferutil",
       "esbuild",
