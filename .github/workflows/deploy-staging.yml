@@ -139,7 +139,7 @@ jobs:
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 10
 
@@ -216,7 +216,7 @@ jobs:
           sudo mkdir -p /usr/local/lib/pkgconfig
           sudo ln -sf "/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc" /usr/local/lib/pkgconfig/fuse.pc
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 10
 
@@ -314,7 +314,7 @@ jobs:
           key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 10
 
@@ -394,7 +394,7 @@ jobs:
           key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: linux-cargo-
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 10
 

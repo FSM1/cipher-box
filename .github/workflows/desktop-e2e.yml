@@ -95,7 +95,7 @@ jobs:
 
       # --- Setup Node.js + pnpm (needed for frontend build before cargo) ---
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 10
 
