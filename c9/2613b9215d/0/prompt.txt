@@ -1,0 +1,105 @@
+/gsd:debug I am having an issue with files being updated. The flow that I am testing is as follows: 
+1. Upload a text file to the cipherbox vault via the desktop mounted folder.
+2. Open the web ui, edit the text file, save.
+3. Close the editor, reopen the editor to make sure the changes were persisted to IPFS.
+4. Open the text file in the native text editor/preview app, from the mounted folder and observe that the original version of the file is still displayed.
+
+---
+
+<task-notification>
+<task-id>a50091417d0bc280c</task-id>
+<tool-use-id>toolu_01WX2YLLst6MUrYoJwDJWPw1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/631d0767-b243-4af7-83d9-7666e975f06b/tasks/a50091417d0bc280c.output</output-file>
+<status>completed</status>
+<summary>Agent "Debug FUSE stale file content" completed</summary>
+<result>## CHECKPOINT REACHED
+
+**Type:** human-verify
+**Debug Session:** `/Users/michael/Code/cipher-box/.planning/debug/fuse-stale-file-after-web-edit.md`
+**Progress:** 5 evidence entries, 0 hypotheses eliminated
+
+### Investigation State
+
+**Current Hypothesis:** CONFIRMED -- `populate_folder()` never re-resolved files that were already marked `file_meta_resolved: true`, even when the folder metadata showed a newer `modified_at` timestamp for the `FilePointer`.
+
+**Evidence So Far:**
+- Folder metadata refreshes every 30s via TTL expiry, and `drain_refresh_completions` calls `populate_folder` with the new metadata
+- `populate_folder` (inode.rs:443) preserved the existing `InodeKind` wholesale for resolved files, keeping the old CID indefinitely
+- `drain_refresh_completions` only spawned async IPNS resolution for `file_meta_resolved: false` inodes, so already-resolved files were never re-fetched
+- Content cache is keyed by CID (content-addressed), so it would correctly return different data for a different CID -- the problem was upstream in the stale CID reference
+
+### Fix Applied
+
+**File changed:** `/Users/michael/Code/cipher-box/crates/fuse/src/inode.rs`
+
+**What changed:** In `populate_folder()`, when processing a `FilePointer` for a file that is already resolved (`file_meta_resolved: true`), the code now compares the incoming `modified_at` timestamp (from the folder metadata `FilePointer`) with the existing inode's `mtime`. If the incoming timestamp is newer:
+
+1. The file is marked as unresolved (`file_meta_resolved: false`) with cleared CID/key/iv fields
+2. The IPNS private key and encrypted key hex are preserved (these don't change when a file is edited)
+3. The `file_meta_ipns_name` is preserved for re-resolution
+
+This causes `drain_refresh_completions` (which runs immediately after `populate_folder`) to pick up the newly-unresolved file and spawn a fresh async IPNS resolution, which fetches the new CID from the file's IPNS record.
+
+**Self-verified checks:**
+- Compilation succeeds with `cargo check --package cipherbox-fuse`
+- All 37 unit tests pass (36 existing + 1 new)
+- New test `test_populate_folder_resets_resolved_file_on_modified_at_change` verifies: (a) unchanged `modified_at` keeps resolved state, (b) newer `modified_at` resets to unresolved with IPNS name preserved
+
+### How to check
+
+1. Build the desktop app with the fix: `cargo tauri build` or run in dev mode
+2. Upload a text file via the FUSE-mounted folder
+3. Open the web UI, edit the file content, save
+4. Wait ~30-60 seconds (one or two metadata cache TTL cycles)
+5. Open the file from the mounted folder -- it should now show the updated content
+6. Check the desktop app logs for: `"File '...': modified_at changed (remote edit detected), marking for re-resolution"`
+
+**Tell me:** "confirmed fixed" OR what's still failing</result>
+<usage><total_tokens>71639</total_tokens><tool_uses>88</tool_uses><duration_ms>1183503</duration_ms></usage>
+</task-notification>
+
+---
+
+ok, can you please push this up to a `fix/` branch and create a PR
+
+---
+
+please commit the debug file as well
+
+---
+
+/resolve-pr-reviews
+
+---
+
+Verify each finding against the current code and only fix it if needed.
+
+In `@crates/fuse/src/inode.rs` around lines 987 - 1075, Update the existing
+test_populate_folder_resets_resolved_file_on_modified_at_change to also exercise
+the replaced-file-pointer case: after resolving the file pointer (via
+InodeTable::resolve_file_pointer) and validating the resolved state, re-call
+InodeTable::populate_folder with a FolderMetadata that keeps the same child name
+("hello.txt") but changes the FilePointer.file_meta_ipns_name (and/or
+ipns_private_key_encrypted) while keeping modified_at the same; then assert the
+inode (inspect via InodeTable::get and match InodeKind::File) now contains the
+new file_meta_ipns_name, does not retain the old encrypted key material
+(ipns_private_key_encrypted is updated/cleared), and does not keep stale
+resolution data (file_meta_resolved false and cid cleared). Ensure you reference
+the FilePointer struct fields and the InodeTable::populate_folder /
+resolve_file_pointer behavior when adding these assertions.
+
+---
+
+ok, have there been any e2e tests added to the desktop e2e test suite to ensure that this fuctionality is indeed working?
+
+---
+
+There are already some `round-trip` tests utilizing the SDK pointed at the local dev instance which test accessibility of files uploaded using the desktop client. Would it be possible to use a similar setup for these editing round-trip tests?
+
+---
+
+yes please go ahead and add these tests
+
+---
+
+is everything pushed up to the branch?
