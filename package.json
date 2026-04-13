@@ -36,6 +36,16 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.21.0"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "argon2",
+      "bufferutil",
+      "esbuild",
+      "msgpackr-extract",
+      "protobufjs",
+      "utf-8-validate"
+    ]
+  },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
       "eslint --fix",
