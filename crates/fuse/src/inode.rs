@@ -432,7 +432,7 @@ impl InodeTable {
                     // timestamp for the FilePointer.  If we detect a newer timestamp,
                     // we mark the file as unresolved so that its per-file IPNS
                     // record is re-fetched, picking up the new CID.
-                    let (_resolved, existing_kind) = if let Some(existing) = existing_ino
+                    let (was_resolved, existing_kind) = if let Some(existing) = existing_ino
                         .and_then(|ino| self.inodes.get(&ino))
                     {
                         match &existing.kind {
@@ -444,8 +444,11 @@ impl InodeTable {
                                         "File '{}': modified_at changed (remote edit detected), marking for re-resolution",
                                         file_pointer.name
                                     );
-                                    // Return the existing kind so we can
-                                    // preserve keys but reset resolved flag
+                                    // Do not return the existing kind here.
+                                    // Instead, signal that we had a resolved inode
+                                    // and force the later code to rebuild an
+                                    // unresolved file kind after re-looking up the
+                                    // existing inode so its IPNS keys can be preserved.
                                     (true, None)
                                 } else {
                                     (true, Some(existing.kind.clone()))
@@ -462,23 +465,29 @@ impl InodeTable {
                     // kind that preserves the IPNS keys from the existing inode.
                     let kind = if let Some(existing_kind) = existing_kind {
                         existing_kind
-                    } else if _resolved {
+                    } else if was_resolved {
                         // File was resolved but modified_at changed -- keep IPNS
-                        // keys from existing inode but mark as unresolved.
+                        // keys from existing inode but mark as unresolved, unless
+                        // the FilePointer identity (IPNS name) changed, which
+                        // means this is a different file reusing the same name.
                         let existing = existing_ino
                             .and_then(|ino| self.inodes.get(&ino));
-                        let (prev_ipns_key, prev_ipns_key_enc_hex, prev_ipns_name) = match existing.map(|e| &e.kind) {
+                        let (prev_ipns_key, prev_ipns_key_enc_hex, prev_ipns_name, same_pointer) = match existing.map(|e| &e.kind) {
                             Some(InodeKind::File {
                                 file_ipns_private_key,
                                 file_ipns_key_encrypted_hex,
                                 file_meta_ipns_name,
                                 ..
-                            }) => (
-                                file_ipns_private_key.clone(),
-                                file_ipns_key_encrypted_hex.clone(),
-                                file_meta_ipns_name.clone(),
-                            ),
-                            _ => (None, None, Some(file_pointer.file_meta_ipns_name.clone())),
+                            }) => {
+                                let same = file_meta_ipns_name.as_deref() == Some(file_pointer.file_meta_ipns_name.as_str());
+                                (
+                                    file_ipns_private_key.clone(),
+                                    file_ipns_key_encrypted_hex.clone(),
+                                    file_meta_ipns_name.clone(),
+                                    same,
+                                )
+                            }
+                            _ => (None, None, None, false),
                         };
                         InodeKind::File {
                             cid: String::new(),
@@ -486,10 +495,18 @@ impl InodeTable {
                             iv: String::new(),
                             size: 0,
                             encryption_mode: "GCM".to_string(),
-                            file_meta_ipns_name: prev_ipns_name,
+                            file_meta_ipns_name: if same_pointer {
+                                prev_ipns_name.or(Some(file_pointer.file_meta_ipns_name.clone()))
+                            } else {
+                                Some(file_pointer.file_meta_ipns_name.clone())
+                            },
                             file_meta_resolved: false,
-                            file_ipns_private_key: prev_ipns_key,
-                            file_ipns_key_encrypted_hex: prev_ipns_key_enc_hex,
+                            file_ipns_private_key: if same_pointer { prev_ipns_key } else { None },
+                            file_ipns_key_encrypted_hex: if same_pointer {
+                                prev_ipns_key_enc_hex
+                            } else {
+                                file_pointer.ipns_private_key_encrypted.clone()
+                            },
                             versions: None,
                         }
                     } else {
@@ -988,6 +1005,8 @@ mod tests {
     fn test_populate_folder_resets_resolved_file_on_modified_at_change() {
         let mut table = InodeTable::new();
 
+        let ipns_name = "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx";
+
         // Initial population with a FilePointer
         let metadata_v1 = FolderMetadata {
             version: "v2".to_string(),
@@ -995,7 +1014,7 @@ mod tests {
                 FolderChild::File(cipherbox_core::folder::FilePointer {
                     id: "file-1".to_string(),
                     name: "hello.txt".to_string(),
-                    file_meta_ipns_name: "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx".to_string(),
+                    file_meta_ipns_name: ipns_name.to_string(),
                     ipns_private_key_encrypted: None,
                     created_at: 1700000000000,
                     modified_at: 1700000000000,
@@ -1020,12 +1039,27 @@ mod tests {
             None,
         );
 
-        // Verify it's resolved
+        // Pre-populate IPNS key material on the resolved inode so we can
+        // verify it is preserved (or cleared) after re-population.
+        if let Some(inode) = table.inodes.get_mut(&child_ino) {
+            if let InodeKind::File {
+                ref mut file_ipns_private_key,
+                ref mut file_ipns_key_encrypted_hex,
+                ..
+            } = inode.kind {
+                *file_ipns_private_key = Some(Zeroizing::new(vec![1u8; 32]));
+                *file_ipns_key_encrypted_hex = Some("abcdef1234".to_string());
+            }
+        }
+
+        // Verify it's resolved with keys
         let child = table.get(child_ino).unwrap();
         match &child.kind {
-            InodeKind::File { file_meta_resolved, cid, .. } => {
+            InodeKind::File { file_meta_resolved, cid, file_ipns_private_key, file_ipns_key_encrypted_hex, .. } => {
                 assert!(file_meta_resolved);
                 assert_eq!(cid, "bafyOLDcid");
+                assert!(file_ipns_private_key.is_some(), "IPNS private key should be set");
+                assert_eq!(file_ipns_key_encrypted_hex.as_deref(), Some("abcdef1234"));
             }
             _ => panic!("Expected File kind"),
         }
@@ -1042,14 +1076,15 @@ mod tests {
             _ => panic!("Expected File kind"),
         }
 
-        // Now re-populate with NEWER modified_at -- should reset to unresolved
+        // Now re-populate with NEWER modified_at (same IPNS name) -- should reset
+        // to unresolved but preserve IPNS keys since it's the same file pointer.
         let metadata_v2 = FolderMetadata {
             version: "v2".to_string(),
             children: vec![
                 FolderChild::File(cipherbox_core::folder::FilePointer {
                     id: "file-1".to_string(),
                     name: "hello.txt".to_string(),
-                    file_meta_ipns_name: "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx".to_string(),
+                    file_meta_ipns_name: ipns_name.to_string(),
                     ipns_private_key_encrypted: None,
                     created_at: 1700000000000,
                     modified_at: 1700001000000, // 1000s later
@@ -1061,13 +1096,73 @@ mod tests {
 
         let child = table.get(child_ino).unwrap();
         match &child.kind {
-            InodeKind::File { file_meta_resolved, cid, file_meta_ipns_name, .. } => {
+            InodeKind::File {
+                file_meta_resolved, cid, file_meta_ipns_name,
+                file_ipns_private_key, file_ipns_key_encrypted_hex, ..
+            } => {
                 assert!(!file_meta_resolved, "File should be unresolved after modified_at change");
                 assert!(cid.is_empty(), "CID should be cleared for re-resolution");
                 assert_eq!(
                     file_meta_ipns_name.as_deref(),
-                    Some("k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx"),
+                    Some(ipns_name),
                     "IPNS name should be preserved for re-resolution"
+                );
+                assert!(file_ipns_private_key.is_some(), "IPNS private key should be preserved for same pointer");
+                assert_eq!(
+                    file_ipns_key_encrypted_hex.as_deref(), Some("abcdef1234"),
+                    "IPNS encrypted key hex should be preserved for same pointer"
+                );
+            }
+            _ => panic!("Expected File kind"),
+        }
+
+        // Now simulate a file replacement: same name but different IPNS name.
+        // IPNS keys should be cleared since this is a different file.
+        let new_ipns_name = "k51qzi5uqu5dREPLACEDfileDIFFERENTipnsNAMEabcdef123456789";
+        let metadata_v3 = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![
+                FolderChild::File(cipherbox_core::folder::FilePointer {
+                    id: "file-2".to_string(),
+                    name: "hello.txt".to_string(),
+                    file_meta_ipns_name: new_ipns_name.to_string(),
+                    ipns_private_key_encrypted: Some("newencryptedkey".to_string()),
+                    created_at: 1700000000000,
+                    modified_at: 1700002000000, // even later
+                }),
+            ],
+        };
+
+        // First resolve the inode again so we enter the was_resolved path
+        table.resolve_file_pointer(
+            child_ino,
+            "bafyRESOLVED".to_string(),
+            "enckey2".to_string(),
+            "iv456".to_string(),
+            99,
+            "GCM".to_string(),
+            None,
+        );
+
+        table.populate_folder(ROOT_INO, &metadata_v3, &private_key, &public_key, true).unwrap();
+
+        let child = table.get(child_ino).unwrap();
+        match &child.kind {
+            InodeKind::File {
+                file_meta_resolved, file_meta_ipns_name,
+                file_ipns_private_key, file_ipns_key_encrypted_hex, ..
+            } => {
+                assert!(!file_meta_resolved, "File should be unresolved after pointer replacement");
+                assert_eq!(
+                    file_meta_ipns_name.as_deref(),
+                    Some(new_ipns_name),
+                    "IPNS name should be updated to new pointer's name"
+                );
+                assert!(file_ipns_private_key.is_none(), "IPNS private key should be cleared for different pointer");
+                assert_eq!(
+                    file_ipns_key_encrypted_hex.as_deref(),
+                    Some("newencryptedkey"),
+                    "IPNS encrypted key should come from new FilePointer"
                 );
             }
             _ => panic!("Expected File kind"),
