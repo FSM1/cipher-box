@@ -36,9 +36,7 @@ jobs:
           key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: macos-cargo-
 
-      - uses: pnpm/action-setup@v5
-        with:
-          version: 10
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
@@ -125,9 +123,7 @@ jobs:
           key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - uses: pnpm/action-setup@v5
-        with:
-          version: 10
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
@@ -202,9 +198,7 @@ jobs:
           key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: linux-cargo-
 
-      - uses: pnpm/action-setup@v5
-        with:
-          version: 10
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
