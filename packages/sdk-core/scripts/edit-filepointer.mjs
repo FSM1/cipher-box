@@ -89,8 +89,8 @@ async function authenticate(apiUrl, email, secret) {
 
   const payload = await response.json();
 
-  if (!payload.accessToken || !payload.privateKeyHex) {
-    throw new Error('test-login response missing accessToken or privateKeyHex');
+  if (!payload.accessToken || !payload.privateKeyHex || !payload.publicKeyHex) {
+    throw new Error('test-login response missing accessToken, privateKeyHex, or publicKeyHex');
   }
 
   return payload;
