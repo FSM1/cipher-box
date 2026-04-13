@@ -84,3 +84,7 @@ while preserving the same warn/debug log messages on errors; replace both
 rt.spawn blocks to call rt.spawn(fetch_and_send_pending_refresh(...)) so the
 identical flow is centralized and you can apply the refreshing_metadata cleanup
 fix in one place.
+
+---
+
+yes and then /resolve-pr-reviews
