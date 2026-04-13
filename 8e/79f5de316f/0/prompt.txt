@@ -1,0 +1,86 @@
+ok can you create a seaparate worktree for PR 455 please
+
+---
+
+error message has changed, but lint is still failing. seems like a conflict in the versions specified by packageManager and the action yaml https://github.com/FSM1/cipher-box/actions/runs/24371067488/job/71174615869?pr=455
+
+---
+
+the windows desktop build is failing after the most recent changes:  https://github.com/FSM1/cipher-box/actions/runs/24370310939/job/71172287861?pr=456
+
+---
+
+yes please
+
+---
+
+Verify each finding against the current code and only fix it if needed.
+
+Inline comments:
+In `@crates/fuse/src/platform/windows/read_ops.rs`:
+- Around line 146-175: The async refresh task currently never removes ipns_name
+from fs.refreshing_metadata on error, so implement the same failure-reporting
+pattern used for content prefetch: add a PendingRefresh::Failure variant to the
+PendingRefresh enum (mirroring PendingContent::Failure), and on each error path
+inside the spawned task (resolve, fetch, decrypt) send
+tx.send(PendingRefresh::Failure { ino: refresh_ino, ipns_name }) instead of just
+logging; ensure drain_refresh_completions() (the consumer of refresh_tx) is
+updated to handle PendingRefresh::Failure by cleaning up fs.refreshing_metadata
+and any other bookkeeping, while leaving the existing success send of
+PendingRefresh::Success (or the current PendingRefresh structure with metadata)
+intact.
+
+In `@crates/fuse/src/read_ops.rs`:
+- Around line 183-215: The async refresh task leaves ipns_name in the
+fs.refreshing_metadata set on all error paths (in the resolve/fetch/decrypt
+branches), blocking future refreshes; modify the code around the needs_refresh
+handling (the rt.spawn block) so the ipns_name is removed from
+refreshing_metadata in every outcome—either by cloning a thread-safe handle to
+refreshing_metadata (e.g., Arc/Mutex or DashMap) into the task and removing
+ipns_name before returning on both success and each Err branch, or by sending a
+dedicated cleanup/failure message (via refresh_tx or a new channel) that the
+main loop consumes to remove the entry; apply the same pattern to the needs_load
+path so load-related tasks also clear refreshing_metadata on error.
+
+---
+
+Outside diff comments:
+In `@crates/fuse/src/lib.rs`:
+- Around line 643-648: The code currently only removes entries from
+refreshing_metadata when a successful PendingRefresh is received in
+drain_refresh_completions, leaving names stuck on task failure; update the
+background refresh task(s) that perform resolve/fetch/decrypt to always send a
+terminal notification over the same refresh channel (e.g., send a PendingRefresh
+or a dedicated failure variant via refresh_tx) when they exit with an error, or
+alternatively ensure those error paths explicitly remove the IPNS key from
+refreshing_metadata before returning; reference the refresh_rx/refresh_tx
+channel, the PendingRefresh type, and the
+refreshing_metadata/mutated_folders/publish_queue maps so the
+drain_refresh_completions logic can reliably clear the in-progress marker on
+both success and failure.
+
+In `@crates/fuse/src/read_ops.rs`:
+- Around line 217-251: The lazy-load background task adds ipns_name into
+fs.refreshing_metadata but on several error branches (the Err arms in the
+rt.spawn async resolving/fetching/decrypting flow) it never removes it, leaving
+entries orphaned; modify the async closure spawned by rt.spawn so that ipns_name
+is removed from fs.refreshing_metadata on all exit paths (success and any error)
+— e.g. capture fs or a clone, and ensure removal happens in every Err arm or use
+a small RAII guard/local finally-style helper inside the async move block that
+calls fs.refreshing_metadata.remove(&ipns_name) when dropped, referencing the
+existing symbols ipns_name, fs.refreshing_metadata, rt.spawn, and the tx
+send/resolve/fetch/decrypt branches so the cleanup always runs.
+
+---
+
+Nitpick comments:
+In `@crates/fuse/src/read_ops.rs`:
+- Around line 190-214: Duplicate async logic in the needs_refresh and needs_load
+spawn blocks should be extracted into a shared async helper (e.g.,
+fetch_and_send_pending_refresh) that takes the API client (&api), ipns_name,
+folder_key, refresh_ino, and the tx sender and performs resolve_ipns ->
+fetch_content -> decrypt_metadata_from_ipfs_public -> tx.send(PendingRefresh)
+while preserving the same warn/debug log messages on errors; replace both
+rt.spawn blocks to call rt.spawn(fetch_and_send_pending_refresh(...)) so the
+identical flow is centralized and you can apply the refreshing_metadata cleanup
+fix in one place.

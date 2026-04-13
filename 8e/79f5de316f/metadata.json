@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "8e79f5de316f",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-cross-client-sync-poll",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/fuse/src/dir_ops.rs",
+    "crates/fuse/src/lib.rs",
+    "crates/fuse/src/platform/windows/dir_ops.rs",
+    "crates/fuse/src/platform/windows/read_ops.rs",
+    "crates/fuse/src/read_ops.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8e/79f5de316f/0/metadata.json",
+      "transcript": "/8e/79f5de316f/0/full.jsonl",
+      "content_hash": "/8e/79f5de316f/0/content_hash.txt",
+      "prompt": "/8e/79f5de316f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 156,
+    "cache_creation_tokens": 103971,
+    "cache_read_tokens": 9500950,
+    "output_tokens": 40657,
+    "api_call_count": 137
+  }
+}
