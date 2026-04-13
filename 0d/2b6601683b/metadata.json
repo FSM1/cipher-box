@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0d2b6601683b",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-sequence-mismatch",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/desktop-e2e/scripts/test-round-trip.ps1",
+    "tests/desktop-e2e/scripts/test-round-trip.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0d/2b6601683b/0/metadata.json",
+      "transcript": "/0d/2b6601683b/0/full.jsonl",
+      "content_hash": "/0d/2b6601683b/0/content_hash.txt",
+      "prompt": "/0d/2b6601683b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 17158,
+    "cache_read_tokens": 772690,
+    "output_tokens": 2167,
+    "api_call_count": 12
+  }
+}

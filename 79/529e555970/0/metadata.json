@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "79529e555970",
+  "session_id": "53e63831-44bc-4b3b-95a3-b14b12b40d28",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-05T20:02:46.064163Z",
+  "branch": "fix/desktop-e2e-sequence-mismatch",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "31b69998e684",
+  "token_usage": {
+    "input_tokens": 278,
+    "cache_creation_tokens": 1236631,
+    "cache_read_tokens": 45081621,
+    "output_tokens": 89716,
+    "api_call_count": 247
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Investigate and fix E2E test failures on PR #449 (fix/desktop-e2e-sequence-mismatch), tracing failures introduced by PR #448's IPNS publish/signature changes and a pre-existing FUSE desktop upload drain bug.",
+    "outcome": "Web E2E tests fixed (175/176 passing, 1 remaining flaky Sapphire login) by making IPNS signature verification non-fatal and fixing deprecated protobuf wire type handling. Desktop E2E partially fixed — inode-not-found bug resolved and FUSE drain added to readdir, but macOS still failing due to SMB cache preventing ls from reaching FUSE layer. Session ends mid-fix.",
+    "learnings": {
+      "repo": [
+        "PR #448 changed apps/web/src/services/ipns.service.ts and apps/api/src/ipns/ipns-record-parser.ts to add publicKey on publish and signature verification on resolve — this broke vault initialization across all multi-account web E2E tests.",
+        "The 91 skipped tests in web E2E are all cascade failures from 5 setup failures (invite-link, writable-shares, mfa-flows, media-preview, recovery suites) — actual unique root causes are far fewer.",
+        "Desktop E2E failures pre-date PR #448; they began with PR #446 around April 2 and are a separate FUSE pipeline issue.",
+        "macOS FUSE-T uses an SMB backend that caches directory listings — ls may not reach the FUSE layer, so readdir drain doesn't trigger reliably.",
+        "Windows dir_ops.rs already had drain_upload_completions() in its readdir handler; macOS/Linux did not — an asymmetry that caused the upload pipeline to stall in CI where no background OS events trigger FUSE callbacks.",
+        "The Sapphire Devnet 'Error occurred while getting current epoch' alert on the login page is a known flaky env issue unrelated to code bugs.",
+        "vault.service.ts duplicate key errors (UQ_folder_ipns_user_ipns) during vault init are expected and already caught — not a root cause.",
+        "CI Web E2E was green through April 2, broke April 4 after PR #448 merged."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "line": 177,
+          "end_line": 188,
+          "finding": "Hard-throwing signature verification on resolve crashed vault init/folder loading. Fixed by wrapping in try/catch, returning signatureVerified: false on failure instead of throwing."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-record-parser.ts",
+          "finding": "Threw 'Unsupported wire type 4' for deprecated protobuf group types (3=start group, 4=end group), causing delegated routing resolve to fail and fall back to DB cache. Fixed to skip gracefully."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-record-parser.spec.ts",
+          "finding": "Test expected a throw on wire type 3; updated to verify deprecated group types are skipped instead."
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "finding": "rmdir did not clean up the publish_queue for the deleted inode, causing 'Folder inode not found' errors when the flush attempted to publish a deleted directory. Fixed by removing the inode from publish_queue on rmdir and rename-over-destination."
+        },
+        {
+          "path": "crates/fuse/src/dir_ops.rs",
+          "finding": "macOS/Linux readdir handler was missing drain_upload_completions() call present in Windows equivalent — upload completions never processed in CI where no background OS FUSE events occur after file write."
+        },
+        {
+          "path": "tests/desktop-e2e/scripts/test-round-trip.sh",
+          "finding": "FilePointer polling was 12 attempts x 5s = 60s. Doubled to 24 attempts. Also added ls and repeated FUSE touches inside polling loop to force drain_upload_completions to fire."
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "finding": "Same rmdir/rename publish_queue cleanup fix applied to Windows write_ops for parity."
+        }
+      ],
+      "workflow": [
+        "Always run pnpm build for all packages (not just @cipherbox/crypto) before starting dev servers to avoid missing built outputs.",
+        "When E2E failures look high, separate cascade skips from unique root causes before diagnosing — the actual failure count can be much smaller.",
+        "CI Playwright reports can be downloaded as artifacts (gh run download) for detailed error-context.md and screenshot inspection without re-running tests locally.",
+        "Checking git log against CI run timestamps is an effective way to pinpoint which PR introduced a regression.",
+        "Rust fuse module: after release() spawns a background upload, no further FUSE callbacks are guaranteed in CI headless environments — drain must be triggered explicitly."
+      ]
+    },
+    "friction": [
+      "Local dev environment was down (PostgreSQL/Redis at 192.168.133.12 unreachable) for much of the session, blocking local E2E re-runs and forcing reliance on CI for validation.",
+      "GitHub CLI OAuth token expired mid-session, blocking CI log queries.",
+      "Playwright output buffering made it hard to track test progress in real-time.",
+      "macOS FUSE-T SMB caching meant ls didn't reliably reach the FUSE layer, requiring repeated touch-based workarounds.",
+      "Long round-trip of commit → push → CI trigger → wait → analyze added significant latency to each fix iteration.",
+      "The 'Error occurred while getting current epoch' Sapphire error was a red herring that consumed investigation time before being ruled out."
+    ],
+    "open_items": [
+      "macOS desktop E2E still failing at end of session — the repeated FUSE touch approach in the polling loop was committed but CI result not yet confirmed.",
+      "recovery.spec.ts skipped entirely — IPNS mock routing 404 (POST /api/v0/name/resolve) causing empty progress log; root cause not investigated.",
+      "The 1 remaining flaky web E2E failure (batch-download or media-preview wallet login timeout) is attributed to Sapphire Devnet instability but not definitively confirmed or fixed.",
+      "Windows desktop E2E was passing but the PowerShell polling script changes were made speculatively — should verify Windows CI stays green.",
+      "The FUSE drain architecture asymmetry between Windows and macOS/Linux was patched reactively; a more systematic audit of drain_upload_completions call sites across all platform impls may be warranted.",
+      "PR #449 was originally about desktop-e2e-sequence-mismatch but grew to include web IPNS fixes and FUSE drain fixes — PR scope has expanded significantly from its original intent."
+    ]
+  }
+}

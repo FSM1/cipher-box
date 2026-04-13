@@ -1,0 +1,1 @@
+but having it as fix(ci) will also not trigger a release, as no actionable components are changed.
