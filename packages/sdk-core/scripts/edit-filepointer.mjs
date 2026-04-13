@@ -48,7 +48,7 @@ function parseArgs(argv) {
 
     const key = token.slice(2);
     const value = argv[i + 1];
-    if (!value || value.startsWith('--')) {
+    if (value === undefined || value.startsWith('--')) {
       throw new Error(`Missing value for --${key}`);
     }
 
@@ -66,7 +66,7 @@ function parseArgs(argv) {
   const fileName = values.get('file-name');
   const newContent = values.get('new-content');
 
-  if (!apiUrl || !email || !fileName || !secret || !newContent) {
+  if (!apiUrl || !email || !fileName || !secret || newContent === undefined) {
     throw new Error(
       'Usage: edit-filepointer.mjs --api-url <url> --email <email> --file-name <name> --new-content <text> (requires TEST_SECRET env var)'
     );

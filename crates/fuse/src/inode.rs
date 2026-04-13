@@ -439,7 +439,11 @@ impl InodeTable {
                             InodeKind::File { file_meta_resolved: true, .. } => {
                                 // Compare the incoming modified_at with the
                                 // existing inode's mtime to detect remote edits.
-                                if modified > existing.attr.mtime {
+                                // Use != rather than > to handle clock skew
+                                // between clients (a remote edit from a client
+                                // with a behind clock could produce a smaller
+                                // modified_at).
+                                if modified != existing.attr.mtime {
                                     log::info!(
                                         "File '{}': modified_at changed (remote edit detected), marking for re-resolution",
                                         file_pointer.name

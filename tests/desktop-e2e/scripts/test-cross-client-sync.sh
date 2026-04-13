@@ -44,15 +44,16 @@ fail() {
 ensure_runtime() {
   if [ -f "$REPO_ROOT/packages/sdk-core/dist/index.mjs" ] && \
      [ -f "$REPO_ROOT/packages/api-client/dist/index.mjs" ] && \
+     [ -f "$REPO_ROOT/packages/core/dist/index.mjs" ] && \
      [ -f "$REPO_ROOT/packages/crypto/dist/index.mjs" ]; then
-    return
+    return 0
   fi
 
   echo "Building SDK dependencies..."
-  pnpm --dir "$REPO_ROOT" --filter @cipherbox/crypto build
-  pnpm --dir "$REPO_ROOT" --filter @cipherbox/core build
-  pnpm --dir "$REPO_ROOT" --filter @cipherbox/api-client build
-  pnpm --dir "$REPO_ROOT" --filter @cipherbox/sdk-core build
+  pnpm --dir "$REPO_ROOT" --filter @cipherbox/crypto build && \
+    pnpm --dir "$REPO_ROOT" --filter @cipherbox/core build && \
+    pnpm --dir "$REPO_ROOT" --filter @cipherbox/api-client build && \
+    pnpm --dir "$REPO_ROOT" --filter @cipherbox/sdk-core build
 }
 
 run_verify() {
@@ -78,7 +79,10 @@ echo "Test email:  $TEST_EMAIL"
 echo "Test file:   $TEST_FILE"
 echo ""
 
-ensure_runtime
+ensure_runtime || {
+  echo "FATAL: Failed to build SDK dependencies."
+  exit 1
+}
 
 # ---- Test 1: Write file via FUSE mount ----
 echo "--- Test 1: Write file via FUSE mount ---"
