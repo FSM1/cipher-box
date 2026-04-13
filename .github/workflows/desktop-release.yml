@@ -37,8 +37,6 @@ jobs:
           restore-keys: macos-cargo-
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - uses: actions/setup-node@v6
         with:
@@ -126,8 +124,6 @@ jobs:
           restore-keys: windows-cargo-
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - uses: actions/setup-node@v6
         with:
@@ -203,8 +199,6 @@ jobs:
           restore-keys: linux-cargo-
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - uses: actions/setup-node@v6
         with:

@@ -140,8 +140,6 @@ jobs:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - uses: actions/setup-node@v6
         with:
@@ -217,8 +215,6 @@ jobs:
           sudo ln -sf "/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc" /usr/local/lib/pkgconfig/fuse.pc
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - uses: actions/setup-node@v6
         with:
@@ -315,8 +311,6 @@ jobs:
           restore-keys: windows-cargo-
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - uses: actions/setup-node@v6
         with:
@@ -395,8 +389,6 @@ jobs:
           restore-keys: linux-cargo-
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - uses: actions/setup-node@v6
         with:
