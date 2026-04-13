@@ -456,26 +456,22 @@ export function useFileOperations() {
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
 
-        // 7b. Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
-        if (migratedIpnsPrivateKeyEncrypted) {
-          updateFolderMetadataAndPublish({
-            children: updatedChildren,
-            folderKey: parentFolder.folderKey,
-            ipnsPrivateKey: parentFolder.ipnsPrivateKey,
-            ipnsName: parentFolder.ipnsName,
-            sequenceNumber: parentFolder.sequenceNumber,
-            ctx: getSdkClient().getContext(),
+        // 7b. Republish folder metadata so other clients (e.g. FUSE desktop mount)
+        // see the updated modifiedAt on the FilePointer and re-resolve the file.
+        updateFolderMetadataAndPublish({
+          children: updatedChildren,
+          folderKey: parentFolder.folderKey,
+          ipnsPrivateKey: parentFolder.ipnsPrivateKey,
+          ipnsName: parentFolder.ipnsName,
+          sequenceNumber: parentFolder.sequenceNumber,
+          ctx: getSdkClient().getContext(),
+        })
+          .then(({ newSequenceNumber }) => {
+            useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
           })
-            .then(({ newSequenceNumber }) => {
-              useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
-            })
-            .catch((err) => {
-              logger.warn(
-                '[FileOps] Lazy IPNS key migration: folder re-publish failed, will retry:',
-                err
-              );
-            });
-        }
+          .catch((err) => {
+            logger.warn('[FileOps] Folder metadata re-publish after file edit failed:', err);
+          });
 
         // 8. Re-wrap new file key for share recipients (fire-and-forget)
         (async () => {

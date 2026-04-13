@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.36.1
+ * OpenAPI spec version: 0.37.1
  */
 import type { InviteDataResponseDtoStatus } from './inviteDataResponseDtoStatus';
 import type { InviteChildKeyDto } from './inviteChildKeyDto';

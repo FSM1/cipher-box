@@ -2161,7 +2161,7 @@
   "info": {
     "title": "CipherBox API",
     "description": "Zero-knowledge encrypted cloud storage API",
-    "version": "0.36.1",
+    "version": "0.37.1",
     "contact": {}
   },
   "tags": [
