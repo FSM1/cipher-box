@@ -98,6 +98,21 @@ else
 fi
 echo ""
 
+# ---- Step 6: Cross-client sync ----
+echo "--- Step 6: Cross-client sync ---"
+set +e
+TEST_SECRET="$TEST_SECRET" bash "$SCRIPT_DIR/test-cross-client-sync.sh" "$MOUNT_POINT" "$API_URL"
+SYNC_FAILURES=$?
+set -e
+
+if [ "$SYNC_FAILURES" -eq 0 ]; then
+  echo "Cross-client sync: ALL PASSED"
+else
+  echo "Cross-client sync: $SYNC_FAILURES FAILURE(S)"
+  TOTAL_FAIL=$((TOTAL_FAIL + SYNC_FAILURES))
+fi
+echo ""
+
 # ---- Summary ----
 echo "============================================"
 echo "  Summary"
