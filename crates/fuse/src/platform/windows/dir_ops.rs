@@ -36,6 +36,11 @@ pub mod implementation {
             .get(ino)
             .ok_or(status_object_name_not_found())?;
 
+        // Extract values from inode before mutable borrow of fs below
+        let parent_ino = inode.parent_ino;
+        let children = inode.children.clone().unwrap_or_default();
+        let inode_attr = inode.attr.clone();
+
         // Check if metadata is stale and fire background refresh
         let stale_info: Option<(String, zeroize::Zeroizing<Vec<u8>>)> =
             match &inode.kind {
@@ -57,6 +62,9 @@ pub mod implementation {
                 }
                 _ => None,
             };
+
+        // Drop inode borrow so we can mutably borrow fs
+        drop(inode);
 
         if let Some((ipns_name, folder_key)) = stale_info.filter(|(n, _)| !fs.refreshing_metadata.contains(n)) {
             fs.refreshing_metadata.insert(ipns_name.clone());
@@ -91,13 +99,10 @@ pub mod implementation {
             });
         }
 
-        let parent_ino = inode.parent_ino;
-        let children = inode.children.clone().unwrap_or_default();
-
         let mut entries: Vec<(U16CString, FileInfo)> = Vec::new();
 
         if let Ok(name) = U16CString::from_str(".") {
-            entries.push((name, fill_file_info(&inode.attr)));
+            entries.push((name, fill_file_info(&inode_attr)));
         }
 
         if let Some(parent) = fs.inodes.get(parent_ino) {
