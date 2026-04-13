@@ -61,7 +61,8 @@ pub(crate) mod implementation {
         };
 
         // Fire background refresh (non-blocking, results applied on next readdir)
-        if let Some((ipns_name, folder_key)) = stale_info.filter(|_| offset == 0) {
+        if let Some((ipns_name, folder_key)) = stale_info.filter(|(n, _)| offset == 0 && !fs.refreshing_metadata.contains(n)) {
+            fs.refreshing_metadata.insert(ipns_name.clone());
             let api = fs.api.clone();
             let rt = fs.rt.clone();
             let tx = fs.refresh_tx.clone();

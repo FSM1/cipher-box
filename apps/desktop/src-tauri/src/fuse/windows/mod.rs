@@ -340,6 +340,7 @@ mod mount_impl {
             refresh_rx,
             refresh_tx,
             prefetching: std::collections::HashSet::new(),
+            refreshing_metadata: std::collections::HashSet::new(),
             content_rx,
             content_tx,
             filepointer_rx,

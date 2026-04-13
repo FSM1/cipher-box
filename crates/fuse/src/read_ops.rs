@@ -181,7 +181,8 @@ pub(crate) mod implementation {
         };
 
         // Non-blocking stale metadata refresh (same as readdir's staleness check)
-        if let Some((ipns_name, folder_key)) = needs_refresh {
+        if let Some((ipns_name, folder_key)) = needs_refresh.filter(|(n, _)| !fs.refreshing_metadata.contains(n)) {
+            fs.refreshing_metadata.insert(ipns_name.clone());
             let api = fs.api.clone();
             let rt = fs.rt.clone();
             let tx = fs.refresh_tx.clone();
@@ -214,7 +215,8 @@ pub(crate) mod implementation {
         }
 
         // Non-blocking lazy load: fire background fetch
-        if let Some((ipns_name, folder_key)) = needs_load {
+        if let Some((ipns_name, folder_key)) = needs_load.filter(|(n, _)| !fs.refreshing_metadata.contains(n)) {
+            fs.refreshing_metadata.insert(ipns_name.clone());
             let api = fs.api.clone();
             let rt = fs.rt.clone();
             let tx = fs.refresh_tx.clone();

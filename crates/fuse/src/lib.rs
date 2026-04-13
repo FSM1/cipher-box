@@ -503,6 +503,7 @@ pub struct CipherBoxFS {
     pub refresh_tx: std::sync::mpsc::Sender<PendingRefresh>,
     pub mutated_folders: HashMap<u64, std::time::Instant>,
     pub prefetching: std::collections::HashSet<String>,
+    pub refreshing_metadata: std::collections::HashSet<String>,
     pub content_rx: std::sync::mpsc::Receiver<PendingContent>,
     pub content_tx: std::sync::mpsc::Sender<PendingContent>,
     pub filepointer_rx: std::sync::mpsc::Receiver<PendingFilePointer>,
@@ -643,6 +644,7 @@ impl CipherBoxFS {
         let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(30);
         self.mutated_folders.retain(|_, ts| *ts > cutoff);
         while let Ok(refresh) = self.refresh_rx.try_recv() {
+            self.refreshing_metadata.remove(&refresh.ipns_name);
             if self.mutated_folders.contains_key(&refresh.ino) || self.publish_queue.contains_key(&refresh.ino) {
                 self.metadata_cache.set(&refresh.ipns_name, refresh.metadata.clone(), refresh.cid);
                 continue;

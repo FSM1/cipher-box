@@ -210,8 +210,8 @@ Write-Host "--- Test 5: Wait for FUSE mount to detect edit ---"
 # The FUSE mount polls folder metadata every 30s. After detecting a newer
 # modified_at on the FilePointer, it re-resolves the file's IPNS record
 # to pick up the new CID. Allow up to 120s for two full polling cycles.
-# IMPORTANT: Get-ChildItem triggers readdir which is the ONLY operation
-# that calls drain_refresh_completions() -> populate_folder().
+# IMPORTANT: Get-ChildItem triggers readdir which is a reliable operation
+# for calling drain_refresh_completions() -> populate_folder().
 $SyncOk = $false
 for ($attempt = 1; $attempt -le 24 -and -not $SyncOk; $attempt++) {
     Start-Sleep -Seconds 5

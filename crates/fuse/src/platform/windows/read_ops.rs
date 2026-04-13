@@ -143,7 +143,8 @@ pub mod implementation {
             }
         };
 
-        if let Some((refresh_ino, ipns_name, folder_key)) = stale_info {
+        if let Some((refresh_ino, ipns_name, folder_key)) = stale_info.filter(|(_, n, _)| !fs.refreshing_metadata.contains(n)) {
+            fs.refreshing_metadata.insert(ipns_name.clone());
             let api = fs.api.clone();
             let rt = fs.rt.clone();
             let tx = fs.refresh_tx.clone();
