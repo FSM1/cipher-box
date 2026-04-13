@@ -103,3 +103,15 @@ yes please go ahead and add these tests
 ---
 
 is everything pushed up to the branch?
+
+---
+
+also, please fix the missing publicKey property on the dto
+
+---
+
+can all of these changes be included in the `fix/fuse-stale-file-after-web-edit` branch?
+
+---
+
+can all of these changes be included in the `fix/fuse-stale-file-after-web-edit` branch?
