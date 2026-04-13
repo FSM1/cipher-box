@@ -1,0 +1,1 @@
+could you help me figure out why the lint job is failing in CI https://github.com/FSM1/cipher-box/actions/runs/24362266386/job/71144793589?pr=455
