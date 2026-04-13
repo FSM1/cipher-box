@@ -1,0 +1,5 @@
+ok the lint check is still failing with the exact same error as before on PR #455
+
+---
+
+but why not update pnpm to version 11 locally?
