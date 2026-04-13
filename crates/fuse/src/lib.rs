@@ -70,11 +70,16 @@ where
 
 /// Pending folder refresh result sent from background tasks.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub struct PendingRefresh {
-    pub ino: u64,
-    pub ipns_name: String,
-    pub metadata: cipherbox_core::folder::FolderMetadata,
-    pub cid: String,
+pub enum PendingRefresh {
+    Success {
+        ino: u64,
+        ipns_name: String,
+        metadata: cipherbox_core::folder::FolderMetadata,
+        cid: String,
+    },
+    Failure {
+        ipns_name: String,
+    },
 }
 
 /// Pending content prefetch result sent from background tasks.
@@ -112,6 +117,54 @@ pub struct UploadComplete {
     pub pruned_cids: Vec<String>,
     /// Write generation at the time this upload was started.
     pub write_generation: u64,
+}
+
+/// Spawn a background metadata refresh task that resolves IPNS, fetches content,
+/// decrypts metadata, and sends the result (success or failure) over `tx`.
+/// On any error path, sends `PendingRefresh::Failure` so the caller's
+/// `refreshing_metadata` set is always cleaned up.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub fn spawn_metadata_refresh(
+    rt: &tokio::runtime::Handle,
+    api: std::sync::Arc<cipherbox_api_client::ApiClient>,
+    tx: std::sync::mpsc::Sender<PendingRefresh>,
+    ino: u64,
+    ipns_name: String,
+    folder_key: zeroize::Zeroizing<Vec<u8>>,
+) {
+    rt.spawn(async move {
+        let result: Result<(cipherbox_core::folder::FolderMetadata, String), String> = async {
+            let resolve_resp = cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name)
+                .await
+                .map_err(|e| format!("resolve: {}", e))?;
+            let encrypted_bytes =
+                cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid)
+                    .await
+                    .map_err(|e| format!("fetch: {}", e))?;
+            let metadata = cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
+                &encrypted_bytes,
+                &folder_key,
+            )
+            .map_err(|e| format!("decrypt: {}", e))?;
+            Ok((metadata, resolve_resp.cid))
+        }
+        .await;
+
+        match result {
+            Ok((metadata, cid)) => {
+                let _ = tx.send(PendingRefresh::Success {
+                    ino,
+                    ipns_name,
+                    metadata,
+                    cid,
+                });
+            }
+            Err(e) => {
+                log::warn!("Metadata refresh failed for {}: {}", ipns_name, e);
+                let _ = tx.send(PendingRefresh::Failure { ipns_name });
+            }
+        }
+    });
 }
 
 /// Entry in the debounced publish queue.
@@ -644,19 +697,26 @@ impl CipherBoxFS {
         let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(30);
         self.mutated_folders.retain(|_, ts| *ts > cutoff);
         while let Ok(refresh) = self.refresh_rx.try_recv() {
-            self.refreshing_metadata.remove(&refresh.ipns_name);
-            if self.mutated_folders.contains_key(&refresh.ino) || self.publish_queue.contains_key(&refresh.ino) {
-                self.metadata_cache.set(&refresh.ipns_name, refresh.metadata.clone(), refresh.cid);
+            let (ino, ipns_name, metadata, cid) = match refresh {
+                PendingRefresh::Success { ino, ipns_name, metadata, cid } => (ino, ipns_name, metadata, cid),
+                PendingRefresh::Failure { ipns_name } => {
+                    self.refreshing_metadata.remove(&ipns_name);
+                    continue;
+                }
+            };
+            self.refreshing_metadata.remove(&ipns_name);
+            if self.mutated_folders.contains_key(&ino) || self.publish_queue.contains_key(&ino) {
+                self.metadata_cache.set(&ipns_name, metadata.clone(), cid);
                 continue;
             }
-            self.metadata_cache.set(&refresh.ipns_name, refresh.metadata.clone(), refresh.cid.clone());
-            if let Err(e) = self.inodes.populate_folder(refresh.ino, &refresh.metadata, &self.private_key, &self.public_key, true) {
-                log::warn!("Drain refresh apply failed for ino {}: {}", refresh.ino, e);
+            self.metadata_cache.set(&ipns_name, metadata.clone(), cid.clone());
+            if let Err(e) = self.inodes.populate_folder(ino, &metadata, &self.private_key, &self.public_key, true) {
+                log::warn!("Drain refresh apply failed for ino {}: {}", ino, e);
             }
             // Spawn async resolution for unresolved FilePointers in this folder
-            let unresolved = self.inodes.get_unresolved_file_pointers_for_parent(refresh.ino);
+            let unresolved = self.inodes.get_unresolved_file_pointers_for_parent(ino);
             if !unresolved.is_empty() {
-                let folder_key = self.inodes.get(refresh.ino).and_then(|i| match &i.kind {
+                let folder_key = self.inodes.get(ino).and_then(|i| match &i.kind {
                     inode::InodeKind::Root { .. } => Some(self.root_folder_key.to_vec()),
                     inode::InodeKind::Folder { folder_key, .. } => Some(folder_key.to_vec()),
                     _ => None,
@@ -667,7 +727,7 @@ impl CipherBoxFS {
                         Err(_) => {
                             log::warn!(
                                 "FilePointer resolution skipped for folder ino {}: folder_key length is {} (expected 32)",
-                                refresh.ino,
+                                ino,
                                 fk.len()
                             );
                             continue;
