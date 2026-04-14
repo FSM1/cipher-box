@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.2](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.5.1...cipherbox-fuse-v0.5.2) (2026-04-14)
+
+
+### Bug Fixes
+
+* **desktop:** detect remote file edits and re-resolve IPNS in FUSE mount ([#454](https://github.com/FSM1/cipher-box/issues/454)) ([09e6830](https://github.com/FSM1/cipher-box/commit/09e6830b87de176b3613c700f78b2f1cd3b517f9))
+* **desktop:** trigger metadata refresh from lookup/open, fix e2e sync test ([#456](https://github.com/FSM1/cipher-box/issues/456)) ([1e3ef75](https://github.com/FSM1/cipher-box/commit/1e3ef750f430f7d49ffe85d5d81cd80cb1467988))
+
 ## [0.5.1](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.5.0...cipherbox-fuse-v0.5.1) (2026-04-06)
 
 

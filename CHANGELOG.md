@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.38.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.37.1...cipher-box-v0.38.0) (2026-04-14)
+
+
+### Features
+
+* add static landing page for cipherbox.cc with IPFS deployment ([#452](https://github.com/FSM1/cipher-box/issues/452)) ([705b9df](https://github.com/FSM1/cipher-box/commit/705b9df8f2e8fb1db849853c658adf27e3bf58c4))
+
+
+### Bug Fixes
+
+* **desktop:** detect remote file edits and re-resolve IPNS in FUSE mount ([#454](https://github.com/FSM1/cipher-box/issues/454)) ([09e6830](https://github.com/FSM1/cipher-box/commit/09e6830b87de176b3613c700f78b2f1cd3b517f9))
+* **desktop:** trigger metadata refresh from lookup/open, fix e2e sync test ([#456](https://github.com/FSM1/cipher-box/issues/456)) ([1e3ef75](https://github.com/FSM1/cipher-box/commit/1e3ef750f430f7d49ffe85d5d81cd80cb1467988))
+
 ## [0.37.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.37.0...cipher-box-v0.37.1) (2026-04-06)
 
 

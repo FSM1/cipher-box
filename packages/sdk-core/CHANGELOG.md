@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.35.0...@cipherbox/sdk-core-v0.36.0) (2026-04-14)
+
+
+### Bug Fixes
+
+* **desktop:** detect remote file edits and re-resolve IPNS in FUSE mount ([#454](https://github.com/FSM1/cipher-box/issues/454)) ([09e6830](https://github.com/FSM1/cipher-box/commit/09e6830b87de176b3613c700f78b2f1cd3b517f9))
+
 ## [0.35.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.34.0...@cipherbox/sdk-core-v0.35.0) (2026-04-06)
 
 

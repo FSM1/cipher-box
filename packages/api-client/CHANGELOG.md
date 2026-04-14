@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-client-v0.37.0...@cipherbox/api-client-v0.38.0) (2026-04-14)
+
+
+### Bug Fixes
+
+* **desktop:** detect remote file edits and re-resolve IPNS in FUSE mount ([#454](https://github.com/FSM1/cipher-box/issues/454)) ([09e6830](https://github.com/FSM1/cipher-box/commit/09e6830b87de176b3613c700f78b2f1cd3b517f9))
+
 ## [0.37.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-client-v0.36.0...@cipherbox/api-client-v0.37.0) (2026-04-06)
 
 
