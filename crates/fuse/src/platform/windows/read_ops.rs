@@ -108,10 +108,45 @@ pub mod implementation {
 
         fs.drain_upload_completions();
         fs.drain_content_prefetches();
+        fs.drain_refresh_completions();
         fs.drain_filepointer_completions();
 
-        let (ino, _parent_ino) = resolve_path(&fs, &path)
+        let (ino, parent_ino) = resolve_path(&fs, &path)
             .ok_or(status_object_name_not_found())?;
+
+        // Check if parent folder metadata is stale and fire background refresh.
+        // This mirrors read_directory's staleness check so that file opens also
+        // trigger metadata refresh, not only directory listings.
+        let stale_info: Option<(u64, String, zeroize::Zeroizing<Vec<u8>>)> = {
+            if let Some(parent_inode) = fs.inodes.get(parent_ino) {
+                match &parent_inode.kind {
+                    InodeKind::Root { ipns_name, .. } => {
+                        ipns_name.as_ref().and_then(|name| {
+                            if fs.metadata_cache.get(name).is_none() {
+                                Some((parent_ino, name.clone(), fs.root_folder_key.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                    }
+                    InodeKind::Folder { ipns_name, folder_key, .. } => {
+                        if fs.metadata_cache.get(ipns_name).is_none() {
+                            Some((parent_ino, ipns_name.clone(), folder_key.clone()))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some((refresh_ino, ipns_name, folder_key)) = stale_info.filter(|(_, n, _)| !fs.refreshing_metadata.contains(n)) {
+            fs.refreshing_metadata.insert(ipns_name.clone());
+            crate::spawn_metadata_refresh(&fs.rt, fs.api.clone(), fs.refresh_tx.clone(), refresh_ino, ipns_name, folder_key);
+        }
 
         let inode = fs
             .inodes

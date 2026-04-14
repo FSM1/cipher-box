@@ -216,6 +216,7 @@ pub async fn mount_filesystem(
         max_versions_per_file, version_cooldown_ms,
         refresh_rx, refresh_tx,
         prefetching: std::collections::HashSet::new(),
+        refreshing_metadata: std::collections::HashSet::new(),
         content_rx, content_tx,
         filepointer_rx, filepointer_tx,
         resolving_file_pointers: std::collections::HashSet::new(),

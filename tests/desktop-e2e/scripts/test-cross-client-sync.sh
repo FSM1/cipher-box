@@ -165,7 +165,11 @@ echo "--- Test 5: Wait for FUSE mount to detect edit ---"
 SYNC_OK=0
 for attempt in $(seq 1 24); do
   sleep 5
-  # Force a fresh read by stat-ing the file (invalidates macOS file cache)
+  # Trigger readdir to reliably drain refresh completions via
+  # drain_refresh_completions() -> populate_folder(), which detects
+  # modified_at changes and marks files for re-resolution. We use `ls`
+  # here because it is a dependable refresh trigger during polling.
+  ls "$MP" > /dev/null 2>&1 || true
   stat "$MP/$TEST_FILE" > /dev/null 2>&1 || true
   FUSE_CONTENT=$(cat "$MP/$TEST_FILE" 2>/dev/null || echo "")
   if [ "$FUSE_CONTENT" = "$EDITED_CONTENT" ]; then

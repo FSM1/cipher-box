@@ -142,7 +142,10 @@ pub(crate) mod implementation {
         }
 
         // Check if parent is a folder with unloaded children (lazy loading)
-        let needs_load = {
+        // OR if the parent folder metadata is stale and needs a background refresh.
+        // This mirrors readdir's staleness check so that file access (stat, open)
+        // also triggers metadata refresh, not only directory listings.
+        let (needs_load, needs_refresh) = {
             if let Some(parent_inode) = fs.inodes.get(parent) {
                 match &parent_inode.kind {
                     InodeKind::Folder {
@@ -152,12 +155,24 @@ pub(crate) mod implementation {
                         ..
                     } => {
                         if !children_loaded {
-                            Some((ipns_name.clone(), folder_key.clone()))
+                            (Some((ipns_name.clone(), folder_key.clone())), None)
+                        } else if fs.metadata_cache.get(ipns_name).is_none() {
+                            (None, Some((ipns_name.clone(), folder_key.clone())))
                         } else {
-                            None
+                            (None, None)
                         }
                     }
-                    _ => None,
+                    InodeKind::Root { ipns_name, .. } => {
+                        let stale = ipns_name.as_ref().and_then(|name| {
+                            if fs.metadata_cache.get(name).is_none() {
+                                Some((name.clone(), fs.root_folder_key.clone()))
+                            } else {
+                                None
+                            }
+                        });
+                        (None, stale)
+                    }
+                    _ => (None, None),
                 }
             } else {
                 reply.error(libc::ENOENT);
@@ -165,37 +180,16 @@ pub(crate) mod implementation {
             }
         };
 
+        // Non-blocking stale metadata refresh (same as readdir's staleness check)
+        if let Some((ipns_name, folder_key)) = needs_refresh.filter(|(n, _)| !fs.refreshing_metadata.contains(n)) {
+            fs.refreshing_metadata.insert(ipns_name.clone());
+            crate::spawn_metadata_refresh(&fs.rt, fs.api.clone(), fs.refresh_tx.clone(), parent, ipns_name, folder_key);
+        }
+
         // Non-blocking lazy load: fire background fetch
-        if let Some((ipns_name, folder_key)) = needs_load {
-            let api = fs.api.clone();
-            let rt = fs.rt.clone();
-            let tx = fs.refresh_tx.clone();
-            let refresh_ino = parent;
-            rt.spawn(async move {
-                match cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name).await {
-                    Ok(resolve_resp) => {
-                        match cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid).await {
-                            Ok(encrypted_bytes) => {
-                                match cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
-                                    &encrypted_bytes, &folder_key,
-                                ) {
-                                    Ok(metadata) => {
-                                        let _ = tx.send(crate::PendingRefresh {
-                                            ino: refresh_ino,
-                                            ipns_name,
-                                            metadata,
-                                            cid: resolve_resp.cid,
-                                        });
-                                    }
-                                    Err(e) => log::warn!("Lookup prefetch decrypt failed: {}", e),
-                                }
-                            }
-                            Err(e) => log::warn!("Lookup prefetch fetch failed: {}", e),
-                        }
-                    }
-                    Err(e) => log::debug!("Lookup prefetch resolve failed for {}: {}", ipns_name, e),
-                }
-            });
+        if let Some((ipns_name, folder_key)) = needs_load.filter(|(n, _)| !fs.refreshing_metadata.contains(n)) {
+            fs.refreshing_metadata.insert(ipns_name.clone());
+            crate::spawn_metadata_refresh(&fs.rt, fs.api.clone(), fs.refresh_tx.clone(), parent, ipns_name, folder_key);
             reply.error(libc::ENOENT);
             return;
         }

@@ -61,36 +61,9 @@ pub(crate) mod implementation {
         };
 
         // Fire background refresh (non-blocking, results applied on next readdir)
-        if let Some((ipns_name, folder_key)) = stale_info.filter(|_| offset == 0) {
-            let api = fs.api.clone();
-            let rt = fs.rt.clone();
-            let tx = fs.refresh_tx.clone();
-            let refresh_ino = ino;
-            rt.spawn(async move {
-                match cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name).await {
-                    Ok(resolve_resp) => {
-                        match cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid).await {
-                            Ok(encrypted_bytes) => {
-                                match cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
-                                    &encrypted_bytes, &folder_key,
-                                ) {
-                                    Ok(metadata) => {
-                                        let _ = tx.send(crate::PendingRefresh {
-                                            ino: refresh_ino,
-                                            ipns_name,
-                                            metadata,
-                                            cid: resolve_resp.cid,
-                                        });
-                                    }
-                                    Err(e) => log::warn!("Refresh decrypt failed: {}", e),
-                                }
-                            }
-                            Err(e) => log::warn!("Refresh fetch failed: {}", e),
-                        }
-                    }
-                    Err(e) => log::warn!("Refresh resolve failed for {}: {}", ipns_name, e),
-                }
-            });
+        if let Some((ipns_name, folder_key)) = stale_info.filter(|(n, _)| offset == 0 && !fs.refreshing_metadata.contains(n)) {
+            fs.refreshing_metadata.insert(ipns_name.clone());
+            crate::spawn_metadata_refresh(&fs.rt, fs.api.clone(), fs.refresh_tx.clone(), ino, ipns_name, folder_key);
         }
 
         // 3. Return current (possibly stale) entries immediately

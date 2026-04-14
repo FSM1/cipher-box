@@ -36,6 +36,11 @@ pub mod implementation {
             .get(ino)
             .ok_or(status_object_name_not_found())?;
 
+        // Extract values from inode before mutable borrow of fs below
+        let parent_ino = inode.parent_ino;
+        let children = inode.children.clone().unwrap_or_default();
+        let inode_attr = inode.attr.clone();
+
         // Check if metadata is stale and fire background refresh
         let stale_info: Option<(String, zeroize::Zeroizing<Vec<u8>>)> =
             match &inode.kind {
@@ -58,45 +63,18 @@ pub mod implementation {
                 _ => None,
             };
 
-        if let Some((ipns_name, folder_key)) = stale_info {
-            let api = fs.api.clone();
-            let rt = fs.rt.clone();
-            let tx = fs.refresh_tx.clone();
-            let refresh_ino = ino;
-            rt.spawn(async move {
-                match cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name).await {
-                    Ok(resolve_resp) => {
-                        match cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid).await {
-                            Ok(encrypted_bytes) => {
-                                match cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
-                                    &encrypted_bytes, &folder_key,
-                                ) {
-                                    Ok(metadata) => {
-                                        let _ = tx.send(crate::PendingRefresh {
-                                            ino: refresh_ino,
-                                            ipns_name,
-                                            metadata,
-                                            cid: resolve_resp.cid,
-                                        });
-                                    }
-                                    Err(e) => log::warn!("Refresh decrypt failed: {}", e),
-                                }
-                            }
-                            Err(e) => log::warn!("Refresh fetch failed: {}", e),
-                        }
-                    }
-                    Err(e) => log::warn!("Refresh resolve failed for {}: {}", ipns_name, e),
-                }
-            });
-        }
+        // Drop inode borrow so we can mutably borrow fs
+        drop(inode);
 
-        let parent_ino = inode.parent_ino;
-        let children = inode.children.clone().unwrap_or_default();
+        if let Some((ipns_name, folder_key)) = stale_info.filter(|(n, _)| !fs.refreshing_metadata.contains(n)) {
+            fs.refreshing_metadata.insert(ipns_name.clone());
+            crate::spawn_metadata_refresh(&fs.rt, fs.api.clone(), fs.refresh_tx.clone(), ino, ipns_name, folder_key);
+        }
 
         let mut entries: Vec<(U16CString, FileInfo)> = Vec::new();
 
         if let Ok(name) = U16CString::from_str(".") {
-            entries.push((name, fill_file_info(&inode.attr)));
+            entries.push((name, fill_file_info(&inode_attr)));
         }
 
         if let Some(parent) = fs.inodes.get(parent_ino) {
