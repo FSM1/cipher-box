@@ -55,7 +55,7 @@ const NETWORK_MAP: Record<string, (typeof WEB3AUTH_NETWORK)[keyof typeof WEB3AUT
   local: WEB3AUTH_NETWORK.DEVNET,
   ci: WEB3AUTH_NETWORK.DEVNET,
   staging: WEB3AUTH_NETWORK.DEVNET,
-  production: WEB3AUTH_NETWORK.MAINNET,
+  production: WEB3AUTH_NETWORK.DEVNET,
 };
 
 let coreKit: Web3AuthMPCCoreKit | null = null;
