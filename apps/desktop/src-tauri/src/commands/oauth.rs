@@ -1,7 +1,7 @@
 //! OAuth popup window and callback server commands.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use rand::{thread_rng, Rng};
+use rand::RngCore;
 use tauri::{Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -117,7 +117,11 @@ pub async fn start_oauth_server(app: tauri::AppHandle) -> Result<OAuthServerInfo
         .port();
 
     // Generate a random nonce to validate POSTs (prevents blind injection by local processes)
-    let nonce: String = format!("{:016x}", thread_rng().gen::<u64>());
+    let nonce: String = {
+        let mut buf = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut buf);
+        buf.iter().map(|b| format!("{:02x}", b)).collect()
+    };
     let event_name = format!("oauth-callback-{}", port);
 
     log::info!("OAuth callback server started on port {} (event: {})", port, event_name);
@@ -211,7 +215,7 @@ async fn run_oauth_server(
     event_name: String,
     expected_nonce: String,
 ) {
-    // Absolute deadline — connections cannot extend the server lifetime (fix: review #3)
+    // Absolute deadline — connections cannot extend the server lifetime
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(120);
     let callback_html = build_callback_html(&expected_nonce);
 
@@ -225,6 +229,7 @@ async fn run_oauth_server(
                     error: Some("OAuth callback server timed out".to_string()),
                     state: None,
                 });
+                close_oauth_popups(&app);
                 return;
             }
         };
@@ -351,14 +356,16 @@ async fn run_oauth_server(
                             \r\n";
             let _ = stream.write_all(response.as_bytes()).await;
             let _ = stream.flush().await;
-        } else {
-            // GET request — serve the callback page with embedded nonce
+        } else if first_line.starts_with("GET /callback") {
+            // Serve the callback page with embedded nonce (only on /callback path)
             send_response(&mut stream, "200 OK", &callback_html).await;
+        } else {
+            send_response(&mut stream, "404 Not Found", "Not found").await;
         }
     }
 }
 
-/// Send a minimal HTTP response with HTML body.
+/// Send a minimal HTTP response with HTML body (no CORS headers).
 async fn send_response(
     stream: &mut tokio::net::TcpStream,
     status: &str,
@@ -369,7 +376,6 @@ async fn send_response(
          Content-Type: text/html\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n\
-         Access-Control-Allow-Origin: *\r\n\
          \r\n\
          {}",
         status,

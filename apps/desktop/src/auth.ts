@@ -745,17 +745,17 @@ function getGoogleCredential(): Promise<string> {
           error: string | null;
           state: string | null;
         }>(eventName, (event) => {
-          cleanup();
-          console.log('[Google Auth] Received oauth-callback event');
-
           const { id_token, error, state: returnedState } = event.payload;
 
-          // Validate state first — ignore events with mismatched state
-          // (prevents local processes from injecting error payloads)
+          // Validate state BEFORE cleanup — a mismatch should be ignored,
+          // not treated as a terminal event (keeps listener alive for the real callback)
           if (returnedState !== state) {
             console.warn('[Google Auth] Ignoring event with mismatched state');
             return;
           }
+
+          cleanup();
+          console.log('[Google Auth] Received valid oauth-callback event');
 
           if (error) {
             reject(new Error(error));
