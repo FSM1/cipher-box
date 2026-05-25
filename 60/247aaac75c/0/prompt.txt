@@ -1,0 +1,5 @@
+/resolve-pr-reviews
+
+---
+
+it seems like coderabbit has updated the format of their review comments: https://github.com/FSM1/cipher-box/pull/459#issuecomment-4535991364

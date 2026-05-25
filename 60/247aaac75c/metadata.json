@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "60247aaac75c",
+  "strategy": "manual-commit",
+  "branch": "fix/google-oauth-tauri-redirect",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/commands/oauth.rs",
+    "apps/desktop/src/auth.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/60/247aaac75c/0/metadata.json",
+      "transcript": "/60/247aaac75c/0/full.jsonl",
+      "content_hash": "/60/247aaac75c/0/content_hash.txt",
+      "prompt": "/60/247aaac75c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 22063,
+    "cache_read_tokens": 2644104,
+    "output_tokens": 5764,
+    "api_call_count": 18
+  }
+}
