@@ -697,15 +697,12 @@ export async function approveDevice(
  * In dev mode (`http://localhost:1420` origin), the localhost callback server
  * is still used for consistency.
  *
- * Requires `http://localhost` (with the callback server port) to be registered
- * as an authorized redirect URI in the Google Cloud Console. Since the port is
- * dynamic, register `http://localhost` as an authorized JavaScript origin and
- * add a few specific redirect URIs or use a loopback redirect approach.
- *
- * **Google's loopback IP redirect policy:**
- * For desktop apps, Google allows `http://localhost:<port>/path` redirect URIs
- * without pre-registering each port, as long as `http://localhost` is
- * registered as an authorized redirect URI in the Google Cloud Console.
+ * The Rust server tries fixed preferred ports (14200, 14201, 14202) and fails
+ * fast if none are available. These must be pre-registered as authorized
+ * redirect URIs in the Google Cloud Console:
+ *   - `http://localhost:14200/callback`
+ *   - `http://localhost:14201/callback`
+ *   - `http://localhost:14202/callback`
  */
 function getGoogleCredential(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -753,14 +750,15 @@ function getGoogleCredential(): Promise<string> {
 
           const { id_token, error, state: returnedState } = event.payload;
 
-          if (error) {
-            reject(new Error(error));
+          // Validate state first — ignore events with mismatched state
+          // (prevents local processes from injecting error payloads)
+          if (returnedState !== state) {
+            console.warn('[Google Auth] Ignoring event with mismatched state');
             return;
           }
 
-          // CSRF validation: verify state matches
-          if (returnedState !== state) {
-            reject(new Error('OAuth state mismatch (possible CSRF)'));
+          if (error) {
+            reject(new Error(error));
             return;
           }
 

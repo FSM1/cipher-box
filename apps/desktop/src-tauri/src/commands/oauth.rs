@@ -237,20 +237,36 @@ async fn run_oauth_server(
             }
         };
 
-        // Read the HTTP request — headers may arrive before the body,
-        // so we may need multiple reads for POST requests.
+        // Read the HTTP request — headers and body may arrive in separate
+        // TCP segments, so loop-read until we have complete headers (\r\n\r\n)
+        // and then read any remaining body bytes based on Content-Length.
         let mut buf = vec![0u8; 65536];
         let mut total = 0usize;
-        match stream.read(&mut buf).await {
-            Ok(n) if n > 0 => total = n,
-            _ => continue,
-        };
+
+        // Phase 1: Read until we have complete headers (\r\n\r\n)
+        loop {
+            match stream.read(&mut buf[total..]).await {
+                Ok(0) => break,
+                Ok(n) => total += n,
+                Err(_) => break,
+            };
+            let so_far = String::from_utf8_lossy(&buf[..total]);
+            if so_far.contains("\r\n\r\n") {
+                break;
+            }
+            if total >= buf.len() {
+                break; // Buffer full, proceed with what we have
+            }
+        }
+        if total == 0 {
+            continue;
+        }
 
         let initial_request = String::from_utf8_lossy(&buf[..total]);
         let first_line = initial_request.lines().next().unwrap_or("");
 
         if first_line.starts_with("POST /token") {
-            // Parse Content-Length to know how much body to expect
+            // Parse Content-Length from complete headers
             let content_length = initial_request
                 .lines()
                 .find_map(|line| {
@@ -263,7 +279,7 @@ async fn run_oauth_server(
                 })
                 .unwrap_or(0);
 
-            // Read remaining body bytes if headers arrived before body
+            // Read remaining body bytes if we don't have everything yet
             let header_end = initial_request.find("\r\n\r\n").map(|i| i + 4);
             if let Some(header_len) = header_end {
                 let body_so_far = total.saturating_sub(header_len);
