@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "0dd0f9327354",
+  "session_id": "8c0261da-fb01-4c41-950a-8296caf4f31b",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-25T18:19:24.928542Z",
+  "branch": "fix/web3auth-devnet-network",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "release-please-config.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "c1e82fed2075",
+  "checkpoint_transcript_start": 98,
+  "transcript_lines_at_start": 98,
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 5110,
+    "cache_read_tokens": 481032,
+    "output_tokens": 1416,
+    "api_call_count": 9
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Revert web app changes from PR #461 so only the desktop DEVNET auth fix remains, and clean up the release-please config to reflect that only the desktop package is being bumped.",
+    "outcome": "Successfully reverted core-kit.ts to MAINNET for production, kept the desktop auth.ts DEVNET fix, and removed the spurious apps/web version bump (0.40.0→0.41.0) from release-please-config.json while preserving the desktop bump (0.39.0→0.40.0).",
+    "learnings": {
+      "repo": [
+        "A CI bot automatically commits 'chore(release): set release targets' to bump versions in release-please-config.json when PRs are updated — this needs manual correction if the PR scope changes.",
+        "The repo uses release-please with per-package version targets configured in release-please-config.json for apps/web and apps/desktop independently.",
+        "core-kit.ts controls the network target (MAINNET/DEVNET) and is shared; desktop auth.ts has a separate DEVNET override that is intentionally kept."
+      ],
+      "code": [
+        {
+          "path": "release-please-config.json",
+          "finding": "Contains per-package release targets; apps/web entry was spuriously added by CI bot and needed removal after web changes were reverted."
+        }
+      ],
+      "workflow": [
+        "After reverting changes that triggered a CI release-please bot commit, manually audit release-please-config.json to remove any package bumps that no longer apply.",
+        "When a PR's scope narrows (e.g., web changes reverted), check for bot-generated commits that may have added stale metadata."
+      ]
+    },
+    "friction": [
+      "CI bot automatically added an apps/web version bump to release-please-config.json that had to be manually identified and reverted after the web changes were rolled back."
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-25T18:19:13.294659Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}

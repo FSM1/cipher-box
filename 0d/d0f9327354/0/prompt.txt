@@ -1,0 +1,1 @@
+the release please config file contains changes that I think are not relevant now that the web changes have been reverted.
