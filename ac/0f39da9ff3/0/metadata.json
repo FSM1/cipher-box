@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "ac0f39da9ff3",
+  "session_id": "ed63e257-4d24-4447-b1fc-fd79dd4a5c7b",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-25T16:34:49.855317Z",
+  "branch": "fix/google-oauth-tauri-redirect",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/debug/google-oauth-tauri-redirect.md",
+    "Cargo.lock"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "61e030a8a3d0",
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 143791,
+    "cache_read_tokens": 5076805,
+    "output_tokens": 33100,
+    "api_call_count": 69
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Fix Google OAuth login in a Tauri desktop app that was failing with Error 400 invalid_request because Google rejects the tauri://localhost redirect URI scheme.",
+    "outcome": "Implemented a temporary localhost HTTP callback server in Rust to handle the OAuth redirect on http://localhost:{port}/callback, wired it into the TypeScript auth flow, fixed several follow-on bugs (Tauri event permissions, TCP body parsing, event scoping, nonce validation), and resolved all 6 Copilot PR review comments.",
+    "learnings": {
+      "repo": [
+        "Tauri v2 uses capability-based permissions in apps/desktop/src-tauri/capabilities/default.json — event listener API requires core:event:default to be explicitly listed",
+        "Google OAuth client ID is 164556913424-uif44is1apnl7rqc9a2ac7vn8u9dq0ee; preferred pre-registerable callback ports are 14200, 14201, 14202",
+        "The rand crate version is 0.8, which uses thread_rng() — not the newer rand::rng() API",
+        "Project has a .planning/debug/ directory used by the gsd-debugger subagent system for session state tracking",
+        "Cargo.lock picks up unrelated version bumps (e.g. cipherbox-fuse) during dev builds; must be stashed/discarded before committing OAuth-only fixes"
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src-tauri/src/commands/oauth.rs",
+          "line": 216,
+          "end_line": 216,
+          "finding": "Original single read() call could not capture POST body that arrived in a separate TCP segment from headers, causing JSON parse failure; fixed with Content-Length-aware body accumulation loop"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/oauth.rs",
+          "finding": "OAuth callback server now uses an absolute Instant deadline (not per-connection timeout reset), port-scoped event names (oauth-callback-{port}), random nonce embedded in callback HTML and validated on POST, and POPUP_COUNTER.load() instead of hardcoded 0..99 range for popup cleanup"
+        },
+        {
+          "path": "apps/desktop/src-tauri/capabilities/default.json",
+          "finding": "Added core:event:default permission; without it Tauri v2 blocks listen() calls from the webview with 'event.listen not allowed'"
+        },
+        {
+          "path": "apps/desktop/src/auth.ts",
+          "finding": "getGoogleCredential() now calls start_oauth_server Tauri command first, uses returned port and event_name for scoped event listener, replaces old localStorage-polling approach"
+        }
+      ],
+      "workflow": [
+        "Google OAuth rejects tauri:// scheme URIs entirely — any Tauri app doing OAuth needs a real http://localhost callback server",
+        "GITHUB_TOKEN env var injected at the shell level overrides gh auth login stored credentials; unset inside a subshell doesn't propagate — must use env -u GITHUB_TOKEN gh ... as a prefix workaround",
+        "When writing a minimal HTTP server in Rust without hyper/axum, a single TcpStream read() is insufficient for POST requests — headers and body may arrive in separate TCP segments and require Content-Length-aware accumulation"
+      ]
+    },
+    "friction": [
+      "GITHUB_TOKEN env var was injected at a level the Bash tool cannot unset; required env -u GITHUB_TOKEN prefix on every gh command and blocked the gh pr create flow entirely until the user cleared it in their own terminal",
+      "Tauri v2 capability permission error (core:event:default missing) only surfaced at runtime after dev server restart, not at compile time",
+      "Single TCP read() bug caused a 'Failed to parse callback data' regression that required a second debugging pass",
+      "Dev server had to be started 5+ times across the session due to app not appearing in taskbar, permission errors, and iterative Rust fixes requiring recompilation",
+      "git pull failed at session start due to divergent branches with no reconcile strategy configured",
+      "Cargo.lock accumulated an unrelated cipherbox-fuse version bump that had to be identified and discarded before committing"
+    ],
+    "open_items": [
+      "Redirect URIs http://localhost:14200/callback, http://localhost:14201/callback, http://localhost:14202/callback must be manually added to the Google Cloud Console OAuth client before production builds will work",
+      "Random port fallback was removed — if all three preferred ports (14200-14202) are busy, OAuth fails fast with an error rather than trying a random port; may need revisiting for constrained environments",
+      "core:event:default capability uses windows: [\"*\"] scope; Copilot flagged this as too broad but was left as-is since OAuth popups load external URLs and cannot access Tauri APIs regardless"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-25T16:34:05.744369Z",
+    "agent_lines": 69,
+    "human_added": 2,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 71,
+    "agent_percentage": 97.1830985915493
+  }
+}
