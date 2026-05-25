@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.40.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.39.0...cipherbox-desktop-v0.40.0) (2026-05-25)
+
+
+### Bug Fixes
+
+* **desktop:** use Web3Auth devnet network for production builds ([#462](https://github.com/FSM1/cipher-box/issues/462)) ([d502940](https://github.com/FSM1/cipher-box/commit/d502940c187b35df49ed305969071da0fd2749bd))
+
 ## [0.39.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.38.0...cipherbox-desktop-v0.39.0) (2026-05-25)
 
 
