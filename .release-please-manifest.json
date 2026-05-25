@@ -1,8 +1,8 @@
 {
-  ".": "0.38.0",
+  ".": "0.38.1",
   "apps/api": "0.37.1",
   "apps/web": "0.40.0",
-  "apps/desktop": "0.38.0",
+  "apps/desktop": "0.39.0",
   "apps/tee-worker": "0.31.1",
   "packages/core": "0.30.0",
   "packages/crypto": "0.31.0",
