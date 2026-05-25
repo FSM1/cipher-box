@@ -735,16 +735,19 @@ function getGoogleCredential(): Promise<string> {
     (async () => {
       try {
         // Start temporary localhost HTTP server for OAuth callback
-        const port: number = await invoke('start_oauth_server');
+        const { port, event_name: eventName } = await invoke<{
+          port: number;
+          event_name: string;
+        }>('start_oauth_server');
         const redirectUri = `http://localhost:${port}/callback`;
-        console.log('[Google Auth] OAuth callback server on port', port);
+        console.log('[Google Auth] OAuth callback server on port', port, 'event:', eventName);
 
-        // Listen for the oauth-callback Tauri event from the Rust server
+        // Listen for the port-scoped Tauri event from the Rust server
         unlisten = await listen<{
           id_token: string | null;
           error: string | null;
           state: string | null;
-        }>('oauth-callback', (event) => {
+        }>(eventName, (event) => {
           cleanup();
           console.log('[Google Auth] Received oauth-callback event');
 
