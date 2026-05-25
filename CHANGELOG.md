@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.38.0...cipher-box-v0.38.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* **desktop:** use localhost callback server for Google OAuth in Tauri ([#459](https://github.com/FSM1/cipher-box/issues/459)) ([ebfa8a8](https://github.com/FSM1/cipher-box/commit/ebfa8a8af2dcec7bdde8b5eb78995f5d825ea8e1))
+
 ## [0.38.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.37.1...cipher-box-v0.38.0) (2026-04-14)
 
 
