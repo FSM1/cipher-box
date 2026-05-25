@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "172d4ce72f72",
+  "session_id": "ed63e257-4d24-4447-b1fc-fd79dd4a5c7b",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-25T16:24:11.07302Z",
+  "branch": "fix/google-oauth-tauri-redirect",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "61e030a8a3d0",
+  "token_usage": {
+    "input_tokens": 77,
+    "cache_creation_tokens": 123914,
+    "cache_read_tokens": 4347188,
+    "output_tokens": 30955,
+    "api_call_count": 62
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Fix Google OAuth login in a Tauri desktop app (cipher-box) that was returning Error 400 (invalid_request) because Tauri's `tauri://localhost` scheme is rejected as a redirect URI by Google OAuth. After the fix, address PR review comments raised by Copilot.",
+    "outcome": "Implemented a temporary localhost HTTP server in Rust (`start_oauth_server` Tauri command) to receive the OAuth callback on `http://localhost:{port}/callback`, rewrote `getGoogleCredential()` in TypeScript to use it, fixed a Tauri capability permission gap blocking event listening, fixed an HTTP body-parsing bug in the Rust server, and addressed 5 of 6 Copilot review comments (nonce validation, scoped event names, absolute timeout deadline, popup cleanup counter, fail-fast port binding). Branch pushed as `fix/google-oauth-tauri-redirect` and PR #459 opened.",
+    "learnings": {
+      "repo": [
+        "cipher-box is a Tauri v2 desktop app in a pnpm monorepo; desktop app is run with `pnpm --filter desktop dev`",
+        "Tauri capabilities are declared in `apps/desktop/src-tauri/capabilities/default.json` and must explicitly list permissions like `core:event:default` for webview APIs such as `listen()`",
+        "Google OAuth client ID is `164556913424-uif44is1apnl7rqc9a2ac7vn8u9dq0ee`; preferred callback ports to pre-register in Google Cloud Console are 14200, 14201, 14202",
+        "The `rand` crate in use is v0.8, which uses `thread_rng().gen::\u003cu64\u003e()` not the newer `rand::random()` API",
+        "An unrelated `cipherbox-fuse` version bump was present in `Cargo.lock` and had to be discarded before committing the OAuth fix"
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src/auth.ts",
+          "finding": "`getGoogleCredential()` was building the redirect URI from `window.location.origin`, which resolves to `tauri://localhost` in production Tauri builds — rejected by Google OAuth. Fixed to call `start_oauth_server` and use `http://localhost:{port}/callback`."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/oauth.rs",
+          "line": 216,
+          "end_line": 216,
+          "finding": "Single `read()` call on the TCP stream failed to capture the full POST body when headers and body arrived in separate TCP segments. Fixed by reading until Content-Length is satisfied."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/oauth.rs",
+          "finding": "Timeout was being reset on every new connection rather than using an absolute deadline. Also, `oauth-callback` event name was global (collision risk); fixed to use a per-session scoped name returned by the server. Nonce added to POST payload and validated server-side. Popup cleanup loop was hardcoded to 0..99 instead of using the actual connection counter."
+        },
+        {
+          "path": "apps/desktop/src-tauri/capabilities/default.json",
+          "finding": "Missing `core:event:default` permission caused `Failed to start OAuth flow: event.listen not allowed` in the webview. Required for `@tauri-apps/api/event` listen/emit APIs."
+        }
+      ],
+      "workflow": [
+        "Tauri v2 requires explicit capability grants per webview API; adding a Rust command is not enough if the frontend also needs event APIs",
+        "`GITHUB_TOKEN` environment variable takes priority over `gh auth login` keyring credentials and cannot be overridden with `unset` in the Bash tool session — use `env -u GITHUB_TOKEN gh ...` as a workaround",
+        "Rust TCP servers doing a single `stream.read()` are unreliable for HTTP POST bodies; always read until Content-Length is satisfied",
+        "When using `rand` 0.8, verify API with `cargo metadata` before assuming the latest `rand::random()` API is available"
+      ]
+    },
+    "friction": [
+      "`git pull` failed immediately due to divergent branches with no reconciliation strategy configured — required manual `git fetch` + status check before proceeding",
+      "Dev server (`pnpm --filter desktop dev`) was launched three times in background before the app appeared in the macOS taskbar, with no clear signal it had actually started",
+      "`gh auth login` silently had no effect because `GITHUB_TOKEN` env var was injected at the shell environment level and could not be unset within the Bash tool session; required `env -u GITHUB_TOKEN` workaround",
+      "First OAuth attempt failed with `Failed to start OAuth flow: event.listen not allowed` — missing Tauri capability not caught at development time",
+      "Second OAuth attempt failed with `Failed to parse callback data` — single-read HTTP body parsing bug not caught before testing",
+      "`rand` 0.8 API mismatch caused a compile error after using newer `rand::random::\u003cu64\u003e()` syntax"
+    ],
+    "open_items": [
+      "Add `http://localhost:14200/callback`, `http://localhost:14201/callback`, and `http://localhost:14202/callback` as authorized redirect URIs in Google Cloud Console before the PR can be tested in production builds",
+      "Copilot comment #5 (`core:event:default` capability scoped to `windows: [\"*\"]` being too broad) was marked not applicable — worth revisiting if the app grows to multiple window types with different trust levels",
+      "The `GITHUB_TOKEN` env var injection issue has no permanent fix applied; may block future `gh` usage from the assistant",
+      "Release build testing of the OAuth flow has not been done — only verified on `dev` build"
+    ]
+  }
+}
