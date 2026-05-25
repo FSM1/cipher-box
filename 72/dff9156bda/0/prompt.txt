@@ -1,0 +1,17 @@
+with the latest changes, specifically to the callback ports, which exact redirect urls need to be configured in the google oauth console?
+
+---
+
+ok great that is all done.
+
+---
+
+/resolve-pr-reviews
+
+---
+
+please go back to the feature branch
+
+---
+
+/resolve-pr-reviews
