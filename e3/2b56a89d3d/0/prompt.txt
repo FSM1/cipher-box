@@ -1,0 +1,5 @@
+please retry with `env -u GITHUB_TOKEN && ` rest of command
+
+---
+
+can you please revert the changes made to core-kit.ts - the web config does not need to change at all - the `staging` env correctly works there.

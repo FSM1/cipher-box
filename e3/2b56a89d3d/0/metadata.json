@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "e32b56a89d3d",
+  "session_id": "8c0261da-fb01-4c41-950a-8296caf4f31b",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-25T18:16:05.773814Z",
+  "branch": "fix/web3auth-devnet-network",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/lib/web3auth/core-kit.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8de9774b6f69",
+  "checkpoint_transcript_start": 78,
+  "transcript_lines_at_start": 78,
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 2047,
+    "cache_read_tokens": 351973,
+    "output_tokens": 1344,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Fix a Web3Auth network mismatch error in production builds by aligning the network configuration with the actual client ID registration on sapphire_devnet.",
+    "outcome": "PR #461 was created on FSM1/cipher-box with the desktop Core Kit fix. The web app core-kit.ts change was subsequently reverted after the user clarified it was unnecessary, since staging already works correctly there.",
+    "learnings": {
+      "repo": [
+        "Web3Auth client ID is registered on sapphire_devnet, not mainnet — production builds were incorrectly mapped to MAINNET causing network mismatch on login.",
+        "The repo has separate Web3Auth core-kit configs for web (apps/web/src/lib/web3auth/core-kit.ts) and desktop; the fix only needed to apply to the desktop config.",
+        "VITE_ENVIRONMENT=production is set for production builds, which feeds into the WEB3AUTH_NETWORK mapping logic.",
+        "The staging environment config was already correct and did not need changes."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/lib/web3auth/core-kit.ts",
+          "finding": "This file was incorrectly modified and then reverted — the web app's network config did not need to change; only the desktop Core Kit config required the production→DEVNET mapping fix."
+        }
+      ],
+      "workflow": [
+        "GITHUB_TOKEN env var can interfere with gh CLI authentication; unsetting it with `env -u GITHUB_TOKEN` resolved the auth issue without requiring a full gh auth login.",
+        "gh CLI was not authenticated in the shell environment, requiring a workaround to create the PR."
+      ]
+    },
+    "friction": [
+      "gh CLI was unauthenticated, blocking PR creation and requiring the user to supply a workaround (`env -u GITHUB_TOKEN`).",
+      "The web core-kit.ts was modified unnecessarily and had to be reverted, adding an extra commit to the PR."
+    ],
+    "open_items": [
+      "Verify that production desktop builds and web deploys initialize Web3Auth without network mismatch errors after the fix.",
+      "Confirm login flows (Google, Email, Wallet) work end-to-end in production builds.",
+      "Consider documenting that the Web3Auth client ID is on sapphire_devnet to prevent future misconfiguration."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-25T18:15:52.215273Z",
+    "agent_lines": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 100
+  }
+}
