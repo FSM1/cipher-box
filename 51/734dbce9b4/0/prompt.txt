@@ -16,3 +16,7 @@ attempting to log in with google displays `Failed to start OAuth flow: event.lis
 ---
 
 ok now I am shown a `Failed to parse callback data` message in the webview after completing oauth via google.
+
+---
+
+right on, everything seems to be working with the dev build. Think we can push these changes up to a branch and prepare a bugfix PR
