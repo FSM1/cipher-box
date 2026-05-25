@@ -199,6 +199,7 @@ fn main() {
                     commands::logout,
                     commands::start_sync_daemon,
                     commands::open_oauth_popup,
+                    commands::start_oauth_server,
                     commands::get_dev_key,
                     commands::handle_test_login_complete,
                     commands::log_js_error,
@@ -213,6 +214,7 @@ fn main() {
                     commands::logout,
                     commands::start_sync_daemon,
                     commands::open_oauth_popup,
+                    commands::start_oauth_server,
                 ]
             }
         })

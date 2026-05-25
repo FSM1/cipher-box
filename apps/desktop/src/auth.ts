@@ -24,6 +24,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   Web3AuthMPCCoreKit,
   WEB3AUTH_NETWORK,
@@ -685,11 +686,26 @@ export async function approveDevice(
  *
  * GIS One Tap doesn't work in Tauri webview (no Google session, unregistered
  * origin). Instead, open a proper Google OAuth consent page in a popup window.
- * Tauri's on_new_window handler creates the popup with shared
- * WKWebViewConfiguration so window.opener.postMessage works for the callback.
  *
- * Requires `http://localhost:1420/google-callback.html` to be registered as
- * an authorized redirect URI in the Google Cloud Console.
+ * **Redirect URI handling:**
+ * Google OAuth rejects custom URI schemes like `tauri://localhost` (used in
+ * production Tauri builds on macOS). To solve this, the Rust backend starts
+ * a temporary localhost HTTP server that receives the OAuth redirect. The
+ * callback page extracts the token from the URL fragment and POSTs it back
+ * to the server, which emits a Tauri event to the main webview.
+ *
+ * In dev mode (`http://localhost:1420` origin), the localhost callback server
+ * is still used for consistency.
+ *
+ * Requires `http://localhost` (with the callback server port) to be registered
+ * as an authorized redirect URI in the Google Cloud Console. Since the port is
+ * dynamic, register `http://localhost` as an authorized JavaScript origin and
+ * add a few specific redirect URIs or use a loopback redirect approach.
+ *
+ * **Google's loopback IP redirect policy:**
+ * For desktop apps, Google allows `http://localhost:<port>/path` redirect URIs
+ * without pre-registering each port, as long as `http://localhost` is
+ * registered as an authorized redirect URI in the Google Cloud Console.
  */
 function getGoogleCredential(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -698,74 +714,86 @@ function getGoogleCredential(): Promise<string> {
       return;
     }
 
-    const nonce = crypto.randomUUID();
-    const state = crypto.randomUUID();
-    const redirectUri = `${window.location.origin}/google-callback.html`;
-
-    const params = new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      redirect_uri: redirectUri,
-      response_type: 'id_token',
-      scope: 'openid email profile',
-      nonce,
-      state,
-      prompt: 'select_account',
-    });
-
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
-
-    // Clear any stale result and store expected state for CSRF validation
-    // Use localStorage (shared across Tauri webviews) instead of sessionStorage (per-window)
-    localStorage.removeItem('google-auth-result');
-    localStorage.setItem('google-auth-state', state);
-
-    console.log('[Google Auth] Opening OAuth popup...');
-    // Create the OAuth popup via Tauri IPC command. This bypasses window.open()
-    // which is unreliable on Windows WebView2 (NewWindowRequested may silently fail).
-    invoke('open_oauth_popup', { url: authUrl }).catch((err) => {
-      console.error('[Google Auth] Failed to open popup:', err);
-      cleanup();
-      reject(new Error(`Failed to open OAuth popup: ${err}`));
-    });
+    let unlisten: UnlistenFn | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
-      clearInterval(pollStorage);
-      clearTimeout(timeout);
+      if (unlisten) {
+        unlisten();
+        unlisten = null;
+      }
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
     };
 
-    // Poll localStorage for the result (postMessage doesn't survive
-    // cross-origin redirects in Tauri's WKWebView, and sessionStorage
-    // is per-window so the popup can't write to the main window's storage)
-    let pollCount = 0;
-    const pollStorage = setInterval(() => {
-      const raw = localStorage.getItem('google-auth-result');
-      pollCount++;
-      if (pollCount % 25 === 0) {
-        console.log(`[Google Auth] Polling... (${pollCount} checks, ${pollCount * 0.2}s)`);
-      }
-      if (!raw) return;
+    const nonce = crypto.randomUUID();
+    const state = crypto.randomUUID();
 
-      localStorage.removeItem('google-auth-result');
-      cleanup();
-      console.log('[Google Auth] Got result from callback');
-
+    // Start the OAuth callback server and open the popup
+    (async () => {
       try {
-        const result = JSON.parse(raw);
-        if (result.idToken) {
-          resolve(result.idToken);
-        } else {
-          reject(new Error(result.error || 'Google sign-in failed'));
-        }
-      } catch {
-        reject(new Error('Invalid auth callback data'));
-      }
-    }, 200);
+        // Start temporary localhost HTTP server for OAuth callback
+        const port: number = await invoke('start_oauth_server');
+        const redirectUri = `http://localhost:${port}/callback`;
+        console.log('[Google Auth] OAuth callback server on port', port);
 
-    // Timeout after 2 minutes
-    const timeout = setTimeout(() => {
-      cleanup();
-      console.error('[Google Auth] Timed out after 2 minutes');
-      reject(new Error('Google authentication timed out'));
-    }, 120000);
+        // Listen for the oauth-callback Tauri event from the Rust server
+        unlisten = await listen<{
+          id_token: string | null;
+          error: string | null;
+          state: string | null;
+        }>('oauth-callback', (event) => {
+          cleanup();
+          console.log('[Google Auth] Received oauth-callback event');
+
+          const { id_token, error, state: returnedState } = event.payload;
+
+          if (error) {
+            reject(new Error(error));
+            return;
+          }
+
+          // CSRF validation: verify state matches
+          if (returnedState !== state) {
+            reject(new Error('OAuth state mismatch (possible CSRF)'));
+            return;
+          }
+
+          if (id_token) {
+            resolve(id_token);
+          } else {
+            reject(new Error('No ID token received from Google'));
+          }
+        });
+
+        const params = new URLSearchParams({
+          client_id: GOOGLE_CLIENT_ID,
+          redirect_uri: redirectUri,
+          response_type: 'id_token',
+          scope: 'openid email profile',
+          nonce,
+          state,
+          prompt: 'select_account',
+        });
+
+        const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+
+        console.log('[Google Auth] Opening OAuth popup...');
+        await invoke('open_oauth_popup', { url: authUrl });
+
+        // Timeout after 2 minutes
+        timeout = setTimeout(() => {
+          cleanup();
+          console.error('[Google Auth] Timed out after 2 minutes');
+          reject(new Error('Google authentication timed out'));
+        }, 120000);
+      } catch (err) {
+        cleanup();
+        console.error('[Google Auth] Failed to start OAuth flow:', err);
+        reject(new Error(`Failed to start OAuth flow: ${err}`));
+      }
+    })();
   });
 }

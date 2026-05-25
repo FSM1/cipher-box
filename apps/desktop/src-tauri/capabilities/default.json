@@ -8,6 +8,7 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "core:window:allow-close",
+    "core:event:default",
     "deep-link:default",
     "shell:allow-open",
     "notification:default",
