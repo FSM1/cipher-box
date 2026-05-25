@@ -1,0 +1,16 @@
+codecov reports no patch coverage for the changes in PR 459 https://github.com/FSM1/cipher-box/pull/459#issuecomment-4535679686 - were there any tests for the oauth module?
+
+---
+
+no need to add tests - I don't expect this to be tested.
+
+---
+
+the dev config works jsut fine, but the production build seems to be targetting the web3auth sapphire mainnet instance. Error message is as follows:
+
+ Failed to initialize authentication.
+undefined Client network mismatch, clientId REDACTED belongs to network: sapphire_devnet, and app is configured on network: sapphire_mainnet
+
+---
+
+yes, this will also need to be a bugfix PR, to trigger a new release.

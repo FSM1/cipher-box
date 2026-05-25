@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "b38f63f2e439",
+  "session_id": "8c0261da-fb01-4c41-950a-8296caf4f31b",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-25T18:09:46.501406Z",
+  "branch": "fix/web3auth-devnet-network",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/lib/web3auth/core-kit.ts",
+    "apps/desktop/src/auth.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b5d1292c2ba1",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 36935,
+    "cache_read_tokens": 402276,
+    "output_tokens": 3174,
+    "api_call_count": 12
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "The user was triaging a Codecov no-patch-coverage warning on PR #459 and then debugging a Web3Auth network mismatch error in the production desktop build.",
+    "outcome": "Confirmed no tests were needed for the OAuth module. Identified and fixed the Web3Auth network misconfiguration (production mapped to MAINNET but client ID was registered on DEVNET) by updating both web and desktop auth configs on a bugfix branch to trigger a new release.",
+    "learnings": {
+      "repo": [
+        "The desktop app (apps/desktop) has zero test files — no unit or integration tests exist for Tauri/TypeScript code.",
+        "API-side OAuth tests exist (google-oauth.service.spec.ts, identity.controller.spec.ts) but only cover the server-side flow.",
+        "Web3Auth network is selected via a NETWORK_MAP keyed on VITE_ENVIRONMENT; the desktop-release.yml CI workflow sets VITE_ENVIRONMENT=production.",
+        "The 'production' key in NETWORK_MAP was mapped to WEB3AUTH_NETWORK.MAINNET aspirationally, but the actual client ID (REDACTED) is registered on sapphire_devnet.",
+        "Both apps/web and apps/desktop maintain their own NETWORK_MAP and must be updated in sync.",
+        "The project uses release-please for automated releases; a merged bugfix PR triggers a new release."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/lib/web3auth/core-kit.ts",
+          "finding": "Contains a NETWORK_MAP that maps environment strings to WEB3AUTH_NETWORK values; 'production' was incorrectly set to MAINNET instead of DEVNET."
+        },
+        {
+          "path": "apps/desktop/src/auth.ts",
+          "finding": "Contains a parallel NETWORK_MAP with the same incorrect 'production' -\u003e MAINNET mapping; also holds the OAuth callback server integration for Tauri."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/oauth.rs",
+          "finding": "Implements a localhost HTTP callback server for handling Google OAuth redirects in the Tauri desktop app — inherently integration-level, not unit-testable."
+        }
+      ],
+      "workflow": [
+        "Codecov 'no patch coverage' warnings can be safely ignored for Tauri desktop OAuth callback code that requires real HTTP server and OS browser interaction.",
+        "Environment-specific config bugs in production builds are best surfaced by checking CI workflow env var overrides (VITE_ENVIRONMENT) against the NETWORK_MAP logic."
+      ]
+    },
+    "friction": [
+      "The MAINNET mapping was aspirational/placeholder and made it into a shipped release, causing a production auth failure.",
+      "The mismatch between client ID registration (devnet) and code configuration (mainnet) was not caught before release — no validation or assertion exists to detect this at build or startup time."
+    ],
+    "open_items": [
+      "No tests exist for the desktop OAuth module and none are planned; this is an accepted gap.",
+      "The 'production' Web3Auth network is currently forced to DEVNET — when a real mainnet client ID is obtained, both NETWORK_MAPs will need to be updated back to MAINNET.",
+      "A mechanism to validate Web3Auth client ID / network pairing at build time would prevent this class of misconfiguration from shipping."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-25T18:09:25.610895Z",
+    "agent_lines": 2,
+    "human_added": 19,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 21,
+    "agent_percentage": 9.523809523809524
+  }
+}
