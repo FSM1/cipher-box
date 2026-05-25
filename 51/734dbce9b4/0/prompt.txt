@@ -1,0 +1,18 @@
+/gsd:debug problem when attempting to use google login in tauri webview. Error 400: invalid_request
+Request details: redirect_uri=tauri://localhost/google-callback.html flowName=GeneralOAuthLite
+
+---
+
+pnpm --filter desktop dev
+
+---
+
+I have the dev server started, but not seeing the application running in my macos taskbar
+
+---
+
+attempting to log in with google displays `Failed to start OAuth flow: event.listen not allowed. Permissions associated with this command: core:event:allow-listen, core:event:default` in the tauri webview.
+
+---
+
+ok now I am shown a `Failed to parse callback data` message in the webview after completing oauth via google.

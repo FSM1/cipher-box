@@ -1,0 +1,91 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "51734dbce9b4",
+  "session_id": "ed63e257-4d24-4447-b1fc-fd79dd4a5c7b",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-25T16:01:52.157141Z",
+  "branch": "fix/google-oauth-tauri-redirect",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "apps/desktop/src-tauri/capabilities/default.json",
+    "apps/desktop/src-tauri/src/commands/oauth.rs",
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src/auth.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "37e67571682d",
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 95610,
+    "cache_read_tokens": 1505431,
+    "output_tokens": 14376,
+    "api_call_count": 29
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Fix Google OAuth login in the Tauri desktop app, which was failing with error 400 because the redirect URI `tauri://localhost/google-callback.html` is rejected by Google OAuth.",
+    "outcome": "Google OAuth login was fixed end-to-end in the dev build: a local HTTP server was introduced for the OAuth callback, Tauri event permissions were added, and a POST body parsing bug in the Rust server was resolved. Changes were committed and staged for a bugfix PR.",
+    "learnings": {
+      "repo": [
+        "Tauri v2 requires explicit capability grants in `apps/desktop/src-tauri/capabilities/default.json`; `@tauri-apps/api/event` listen() requires `core:event:default` which was missing.",
+        "Google OAuth client ID is `164556913424-uif44is1apnl7rqc9a2ac7vn8u9dq0ee`; authorized redirect URIs must be pre-registered in Google Cloud Console.",
+        "The desktop app is a pnpm workspace package filtered with `--filter desktop`; dev command is `pnpm --filter desktop dev` which runs `tauri dev`.",
+        "Cargo.lock can accumulate unrelated version bumps (e.g. cipherbox-fuse) during dev builds; should be excluded or selectively committed."
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src/auth.ts",
+          "finding": "`getGoogleCredential()` was using `window.location.origin` as the base for the redirect URI, which resolves to `tauri://localhost` inside a Tauri webview — a scheme Google OAuth rejects. Fixed to use a local HTTP server port instead."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/oauth.rs",
+          "line": 216,
+          "end_line": 216,
+          "finding": "Single `stream.read()` call did not reliably capture the full POST body when headers and body arrive in separate TCP segments. Fixed by reading Content-Length header first, then reading exactly that many bytes for the body."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/oauth.rs",
+          "finding": "New `start_oauth_server` command: binds to 127.0.0.1, tries preferred ports 14200/14201/14202 first (pre-registerable in Google Console), falls back to random port, serves callback HTML, auto-terminates after 120s, emits `oauth-callback` Tauri event."
+        },
+        {
+          "path": "apps/desktop/src-tauri/capabilities/default.json",
+          "finding": "`core:event:default` was missing from capabilities, blocking `listen()` calls from the webview frontend. This must be present for any `@tauri-apps/api/event` usage."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/main.rs",
+          "finding": "New Tauri commands must be registered in both debug and release invoke handlers."
+        }
+      ],
+      "workflow": [
+        "Tauri permission errors surface at runtime in the webview with a message like `event.listen not allowed. Permissions associated with this command: core:event:allow-listen` — check capabilities JSON when this appears.",
+        "Rust TCP servers in Tauri commands must handle partial reads; a single `read()` into a fixed buffer is insufficient for HTTP POST requests where headers and body may arrive separately.",
+        "Before committing after a Tauri dev session, check `git diff Cargo.lock` — the build toolchain can silently modify it with unrelated package version bumps."
+      ]
+    },
+    "friction": [
+      "`git pull` failed on first attempt due to divergent branches with no reconcile strategy configured; required manual `git fetch` + separate merge/rebase step.",
+      "App did not appear in macOS taskbar after starting dev server; required multiple retries of `pnpm --filter desktop dev` before the window appeared.",
+      "Three sequential runtime errors had to be debugged one at a time: (1) Google 400 redirect_uri error, (2) Tauri capabilities permission error, (3) `Failed to parse callback data` from incomplete TCP read.",
+      "A stale git lock file blocked the commit and had to be manually removed.",
+      "Cargo.lock accumulated an unrelated `cipherbox-fuse` version bump that had to be identified and discarded before staging."
+    ],
+    "open_items": [
+      "Authorized redirect URIs `http://localhost:14200/callback`, `http://localhost:14201/callback`, `http://localhost:14202/callback` must be added to Google Cloud Console for client `164556913424-uif44is1apnl7rqc9a2ac7vn8u9dq0ee` before this works in any environment.",
+      "PR was staged and committed but the transcript ends before push and PR creation were confirmed complete.",
+      "The local OAuth HTTP server uses a fixed 120s timeout and preferred ports 14200–14202; port conflicts on developer machines or in CI could cause intermittent failures — no retry logic is in place.",
+      "The divergent branch state between local `main` and `origin/main` (1 local vs 10 remote commits) was never resolved; the feature branch was cut from the local state without reconciling upstream changes."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-25T16:01:05.729571Z",
+    "agent_lines": 393,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 393,
+    "agent_percentage": 100
+  }
+}
