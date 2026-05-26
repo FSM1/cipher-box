@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: 'After editing a text file in the CipherBox web UI and saving, the FUSE-mounted desktop folder still shows the original file content.'
 created: 2026-04-13T00:00:00Z
 updated: 2026-04-13T00:00:00Z

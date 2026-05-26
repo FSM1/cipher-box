@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: 'Google login fails in Tauri webview with Error 400: invalid_request. redirect_uri=tauri://localhost/google-callback.html rejected by Google OAuth.'
 created: 2026-05-25T00:00:00Z
 updated: 2026-05-25T00:02:00Z
