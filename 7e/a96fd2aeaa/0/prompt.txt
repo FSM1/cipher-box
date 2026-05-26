@@ -23,3 +23,7 @@ yes please commit all the changes.
 ---
 
 ok, can all the unresolved debug sessions be marked as resolved now?
+
+---
+
+the files should also be moved to the /resolved folder, and committed
