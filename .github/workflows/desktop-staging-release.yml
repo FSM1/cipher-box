@@ -1,4 +1,4 @@
-name: Desktop Release
+name: Desktop Staging Release
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
   build-desktop-macos:
     name: Build Desktop (macOS)
     runs-on: macos-latest
-    environment: production
+    environment: staging
     steps:
       - uses: actions/checkout@v6
         with:
@@ -60,8 +60,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
-          VITE_API_URL: ${{ vars.PRODUCTION_API_URL }}
-          VITE_ENVIRONMENT: production
+          VITE_API_URL: ${{ vars.STAGING_API_URL }}
+          VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
           VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
           GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
@@ -79,7 +79,7 @@ jobs:
   build-desktop-windows:
     name: Build Desktop (Windows)
     runs-on: windows-latest
-    environment: production
+    environment: staging
     steps:
       - uses: actions/checkout@v6
         with:
@@ -147,8 +147,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
-          VITE_API_URL: ${{ vars.PRODUCTION_API_URL }}
-          VITE_ENVIRONMENT: production
+          VITE_API_URL: ${{ vars.STAGING_API_URL }}
+          VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
           VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
           GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
@@ -167,7 +167,7 @@ jobs:
   build-desktop-linux:
     name: Build Desktop (Linux)
     runs-on: ubuntu-22.04
-    environment: production
+    environment: staging
     steps:
       - uses: actions/checkout@v6
         with:
@@ -222,8 +222,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
-          VITE_API_URL: ${{ vars.PRODUCTION_API_URL }}
-          VITE_ENVIRONMENT: production
+          VITE_API_URL: ${{ vars.STAGING_API_URL }}
+          VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
           VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
           GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
