@@ -1,0 +1,41 @@
+/debug renaming a folder in the MacOS cipherbox fuse mount requires elevated permissions and still fails to rename. Renaming a folder in the web ui and manually syncing the desktop app creates a new folder with the new name, but does not remove the old folder.
+
+this has been tested both from finder and terminal on macos. I have not tested linux or windows behavior.
+
+---
+
+/gsd:debug renaming a folder in the MacOS cipherbox fuse mount requires elevated permissions and still fails to rename. Renaming a folder in the web ui and manually syncing the desktop app creates a new folder with the new name, but does not remove the old folder.
+
+this has been tested both from finder and terminal on macos. I have not tested linux or windows behavior.
+
+---
+
+have tests been added for the rename functionality?
+
+---
+
+ok, but outside of unit tests, the rename functionality should be exercised in the e2e desktop tests.
+
+---
+
+yes please commit all the changes.
+
+---
+
+ok, can all the unresolved debug sessions be marked as resolved now?
+
+---
+
+the files should also be moved to the /resolved folder, and committed
+
+---
+
+ok now create a PR for this
+
+---
+
+try with env -u
+
+---
+
+/resolve-pr-reviews
