@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.38.4](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.38.3...cipher-box-v0.38.4) (2026-05-26)
+
+
+### Bug Fixes
+
+* **desktop:** resolve folder rename permission errors and sync duplicates ([#466](https://github.com/FSM1/cipher-box/issues/466)) ([1f84eec](https://github.com/FSM1/cipher-box/commit/1f84eec428be6a81068381e1488b0598317d49ae))
+* **test:** increase folder rename sync timeout and make optional ([#470](https://github.com/FSM1/cipher-box/issues/470)) ([f5acfcb](https://github.com/FSM1/cipher-box/commit/f5acfcb67570491cf7b8caafc120f1f697be6986))
+* **test:** wait for FUSE metadata publish before SDK folder rename ([#469](https://github.com/FSM1/cipher-box/issues/469)) ([bc65c03](https://github.com/FSM1/cipher-box/commit/bc65c03316a0983a1fd0d0406f55abeab40dd8f2))
+
 ## [0.38.3](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.38.2...cipher-box-v0.38.3) (2026-05-26)
 
 
