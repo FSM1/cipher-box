@@ -1,0 +1,13 @@
+we have been over this so many times before - add a memory to use `env -u` with the gh commands
+
+---
+
+I would like to switch staging to using a locally hosted tee-worker to keep hosting costs for staging down as low as possible.
+
+---
+
+yeah please create a chore PR
+
+---
+
+/resolve-pr-reviews

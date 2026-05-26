@@ -1,0 +1,72 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "997660a6c25a",
+  "session_id": "0b02afa5-848a-4952-947b-1aecbf632f27",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-26T23:08:35.768356Z",
+  "branch": "chore/staging-local-tee-worker",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7c1bef85efcb",
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 59852,
+    "cache_read_tokens": 2395291,
+    "output_tokens": 12498,
+    "api_call_count": 51
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Fix a CSS layout bug causing bin view column headers to stack vertically, then reduce staging hosting costs by switching from Phala Cloud TEE worker to a locally-hosted simulator.",
+    "outcome": "Both issues were resolved: PR #471 fixes the bin header layout and PR #472 wires up a local TEE worker for staging. A follow-up Copilot review comment about missing CIPHERBOX_ENVIRONMENT=staging was also addressed in the same PR.",
+    "learnings": {
+      "repo": [
+        "BinBrowser header was using both `file-list-header` (3-column grid, globally imported via App.css) and `bin-list-header` (5-column grid, component-imported). Equal CSS specificity meant Vite load order determined which grid won, causing the stacking bug.",
+        "Staging API is at https://api-staging.cipherbox.cc; dev server can be targeted at it via VITE_API env var.",
+        "Phala CVM derives keys via hardware-backed dstack SDK. Switching to simulator mode uses HKDF from a fixed seed — different epoch keys, so existing IPNS keys encrypted against the Phala public key become unreadable. Acceptable for staging but must be noted.",
+        "The tee-worker Dockerfile sets NODE_ENV=production, which causes the worker to reject simulator mode at startup unless CIPHERBOX_ENVIRONMENT=staging is also set in the compose environment.",
+        "`gh` CLI commands require `env -u GITHUB_TOKEN` to work in this repo's shell environment — a recurring issue."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/BinBrowser.tsx",
+          "line": 362,
+          "end_line": 362,
+          "finding": "Header element carried both `file-list-header` and `bin-list-header` classes. Removing `file-list-header` fixes the grid-template-columns conflict since bin-list-header already defines all necessary base styles."
+        },
+        {
+          "path": "apps/web/src/styles/bin-browser.css",
+          "finding": "Defines the correct 5-column grid: `1fr 180px 100px 80px 90px`."
+        },
+        {
+          "path": "apps/web/src/styles/file-browser.css",
+          "finding": "Defines a 3-column grid `1fr 120px 180px` on `.file-list-header` — the conflicting rule."
+        },
+        {
+          "path": "docker/docker-compose.staging.yml",
+          "finding": "Added tee-worker service in simulator mode on internal network, and added CIPHERBOX_ENVIRONMENT=staging to its environment to prevent startup rejection."
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "finding": "Removed deploy-tee-phala job and updated TEE_WORKER_URL to point at http://tee-worker:3001 (local Docker service)."
+        }
+      ],
+      "workflow": [
+        "Always use `env -u GITHUB_TOKEN gh ...` when running gh CLI commands in this environment to avoid auth failures.",
+        "Copilot review comments on staging infra PRs may catch environment-variable gaps that aren't obvious from the Dockerfile alone — worth reading before merging."
+      ]
+    },
+    "friction": [
+      "GitHub CLI repeatedly fails without `env -u GITHUB_TOKEN` — user had to correct this again and request a memory be saved despite it being a known recurring issue.",
+      "CSS specificity conflict was subtle: both rules were single-class selectors so specificity alone gave no hint; root cause required tracing Vite's CSS import/load order."
+    ],
+    "open_items": [
+      "Remove PHALA_CLOUD_API_KEY and PHALA_TEE_WORKER_URL from GitHub staging environment secrets/vars after PR #472 merges — they are no longer needed.",
+      "Staging users will need to re-register after the TEE worker switch due to epoch key change (simulator HKDF seed differs from Phala hardware key).",
+      "PRs #471 and #472 are open and awaiting merge."
+    ]
+  }
+}
