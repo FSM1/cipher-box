@@ -93,6 +93,7 @@ services:
     environment:
       PORT: 3001
       TEE_MODE: simulator
+      CIPHERBOX_ENVIRONMENT: staging
       TEE_WORKER_SECRET: ${TEE_WORKER_SECRET}
     logging: *default-logging
     healthcheck:
