@@ -15,3 +15,7 @@ have tests been added for the rename functionality?
 ---
 
 ok, but outside of unit tests, the rename functionality should be exercised in the e2e desktop tests.
+
+---
+
+yes please commit all the changes.
