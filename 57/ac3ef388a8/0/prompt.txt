@@ -1,0 +1,9 @@
+[Image #4] /gsd:debug fix weird column heading layout on bin interface in web ui.
+
+---
+
+ok now spin up the web ui pointed at the staging api. I would like to test this change locally.
+
+---
+
+ok that seems to have worked - create a fix branch for this change.

@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "57ac3ef388a8",
+  "strategy": "manual-commit",
+  "branch": "fix/bin-header-layout",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "apps/web/src/components/file-browser/BinBrowser.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/57/ac3ef388a8/0/metadata.json",
+      "transcript": "/57/ac3ef388a8/0/full.jsonl",
+      "content_hash": "/57/ac3ef388a8/0/content_hash.txt",
+      "prompt": "/57/ac3ef388a8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 29,
+    "cache_creation_tokens": 28643,
+    "cache_read_tokens": 709644,
+    "output_tokens": 5246,
+    "api_call_count": 21
+  }
+}
