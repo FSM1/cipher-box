@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "c2b742949204",
+  "strategy": "manual-commit",
+  "branch": "fix/fuse-rename-ci-timing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/desktop-e2e/scripts/test-cross-client-sync.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c2/b742949204/0/metadata.json",
+      "transcript": "/c2/b742949204/0/full.jsonl",
+      "content_hash": "/c2/b742949204/0/content_hash.txt",
+      "prompt": "/c2/b742949204/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 27,
+    "cache_creation_tokens": 9281,
+    "cache_read_tokens": 2831296,
+    "output_tokens": 3414,
+    "api_call_count": 19
+  }
+}
