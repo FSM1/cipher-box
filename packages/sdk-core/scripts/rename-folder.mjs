@@ -21,10 +21,7 @@ import {
   renameInFolder,
   updateFolderMetadataAndPublish,
 } from '../dist/index.mjs';
-import {
-  deriveVaultIpnsKeypair,
-  clearBytes,
-} from '../../crypto/dist/index.mjs';
+import { deriveVaultIpnsKeypair, clearBytes } from '../../crypto/dist/index.mjs';
 
 function parseArgs(argv) {
   const values = new Map();
