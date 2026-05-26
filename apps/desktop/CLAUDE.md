@@ -104,7 +104,7 @@ File mutations (create, write, delete, rename) trigger IPNS metadata publish via
 
 ### Known Limitations (macOS)
 
-- **Rename (`mv`)** — Fixed. The macOS SMB client calls `access(W_OK)` before rename; strict UID checking returned EACCES under SMB's proxied UID. Fix: `access()` now always grants (encryption is the access control). UID assignment in `create()`/`mkdir()` also unified to use `getuid()` for consistency.
+- **Rename (`mv`)** — Fixed. Two issues resolved: (1) FUSE-T's SMB backend interprets Unix permissions from getattr; restrictive `0o755`/`0o644` caused Finder to show elevation dialogs and deny renames. Fix: all FUSE permissions set to `0o777`/`0o666` since encryption is the access control. (2) `access()` always grants (encryption is the access control). UID assignment in `create()`/`mkdir()` uses `getuid()` for consistency.
 - **Keychain prompts in debug builds** — each rebuild changes binary signature. Debug builds skip Keychain entirely (`#[cfg(debug_assertions)]`), using ephemeral UUIDs for device ID.
 - **`opendir` must return non-zero file handles** — SMB treats `fh=0` as invalid.
 - **No FSEvents on FUSE mounts** — Finder won't auto-refresh. CLI-created files appear in `ls` but not Finder until a new window is opened.

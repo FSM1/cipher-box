@@ -36,5 +36,8 @@ unicode-normalization = { workspace = true, optional = true }
 winfsp = { version = "0.12", optional = true, features = ["system"] }
 widestring = { version = "1", optional = true }
 
+[dev-dependencies]
+ecies = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

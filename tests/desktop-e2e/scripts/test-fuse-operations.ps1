@@ -4,7 +4,8 @@
 #   -MountPoint  Path to FUSE mount (default: $env:USERPROFILE\CipherBox)
 #
 # Tests: create, read, overwrite, mkdir, nested write, binary round-trip,
-#        rename, delete file, delete directory.
+#        rename file, rename directory, move file across directories,
+#        delete file, delete directory.
 #
 # Exit code: number of failed tests (0 = all passed).
 
@@ -135,6 +136,50 @@ try {
     Test-Fail "Rename file (exception: $($_.Exception.Message))"
 }
 
+# ---- Test 6b: Rename directory ----
+Write-Host "--- Test 6b: Rename directory ---"
+try {
+    Move-Item -Path "$MountPoint\e2e-folder" -Destination "$MountPoint\e2e-folder-renamed" -Force -ErrorAction Stop
+    Start-Sleep -Seconds 2
+    $OldDirExists = Test-Path "$MountPoint\e2e-folder" -PathType Container
+    $NewDirExists = Test-Path "$MountPoint\e2e-folder-renamed" -PathType Container
+    if (-not $OldDirExists -and $NewDirExists) {
+        # Verify nested content is still accessible
+        $NestedAfter = Get-Content -Path "$MountPoint\e2e-folder-renamed\nested.txt" -Raw -ErrorAction Stop
+        if ($null -ne $NestedAfter -and $NestedAfter.Trim() -eq "Nested content") {
+            Test-Pass "Rename directory (with nested content preserved)"
+        } else {
+            Test-Fail "Rename directory (nested content changed: '$NestedAfter')"
+        }
+    } else {
+        Test-Fail "Rename directory (old exists: $OldDirExists, new exists: $NewDirExists)"
+    }
+} catch {
+    Test-Fail "Rename directory (exception: $($_.Exception.Message))"
+}
+
+# ---- Test 6c: Move file across directories ----
+Write-Host "--- Test 6c: Move file across directories ---"
+try {
+    New-Item -ItemType Directory -Path "$MountPoint\e2e-dest-folder" -Force -ErrorAction Stop | Out-Null
+    Move-Item -Path "$MountPoint\e2e-folder-renamed\nested.txt" -Destination "$MountPoint\e2e-dest-folder\nested.txt" -Force -ErrorAction Stop
+    Start-Sleep -Seconds 2
+    $SourceExists = Test-Path "$MountPoint\e2e-folder-renamed\nested.txt"
+    $DestExists = Test-Path "$MountPoint\e2e-dest-folder\nested.txt"
+    if (-not $SourceExists -and $DestExists) {
+        $Moved = Get-Content -Path "$MountPoint\e2e-dest-folder\nested.txt" -Raw -ErrorAction Stop
+        if ($null -ne $Moved -and $Moved.Trim() -eq "Nested content") {
+            Test-Pass "Move file across directories"
+        } else {
+            Test-Fail "Move file across directories (content changed: '$Moved')"
+        }
+    } else {
+        Test-Fail "Move file across directories (source exists: $SourceExists, dest exists: $DestExists)"
+    }
+} catch {
+    Test-Fail "Move file across directories (exception: $($_.Exception.Message))"
+}
+
 # ---- Test 7: Delete file ----
 Write-Host "--- Test 7: Delete file ---"
 try {
@@ -149,40 +194,42 @@ try {
     Test-Fail "Delete file (exception: $($_.Exception.Message))"
 }
 
-# ---- Test 8: Delete directory ----
-Write-Host "--- Test 8: Delete directory ---"
+# ---- Test 8: Delete directories ----
+Write-Host "--- Test 8: Delete directories ---"
 try {
-    # Delete known files first, then the empty directory (most reliable on FUSE)
-    Remove-Item -Path "$MountPoint\e2e-folder\nested.txt" -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
-
-    # Verify directory is now empty
-    $Children = @(Get-ChildItem -Path "$MountPoint\e2e-folder" -Force -ErrorAction SilentlyContinue)
-    Write-Host "  Directory children after nested.txt delete: $($Children.Count) items"
-    foreach ($c in $Children) { Write-Host "    - $($c.Name)" }
-
-    # Use [System.IO.Directory]::Delete which calls RemoveDirectoryW directly,
-    # avoiding PowerShell provider overhead that can fail on WinFsp mounts.
-    [System.IO.Directory]::Delete("$MountPoint\e2e-folder")
+    # Delete e2e-dest-folder (contains nested.txt)
+    Remove-Item -Path "$MountPoint\e2e-dest-folder\nested.txt" -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
-    if (-not (Test-Path "$MountPoint\e2e-folder")) {
-        Test-Pass "Delete directory"
+    [System.IO.Directory]::Delete("$MountPoint\e2e-dest-folder")
+    Start-Sleep -Seconds 2
+
+    # Delete e2e-folder-renamed (now empty after move)
+    [System.IO.Directory]::Delete("$MountPoint\e2e-folder-renamed")
+    Start-Sleep -Seconds 2
+
+    $DestDirExists = Test-Path "$MountPoint\e2e-dest-folder" -PathType Container
+    $RenamedDirExists = Test-Path "$MountPoint\e2e-folder-renamed" -PathType Container
+    if (-not $DestDirExists -and -not $RenamedDirExists) {
+        Test-Pass "Delete directories"
     } else {
-        Test-Fail "Delete directory (still exists)"
+        Test-Fail "Delete directories (e2e-dest-folder exists: $DestDirExists, e2e-folder-renamed exists: $RenamedDirExists)"
     }
 } catch {
     Write-Host "  Directory::Delete failed: $($_.Exception.Message)"
     Write-Host "  Trying cmd /c rd fallback..."
     try {
-        cmd /c rd "$MountPoint\e2e-folder" 2>&1
+        cmd /c rd "$MountPoint\e2e-dest-folder" 2>&1
+        cmd /c rd "$MountPoint\e2e-folder-renamed" 2>&1
         Start-Sleep -Seconds 2
-        if (-not (Test-Path "$MountPoint\e2e-folder")) {
-            Test-Pass "Delete directory (via rd fallback)"
+        $DestDirExists = Test-Path "$MountPoint\e2e-dest-folder" -PathType Container
+        $RenamedDirExists = Test-Path "$MountPoint\e2e-folder-renamed" -PathType Container
+        if (-not $DestDirExists -and -not $RenamedDirExists) {
+            Test-Pass "Delete directories (via rd fallback)"
         } else {
-            Test-Fail "Delete directory (still exists after rd)"
+            Test-Fail "Delete directories (still exist after rd: e2e-dest-folder=$DestDirExists, e2e-folder-renamed=$RenamedDirExists)"
         }
     } catch {
-        Test-Fail "Delete directory (exception: $($_.Exception.Message))"
+        Test-Fail "Delete directories (exception: $($_.Exception.Message))"
     }
 }
 
