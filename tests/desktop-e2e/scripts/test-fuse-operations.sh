@@ -154,6 +154,7 @@ fi
 
 # ---- Test 8: Delete directories ----
 echo "--- Test 8: Delete directories ---"
+: "${MP:?Mount point is required}"
 rm -rf "$MP/e2e-dest-folder"
 rm -rf "$MP/e2e-folder-renamed"
 sleep 2

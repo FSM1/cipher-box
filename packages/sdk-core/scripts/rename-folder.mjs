@@ -141,18 +141,21 @@ async function main() {
   const rootIpnsKeypair = await deriveVaultIpnsKeypair(userPrivateKey);
 
   // 7. Republish folder metadata with the renamed entry
-  const { newSequenceNumber } = await updateFolderMetadataAndPublish({
-    children: updatedChildren,
-    folderKey: vaultKeyBlob.rootFolderKey,
-    ipnsPrivateKey: rootIpnsKeypair.privateKey,
-    ipnsName: rootIpnsName,
-    sequenceNumber: folder.sequenceNumber,
-    ctx,
-  });
-
-  // 8. Zero sensitive key material
-  rootIpnsKeypair.privateKey.fill(0);
-  clearBytes(userPrivateKey);
+  let newSequenceNumber;
+  try {
+    ({ newSequenceNumber } = await updateFolderMetadataAndPublish({
+      children: updatedChildren,
+      folderKey: vaultKeyBlob.rootFolderKey,
+      ipnsPrivateKey: rootIpnsKeypair.privateKey,
+      ipnsName: rootIpnsName,
+      sequenceNumber: folder.sequenceNumber,
+      ctx,
+    }));
+  } finally {
+    // 8. Zero sensitive key material regardless of success/failure
+    rootIpnsKeypair.privateKey.fill(0);
+    clearBytes(userPrivateKey);
+  }
 
   console.log(
     JSON.stringify({

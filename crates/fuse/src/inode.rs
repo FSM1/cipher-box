@@ -361,8 +361,12 @@ impl InodeTable {
                     let in_remote = stable_id.as_ref()
                         .map(|id| new_ipns_names.contains(id))
                         .unwrap_or(false);
-                    // Also check by name as fallback for items without stable IDs
-                    let in_remote = in_remote || new_names.contains(&old_child.name);
+                    // Fall back to name only when no stable ID exists
+                    let in_remote = if stable_id.is_some() {
+                        in_remote
+                    } else {
+                        new_names.contains(&old_child.name)
+                    };
                     if !in_remote {
                         let name = old_child.name.clone();
                         self.inodes.remove(old_ino);
@@ -377,10 +381,9 @@ impl InodeTable {
         for child in &metadata.children {
             match child {
                 FolderChild::Folder(folder) => {
-                    // Reuse existing ino: first try by name, then by IPNS name
-                    // (handles renames where IPNS name is stable but name changed)
-                    let existing_ino = self.find_child(parent_ino, &folder.name)
-                        .or_else(|| ipns_to_ino.get(&folder.ipns_name).copied());
+                    // Reuse existing ino: prefer stable IPNS name, fall back to display name
+                    let existing_ino = ipns_to_ino.get(&folder.ipns_name).copied()
+                        .or_else(|| self.find_child(parent_ino, &folder.name));
 
                     // If matched by IPNS name (rename), clean up old name index entry
                     if let Some(matched_ino) = existing_ino {
@@ -390,9 +393,9 @@ impl InodeTable {
                             if let Some(old_inode) = self.inodes.get(&matched_ino) {
                                 let old_name = old_inode.name.clone();
                                 self.name_to_ino.remove(&(parent_ino, normalize_name(&old_name)));
-                                log::info!(
-                                    "Folder rename detected via IPNS match: '{}' -> '{}' (ipns={})",
-                                    old_name, folder.name, folder.ipns_name
+                                log::debug!(
+                                    "Folder rename detected via IPNS match (ipns={})",
+                                    folder.ipns_name
                                 );
                             }
                         }
@@ -476,10 +479,9 @@ impl InodeTable {
                     child_inos.push(ino);
                 }
                 FolderChild::File(file_pointer) => {
-                    // Reuse existing ino: first try by name, then by file IPNS name
-                    // (handles renames where file_meta_ipns_name is stable but name changed)
-                    let existing_ino = self.find_child(parent_ino, &file_pointer.name)
-                        .or_else(|| file_ipns_to_ino.get(&file_pointer.file_meta_ipns_name).copied());
+                    // Reuse existing ino: prefer stable file IPNS name, fall back to display name
+                    let existing_ino = file_ipns_to_ino.get(&file_pointer.file_meta_ipns_name).copied()
+                        .or_else(|| self.find_child(parent_ino, &file_pointer.name));
 
                     // If matched by file IPNS name (rename), clean up old name index entry
                     if let Some(matched_ino) = existing_ino {
@@ -487,9 +489,9 @@ impl InodeTable {
                             if let Some(old_inode) = self.inodes.get(&matched_ino) {
                                 let old_name = old_inode.name.clone();
                                 self.name_to_ino.remove(&(parent_ino, normalize_name(&old_name)));
-                                log::info!(
-                                    "File rename detected via IPNS match: '{}' -> '{}' (ipns={})",
-                                    old_name, file_pointer.name, file_pointer.file_meta_ipns_name
+                                log::debug!(
+                                    "File rename detected via IPNS match (ipns={})",
+                                    file_pointer.file_meta_ipns_name
                                 );
                             }
                         }
