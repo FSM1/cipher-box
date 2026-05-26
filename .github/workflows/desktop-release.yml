@@ -1,4 +1,4 @@
-name: Desktop Release
+name: Desktop Staging Release
 
 on:
   push:
