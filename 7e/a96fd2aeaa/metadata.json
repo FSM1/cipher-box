@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "7ea96fd2aeaa",
+  "strategy": "manual-commit",
+  "branch": "fix/fuse-folder-rename",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/debug/fuse-stale-file-after-web-edit.md",
+    ".planning/debug/google-oauth-tauri-redirect.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7e/a96fd2aeaa/0/metadata.json",
+      "transcript": "/7e/a96fd2aeaa/0/full.jsonl",
+      "content_hash": "/7e/a96fd2aeaa/0/content_hash.txt",
+      "prompt": "/7e/a96fd2aeaa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1603,
+    "cache_creation_tokens": 84265,
+    "cache_read_tokens": 3007832,
+    "output_tokens": 14925,
+    "api_call_count": 45
+  }
+}
