@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "bb337ece2327",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-release-staging-env",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/desktop-release.yml",
+    ".github/workflows/desktop-staging-release.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bb/337ece2327/0/metadata.json",
+      "transcript": "/bb/337ece2327/0/full.jsonl",
+      "content_hash": "/bb/337ece2327/0/content_hash.txt",
+      "prompt": "/bb/337ece2327/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 656,
+    "cache_read_tokens": 244564,
+    "output_tokens": 259,
+    "api_call_count": 3
+  }
+}
