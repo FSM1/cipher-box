@@ -272,13 +272,16 @@ else
       fail "FUSE mount renamed folder but inner content mismatch (got: '$INNER_CONTENT')"
     fi
   else
-    # Optional: cross-client folder rename sync depends on metadata cache
-    # timing which can be slow on macOS FUSE-T SMB backend. The rename
-    # logic is independently verified by unit tests and FUSE operations
-    # tests. Log as warning, not failure.
-    echo "WARN: FUSE mount did not detect folder rename after 300s (optional)"
-    echo "  This does not indicate a bug in rename logic -- see unit tests."
-    pass "FUSE folder rename sync (optional -- timed out, see warning above)"
+    if [ "$(uname -s)" = "Darwin" ]; then
+      # Optional on macOS only: FUSE-T SMB cache timing can delay visibility
+      # beyond 300s. The rename logic is independently verified by unit tests
+      # and FUSE operations tests.
+      echo "WARN: FUSE mount did not detect folder rename after 300s on macOS (optional)"
+      echo "  This does not indicate a bug in rename logic -- see unit tests."
+      pass "FUSE folder rename sync (optional on macOS -- timed out, see warning above)"
+    else
+      fail "FUSE mount did not detect folder rename after 300s"
+    fi
   fi
 fi
 
