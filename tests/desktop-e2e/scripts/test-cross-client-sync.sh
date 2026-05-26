@@ -209,42 +209,33 @@ sleep 3
 ls "$MP" > /dev/null 2>&1 || true
 ls "$MP/$RENAME_DIR" > /dev/null 2>&1 || true
 
-# 6b. Wait for folder to be visible via FUSE stat
-FOLDER_VISIBLE=0
-for attempt in $(seq 1 24); do
-  stat "$MP/$RENAME_DIR" > /dev/null 2>&1 || true
+# 6b. Wait for the FUSE mount's metadata publish to complete and propagate.
+# The folder is immediately visible locally, but the IPNS publish takes
+# 1.5s debounce + publish time. We must wait for this to finish before the
+# SDK rename, otherwise the FUSE mount's pending publish can overwrite the
+# SDK's renamed metadata. Verify via SDK rename success (not local stat).
+RENAME_READY=0
+RENAME_OK=0
+echo "  Waiting for FUSE metadata publish to propagate before SDK rename..."
+for rename_attempt in $(seq 1 12); do
+  sleep 10
+  # Trigger readdir to drain publish completions
   ls "$MP" > /dev/null 2>&1 || true
-  sleep 5
-  if [ -d "$MP/$RENAME_DIR" ]; then
-    FOLDER_VISIBLE=1
+  if RENAME_OUTPUT=$(run_rename_folder "$RENAME_DIR" "$RENAMED_DIR" 2>&1); then
+    RENAME_OK=1
+    echo "  SDK rename succeeded on attempt $rename_attempt ($(( rename_attempt * 10 ))s)"
     break
   fi
-  echo "  Folder visibility attempt $attempt: not yet visible"
+  echo "  SDK rename attempt $rename_attempt: folder not yet in remote metadata"
 done
 
-RENAME_READY=0
-if [ "$FOLDER_VISIBLE" -ne 1 ]; then
-  fail "Folder $RENAME_DIR not visible after 120s"
-  echo "FATAL: Cannot proceed with rename test."
+if [ "$RENAME_OK" -eq 1 ]; then
+  pass "Rename folder via SDK"
+  echo "  $RENAME_OUTPUT"
+  RENAME_READY=1
 else
-  # 6c. Rename folder via SDK (retry up to 3 times in case metadata hasn't propagated)
-  RENAME_OK=0
-  for rename_attempt in 1 2 3; do
-    if RENAME_OUTPUT=$(run_rename_folder "$RENAME_DIR" "$RENAMED_DIR" 2>&1); then
-      RENAME_OK=1
-      break
-    fi
-    echo "  SDK rename attempt $rename_attempt failed: $RENAME_OUTPUT"
-    sleep 10
-  done
-  if [ "$RENAME_OK" -eq 1 ]; then
-    pass "Rename folder via SDK"
-    echo "  $RENAME_OUTPUT"
-    RENAME_READY=1
-  else
-    fail "Rename folder via SDK ($RENAME_OUTPUT)"
-    echo "FATAL: Cannot test folder rename sync without successful rename."
-  fi
+  fail "Rename folder via SDK (not visible in remote metadata after 120s: $RENAME_OUTPUT)"
+  echo "FATAL: Cannot test folder rename sync without successful rename."
 fi
 
 # ---- Test 7: FUSE mount detects folder rename ----
