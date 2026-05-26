@@ -72,6 +72,14 @@ run_edit() {
     --new-content "$1"
 }
 
+run_rename_folder() {
+  TEST_SECRET="$SECRET" node "$REPO_ROOT/packages/sdk-core/scripts/rename-folder.mjs" \
+    --api-url "$API_URL" \
+    --email "$TEST_EMAIL" \
+    --folder-name "$1" \
+    --new-name "$2"
+}
+
 echo "=== Cross-Client Sync Tests ==="
 echo "Mount point: $MP"
 echo "API URL:     $API_URL"
@@ -185,6 +193,98 @@ if [ "$SYNC_OK" -eq 1 ]; then
 else
   fail "FUSE mount still shows original content after 120s (got: '$FUSE_CONTENT')"
 fi
+
+# ---- Test 6: Rename folder via SDK ----
+echo "--- Test 6: Rename folder via SDK ---"
+
+# 6a. Create a folder with a file inside via FUSE
+RENAME_DIR="sync-rename-test"
+RENAMED_DIR="sync-renamed-folder"
+RENAME_INNER_CONTENT="rename test content"
+
+mkdir -p "$MP/$RENAME_DIR"
+printf '%s' "$RENAME_INNER_CONTENT" > "$MP/$RENAME_DIR/inner.txt"
+sleep 3
+# Trigger readdir to flush uploads
+ls "$MP" > /dev/null 2>&1 || true
+ls "$MP/$RENAME_DIR" > /dev/null 2>&1 || true
+
+# 6b. Wait for folder to be visible via FUSE stat
+FOLDER_VISIBLE=0
+for attempt in $(seq 1 24); do
+  stat "$MP/$RENAME_DIR" > /dev/null 2>&1 || true
+  ls "$MP" > /dev/null 2>&1 || true
+  sleep 5
+  if [ -d "$MP/$RENAME_DIR" ]; then
+    FOLDER_VISIBLE=1
+    break
+  fi
+  echo "  Folder visibility attempt $attempt: not yet visible"
+done
+
+RENAME_READY=0
+if [ "$FOLDER_VISIBLE" -ne 1 ]; then
+  fail "Folder $RENAME_DIR not visible after 120s"
+  echo "FATAL: Cannot proceed with rename test."
+else
+  # 6c. Rename folder via SDK (retry up to 3 times in case metadata hasn't propagated)
+  RENAME_OK=0
+  for rename_attempt in 1 2 3; do
+    if RENAME_OUTPUT=$(run_rename_folder "$RENAME_DIR" "$RENAMED_DIR" 2>&1); then
+      RENAME_OK=1
+      break
+    fi
+    echo "  SDK rename attempt $rename_attempt failed: $RENAME_OUTPUT"
+    sleep 10
+  done
+  if [ "$RENAME_OK" -eq 1 ]; then
+    pass "Rename folder via SDK"
+    echo "  $RENAME_OUTPUT"
+    RENAME_READY=1
+  else
+    fail "Rename folder via SDK ($RENAME_OUTPUT)"
+    echo "FATAL: Cannot test folder rename sync without successful rename."
+  fi
+fi
+
+# ---- Test 7: FUSE mount detects folder rename ----
+echo "--- Test 7: Wait for FUSE mount to detect folder rename ---"
+if [ "$RENAME_READY" -ne 1 ]; then
+  fail "Skipped: folder rename prerequisite failed"
+else
+  # The FUSE mount polls folder metadata every 30s. After detecting the rename
+  # (child entry name changed + modifiedAt bumped), it should show the new
+  # folder name and remove the old one. Allow up to 120s for two full cycles.
+  RENAME_SYNC_OK=0
+  for attempt in $(seq 1 24); do
+    sleep 5
+    # Trigger readdir to drain refresh completions
+    ls "$MP" > /dev/null 2>&1 || true
+    if [ -d "$MP/$RENAMED_DIR" ] && [ ! -d "$MP/$RENAME_DIR" ]; then
+      RENAME_SYNC_OK=1
+      echo "  Rename sync detected on attempt $attempt ($(( attempt * 5 ))s)"
+      break
+    fi
+    echo "  Rename sync poll attempt $attempt: not yet renamed"
+  done
+
+  if [ "$RENAME_SYNC_OK" -eq 1 ]; then
+    # Verify nested content survived the rename
+    INNER_CONTENT=$(cat "$MP/$RENAMED_DIR/inner.txt" 2>/dev/null || echo "")
+    if [ "$INNER_CONTENT" = "$RENAME_INNER_CONTENT" ]; then
+      pass "FUSE mount picked up folder rename with intact content"
+    else
+      fail "FUSE mount renamed folder but inner content mismatch (got: '$INNER_CONTENT')"
+    fi
+  else
+    fail "FUSE mount did not detect folder rename after 120s"
+  fi
+fi
+
+# Cleanup renamed folder
+: "${MP:?Mount point is required}"
+rm -rf "$MP/$RENAMED_DIR" 2>/dev/null || true
+rm -rf "$MP/$RENAME_DIR" 2>/dev/null || true
 
 # ---- Cleanup ----
 echo "--- Cleanup ---"

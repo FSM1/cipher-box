@@ -7,7 +7,8 @@ set -uo pipefail
 #   mount-point  Path to FUSE mount (default: $HOME/CipherBox)
 #
 # Tests: create, read, overwrite, mkdir, nested write, binary round-trip,
-#        rename, delete file, delete directory.
+#        rename file, rename directory, move file across directories,
+#        delete file, delete directory.
 #
 # Exit code: number of failed tests (0 = all passed).
 
@@ -109,6 +110,38 @@ else
   fail "Rename file (old exists: $(test -f "$MP/e2e-test.txt" && echo yes || echo no), new exists: $(test -f "$MP/e2e-renamed.txt" && echo yes || echo no))"
 fi
 
+# ---- Test 6b: Rename directory ----
+echo "--- Test 6b: Rename directory ---"
+mv "$MP/e2e-folder" "$MP/e2e-folder-renamed"
+sleep 2
+if [ ! -d "$MP/e2e-folder" ] && [ -d "$MP/e2e-folder-renamed" ]; then
+  # Verify nested content is still accessible
+  NESTED_AFTER=$(cat "$MP/e2e-folder-renamed/nested.txt")
+  if [ "$NESTED_AFTER" = "Nested content" ]; then
+    pass "Rename directory (with nested content preserved)"
+  else
+    fail "Rename directory (nested content changed: '$NESTED_AFTER')"
+  fi
+else
+  fail "Rename directory (old exists: $(test -d "$MP/e2e-folder" && echo yes || echo no), new exists: $(test -d "$MP/e2e-folder-renamed" && echo yes || echo no))"
+fi
+
+# ---- Test 6c: Move file across directories ----
+echo "--- Test 6c: Move file across directories ---"
+mkdir -p "$MP/e2e-dest-folder"
+mv "$MP/e2e-folder-renamed/nested.txt" "$MP/e2e-dest-folder/nested.txt"
+sleep 2
+if [ ! -f "$MP/e2e-folder-renamed/nested.txt" ] && [ -f "$MP/e2e-dest-folder/nested.txt" ]; then
+  MOVED=$(cat "$MP/e2e-dest-folder/nested.txt")
+  if [ "$MOVED" = "Nested content" ]; then
+    pass "Move file across directories"
+  else
+    fail "Move file across directories (content changed: '$MOVED')"
+  fi
+else
+  fail "Move file across directories (source exists: $(test -f "$MP/e2e-folder-renamed/nested.txt" && echo yes || echo no), dest exists: $(test -f "$MP/e2e-dest-folder/nested.txt" && echo yes || echo no))"
+fi
+
 # ---- Test 7: Delete file ----
 echo "--- Test 7: Delete file ---"
 rm "$MP/e2e-renamed.txt"
@@ -119,14 +152,16 @@ else
   fail "Delete file (still exists)"
 fi
 
-# ---- Test 8: Delete directory ----
-echo "--- Test 8: Delete directory ---"
-rm -rf "$MP/e2e-folder"
+# ---- Test 8: Delete directories ----
+echo "--- Test 8: Delete directories ---"
+: "${MP:?Mount point is required}"
+rm -rf "$MP/e2e-dest-folder"
+rm -rf "$MP/e2e-folder-renamed"
 sleep 2
-if [ ! -d "$MP/e2e-folder" ]; then
-  pass "Delete directory"
+if [ ! -d "$MP/e2e-dest-folder" ] && [ ! -d "$MP/e2e-folder-renamed" ]; then
+  pass "Delete directories"
 else
-  fail "Delete directory (still exists)"
+  fail "Delete directories (e2e-dest-folder exists: $(test -d "$MP/e2e-dest-folder" && echo yes || echo no), e2e-folder-renamed exists: $(test -d "$MP/e2e-folder-renamed" && echo yes || echo no))"
 fi
 
 # ---- Test 9: Cleanup ----

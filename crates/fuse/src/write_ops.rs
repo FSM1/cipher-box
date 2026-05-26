@@ -163,7 +163,7 @@ pub(crate) mod implementation {
             ctime: now,
             crtime: now,
             is_dir: false,
-            perm: 0o644,
+            perm: 0o666,
             nlink: 1,
         };
         let fuse_attr = attr.to_fuse_attr(current_uid(), current_gid());
@@ -456,7 +456,7 @@ pub(crate) mod implementation {
                 ctime: now,
                 crtime: now,
                 is_dir: true,
-                perm: 0o755,
+                perm: 0o777,
                 nlink: 2,
             };
             let fuse_attr = attr.to_fuse_attr(current_uid(), current_gid());
