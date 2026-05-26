@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.36.0...@cipherbox/sdk-core-v0.36.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* **desktop:** resolve folder rename permission errors and sync duplicates ([#466](https://github.com/FSM1/cipher-box/issues/466)) ([1f84eec](https://github.com/FSM1/cipher-box/commit/1f84eec428be6a81068381e1488b0598317d49ae))
+
 ## [0.36.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.35.0...@cipherbox/sdk-core-v0.36.0) (2026-04-14)
 
 
