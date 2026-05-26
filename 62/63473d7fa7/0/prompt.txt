@@ -1,0 +1,5 @@
+seems like the https://github.com/FSM1/cipher-box/actions/runs/26461632464/job/77910733797 is still failing
+
+---
+
+I do feel that testing the full sync workflow when renaming is quite vital. happy to increase the timeout, and possibly mark the test as `optional` if the increased timeout is still flakey.
