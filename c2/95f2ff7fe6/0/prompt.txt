@@ -1,0 +1,11 @@
+is there any value in implementing this functionality: https://github.com/FSM1/cipher-box/pull/466#discussion_r3304494321
+
+The way I see it this script is only used in some tests, so should never be involved in leaking actual secrets.
+
+---
+
+yes please do that
+
+---
+
+the macos e2e test is failing in CI https://github.com/FSM1/cipher-box/actions/runs/26455136327/job/77886949162
