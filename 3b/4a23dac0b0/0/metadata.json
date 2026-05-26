@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "3b4a23dac0b0",
+  "session_id": "0b02afa5-848a-4952-947b-1aecbf632f27",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-26T22:46:57.271636Z",
+  "branch": "chore/staging-local-tee-worker",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "26a01a68519b",
+  "checkpoint_transcript_start": 98,
+  "transcript_lines_at_start": 98,
+  "token_usage": {
+    "input_tokens": 27,
+    "cache_creation_tokens": 26420,
+    "cache_read_tokens": 1063033,
+    "output_tokens": 5376,
+    "api_call_count": 21
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Switch the staging environment's TEE worker from Phala's hosted CVM service to a locally-hosted simulator to reduce staging hosting costs.",
+    "outcome": "A chore branch was created with edits to docker-compose.staging.yml and deploy-staging.yml; the changes were committed but the transcript ends before the PR is created.",
+    "learnings": {
+      "repo": [
+        "Staging TEE worker runs on Phala CVM with hardware-backed dstack SDK; switching to simulator mode uses HKDF from a fixed seed, producing different epoch keys that break existing IPNS key decryption — staging users must re-register after the switch.",
+        "TEE worker URL is injected as TEE_WORKER_URL env var and was previously pointing at an external Phala URL; in the new setup it points at http://tee-worker:3001 on the internal Docker network.",
+        "The deploy-staging workflow contains a separate deploy-tee-phala job that needed to be removed when moving to the local simulator.",
+        "The repo is at github.com/FSM1/cipher-box; a recent tag staging-20260526-release-1 was cut the day before this session."
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "finding": "Contains a deploy-tee-phala job that provisions the Phala CVM; this was removed as part of switching to local simulator."
+        },
+        {
+          "path": "docker/docker-compose.staging.yml",
+          "finding": "A new tee-worker service running in simulator mode was added to this file, placed on the internal network only."
+        },
+        {
+          "path": "apps/tee-worker/.env.example",
+          "finding": "Consulted to understand the env vars required to configure the tee-worker service in the compose file."
+        },
+        {
+          "path": "apps/tee-worker/Dockerfile",
+          "finding": "Consulted to understand how to build/run the tee-worker image for the new compose service."
+        }
+      ],
+      "workflow": [
+        "gh CLI commands in this project must be run with `env -u GITHUB_TOKEN gh ...` to avoid authentication conflicts with an ambient GITHUB_TOKEN env var.",
+        "The project uses a project-scoped memory directory at /Users/myankelev/.claude/projects/-Users-myankelev-Code-random-cipher-box/memory/ for persisting repo-specific guidance."
+      ]
+    },
+    "friction": [
+      "gh CLI authentication failed again due to a GITHUB_TOKEN env var conflict — a recurring issue that required the user to explicitly remind the assistant to use `env -u GITHUB_TOKEN` and save a memory about it."
+    ],
+    "open_items": [
+      "PR for the staging local TEE worker changes was not yet created at the end of the transcript — needs to be pushed and opened.",
+      "Staging users will need to re-register after the epoch key change caused by switching from Phala CVM to the simulator; no migration or communication plan was discussed.",
+      "Cost impact of the Phala hosted TEE worker on staging has not been quantified or compared against the operational overhead of running a local simulator."
+    ]
+  }
+}
