@@ -359,7 +359,7 @@ export function BinBrowser() {
       {isLoaded && hasEntries && (
         <div className="file-list bin-list" role="grid" data-testid="bin-list">
           {/* Column headers */}
-          <div className="file-list-header bin-list-header" role="row">
+          <div className="bin-list-header" role="row">
             <button
               type="button"
               className="bin-column-header bin-column-name"
