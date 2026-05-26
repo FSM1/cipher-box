@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.3](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.38.2...cipher-box-v0.38.3) (2026-05-26)
+
+
+### Bug Fixes
+
+* **ci:** target staging environment for desktop release builds ([#464](https://github.com/FSM1/cipher-box/issues/464)) ([cb5458d](https://github.com/FSM1/cipher-box/commit/cb5458d6e1446b731b55b3823ce7cedece79d50b))
+
 ## [0.38.2](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.38.1...cipher-box-v0.38.2) (2026-05-25)
 
 
