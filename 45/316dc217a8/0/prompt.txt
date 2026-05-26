@@ -1,0 +1,17 @@
+ok now recreate the PR
+
+---
+
+I am still getting weird errors when trying to log in with the production binary produced by CI.
+
+The email login fails with `Load failed`.
+
+The google oauth login fails with `Google Client ID not configured (VITE_GOOGLE_CLIENT_ID)`
+
+---
+
+since we are still working against the staging api, would it not make sense to change the GH action to target the staging environment?
+
+---
+
+ok, please create a chore branch of this work
