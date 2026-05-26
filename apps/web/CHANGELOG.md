@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.41.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.40.0...@cipherbox/web-v0.41.0) (2026-05-26)
+
+
+### Bug Fixes
+
+* **web:** resolve bin view column header layout conflict ([#471](https://github.com/FSM1/cipher-box/issues/471)) ([eb52e10](https://github.com/FSM1/cipher-box/commit/eb52e10da744313aa70da56e88427cc3c86570f1))
+
 ## [0.40.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.39.0...@cipherbox/web-v0.40.0) (2026-04-14)
 
 

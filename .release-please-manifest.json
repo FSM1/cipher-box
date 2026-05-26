@@ -1,7 +1,7 @@
 {
-  ".": "0.38.4",
+  ".": "0.38.5",
   "apps/api": "0.37.1",
-  "apps/web": "0.40.0",
+  "apps/web": "0.41.0",
   "apps/desktop": "0.41.0",
   "apps/tee-worker": "0.31.1",
   "packages/core": "0.30.0",
