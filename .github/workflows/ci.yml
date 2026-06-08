@@ -332,7 +332,7 @@ jobs:
         run: pnpm --filter @cipherbox/api-client test:coverage
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./apps/api/coverage/lcov.info,./packages/crypto/coverage/lcov.info,./packages/core/coverage/lcov.info,./packages/sdk-core/coverage/lcov.info,./packages/sdk/coverage/lcov.info,./packages/api-client/coverage/lcov.info
@@ -657,7 +657,7 @@ jobs:
           --lcov --output-path desktop-lcov.info
 
       - name: Upload desktop coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: desktop-lcov.info
