@@ -1,9 +1,11 @@
 ---
-name: gsd:stats
+name: gsd-stats
 description: Display project statistics — phases, plans, requirements, git metrics, and timeline
+effort: low
 allowed-tools:
   - Read
   - Bash
+requires: [phase, progress]
 ---
 
 <objective>
@@ -11,9 +13,9 @@ Display comprehensive project statistics including phase progress, plan executio
 </objective>
 
 <execution_context>
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/stats.md
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/workflows/stats.md
 </execution_context>
 
 <process>
-Execute the stats workflow from @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/stats.md end-to-end.
+Execute end-to-end.
 </process>

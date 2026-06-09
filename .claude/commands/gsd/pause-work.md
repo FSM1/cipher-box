@@ -1,10 +1,12 @@
 ---
-name: gsd:pause-work
+name: gsd-pause-work
 description: Create context handoff when pausing work mid-phase
+argument-hint: '[--report]'
 allowed-tools:
   - Read
   - Write
   - Bash
+requires: [phase, progress]
 ---
 
 <objective>
@@ -20,7 +22,7 @@ Routes to the pause-work workflow which handles:
   </objective>
 
 <execution_context>
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/pause-work.md
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/workflows/pause-work.md
 </execution_context>
 
 <context>
@@ -28,7 +30,10 @@ State and phase progress are gathered in-workflow with targeted reads.
 </context>
 
 <process>
-**Follow the pause-work workflow** from `@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/pause-work.md`.
+If `--report` is in $ARGUMENTS:
+Read and execute `/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/workflows/session-report.md` end-to-end.
+
+**Follow the pause-work workflow**.
 
 The workflow handles all logic including:
 

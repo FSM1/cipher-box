@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// gsd-hook-version: 1.30.0
+// gsd-hook-version: 1.4.3
 // GSD Workflow Guard — PreToolUse hook
 // Detects when Claude attempts file edits outside a GSD workflow context
-// (no active /gsd: command or Task subagent) and injects an advisory warning.
+// (no active /gsd- skill or Task subagent) and injects an advisory warning.
 //
 // This is a SOFT guard — it advises, not blocks. The edit still proceeds.
-// The warning nudges Claude to use /gsd:quick or /gsd:fast instead of
+// The warning nudges Claude to use /gsd-quick or /gsd-fast instead of
 // making direct edits that bypass state tracking.
 //
 // Enable via config: hooks.workflow_guard: true (default: false)
@@ -13,6 +13,74 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
+const { tokenize } = require('./lib/git-cmd.js');
+
+function forceGitAddCwds(command, defaultCwd) {
+  const tokens = tokenize(command || '');
+  const separators = new Set(['&&', '||', ';', '|']);
+  const cwdList = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (path.basename(tokens[i]) !== 'git') continue;
+
+    let j = i + 1;
+    let gitCwd = defaultCwd;
+    while (j < tokens.length) {
+      const token = tokens[j];
+      const flagName = token.includes('=') ? token.slice(0, token.indexOf('=')) : token;
+      if (token === '-C' && tokens[j + 1]) {
+        gitCwd = path.resolve(gitCwd, tokens[j + 1]);
+        j += 2;
+        continue;
+      }
+      if (['-C', '--git-dir', '--work-tree'].includes(flagName) && !token.includes('=')) {
+        j += 2;
+        continue;
+      }
+      if (['--git-dir', '--work-tree', '--no-pager', '-p', '-P'].includes(flagName)) {
+        j++;
+        continue;
+      }
+      break;
+    }
+
+    if (tokens[j] !== 'add') continue;
+    for (let k = j + 1; k < tokens.length && !separators.has(tokens[k]); k++) {
+      if (tokens[k] === '--') break;
+      if (
+        tokens[k] === '--force' ||
+        tokens[k] === '-f' ||
+        /^-[A-Za-z]*f[A-Za-z]*$/.test(tokens[k])
+      ) {
+        cwdList.push(gitCwd);
+        break;
+      }
+    }
+  }
+  return cwdList;
+}
+
+function currentBranch(cwd) {
+  const result = spawnSync('git', ['branch', '--show-current'], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  });
+  if (result.status !== 0) return '';
+  return result.stdout.trim();
+}
+
+function workflowGuardEnabled(cwd) {
+  const configPath = path.join(cwd, '.planning', 'config.json');
+  if (!fs.existsSync(configPath)) return false;
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    return Boolean(config.hooks?.workflow_guard);
+  } catch (e) {
+    return false;
+  }
+}
 
 let input = '';
 const stdinTimeout = setTimeout(() => process.exit(0), 3000);
@@ -23,13 +91,37 @@ process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
     const toolName = data.tool_name;
+    const cwd = data.cwd || process.cwd();
+    const isWorkflowGuardEnabled = workflowGuardEnabled(cwd);
 
-    // Only guard Write and Edit tool calls
-    if (toolName !== 'Write' && toolName !== 'Edit') {
+    if (toolName === 'Bash') {
+      if (!isWorkflowGuardEnabled) {
+        process.exit(0);
+      }
+      const command = data.tool_input?.command || '';
+      for (const gitCwd of forceGitAddCwds(command, cwd)) {
+        const branch = currentBranch(gitCwd);
+        if (branch.startsWith('worktree-agent-')) {
+          process.stdout.write(
+            JSON.stringify({
+              decision: 'block',
+              code: 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN',
+              reason:
+                'worktree-agent branches must not run git add -f or git add --force. Respect the SDK skipped_gitignored/skipped_commit_docs_false contract and leave gitignored files untracked.',
+            })
+          );
+          process.exit(2);
+        }
+      }
       process.exit(0);
     }
 
-    // Check if we're inside a GSD workflow (Task subagent or /gsd: command)
+    // Only guard Write, Edit, and MultiEdit tool calls
+    if (!['Write', 'Edit', 'MultiEdit'].includes(toolName)) {
+      process.exit(0);
+    }
+
+    // Check if we're inside a GSD workflow (Task subagent or /gsd- skill)
     // Subagents have a session_id that differs from the parent
     // and typically have a description field set by the orchestrator
     if (data.tool_input?.is_subagent || data.session_type === 'task') {
@@ -57,20 +149,8 @@ process.stdin.on('end', () => {
       process.exit(0);
     }
 
-    // Check if workflow guard is enabled
-    const cwd = data.cwd || process.cwd();
-    const configPath = path.join(cwd, '.planning', 'config.json');
-    if (fs.existsSync(configPath)) {
-      try {
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        if (!config.hooks?.workflow_guard) {
-          process.exit(0); // Guard disabled (default)
-        }
-      } catch (e) {
-        process.exit(0);
-      }
-    } else {
-      process.exit(0); // No GSD project — don't guard
+    if (!isWorkflowGuardEnabled) {
+      process.exit(0); // Guard disabled (default) or no GSD project
     }
 
     // If we get here: GSD project, guard enabled, file edit outside .planning/,
@@ -81,7 +161,7 @@ process.stdin.on('end', () => {
         additionalContext:
           `⚠️ WORKFLOW ADVISORY: You're editing ${path.basename(filePath)} directly without a GSD command. ` +
           'This edit will not be tracked in STATE.md or produce a SUMMARY.md. ' +
-          'Consider using /gsd:fast for trivial fixes or /gsd:quick for larger changes ' +
+          'Consider using /gsd-fast for trivial fixes or /gsd-quick for larger changes ' +
           'to maintain project state tracking. ' +
           'If this is intentional (e.g., user explicitly asked for a direct edit), proceed normally.',
       },

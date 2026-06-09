@@ -1,5 +1,5 @@
 ---
-name: gsd:ui-review
+name: gsd-ui-review
 description: Retroactive 6-pillar visual audit of implemented frontend code
 argument-hint: '[phase]'
 allowed-tools:
@@ -8,8 +8,9 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
-  - Task
+  - Agent
   - AskUserQuestion
+requires: [phase]
 ---
 
 <objective>
@@ -19,8 +20,8 @@ Output: {phase_num}-UI-REVIEW.md
 </objective>
 
 <execution_context>
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/ui-review.md
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/references/ui-brand.md
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/workflows/ui-review.md
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/references/ui-brand.md
 </execution_context>
 
 <context>
@@ -28,6 +29,6 @@ Phase: $ARGUMENTS — optional, defaults to last completed phase.
 </context>
 
 <process>
-Execute @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/ui-review.md end-to-end.
+Execute end-to-end.
 Preserve all workflow gates.
 </process>

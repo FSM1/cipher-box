@@ -14,7 +14,9 @@ apps/desktop/src-tauri/target/
 # GSD workflow files - vendor/generated markdown with non-standard syntax
 .claude/agents/gsd-*.md
 .claude/commands/gsd/
-.claude/get-shit-done/
+.claude/gsd-core/
+.claude/gsd-pristine/
+.claude/gsd-migration-journal/
 .claude/gsd-local-patches/
 
 # GSD planning directory - contains generated/structured markdown with non-standard syntax

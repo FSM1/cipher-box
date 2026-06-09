@@ -9,14 +9,6 @@
             "command": "entire hooks claude-code session-start"
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node .claude/hooks/gsd-check-update.js"
-          }
-        ]
       }
     ],
     "SessionEnd": [
@@ -61,16 +53,6 @@
             "command": "entire hooks claude-code pre-task"
           }
         ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node .claude/hooks/gsd-prompt-guard.js",
-            "timeout": 5
-          }
-        ]
       }
     ],
     "PostToolUse": [
@@ -91,16 +73,6 @@
             "command": "entire hooks claude-code post-todo"
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node .claude/hooks/gsd-context-monitor.js",
-            "timeout": 10
-          }
-        ],
-        "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task"
       }
     ]
   },

@@ -1,7 +1,7 @@
 ---
-name: gsd:discuss-phase
-description: Gather phase context through adaptive questioning before planning. Use --auto to skip interactive questions (Claude picks recommended defaults).
-argument-hint: '<phase> [--auto] [--batch] [--analyze] [--text]'
+name: gsd-discuss-phase
+description: Gather phase context through adaptive questioning before planning.
+argument-hint: '<phase> [--all] [--auto] [--chain] [--batch] [--analyze] [--text] [--power] [--assumptions]'
 allowed-tools:
   - Read
   - Write
@@ -9,9 +9,10 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
-  - Task
+  - Agent
   - mcp__context7__resolve-library-id
   - mcp__context7__query-docs
+requires: [config, phase]
 ---
 
 <objective>
@@ -30,10 +31,13 @@ Extract implementation decisions that downstream agents need — researcher and 
 </objective>
 
 <execution_context>
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/discuss-phase.md
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/discuss-phase-assumptions.md
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/templates/context.md
+Workflow files are loaded on-demand in the <process> section below — not upfront.
+Do not pre-load any workflow files before reading the mode routing instructions.
 </execution_context>
+
+<runtime_note>
+**Copilot (VS Code):** Use `vscode_askquestions` wherever this workflow calls `AskUserQuestion`. They are equivalent — `vscode_askquestions` is the VS Code Copilot implementation of the same interactive question API.
+</runtime_note>
 
 <context>
 Phase number: $ARGUMENTS (required)
@@ -44,14 +48,23 @@ Context files are resolved in-workflow using `init phase-op` and roadmap/state t
 <process>
 **Mode routing:**
 ```bash
-DISCUSS_MODE=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" config-get workflow.discuss_mode 2>/dev/null || echo "discuss")
+_GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; elif [ -f "/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi
+DISCUSS_MODE=$(gsd_run query config-get workflow.discuss_mode 2>/dev/null || echo "discuss")
 ```
 
-If `DISCUSS_MODE` is `"assumptions"`: Read and execute @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/discuss-phase-assumptions.md end-to-end.
+If `--assumptions` is in $ARGUMENTS:
+Read and execute `/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/workflows/list-phase-assumptions.md` end-to-end.
+Stop here.
 
-If `DISCUSS_MODE` is `"discuss"` (or unset, or any other value): Read and execute @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/discuss-phase.md end-to-end.
+Otherwise, if `DISCUSS_MODE` is `"assumptions"`:
+Read and execute `/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/workflows/discuss-phase-assumptions.md` end-to-end.
 
-**MANDATORY:** The execution_context files listed above ARE the instructions. Read the workflow file BEFORE taking any action. The objective and success_criteria sections in this command file are summaries — the workflow file contains the complete step-by-step process with all required behaviors, config checks, and interaction patterns. Do not improvise from the summary.
+Otherwise (`"discuss"` / unset / any other value):
+Read and execute `/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/workflows/discuss-phase.md` end-to-end.
+
+**MANDATORY:** Read the appropriate workflow file BEFORE taking any action. The objective and success_criteria sections in this command file are summaries — the workflow file contains the complete step-by-step process with all required behaviors, config checks, and interaction patterns. Do not improvise from the summary.
+
+**Lazy loading:** `templates/context.md` is loaded inside the `write_context` step of the active workflow. `discuss-phase-power.md` is loaded inside `discuss-phase.md` when `--power` is detected. Do not load either here.
 </process>
 
 <success_criteria>
