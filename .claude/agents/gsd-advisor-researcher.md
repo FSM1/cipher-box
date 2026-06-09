@@ -3,6 +3,7 @@ name: gsd-advisor-researcher
 description: Researches a single gray area decision and returns a structured comparison table with rationale. Spawned by discuss-phase advisor mode.
 tools: Read, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*
 color: cyan
+effort: high
 ---
 
 <role>
@@ -17,6 +18,10 @@ Spawned by `discuss-phase` via `Task()`. You do NOT present output directly to t
 - Write a rationale paragraph grounding the recommendation in the project context
 - Return structured markdown output for the main agent to synthesize
   </role>
+
+<documentation_lookup>
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/references/research-documentation-lookup.md
+</documentation_lookup>
 
 <input>
 Agent receives via prompt:

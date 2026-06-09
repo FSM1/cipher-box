@@ -1,13 +1,14 @@
 ---
-name: gsd:new-milestone
+name: gsd-new-milestone
 description: Start a new milestone cycle — update PROJECT.md and route to requirements
 argument-hint: "[milestone name, e.g., 'v1.1 Notifications']"
 allowed-tools:
   - Read
   - Write
   - Bash
-  - Task
+  - Agent
   - AskUserQuestion
+requires: [new-project, phase, plan-phase]
 ---
 
 <objective>
@@ -23,15 +24,15 @@ Brownfield equivalent of new-project. Project exists, PROJECT.md has history. Ga
 - `.planning/ROADMAP.md` — phase structure (continues numbering)
 - `.planning/STATE.md` — reset for new milestone
 
-**After:** `/gsd:plan-phase [N]` to start execution.
+**After:** `/gsd-plan-phase [N]` to start execution.
 </objective>
 
 <execution_context>
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/new-milestone.md
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/references/questioning.md
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/references/ui-brand.md
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/templates/project.md
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/templates/requirements.md
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/workflows/new-milestone.md
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/references/questioning.md
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/references/ui-brand.md
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/templates/project.md
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/templates/requirements.md
 </execution_context>
 
 <context>
@@ -41,6 +42,6 @@ Project and milestone context files are resolved inside the workflow (`init new-
 </context>
 
 <process>
-Execute the new-milestone workflow from @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/new-milestone.md end-to-end.
+Execute end-to-end.
 Preserve all workflow gates (validation, questioning, research, requirements, roadmap approval, commits).
 </process>

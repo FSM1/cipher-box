@@ -1,5 +1,5 @@
 ---
-name: gsd:audit-milestone
+name: gsd-audit-milestone
 description: Audit milestone completion against original intent before archiving
 argument-hint: '[version]'
 allowed-tools:
@@ -7,8 +7,9 @@ allowed-tools:
   - Glob
   - Grep
   - Bash
-  - Task
+  - Agent
   - Write
+requires: [execute-phase]
 ---
 
 <objective>
@@ -18,7 +19,7 @@ Verify milestone achieved its definition of done. Check requirements coverage, c
 </objective>
 
 <execution_context>
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/audit-milestone.md
+@/Users/myankelev/Code/random/cipher-box/.claude/gsd-core/workflows/audit-milestone.md
 </execution_context>
 
 <context>
@@ -32,6 +33,6 @@ Glob: .planning/phases/_/_-VERIFICATION.md
 </context>
 
 <process>
-Execute the audit-milestone workflow from @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/audit-milestone.md end-to-end.
+Execute end-to-end.
 Preserve all workflow gates (scope determination, verification reading, integration check, requirements coverage, routing).
 </process>
