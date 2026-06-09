@@ -1,0 +1,9 @@
+I jsust updated GSD in this prokect
+
+---
+
+is the migration journal necessary at all?
+
+---
+
+ok unstage the journal and delete it from disc before committing. I also think the markdownlint ignore paths need to be updated for the new GSD paths
