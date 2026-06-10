@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ed9c208da012",
+  "strategy": "manual-commit",
+  "branch": "chore/claude-md-cleanup",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "CLAUDE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ed/9c208da012/0/metadata.json",
+      "transcript": "/ed/9c208da012/0/full.jsonl",
+      "content_hash": "/ed/9c208da012/0/content_hash.txt",
+      "prompt": "/ed/9c208da012/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 88843,
+    "cache_creation_tokens": 404332,
+    "cache_read_tokens": 4011377,
+    "output_tokens": 38777,
+    "api_call_count": 37
+  }
+}

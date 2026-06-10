@@ -1,0 +1,110 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ed9c208da012",
+  "session_id": "c74136af-1fb5-430d-923e-b3b47d40066e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T12:01:25.624177Z",
+  "branch": "chore/claude-md-cleanup",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "CLAUDE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "d6f257238605",
+  "token_usage": {
+    "input_tokens": 88843,
+    "cache_creation_tokens": 404332,
+    "cache_read_tokens": 4011377,
+    "output_tokens": 38777,
+    "api_call_count": 37
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Configure GSD workflow settings interactively, generate a behavioral developer profile from session analysis, then clean up and merge stale CLAUDE.md documentation files.",
+    "outcome": "GSD config updated (adaptive model, TDD on, deep code review, intel/graphify enabled), developer profile generated from 151 messages with 8 dimensions scored, .claude/claude.md merged into root CLAUDE.md with stale claims corrected, dead path in sync.md fixed, all pushed to a chore/ branch with PR.",
+    "learnings": {
+      "repo": [
+        "Playwright MCP is NOT configured for this project; only Puppeteer MCP is (registered in ~/.claude.json)",
+        ".release-please-manifest.json tracks independent per-package versions (root 0.38.5, web 0.41.0, fuse 0.5.3), not a unified version",
+        "Staging tags format changed from staging-v*-rc-N to staging-YYYYMMDD-release-N; deploy triggers on staging-*",
+        "Sharing, file versioning, and client-side search are fully implemented v1.0 features — no longer out of scope",
+        "Desktop virtual filesystem is FUSE on macOS/Linux but WinFsp on Windows",
+        "TEE is Phala in production but local Docker simulator in staging (changed in commit f270d843a)",
+        ".husky/commit-msg hook was clobbered by commit 0d37d710b and no longer runs commitlint locally; only PR-title CI enforces conventional commits",
+        "GSD restructured from .claude/get-shit-done/ to .claude/gsd-core/ — old paths are dead"
+      ],
+      "code": [
+        {
+          "path": ".claude/commands/design/sync.md",
+          "line": 473,
+          "end_line": 475,
+          "finding": "Referenced dead .claude/get-shit-done/ paths after GSD restructured to .claude/gsd-core/; fixed to point at valid locations"
+        }
+      ],
+      "workflow": [
+        "gsd-tools config-set performs safe merge — unrelated config keys are preserved when updating .planning/config.json",
+        "/gsd:profile-user generates evidence-backed behavioral profile across 8 dimensions; artifacts include USER-PROFILE.md, /gsd-dev-preferences skill, and CLAUDE.md section with idempotent markers for future refreshes",
+        "Profile artifact generation places CLAUDE.md at repo root by default, not .claude/CLAUDE.md — verify placement before committing",
+        "Global ~/.claude/CLAUDE.md profile table is not auto-updated; user must opt in explicitly during artifact selection"
+      ]
+    },
+    "friction": [
+      "Changes from /gsd:config and /gsd:profile-user accumulated on main with no feature branch, requiring a retroactive chore/ branch before pushing",
+      "profile-user created root CLAUDE.md instead of updating .claude/CLAUDE.md, causing a placement ambiguity that needed manual resolution",
+      "The .husky/commit-msg hook is silently broken — no local commitlint enforcement, only CI catches format violations"
+    ],
+    "open_items": [
+      "Global ~/.claude/CLAUDE.md still contains the older, lower-confidence profile table — user opted out of updating it during this session",
+      "Broken .husky/commit-msg hook (clobbered in 0d37d710b) — commitlint does not run locally, only on PRs via CI",
+      ".planning/config.json changes from /gsd:config are bundled in the chore/ PR — verify this is intentional vs. keeping config changes separate"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T12:00:47.759405Z",
+    "agent_lines": 17,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 14,
+    "human_removed": 198,
+    "total_committed": 31,
+    "total_lines_changed": 437,
+    "agent_percentage": 3.8901601830663615,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 30,
+      "agent_lines_removed": 5
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 59,
+      "agent_lines_removed": 5
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 202,
+      "agent_lines_added": 259,
+      "agent_lines_removed": 5,
+      "user_removed_per_file": {
+        ".claude/claude.md": 202
+      }
+    }
+  ]
+}
