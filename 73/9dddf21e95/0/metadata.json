@@ -1,0 +1,117 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "739dddf21e95",
+  "session_id": "24bf5c01-651c-48e8-b60c-3773c340cee2",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T16:33:17.783166Z",
+  "branch": "fix/pinning-provider-fetch-binding",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/21-byo-ipfs-node-support/21-UAT.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "060981f6f1d1",
+  "checkpoint_transcript_start": 750,
+  "transcript_lines_at_start": 750,
+  "token_usage": {
+    "input_tokens": 1456,
+    "cache_creation_tokens": 44660,
+    "cache_read_tokens": 15446741,
+    "output_tokens": 30518,
+    "api_call_count": 55
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Y7QBPfNbq9q7C2J38koKXv",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "060981f6f1d1",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 44,
+        "end": 45,
+        "entry_ids": [
+          "aa771069-87bf-43c0-8a3a-a4bc584efb72"
+        ],
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:verify-work",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Start the local Docker-based TEE worker and complete UAT verification for phase 21 (BYO IPFS node support), exercising migration, pause/resume controls, advisory badge, and BYO upload flows.",
+    "outcome": "TEE worker came up and validated ('epoch 1 matches worker'); all phase 21 UAT items were exercised and the UAT doc was updated and committed, though 10 migration pins failed in the TEE worker and the root cause was not fully diagnosed.",
+    "learnings": {
+      "repo": [
+        "TEE worker is a multi-stage Docker build launched from repo root; dev servers must be restarted with TEE worker env vars wired after the container is healthy.",
+        "TEE key state validation log line is 'TEE key state validated: epoch X matches worker' — the canonical signal that the full TEE chain is live.",
+        "Migration runs 57 CIDs in batches of 10; job state is tracked server-side in the pin_migrations schema.",
+        "The isByoUser / byo flag lives in the vault and controls both the advisory badge rendering and which upload path is taken; it must be set directly in the DB when testing without going through the normal provisioning flow.",
+        "The BYO IPFS node external config is loaded at login time, not lazily."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-UAT.md",
+          "finding": "UAT checklist for phase 21; updated with verification status and committed at end of session."
+        }
+      ],
+      "workflow": [
+        "When the TEE container can't reach the host by default, find the host IP visible from inside the container (bridge gateway) and pass it explicitly via env.",
+        "Puppeteer remount is sometimes needed to re-trigger component polling — if the UI appears unresponsive to state changes, remounting the component is a reliable workaround to confirm the polling logic itself is correct.",
+        "Dev OTP must be fetched via Bash and pasted into the browser flow when authenticating in the local dev environment."
+      ]
+    },
+    "friction": [
+      "MigrationProgress UI component was not polling after initial render — polling only resumed after a full remount, making it easy to miss live migration progress.",
+      "10 out of 57 migration pins failed in the TEE worker; cause was checked in logs but not resolved during the session.",
+      "Container networking required manual discovery of a host IP reachable from inside the TEE Docker container.",
+      "The byo flag had to be set directly in the DB to test BYO flows, with no dev-friendly toggle exposed in the UI or CLI."
+    ],
+    "open_items": [
+      "Investigate and fix the 10 TEE worker migration pin failures — error details were in the logs but not diagnosed.",
+      "Fix or document the MigrationProgress polling regression that requires a remount to activate.",
+      "Consider exposing a dev-mode setter for the byo/isByoUser flag to avoid raw DB writes during local testing."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T16:32:50.956364Z",
+    "agent_lines": 68,
+    "agent_removed": 25,
+    "human_added": 1,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 69,
+    "total_lines_changed": 95,
+    "agent_percentage": 97.89473684210527,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

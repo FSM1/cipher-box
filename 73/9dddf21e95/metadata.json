@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "739dddf21e95",
+  "strategy": "manual-commit",
+  "branch": "fix/pinning-provider-fetch-binding",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/21-byo-ipfs-node-support/21-UAT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/73/9dddf21e95/0/metadata.json",
+      "transcript": "/73/9dddf21e95/0/full.jsonl",
+      "content_hash": "/73/9dddf21e95/0/content_hash.txt",
+      "prompt": "/73/9dddf21e95/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1456,
+    "cache_creation_tokens": 44660,
+    "cache_read_tokens": 15446741,
+    "output_tokens": 30518,
+    "api_call_count": 55
+  }
+}
