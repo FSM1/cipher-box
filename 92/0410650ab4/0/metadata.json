@@ -1,0 +1,112 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "920410650ab4",
+  "session_id": "24bf5c01-651c-48e8-b60c-3773c340cee2",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T22:06:20.374072Z",
+  "branch": "fix/pinning-provider-fetch-binding",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "e8991c24f9f9",
+  "checkpoint_transcript_start": 964,
+  "transcript_lines_at_start": 964,
+  "token_usage": {
+    "input_tokens": 20139,
+    "cache_creation_tokens": 76318,
+    "cache_read_tokens": 1934134,
+    "output_tokens": 19665,
+    "api_call_count": 26
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Y7QBPfNbq9q7C2J38koKXv",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e8991c24f9f9",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 44,
+        "end": 45,
+        "entry_ids": [
+          "aa771069-87bf-43c0-8a3a-a4bc584efb72"
+        ],
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:verify-work",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Run UAT for phase 35 (Phala testnet TEE migration) to clear the last 6 remaining human-UAT verification debt items and bring total audit debt to zero.",
+    "outcome": "Phase 35 UAT was written, VERIFICATION.md flipped to passed, and committed — UAT audit debt is now zero across all phases (19.1, 21, and 35 all cleared).",
+    "learnings": {
+      "repo": [
+        "Staging API URL is https://api-staging.cipherbox.cc, exposed as GitHub environment variable STAGING_API_URL in the 'staging' environment.",
+        "The Phala Cloud CVM TEE endpoint referenced in phase 35 planning docs is stale — actual staging deployment runs tee-worker as a Docker container on the VPS, not on Phala.",
+        "ENVIRONMENTS.md contains stale Phala Cloud CVM references that no longer reflect actual staging infrastructure.",
+        "deploy-staging.yml provisions tee-worker as part of the VPS Docker Compose stack; Phala integration was planned for this phase but not shipped to staging.",
+        "UAT debt audit via `node .claude/gsd-core/bin/gsd-tools.cjs query audit-uat --raw` gives exact remaining item counts by phase and is the authoritative source — VERIFICATION.md item counts can diverge from what the audit actually tracks."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/health/health.controller.ts",
+          "finding": "Health controller exposes TEE worker connection status; used to verify whether staging API has a live TEE worker and what its epoch state is."
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "finding": "Staging deploy workflow shows tee-worker is a Docker container on the VPS — no Phala CVM provisioning step exists, confirming the Phala integration never shipped to staging."
+        },
+        {
+          "path": "apps/api/src/tee/tee.service.ts",
+          "finding": "initializeFromTee() validates epoch state against worker health on API boot; API startup behavior on TEE worker absence/failure was relevant to determining phase 35 item verdicts."
+        }
+      ],
+      "workflow": [
+        "GitHub CLI `gh variable list --env <env>` paginates at 10 results by default — always pass `--limit 100` or explicitly check for truncation when listing environment variables.",
+        "When verifying a cloud integration that was planned but may not have shipped, cross-check deploy workflow YAML and direct port probes rather than relying on planning or architecture docs, which can be aspirational.",
+        "UAT debt audit should be re-run after each phase completion to confirm the count drops as expected — it is the ground truth, not VERIFICATION.md item counts."
+      ]
+    },
+    "friction": [
+      "GitHub variables list hit the default 10-item page cap on the first query, silently truncating results and requiring a second paginated call to find STAGING_API_URL.",
+      "Phase 35 VERIFICATION.md listed only 2 human items while the audit reported 6 — required checking raw audit output to understand actual scope before starting.",
+      "Had to triangulate across health endpoint probe, direct VPS port probe, deploy workflow YAML, and deploy run logs to confirm that Phala CVM was never actually used in staging; planning docs were misleading about the deployed state."
+    ],
+    "open_items": [
+      "Push branch `fix/pinning-provider-fetch-binding` and open a PR — offered earlier but superseded by UAT work; still pending.",
+      "Three diagnosed phase-21 gaps need fixes: missing PATCH /vault/byo-status call in web save flow (major); MigrationProgress polling never restarts after a terminal job (minor); migration stats double-count due to API 120s batch timeout vs >130s worker batches (minor). Addressable via `/gsd-plan-phase 21 --gaps`.",
+      "User must manually persist TEE_WORKER_URL=http://localhost:3002 and TEE_WORKER_SECRET (in /tmp/cipherbox-tee-secret.txt) into apps/api/.env — Claude cannot touch .env files.",
+      "Stale Phala Cloud CVM references in ENVIRONMENTS.md should be updated to reflect the actual VPS Docker Compose deployment.",
+      "Local TEE worker setup (Docker on port 3002, secret in /tmp/) is ephemeral and will need to be re-established in future sessions if the TEE-dependent features need further work."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
