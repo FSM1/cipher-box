@@ -36,13 +36,13 @@
 
 **TEE Providers:**
 
-- Phala Cloud CVM (Primary) - TEE-based IPNS key decryption and record signing
-  - Worker: `tee-worker/src/`
+- Phala Cloud CVM (production target) - TEE-based IPNS key decryption and record signing. Staging runs the same worker as a local Docker service in simulator mode since PR #472.
+  - Worker: `apps/tee-worker/src/`
   - Routes: `GET /health`, `GET /public-key`, `POST /republish`, `POST /migrate`, `POST /connection-test`
-  - Features: Intel SGX hardware attestation, key epoch rotation
+  - Features: Intel TDX hardware attestation (CVM mode only), key epoch rotation
   - Schedule: Every 6 hours via backend cron
   - Enrollment: `apps/api/src/republish/republish.service.ts`
-  - Docker Compose: `tee-worker/docker-compose.yml` (mounts `/var/run/tappd.sock` for TEE attestation)
+  - Docker Compose: `apps/tee-worker/docker-compose.phala.yml` for CVM (mounts `/var/run/dstack.sock`); `docker/docker-compose.staging.yml` for the staging simulator
   - Env: `TEE_WORKER_URL`, `TEE_WORKER_SECRET`, `TEE_MODE` (cvm/simulator)
   - Auth: Shared secret via `TEE_WORKER_SECRET`
 

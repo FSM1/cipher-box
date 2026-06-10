@@ -182,11 +182,11 @@ The TypeScript and Rust SDKs implement the same data model and crypto operations
 - Write path: `write()` -> temp file -> `release()` -> encrypt + upload (background)
 - Read path: `open()` -> async prefetch -> `read()` -> cache check -> return or EIO
 
-### TEE Worker (`tee-worker/`)
+### TEE Worker (`apps/tee-worker/`)
 
-**Purpose:** Automatic IPNS republishing without user devices online. Runs in Phala Cloud CVM.
+**Purpose:** Automatic IPNS republishing without user devices online. Runs as a Docker simulator on the staging VPS (since PR #472); Phala Cloud CVM in production.
 
-**Entry point:** `tee-worker/src/index.ts`
+**Entry point:** `apps/tee-worker/src/index.ts`
 
 **Framework:** Express.js (standalone, not part of pnpm workspace)
 
@@ -360,9 +360,9 @@ type FileMetadata = {
 
 **TEE Worker:**
 
-- Location: `tee-worker/src/index.ts`
+- Location: `apps/tee-worker/src/index.ts`
 - Dev: `pnpm --filter cipherbox-tee-worker dev`
-- Deployed: Phala Cloud CVM
+- Deployed: Docker Compose service on the staging VPS, simulator mode (Phala Cloud CVM in production)
 
 **API Client Generation:**
 
