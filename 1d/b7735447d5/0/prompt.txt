@@ -1,0 +1,1 @@
+ok, the BYO kubo node is on local docker, not the ip any more

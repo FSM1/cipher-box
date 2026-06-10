@@ -1,0 +1,117 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1db7735447d5",
+  "session_id": "24bf5c01-651c-48e8-b60c-3773c340cee2",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T16:14:15.065278Z",
+  "branch": "fix/pinning-provider-fetch-binding",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/21-byo-ipfs-node-support/21-UAT.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ecde5c6fec99",
+  "checkpoint_transcript_start": 609,
+  "transcript_lines_at_start": 609,
+  "token_usage": {
+    "input_tokens": 586,
+    "cache_creation_tokens": 31948,
+    "cache_read_tokens": 8416605,
+    "output_tokens": 24073,
+    "api_call_count": 35
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Y7QBPfNbq9q7C2J38koKXv",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ecde5c6fec99",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 44,
+        "end": 45,
+        "entry_ids": [
+          "aa771069-87bf-43c0-8a3a-a4bc584efb72"
+        ],
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:verify-work",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Complete UAT for phase 21 (BYO IPFS node support), verifying that a user-supplied Kubo node running in local Docker works as a custom pinning backend in the cipher-box app.",
+    "outcome": "All phase 21 UAT items passed: the storage tab correctly connected to the local Dockerized Kubo node, pins were verified on the BYO node independently, and results were documented and committed to .planning/phases/21-byo-ipfs-node-support/21-UAT.md.",
+    "learnings": {
+      "repo": [
+        "The BYO Kubo node target shifted from a static IP address to a local Docker container — connection config must point at the Docker-exposed port rather than a remote IP.",
+        "The storage tab save button has an explicit gating condition that prevents saves from firing unless preconditions are met; this condition is separate from the migration UI appearing.",
+        "Migration UI displays a pin count progress ('migrating: 0/39 pins') independently of whether the save action has actually been triggered.",
+        "A TEE worker service is part of the infrastructure; its URL and routes live in a separate workspace directory and are configured via environment variables.",
+        "Pin existence on the BYO node can be independently verified via the Kubo RPC API, which was used as a ground-truth check separate from the app UI."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/21-byo-ipfs-node-support/21-UAT.md",
+          "finding": "UAT results document for phase 21; created and committed during this session as the canonical record of manual verification."
+        }
+      ],
+      "workflow": [
+        "Puppeteer was used for browser-driven UAT: navigating, filling forms, clicking, and evaluating JS in the page to inspect component state.",
+        "API server logs were checked in parallel with UI actions to confirm requests actually reached the backend — useful for diagnosing silent UI failures.",
+        "When a UI action appeared to do nothing, the correct next step was to read the component's save-button gating logic in source rather than assuming a network or server error.",
+        "Independent Kubo RPC verification (via Bash, outside the app) was used to confirm pin state as a definitive ground truth check."
+      ]
+    },
+    "friction": [
+      "Save button was silently disabled due to a gating condition — the migration UI rendered (showing '0/39 pins') which made it look like the action had fired, but no API request was made, causing a confusing diagnostic loop.",
+      "TEE worker configuration was opaque — required grepping across multiple workspace directories and inspecting compose files to locate the actual URL and routes.",
+      "Initial Kubo node connection assumption (IP-based) was stale; had to re-probe Docker ports and CORS config at the start of the session."
+    ],
+    "open_items": [
+      "39 existing pins flagged in the migration UI — it is unclear from the transcript whether all were successfully migrated to the BYO node or if migration was only partially tested.",
+      "CORS configuration on the local Kubo Docker container was investigated but no confirmation appears in the transcript that it was validated end-to-end for all required origins.",
+      "TEE worker integration with BYO node flow was inspected but not explicitly UAT-verified in this session."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T16:13:47.561608Z",
+    "agent_lines": 69,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 69,
+    "total_lines_changed": 69,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
