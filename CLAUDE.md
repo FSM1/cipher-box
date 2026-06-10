@@ -143,20 +143,9 @@ await mcp__puppeteer__puppeteer_click({ selector: 'button.action' });
 - Provide manual test steps
 - Flag items in VERIFICATION.md
 
-### Pencil Design Files for Design Work
+### Pencil Design Files
 
-**When working on UI phases**, parse the `.pen` design files directly (or use the `design:sync` skill) to extract design specifications as the source of truth. A Pencil MCP server is not currently configured for this project.
-
-**Design files location:** `designs/*.pen` (currently `designs/cipher-box-design.pen`)
-
-**Verification against design:**
-
-1. Extract design specs from the Pencil file
-2. Verify CSS values match exactly (hex codes, pixel values)
-3. Use Puppeteer MCP to verify computed styles at runtime
-4. Document any discrepancies with file/line references
-
-**Reference:** See `designs/DESIGN.md` and the `design:sync` skill (`.claude/commands/design/sync.md`) for the Pencil design workflow.
+Pencil design files exist at `designs/*.pen` (with `designs/DESIGN.md`) but are not actively maintained right now. If design specs are needed, parse the `.pen` file directly — no Pencil MCP server is configured.
 
 ## Git Workflow
 
