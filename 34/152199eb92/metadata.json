@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "34152199eb92",
+  "strategy": "manual-commit",
+  "branch": "fix/pinning-provider-fetch-binding",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ENVIRONMENTS.md",
+    ".planning/codebase/ARCHITECTURE.md",
+    ".planning/codebase/CONCERNS.md",
+    ".planning/codebase/INTEGRATIONS.md",
+    ".planning/codebase/STACK.md",
+    ".planning/codebase/STRUCTURE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/34/152199eb92/0/metadata.json",
+      "transcript": "/34/152199eb92/0/full.jsonl",
+      "content_hash": "/34/152199eb92/0/content_hash.txt",
+      "prompt": "/34/152199eb92/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 79131,
+    "cache_creation_tokens": 837939,
+    "cache_read_tokens": 53170901,
+    "output_tokens": 185672,
+    "api_call_count": 290
+  }
+}

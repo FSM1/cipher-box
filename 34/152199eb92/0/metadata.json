@@ -1,0 +1,169 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "34152199eb92",
+  "session_id": "24bf5c01-651c-48e8-b60c-3773c340cee2",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T23:03:19.206376Z",
+  "branch": "fix/pinning-provider-fetch-binding",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ENVIRONMENTS.md",
+    ".planning/codebase/ARCHITECTURE.md",
+    ".planning/codebase/CONCERNS.md",
+    ".planning/codebase/INTEGRATIONS.md",
+    ".planning/codebase/STACK.md",
+    ".planning/codebase/STRUCTURE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "eb527c278145",
+  "token_usage": {
+    "input_tokens": 79131,
+    "cache_creation_tokens": 837939,
+    "cache_read_tokens": 53170901,
+    "output_tokens": 185672,
+    "api_call_count": 290
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Y7QBPfNbq9q7C2J38koKXv",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "eb527c278145",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 44,
+        "end": 45,
+        "entry_ids": [
+          "aa771069-87bf-43c0-8a3a-a4bc584efb72"
+        ],
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:verify-work",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Clear 18 outstanding human-UAT verification debt items across phases 19.1, 21, and 35 by driving the app with Puppeteer MCP and reading dev OTPs from API logs. Secondarily, fix any bugs discovered during UAT and update stale planning docs.",
+    "outcome": "All 18 UAT items cleared (debt → 0), a latent browser-only unbound-fetch bug diagnosed and fixed in both pinning providers with regression tests, the local TEE worker stood up in Docker simulator mode, phase 35 Phala Cloud references updated across 6 planning docs, and all changes committed on branch `fix/pinning-provider-fetch-binding`.",
+    "learnings": {
+      "repo": [
+        "CipherBox pinning modes (`cipherbox` / `external` / `dual`) are per-account config, not per-env — the same code takes entirely different paths depending on what's stored in the vault record, making account state a required UAT variable",
+        "TEE worker simulator mode derives keys via HKDF-SHA256 from fixed seed `'cipherbox-tee-simulator-seed'`; the epoch-1 pubkey is deterministic and matches the dev DB without any manual alignment",
+        "Dev OTP is logged as `DEV OTP for <email>: <code>` when SendGrid is unconfigured — enables fully automated email-auth login from API log tailing",
+        "Process env beats `.env` at runtime (dotenv doesn't override existing process.env) — useful for injecting TEE vars without touching .env files",
+        "TEE container `localhost` ≠ host — BYO IPFS endpoint must use host LAN IP to be reachable from both the browser and the TEE container; Kubo's CORS allows `localhost:5173` origin",
+        "`useDropUpload.ts` has a silent catch block that marks upload rows as error without logging — upload failures surface with zero console output, making them appear as env issues",
+        "No `PATCH /vault/byo-status` call exists anywhere in `apps/web/src` despite the endpoint existing — the advisory quota badge is unreachable through the product flow",
+        "Phase 35 `PHALA_CLOUD_API_KEY` secret and `PHALA_TEE_WORKER_URL` variable are orphaned in GitHub — still present but nothing references them since PR #472 removed `deploy-tee-phala`; the key is live and should be revoked",
+        "GitHub Actions environment variables API defaults to page size 10 — queries without `per_page=100` silently truncate results, causing `PHALA_TEE_WORKER_URL` to appear missing",
+        "Planning docs (`ENVIRONMENTS.md`, `STACK.md`, `ARCHITECTURE.md`, `CONCERNS.md`, `INTEGRATIONS.md`, `STRUCTURE.md`) still documented staging TEE as Phala Cloud CVM; root `CLAUDE.md` had already been corrected by PR #476 but the `.planning/codebase/` sweep was missed"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/pinning/kubo-provider.ts",
+          "line": 22,
+          "end_line": 22,
+          "finding": "Unbound fetch fallback: `this.fetchFn = options?.fetchFn ?? globalThis.fetch` — invoking via `this.fetchFn(url, ...)` sets `this` to the provider instance, throwing `TypeError: Illegal invocation` in browsers (Node's fetch is not this-sensitive, so this was invisible to all automated tests). Fixed to `globalThis.fetch.bind(globalThis)`."
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/psa-provider.ts",
+          "line": 41,
+          "end_line": 41,
+          "finding": "Identical unbound-fetch pattern to kubo-provider.ts. Same fix applied. PSA test mock response shape: `{ pin: { cid: 'bafyBound' }, status: 'pinned' }` (pinByCid maps `result.pin.cid`, not top-level `cid`)."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 87,
+          "end_line": 94,
+          "finding": "Provider construction never passes `fetchFn` to KuboProvider/PSAProvider. No change needed after providers self-bind, but this is why the bug never surfaced in SDK-level tests."
+        },
+        {
+          "path": "apps/web/src/components/settings/StorageTab.tsx",
+          "line": 414,
+          "end_line": 414,
+          "finding": "Save button gated on TEE connection test: `disabled={mode !== 'cipherbox' && !testResult?.success}`. When TEE_WORKER_URL points at the wrong service (e.g., mock-ipns-routing on 3001 that answers /health but 404s /connection-test), the button is permanently disabled and no API calls fire."
+        },
+        {
+          "path": "apps/web/src/components/settings/MigrationProgress.tsx",
+          "line": 38,
+          "end_line": 52,
+          "finding": "Poll loop exits permanently on any terminal job status: `if (status && TERMINAL_STATUSES.includes(status.status)) return;`. No restart mechanism on re-save. A failed job renders as 'migrating: 0/39' indefinitely."
+        },
+        {
+          "path": "apps/web/src/components/layout/StorageQuota.tsx",
+          "line": 39,
+          "end_line": 39,
+          "finding": "Advisory badge renders conditionally on `is_byo_user` flag, but no web code ever calls `PATCH /vault/byo-status` — the flag must be set directly in the DB or via a missing web save integration."
+        }
+      ],
+      "workflow": [
+        "Instrumentation contamination is a real risk: console.error/warn wrappers and `window.fetch` arrow-function wrappers cause false results (arrow functions ignore `this`, masking the exact bug being tested). Always re-verify negative controls on a clean page with native fetch confirmed (`fetch is native: true`).",
+        "React fiber walking (`__reactFiber` keys, `memoizedState` hook chains) can extract Zustand-fed component props/state without dev tools — useful when component state is not exposed globally.",
+        "Vite `/@fs/<absolute-path>` dynamic imports allow loading real workspace TypeScript source directly in the browser for targeted verification of provider behavior with real crypto.",
+        "For browser automation, XHR-only logging (patching XMLHttpRequest, not wrapping `window.fetch`) avoids contaminating the fetch `this`-binding and is safer for instrumentation.",
+        "When reading large Bash command outputs, use `head -c 2000` or `grep` to avoid oversized tool results (console floods can reach 1.9MB+).",
+        "GSD audit-uat (`gsd-tools.cjs query audit-uat --raw`) tracks outstanding human-UAT debt per-phase and is the canonical check for clearing debt, distinct from UAT.md file status."
+      ]
+    },
+    "friction": [
+      "Upload failure was completely silent (no console errors, no network requests) due to `useDropUpload.ts` silent catch — initially misattributed to local env differences vs staging",
+      "TEE_WORKER_URL was pointing at mock-ipns-routing (port 3001) which answers `/health` but 404s `/connection-test`, producing a fake 'healthy' TEE state that blocked save and caused the 'migrating: 0/39' stale render",
+      "Browser frame detached after page reload mid-session requiring puppeteer_navigate re-attach and full OTP re-login cycle",
+      "Console instrumentation caused a 5,498-error RangeError flood during logout/re-login, masking real product behavior — required a clean-page repro to confirm not a product bug",
+      "Contaminated fix verification: arrow-function fetch wrapper ignored `this`, making the negative control return null instead of Illegal invocation — required page reload and native fetch verification before re-running",
+      "psql column names required guessing: `processed_cids`→`migrated_cids`, `user_id`→`owner_id` (vaults table), `LEFT()` on bytea → `encode(...,'hex')`",
+      "GitHub env variables API defaulting to page size 10 made `PHALA_TEE_WORKER_URL` appear missing, requiring a separate `per_page=100` query",
+      "10 migration pins failed silently during phase 21 testing due to TEE container network routing (container localhost ≠ host); root cause required switching to host LAN IP"
+    ],
+    "open_items": [
+      "Push `fix/pinning-provider-fetch-binding` and open PR (5 commits: 19.1 UAT, fetch-binding fix + regression tests, gap resolution, 21 UAT, 35 UAT docs) — offered twice but never confirmed",
+      "Phase 21 major gap: no `PATCH /vault/byo-status` call in web app — advisory badge is unreachable through the product flow without a new API call wired to the Settings save flow",
+      "Phase 21 minor gap: `MigrationProgress` polling stops permanently after any terminal job status; stale failed jobs display as 'migrating: 0/39' with no way to restart from the UI",
+      "Phase 21 minor gap: migration stats double-count when API 120s batch timeout fires mid-batch (recorded 44+33 on a 57-CID job, showing '57 transferred' and '33 failed' simultaneously)",
+      "Persist `TEE_WORKER_URL=http://localhost:3002` and `TEE_WORKER_SECRET` (in `/tmp/cipherbox-tee-secret.txt`) into `apps/api/.env` — user must do this manually (env file access denied)",
+      "Revoke orphaned `PHALA_CLOUD_API_KEY` GitHub secret — it's a live credential for the retired Phala Cloud service; nothing references it since PR #472",
+      "Account's stored external IPFS endpoint is `http://192.168.133.12:5002` (old static IP) — should be updated to `http://localhost:5002` or the Docker gateway IP to match the new local Docker setup",
+      "Pending todo with deadline: check remaining GitHub Actions for Node 24 updates before June 2026 deadline"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T23:01:45.375554Z",
+    "agent_lines": 22,
+    "agent_removed": 71,
+    "human_added": 0,
+    "human_modified": 36,
+    "human_removed": 1,
+    "total_committed": 58,
+    "total_lines_changed": 130,
+    "agent_percentage": 71.53846153846153,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
