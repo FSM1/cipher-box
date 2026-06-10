@@ -1,0 +1,121 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "5fa84813c643",
+  "session_id": "24bf5c01-651c-48e8-b60c-3773c340cee2",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T16:00:33.310563Z",
+  "branch": "fix/pinning-provider-fetch-binding",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/sdk-core/src/pinning/kubo-provider.ts",
+    "packages/sdk-core/src/pinning/psa-provider.ts",
+    "packages/sdk-core/src/__tests__/pinning/psa-provider.test.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "7ed2b73e66da",
+  "checkpoint_transcript_start": 515,
+  "transcript_lines_at_start": 515,
+  "token_usage": {
+    "input_tokens": 425,
+    "cache_creation_tokens": 209594,
+    "cache_read_tokens": 3924964,
+    "output_tokens": 9646,
+    "api_call_count": 19
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Y7QBPfNbq9q7C2J38koKXv",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7ed2b73e66da",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 44,
+        "end": 45,
+        "entry_ids": [
+          "aa771069-87bf-43c0-8a3a-a4bc584efb72"
+        ],
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:verify-work",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Rename the UAT branch to a fix branch and apply a fix for a major finding: unbound fetch calls in the external pinning providers that fail in browser contexts.",
+    "outcome": "Branch renamed to fix/..., `this`-binding fix applied to both kubo-provider.ts and psa-provider.ts, regression tests written and verified to fail without the fix and pass with it, all committed.",
+    "learnings": {
+      "repo": [
+        "Exactly two sites in the repo use unbound fetch fallbacks: packages/sdk-core/src/pinning/kubo-provider.ts and packages/sdk-core/src/pinning/psa-provider.ts.",
+        "Pinning provider tests live under packages/sdk-core/src/__tests__/pinning/.",
+        "Phase 35 UAT (6 items) is blocked on TEE_WORKER_URL and TEE_WORKER_SECRET being set locally — not yet started.",
+        "Long-running Docker containers (cipherbox-ipfs, postgres, redis, someguy, mock-ipns-routing) were running independently of this session and were not touched."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/pinning/kubo-provider.ts",
+          "finding": "Had an unbound fetch call that loses `this` context in browser environments; fixed with explicit binding."
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/psa-provider.ts",
+          "finding": "Same unbound fetch issue as kubo-provider; also fixed. PSA mock shape in tests needed correction to match actual pinByCid response mapping."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/pinning/psa-provider.test.ts",
+          "finding": "Regression test added; initial mock shape was wrong and had to be corrected to match the real pinByCid return mapping before tests went green."
+        }
+      ],
+      "workflow": [
+        "The assistant verified the regression test actually bites (fails without the fix) before restoring the fix and committing — a deliberate red/green proof step.",
+        "Full sdk-core test suite, build, and lint were run on the changed files before committing."
+      ]
+    },
+    "friction": [
+      "PSA mock shape was initially wrong (didn't match actual pinByCid response structure), requiring a correction before the regression test would pass."
+    ],
+    "open_items": [
+      "Phase 35 UAT (6 items) not started — blocked on TEE_WORKER_URL and TEE_WORKER_SECRET being configured locally.",
+      "Long-running Docker containers (cipherbox-ipfs, postgres, redis, someguy, mock-ipns-routing) left running; may need cleanup."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T16:00:09.541466Z",
+    "agent_lines": 34,
+    "agent_removed": 2,
+    "human_added": 31,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 65,
+    "total_lines_changed": 67,
+    "agent_percentage": 53.73134328358209,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

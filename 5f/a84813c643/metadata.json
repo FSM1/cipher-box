@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "5fa84813c643",
+  "strategy": "manual-commit",
+  "branch": "fix/pinning-provider-fetch-binding",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/sdk-core/src/__tests__/pinning/psa-provider.test.ts",
+    "packages/sdk-core/src/pinning/kubo-provider.ts",
+    "packages/sdk-core/src/pinning/psa-provider.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5f/a84813c643/0/metadata.json",
+      "transcript": "/5f/a84813c643/0/full.jsonl",
+      "content_hash": "/5f/a84813c643/0/content_hash.txt",
+      "prompt": "/5f/a84813c643/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 425,
+    "cache_creation_tokens": 209594,
+    "cache_read_tokens": 3924964,
+    "output_tokens": 9646,
+    "api_call_count": 19
+  }
+}
