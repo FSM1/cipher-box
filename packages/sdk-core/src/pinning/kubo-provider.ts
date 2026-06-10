@@ -19,7 +19,10 @@ export class KuboProvider implements PinningProvider {
     // Normalize: strip trailing slash
     this.endpoint = endpoint.replace(/\/+$/, '');
     this.authToken = authToken;
-    this.fetchFn = options?.fetchFn ?? globalThis.fetch;
+    // Bind the fallback: invoking native fetch as `this.fetchFn(...)` sets `this`
+    // to the provider instance, which throws "Illegal invocation" in browsers
+    // (Node's fetch is not this-sensitive, so only real browsers hit it).
+    this.fetchFn = options?.fetchFn ?? globalThis.fetch.bind(globalThis);
     this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
