@@ -66,6 +66,7 @@ blocked: 0
     missing:
   - 'Update staging TEE references to local Docker simulator on VPS; keep Phala Cloud CVM content under the production section only'
     debug_session: ''
+    resolution: 'Fixed in b15cf2748 - ENVIRONMENTS.md staging TEE section reworked around the Docker simulator, CVM identity warning moved to production, fictional TEE env vars replaced with real ones; stale claims in codebase STACK/STRUCTURE/ARCHITECTURE/CONCERNS/INTEGRATIONS docs also corrected'
 
 ## Environment Notes
 
