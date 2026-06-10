@@ -1,7 +1,7 @@
 ---
 phase: 21-byo-ipfs-node-support
 verified: 2026-03-25T02:15:00Z
-status: human_needed
+status: passed
 score: 5/5 success criteria verified
 re_verification:
   previous_status: gaps_found
