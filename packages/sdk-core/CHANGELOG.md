@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.2](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.36.1...@cipherbox/sdk-core-v0.36.2) (2026-06-10)
+
+
+### Bug Fixes
+
+* bind pinning provider fetch fallback to globalThis for browser compatibility ([#477](https://github.com/FSM1/cipher-box/issues/477)) ([39dd78e](https://github.com/FSM1/cipher-box/commit/39dd78ec578e5bf991d8102db66e895b7a835e5e))
+
 ## [0.36.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.36.0...@cipherbox/sdk-core-v0.36.1) (2026-05-26)
 
 
