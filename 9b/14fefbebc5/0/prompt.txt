@@ -1,0 +1,9 @@
+run the uat for phase 35
+
+---
+
+I am trying to get some free credits from Phala to run the TEE, and need a short blurb describing the project and to provide details regarding what needs to stay private (how the TEE is used)
+
+---
+
+ok can you update the stale docs referencing the phala CVM in staging

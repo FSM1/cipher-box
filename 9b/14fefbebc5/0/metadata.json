@@ -1,0 +1,172 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9b14fefbebc5",
+  "session_id": "24bf5c01-651c-48e8-b60c-3773c340cee2",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T23:06:26.635316Z",
+  "branch": "fix/pinning-provider-fetch-binding",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/35-phala-testnet-tee-migration/35-UAT.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "eb527c278145",
+  "token_usage": {
+    "input_tokens": 86701,
+    "cache_creation_tokens": 849333,
+    "cache_read_tokens": 53929917,
+    "output_tokens": 187049,
+    "api_call_count": 295
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Y7QBPfNbq9q7C2J38koKXv",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "eb527c278145",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 44,
+        "end": 45,
+        "entry_ids": [
+          "aa771069-87bf-43c0-8a3a-a4bc584efb72"
+        ],
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:verify-work",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Clear 18 outstanding human-UAT verification debt items across phases 19.1, 21, and 35 of the CipherBox project, using Puppeteer MCP to drive the browser autonomously rather than requiring manual user testing.",
+    "outcome": "All 18 UAT debt items cleared (18 → 0) across all three phases. A latent browser-only bug in the BYO pinning providers was found, fixed, and verified end-to-end. A local TEE worker stack was stood up. Stale Phala CVM documentation was updated. Six commits landed on branch `fix/pinning-provider-fetch-binding`.",
+    "learnings": {
+      "repo": [
+        "Email OTP codes are logged to the API console as `DEV OTP for <email>: <code>` when SendGrid is not configured, enabling fully self-serve automated login in local dev.",
+        "Pinning mode 'external only' or 'dual' is stored per-account in the vault config; the StorageTab save button is hard-gated on a successful TEE connection test (`disabled={mode !== 'cipherbox' && !testResult?.success}`).",
+        "No web caller exists for `PATCH /vault/byo-status` anywhere in `apps/web/src` — the advisory quota badge in StorageQuota.tsx renders correctly but is unreachable through the product UI flow.",
+        "MigrationProgress component permanently stops polling after any terminal job status and does not restart when a new save is triggered.",
+        "Phase 35 retired Phala Cloud CVM for staging in PR #472 and replaced it with the Docker simulator on the VPS; `cipherbox-staging-tee-worker-1` now runs the simulator image from the `staging-YYYYMMDD-release-N` tag.",
+        "TEE worker simulator derives keys via HKDF-SHA256 from fixed seed `'cipherbox-tee-simulator-seed'` — deterministic, so epoch-1 pubkey matches dev DB without any migration needed.",
+        "Docker container `localhost` is not the host; the TEE container must use the host LAN IP (e.g. `192.168.133.12:5002`) to reach the Kubo container — `localhost:5002` inside the container points at itself.",
+        "GitHub Actions environment variables paginate at 10 per page by default; `gh api ... --paginate` or `?per_page=100` is required to see all variables.",
+        "process-level env vars injected at `pnpm dev` invocation override dotenv — useful for injecting secrets without touching `.env` files.",
+        "The TEE worker secret generated at container start is written to `/tmp/cipherbox-tee-secret.txt` for local dev reference."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/pinning/kubo-provider.ts",
+          "line": 22,
+          "end_line": 22,
+          "finding": "Bug (now fixed): `this.fetchFn = options?.fetchFn ?? globalThis.fetch` stores an unbound reference. When called as `this.fetchFn(url, ...)` the receiver is the provider instance, causing `TypeError: Failed to execute 'fetch' on 'Window': Illegal invocation` in browsers. Node's fetch is not this-sensitive so the bug was invisible to all automated tests. Fix: `globalThis.fetch.bind(globalThis)`."
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/psa-provider.ts",
+          "line": 41,
+          "end_line": 41,
+          "finding": "Identical unbound-fetch bug as kubo-provider.ts — same fix applied: `globalThis.fetch.bind(globalThis)`."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 87,
+          "end_line": 94,
+          "finding": "Provider construction (`new sdkCore.KuboProvider(ext.endpoint, ext.authToken)`) never passes `fetchFn`; that's fine now that the providers self-bind, but this is why the bug was latent — the only path to override fetch is via options, which nothing uses."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 181,
+          "end_line": 188,
+          "finding": "Silent catch block marks upload rows as error without logging — reason the unbound-fetch bug surfaced with 0% failure and zero console output, making it appear to be an env issue rather than a code bug."
+        },
+        {
+          "path": "apps/web/src/components/settings/StorageTab.tsx",
+          "line": 414,
+          "end_line": 414,
+          "finding": "Save button disabled when `mode !== 'cipherbox' && !testResult?.success` — requires a successful TEE connection test before external/dual mode can be saved. This gated all phase-21 UAT until the real TEE worker was running."
+        },
+        {
+          "path": "apps/web/src/components/settings/MigrationProgress.tsx",
+          "line": 38,
+          "end_line": 52,
+          "finding": "Poll loop: `if (status && TERMINAL_STATUSES.includes(status.status)) return;` — permanently stops on any terminal state with no restart path. A failed job from a prior session renders as 'migrating: 0/39' on next load."
+        },
+        {
+          "path": "apps/web/src/components/layout/StorageQuota.tsx",
+          "line": 39,
+          "end_line": 39,
+          "finding": "Advisory quota badge renders correctly when `is_byo_user=true` in the vault, but the web app never calls `PATCH /vault/byo-status` anywhere, so the flag can only be set directly in the DB or from another client (e.g. desktop)."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/pinning/kubo-provider.test.ts",
+          "finding": "New regression test block added: stubs a this-sensitive `strictFetch` that throws `Illegal invocation` when called with wrong receiver — verified it fails with pre-fix code and passes with the fix."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/pinning/psa-provider.test.ts",
+          "finding": "Same regression test added. PSA mock response shape must be `{ pin: { cid: '...' }, status: 'pinned' }` because `pinByCid` maps `result.pin.cid`."
+        }
+      ],
+      "workflow": [
+        "Puppeteer MCP can fully automate the CipherBox UAT flow including OTP login (read code from API logs), file operations, and logout/re-login lifecycle — no manual browser interaction required.",
+        "React fiber walking (`__reactFiber*` keys, `memoizedState` hook chains) can extract Zustand-fed component state in the browser when no `window.__store` is exposed.",
+        "vite `/@fs/<absolute-path>` dynamic imports allow running real workspace TypeScript source directly in the headed browser — useful for pinning provider verification without a build step.",
+        "Console wrapper instrumentation (overriding `console.error`/`console.warn`) can cause cascading RangeError floods during login initialization. XHR-only logging is safer. Always re-verify on a clean page when a large error count appears unexpectedly.",
+        "Arrow-function fetch wrappers (`window.fetch = (...args) => realFetch(...args)`) ignore `this` and will mask the `Illegal invocation` bug during negative-control testing. Use `function`-declared wrappers for this-sensitivity checks.",
+        "When a Puppeteer page reloads or the browser restarts, all `evaluate` handles become detached — re-navigate with `puppeteer_navigate` before further interaction.",
+        "Building the tee-worker Docker image requires `docker build -f apps/tee-worker/Dockerfile -t cipherbox-tee-worker .` from the repo root (multi-stage build with monorepo context)."
+      ]
+    },
+    "friction": [
+      "Initial upload failure appeared to be a local env issue but was actually an account config difference (pinning mode 'external only' → `http://192.168.133.12:5002`) combined with a real latent code bug — took significant debugging to separate the two.",
+      "Console instrumentation in the browser caused 5,498 fake RangeErrors during re-login, requiring a clean repro to rule it out as a product bug.",
+      "Arrow-wrapped `window.fetch` masked the negative-control test for the fix verification — needed a full page reload to confirm `fetch is native: true` before the negative control was trustworthy.",
+      "TEE_WORKER_URL defaulted to port 3001 (occupied by mock-ipns-routing which answers `/health`), causing the API to report a fake 'healthy' TEE while all actual TEE requests got 404s.",
+      "TEE container cannot reach `localhost:5002` — must use host LAN IP, which took multiple failed attempts to diagnose.",
+      "GitHub environment variable list truncated at 10 entries (default page size), causing a PHALA_TEE_WORKER_URL variable to be initially missed.",
+      "`.env` files are off-limits (permission denied on read) — TEE secrets had to be injected as process-level env vars at server start instead.",
+      "psql queries required guessing column names (`processed_cids`→`migrated_cids`, `user_id`→`owner_id`) with no schema reference available.",
+      "1Password SSH agent locked/expired during git commit signing, requiring a retry.",
+      "Puppeteer browser frame detachment after page reloads required repeated re-navigation and re-login cycles.",
+      "An oversized tool result (1.9MB console flood) required switching to `head -c` / grep to read execution output."
+    ],
+    "open_items": [
+      "Three diagnosed phase-21 gaps not yet fix-planned: (1) missing `PATCH /vault/byo-status` call in web save flow [major], (2) MigrationProgress polling never restarts after terminal job [minor], (3) migration stats double-count when API 120s batch timeout fires mid-batch [minor].",
+      "Two phase-35 gaps recorded: (1) orphaned CI secrets `PHALA_CLOUD_API_KEY` and `PHALA_TEE_WORKER_URL` in GitHub should be deleted and the Phala key revoked, (2) stale docs gap was resolved in this session but the commit signing failed and may need retry.",
+      "`TEE_WORKER_URL` and `TEE_WORKER_SECRET` need to be persisted to `apps/api/.env` by the user — cannot be done by Claude (`.env` files are off-limits).",
+      "Branch `fix/pinning-provider-fetch-binding` has not been pushed or PR opened — was offered twice but superseded by other work.",
+      "Phase-21 full BYO upload e2e with the connection test working at `192.168.133.12:5002` still needs a retest after the fetch fix — verified at the provider level but the in-app save flow was gated during the session.",
+      "Migration failures: 10 of 57 pins failed during the phase-21 migration test run — root cause not fully investigated (likely IPFS relay connectivity for those specific CIDs).",
+      "Advisory quota badge (`is_byo_user` flag): the web save flow never calls `PATCH /vault/byo-status` — needs a product fix to wire this up after saving external/dual mode settings."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T23:04:56.659885Z",
+    "agent_lines": 1,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 1,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

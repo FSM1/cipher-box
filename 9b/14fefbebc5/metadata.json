@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9b14fefbebc5",
+  "strategy": "manual-commit",
+  "branch": "fix/pinning-provider-fetch-binding",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/35-phala-testnet-tee-migration/35-UAT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9b/14fefbebc5/0/metadata.json",
+      "transcript": "/9b/14fefbebc5/0/full.jsonl",
+      "content_hash": "/9b/14fefbebc5/0/content_hash.txt",
+      "prompt": "/9b/14fefbebc5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 86701,
+    "cache_creation_tokens": 849333,
+    "cache_read_tokens": 53929917,
+    "output_tokens": 187049,
+    "api_call_count": 295
+  }
+}
