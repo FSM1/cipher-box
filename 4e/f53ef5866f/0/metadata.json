@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "4ef53ef5866f",
+  "session_id": "c74136af-1fb5-430d-923e-b3b47d40066e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T12:02:25.8924Z",
+  "branch": "chore/claude-md-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/config.json"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "d6f257238605",
+  "token_usage": {
+    "input_tokens": 92285,
+    "cache_creation_tokens": 405614,
+    "cache_read_tokens": 4192308,
+    "output_tokens": 39100,
+    "api_call_count": 38
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Configure GSD workflow settings, generate a developer behavioral profile from session analysis, then clean up stale `.claude/claude.md` by merging it with the newly generated root `CLAUDE.md`, fix a dead path reference in sync.md, and push everything to a chore branch PR.",
+    "outcome": "All three goals completed: GSD config updated (adaptive model, TDD on, deep code review, intel/graphify/auto-advance enabled), a full 8-dimension developer profile written to USER-PROFILE.md with artifacts, `.claude/claude.md` merged into root `CLAUDE.md` with verified/corrected content and old file deleted, sync.md path fixed, and changes pushed to a `chore/` branch with a PR.",
+    "learnings": {
+      "repo": [
+        "Playwright MCP is NOT configured for this project; only Puppeteer MCP is active (defined in `~/.claude.json`). Any docs referencing `mcp__playwright__*` tool names were wrong.",
+        "Pencil MCP is not configured anywhere in the project; designs live in `designs/cipher-box-design.pen` and `designs/DESIGN.md`.",
+        "Release Please now uses independent per-package versions (root 0.38.5, web 0.41.0, fuse 0.5.3…), not a single unified version; `include-component-in-tag` is set and only `apps/desktop` propagates to `tauri.conf.json`/`Cargo.toml` via extra-files.",
+        "Staging tags are `staging-YYYYMMDD-release-N` (created by `tag-staging.yml` manual dispatch behind `staging-approval` environment), NOT `staging-v*-rc-N`. Deploy triggers on `staging-*` prefix.",
+        "Sharing, file versioning, and client-side search are fully implemented v1.0 features (`apps/api/src/shares/`, `file-metadata.service.ts`, `search-index.service.ts`). Remaining out-of-scope items are billing, mobile, collab editing, and team accounts (Milestone 4/v2.0).",
+        "Desktop uses FUSE on macOS/Linux but WinFsp on Windows; TEE is Phala in production but a local Docker simulator in staging (introduced in commit f270d843a).",
+        "The `.husky/commit-msg` hook was clobbered by an Entire CLI wrapper in commit 0d37d710b and no longer runs commitlint locally. Only the PR-title CI check enforces conventional commit format.",
+        "The UI-keyword heuristic for design/sync now exists only in `.claude/commands/design/sync.md`; the three files it previously cross-referenced no longer exist."
+      ],
+      "code": [
+        {
+          "path": ".claude/commands/design/sync.md",
+          "line": 473,
+          "end_line": 475,
+          "finding": "Had stale references to dead `.claude/get-shit-done/` paths (old GSD directory layout); fixed to point at current `.claude/gsd-core/` structure."
+        }
+      ],
+      "workflow": [
+        "GSD profile-user workflow's CLAUDE.md artifact lands at the repo root by default, not inside `.claude/CLAUDE.md` where project instructions live — verify placement before accepting.",
+        "lint-staged auto-applied fixes on the first commit in the chore branch, so the commit had two rounds (lint-staged output, then config commit).",
+        "GSD config changes on `main` need to be moved to a feature branch before committing per repo conventions.",
+        "When verifying stale docs, fan-out verification against the live repo (checking actual MCP config files, release manifests, husky hooks) catches wrong assumptions that reading docs alone would miss."
+      ]
+    },
+    "friction": [
+      "Root CLAUDE.md placement was unexpected — the profile-user workflow created it at repo root instead of `.claude/CLAUDE.md`, requiring manual awareness and a subsequent merge step.",
+      "`.claude/claude.md` used lowercase filename which required careful casing checks before deletion.",
+      "Working tree was on `main` with uncommitted changes from the GSD config step, which couldn't be committed directly due to the branch policy."
+    ],
+    "open_items": [
+      "Global `~/.claude/CLAUDE.md` still contains the older, lower-confidence profile table — user opted not to update it during profiling; the new evidence-backed profile only loads via `/gsd-dev-preferences`.",
+      "The broken `.husky/commit-msg` commitlint hook (clobbered in commit 0d37d710b) was documented but not fixed — only PR-title CI enforces conventional commits locally."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T12:01:42.442088Z",
+    "agent_lines": 30,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 30,
+    "total_lines_changed": 35,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

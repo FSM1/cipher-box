@@ -1,0 +1,13 @@
+/gsd:config
+
+---
+
+/gsd:profile-user
+
+---
+
+ok firstly I think that the @.claude/claude.md file needs to be cleaned up from stale info, and this should be merged with the root @CLAUDE.md that was just created.
+
+---
+
+please update the @.claude/commands/design/sync.md to point at valid path, and push all these changes up to a `chore/` branch and PR
