@@ -468,12 +468,10 @@ Exit immediately -- not an error, just nothing to sync.
 
 <ui_keyword_heuristic>
 
-<!-- SYNC: This heuristic appears in 4 locations. Keep all in sync:
-  1. .claude/commands/gsd/quick.md:105
-  2. .claude/get-shit-done/workflows/discuss-phase.md:505
-  3. .claude/commands/design/sync.md (this file, used in post-task hooks)
-  4. .claude/get-shit-done/workflows/execute-phase.md (design_sync_check step)
--->
+<!-- This file is the only location of this heuristic. The copies formerly in
+  .claude/commands/gsd/quick.md and the get-shit-done workflow files were removed
+  when GSD was restructured into .claude/gsd-core/. If the heuristic is ever
+  duplicated again, restore a sync list here. -->
 
 The following regex detects UI-related task descriptions:
 
