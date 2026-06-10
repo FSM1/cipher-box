@@ -53,7 +53,7 @@ cipher-box/
 │   │       │   └── updater.rs     # Auto-updater
 │   │       ├── vendor/fuser/      # Vendored fuser crate (socket-read patch for FUSE-T)
 │   │       └── Cargo.toml         # Desktop crate dependencies
-│   ├── tee-worker/                # TEE IPNS republishing worker (Phala Cloud CVM)
+│   ├── tee-worker/                # TEE IPNS republishing worker (simulator in staging, Phala Cloud CVM in production)
 │   │   └── src/
 │   │       ├── __tests__/         # Unit tests (Vitest)
 │   │       ├── middleware/        # Auth middleware (auth.ts)
@@ -309,7 +309,7 @@ cipher-box/
 
 **`apps/tee-worker/`:**
 
-- Purpose: Standalone TEE worker deployed as Phala Cloud CVM for automatic IPNS republishing every 3 hours
+- Purpose: Standalone TEE worker for automatic IPNS republishing every 3 hours (Docker simulator on the staging VPS since PR #472; Phala Cloud CVM in production)
 - Contains: Express routes, IPNS signer, key manager, SSRF validation, migration worker, Prometheus metrics
 - Uses shared workspace packages: `@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/sdk-core`
 - Uses `@phala/dstack-sdk` for hardware-backed key derivation inside CVM

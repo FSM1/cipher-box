@@ -177,4 +177,35 @@ describe('KuboProvider', () => {
       expect(mockFetch.mock.calls[0][0]).not.toContain('//api');
     });
   });
+
+  describe('browser this-binding regression', () => {
+    it('default fetchFn works when global fetch is this-sensitive (browser native fetch)', async () => {
+      // Browser native fetch throws "Illegal invocation" when invoked with a
+      // `this` other than the global object (e.g. as `this.fetchFn(...)` on a
+      // provider instance). Node's fetch is not this-sensitive, so a plain
+      // vi.fn() stub can never catch a missing .bind — this mock reproduces
+      // the browser contract.
+      const calls: unknown[] = [];
+      function strictFetch(this: unknown, ...args: unknown[]) {
+        if (this !== globalThis && this !== undefined) {
+          throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+        }
+        calls.push(args);
+        return Promise.resolve({
+          ok: true,
+          text: () => Promise.resolve(JSON.stringify({ Hash: 'bafyBound', Size: '7' })),
+        });
+      }
+      vi.stubGlobal('fetch', strictFetch);
+      try {
+        // Construct AFTER stubbing — the constructor captures globalThis.fetch
+        const boundProvider = new KuboProvider(endpoint);
+        const result = await boundProvider.pin(new Uint8Array([1, 2, 3]));
+        expect(result).toEqual({ cid: 'bafyBound', size: 7 });
+        expect(calls).toHaveLength(1);
+      } finally {
+        vi.stubGlobal('fetch', mockFetch);
+      }
+    });
+  });
 });

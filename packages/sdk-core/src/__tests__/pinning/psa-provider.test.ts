@@ -191,4 +191,30 @@ describe('PsaProvider', () => {
       await expect(provider.get('bafyAny')).rejects.toThrow('does not support content retrieval');
     });
   });
+
+  describe('browser this-binding regression', () => {
+    it('default fetchFn works when global fetch is this-sensitive (browser native fetch)', async () => {
+      // Mirrors browser native fetch, which throws "Illegal invocation" when
+      // invoked with a `this` other than the global object. Guards against
+      // regressing the .bind(globalThis) on the default fetchFn fallback.
+      function strictFetch(this: unknown) {
+        if (this !== globalThis && this !== undefined) {
+          throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ pin: { cid: 'bafyBound' }, status: 'pinned' }),
+        });
+      }
+      vi.stubGlobal('fetch', strictFetch);
+      try {
+        // Construct AFTER stubbing — the constructor captures globalThis.fetch
+        const boundProvider = new PsaProvider(endpoint, authToken);
+        const result = await boundProvider.pinByCid('bafyBound');
+        expect(result.cid).toBe('bafyBound');
+      } finally {
+        vi.stubGlobal('fetch', mockFetch);
+      }
+    });
+  });
 });

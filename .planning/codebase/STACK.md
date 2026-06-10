@@ -95,11 +95,11 @@ defineConfig({
 
 ### TEE Worker (`apps/tee-worker/`)
 
-| Component          | Framework | Purpose                                                                    |
-| ------------------ | --------- | -------------------------------------------------------------------------- |
-| `apps/tee-worker`  | Express 4 | Standalone TEE worker deployed as Phala Cloud CVM -- IPNS republishing     |
+| Component         | Framework | Purpose                                                                                                 |
+| ----------------- | --------- | ------------------------------------------------------------------------------------------------------- |
+| `apps/tee-worker` | Express 4 | Standalone TEE worker -- IPNS republishing (Docker simulator in staging, Phala Cloud CVM in production) |
 
-The tee-worker is part of the pnpm workspace (since Phase 35 migration to `apps/`). It uses workspace dependencies for shared packages (`@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/sdk-core`) and is deployed independently as a Phala Cloud CVM via Docker (node:20-alpine).
+The tee-worker is part of the pnpm workspace (since Phase 35 migration to `apps/`). It uses workspace dependencies for shared packages (`@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/sdk-core`) and is deployed as a Docker service (node:20-alpine) — simulator mode on the staging VPS since PR #472; Phala Cloud CVM (`TEE_MODE=cvm`) is the production target.
 
 ### Test Suites (`tests/`)
 
@@ -164,7 +164,7 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 
 **Deployment:**
 
-- phala CLI 1.1.13+ - Phala Cloud CVM deployment and management (CI/CD only, `npm install -g phala`)
+- phala CLI 1.1.13+ - Phala Cloud CVM deployment and management (`npm install -g phala`; no longer used in CI since PR #472 retired the staging CVM — kept for manual CVM management and future production deploys)
 
 **Code Quality:**
 
@@ -306,9 +306,9 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 
 **Shared workspace packages:**
 
-- `@cipherbox/crypto` workspace:* - Cryptographic primitives (ECIES, Ed25519, HKDF, IPNS)
-- `@cipherbox/core` workspace:* - Domain types, metadata schemas, IPNS record creation
-- `@cipherbox/sdk-core` workspace:* - Stateless orchestration (pinning providers, IPFS operations)
+- `@cipherbox/crypto` workspace:\* - Cryptographic primitives (ECIES, Ed25519, HKDF, IPNS)
+- `@cipherbox/core` workspace:\* - Domain types, metadata schemas, IPNS record creation
+- `@cipherbox/sdk-core` workspace:\* - Stateless orchestration (pinning providers, IPFS operations)
 
 **TEE-specific dependencies:**
 
@@ -482,7 +482,7 @@ pnpm --filter @cipherbox/api migration:generate   # Generate migration from enti
 
 - VPS at 76.13.151.200 (Hostinger)
 - Docker Compose: API (node:22-alpine) + supporting services
-- TEE Worker: External Phala Cloud CVM (node:20-alpine Docker image on GHCR)
+- TEE Worker: local Docker Compose service in simulator mode (node:20-alpine image on GHCR; was an external Phala Cloud CVM until PR #472)
 - Caddy reverse proxy for HTTPS
 - Domains: `api-staging.cipherbox.cc`, `app-staging.cipherbox.cc`
 - Container registry: `ghcr.io`
@@ -510,7 +510,7 @@ pnpm --filter @cipherbox/api migration:generate   # Generate migration from enti
 | `ci.yml`             | PR to main                           | Lint, typecheck, test, build, API spec verify, migration drift check, Cargo check/test on 3 platforms, vector parity |
 | `e2e.yml`            | Push to main, dispatch               | Web E2E tests with Playwright                                                                                        |
 | `release-please.yml` | Push to main                         | Create/update release PR, publish GitHub Releases                                                                    |
-| `deploy-staging.yml` | Push `staging-v*` tag, workflow_call | Build Docker images, deploy API/web to staging VPS, deploy TEE worker to Phala Cloud CVM                             |
+| `deploy-staging.yml` | Push `staging-v*` tag, workflow_call | Build Docker images, deploy API/web/TEE worker to staging VPS                                                        |
 | `build-desktop.yml`  | -                                    | Desktop app build                                                                                                    |
 | `desktop-e2e.yml`    | -                                    | Desktop E2E tests                                                                                                    |
 | `load-test.yml`      | -                                    | Load test runs                                                                                                       |

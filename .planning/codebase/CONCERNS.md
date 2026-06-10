@@ -166,7 +166,7 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 **Phala Cloud CVM deployment (single provider):**
 
 - Files: `apps/tee-worker/src/services/tee-keys.ts`, `apps/tee-worker/src/index.ts`
-- Why fragile: Phase 35 migrated TEE to Phala Cloud CVM using the dstack SDK (`@phala/dstack-sdk`). There is no fallback TEE provider — the previous AWS Nitro fallback option was not implemented. The dstack SDK is dynamically imported only inside `TEE_MODE=cvm`, making it unavailable for local testing without a CVM.
+- Why fragile: Phase 35 migrated TEE to Phala Cloud CVM using the dstack SDK (`@phala/dstack-sdk`). There is no fallback TEE provider — the previous AWS Nitro fallback option was not implemented. The dstack SDK is dynamically imported only inside `TEE_MODE=cvm`, making it unavailable for local testing without a CVM. Since PR #472 reverted staging to simulator mode, no deployed environment exercises the CVM path until production launches — it can bitrot silently.
 - Safe modification: Key derivation and signing logic is tested via unit tests with `TEE_MODE=test`. Production CVM changes require Phala console deployment.
 - Test coverage: `apps/tee-worker/src/__tests__/tee-keys.test.ts` covers the test-mode derivation path. The CVM code path itself is not unit-testable outside a real Phala CVM.
 
@@ -225,7 +225,7 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 **@phala/dstack-sdk:**
 
 - Risk: Phala-specific SDK for CVM key derivation. Tightly coupled to Phala Cloud infrastructure. No alternative provider is implemented.
-- Impact: If Phala Cloud has an outage or breaking API change, the TEE republishing pipeline stops. No fallback means IPNS records eventually expire (48-hour TTL).
+- Impact: If Phala Cloud has an outage or breaking API change, the production TEE republishing pipeline stops (staging is unaffected since PR #472 — it runs simulator mode). No fallback means IPNS records eventually expire (48-hour TTL).
 - Migration plan: Abstract key derivation behind an interface so alternative providers (AWS Nitro Enclaves, Azure Confidential Computing) can be plugged in. Currently blocked by the complexity of re-implementing key derivation + epoch management for a second provider.
 
 ## Missing Critical Features
