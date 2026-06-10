@@ -1,0 +1,164 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "36431b6e6b11",
+  "session_id": "24bf5c01-651c-48e8-b60c-3773c340cee2",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T13:05:01.318984Z",
+  "branch": "test/19.1-uat-verification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/19.1-extract-core-crypto-sdk-as-shared-package/19.1-UAT.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "adb267a2896f",
+  "token_usage": {
+    "input_tokens": 46998,
+    "cache_creation_tokens": 427125,
+    "cache_read_tokens": 18929311,
+    "output_tokens": 67185,
+    "api_call_count": 124
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Y7QBPfNbq9q7C2J38koKXv",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "adb267a2896f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 44,
+        "end": 45,
+        "entry_ids": [
+          "aa771069-87bf-43c0-8a3a-a4bc584efb72"
+        ],
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y7QBPfNbq9q7C2J38koKXv"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:verify-work",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Clear outstanding human UAT verification debt for phase 19.1 (extract-core-crypto-sdk-as-shared-package), which had 8 unresolved items in its VERIFICATION.md.",
+    "outcome": "All 9 UAT tests for phase 19.1 passed using a Puppeteer-driven headed browser session with automated OTP auth. Verification debt dropped from 18 to 10 items. A previously undetected browser-only fetch binding bug in the BYO IPFS pinning providers was discovered and documented.",
+    "learnings": {
+      "repo": [
+        "Email OTP codes are printed to the API dev server stdout in local dev, enabling fully automated browser login without manual intervention.",
+        "The e2e suite authenticates via a real SIWE flow using an injected mock EIP-6963 wallet (@johanneskares/wallet-mock) — no localStorage hacks or env bypasses.",
+        "The app uses hash navigation (#/files, #/bin) to avoid full page reloads during navigation.",
+        "Pinning mode ('cipherbox only' vs 'external only') is stored per-vault account and controls which upload code path executes; changing it triggers a background migration job requiring TEE_WORKER_URL/TEE_WORKER_SECRET env vars (not configured locally).",
+        "The recycle bin displays 0 B for file sizes — this appears to be a cosmetic display-only issue since restored files show the correct size."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/pinning/kubo-provider.ts",
+          "line": 22,
+          "end_line": 22,
+          "finding": "fetch is stored as `this.fetchFn = options?.fetchFn ?? globalThis.fetch` without binding — calling it as `this.fetchFn(url, ...)` throws 'Illegal invocation' TypeError in browsers. Fix: `globalThis.fetch.bind(globalThis)`. This means BYO/external-only upload has never worked in a real browser; Node.js tests pass because Node fetch is not this-sensitive."
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/psa-provider.ts",
+          "line": 41,
+          "end_line": 41,
+          "finding": "Identical unbound fetch bug as kubo-provider.ts — same one-line fix required."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 90,
+          "end_line": 90,
+          "finding": "Client never passes fetchFn to KuboProvider constructor, so the provider always falls back to the unbound globalThis.fetch reference."
+        },
+        {
+          "path": "tests/web-e2e/utils/wallet-login-helpers.ts",
+          "line": 111,
+          "end_line": 163,
+          "finding": "loginViaWallet drives the real SIWE→Core Kit flow: waits for [data-testid='wallet-login-button'] to be enabled, clicks it, selects 'Mock Wallet' from .wallet-connector-list, then races waitForURL('**/files') against [data-testid='device-waiting'] to detect the requiredShare outcome."
+        },
+        {
+          "path": "tests/web-e2e/page-objects/dialogs/create-folder-dialog.page.ts",
+          "line": 88,
+          "end_line": 143,
+          "finding": "Folder creation dialog: trigger via .file-browser-new-folder-button, input is #folder-name-input, submit via .dialog-button--primary[type='submit']."
+        },
+        {
+          "path": "tests/web-e2e/page-objects/dialogs/move-dialog.page.ts",
+          "line": 95,
+          "end_line": 177,
+          "finding": "Move dialog: trigger right-click → Move to..., folders listed in .move-dialog-folder-list as .move-dialog-folder-item, confirm with .dialog-button--primary containing text 'Move'."
+        },
+        {
+          "path": "tests/web-e2e/page-objects/pages/bin.page.ts",
+          "line": 1,
+          "finding": "Recycle bin: nav via [data-testid='nav-item-bin'], items use [data-testid^='bin-item-'] prefix selector, restore/permanent-delete via right-click context menu."
+        }
+      ],
+      "workflow": [
+        "Puppeteer MCP can drive the full UAT flow autonomously (navigate, fill forms, click, evaluate JS) — eliminates manual browser testing for web app UAT.",
+        "When an upload fails at 0% with no network requests, the error is synchronous and pre-fetch; reading it from the React fiber (reactFiber internals on the DOM node) is the fastest diagnosis path.",
+        "Puppeteer frame detachment on page reload requires re-navigation (puppeteer_navigate back to the URL) before any further evaluate calls will succeed.",
+        "UAT results should be committed on a feature branch rather than directly to main, per repo convention."
+      ]
+    },
+    "friction": [
+      "Account was configured with 'external only' pinning mode pointing to an unreachable BYO IPFS node (192.168.133.12:5002), causing an instant silent failure with zero network requests before the real test could run.",
+      "Upload error string was not surfaced in network logs or visible UI text — required reading it from React fiber internals via page.evaluate.",
+      "Page reload during pinning mode settings save caused Puppeteer frame detachment, requiring full re-navigation and re-authentication.",
+      "Had to authenticate via OTP three separate times across the session (initial login, frame detachment recovery, logout→re-login lifecycle test).",
+      "TEE_WORKER_URL / TEE_WORKER_SECRET are not configured locally, causing a non-fatal warning logged during the pinning mode migration job that initially looked like a blocking error."
+    ],
+    "open_items": [
+      "Browser fetch binding bug in kubo-provider.ts:22 and psa-provider.ts:41 — BYO/dual-pin upload has never worked in a real browser. Two-line fix (globalThis.fetch.bind(globalThis)) needs to be applied and tested; phase 21 UAT debt is likely covering this same surface.",
+      "Phase 21 (BYO IPFS node) still has 4 uncleared human UAT items — strongly suspected to be blocked by or related to the fetch binding bug.",
+      "Phase 35 still has 6 uncleared human UAT items.",
+      "Pending todo: check remaining GitHub Actions workflows for Node 24 compatibility before the June deadline.",
+      "Local BYO IPFS node at 192.168.133.12:5002 is down/unreachable — external pinning mode is untestable until it's restored.",
+      "Recycle bin displays 0 B for file sizes — cosmetic but worth a targeted fix."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T13:03:55.756569Z",
+    "agent_lines": 56,
+    "agent_removed": 0,
+    "human_added": 38,
+    "human_modified": 21,
+    "human_removed": 0,
+    "total_committed": 115,
+    "total_lines_changed": 118,
+    "agent_percentage": 47.45762711864407,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 77,
+      "agent_lines_removed": 0
+    }
+  ]
+}
