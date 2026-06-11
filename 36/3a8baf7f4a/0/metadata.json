@@ -1,0 +1,165 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "363a8baf7f4a",
+  "session_id": "76fc2ea9-e2ee-4422-b71b-cf9b885217c1",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T22:53:22.026524Z",
+  "branch": "docs/gsd-docs-update",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d10d0417c34b",
+  "token_usage": {
+    "input_tokens": 78654,
+    "cache_creation_tokens": 683290,
+    "cache_read_tokens": 15619372,
+    "output_tokens": 117089,
+    "api_call_count": 100
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Run a full GSD docs-update workflow on the cipher-box monorepo to generate 9 canonical docs, 2 gap docs, 12 per-package READMEs, and accuracy-verify all existing hand-written specs against the live codebase.",
+    "outcome": "28 files committed to branch docs/gsd-docs-update (+2666/-467 lines); all 383+ verified claims passed after two fix-loop iterations and manual inline corrections for the 5 agents that died in a mid-session process restart.",
+    "learnings": {
+      "repo": [
+        "Types package was renamed: `packages/crypto/src/` → `packages/core/src/` — 15+ doc references to the old path were stale",
+        "Rust crypto module was removed from `apps/desktop/src-tauri/src/crypto/`; Rust logic now lives in `crates/core/src/`",
+        "`folder.service.ts` does not exist anywhere; web folder mutation logic lives in `apps/web/src/hooks/useFolderMutations.ts`",
+        "TEE republish interval is 6 hours (`REPUBLISH_INTERVAL_HOURS = 6` in republish.service.ts), not 3 hours as documented in CAPACITY.md",
+        "`pnpm api:generate` outputs to `packages/api-client/`, not `apps/web/src/api/`",
+        "E2E test scripts are `test:web-e2e` / `test:web-e2e:headed`, not `test:e2e` / `test:e2e:headed`",
+        "`folder_ipns` table has `IDX_folder_ipns_user_id` on `user_id` and a unique constraint on `(user_id, ipns_name)` — no standalone `ipns_name` index and no `owner_public_key` column",
+        "8 load test scenario files import `checkThresholds`, not 5 as documented (adds `sdk-folder-read`, `sdk-ipns-contention`, `sdk-upload-pipeline`)",
+        "`crates/core/src/file.rs` is an 11-line re-export shim — `FileMetadata` and `VersionEntry` Rust structs are actually defined in `crates/core/src/folder.rs`",
+        "`VERSION_COOLDOWN_MS` is not a named constant; it is a runtime struct field `version_cooldown_ms` in `crates/fuse/src/lib.rs:554`",
+        "`QUOTA_BYTES` is defined in `crates/fuse/src/constants.rs` for the FUSE layer; `vault.service.ts` only uses `QUOTA_LIMIT_BYTES`",
+        "`recovery.html` enforces hex-only private key input and explicitly rejects v1 folder format — VAULT_EXPORT_FORMAT.md documented both as supported",
+        "DATABASE_EVOLUTION_PROTOCOL was missing 2 of 16 migrations: `AddSignedRecordToFolderIpns` and `AddPublicKeyToFolderIpns`",
+        "`docker/docker-compose.yml` includes a `someguy` delegated-routing service on port 8190 not previously documented in DEVELOPMENT.md",
+        "`crates/fuse` uses `fuser = { version = \"0.16\" }` as a Cargo dependency; the patched vendored source is at `apps/desktop/src-tauri/vendor/fuser/src/channel.rs`, not inside the crate itself"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 102,
+          "end_line": 102,
+          "finding": "createFolder MAX_FOLDER_DEPTH enforcement (parentDepth >= MAX_FOLDER_DEPTH check)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 283,
+          "end_line": 283,
+          "finding": "moveFolder depth enforcement (destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH)"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "finding": "REPUBLISH_INTERVAL_HOURS = 6 (not 3 as documented in CAPACITY.md)"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 101,
+          "end_line": 103,
+          "finding": "TypeORM synchronize/migrations/migrationsRun config (DATABASE_EVOLUTION_PROTOCOL had stale line refs 85-87)"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 85,
+          "end_line": 91,
+          "finding": "FolderMetadata Rust struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 72,
+          "end_line": 80,
+          "finding": "FolderChild Rust struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 29,
+          "end_line": 46,
+          "finding": "FolderEntry Rust struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 173,
+          "end_line": 199,
+          "finding": "FileMetadata Rust struct — file.rs is a re-export shim only"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 152,
+          "end_line": 167,
+          "finding": "VersionEntry Rust struct — file.rs is a re-export shim only"
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 554,
+          "end_line": 554,
+          "finding": "version_cooldown_ms runtime struct field (no named constant VERSION_COOLDOWN_MS exists)"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/src/channel.rs",
+          "finding": "Vendored fuser source with FUSE-T socket patch; not inside crates/fuse"
+        },
+        {
+          "path": "recovery.html",
+          "line": 1102,
+          "end_line": 1102,
+          "finding": "Hex-only private key restriction for v2 recovery (base64 not supported)"
+        },
+        {
+          "path": "recovery.html",
+          "line": 931,
+          "end_line": 931,
+          "finding": "v1 format explicitly rejected with error log and continue (not implemented)"
+        }
+      ],
+      "workflow": [
+        "Background agents can die on transient API errors (socket closed, stream idle timeout) but sometimes auto-recover and complete — always check if the output file was written before relaunching to avoid a duplicate overwrite race",
+        "When an original agent recovers after a respawn is already running, use TaskStop immediately on the duplicate; both will write to the same path",
+        "Process restarts kill all in-flight background agents; on resume, check on-disk state and apply remaining fixes inline rather than re-spawning",
+        "GSD manifest at `.planning/tmp/docs-work-manifest.json` is the source of truth for wave/status tracking across agent restarts",
+        "Markdownlint MD040 (code fence missing language tag) is a common violation in generated docs and is enforced by lint-staged at commit time",
+        "Fix-loop iteration 2 can surface new findings at deeper scan depth (e.g. line ranges, additional stale file paths) not caught in iteration 1"
+      ]
+    },
+    "friction": [
+      "Two Wave 1 agents (ARCHITECTURE, CONFIGURATION) died on transient API errors mid-run; relaunching created a duplicate-write race when the originals auto-recovered, requiring TaskStop",
+      "A mid-session process restart killed all 5 iteration-2 fix agents simultaneously, requiring manual inline corrections for METADATA_SCHEMAS Rust line ranges and the other 4 docs",
+      "METADATA_SCHEMAS fixer in iteration 2 cited `crates/core/src/file.rs` for FileMetadata/VersionEntry, which is a re-export shim — introduced new wrong line ranges that the re-verifier caught, requiring a third manual pass",
+      "`agent-skills` query returned empty on first invocation (minor — workflow continued without it)",
+      "TaskStop calls for the two orphaned Wave-1 respawns silently failed because those agents had already died with the previous process exit"
+    ],
+    "open_items": [
+      "Branch `docs/gsd-docs-update` is local only — not pushed, no PR opened",
+      "20 VERIFY markers remain in CONFIGURATION.md (12) and DEPLOYMENT.md (6) and SECURITY.md (2) for infrastructure claims not provable from the repo (Grafana Cloud URLs, staging host/VPS details, Web3Auth dashboard values, GitHub private vulnerability reporting status)",
+      "DEVELOPMENT.md re-verification was not re-run after the final container-details update (someguy service addition) at end of session"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 86,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5670,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".planning/tmp/verify-CAPACITY.md.json": 14,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 20,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 38,
+        ".planning/tmp/verify-TESTING.md.json": 7
+      }
+    }
+  ]
+}
