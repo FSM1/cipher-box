@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3ca03e3156a3",
+  "session_id": "5f49479c-0fce-4278-8562-dc052015c752",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T13:37:02.667092Z",
+  "branch": "fix/audit-f03-byo-status-wiring",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/api/src/migration/migration.processor.spec.ts",
+    "apps/api/src/migration/migration.processor.ts",
+    "apps/api/src/migration/migration.service.spec.ts",
+    "apps/api/src/migration/migration.service.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "a97ccf2fc5dd",
+  "token_usage": {
+    "input_tokens": 19448,
+    "cache_creation_tokens": 153271,
+    "cache_read_tokens": 4536893,
+    "output_tokens": 31722,
+    "api_call_count": 59
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Run the audit-fix pipeline against UAT/verification findings to classify issues as auto-fixable vs manual-only, then autonomously fix auto-fixable findings with test verification and atomic signed commits.",
+    "outcome": "F-03 (BYO status wiring in StorageTab) and F-04 (MigrationProgress stale-failed-job rendering) were fixed, tested, and committed with signed commits. F-05 (migration batch timeout double-counting) was fixed and a commit was in flight at session end. F-08 (orphaned Phala secrets) was deferred as manual-only.",
+    "learnings": {
+      "repo": [
+        "SSH signature verification is enforced on PRs — commits must be signed; --no-gpg-sign is not an option.",
+        "Pre-commit hooks use lint-staged and take ~15s before the signing step.",
+        "1Password (op-ssh-sign) is the SSH signing agent; it must be unlocked and running or commits will hang indefinitely.",
+        "BYO advisory-quota flag is synced via PATCH /vault/byo-status; StorageTab must call this after a successful pinning-config save.",
+        "Migration module lives at apps/api/src/migration/ — processor and service both have companion spec files.",
+        "Several UAT findings (duplicate MetricsService imports, fetch binding, orphaned FUSE files) were already resolved on main before this session."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/settings/StorageTab.tsx",
+          "finding": "Save flow must call vaultControllerSetByoStatus({ isByo: mode !== 'cipherbox' }) after successful pinning-config save (non-fatal on failure), before fetchQuota() picks up the updated advisory flag."
+        },
+        {
+          "path": "apps/api/src/migration/migration.processor.ts",
+          "finding": "Migration batch timeout was double-counting; fix applied here and in migration.service.ts."
+        },
+        {
+          "path": "apps/api/src/migration/migration.service.ts",
+          "finding": "Co-modified with migration.processor.ts to resolve F-05 double-counting; companion spec files (migration.processor.spec.ts, migration.service.spec.ts) also updated."
+        }
+      ],
+      "workflow": [
+        "When a signed commit hangs on op-ssh-sign: kill all orphaned op-ssh-sign and git commit processes, restart 1Password app, then retry — a fresh signing request triggers the authorization prompt reliably.",
+        "Sandboxed shell environments block op-ssh-sign from reaching the 1Password agent; retry commits in an unsandboxed shell.",
+        "Always run git commit from the repo root; running tests in a subdirectory (e.g., apps/api) leaves the shell cwd there and causes scoped git-add to fail.",
+        "Run targeted test suites in parallel (API jest + web package tests) before committing to keep the pipeline fast."
+      ]
+    },
+    "friction": [
+      "1Password SSH signing caused the first commit to hang indefinitely inside a sandboxed shell that blocked op-ssh-sign from reaching the agent.",
+      "Multiple commit retries were needed across three separate attempts before the signing prompt surfaced correctly.",
+      "Shell cwd was left in apps/api after running Jest, causing the F-04 commit to fail with a path error before being retried from the repo root.",
+      "Background task notifications were the only way to confirm commit success or failure, adding latency to the pipeline between fixes."
+    ],
+    "open_items": [
+      "F-05 commit (migration batch timeout double-counting) was in flight at session end — confirm it landed and is signed.",
+      "F-08 (orphaned Phala secrets in GitHub staging environment) deferred as manual-only — requires manual secret rotation and environment cleanup.",
+      "Pre-existing uncommitted files (.planning/REQUIREMENTS.md, .planning/phases/18-performance-instrumentation/18-VALIDATION.md, Cargo.lock, apps/api/src/metrics/http-metrics.interceptor.spec.ts) are sitting on the branch untouched.",
+      "Branch fix/audit-f03-byo-status-wiring is local only — push and open a PR when F-05 commit is confirmed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-11T13:36:22.287156Z",
+    "agent_lines": 122,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 122,
+    "total_lines_changed": 126,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 164,
+      "user_lines_removed": 0,
+      "agent_lines_added": 565,
+      "agent_lines_removed": 33,
+      "user_added_per_file": {
+        ".planning/v1.1-MILESTONE-AUDIT.md": 164
+      }
+    }
+  ]
+}
