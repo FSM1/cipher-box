@@ -232,6 +232,8 @@ All entity files are relative to `apps/api/src/`.
 | `1742000000000` | `AddPinMigrations.ts`                | Create table       | `pin_migrations`                                                             |
 | `1743000000000` | `AddWritableShares.ts`               | Add columns        | `shares`                                                                     |
 | `1743100000000` | `WidenShareKeyType.ts`               | Alter column       | `share_keys`                                                                 |
+| `1743200000000` | `AddSignedRecordToFolderIpns.ts`     | Add column         | `folder_ipns`                                                                |
+| `1743300000000` | `AddPublicKeyToFolderIpns.ts`        | Add column         | `folder_ipns`                                                                |
 
 ---
 
@@ -346,9 +348,9 @@ During the creation of this protocol, the `device_approvals` table was identifie
 - **Migration files:** `apps/api/src/migrations/`
 - **FullSchema baseline:** `apps/api/src/migrations/1700000000000-FullSchema.ts`
 - **Entity files:** `apps/api/src/{module}/entities/*.entity.ts`
-- **TypeORM config:** `apps/api/src/app.module.ts` (lines 85-87 for `synchronize`/`migrations`/`migrationsRun`)
+- **TypeORM config:** `apps/api/src/app.module.ts` (lines 101-103 for `synchronize`/`migrations`/`migrationsRun`)
 - **Migration runner:** `apps/api/src/run-migrations.ts`
-- **Deploy workflow:** `.github/workflows/deploy-staging.yml` (line 287)
+- **Deploy workflow:** `.github/workflows/deploy-staging.yml` (lines 519-520)
 - **Metadata Evolution Protocol:** [docs/METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md)
 - **Metadata Schema Reference:** [docs/METADATA_SCHEMAS.md](METADATA_SCHEMAS.md)
 - **Phase 14 learnings:** `.learnings/2026-02-22-staging-migration-missing-create-table.md`

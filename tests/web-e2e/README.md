@@ -1,3 +1,5 @@
+<!-- generated-by: gsd-doc-writer -->
+
 # CipherBox E2E Tests
 
 End-to-end tests for CipherBox using Playwright.
@@ -34,7 +36,7 @@ pnpm test
 ### Specific test file
 
 ```bash
-pnpm test tests/auth/login.spec.ts
+pnpm test tests/wallet-login.spec.ts
 ```
 
 ### Single browser
@@ -55,67 +57,80 @@ pnpm test:headed
 pnpm test:debug
 ```
 
-### UI mode (interactive)
+### View last report
 
 ```bash
-pnpm test:ui
+pnpm test:report
 ```
 
 ## Test Structure
 
 ```text
 tests/web-e2e/
-├── fixtures/          # Test fixtures
-│   └── auth.fixture.ts    # Authenticated session fixture
-├── tests/             # Test specs
-│   └── auth/
-│       ├── login.spec.ts   # Login flow tests
-│       ├── logout.spec.ts  # Logout flow tests
-│       └── session.spec.ts # Session persistence tests
-├── utils/             # Test utilities
-│   └── wallet-login-helpers.ts # Wallet login helpers
-└── playwright.config.ts    # Playwright configuration
+├── fixtures/              # Static test assets
+│   └── files/             # Sample files for upload tests (images, PDFs, video, audio)
+├── page-objects/          # Page Object Model classes
+│   ├── login.page.ts      # Login page interactions
+│   ├── base.page.ts       # Base page helpers
+│   ├── dialogs/           # Dialog page objects
+│   ├── file-browser/      # File browser page objects
+│   └── pages/             # Other page objects
+├── tests/                 # Test specs (flat, no subdirectories)
+│   ├── wallet-login.spec.ts
+│   ├── full-workflow.spec.ts
+│   ├── sharing-workflow.spec.ts
+│   ├── mfa-flows.spec.ts
+│   ├── recovery.spec.ts
+│   ├── search-workflow.spec.ts
+│   ├── recycle-bin.spec.ts
+│   ├── conflict-detection.spec.ts
+│   ├── batch-download.spec.ts
+│   ├── writable-shares.spec.ts
+│   ├── invite-link-workflow.spec.ts
+│   ├── media-preview.spec.ts
+│   ├── streaming-playback.spec.ts
+│   └── journey-timing.spec.ts
+├── utils/                 # Test utilities
+│   ├── wallet-login-helpers.ts  # Mock wallet setup and login helpers
+│   ├── api-helpers.ts           # API-level helpers
+│   ├── cleanup-helpers.ts       # Account/data cleanup helpers
+│   ├── conflict-helpers.ts      # Conflict scenario helpers
+│   ├── mfa-helpers.ts           # MFA flow helpers
+│   ├── multi-account-wallet.ts  # Multi-account wallet setup
+│   └── test-files.ts            # Test file references
+└── playwright.config.ts   # Playwright configuration
 ```
 
 ## Authentication in Tests
 
-### Storage State Pattern
+### Mock Wallet Pattern
 
-Most tests use the **storage state pattern** for fast, reliable authentication:
+Tests authenticate using `@johanneskares/wallet-mock`, which installs an EIP-6963 mock
+provider in the browser. This avoids any real Web3Auth modal interaction and works fully
+headless in CI.
 
-1. **First run**: Perform manual login once to generate auth state
-2. **Subsequent runs**: Tests load saved auth state (fast, no Web3Auth interaction)
-
-### Setting up Auth State
-
-#### Option 1: Manual Login (Interactive)
-
-Run a test that requires authentication and complete the Web3Auth flow manually:
-
-```bash
-pnpm test:headed tests/auth/login.spec.ts
-```
-
-This will generate `.auth/user.json` with your authenticated session.
-
-#### Option 2: CI Setup
-
-For CI environments, auth state should be pre-generated and made available to tests. This can be done via:
-
-- Storing auth state as a CI secret
-- Using API-based test authentication endpoint
-- Programmatic Web3Auth authentication
-
-### Using Authenticated Tests
+Each test suite that requires authentication calls `setupMockWallet()` before navigating:
 
 ```typescript
-import { authenticatedTest } from '../fixtures/auth.fixture';
+import { setupMockWallet, createTestAccount } from '../utils/wallet-login-helpers';
 
-authenticatedTest('my test', async ({ authenticatedPage }) => {
-  // Page is already authenticated and on dashboard
-  await authenticatedPage.click('button');
+const account = createTestAccount(); // generates a random private key
+
+test.beforeAll(async ({ browser }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await setupMockWallet(page, account); // must be called before navigation
+  await page.goto('/');
 });
 ```
+
+For deterministic tests (e.g., wallet login flow), a well-known Hardhat account key is
+used instead of a random key.
+
+### No Storage State
+
+There is no global setup or stored `.auth/user.json` state. Each test suite sets up its
+own wallet-authenticated session from scratch using the mock wallet.
 
 ## CI Integration
 
@@ -123,7 +138,7 @@ E2E tests run automatically on GitHub Actions for every push and pull request to
 
 ### CI Workflow
 
-The E2E workflow (`.github/workflows/e2e.yml`):
+The E2E workflow (`.github/workflows/web-e2e.yml`):
 
 1. Starts PostgreSQL and IPFS services
 2. Installs dependencies and Playwright browsers
@@ -133,10 +148,9 @@ The E2E workflow (`.github/workflows/e2e.yml`):
 
 ### CI Environment
 
-- **Authentication**: Global setup creates placeholder auth state for CI
-- **Authenticated tests**: Skipped in CI (require manual Web3Auth interaction)
-- **Unauthenticated tests**: Run fully automated (login page, redirects, etc.)
+- **Authentication**: All tests use the mock wallet — no manual Web3Auth interaction required
 - **Services**: PostgreSQL and IPFS run as Docker containers
+- **Parallelism**: Tests run sequentially (`workers: 1`) to share a single browser session
 
 ### Running Tests Locally Like CI
 
@@ -149,29 +163,31 @@ This will:
 
 - Use HTML reporter (instead of interactive list)
 - Fail if any tests are marked `.only`
-- Never reuse existing dev server (always starts fresh)
+- Always start a fresh dev server (never reuses an existing one)
 
 ## Notes
 
-- **Web3Auth Modal Tests**: Tests that interact with the Web3Auth modal may be flaky and are skipped in CI
-- **Protected Routes**: Dashboard and Settings routes require authentication
-- **Logout**: Clears all session data and redirects to login page
-- **Session Persistence**: Auth state persists across page reloads via cookies and localStorage
+- **Chromium only**: Tests target Desktop Chrome; other browsers are not configured
+- **Sequential execution**: `fullyParallel: false`, `workers: 1` — tests run one at a time
+- **No retries**: Flakiness is fixed at the source, not masked with retries
+- **External target**: Set `BASE_URL` to a staging/production URL to skip local server startup
+- **Protected Routes**: Dashboard and file browser routes require wallet authentication
 
 ## Troubleshooting
 
-### "Authentication state not found" Error
+### Mock Wallet Not Detected
 
-This means you need to set up auth state first. Run an interactive test or generate auth state using the setup process.
+`setupMockWallet()` must be called before any `page.goto()`. If the wallet is not detected,
+ensure the call order in `beforeAll`/`beforeEach` is correct.
 
-### Web3Auth Modal Not Appearing
+### Web App Not Starting
 
-- Check that the web app is running (`pnpm dev` in workspace root)
-- Verify Web3Auth client ID is configured
-- Try running in headed mode to see what's happening
+- Verify `pnpm install` has been run at the monorepo root
+- Check that ports 3000 (API), 3001 (mock IPNS routing), and 5173 (web) are free
+- The mock IPNS routing service must be built first: `pnpm build` from the workspace root
 
 ### Tests Timing Out
 
 - Increase timeout in `playwright.config.ts`
-- Check that backend API is running and accessible
-- Verify network connectivity to Web3Auth services
+- Check that the backend API is running and accessible at `http://localhost:3000`
+- For CI, verify the `web-e2e.yml` workflow services started successfully

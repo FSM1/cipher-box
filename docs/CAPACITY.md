@@ -214,7 +214,7 @@ DHT propagation errors do not affect client-facing operations (fire-and-forget).
 **TEE Republishing:**
 
 - Independent scaling path. Add TEE workers to increase IPNS republish batch throughput.
-- Each TEE worker processes a batch of IPNS names every 3 hours.
+- Each TEE worker processes a batch of IPNS names every 6 hours.
 - Batch duration grows linearly with IPNS name count. Monitor `cipherbox_republish_batch_duration_seconds`.
 
 ---
@@ -256,11 +256,11 @@ ipns_names = users * (1 + avg_folders_per_user + avg_files_per_user)
 
 | Users  | Folders/User | Files/User | Total IPNS Names | TEE Republish Batch Size |
 | ------ | ------------ | ---------- | ---------------- | ------------------------ |
-| 100    | 10           | 100        | ~11,100          | ~11,100 every 3h         |
-| 1,000  | 10           | 100        | ~111,000         | ~111,000 every 3h        |
-| 10,000 | 10           | 100        | ~1,110,000       | ~1,110,000 every 3h      |
+| 100    | 10           | 100        | ~11,100          | ~11,100 every 6h         |
+| 1,000  | 10           | 100        | ~111,000         | ~111,000 every 6h        |
+| 10,000 | 10           | 100        | ~1,110,000       | ~1,110,000 every 6h      |
 
-TEE republish batch duration scales linearly with IPNS name count. At current Someguy publish throughput (~15 ops/s), 111,000 names would take ~2 hours to republish -- within the 3-hour window. At 1.1M names, multiple TEE workers or batching optimizations would be needed.
+TEE republish batch duration scales linearly with IPNS name count. At current Someguy publish throughput (~15 ops/s), 111,000 names would take ~2 hours to republish -- within the 6-hour window. At 1.1M names, multiple TEE workers or batching optimizations would be needed.
 
 ### 4.3 Database Growth
 
@@ -271,7 +271,7 @@ TEE republish batch duration scales linearly with IPNS name count. At current So
 | folder_ipns   | users x (folders + files) | ~111,000            | ~1,110,000           |
 | device_tokens | users x avg_devices       | ~2,000              | ~20,000              |
 
-The `folder_ipns` table is the largest growth driver. With proper indexing (already in place on `ipns_name` and `owner_public_key`), queries remain efficient at millions of rows.
+The `folder_ipns` table is the largest growth driver. With proper indexing (already in place on `user_id`, with a unique constraint on `(user_id, ipns_name)`), queries remain efficient at millions of rows.
 
 ### 4.4 Cost Estimates (Single Server Deployment)
 
@@ -296,7 +296,7 @@ These are rough estimates for a self-hosted tech demo deployment, not production
 
 ## 5. Load Test Thresholds
 
-Automated pass/fail thresholds are defined in `tests/load/src/harness/thresholds.ts` and integrated into all 5 load test scenarios. Thresholds are 2-3x observed baselines to avoid CI flakiness while still catching significant regressions.
+Automated pass/fail thresholds are defined in `tests/load/src/harness/thresholds.ts` and integrated into all 8 load test scenarios. Thresholds are 2-3x observed baselines to avoid CI flakiness while still catching significant regressions.
 
 | Scenario           | Operation    | p95 Threshold | Error Rate Max | Rationale                                 |
 | ------------------ | ------------ | ------------- | -------------- | ----------------------------------------- |
@@ -334,7 +334,7 @@ Automated pass/fail thresholds are defined in `tests/load/src/harness/thresholds
 - `tests/load/src/harness/thresholds.ts` -- Threshold checking module (ThresholdConfig, checkThresholds)
 - `tests/load/src/harness/metrics.ts` -- MetricsCollector with percentile calculation
 - `tests/load/src/harness/client-pool.ts` -- Multi-client pool management
-- `tests/load/src/scenarios/` -- 5 load test scenarios with threshold assertions
+- `tests/load/src/scenarios/` -- 8 load test scenarios with threshold assertions
 - `.github/workflows/load-test.yml` -- CI workflow for staging load tests
 
 ### Architecture

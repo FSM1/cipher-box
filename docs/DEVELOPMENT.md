@@ -119,13 +119,13 @@ pnpm --filter @cipherbox/crypto test
 Playwright auto-starts API + web via `webServer` config (requires infra services: Postgres, IPFS, Redis):
 
 ```bash
-pnpm test:e2e
+pnpm test:web-e2e
 ```
 
 Headed mode (shows browser):
 
 ```bash
-pnpm test:e2e:headed
+pnpm test:web-e2e:headed
 ```
 
 ### Desktop E2E
@@ -143,7 +143,7 @@ After modifying API endpoints, DTOs, or controllers, regenerate the typed client
 pnpm api:generate
 ```
 
-This generates the OpenAPI spec from the API, creates the typed client at `apps/web/src/api/`, and runs lint fixes. Always commit the regenerated files with your API changes.
+This generates the OpenAPI spec from the API, creates the typed client at `packages/api-client/`, and runs lint fixes. Always commit the regenerated files with your API changes.
 
 ## Code Quality
 
@@ -152,3 +152,30 @@ This generates the OpenAPI spec from the API, creates the typed client at `apps/
 - **Type checking:** `pnpm typecheck`
 - **Formatting:** Prettier (runs via lint-staged on commit)
 - **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) enforced by commitlint (`feat:`, `fix:`, `docs:`, etc.)
+
+## Running the TEE Worker (Simulator Mode)
+
+The TEE worker (`apps/tee-worker`) republishes IPNS records. In production it runs inside a Phala Cloud CVM; locally it runs in **simulator mode**, which uses a deterministic HKDF-SHA256 seed instead of hardware-backed key derivation.
+
+Set the required environment variables and start the worker:
+
+```bash
+TEE_MODE=simulator TEE_WORKER_SECRET=dev-secret pnpm --filter cipherbox-tee-worker dev
+```
+
+The worker listens on port `3001` by default. The API authenticates to the TEE worker using a shared `Bearer` token — set the same value in `apps/api/.env`:
+
+```bash
+TEE_WORKER_SECRET=dev-secret
+TEE_WORKER_URL=http://localhost:3001
+```
+
+Key variables:
+
+| Variable            | Required | Notes                                           |
+| :------------------ | :------- | :---------------------------------------------- |
+| `TEE_MODE`          | Yes      | `simulator` (local) or `cvm` (Phala Cloud prod) |
+| `TEE_WORKER_SECRET` | Yes      | Shared secret for Bearer token auth             |
+| `PORT`              | No       | Defaults to `3001`                              |
+
+`TEE_MODE=simulator` is blocked at runtime if `NODE_ENV=production` or `CIPHERBOX_ENVIRONMENT=production` to prevent accidental use of the fixed seed in production.

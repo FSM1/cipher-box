@@ -31,7 +31,7 @@ CipherBox stores all metadata encrypted client-side using AES-256-GCM or ECIES b
 Metadata exists in two implementations that must produce byte-identical JSON (camelCase field names):
 
 - **TypeScript** -- `packages/crypto/src/` (web app, shared crypto library)
-- **Rust** -- `apps/desktop/src-tauri/src/crypto/` (desktop app, uses `serde(rename_all = "camelCase")`)
+- **Rust** -- `crates/core/src/` (desktop app, uses `serde(rename_all = "camelCase")`)
 
 This document defines the canonical schema for every metadata object in the system. For rules governing how these schemas evolve over time, see [METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md).
 
@@ -71,9 +71,9 @@ Folder metadata and file metadata share the same encrypted envelope format for I
 
 **Source files:**
 
-- TS folder: `packages/crypto/src/folder/types.ts:53-58` (`EncryptedFolderMetadata`)
-- TS file: `packages/crypto/src/file/types.ts:75-80` (`EncryptedFileMetadata`)
-- Rust: inline struct in `apps/desktop/src-tauri/src/fuse/operations.rs` (defined locally)
+- TS folder: `packages/core/src/folder/types.ts:53-58` (`EncryptedFolderMetadata`)
+- TS file: `packages/core/src/file/types.ts:79-84` (`EncryptedFileMetadata`)
+- Rust: inline struct in `crates/fuse/src/operations.rs` (defined locally)
 
 **Encoding note:** The `iv` field is hex-encoded. The `data` field uses standard base64 (not base64url, not hex). Mixing up encodings causes decryption failures.
 
@@ -96,9 +96,9 @@ The top-level metadata object for each folder. Contains an array of children (su
 
 **Source files:**
 
-- TS types: `packages/crypto/src/folder/types.ts:15-20`
-- TS validator: `packages/crypto/src/folder/metadata.ts:32-78`
-- Rust: `apps/desktop/src-tauri/src/crypto/folder.rs:78-84`
+- TS types: `packages/core/src/folder/types.ts:15-20`
+- TS validator: `packages/core/src/folder/metadata.ts:38-96`
+- Rust: `crates/core/src/folder.rs:85-91`
 
 **Version history:**
 
@@ -122,8 +122,8 @@ Discriminated union type for children within a folder.
 
 **Source files:**
 
-- TS: `packages/crypto/src/folder/types.ts:25`
-- Rust: `apps/desktop/src-tauri/src/crypto/folder.rs:66-73` (serde internally tagged enum with `#[serde(tag = "type", rename_all = "lowercase")]`)
+- TS: `packages/core/src/folder/types.ts:25`
+- Rust: `crates/core/src/folder.rs:72-80` (serde internally tagged enum with `#[serde(tag = "type", rename_all = "lowercase")]`)
 
 ---
 
@@ -150,8 +150,8 @@ A subfolder child within folder metadata. Contains ECIES-wrapped keys for access
 
 **Source files:**
 
-- TS: `packages/crypto/src/folder/types.ts:31-47`
-- Rust: `apps/desktop/src-tauri/src/crypto/folder.rs:28-45`
+- TS: `packages/core/src/folder/types.ts:31-47`
+- Rust: `crates/core/src/folder.rs:29-46`
 
 **Version history:** Unchanged since initial design.
 
@@ -179,8 +179,8 @@ A slim file reference within v2 folder metadata. Points to a file's own IPNS rec
 
 **Source files:**
 
-- TS: `packages/crypto/src/file/types.ts:57-73`
-- Rust: `apps/desktop/src-tauri/src/crypto/folder.rs:50-70`
+- TS: `packages/core/src/file/types.ts:57-73`
+- Rust: `crates/core/src/folder.rs:50-70`
 
 **Version history:** Added in Phase 12.6 (replaced inline `FileEntry` in v2 folders). `ipnsPrivateKeyEncrypted` added in v0.14.0 (random IPNS key migration).
 
@@ -211,9 +211,9 @@ Per-file metadata stored in a file's own IPNS record. Contains all crypto materi
 
 **Source files:**
 
-- TS types: `packages/crypto/src/file/types.ts:30-51`
-- TS validator: `packages/crypto/src/file/metadata.ts:93-188`
-- Rust: `apps/desktop/src-tauri/src/crypto/folder.rs:166-192`
+- TS types: `packages/core/src/file/types.ts:30-51`
+- TS validator: `packages/core/src/file/metadata.ts:98-193`
+- Rust: `crates/core/src/folder.rs:173-199` (re-exported via `file.rs`)
 
 **Version history:**
 
@@ -262,9 +262,9 @@ A single past version of a file. Embedded in the `versions` array of `FileMetada
 
 **Source files:**
 
-- TS types: `packages/crypto/src/file/types.ts:10-23`
-- TS validator: `packages/crypto/src/file/metadata.ts:32-87`
-- Rust: `apps/desktop/src-tauri/src/crypto/folder.rs:145-160`
+- TS types: `packages/core/src/file/types.ts:10-23`
+- TS validator: `packages/core/src/file/metadata.ts:37-92`
+- Rust: `crates/core/src/folder.rs:152-167` (re-exported via `file.rs`)
 
 **Version history:** Added in Phase 13 (File Versioning).
 
@@ -303,7 +303,7 @@ Key-only binary envelope storing the ECIES-wrapped `rootFolderKey`. Written once
 
 - TS: `packages/core/src/vault/blob.ts` (`serializeVaultBlobV2`, `deserializeVaultBlobV2`, `detectBlobVersion`)
 - Return type: `Uint8Array` (raw ECIES-encrypted `rootFolderKey`)
-- Rust: `apps/desktop/src-tauri/src/crypto/vault_blob.rs`
+- Rust: `crates/core/src/vault_blob.rs`
 
 **Detection:** `detectBlobVersion(blob)` returns `2` if `blob[0] === 0x02`, else `1` (v1 JSON). v1 blobs start with `0x7B` (`{`).
 
@@ -394,7 +394,7 @@ An individual device record within the `DeviceRegistry`. Tracks authentication s
 **Validator constraints:**
 
 - `deviceId`: exactly 64 hex characters (SHA-256 output)
-- `publicKey`: exactly 130 hex characters (uncompressed secp256k1 point: `04` prefix + 64 bytes)
+- `publicKey`: exactly 64 hex characters (32-byte Ed25519 public key)
 - `ipHash`: exactly 64 hex characters (SHA-256 output)
 - `name`: max 200 characters
 - `appVersion`: max 50 characters
@@ -405,8 +405,8 @@ An individual device record within the `DeviceRegistry`. Tracks authentication s
 
 **Source files:**
 
-- TS types: `packages/crypto/src/registry/types.ts:21-46`
-- TS validator: `packages/crypto/src/registry/schema.ts:63-136`
+- TS types: `packages/core/src/registry/types.ts:21-46`
+- TS validator: `packages/core/src/registry/schema.ts:63-136`
 
 **Version history:** Added in Phase 12.2 (Encrypted Device Registry).
 
@@ -416,17 +416,17 @@ An individual device record within the `DeviceRegistry`. Tracks authentication s
 
 TypeScript and Rust implementations must produce identical JSON for the same logical data.
 
-| Schema            | TypeScript          | Rust                                   | Notes                          |
-| ----------------- | ------------------- | -------------------------------------- | ------------------------------ |
-| FolderMetadata    | `folder/types.ts`   | `crypto/folder.rs`                     | Both platforms                 |
-| FolderChild       | `folder/types.ts`   | `crypto/folder.rs` (serde tagged enum) | Both platforms                 |
-| FolderEntry       | `folder/types.ts`   | `crypto/folder.rs`                     | Both platforms                 |
-| FilePointer       | `file/types.ts`     | `crypto/folder.rs`                     | Both platforms                 |
-| FileMetadata      | `file/types.ts`     | `crypto/folder.rs`                     | Both platforms                 |
-| VersionEntry      | `file/types.ts`     | `crypto/folder.rs`                     | Both platforms                 |
-| VaultKeyBlob (v2) | `vault/blob.ts`     | `crypto/vault_blob.rs`                 | Both platforms (binary format) |
-| DeviceRegistry    | `registry/types.ts` | --                                     | TypeScript only                |
-| DeviceEntry       | `registry/types.ts` | --                                     | TypeScript only                |
+| Schema            | TypeScript          | Rust                                            | Notes                          |
+| ----------------- | ------------------- | ----------------------------------------------- | ------------------------------ |
+| FolderMetadata    | `folder/types.ts`   | `crates/core/src/folder.rs`                     | Both platforms                 |
+| FolderChild       | `folder/types.ts`   | `crates/core/src/folder.rs` (serde tagged enum) | Both platforms                 |
+| FolderEntry       | `folder/types.ts`   | `crates/core/src/folder.rs`                     | Both platforms                 |
+| FilePointer       | `file/types.ts`     | `crates/core/src/folder.rs`                     | Both platforms                 |
+| FileMetadata      | `file/types.ts`     | `crates/core/src/folder.rs`                     | Both platforms                 |
+| VersionEntry      | `file/types.ts`     | `crates/core/src/folder.rs`                     | Both platforms                 |
+| VaultKeyBlob (v2) | `vault/blob.ts`     | `crates/core/src/vault_blob.rs`                 | Both platforms (binary format) |
+| DeviceRegistry    | `registry/types.ts` | --                                              | TypeScript only                |
+| DeviceEntry       | `registry/types.ts` | --                                              | TypeScript only                |
 
 **Rust serialization strategy:** All Rust structs use `#[serde(rename_all = "camelCase")]` to produce camelCase JSON field names matching the TypeScript convention. The `FolderChild` enum uses `#[serde(tag = "type", rename_all = "lowercase")]` for internally tagged union serialization.
 
@@ -442,11 +442,11 @@ CipherBox uses two strategies for Ed25519 IPNS keypairs:
 
 Used for the root vault, vault key blob, and device registry where discoverability from the private key alone is required.
 
-| Purpose              | Salt           | HKDF Info                           | Stores                                      | Source File                                   |
-| -------------------- | -------------- | ----------------------------------- | ------------------------------------------- | --------------------------------------------- |
-| Root folder IPNS     | `CipherBox-v1` | `cipherbox-vault-ipns-v1`           | v1 folder metadata `{iv, data}`             | `packages/crypto/src/vault/derive-ipns.ts`    |
-| Vault key blob IPNS  | `CipherBox-v1` | `cipherbox-vault-key-ipns-v1`       | v2 key blob (ECIES-wrapped `rootFolderKey`) | `packages/crypto/src/vault/derive-ipns.ts`    |
-| Device registry IPNS | `CipherBox-v1` | `cipherbox-device-registry-ipns-v1` | ECIES-encrypted registry                    | `packages/crypto/src/registry/derive-ipns.ts` |
+| Purpose              | Salt           | HKDF Info                           | Stores                                      | Source File                                 |
+| -------------------- | -------------- | ----------------------------------- | ------------------------------------------- | ------------------------------------------- |
+| Root folder IPNS     | `CipherBox-v1` | `cipherbox-vault-ipns-v1`           | v1 folder metadata `{iv, data}`             | `packages/crypto/src/vault/derive-ipns.ts`  |
+| Vault key blob IPNS  | `CipherBox-v1` | `cipherbox-vault-key-ipns-v1`       | v2 key blob (ECIES-wrapped `rootFolderKey`) | `packages/crypto/src/vault/derive-ipns.ts`  |
+| Device registry IPNS | `CipherBox-v1` | `cipherbox-device-registry-ipns-v1` | ECIES-encrypted registry                    | `packages/core/src/registry/derive-ipns.ts` |
 
 **Root folder vs vault key blob:** These are two separate IPNS names derived from the same private key with different HKDF info strings. The root folder IPNS stores standard folder metadata (updated on every folder operation). The vault key blob IPNS stores the ECIES-wrapped `rootFolderKey` (written once at vault init, read on every login). This separation prevents folder publishes from overwriting the key blob.
 
@@ -465,10 +465,10 @@ secp256k1 privateKey (32 bytes)
 
 Used for subfolders and new files. The private key is ECIES-wrapped with the vault owner's public key and stored in the parent folder's metadata.
 
-| Purpose       | Storage Location                      | Source File                               |
-| ------------- | ------------------------------------- | ----------------------------------------- |
-| Subfolder     | `FolderEntry.ipnsPrivateKeyEncrypted` | `packages/crypto/src/ed25519/keygen.ts`   |
-| Per-file IPNS | `FilePointer.ipnsPrivateKeyEncrypted` | `packages/crypto/src/file/derive-ipns.ts` |
+| Purpose       | Storage Location                      | Source File                             |
+| ------------- | ------------------------------------- | --------------------------------------- |
+| Subfolder     | `FolderEntry.ipnsPrivateKeyEncrypted` | `packages/crypto/src/ed25519/keygen.ts` |
+| Per-file IPNS | `FilePointer.ipnsPrivateKeyEncrypted` | `packages/core/src/file/derive-ipns.ts` |
 
 **Migration:** Legacy files without `ipnsPrivateKeyEncrypted` fall back to HKDF derivation. Lazy migration writes the encrypted key when folder metadata is next published. Recovery traverses the folder tree via `fileMetaIpnsName` and never derives IPNS names independently, so the random-key approach is safe.
 

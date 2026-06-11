@@ -265,10 +265,10 @@ After decrypting the `data` field with the folder's AES-256 key and the `iv`, th
 }
 ```
 
-| Field      | Type   | Description                                                                  |
-| ---------- | ------ | ---------------------------------------------------------------------------- |
-| `version`  | string | Schema version: `"v1"` (inline file data) or `"v2"` (per-file IPNS pointers) |
-| `children` | array  | Array of folder and file child entries                                       |
+| Field      | Type   | Description                                                                                                                                |
+| ---------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `version`  | string | Schema version: `"v2"` (per-file IPNS pointers). `"v1"` (inline file data) is a historical format rejected by the reference recovery tool. |
+| `children` | array  | Array of folder and file child entries                                                                                                     |
 
 ### Folder Child Entry
 
@@ -457,10 +457,11 @@ assert export.encryptedRootIpnsPrivateKey is not empty
 
 ### Step 2: Accept Private Key
 
-The user's secp256k1 private key is 32 bytes. It may be provided as:
+The user's secp256k1 private key is 32 bytes. It must be provided as:
 
 - 64-character hex string (with or without `0x` prefix)
-- Base64-encoded string (~44 characters)
+
+> **Note:** Base64 input is not supported by the reference recovery tool (`recovery.html`), which accepts hex only.
 
 ```text
 private_key = parse_key_input(user_input)   // 32 bytes
@@ -546,23 +547,14 @@ subfolder_cid = resolve_ipns(child.ipnsName)
 // 5. Recursively process subfolder's children (this step)
 ```
 
-**If child is a file (v1 -- inline file data):**
+**If child is a file without `fileMetaIpnsName` (v1 -- historical, not supported):**
 
 ```text
-// v1 folder metadata: file data embedded directly in the child entry
-// 1. ECIES-decrypt the file key
-file_key = ecies_decrypt(private_key, hex_to_bytes(child.fileKeyEncrypted))
-// file_key is 32 bytes
-
-// 2. Fetch encrypted file from IPFS
-encrypted_file = http_get("https://ipfs.io/ipfs/{child.cid}")
-
-// 3. Decrypt file content
-iv = hex_to_bytes(child.fileIv)    // 12 bytes
-decrypted_file = aes_256_gcm_decrypt(file_key, iv, encrypted_file)
-
-// 4. Save decrypted_file with name child.name
-//    Preserve folder path from recursive traversal
+// v1 folder metadata: file data embedded directly in the child entry.
+// The reference recovery tool (recovery.html) logs an error and skips
+// these children — v1 inline file recovery is not implemented.
+log_error("Invalid file child '" + child.name + "': missing fileMetaIpnsName (v1 format not supported)")
+continue  // skip; do not attempt recovery
 ```
 
 **If child is a file (v2 -- FilePointer with per-file IPNS):**
