@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "8e16e8caace9",
+  "session_id": "5f49479c-0fce-4278-8562-dc052015c752",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T13:52:59.475196Z",
+  "branch": "fix/audit-f03-byo-status-wiring",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "d4410bf5ad7a",
+  "token_usage": {
+    "input_tokens": 30923,
+    "cache_creation_tokens": 178155,
+    "cache_read_tokens": 6902605,
+    "output_tokens": 41156,
+    "api_call_count": 79
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Run the audit-fix pipeline on cipher-box UAT findings, auto-fix eligible issues with test verification and atomic signed commits, then ship the branch as a PR.",
+    "outcome": "Fixed F-03 (BYO status wiring in StorageTab), F-04 (failed-migration rendering and poll restart), F-05 (batch timeout and idempotent progress accounting), marked F-08 not-applicable, and created PR #479 from branch fix/audit-f03-byo-status-wiring.",
+    "learnings": {
+      "repo": [
+        "SSH commit signing is enforced via 1Password's op-ssh-sign and PR signature verification is also enforced — commits cannot be made with --no-gpg-sign.",
+        "Committing from a sandboxed shell blocks op-ssh-sign from reaching the 1Password agent; commits must run unsandboxed and 1Password must be unlocked.",
+        "The project disallows direct commits to main; all fixes must go on a feature branch.",
+        "The audit-uat source reads from .planning/phases/*/*-UAT.md and .planning/phases/*/*-VERIFICATION.md glob patterns.",
+        "Phala Cloud env vars (PHALA_CLOUD_API_KEY, PHALA_TEE_WORKER_URL) in GitHub staging are currently inert — user expects Phala credits soon and they should not be re-flagged in future audits."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/settings/StorageTab.tsx",
+          "finding": "BYO advisory-quota flag was never synced on save; fix calls vaultControllerSetByoStatus({ isByo: mode !== 'cipherbox' }) after a successful pinning-config save (non-fatal on failure), then fetchQuota() picks up the updated flag."
+        },
+        {
+          "path": "apps/web/src/components/settings/MigrationProgress.tsx",
+          "finding": "Failed migrations were not rendering with a clear status string; adding key={migrationRunId} causes React to remount the component after migrationApi.start, restarting polling correctly for new runs."
+        },
+        {
+          "path": "apps/api/src/migration/migration.processor.ts",
+          "finding": "Batch timeout was 120s (worst case ~130s, causing spurious failures); raised to 300s. updateProgress was double-counting failures — fixed by using failedCidList as the authoritative source for the failed count with a migrated + failed ≤ totalCids clamp."
+        },
+        {
+          "path": ".planning/phases/35-phala-testnet-tee-migration/35-UAT.md",
+          "finding": "F-08 (orphaned Phala secrets in GitHub staging) marked not-applicable with rationale so future audits skip it."
+        }
+      ],
+      "workflow": [
+        "When op-ssh-sign hangs, the recovery procedure is: kill the hung git commit and op-ssh-sign processes, restart the 1Password desktop app, then retry the commit — this consistently unblocks the signing flow.",
+        "Running jest inside a package subdirectory leaves the shell cwd in that directory; subsequent git commands from the same shell session will fail unless the path is explicitly set to the repo root.",
+        "The audit-fix pipeline classifies findings as auto-fixable vs manual-only before attempting any fixes, making it easy for the user to upgrade manual-only items to auto-fixable mid-session.",
+        "STATE.md should be updated and committed after shipping to track PR number and date."
+      ]
+    },
+    "friction": [
+      "1Password op-ssh-sign hung three times across multiple commit attempts, requiring process kills, app restarts, and retries — each cycle added ~5-10 minutes of delay.",
+      "The sandboxed shell used for background Bash tasks blocks the SSH signing agent socket, making signed commits impossible from within it; required switching to unsandboxed execution.",
+      "A stale cwd left in apps/api after running jest caused the first F-04 commit attempt to fail with a detached-HEAD-style error."
+    ],
+    "open_items": [
+      "F-08: PHALA_CLOUD_API_KEY and PHALA_TEE_WORKER_URL in GitHub staging environment are inert — user is expecting Phala credits to fund the staging TEE infra before activating them.",
+      "Pre-existing uncommitted files on the branch (.planning/REQUIREMENTS.md, .planning/phases/18-performance-instrumentation/18-VALIDATION.md, Cargo.lock, apps/api/src/metrics/http-metrics.interceptor.spec.ts) were intentionally left untouched and are not part of this PR."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 164,
+      "user_lines_removed": 0,
+      "agent_lines_added": 443,
+      "agent_lines_removed": 29,
+      "user_added_per_file": {
+        ".planning/v1.1-MILESTONE-AUDIT.md": 164
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 164,
+      "user_lines_removed": 0,
+      "agent_lines_added": 443,
+      "agent_lines_removed": 29,
+      "user_added_per_file": {
+        ".planning/v1.1-MILESTONE-AUDIT.md": 164
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "8e16e8caace9",
+  "strategy": "manual-commit",
+  "branch": "fix/audit-f03-byo-status-wiring",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/8e/16e8caace9/0/metadata.json",
+      "transcript": "/8e/16e8caace9/0/full.jsonl",
+      "content_hash": "/8e/16e8caace9/0/content_hash.txt",
+      "prompt": "/8e/16e8caace9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30923,
+    "cache_creation_tokens": 178155,
+    "cache_read_tokens": 6902605,
+    "output_tokens": 41156,
+    "api_call_count": 79
+  }
+}
