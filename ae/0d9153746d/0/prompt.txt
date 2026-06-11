@@ -1,0 +1,13 @@
+/gsd:explore
+
+---
+
+The v1.1 milestone introduced a lot of architectural and performance improvements to the platform. do you see any areas that might do with improving the protocol, ensuring operation idempotency and ACID patterns, while still delivering the same or improved privacy?
+
+---
+
+what was that last response? what data do write shares need to authorize publishes - writes are controlled by access to the ECIES encrypted metadata ipns key
+
+---
+
+yes capture the todos

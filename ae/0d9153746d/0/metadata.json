@@ -1,0 +1,187 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ae0d9153746d",
+  "session_id": "e154945f-2a00-469e-bfca-c169c0c76a88",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T18:12:31.542133Z",
+  "branch": "docs/explore-protocol-and-privacy-hardening",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/notes/ipns-write-auth-is-cryptographic.md",
+    ".planning/seeds/blind-share-social-graph.md",
+    ".planning/todos/pending/2026-06-11-fuse-mkdir-parent-publish-orphan.md",
+    ".planning/todos/pending/2026-06-11-fuse-release-data-loss-before-remote-commit.md",
+    ".planning/todos/pending/2026-06-11-ipfs-unpin-missing-ownership-check.md",
+    ".planning/todos/pending/2026-06-11-ipns-409-retry-lost-update.md",
+    ".planning/todos/pending/2026-06-11-server-quota-never-decremented-on-unpin.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f0d5e5ef19c6",
+  "token_usage": {
+    "input_tokens": 18152,
+    "cache_creation_tokens": 177151,
+    "cache_read_tokens": 1896202,
+    "output_tokens": 72359,
+    "api_call_count": 24
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Explore protocol hardening opportunities (idempotency, ACID patterns) in cipher-box v1.1 while preserving or improving privacy, with focus on the IPNS write-share mechanism.",
+    "outcome": "Identified that IPNS write authorization is fully cryptographic (key possession), not server-enforced — enabling full social-graph blinding as a small protocol change rather than a redesign. Captured 1 architectural note, 1 forward-looking seed, and 5 high-severity bug todos, all committed to a docs branch.",
+    "learnings": {
+      "repo": [
+        "IPNS write control is cryptographic: a write-share recipient gets an ECIES-wrapped IPNS private key; producing a validly-signed record IS the authorization — the server is not in the trust path.",
+        "`findActiveWriteShare` is DB-row routing, not a security boundary: it redirects Bob's publish onto Alice's canonical row keyed by (userId, ipnsName); the resolve path keys by ipnsName alone and ignores the edge entirely.",
+        "The server self-increments the IPNS sequence number instead of reading it from the signed record, and never verifies the Ed25519 signature — acknowledged in a comment at ipns.service.ts:543.",
+        "The social-graph write-share edge is a caching/routing convenience; revoking a write-share requires rotating the IPNS key (which the existing rotation path already does), not edge deletion.",
+        "There is an existing todo at .planning/todos/pending/2026-02-22-crdt-ipns-inbox-sharing.md for a CRDT IPNS inbox for serverless share discovery — the new finding makes that todo's scope smaller.",
+        "`POST /ipfs/unpin` has no ownership check — any authenticated user can unpin any CID.",
+        "The quota decrement function `recordUnpin` in vault.service.ts has zero callers, so storage usage grows monotonically until lockout.",
+        "FUSE `release()` returns OK to the OS and then zeroizes/deletes the temp file before completing the remote commit — a crash after ack causes silent permanent data loss.",
+        "FUSE `mkdir` never queues the parent for republish on macOS, causing the folder to vanish on restart.",
+        "The SDK 409 retry handler re-resolves only the sequence and republishes stale children, silently overwriting a concurrent writer."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 79,
+          "end_line": 83,
+          "finding": "Server optionally checks that publicKey derives to ipnsName but never verifies the Ed25519 signature on publish."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 213,
+          "end_line": 218,
+          "finding": "Write-share lookup redirects Bob's publish onto Alice's canonical row — this is routing, not authorization."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 246,
+          "end_line": 246,
+          "finding": "Server self-increments the sequence number instead of reading it from the signed record — root of sequence-divergence bug."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 351,
+          "end_line": 353,
+          "finding": "getFolderIpns keys the canonical row by (userId, ipnsName) on the write path."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 418,
+          "end_line": 419,
+          "finding": "Resolve path keys by ipnsName alone and never consults the share edge."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 543,
+          "end_line": 543,
+          "finding": "Comment acknowledging the sequence-integrity bug."
+        },
+        {
+          "path": "apps/api/src/ipfs/ipfs.controller.ts",
+          "line": 144,
+          "end_line": 148,
+          "finding": "POST /ipfs/unpin missing ownership check — any authenticated user can unpin any CID."
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "line": 225,
+          "end_line": 230,
+          "finding": "recordUnpin has zero callers — quota is never decremented on unpin."
+        },
+        {
+          "path": "crates/fuse/src/read_ops.rs",
+          "line": 835,
+          "end_line": 848,
+          "finding": "release() returns OK to OS then zeroizes/deletes temp file before remote commit completes — crash window causes silent permanent data loss."
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 194,
+          "end_line": 194,
+          "finding": "mkdir never queues parent for republish on macOS; folder disappears on restart. Line number flagged as unverified — needs grep before fixing."
+        },
+        {
+          "path": "sdk-core/folder/index.ts",
+          "line": 196,
+          "end_line": 232,
+          "finding": "409 retry re-resolves only the sequence and republishes stale children, silently overwriting a concurrent writer."
+        }
+      ],
+      "workflow": [
+        "When an agent's architectural summary conflicts with the user's mental model of the code, read the actual source before restating — the agent's framing of 'write-shares need structural exposure' was wrong and the user caught it immediately.",
+        "GSD explore sessions benefit from cross-linking new notes/seeds to pre-existing todos rather than creating duplicate artifacts.",
+        "Staging only the new exploration artifacts by explicit pathspec (not `git add .`) preserved pre-existing staged changes in the working tree."
+      ]
+    },
+    "friction": [
+      "Initial agent sweep produced an incorrect architectural claim (write-share graph must be exposed for authorization) that required correcting via direct code reading after the user challenged it.",
+      "An AskUserQuestion call interrupted the flow before the corrected analysis was fully formed, leading to a slightly disjointed exchange."
+    ],
+    "open_items": [
+      "Discovery model for capability-based (blinded) shares is unresolved: the server social edge provided 'what's shared with me?' for free; a replacement (e.g. blinded CRDT inbox) needs design. Cross-linked to 2026-02-22-crdt-ipns-inbox-sharing.md todo.",
+      "Linchpin protocol change not yet implemented: server should verify IPNS record Ed25519 signature against ipnsName and key canonical records by ipnsName (not userId) — this also fixes the sequence-divergence bug.",
+      "FUSE mkdir macOS line number in write_ops.rs:194 flagged as unverified — needs grep before the fix is written.",
+      "Full capability-based share redesign (seed: blind-share-social-graph.md) deferred until the discovery model question is resolved.",
+      "Five high-severity bug todos created but not yet assigned or scheduled for a sprint."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-11T18:11:54.669646Z",
+    "agent_lines": 299,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 299,
+    "total_lines_changed": 299,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 607,
+      "user_lines_removed": 29,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".planning/REQUIREMENTS.md": 9,
+        ".planning/phases/18-performance-instrumentation/18-VALIDATION.md": 30,
+        ".planning/v1.1-MILESTONE-AUDIT.md": 164,
+        "Cargo.lock": 1,
+        "apps/api/src/metrics/http-metrics.interceptor.spec.ts": 403
+      },
+      "user_removed_per_file": {
+        ".planning/REQUIREMENTS.md": 9,
+        ".planning/phases/18-performance-instrumentation/18-VALIDATION.md": 19,
+        "Cargo.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 607,
+      "agent_lines_removed": 29
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 714,
+      "agent_lines_removed": 29
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 906,
+      "agent_lines_removed": 29
+    }
+  ]
+}
