@@ -11,3 +11,7 @@ what was that last response? what data do write shares need to authorize publish
 ---
 
 yes capture the todos
+
+---
+
+yeah please, commit all of these to a docs branch
