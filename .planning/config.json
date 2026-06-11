@@ -5,7 +5,7 @@
   "commit_docs": true,
   "created": "2026-01-20",
   "notes": "Start interactive, can switch to YOLO once confident",
-  "model_profile": "adaptive",
+  "model_profile": "balanced",
   "workflow": {
     "research": true,
     "plan_check": true,
