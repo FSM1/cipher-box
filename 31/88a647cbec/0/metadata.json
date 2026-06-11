@@ -1,0 +1,190 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3188a647cbec",
+  "session_id": "76fc2ea9-e2ee-4422-b71b-cf9b885217c1",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T22:58:32.255479Z",
+  "branch": "docs/gsd-docs-update",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ea438addcdb3",
+  "token_usage": {
+    "input_tokens": 96600,
+    "cache_creation_tokens": 703307,
+    "cache_read_tokens": 18312346,
+    "output_tokens": 125209,
+    "api_call_count": 109
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Run the GSD docs-update workflow to generate, verify, and fix all project documentation for the cipher-box monorepo, then ship the result as a PR via the GSD ship workflow.",
+    "outcome": "Generated/updated 22 docs (10 canonical+gap, 12 per-package READMEs), fact-checked 17 docs against the live codebase (383+ claims), corrected all inaccuracies across 2 fix iterations, and merged a PR on branch docs/gsd-docs-update.",
+    "learnings": {
+      "repo": [
+        "packages/crypto/ was renamed to packages/core/ — METADATA_SCHEMAS, METADATA_EVOLUTION_PROTOCOL, and METADATA_SCHEMAS all had 15+ stale references to the old package path",
+        "apps/desktop/src-tauri/src/crypto/ directory does not exist; Rust crypto/types live in crates/core/src/ and crates/fuse/",
+        "folder.service.ts does not exist in the web app; folder depth enforcement is in apps/web/src/hooks/useFolderMutations.ts",
+        "FileMetadata and VersionEntry Rust structs are defined in crates/core/src/folder.rs — file.rs is an 11-line re-export shim; referencing file.rs for those types is wrong",
+        "TEE republish interval is 6 hours (REPUBLISH_INTERVAL_HOURS = 6), not 3 hours as documented in CAPACITY.md in 3 places",
+        "The vendored fuser source with the FUSE-T socket patch lives at apps/desktop/src-tauri/vendor/fuser/src/channel.rs, not in crates/fuse/",
+        "pnpm test:e2e and pnpm test:e2e:headed do not exist; correct scripts are test:web-e2e and test:web-e2e:headed",
+        "pnpm api:generate output is packages/api-client/, not apps/web/src/api/",
+        "There are 16 migration files in apps/api/src/migrations/, not 14; AddSignedRecordToFolderIpns and AddPublicKeyToFolderIpns were undocumented",
+        "8 load test scenario files use checkThresholds, not 5 (sdk-folder-read, sdk-ipns-contention, sdk-upload-pipeline were missed)",
+        "QUOTA_BYTES constant is defined only in crates/fuse/src/constants.rs for the FUSE layer; vault.service.ts uses only QUOTA_LIMIT_BYTES",
+        "recovery.html accepts only hex-encoded private keys (line 1102 explicitly states base64 not supported for v2); v1 inline file format is also rejected at line 931",
+        "docker-compose.yml has 5 services including someguy (delegated routing, port 8190 + libp2p 4004) which was entirely undocumented; someguy's 8190 API port is internal-only in staging",
+        "TEE worker simulator defaults to port 3001, which conflicts with mock-ipns-routing when both run locally — workaround is PORT=3002 for TEE worker",
+        "folder_ipns table has no standalone ipns_name index; indexes are IDX_folder_ipns_user_id (user_id) and UQ_folder_ipns_user_ipns (user_id, ipns_name) — owner_public_key is not a column",
+        "publicKey in the device registry is a 32-byte Ed25519 key (64 hex chars), not a 130-char uncompressed secp256k1 point"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "finding": "REPUBLISH_INTERVAL_HOURS = 6, not 3 as documented in CAPACITY.md"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 102,
+          "end_line": 102,
+          "finding": "createFolder checks parentDepth >= MAX_FOLDER_DEPTH here (not in nonexistent folder.service.ts)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 283,
+          "end_line": 283,
+          "finding": "moveFolder checks destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH here"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 29,
+          "end_line": 46,
+          "finding": "FolderEntry struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 72,
+          "end_line": 80,
+          "finding": "FolderChild struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 85,
+          "end_line": 91,
+          "finding": "FolderMetadata struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 152,
+          "end_line": 167,
+          "finding": "VersionEntry struct definition — file.rs is just a re-export shim"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 173,
+          "end_line": 199,
+          "finding": "FileMetadata struct definition — file.rs is just a re-export shim"
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 554,
+          "end_line": 554,
+          "finding": "version_cooldown_ms is a u64 runtime struct field populated from VaultSettings, not a named constant VERSION_COOLDOWN_MS"
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 142,
+          "end_line": 142,
+          "finding": "publicKey validation checks length !== 64 (Ed25519 32-byte / 64 hex chars), not 130 as secp256k1 would require"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 101,
+          "end_line": 103,
+          "finding": "TypeORM synchronize/migrations/migrationsRun config — doc had wrong line numbers 85-87"
+        },
+        {
+          "path": "recovery.html",
+          "line": 1102,
+          "end_line": 1102,
+          "finding": "Hex-only private key input; base64 explicitly not supported for v2 recovery"
+        },
+        {
+          "path": "recovery.html",
+          "line": 931,
+          "end_line": 931,
+          "finding": "v1 inline file format not supported — logs error and skips files missing fileMetaIpnsName"
+        }
+      ],
+      "workflow": [
+        "Background GSD doc-writer agents can hit transient API errors (socket closed, stream idle timeout) and auto-recover — the original agent may eventually complete after a respawn is already running, requiring TaskStop on the duplicate before it overwrites finished work",
+        "A process restart kills all background agents mid-flight; on restart, check actual on-disk file state before deciding whether to re-run agents",
+        "TaskStop may report agents as not-found if they died with a previous process — treat this as confirmation they are gone rather than a blocking error",
+        "markdownlint MD040 (code fence missing language tag) is enforced by lint-staged at commit time in this repo — fix fences before committing generated docs",
+        "The GSD fix loop cap is 2 iterations; after exhaustion, remaining inaccuracies with known correct values can be applied directly via Edit rather than spawning another agent",
+        "When re-verification uncovers new failures (deeper scan surfacing issues the first pass missed), these are not regressions if the originally-failing doc was already in the failing set"
+      ]
+    },
+    "friction": [
+      "Two Wave-1 agents (ARCHITECTURE, CONFIGURATION) hit transient API errors and had to be respawned; the originals later auto-recovered, requiring TaskStop on the duplicates to prevent file overwrites",
+      "A process restart during fix iteration 2 killed all 5 fix agents mid-flight, losing their in-process state and requiring manual edits to apply their corrections",
+      "The METADATA_SCHEMAS verifier was still running concurrently when the fix agent for the same file completed, resulting in a second post-fix report arriving late and causing confusion about iteration count",
+      "Iteration-2 fixer for METADATA_SCHEMAS used file.rs (re-export shim) for FileMetadata and VersionEntry locations instead of folder.rs where the structs are actually defined, requiring another manual correction pass",
+      "CAPACITY.md had the '5 load test scenarios' stale claim in two places (lines 299 and 337); the first fix agent only caught line 299, leaving line 337 for iteration 2"
+    ],
+    "open_items": [
+      "20 VERIFY markers remain in generated docs (12 in CONFIGURATION, 6 in DEPLOYMENT, 2 in SECURITY) covering infrastructure claims not provable from the repo — e.g. Web3Auth/Google dashboard values, Grafana Cloud ingest URLs, staging host provisioning, whether GitHub private vulnerability reporting is enabled",
+      "someguy delegated-routing service (port 8190 + libp2p 4004) is now documented in DEVELOPMENT.md but the service itself has no dedicated docs explaining its role in the IPFS routing topology",
+      "TEE worker / mock-ipns-routing port-3001 collision is documented with a PORT=3002 workaround but not resolved at the configuration level",
+      "DEVELOPMENT.md informational note: the someguy service in docker-compose.yml has 2 GB memory and 1 CPU caps that may affect local development on constrained machines — worth calling out more prominently"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 5710,
+      "user_lines_removed": 0,
+      "agent_lines_added": 46,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".planning/tmp/ARCHITECTURE.md.wave1-original": 397,
+        ".planning/tmp/CONFIGURATION.md.wave1-original": 275,
+        ".planning/tmp/DEVELOPMENT.md.pre-supplement": 154,
+        ".planning/tmp/prefix-backups-iter2/CAPACITY.md": 347,
+        ".planning/tmp/prefix-backups-iter2/DATABASE_EVOLUTION_PROTOCOL.md": 362,
+        ".planning/tmp/prefix-backups-iter2/FILESYSTEM_SPECIFICATION.md": 190,
+        ".planning/tmp/prefix-backups-iter2/METADATA_EVOLUTION_PROTOCOL.md": 275,
+        ".planning/tmp/prefix-backups-iter2/METADATA_SCHEMAS.md": 480,
+        ".planning/tmp/prefix-backups/ARCHITECTURE.md": 397,
+        ".planning/tmp/prefix-backups/CAPACITY.md": 347,
+        ".planning/tmp/prefix-backups/DATABASE_EVOLUTION_PROTOCOL.md": 360,
+        ".planning/tmp/prefix-backups/DEVELOPMENT.md": 181,
+        ".planning/tmp/prefix-backups/FILESYSTEM_SPECIFICATION.md": 191,
+        ".planning/tmp/prefix-backups/METADATA_EVOLUTION_PROTOCOL.md": 276,
+        ".planning/tmp/prefix-backups/METADATA_SCHEMAS.md": 480,
+        ".planning/tmp/prefix-backups/VAULT_EXPORT_FORMAT.md": 811,
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 7,
+        ".planning/tmp/verify-AUTHENTICATION_ARCHITECTURE.md.json": 7,
+        ".planning/tmp/verify-CAPACITY.md.json": 14,
+        ".planning/tmp/verify-CONFIGURATION.md.json": 7,
+        ".planning/tmp/verify-CONTRIBUTING.md.json": 7,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 14,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 20,
+        ".planning/tmp/verify-GETTING-STARTED.md.json": 10,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 14,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 38,
+        ".planning/tmp/verify-README.md.json": 7,
+        ".planning/tmp/verify-SECURITY.md.json": 7,
+        ".planning/tmp/verify-SHARING.md.json": 7,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 7
+      }
+    }
+  ]
+}
