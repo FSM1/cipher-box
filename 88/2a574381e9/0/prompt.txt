@@ -31,3 +31,7 @@ try a fresh request maybe?
 <status>completed</status>
 <summary>Background command "Retry signed commit after 1Password restart" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+F-04 & 05 seem like candidates for fixing on this branch
