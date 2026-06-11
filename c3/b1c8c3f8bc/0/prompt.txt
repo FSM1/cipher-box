@@ -55,3 +55,7 @@ F-04 & 05 seem like candidates for fixing on this branch
 <status>completed</status>
 <summary>Background command "Commit F-05 fix" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+F-08 can be marked as `not applicable` as I will likely be getting some phala credits and will be able to run the staging TEE infra. the variables can remain inert for now.
