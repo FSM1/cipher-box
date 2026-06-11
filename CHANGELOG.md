@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.6](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.38.5...cipher-box-v0.38.6) (2026-06-10)
+
+
+### Bug Fixes
+
+* bind pinning provider fetch fallback to globalThis for browser compatibility ([#477](https://github.com/FSM1/cipher-box/issues/477)) ([39dd78e](https://github.com/FSM1/cipher-box/commit/39dd78ec578e5bf991d8102db66e895b7a835e5e))
+
 ## [0.38.5](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.38.4...cipher-box-v0.38.5) (2026-05-26)
 
 
