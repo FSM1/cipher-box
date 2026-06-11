@@ -80,7 +80,11 @@ export class MigrationProcessor extends WorkerHost {
             sourceConfigEncrypted: migration.sourceConfigEncrypted,
             destConfigEncrypted: migration.destConfigEncrypted,
           }),
-          signal: AbortSignal.timeout(120_000), // 2 min per batch
+          // 5 min per batch. Observed worst-case TEE batch duration is ~130s;
+          // the timeout must comfortably exceed it, otherwise an in-flight batch
+          // gets aborted client-side and counted as failed even though the TEE
+          // worker completes it (double-counting race).
+          signal: AbortSignal.timeout(300_000),
         });
 
         if (!response.ok) {

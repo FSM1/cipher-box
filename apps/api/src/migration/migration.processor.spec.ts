@@ -362,6 +362,33 @@ describe('MigrationProcessor', () => {
       );
     });
 
+    it('should use a 300s batch timeout exceeding worst-case TEE batch duration (~130s)', async () => {
+      const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
+
+      const migration = { ...baseMigration, status: 'running' as const };
+      mockMigrationRepo.findOneOrFail
+        .mockResolvedValueOnce(migration)
+        .mockResolvedValueOnce(migration)
+        .mockResolvedValueOnce(migration);
+
+      mockPinnedCidRepo.find.mockResolvedValue(makePinnedCids(1));
+      mockConfigService.get
+        .mockReturnValueOnce('https://tee.example.com')
+        .mockReturnValueOnce('secret-token');
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({ succeeded: ['bafkrei0'], failed: [] }),
+      });
+      mockMigrationRepo.update.mockResolvedValue({ affected: 1 });
+
+      await processor.process(makeJob(testMigrationId));
+
+      expect(timeoutSpy).toHaveBeenCalledWith(300_000);
+
+      timeoutSpy.mockRestore();
+    });
+
     it('should pause migration on TEE 401 auth failure', async () => {
       const migration = { ...baseMigration, status: 'running' as const };
       mockMigrationRepo.findOneOrFail

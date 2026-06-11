@@ -166,12 +166,27 @@ export class MigrationService {
     });
 
     migration.migratedCids += migratedDelta;
-    migration.failedCids += failedDelta;
 
     if (failedCids && failedCids.length > 0) {
       const existingList = migration.failedCidList ? migration.failedCidList.split(',') : [];
       existingList.push(...failedCids);
-      migration.failedCidList = existingList.join(',');
+      const dedupedList = [...new Set(existingList)];
+      migration.failedCidList = dedupedList.join(',');
+      // The deduped list is the source of truth for the failed count, so
+      // re-reported CIDs (e.g. retried batches) never inflate it.
+      migration.failedCids = dedupedList.length;
+    } else {
+      migration.failedCids += failedDelta;
+    }
+
+    // Clamp so migrated + failed never exceeds totalCids. Guards against
+    // double-reported batches (e.g. an HTTP timeout abort counted as failed
+    // while the TEE worker actually completed the batch and it later succeeds).
+    if (
+      migration.totalCids > 0 &&
+      migration.migratedCids + migration.failedCids > migration.totalCids
+    ) {
+      migration.migratedCids = Math.max(0, migration.totalCids - migration.failedCids);
     }
 
     await this.migrationRepo.save(migration);
