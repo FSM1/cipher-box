@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "d3b4f17ef0b4",
+  "strategy": "manual-commit",
+  "branch": "docs/explore-protocol-and-privacy-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/metrics/http-metrics.interceptor.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d3/b4f17ef0b4/0/metadata.json",
+      "transcript": "/d3/b4f17ef0b4/0/full.jsonl",
+      "content_hash": "/d3/b4f17ef0b4/0/content_hash.txt",
+      "prompt": "/d3/b4f17ef0b4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3724,
+    "cache_creation_tokens": 43757,
+    "cache_read_tokens": 1538609,
+    "output_tokens": 31987,
+    "api_call_count": 9
+  }
+}
