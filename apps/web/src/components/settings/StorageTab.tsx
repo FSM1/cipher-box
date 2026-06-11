@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type ConnectionTestResult, type PinningMode } from '@cipherbox/sdk-core';
+import { vaultControllerSetByoStatus } from '@cipherbox/api-client';
 import {
   wrapKey,
   unwrapKey,
@@ -17,6 +18,7 @@ import { ConnectionTest } from './ConnectionTest';
 import { MigrationProgress } from './MigrationProgress';
 import { migrationApi } from '../../lib/api/migration';
 import { reconfigurePinning } from '../../lib/sdk-provider';
+import { logger } from '../../lib/logger';
 
 /** Local storage key for the BYO config IPNS name (not sensitive -- public identifier) */
 const BYO_IPNS_NAME_KEY = 'cipherbox-byo-ipns-name';
@@ -255,6 +257,15 @@ export function StorageTab() {
         );
 
         await migrationApi.start(sourceConfigEncrypted, destConfigEncrypted);
+      }
+
+      // Sync BYO advisory-quota flag on the server (external/dual = BYO enabled).
+      // Non-fatal: the pinning config is already saved; failure only delays the
+      // advisory badge until the next save.
+      try {
+        await vaultControllerSetByoStatus({ isByo: mode !== 'cipherbox' });
+      } catch (err) {
+        logger.warn('[BYO] failed to update byo-status flag', err);
       }
 
       useQuotaStore.getState().fetchQuota();
