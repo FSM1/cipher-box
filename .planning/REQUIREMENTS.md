@@ -10,8 +10,8 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 ### IPNS Reliability
 
 - [x] **IPNS-01**: Self-hosted Someguy deployed alongside Kubo, replacing delegated-ipfs.dev as primary IPNS routing provider
-- [ ] **IPNS-02**: IPNS resolution uses DB-first strategy with async Kubo DHT verification via self-hosted Someguy
-- [ ] **IPNS-03**: Recovery tool resolves IPNS via self-hosted Someguy instead of delegated-ipfs.dev
+- [x] **IPNS-02**: IPNS resolution uses DB-first strategy with async Kubo DHT verification via self-hosted Someguy
+- [x] **IPNS-03**: Recovery tool resolves IPNS via self-hosted Someguy instead of delegated-ipfs.dev
 - [x] **IPNS-04**: System degrades gracefully when DHT resolution is slow (timeout + DB fallback within 2s)
 
 ### Vault Migration
@@ -54,8 +54,8 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [x] **SDK-05**: sdk-core IPFS/IPNS functions accept SdkContext (apiUrl + getAccessToken) instead of reading browser globals
 - [x] **SDK-06**: @cipherbox/sdk provides stateful CipherBoxClient class with internal folder tree, key cache, and event emission
 - [x] **SDK-07**: SDK bin operations (add, restore, permanent delete, empty) and share operations (create, revoke) work through stateful client
-- [ ] **SDK-08**: Web app creates CipherBoxClient on vault load and destroys on logout; Zustand stores subscribe to SDK events
-- [ ] **SDK-09**: React hooks refactored to thin wrappers calling SDK client methods instead of service functions directly
+- [x] **SDK-08**: Web app creates CipherBoxClient on vault load and destroys on logout; Zustand stores subscribe to SDK events
+- [x] **SDK-09**: React hooks refactored to thin wrappers calling SDK client methods instead of service functions directly
 - [x] **SDK-10**: All transitional re-exports removed from @cipherbox/crypto; domain type imports enforced at compile time
 - [x] **SDK-11**: Release Please configured for independent per-package versioning
 
@@ -142,8 +142,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase      | Status   |
 | ----------- | ---------- | -------- |
 | IPNS-01     | Phase 19   | Complete |
-| IPNS-02     | Phase 19   | Pending  |
-| IPNS-03     | Phase 19   | Pending  |
+| IPNS-02     | Phase 19   | Complete |
+| IPNS-03     | Phase 19   | Complete |
 | IPNS-04     | Phase 19   | Complete |
 | VAULT-01    | Phase 20   | Complete |
 | VAULT-02    | Phase 20   | Complete |
@@ -174,8 +174,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SDK-05      | Phase 19.1 | Complete |
 | SDK-06      | Phase 19.1 | Complete |
 | SDK-07      | Phase 19.1 | Complete |
-| SDK-08      | Phase 19.1 | Pending  |
-| SDK-09      | Phase 19.1 | Pending  |
+| SDK-08      | Phase 19.1 | Complete |
+| SDK-09      | Phase 19.1 | Complete |
 | SDK-10      | Phase 19.1 | Complete |
 | SDK-11      | Phase 19.1 | Complete |
 | RSDK-01     | Phase 23   | Complete |
@@ -217,4 +217,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 ---
 
 _Requirements defined: 2026-03-07_
-_Last updated: 2026-03-26 after Phase 27 completion (SHARE-01 through SHARE-10 all complete)_
+_Last updated: 2026-06-11 by milestone audit (IPNS-02/03, SDK-08/09 checkboxes reconciled with phase verifications)_
