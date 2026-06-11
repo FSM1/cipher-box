@@ -1,0 +1,742 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "597d5e1cbd6d",
+  "session_id": "9bc2928d-2b68-4449-8bd9-781edbb7b3e7",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T22:38:38.885785Z",
+  "branch": "docs/gsd-docs-update",
+  "checkpoints_count": 33,
+  "files_touched": [
+    "CONTRIBUTING.md",
+    "README.md",
+    "SECURITY.md",
+    "apps/desktop/README.md",
+    "apps/tee-worker/README.md",
+    "apps/web/README.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CAPACITY.md",
+    "docs/CONFIGURATION.md",
+    "docs/DATABASE_EVOLUTION_PROTOCOL.md",
+    "docs/DEVELOPMENT.md",
+    "docs/FILESYSTEM_SPECIFICATION.md",
+    "docs/GETTING-STARTED.md",
+    "docs/METADATA_EVOLUTION_PROTOCOL.md",
+    "docs/METADATA_SCHEMAS.md",
+    "docs/SHARING.md",
+    "docs/VAULT_EXPORT_FORMAT.md",
+    "packages/api-client/README.md",
+    "packages/core/README.md",
+    "packages/crypto/README.md",
+    "packages/sdk-core/README.md",
+    "packages/sdk/README.md",
+    "tests/load/README.md",
+    "tests/sdk-e2e/README.md",
+    "tests/web-e2e/README.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "7998e9a99b8a",
+  "token_usage": {
+    "input_tokens": 57451,
+    "cache_creation_tokens": 418047,
+    "cache_read_tokens": 11088058,
+    "output_tokens": 92945,
+    "api_call_count": 81
+  },
+  "session_metrics": {
+    "turn_count": 33
+  },
+  "summary": {
+    "intent": "Generate and update up to 9 canonical documentation files plus per-package READMEs and gap docs for the cipher-box project using the GSD docs-update multi-agent workflow, with full verification and fix passes against the live codebase.",
+    "outcome": "25 documentation files were created or updated (6 new canonical docs, 3 regenerated, 2 supplemented, 2 gap docs, 12 per-package READMEs). Two rounds of verification surfaced 35+ inaccuracies across 8 hand-written specs; all but 5 in METADATA_SCHEMAS.md were corrected before the 2-iteration fix cap was reached.",
+    "learnings": {
+      "repo": [
+        "packages/crypto/src/ paths are wholesale stale — the canonical source for folder/file/registry types and metadata is packages/core/src/",
+        "apps/desktop/src-tauri/src/crypto/ directory does not exist; Rust crypto lives in crates/core/src/",
+        "crates/core/src/file.rs is an 11-line re-export shim; FileMetadata and VersionEntry are defined in crates/core/src/folder.rs",
+        "folder.service.ts does not exist; web folder depth enforcement is in apps/web/src/hooks/useFolderMutations.ts",
+        "TEE republish interval is 6 hours (REPUBLISH_INTERVAL_HOURS = 6 in republish.service.ts), not 3 hours — stale in three places in CAPACITY.md",
+        "folder_ipns table has no owner_public_key column; indexed on user_id with unique constraint on (user_id, ipns_name)",
+        "There are 16 migration files in apps/api/src/migrations/ (two undocumented: AddSignedRecordToFolderIpns, AddPublicKeyToFolderIpns)",
+        "8 load test scenario files import checkThresholds, not 5",
+        "recovery.html only supports hex-encoded private keys for v2; base64 is explicitly rejected; v1 inline file format is not supported (logs error and skips)",
+        "The vendored fuser source with the FUSE-T socket patch lives at apps/desktop/src-tauri/vendor/fuser/src/channel.rs — crates/fuse is a separate crate that lists fuser as a Cargo dependency",
+        "docker-compose.yml has a 5th service (someguy, delegated routing, port 8190) not documented in DEVELOPMENT.md infra table",
+        "QUOTA_BYTES is defined in crates/fuse/src/constants.rs for the FUSE layer; vault.service.ts uses only QUOTA_LIMIT_BYTES",
+        "pnpm test:e2e script does not exist; correct name is test:web-e2e (and test:web-e2e:headed)",
+        "pnpm api:generate output target is packages/api-client/, not apps/web/src/api/",
+        "app.module.ts TypeORM config (synchronize, migrations, migrationsRun) is at lines 101-103, not 85-87",
+        "apps/desktop/src-tauri/src/fuse/operations.rs does not exist; only fuse/mod.rs and fuse/windows/mod.rs are present",
+        "version_cooldown_ms is a runtime struct field in crates/fuse/src/lib.rs:554, not a named constant VERSION_COOLDOWN_MS"
+      ],
+      "code": [
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 85,
+          "end_line": 91,
+          "finding": "FolderMetadata struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 72,
+          "end_line": 80,
+          "finding": "FolderChild struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 29,
+          "end_line": 46,
+          "finding": "FolderEntry struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 173,
+          "end_line": 199,
+          "finding": "FileMetadata struct definition (not in file.rs)"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 152,
+          "end_line": 167,
+          "finding": "VersionEntry struct definition (not in file.rs)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 102,
+          "end_line": 102,
+          "finding": "createFolder checks parentDepth >= MAX_FOLDER_DEPTH"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 283,
+          "end_line": 283,
+          "finding": "moveFolder checks destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "finding": "REPUBLISH_INTERVAL_HOURS = 6"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 101,
+          "end_line": 103,
+          "finding": "TypeORM synchronize/migrations/migrationsRun config"
+        },
+        {
+          "path": "recovery.html",
+          "line": 1102,
+          "end_line": 1102,
+          "finding": "Hex-only constraint for v2 recovery private key input; base64 explicitly unsupported"
+        },
+        {
+          "path": "recovery.html",
+          "line": 931,
+          "end_line": 931,
+          "finding": "v1 inline file format not supported — logs error and continues (skips)"
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 142,
+          "end_line": 142,
+          "finding": "publicKey length check is 64 hex chars (32-byte Ed25519), not 130 chars (secp256k1)"
+        }
+      ],
+      "workflow": [
+        "GSD background agents can auto-recover from transient API errors (socket closed, stream idle timeout) — always check if a file was written before spawning a retry agent",
+        "Spawning a duplicate retry agent when the original recovers requires TaskStop to prevent a race condition that overwrites the completed file",
+        "GSD verifiers run a shallower initial pass; the deeper re-verification after fixes routinely surfaces additional findings not caught the first time (12 new findings emerged post-fix in this session)",
+        "Fix agents can introduce new stale line citations when correcting paths, making iterative verification necessary even for 'fixed' docs",
+        "The 2-iteration fix loop cap is a hard ceiling; remaining failures after cap require manual correction",
+        "agent-skills query may return empty; the workflow can proceed without it by embedding the doc_assignment block directly"
+      ]
+    },
+    "friction": [
+      "Two Wave 1 agents (ARCHITECTURE, CONFIGURATION) died with transient API errors after 55-74 tool calls each, requiring manual detection and retry spawning",
+      "Both original agents then auto-recovered and completed, creating race conditions that required TaskStop calls to prevent file overwrites",
+      "Fix agent for METADATA_SCHEMAS.md introduced new stale Rust line citations (pointing to file.rs re-export shim instead of folder.rs definitions) while fixing the original path errors",
+      "Deeper re-verification passes after the fix loop surfaced 12 new findings that the initial verification missed, suggesting the verifier's scan depth is non-deterministic",
+      "The agent-skills query returned empty, adding uncertainty about whether agent skill context was properly loaded"
+    ],
+    "open_items": [
+      "METADATA_SCHEMAS.md lines 101, 126, 154, 216, 267: 5 remaining stale Rust line-range citations hit the 2-iteration cap — lines 216/267 (and parity table rows ~425-426) incorrectly point to file.rs instead of folder.rs",
+      "DEVELOPMENT.md: someguy delegated-routing service (port 8190) is present in docker-compose.yml but absent from the infra table — a prose omission not counted as a verifier failure",
+      "docs/FILESYSTEM_SPECIFICATION.md line 22: Case Handling table still references folder.service.ts as the web implementation location; verifier-supplied actual location is packages/sdk-core/src/folder/"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-11T22:37:35.60729Z",
+    "agent_lines": 667,
+    "agent_removed": 132,
+    "human_added": 14275,
+    "human_modified": 715,
+    "human_removed": 0,
+    "total_committed": 15448,
+    "total_lines_changed": 15789,
+    "agent_percentage": 5.06048514788777,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 112,
+      "user_lines_removed": 55,
+      "agent_lines_added": 45,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "README.md": 112
+      },
+      "user_removed_per_file": {
+        "README.md": 55
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 157,
+      "agent_lines_removed": 55
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 157,
+      "agent_lines_removed": 55
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 333,
+      "user_lines_removed": 216,
+      "agent_lines_added": 157,
+      "agent_lines_removed": 55,
+      "user_added_per_file": {
+        "docs/ARCHITECTURE.md": 333
+      },
+      "user_removed_per_file": {
+        "docs/ARCHITECTURE.md": 216
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 14,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1148,
+      "agent_lines_removed": 271,
+      "user_added_per_file": {
+        "docs/CONFIGURATION.md": 14
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 41,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1753,
+      "agent_lines_removed": 271,
+      "user_added_per_file": {
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEVELOPMENT.md": 27
+      }
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 14,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1947,
+      "agent_lines_removed": 271,
+      "user_added_per_file": {
+        "docs/CONFIGURATION.md": 14
+      }
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 258,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1947,
+      "agent_lines_removed": 271,
+      "user_added_per_file": {
+        "docs/CONFIGURATION.md": 14,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 526,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1947,
+      "agent_lines_removed": 271,
+      "user_added_per_file": {
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 11,
+      "user_lines_added": 526,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1947,
+      "agent_lines_removed": 271,
+      "user_added_per_file": {
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 12,
+      "user_lines_added": 526,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2279,
+      "agent_lines_removed": 271,
+      "user_added_per_file": {
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 13,
+      "user_lines_added": 580,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2345,
+      "agent_lines_removed": 283,
+      "user_added_per_file": {
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 14,
+      "user_lines_added": 580,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2926,
+      "agent_lines_removed": 373,
+      "user_added_per_file": {
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 15,
+      "user_lines_added": 594,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2940,
+      "agent_lines_removed": 373,
+      "user_added_per_file": {
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 16,
+      "user_lines_added": 594,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2954,
+      "agent_lines_removed": 373,
+      "user_added_per_file": {
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 17,
+      "user_lines_added": 594,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2974,
+      "agent_lines_removed": 373,
+      "user_added_per_file": {
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 18,
+      "user_lines_added": 594,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2981,
+      "agent_lines_removed": 373,
+      "user_added_per_file": {
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 19,
+      "user_lines_added": 742,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2981,
+      "agent_lines_removed": 373,
+      "user_added_per_file": {
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 110,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 20,
+      "user_lines_added": 762,
+      "user_lines_removed": 0,
+      "agent_lines_added": 3007,
+      "agent_lines_removed": 373,
+      "user_added_per_file": {
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 32,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 98,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 21,
+      "user_lines_added": 762,
+      "user_lines_removed": 0,
+      "agent_lines_added": 3007,
+      "agent_lines_removed": 373,
+      "user_added_per_file": {
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 32,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 98,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 22,
+      "user_lines_added": 777,
+      "user_lines_removed": 9,
+      "agent_lines_added": 6104,
+      "agent_lines_removed": 382,
+      "user_added_per_file": {
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 32,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 104,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CAPACITY.md": 4,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/FILESYSTEM_SPECIFICATION.md": 1,
+        "docs/METADATA_EVOLUTION_PROTOCOL.md": 2,
+        "docs/METADATA_SCHEMAS.md": 2,
+        "docs/TESTING.md": 244
+      },
+      "user_removed_per_file": {
+        "docs/CAPACITY.md": 4,
+        "docs/FILESYSTEM_SPECIFICATION.md": 1,
+        "docs/METADATA_EVOLUTION_PROTOCOL.md": 2,
+        "docs/METADATA_SCHEMAS.md": 2
+      }
+    },
+    {
+      "checkpoint_number": 23,
+      "user_lines_added": 768,
+      "user_lines_removed": 0,
+      "agent_lines_added": 6130,
+      "agent_lines_removed": 408,
+      "user_added_per_file": {
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 32,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 104,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 24,
+      "user_lines_added": 768,
+      "user_lines_removed": 0,
+      "agent_lines_added": 6141,
+      "agent_lines_removed": 428,
+      "user_added_per_file": {
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 32,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 104,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 25,
+      "user_lines_added": 768,
+      "user_lines_removed": 0,
+      "agent_lines_added": 6142,
+      "agent_lines_removed": 429,
+      "user_added_per_file": {
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 32,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 104,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 26,
+      "user_lines_added": 768,
+      "user_lines_removed": 0,
+      "agent_lines_added": 6142,
+      "agent_lines_removed": 429,
+      "user_added_per_file": {
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 32,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 104,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      }
+    },
+    {
+      "checkpoint_number": 27,
+      "user_lines_added": 772,
+      "user_lines_removed": 11,
+      "agent_lines_added": 6142,
+      "agent_lines_removed": 429,
+      "user_added_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 4,
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 32,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 104,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      },
+      "user_removed_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 11
+      }
+    },
+    {
+      "checkpoint_number": 28,
+      "user_lines_added": 776,
+      "user_lines_removed": 34,
+      "agent_lines_added": 6142,
+      "agent_lines_removed": 429,
+      "user_added_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 4,
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 4,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 32,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 104,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      },
+      "user_removed_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 11,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 29,
+      "user_lines_added": 790,
+      "user_lines_removed": 84,
+      "agent_lines_added": 6142,
+      "agent_lines_removed": 429,
+      "user_added_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 4,
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 7,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 4,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 32,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 7,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 104,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      },
+      "user_removed_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 11,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 13,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 23,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 37
+      }
+    },
+    {
+      "checkpoint_number": 30,
+      "user_lines_added": 782,
+      "user_lines_removed": 107,
+      "agent_lines_added": 6142,
+      "agent_lines_removed": 429,
+      "user_added_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 4,
+        ".planning/tmp/verify-CAPACITY.md.json": 38,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 7,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 4,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 20,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 7,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 104,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 4,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      },
+      "user_removed_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 11,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 13,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 23,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 37,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 31,
+      "user_lines_added": 758,
+      "user_lines_removed": 107,
+      "agent_lines_added": 6142,
+      "agent_lines_removed": 429,
+      "user_added_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 4,
+        ".planning/tmp/verify-CAPACITY.md.json": 14,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 7,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 4,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 20,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 7,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 104,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 4,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      },
+      "user_removed_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 11,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 13,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 23,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 37,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 32,
+      "user_lines_added": 704,
+      "user_lines_removed": 107,
+      "agent_lines_added": 6142,
+      "agent_lines_removed": 429,
+      "user_added_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 4,
+        ".planning/tmp/verify-CAPACITY.md.json": 14,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 7,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 4,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 20,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 7,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 50,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 4,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/TESTING.md": 244
+      },
+      "user_removed_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 11,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 13,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 23,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 37,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 33,
+      "user_lines_added": 713,
+      "user_lines_removed": 128,
+      "agent_lines_added": 7800,
+      "agent_lines_removed": 433,
+      "user_added_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 4,
+        ".planning/tmp/verify-CAPACITY.md.json": 14,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 7,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 4,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 20,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 7,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 38,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 4,
+        "apps/api/README.md": 54,
+        "docs/CONFIGURATION.md": 14,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/FILESYSTEM_SPECIFICATION.md": 1,
+        "docs/METADATA_SCHEMAS.md": 20,
+        "docs/TESTING.md": 244
+      },
+      "user_removed_per_file": {
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 11,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 13,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 23,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 37,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 23,
+        "docs/FILESYSTEM_SPECIFICATION.md": 1,
+        "docs/METADATA_SCHEMAS.md": 20
+      }
+    }
+  ]
+}
