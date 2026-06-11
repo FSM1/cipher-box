@@ -23,7 +23,7 @@ CipherBox metadata is encrypted client-side and stored on IPFS. Once written, re
 
 1. **Old records are permanent.** A new client version must be able to read metadata written by any prior version.
 2. **Clients of different versions coexist.** A user may have the desktop app on v1.3 and the web app on v1.4. Both must read and write metadata the other can understand.
-3. **Two implementations must agree.** The TypeScript crypto library (`packages/crypto/`) and the Rust desktop implementation (`apps/desktop/src-tauri/src/crypto/`) must produce byte-identical JSON for the same logical data.
+3. **Two implementations must agree.** The TypeScript crypto library (`packages/crypto/`) and the Rust desktop implementation (`crates/core/src/`) must produce byte-identical JSON for the same logical data.
 
 This protocol establishes formal rules for evolving metadata schemas. It replaces the informal pattern of adding optional fields without documentation that was used through Phase 13.
 
@@ -130,9 +130,9 @@ Complete this checklist for every metadata schema change. This is the most impor
 
 ### 4.2 TypeScript Implementation
 
-- [ ] Update type definition in `packages/crypto/src/{domain}/types.ts`
+- [ ] Update type definition in `packages/core/src/{domain}/types.ts`
 - [ ] If optional: use `field?: Type` syntax
-- [ ] Update validator in `packages/crypto/src/{domain}/metadata.ts` or `schema.ts`
+- [ ] Update validator in `packages/core/src/{domain}/metadata.ts` or `schema.ts`
 - [ ] If optional: validator accepts `undefined`/missing field
 - [ ] If optional: validator applies default value when constructing the return object
 - [ ] If breaking: validator checks `version` field and branches accordingly
@@ -140,7 +140,7 @@ Complete this checklist for every metadata schema change. This is the most impor
 
 ### 4.3 Rust Implementation
 
-- [ ] Update struct in `apps/desktop/src-tauri/src/crypto/folder.rs` (or relevant file)
+- [ ] Update struct in `crates/core/src/folder.rs` (or relevant file)
 - [ ] If optional: use `Option<T>` with `#[serde(default)]` and `#[serde(skip_serializing_if = "Option::is_none")]`
 - [ ] If new enum variant: ensure `#[serde(rename_all = "...")]` handles casing correctly
 - [ ] Verify JSON round-trip: serialize then deserialize produces identical output
@@ -151,7 +151,7 @@ Complete this checklist for every metadata schema change. This is the most impor
 - [ ] Generate test JSON from TypeScript, deserialize in Rust (or vice versa)
 - [ ] Verify old-format JSON (without new field) deserializes correctly in both implementations
 - [ ] Verify new-format JSON (with new field) serializes identically in both implementations
-- [ ] Run: `pnpm test` (TypeScript) and `cargo test --features fuse` (Rust)
+- [ ] Run: `pnpm test` (TypeScript) and `cargo test -p cipherbox-core` (Rust)
 
 ### 4.5 Downstream Updates
 
@@ -266,11 +266,10 @@ The recovery tool (`apps/web/public/recovery.html`) is a standalone HTML file th
 
 - **Metadata Schema Reference:** [docs/METADATA_SCHEMAS.md](METADATA_SCHEMAS.md) -- field tables, encryption, storage, and source file cross-references for all 10 metadata objects
 - **Vault Export Format:** [docs/VAULT_EXPORT_FORMAT.md](VAULT_EXPORT_FORMAT.md) -- recovery procedure and ECIES ciphertext format
-- **Technical Architecture:** `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` -- encryption hierarchy and key management design
-- **Data Flows:** `00-Preliminary-R&D/Documentation/DATA_FLOWS.md` -- sequence diagrams and test vectors
+- **Technical Architecture:** [docs/ARCHITECTURE.md](ARCHITECTURE.md) -- encryption hierarchy and key management design
 
 ---
 
 _Protocol version: 1.0_
 _Last updated: 2026-02-21_
-_Applies to: All metadata objects in `packages/crypto/` and `apps/desktop/src-tauri/src/crypto/`_
+_Applies to: All metadata objects in `packages/core/src/` and `crates/core/src/`_

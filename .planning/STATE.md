@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Milestone complete
-last_updated: '2026-04-01T00:00:00.000Z'
-last_activity: 2026-04-01
+last_updated: '2026-06-11T22:57:00.930Z'
+last_activity: 2026-06-12
 progress:
   total_phases: 26
   completed_phases: 26
@@ -252,4 +252,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-04-01 - Completed quick task 260401-kyv: fix sidebar icons to be consistent
+Last activity: 2026-06-12

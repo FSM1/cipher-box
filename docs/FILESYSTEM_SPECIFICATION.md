@@ -19,7 +19,7 @@ The target invariant is that the strictest platform constraint (Windows) should 
 
 | Platform | Storage    | Lookup                           | Implementation                                                |
 | -------- | ---------- | -------------------------------- | ------------------------------------------------------------- |
-| Web      | As-entered | Case-sensitive (`===`)           | `folder.service.ts`, `sdk-core/folder`                        |
+| Web      | As-entered | Case-sensitive (`===`)           | `sdk-core/src/folder/tree.ts`                                 |
 | macOS    | As-entered | NFC-normalized                   | `inode.rs:normalize_name()` via `unicode-normalization` crate |
 | Linux    | As-entered | NFC-normalized                   | Same `fuse` feature as macOS; case-sensitive                  |
 | Windows  | As-entered | Case-insensitive (lowercase key) | `inode.rs:normalize_name()` via `.to_lowercase()`             |
@@ -92,11 +92,11 @@ CipherBox filters platform-specific system files that should never be created, s
 
 ### Storage Quota
 
-| Limit       | Value   | Enforcement                                        | Constant                            |
-| ----------- | ------- | -------------------------------------------------- | ----------------------------------- |
-| Total quota | 500 MiB | Server-side (`vault.service.ts`), client pre-check | `QUOTA_LIMIT_BYTES` / `QUOTA_BYTES` |
+| Limit       | Value   | Enforcement                                        | Constant                                                                  |
+| ----------- | ------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
+| Total quota | 500 MiB | Server-side (`vault.service.ts`), client pre-check | `QUOTA_LIMIT_BYTES` (API); `QUOTA_BYTES` (`crates/fuse/src/constants.rs`) |
 
-**Rationale:** Technology demonstrator limit. Quota tracks encrypted blob sizes (not plaintext sizes). BYO-IPFS users bypass this limit (advisory only) since they manage their own storage.
+**Rationale:** Quota tracks encrypted blob sizes (not plaintext sizes). BYO-IPFS users bypass this limit (advisory only) since they manage their own storage.
 
 ## Folder Structure
 
@@ -110,9 +110,8 @@ CipherBox filters platform-specific system files that should never be created, s
 
 **Enforcement points:**
 
-- `folder.service.ts:170` — `createFolder` checks `parentDepth >= MAX_FOLDER_DEPTH`
-- `folder.service.ts:759` — `moveFolder` checks `destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH`
-- `useFolderMutations.ts:73` — duplicate check in React hooks layer
+- `useFolderMutations.ts:102` — `createFolder` checks `parentDepth >= MAX_FOLDER_DEPTH`
+- `useFolderMutations.ts:283` — `moveFolder` checks `destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH`
 
 ### Duplicate Names
 
@@ -131,10 +130,10 @@ if (nameExists) throw new Error('An item with this name already exists');
 
 ## File Versioning
 
-| Limit             | Value      | Enforcement        | Constant                |
-| ----------------- | ---------- | ------------------ | ----------------------- |
-| Max versions/file | 10         | SDK and FUSE layer | `MAX_VERSIONS_PER_FILE` |
-| Version cooldown  | 15 minutes | Desktop FUSE only  | `VERSION_COOLDOWN_MS`   |
+| Limit             | Value      | Enforcement        | Constant                                      |
+| ----------------- | ---------- | ------------------ | --------------------------------------------- |
+| Max versions/file | 10         | SDK and FUSE layer | `MAX_VERSIONS_PER_FILE`                       |
+| Version cooldown  | 15 minutes | Desktop FUSE only  | `version_cooldown_ms` (struct field, runtime) |
 
 **Rationale:** Version history is stored inside the file's IPNS metadata. Each version entry contains a CID, key, IV, and timestamp. Capping at 10 prevents metadata bloat. The 15-minute cooldown on desktop prevents rapid saves (e.g., auto-save in text editors) from consuming all version slots.
 

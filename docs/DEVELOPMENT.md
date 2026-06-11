@@ -15,14 +15,21 @@ Start the required services:
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-This starts:
+This starts the `cipherbox-infrastructure` compose project (containers are named `cipherbox-<service>`):
 
-| Service           | Port                       | Purpose                           |
-| :---------------- | :------------------------- | :-------------------------------- |
-| PostgreSQL 16     | 5432                       | Database                          |
-| IPFS (Kubo)       | 5001 (API), 8080 (Gateway) | Decentralized storage             |
-| Redis 7           | 6380                       | BullMQ job queue                  |
-| Mock IPNS Routing | 3001                       | Local IPNS resolution for dev/E2E |
+| Service             | Image                                 | Host Port(s)                                     | Purpose                                  |
+| :------------------ | :------------------------------------ | :----------------------------------------------- | :--------------------------------------- |
+| `postgres`          | `postgres:16-alpine`                  | 5432 (`DB_PORT`)                                 | Database                                 |
+| `ipfs`              | `ipfs/kubo:v0.40.0`                   | 5001 (API), 8080 (gateway), 4001 tcp/udp (swarm) | Decentralized storage (Kubo)             |
+| `redis`             | `redis:7-alpine`                      | 6380 (`REDIS_PORT`) → container 6379             | BullMQ job queue                         |
+| `someguy`           | `ghcr.io/ipfs/someguy:v0.11.1`        | 8190 (routing API), 4004 tcp/udp (libp2p swarm)  | Delegated IPFS routing (accelerated DHT) |
+| `mock-ipns-routing` | built from `tools/mock-ipns-routing/` | 3001 (loopback only)                             | Local IPNS resolution for dev/E2E        |
+
+Notes:
+
+- The IPFS node runs with the `server,pebbleds` datastore profile. If you have an `ipfs_data` volume created before the pebbleds switch, recreate it first: `docker compose -f docker/docker-compose.yml down -v --remove-orphans`.
+- The `ipfs` and `someguy` containers are each capped at 2 GB memory / 1 CPU.
+- The staging stack runs a different set of containers (adds `api`, `tee-worker`, `caddy`, `alloy`; drops `mock-ipns-routing`) — see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Environment
 
@@ -119,13 +126,13 @@ pnpm --filter @cipherbox/crypto test
 Playwright auto-starts API + web via `webServer` config (requires infra services: Postgres, IPFS, Redis):
 
 ```bash
-pnpm test:e2e
+pnpm test:web-e2e
 ```
 
 Headed mode (shows browser):
 
 ```bash
-pnpm test:e2e:headed
+pnpm test:web-e2e:headed
 ```
 
 ### Desktop E2E
@@ -143,7 +150,7 @@ After modifying API endpoints, DTOs, or controllers, regenerate the typed client
 pnpm api:generate
 ```
 
-This generates the OpenAPI spec from the API, creates the typed client at `apps/web/src/api/`, and runs lint fixes. Always commit the regenerated files with your API changes.
+This generates the OpenAPI spec from the API, creates the typed client at `packages/api-client/`, and runs lint fixes. Always commit the regenerated files with your API changes.
 
 ## Code Quality
 
@@ -152,3 +159,30 @@ This generates the OpenAPI spec from the API, creates the typed client at `apps/
 - **Type checking:** `pnpm typecheck`
 - **Formatting:** Prettier (runs via lint-staged on commit)
 - **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) enforced by commitlint (`feat:`, `fix:`, `docs:`, etc.)
+
+## Running the TEE Worker (Simulator Mode)
+
+The TEE worker (`apps/tee-worker`) republishes IPNS records. In production it runs inside a Phala Cloud CVM; locally it runs in **simulator mode**, which uses a deterministic HKDF-SHA256 seed instead of hardware-backed key derivation.
+
+Set the required environment variables and start the worker:
+
+```bash
+TEE_MODE=simulator TEE_WORKER_SECRET=dev-secret pnpm --filter cipherbox-tee-worker dev
+```
+
+The worker listens on port `3001` by default. Note that the `mock-ipns-routing` container also binds `127.0.0.1:3001` — when running the worker alongside the local Docker infrastructure, pick a free port (e.g. `PORT=3002`) and point `TEE_WORKER_URL` at it. The API authenticates to the TEE worker using a shared `Bearer` token — set the same value in `apps/api/.env`:
+
+```bash
+TEE_WORKER_SECRET=dev-secret
+TEE_WORKER_URL=http://localhost:3001
+```
+
+Key variables:
+
+| Variable            | Required | Notes                                           |
+| :------------------ | :------- | :---------------------------------------------- |
+| `TEE_MODE`          | Yes      | `simulator` (local) or `cvm` (Phala Cloud prod) |
+| `TEE_WORKER_SECRET` | Yes      | Shared secret for Bearer token auth             |
+| `PORT`              | No       | Defaults to `3001`                              |
+
+`TEE_MODE=simulator` is blocked at runtime if `NODE_ENV=production` or `CIPHERBOX_ENVIRONMENT=production` to prevent accidental use of the fixed seed in production.
