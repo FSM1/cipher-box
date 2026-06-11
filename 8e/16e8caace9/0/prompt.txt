@@ -69,3 +69,7 @@ F-08 can be marked as `not applicable` as I will likely be getting some phala cr
 <status>completed</status>
 <summary>Background command "Commit F-08 not-applicable marker" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+/gsd:ship
