@@ -10,7 +10,7 @@ related:
 
 ## Idea
 
-The only remaining privacy gap on the API is the social graph. `shares(sharer_id,
+The social graph is the largest remaining privacy gap on the API — not the only one (plaintext `item_name` and `recipientPublicKey` co-storage are listed under Lower-hanging hardening below), but the one that needs a redesign rather than a dropped column. `shares(sharer_id,
 recipient_id, permission, created_at, revoked_at)` is a directed, typed,
 timestamped owner→recipient edge list that resolves to real identities
 (`users.publicKey` → `auth_methods.identifier`), with per-share item counts
