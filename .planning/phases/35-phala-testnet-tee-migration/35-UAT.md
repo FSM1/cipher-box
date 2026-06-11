@@ -42,11 +42,12 @@ blocked: 0
 ## Gaps
 
 - truth: 'CI configuration contains only secrets/variables that are consumed by workflows'
-  status: failed
+  status: not-applicable
   reason: 'PHALA_CLOUD_API_KEY (secret) and PHALA_TEE_WORKER_URL (variable) remain configured in the GitHub staging environment but nothing references them — #472 removed the deploy-tee-phala job, the only consumer. The API key is a live credential for a retired service lingering in CI config.'
   severity: minor
   test: 2
   root_cause: '#472 (f270d843a) removed the workflow consumers but did not clean up the GitHub environment entries (not version-controlled, easy to miss in a code-only PR).'
+  resolution: 'Marked not-applicable 2026-06-11 (audit-fix F-08): Phala credits are expected, which would bring back the Phala Cloud staging TEE infra — the entries stay inert intentionally and will be consumed again when the deploy-tee-phala path returns.'
   artifacts:
   - path: 'GitHub repo Settings -> Environments -> staging'
     issue: 'orphaned PHALA_CLOUD_API_KEY secret and PHALA_TEE_WORKER_URL variable'

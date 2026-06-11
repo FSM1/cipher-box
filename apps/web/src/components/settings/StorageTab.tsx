@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type ConnectionTestResult, type PinningMode } from '@cipherbox/sdk-core';
+import { vaultControllerSetByoStatus } from '@cipherbox/api-client';
 import {
   wrapKey,
   unwrapKey,
@@ -17,6 +18,7 @@ import { ConnectionTest } from './ConnectionTest';
 import { MigrationProgress } from './MigrationProgress';
 import { migrationApi } from '../../lib/api/migration';
 import { reconfigurePinning } from '../../lib/sdk-provider';
+import { logger } from '../../lib/logger';
 
 /** Local storage key for the BYO config IPNS name (not sensitive -- public identifier) */
 const BYO_IPNS_NAME_KEY = 'cipherbox-byo-ipns-name';
@@ -75,6 +77,9 @@ export function StorageTab() {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Incremented each time a new migration starts to remount MigrationProgress,
+  // restarting its poll loop (it stops permanently on terminal statuses)
+  const [migrationRunId, setMigrationRunId] = useState(0);
 
   const vaultKeypair = useAuthStore((s) => s.vaultKeypair);
   const teeKeys = useAuthStore((s) => s.teeKeys);
@@ -255,6 +260,16 @@ export function StorageTab() {
         );
 
         await migrationApi.start(sourceConfigEncrypted, destConfigEncrypted);
+        setMigrationRunId((id) => id + 1);
+      }
+
+      // Sync BYO advisory-quota flag on the server (external/dual = BYO enabled).
+      // Non-fatal: the pinning config is already saved; failure only delays the
+      // advisory badge until the next save.
+      try {
+        await vaultControllerSetByoStatus({ isByo: mode !== 'cipherbox' });
+      } catch (err) {
+        logger.warn('[BYO] failed to update byo-status flag', err);
       }
 
       useQuotaStore.getState().fetchQuota();
@@ -424,7 +439,7 @@ export function StorageTab() {
       )}
 
       {/* Migration Progress (shown when active migration exists) */}
-      <MigrationProgress />
+      <MigrationProgress key={migrationRunId} />
     </div>
   );
 }

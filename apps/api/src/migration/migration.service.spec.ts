@@ -298,7 +298,7 @@ describe('MigrationService', () => {
 
   describe('updateProgress', () => {
     it('should increment migratedCids and failedCids counters', async () => {
-      const migration = { ...mockMigrationEntity, migratedCids: 2, failedCids: 1 };
+      const migration = { ...mockMigrationEntity, totalCids: 10, migratedCids: 2, failedCids: 1 };
       mockMigrationRepo.findOneOrFail.mockResolvedValue(migration);
       mockMigrationRepo.save.mockResolvedValue(migration);
 
@@ -346,6 +346,78 @@ describe('MigrationService', () => {
       expect(mockMigrationRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({
           failedCidList: 'bafkrei0,bafkrei1',
+        })
+      );
+    });
+
+    it('should dedupe failedCidList and derive failedCids from the deduped list', async () => {
+      // bafkrei0 already recorded as failed; the same batch is re-reported
+      // (e.g. HTTP timeout abort followed by a retry of the same batch).
+      const migration = {
+        ...mockMigrationEntity,
+        totalCids: 5,
+        migratedCids: 0,
+        failedCids: 1,
+        failedCidList: 'bafkrei0',
+      };
+      mockMigrationRepo.findOneOrFail.mockResolvedValue(migration);
+      mockMigrationRepo.save.mockResolvedValue(migration);
+
+      await service.updateProgress(testMigrationId, 0, 2, ['bafkrei0', 'bafkrei1']);
+
+      expect(mockMigrationRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failedCidList: 'bafkrei0,bafkrei1',
+          failedCids: 2, // deduped list length, NOT 1 + 2 = 3
+        })
+      );
+    });
+
+    it('should clamp migratedCids so migrated + failed never exceeds totalCids', async () => {
+      // Double-reported batch: a 5-CID batch timed out (counted as 5 failed),
+      // then the TEE worker actually completed it and reports 5 migrated.
+      const migration = {
+        ...mockMigrationEntity,
+        totalCids: 5,
+        migratedCids: 3,
+        failedCids: 5,
+        failedCidList: 'bafkrei0,bafkrei1,bafkrei2,bafkrei3,bafkrei4',
+      };
+      mockMigrationRepo.findOneOrFail.mockResolvedValue(migration);
+      mockMigrationRepo.save.mockResolvedValue(migration);
+
+      await service.updateProgress(testMigrationId, 5, 0);
+
+      expect(mockMigrationRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // migratedCids capped at totalCids - failedCids = 0, not 3 + 5 = 8
+          migratedCids: 0,
+          failedCids: 5,
+        })
+      );
+      const saved = mockMigrationRepo.save.mock.calls[0][0];
+      expect(saved.migratedCids + saved.failedCids).toBeLessThanOrEqual(saved.totalCids);
+    });
+
+    it('should keep totals within totalCids when duplicate failed reports arrive', async () => {
+      // All 3 CIDs already failed once; the identical failure report arrives again.
+      const migration = {
+        ...mockMigrationEntity,
+        totalCids: 3,
+        migratedCids: 0,
+        failedCids: 3,
+        failedCidList: 'bafkrei0,bafkrei1,bafkrei2',
+      };
+      mockMigrationRepo.findOneOrFail.mockResolvedValue(migration);
+      mockMigrationRepo.save.mockResolvedValue(migration);
+
+      await service.updateProgress(testMigrationId, 0, 3, ['bafkrei0', 'bafkrei1', 'bafkrei2']);
+
+      expect(mockMigrationRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          migratedCids: 0,
+          failedCids: 3, // unchanged — duplicates deduped
+          failedCidList: 'bafkrei0,bafkrei1,bafkrei2',
         })
       );
     });
