@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3fda50dc5d1d",
+  "strategy": "manual-commit",
+  "branch": "fix/audit-f03-byo-status-wiring",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/components/settings/StorageTab.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3f/da50dc5d1d/0/metadata.json",
+      "transcript": "/3f/da50dc5d1d/0/full.jsonl",
+      "content_hash": "/3f/da50dc5d1d/0/content_hash.txt",
+      "prompt": "/3f/da50dc5d1d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18879,
+    "cache_creation_tokens": 131399,
+    "cache_read_tokens": 2806218,
+    "output_tokens": 20732,
+    "api_call_count": 41
+  }
+}
