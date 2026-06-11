@@ -1,0 +1,171 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "95e55cbdff7e",
+  "session_id": "76fc2ea9-e2ee-4422-b71b-cf9b885217c1",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T23:42:59.683405Z",
+  "branch": "chore/planning-health-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "6ae2aecb4270",
+  "token_usage": {
+    "input_tokens": 103781,
+    "cache_creation_tokens": 751463,
+    "cache_read_tokens": 23356668,
+    "output_tokens": 141007,
+    "api_call_count": 124
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Generate and verify comprehensive project documentation for the cipher-box monorepo using the GSD docs-update workflow, then ship the changes as a merged PR.",
+    "outcome": "Successfully generated or updated 28 documentation files (+2,683/−477 lines), verified 383+ factual claims against the live codebase with all discovered inaccuracies fixed across two fix-loop iterations, and merged to main as PR #482.",
+    "learnings": {
+      "repo": [
+        "TEE republish interval is 6 hours (REPUBLISH_INTERVAL_HOURS = 6), not 3 — stale in CAPACITY.md in three separate places including a throughput calculation",
+        "packages/crypto/ was renamed/refactored to packages/core/ — 15+ documentation references across METADATA_SCHEMAS.md and METADATA_EVOLUTION_PROTOCOL.md still pointed to the old path",
+        "apps/desktop/src-tauri/src/crypto/ directory does not exist; the desktop Rust source only has commands/, fuse/, registry/, sync/, tray/ and top-level files",
+        "folder.service.ts does not exist; web folder mutation logic (depth checks) lives in apps/web/src/hooks/useFolderMutations.ts",
+        "crates/core/src/file.rs is an 11-line re-export shim; FileMetadata and VersionEntry structs are defined in crates/core/src/folder.rs",
+        "crates/fuse is an independent Rust crate with fuser as a Cargo dependency; the patched fuser source with the socket fix is at apps/desktop/src-tauri/vendor/fuser/src/channel.rs",
+        "docker-compose.yml has 5 services including the previously undocumented someguy (delegated routing, port 8190) and mock-ipns-routing (loopback 3001, built from tools/mock-ipns-routing/)",
+        "TEE worker simulator defaults to port 3001, conflicting with mock-ipns-routing — PORT=3002 recommended when running both",
+        "8 load test scenario files import checkThresholds, not 5 as documented across CAPACITY.md",
+        "apps/api/src/migrations/ has 16 files, not 14 — AddSignedRecordToFolderIpns and AddPublicKeyToFolderIpns were undocumented",
+        "folder_ipns table has an index on user_id and a unique constraint on (user_id, ipns_name); there is no owner_public_key column",
+        "recovery.html only accepts hex private keys for v2 recovery; base64 is explicitly rejected (line 1102); v1 inline file format also explicitly rejected (line 931)",
+        "QUOTA_BYTES is a runtime struct field in crates/fuse/src/constants.rs, not a named constant in vault.service.ts which only uses QUOTA_LIMIT_BYTES",
+        "model_profile: adaptive is an invalid value in .planning/config.json (valid values: quality, balanced, budget, inherit) — caused silent unknown config key warnings throughout the session",
+        "Phase 34 had a Validation Architecture section in RESEARCH.md but no corresponding VALIDATION.md stub"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 102,
+          "end_line": 102,
+          "finding": "createFolder enforces MAX_FOLDER_DEPTH (parentDepth >= MAX_FOLDER_DEPTH check)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 283,
+          "end_line": 283,
+          "finding": "moveFolder enforces MAX_FOLDER_DEPTH (destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH check)"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 29,
+          "end_line": 46,
+          "finding": "FolderEntry struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 72,
+          "end_line": 80,
+          "finding": "FolderChild struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 85,
+          "end_line": 91,
+          "finding": "FolderMetadata struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 152,
+          "end_line": 167,
+          "finding": "VersionEntry struct definition (not in file.rs which is a re-export shim)"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 173,
+          "end_line": 199,
+          "finding": "FileMetadata struct definition (not in file.rs which is a re-export shim)"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 101,
+          "end_line": 103,
+          "finding": "TypeORM synchronize/migrations/migrationsRun config (docs had stale line numbers 85-87)"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/src/channel.rs",
+          "finding": "Actual location of the patched fuser channel with FUSE-T socket fix; crates/fuse Cargo.toml lists fuser as a dependency, it is not vendored there"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "finding": "REPUBLISH_INTERVAL_HOURS = 6, not 3 as documented in CAPACITY.md"
+        }
+      ],
+      "workflow": [
+        "GSD background agents that die with transient API errors (socket closed, stream timeout) often auto-recover and complete — always check if the output file was written before respawning to avoid duplicate overwrites",
+        "When respawning a failed agent, call TaskStop on the duplicate immediately after the original completes; the original may finish before the respawn does",
+        "A process restart kills all in-flight background agents mid-task; their output files should be inspected to determine what partial work (if any) landed",
+        "The gsd-tools commit helper can report commit_failed as a false negative when lint-staged's spinner output is misread as an error; verify via git log",
+        "markdownlint MD040 (code fences missing language tag) is enforced by lint-staged at commit time — worth checking before committing generated docs",
+        "Verification agents doing deeper re-scans can surface new findings not caught in the initial pass (e.g. FILESYSTEM_SPECIFICATION line 22 was missed in round 1); run re-verification even on 'passing' docs in the fix loop",
+        "The GSD fix loop cap is 2 iterations; residual failures after cap exhaustion require manual edits using verifier-supplied corrected values"
+      ]
+    },
+    "friction": [
+      "Two Wave 1 agents (ARCHITECTURE and CONFIGURATION) died with transient API errors (socket closed, stream idle timeout) after consuming 55 and 74 tool calls respectively, requiring respawns and careful deduplication when the originals later auto-recovered",
+      "Process restart mid-iteration-2 killed all 5 fix agents simultaneously; their edits had not landed, requiring manual application of remaining corrections",
+      "METADATA_SCHEMAS.md required the most fix iterations — 16 stale package paths plus Rust line ranges; the iteration-2 fixer introduced new wrong file references (file.rs instead of folder.rs) that had to be corrected by hand",
+      "TaskStop failed silently on the two orphaned respawn agents because they had already died with the old process before the stop command reached them",
+      "The model_profile: adaptive config warning was emitted as 'unknown config key' on every gsd-tools invocation throughout the entire session but only surfaced as a named warning in the health check at the end"
+    ],
+    "open_items": [
+      "20 VERIFY markers in generated docs require manual verification: 12 in docs/CONFIGURATION.md (Web3Auth/Google dashboard values, Grafana Cloud URLs), 6 in docs/DEPLOYMENT.md (VPS host, staging URLs, Render config), 2 in SECURITY.md (GitHub private vulnerability reporting enablement)",
+      "DEVELOPMENT.md's infrastructure table still omits the someguy service's delegated routing detail in the staging context — Deployment.md was updated but the local dev table note about staging differences could be clearer",
+      "Phase 34 VALIDATION.md was generated as a stub from the RESEARCH.md Validation Architecture section — it may need actual validation content rather than a placeholder",
+      "The deferred ideas from .planning/DEFERRED.md were incorporated into a new BACKLOG.md and the original archived — the ideas themselves have not been triaged or prioritized",
+      "ENVIRONMENTS.md, FEATURES.md, REFACTORING.md, and SCOPING_RATIONALE.md were archived to .planning/milestones/ but their contents were not reviewed for staleness or incorporation into canonical planning artifacts"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 5710,
+      "user_lines_removed": 0,
+      "agent_lines_added": 46,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".planning/tmp/ARCHITECTURE.md.wave1-original": 397,
+        ".planning/tmp/CONFIGURATION.md.wave1-original": 275,
+        ".planning/tmp/DEVELOPMENT.md.pre-supplement": 154,
+        ".planning/tmp/prefix-backups-iter2/CAPACITY.md": 347,
+        ".planning/tmp/prefix-backups-iter2/DATABASE_EVOLUTION_PROTOCOL.md": 362,
+        ".planning/tmp/prefix-backups-iter2/FILESYSTEM_SPECIFICATION.md": 190,
+        ".planning/tmp/prefix-backups-iter2/METADATA_EVOLUTION_PROTOCOL.md": 275,
+        ".planning/tmp/prefix-backups-iter2/METADATA_SCHEMAS.md": 480,
+        ".planning/tmp/prefix-backups/ARCHITECTURE.md": 397,
+        ".planning/tmp/prefix-backups/CAPACITY.md": 347,
+        ".planning/tmp/prefix-backups/DATABASE_EVOLUTION_PROTOCOL.md": 360,
+        ".planning/tmp/prefix-backups/DEVELOPMENT.md": 181,
+        ".planning/tmp/prefix-backups/FILESYSTEM_SPECIFICATION.md": 191,
+        ".planning/tmp/prefix-backups/METADATA_EVOLUTION_PROTOCOL.md": 276,
+        ".planning/tmp/prefix-backups/METADATA_SCHEMAS.md": 480,
+        ".planning/tmp/prefix-backups/VAULT_EXPORT_FORMAT.md": 811,
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 7,
+        ".planning/tmp/verify-AUTHENTICATION_ARCHITECTURE.md.json": 7,
+        ".planning/tmp/verify-CAPACITY.md.json": 14,
+        ".planning/tmp/verify-CONFIGURATION.md.json": 7,
+        ".planning/tmp/verify-CONTRIBUTING.md.json": 7,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 14,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 20,
+        ".planning/tmp/verify-GETTING-STARTED.md.json": 10,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 14,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 38,
+        ".planning/tmp/verify-README.md.json": 7,
+        ".planning/tmp/verify-SECURITY.md.json": 7,
+        ".planning/tmp/verify-SHARING.md.json": 7,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 7
+      }
+    }
+  ]
+}
