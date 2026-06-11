@@ -77,6 +77,9 @@ export function StorageTab() {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Incremented each time a new migration starts to remount MigrationProgress,
+  // restarting its poll loop (it stops permanently on terminal statuses)
+  const [migrationRunId, setMigrationRunId] = useState(0);
 
   const vaultKeypair = useAuthStore((s) => s.vaultKeypair);
   const teeKeys = useAuthStore((s) => s.teeKeys);
@@ -257,6 +260,7 @@ export function StorageTab() {
         );
 
         await migrationApi.start(sourceConfigEncrypted, destConfigEncrypted);
+        setMigrationRunId((id) => id + 1);
       }
 
       // Sync BYO advisory-quota flag on the server (external/dual = BYO enabled).
@@ -435,7 +439,7 @@ export function StorageTab() {
       )}
 
       {/* Migration Progress (shown when active migration exists) */}
-      <MigrationProgress />
+      <MigrationProgress key={migrationRunId} />
     </div>
   );
 }

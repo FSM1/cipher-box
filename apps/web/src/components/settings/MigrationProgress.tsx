@@ -59,6 +59,7 @@ export function MigrationProgress() {
   const isActive = migration.status === 'running' || migration.status === 'pending';
   const isPaused = migration.status === 'paused';
   const isComplete = migration.status === 'completed';
+  const isFailed = migration.status === 'failed';
 
   const handlePause = async () => {
     await migrationApi.pause(migration.id);
@@ -104,6 +105,10 @@ export function MigrationProgress() {
       {isComplete ? (
         <p className="migration-progress-text migration-complete">
           {`> migration complete. ${migration.totalCids} pins transferred.`}
+        </p>
+      ) : isFailed ? (
+        <p className="migration-failed-text">
+          {`> migration failed: ${migration.migratedCids}/${migration.totalCids} pins migrated`}
         </p>
       ) : (
         <p className="migration-progress-text">
