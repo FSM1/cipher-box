@@ -1,0 +1,72 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "25962388eaa0",
+  "session_id": "e154945f-2a00-469e-bfca-c169c0c76a88",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T20:57:24.030853Z",
+  "branch": "docs/explore-protocol-and-privacy-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/seeds/blind-share-social-graph.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "746204ee70ce",
+  "checkpoint_transcript_start": 345,
+  "transcript_lines_at_start": 345,
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 3890,
+    "cache_read_tokens": 801795,
+    "output_tokens": 3946,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Correct overly broad wording in a planning seed document that claimed a feature was the 'only' privacy gap, when other gaps were already documented nearby.",
+    "outcome": "Updated the claim to 'largest' privacy gap and added a cross-reference to the other gaps already listed in the seed's 'Lower-hanging hardening' section, then committed and pushed.",
+    "learnings": {
+      "repo": [
+        "Planning artifacts live in .planning/seeds/ within the cipher-box repo at /Users/myankelev/Code/random/cipher-box",
+        "The blind-share-social-graph seed contains a 'Lower-hanging hardening' section that enumerates multiple privacy gaps"
+      ],
+      "code": [
+        {
+          "path": ".planning/seeds/blind-share-social-graph.md",
+          "finding": "Original text claimed the feature was the 'only' privacy gap; corrected to 'largest' with a cross-reference to other listed gaps"
+        }
+      ],
+      "workflow": [
+        "Grep for all instances of a claim before editing to ensure consistency across files",
+        "Only the seed file (not any derived note) contained the privacy-gap claim, so a single targeted edit was sufficient"
+      ]
+    },
+    "friction": [
+      "Initial wording was too absolute ('only') and contradicted content already present in the same document"
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-11T20:57:14.188946Z",
+    "agent_lines": 1,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 2,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "25962388eaa0",
+  "strategy": "manual-commit",
+  "branch": "docs/explore-protocol-and-privacy-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/seeds/blind-share-social-graph.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/25/962388eaa0/0/metadata.json",
+      "transcript": "/25/962388eaa0/0/full.jsonl",
+      "content_hash": "/25/962388eaa0/0/content_hash.txt",
+      "prompt": "/25/962388eaa0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 3890,
+    "cache_read_tokens": 801795,
+    "output_tokens": 3946,
+    "api_call_count": 4
+  }
+}
