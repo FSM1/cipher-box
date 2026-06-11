@@ -1,0 +1,267 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "597d5e1cbd6d",
+  "session_id": "76fc2ea9-e2ee-4422-b71b-cf9b885217c1",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T22:36:31.620916Z",
+  "branch": "docs/gsd-docs-update",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "CONTRIBUTING.md",
+    "README.md",
+    "SECURITY.md",
+    "apps/api/README.md",
+    "apps/desktop/README.md",
+    "apps/tee-worker/README.md",
+    "apps/web/README.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CAPACITY.md",
+    "docs/CONFIGURATION.md",
+    "docs/DATABASE_EVOLUTION_PROTOCOL.md",
+    "docs/DEPLOYMENT.md",
+    "docs/DEVELOPMENT.md",
+    "docs/FILESYSTEM_SPECIFICATION.md",
+    "docs/GETTING-STARTED.md",
+    "docs/METADATA_EVOLUTION_PROTOCOL.md",
+    "docs/METADATA_SCHEMAS.md",
+    "docs/SHARING.md",
+    "docs/TESTING.md",
+    "docs/VAULT_EXPORT_FORMAT.md",
+    "packages/api-client/README.md",
+    "packages/core/README.md",
+    "packages/crypto/README.md",
+    "packages/sdk-core/README.md",
+    "packages/sdk/README.md",
+    "tests/load/README.md",
+    "tests/sdk-e2e/README.md",
+    "tests/web-e2e/README.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d9ce884d2c03",
+  "token_usage": {
+    "input_tokens": 58408,
+    "cache_creation_tokens": 651450,
+    "cache_read_tokens": 13751523,
+    "output_tokens": 107824,
+    "api_call_count": 93
+  },
+  "summary": {
+    "intent": "Run the gsd-docs-update workflow to generate and update comprehensive documentation for the cipher-box project, covering 9 canonical doc types, 12 per-package READMEs, and accuracy-review of existing hand-written specs. Also remove stale 'tech demonstrator' wording from the README mid-session.",
+    "outcome": "Successfully wrote or updated 28 documentation files across canonical docs, per-package READMEs, and existing specs. Two rounds of verification+fix corrected ~30 inaccuracies. All files were committed to a docs branch; 4 iteration-2 fix targets were left with residual minor findings after a mid-session process exit killed those agents.",
+    "learnings": {
+      "repo": [
+        "packages/crypto/src/ was renamed to packages/core/src/ — every pre-existing doc referencing the old path is stale",
+        "apps/desktop/src-tauri/src/crypto/ directory does not exist; Rust crypto logic lives in crates/core/src/",
+        "FileMetadata and VersionEntry Rust structs are defined in crates/core/src/folder.rs (not file.rs, which is an 11-line re-export shim)",
+        "folder.service.ts does not exist in the web app; folder mutation/depth enforcement is in apps/web/src/hooks/useFolderMutations.ts",
+        "TEE republish interval is REPUBLISH_INTERVAL_HOURS = 6 (docs/CAPACITY.md and CLAUDE.md confirm 6h; CAPACITY.md had 3h in three places)",
+        "pnpm api:generate outputs to packages/api-client/, not apps/web/src/api/ as stale docs claimed",
+        "Web E2E npm scripts are test:web-e2e and test:web-e2e:headed, not test:e2e / test:e2e:headed",
+        "recovery.html only accepts hex-encoded private keys for v2 recovery (base64 explicitly rejected at line 1102); v1 inline-file recovery path is not implemented — it logs an error and skips",
+        "8 load-test scenario files import checkThresholds (not 5): ipns-publish-storm, spike-test, sustained-load, sdk-folder-read, mixed-workload, upload-throughput, sdk-upload-pipeline, sdk-ipns-contention",
+        "folder_ipns table has IDX_folder_ipns_user_id on user_id and a unique constraint UQ_folder_ipns_user_ipns on (user_id, ipns_name); no standalone ipns_name index; owner_public_key is not a column",
+        "QUOTA_BYTES exists only in crates/fuse/src/constants.rs for the FUSE layer; vault.service.ts uses only QUOTA_LIMIT_BYTES",
+        "crates/fuse has fuser = '0.16' as a Cargo dependency; the vendored fuser source with the FUSE-T socket patch lives at apps/desktop/src-tauri/vendor/fuser/src/channel.rs",
+        "apps/api/src/migrations/ has 16 migration files; pre-existing docs inventoried only 14 (missing AddSignedRecordToFolderIpns and AddPublicKeyToFolderIpns)",
+        "apps/desktop/src-tauri/src/fuse/operations.rs does not exist; only fuse/mod.rs and fuse/windows/mod.rs are present",
+        "docker/docker-compose.yml defines a 5th service 'someguy' (delegated routing, port 8190) not mentioned in DEVELOPMENT.md infrastructure table",
+        "VERSION_COOLDOWN_MS is not a named constant; it is a u64 struct field version_cooldown_ms populated at runtime from VaultSettings.version_cooldown_minutes"
+      ],
+      "code": [
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 85,
+          "end_line": 91,
+          "finding": "FolderMetadata struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 72,
+          "end_line": 80,
+          "finding": "FolderChild struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 29,
+          "end_line": 46,
+          "finding": "FolderEntry struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 173,
+          "end_line": 199,
+          "finding": "FileMetadata struct definition (not in file.rs)"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 152,
+          "end_line": 167,
+          "finding": "VersionEntry struct definition (not in file.rs)"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "finding": "REPUBLISH_INTERVAL_HOURS = 6, not 3 as documented in CAPACITY.md"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 101,
+          "end_line": 103,
+          "finding": "TypeORM synchronize/migrations/migrationsRun config (docs cited lines 85-87)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 102,
+          "end_line": 102,
+          "finding": "MAX_FOLDER_DEPTH check in createFolder"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 283,
+          "end_line": 283,
+          "finding": "MAX_FOLDER_DEPTH check in moveFolder (destDepth + 1 + subtreeDepth)"
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 554,
+          "end_line": 554,
+          "finding": "version_cooldown_ms is a u64 struct field, not a named constant"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 519,
+          "end_line": 520,
+          "finding": "Migration command (docker compose run --rm api node dist/run-migrations.js); DATABASE_EVOLUTION_PROTOCOL.md cited line 287"
+        }
+      ],
+      "workflow": [
+        "Background agents can hit transient API errors (socket closed, stream idle timeout) and silently recover — check on-disk output before relaunching to avoid duplicate overwrites",
+        "TaskStop fails gracefully when the process that launched the agent has already exited; orphaned agents may still complete and overwrite files",
+        "A process exit kills all in-flight background agents; re-entry requires inspecting on-disk state and applying fixes manually",
+        "Re-verification consistently surfaces additional findings the initial scan missed — plan for iteration-2 to catch residual line-range and path issues",
+        "Generated markdown files require a markdownlint pass before commit; MD040 (code fences missing language tag) is a common generated-doc violation",
+        "The two-iteration fix-loop protocol is intentional: iteration 1 clears known failures, iteration 2 handles deeper findings from the re-scan; remaining failures after cap are manual",
+        "The gsd-docs work manifest (.planning/tmp/docs-work-manifest.json) is essential for resuming after process interruption — always write it before dispatching agents"
+      ]
+    },
+    "friction": [
+      "Two Wave 1 agents (ARCHITECTURE, CONFIGURATION) hit transient API errors mid-run (socket closed after ~55-74 tool calls, stream idle timeout after ~370s) requiring relaunches",
+      "Original agents auto-recovered and completed while relaunched duplicates were still running, creating a race condition requiring TaskStop",
+      "All 5 iteration-2 fix agents were killed by a process exit before completing; their in-process state was lost with no partial output",
+      "TaskStop reported failure for the two orphaned Wave 1 respawns because they had died with the original process, not the current one",
+      "After process exit, Read tool state was invalidated — had to re-read files before any Edit calls would succeed",
+      "METADATA_SCHEMAS required three fix passes: 16 failures → fixer used wrong Rust file paths → 7 more failures → fixer used wrong line ranges → 5 more (manually corrected)",
+      "markdownlint MD040 violations in three generated files had to be fixed manually before commit"
+    ],
+    "open_items": [
+      "CAPACITY.md line 337 still references '5 load test scenarios' (should be 8) — iteration-2 fix agent was killed before applying this correction",
+      "DATABASE_EVOLUTION_PROTOCOL.md line 353 still cites deploy-staging.yml at '(line 287)' — actual lines are 519-520; iteration-2 fix killed",
+      "FILESYSTEM_SPECIFICATION.md line 22 still cites folder.service.ts in the Case Handling table (file does not exist); line 97 conflates QUOTA_BYTES (FUSE only) with QUOTA_LIMIT_BYTES (API) — iteration-2 fix killed",
+      "METADATA_EVOLUTION_PROTOCOL.md has a wrong cargo test command for the core crate — iteration-2 fix killed before applying",
+      "DEVELOPMENT.md infrastructure table omits the 'someguy' delegated-routing service (port 8190) from docker-compose.yml — flagged by verifier as an omission, not fixed",
+      "No final re-verification run was performed after the manual iteration-2 METADATA_SCHEMAS edits and the post-process-exit state; a --verify-only pass is recommended to confirm clean state"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-11T22:35:04.57243Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 132,
+    "human_modified": 864,
+    "human_removed": 0,
+    "total_committed": 132,
+    "total_lines_changed": 996,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 8402,
+      "user_lines_removed": 450,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".planning/tmp/ARCHITECTURE.md.wave1-original": 397,
+        ".planning/tmp/CONFIGURATION.md.wave1-original": 275,
+        ".planning/tmp/DEVELOPMENT.md.pre-supplement": 154,
+        ".planning/tmp/docs-work-manifest.json": 45,
+        ".planning/tmp/prefix-backups-iter2/CAPACITY.md": 347,
+        ".planning/tmp/prefix-backups-iter2/DATABASE_EVOLUTION_PROTOCOL.md": 362,
+        ".planning/tmp/prefix-backups-iter2/FILESYSTEM_SPECIFICATION.md": 190,
+        ".planning/tmp/prefix-backups-iter2/METADATA_EVOLUTION_PROTOCOL.md": 275,
+        ".planning/tmp/prefix-backups-iter2/METADATA_SCHEMAS.md": 480,
+        ".planning/tmp/prefix-backups/ARCHITECTURE.md": 397,
+        ".planning/tmp/prefix-backups/CAPACITY.md": 347,
+        ".planning/tmp/prefix-backups/DATABASE_EVOLUTION_PROTOCOL.md": 360,
+        ".planning/tmp/prefix-backups/DEVELOPMENT.md": 181,
+        ".planning/tmp/prefix-backups/FILESYSTEM_SPECIFICATION.md": 191,
+        ".planning/tmp/prefix-backups/METADATA_EVOLUTION_PROTOCOL.md": 276,
+        ".planning/tmp/prefix-backups/METADATA_SCHEMAS.md": 480,
+        ".planning/tmp/prefix-backups/VAULT_EXPORT_FORMAT.md": 811,
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 7,
+        ".planning/tmp/verify-AUTHENTICATION_ARCHITECTURE.md.json": 7,
+        ".planning/tmp/verify-CAPACITY.md.json": 14,
+        ".planning/tmp/verify-CONFIGURATION.md.json": 7,
+        ".planning/tmp/verify-CONTRIBUTING.md.json": 7,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 14,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 20,
+        ".planning/tmp/verify-GETTING-STARTED.md.json": 10,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 14,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 38,
+        ".planning/tmp/verify-README.md.json": 7,
+        ".planning/tmp/verify-SECURITY.md.json": 7,
+        ".planning/tmp/verify-SHARING.md.json": 7,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 7,
+        "CONTRIBUTING.md": 94,
+        "README.md": 112,
+        "SECURITY.md": 73,
+        "apps/api/README.md": 54,
+        "apps/desktop/README.md": 93,
+        "apps/tee-worker/README.md": 62,
+        "apps/web/README.md": 48,
+        "docs/ARCHITECTURE.md": 333,
+        "docs/CAPACITY.md": 8,
+        "docs/CONFIGURATION.md": 275,
+        "docs/DATABASE_EVOLUTION_PROTOCOL.md": 4,
+        "docs/DEPLOYMENT.md": 268,
+        "docs/DEVELOPMENT.md": 30,
+        "docs/FILESYSTEM_SPECIFICATION.md": 6,
+        "docs/GETTING-STARTED.md": 176,
+        "docs/METADATA_EVOLUTION_PROTOCOL.md": 7,
+        "docs/METADATA_SCHEMAS.md": 32,
+        "docs/SHARING.md": 332,
+        "docs/TESTING.md": 244,
+        "docs/VAULT_EXPORT_FORMAT.md": 10,
+        "packages/api-client/README.md": 17,
+        "packages/core/README.md": 17,
+        "packages/crypto/README.md": 50,
+        "packages/sdk-core/README.md": 38,
+        "packages/sdk/README.md": 55,
+        "tests/load/README.md": 73,
+        "tests/sdk-e2e/README.md": 62,
+        "tests/web-e2e/README.md": 74
+      },
+      "user_removed_per_file": {
+        "README.md": 55,
+        "docs/ARCHITECTURE.md": 216,
+        "docs/CAPACITY.md": 8,
+        "docs/DATABASE_EVOLUTION_PROTOCOL.md": 2,
+        "docs/DEVELOPMENT.md": 3,
+        "docs/FILESYSTEM_SPECIFICATION.md": 7,
+        "docs/METADATA_EVOLUTION_PROTOCOL.md": 8,
+        "docs/METADATA_SCHEMAS.md": 32,
+        "docs/VAULT_EXPORT_FORMAT.md": 18,
+        "packages/api-client/README.md": 5,
+        "packages/core/README.md": 11,
+        "packages/crypto/README.md": 14,
+        "packages/sdk-core/README.md": 7,
+        "packages/sdk/README.md": 6,
+        "tests/web-e2e/README.md": 58
+      }
+    }
+  ]
+}

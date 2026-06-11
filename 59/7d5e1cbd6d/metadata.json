@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "597d5e1cbd6d",
+  "strategy": "manual-commit",
+  "branch": "docs/gsd-docs-update",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "CONTRIBUTING.md",
+    "README.md",
+    "SECURITY.md",
+    "apps/api/README.md",
+    "apps/desktop/README.md",
+    "apps/tee-worker/README.md",
+    "apps/web/README.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CAPACITY.md",
+    "docs/CONFIGURATION.md",
+    "docs/DATABASE_EVOLUTION_PROTOCOL.md",
+    "docs/DEPLOYMENT.md",
+    "docs/DEVELOPMENT.md",
+    "docs/FILESYSTEM_SPECIFICATION.md",
+    "docs/GETTING-STARTED.md",
+    "docs/METADATA_EVOLUTION_PROTOCOL.md",
+    "docs/METADATA_SCHEMAS.md",
+    "docs/SHARING.md",
+    "docs/TESTING.md",
+    "docs/VAULT_EXPORT_FORMAT.md",
+    "packages/api-client/README.md",
+    "packages/core/README.md",
+    "packages/crypto/README.md",
+    "packages/sdk-core/README.md",
+    "packages/sdk/README.md",
+    "tests/load/README.md",
+    "tests/sdk-e2e/README.md",
+    "tests/web-e2e/README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/59/7d5e1cbd6d/0/metadata.json",
+      "transcript": "/59/7d5e1cbd6d/0/full.jsonl",
+      "content_hash": "/59/7d5e1cbd6d/0/content_hash.txt",
+      "prompt": "/59/7d5e1cbd6d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 58408,
+    "cache_creation_tokens": 651450,
+    "cache_read_tokens": 13751523,
+    "output_tokens": 107824,
+    "api_call_count": 93
+  }
+}
