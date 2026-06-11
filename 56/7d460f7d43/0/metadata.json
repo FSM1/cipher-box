@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "567d460f7d43",
+  "session_id": "a7d20a7c-813f-439c-8cab-81d900eed4a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T18:38:07.439322Z",
+  "branch": "docs/explore-protocol-and-privacy-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "Cargo.lock"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "f9102ea64521",
+  "token_usage": {
+    "input_tokens": 33754,
+    "cache_creation_tokens": 202093,
+    "cache_read_tokens": 3933125,
+    "output_tokens": 48726,
+    "api_call_count": 36
+  },
+  "summary": {
+    "intent": "Run a GSD milestone audit for v1.1 of cipher-box to verify definition of done across 26 phases, then close the only orphaned-requirements gap by running Nyquist validation for Phase 18.",
+    "outcome": "Milestone audit completed (62/66 requirements satisfied; 4 gaps were verification-process gaps, not code gaps). Phase 18 Nyquist validation completed — 25 new interceptor tests written and confirmed green, PERF-01..04 closed — but the two resulting commits are blocked pending 1Password SSH signing approval.",
+    "learnings": {
+      "repo": [
+        "Windows FUSE code lives in crates/fuse/src/platform/windows/ (moved there by phases 25/33); Phase 23's VERIFICATION.md predated that move and appeared to have gaps that no longer exist.",
+        "Project enforces a no-direct-commits-to-main rule; all work must go on a feature branch.",
+        "All commits require 1Password SSH signing (op-ssh-sign), which blocks in CI/background processes without a user Touch ID approval.",
+        "Kubo scrape block is at alloy-config.river:83.",
+        "The monorepo uses turbo with default parallelism; vitest adds per-core worker pools on top, creating a multiplicative process storm when test suites run concurrently.",
+        "Phases 31 and 32 lack VERIFICATION.md; Phase 32 additionally lacks VALIDATION.md."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/metrics/http-metrics.interceptor.spec.ts",
+          "line": 1,
+          "finding": "New file created by Nyquist auditor subagent — 25 tests covering success/error paths, duration math, method/status label dimensions, and /metrics self-exclusion. Had an unused HttpException import that blocked eslint pre-commit hook and had to be removed."
+        },
+        {
+          "path": "alloy-config.river",
+          "line": 83,
+          "finding": "Kubo scrape block — confirmed wired, satisfies PERF-03 manual verification item."
+        }
+      ],
+      "workflow": [
+        "GSD integration-checker subagents given Bash access will run full build + test suites unless the prompt explicitly restricts them to static analysis; add 'static analysis only — no builds or test suites' to all future checker/verifier subagent prompts.",
+        "The 3-source cross-reference (VERIFICATION.md + SUMMARY.md frontmatter + REQUIREMENTS.md traceability) caught stale checkboxes (IPNS-02/03, SDK-08/09) that human reviewers had missed.",
+        "Background git commits hang silently when SSH signing is pending; need to watch for op-ssh-sign in the process tree rather than assuming the commit succeeded."
+      ]
+    },
+    "friction": [
+      "gsd-integration-checker subagent ran the full monorepo test suite (turbo × vitest worker pools) and starved the machine of RAM, crashing the session mid-audit.",
+      "Pre-commit eslint hook rejected the new spec file due to an unused HttpException import, requiring a read-edit-recommit cycle.",
+      "Background commit process hung for ~5+ minutes waiting on 1Password SSH signing approval with no visible prompt or timeout.",
+      "The background task was ultimately killed, leaving commits unconfirmed on branch chore/phase-18-nyquist-validation."
+    ],
+    "open_items": [
+      "Approve 1Password SSH signing for the two commits on branch chore/phase-18-nyquist-validation (test(phase-18) and docs(phase-18)) — or rerun commits once signing is ready.",
+      "REQUIREMENTS.md edits (IPNS-02/03, SDK-08/09 checkbox flips) are uncommitted.",
+      "Re-run /gsd-audit-milestone after Phase 18 commits land to flip audit status from gaps_found to passed.",
+      "/gsd-validate-phase 32 — only phase with neither VERIFICATION nor VALIDATION.",
+      "/gsd-validate-phase 31 — VERIFICATION.md missing (Nyquist already compliant).",
+      "Phase 35 live CVM health check + staging secrets confirmation (human action required before /gsd-complete-milestone v1.1).",
+      "BYO-04 settings UI check outstanding.",
+      "Phase 27 share UAT outstanding."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-11T18:37:30.464851Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 2,
+    "human_removed": 18,
+    "total_committed": 0,
+    "total_lines_changed": 41,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 607,
+      "user_lines_removed": 29,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".planning/REQUIREMENTS.md": 9,
+        ".planning/phases/18-performance-instrumentation/18-VALIDATION.md": 30,
+        ".planning/v1.1-MILESTONE-AUDIT.md": 164,
+        "Cargo.lock": 1,
+        "apps/api/src/metrics/http-metrics.interceptor.spec.ts": 403
+      },
+      "user_removed_per_file": {
+        ".planning/REQUIREMENTS.md": 9,
+        ".planning/phases/18-performance-instrumentation/18-VALIDATION.md": 19,
+        "Cargo.lock": 1
+      }
+    }
+  ]
+}
