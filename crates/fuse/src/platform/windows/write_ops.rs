@@ -85,6 +85,9 @@ pub mod implementation {
                 )
                 .map_err(|e| format!("Folder key wrapping failed: {}", e))?;
                 let encrypted_folder_key_hex = hex::encode(&wrapped_folder_key);
+                // Clone before the value is moved into InodeKind::Folder below (same
+                // pattern as fuser plan deviation 4 fix).
+                let encrypted_folder_key_hex_for_journal = encrypted_folder_key_hex.clone();
 
                 let ino = fs.inodes.allocate_ino();
                 let now = SystemTime::now();
@@ -135,10 +138,36 @@ pub mod implementation {
                 let (parent_metadata, parent_folder_key, parent_ipns_key, parent_ipns_name, parent_old_cid) =
                     fs.build_folder_metadata(parent_ino)?;
 
+                // D-04: journal the MkdirPublish entry with an fsync barrier before
+                // the directory entry is reported back to WinFsp (D-11b).
+                let mkdir_created_at_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let mkdir_journal_entry = cipherbox_sdk::JournalEntry {
+                    id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
+                    vault_root_ipns: fs.root_ipns_name.clone(),
+                    op: cipherbox_sdk::JournalOp::MkdirPublish {
+                        child_ipns_name: ipns_name.clone(),
+                        child_folder_key_hex: encrypted_folder_key_hex_for_journal,
+                        child_ipns_key_hex: encrypted_ipns_for_tee.clone().unwrap_or_default(),
+                        parent_folder_ipns_name: parent_ipns_name.clone(),
+                        name: name.to_string(),
+                        created_at_ms: mkdir_created_at_ms,
+                    },
+                    retries: 0,
+                    status: cipherbox_sdk::JournalEntryStatus::Pending,
+                };
+                let mkdir_journal_entry_id = mkdir_journal_entry.id.clone();
+                fs.journal.put(&mkdir_journal_entry)?;
+
                 let api = fs.api.clone();
                 let rt = fs.rt.clone();
                 let ipns_name_clone = ipns_name.clone();
                 let coordinator = fs.publish_coordinator.clone();
+                let upload_tx = fs.upload_tx.clone();
+                let journal_for_mkdir = fs.journal.clone();
+                let parent_ino_for_conflict = parent_ino;
 
                 std::thread::spawn(move || {
                     let result = rt.block_on(async {
@@ -190,8 +219,8 @@ pub mod implementation {
                             .map_err(|e| format!("Parent IPNS marshal failed: {}", e))?;
                         let parent_record_b64 = base64::engine::general_purpose::STANDARD.encode(&parent_marshaled);
                         // Parent folder publish after mkdir includes conflict detection.
-                        // On conflict, log a warning -- the debounced publish queue will retry.
-                        // TODO: Add full re-fetch+merge+retry for parent mkdir publish (v2).
+                        // On conflict, signal the FS thread via upload_tx so the debounced
+                        // publisher retries with a fresh sequence (D-11a).
                         let parent_req = cipherbox_api_client::IpnsPublishRequest {
                             ipns_name: parent_ipns_name.clone(),
                             record: parent_record_b64,
@@ -207,14 +236,19 @@ pub mod implementation {
                                 if let Some(old) = parent_old_cid {
                                     let _ = cipherbox_api_client::ipfs::unpin_content(&api, &old).await;
                                 }
+                                // Remove journal entry now that parent publish is confirmed (D-11b).
+                                let _ = journal_for_mkdir.remove(&mkdir_journal_entry_id);
+                                log::info!("Parent metadata published after mkdir");
                             }
                             cipherbox_api_client::PublishResult::Conflict { current_sequence_number } => {
+                                // Signal the FS thread to re-arm the debounced publisher with a
+                                // fresh sequence (D-11a). Journal entry stays until parent publish
+                                // confirms (D-11b) — do NOT remove it here.
                                 log::warn!(
-                                    "Conflict on parent publish after mkdir (expected seq {}, server has {}). \
-                                    Debounced publish will retry.",
+                                    "Conflict on parent mkdir publish (expected seq {}, server has {}). Signalling retry.",
                                     seq, current_sequence_number
                                 );
-                                // Do not unpin -- let the next debounced publish pick up fresh seq
+                                let _ = upload_tx.send(crate::FsEvent::MkdirConflict { parent_ino: parent_ino_for_conflict });
                             }
                         }
                         Ok::<(), String>(())
@@ -708,7 +742,29 @@ pub mod implementation {
                     .unwrap_or(false);
                 let handle = fs.open_files.remove(&fh).unwrap();
 
-                let prepare_result = (|| -> Result<(), String> {
+                // Spawn params struct separates the prepare+journal phase from the spawn
+                // phase so handle.cleanup() can run before the spawn (D-04, D-05).
+                struct UploadSpawnParams {
+                    api: std::sync::Arc<cipherbox_api_client::ApiConfig>,
+                    rt: std::sync::Arc<tokio::runtime::Runtime>,
+                    upload_tx: std::sync::mpsc::Sender<crate::FsEvent>,
+                    coordinator: std::sync::Arc<crate::publish_coordinator::PublishCoordinator>,
+                    tee_public_key: Option<Vec<u8>>,
+                    tee_key_epoch: Option<u32>,
+                    ciphertext: Vec<u8>,
+                    file_meta: cipherbox_core::folder::FileMetadata,
+                    file_ipns_private_key: Option<zeroize::Zeroizing<Vec<u8>>>,
+                    file_meta_ipns_name: Option<String>,
+                    folder_key_for_file_meta: Option<Vec<u8>>,
+                    old_file_cid: Option<String>,
+                    pruned_cids: Vec<String>,
+                    write_gen: u64,
+                    parent_ino: u64,
+                    journal: cipherbox_sdk::WriteQueue,
+                    journal_entry_id: String,
+                }
+
+                let prepare_result = (|| -> Result<UploadSpawnParams, String> {
                     let plaintext = handle.read_all()?;
                     let mut file_key = cipherbox_crypto::utils::generate_file_key();
                     let iv = cipherbox_crypto::utils::generate_iv();
@@ -798,12 +854,68 @@ pub mod implementation {
                     let folder_key_for_file_meta = fs.get_folder_key(parent_ino);
                     fs.queue_publish(parent_ino, true);
 
+                    // Resolve parent IPNS name for stable journal entry (D-02).
+                    let parent_folder_ipns_name = fs.inodes.get(parent_ino)
+                        .and_then(|inode| match &inode.kind {
+                            InodeKind::Root { ipns_name, .. } => ipns_name.clone(),
+                            InodeKind::Folder { ipns_name, .. } => Some(ipns_name.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| fs.root_ipns_name.clone());
+
+                    let file_meta_ipns_name_str = file_meta_ipns_name
+                        .clone()
+                        .unwrap_or_default();
+
+                    // Build journal entry referencing ciphertext only — no plaintext (D-05).
+                    use base64::Engine;
+                    let ciphertext_b64 = base64::engine::general_purpose::STANDARD.encode(&ciphertext);
+                    let wrapped_key_hex = encrypted_file_key_hex.clone();
+                    let journal_entry = cipherbox_sdk::JournalEntry {
+                        id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
+                        vault_root_ipns: fs.root_ipns_name.clone(),
+                        op: cipherbox_sdk::JournalOp::UploadFile {
+                            ciphertext_b64,
+                            wrapped_key_hex,
+                            iv_hex: iv_hex.clone(),
+                            file_meta_ipns_name: file_meta_ipns_name_str,
+                            file_ipns_key_hex: file_meta_ipns_name.as_ref().map(|_| {
+                                file_ipns_private_key.as_ref()
+                                    .map(|k| {
+                                        cipherbox_crypto::ecies::wrap_key(k, &fs.public_key)
+                                            .map(|w| hex::encode(&w))
+                                            .unwrap_or_default()
+                                    })
+                                    .or_else(|| {
+                                        fs.inodes.get(ino).and_then(|i| match &i.kind {
+                                            InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
+                                            _ => None,
+                                        })
+                                    })
+                            }).flatten(),
+                            parent_folder_ipns_name,
+                            filename: file_name,
+                            size: file_size,
+                            created_at_ms: now_ms,
+                        },
+                        retries: 0,
+                        status: cipherbox_sdk::JournalEntryStatus::Pending,
+                    };
+                    let journal_entry_id = journal_entry.id.clone();
+
+                    // D-04: fsync journal entry to disk BEFORE spawning the upload thread.
+                    // WinFsp cleanup has no explicit reply — the implicit ack occurs after
+                    // the callback returns, but the fsync barrier here still protects against
+                    // crash-before-spawn data loss.
+                    fs.journal.put(&journal_entry)?;
+
                     let api = fs.api.clone();
                     let rt = fs.rt.clone();
                     let upload_tx = fs.upload_tx.clone();
                     let coordinator = fs.publish_coordinator.clone();
                     let tee_public_key = fs.tee_public_key.clone();
                     let tee_key_epoch = fs.tee_key_epoch;
+                    let journal_clone = fs.journal.clone();
 
                     let file_meta = cipherbox_core::folder::FileMetadata {
                         version: "v1".to_string(),
@@ -818,51 +930,87 @@ pub mod implementation {
                         versions: versions_for_meta,
                     };
 
-                    std::thread::spawn(move || {
-                        let result = rt.block_on(async {
-                            let file_cid = cipherbox_api_client::ipfs::upload_content(&api, &ciphertext).await.map_err(|e| e.to_string())?;
-                            log::info!("File uploaded: ino {} -> CID {}", ino, file_cid);
-
-                            let _ = upload_tx.send(crate::FsEvent::UploadComplete(crate::UploadComplete {
-                                ino,
-                                new_cid: file_cid.clone(),
-                                parent_ino,
-                                old_file_cid,
-                                pruned_cids,
-                                write_generation: write_gen,
-                            }));
-
-                            if let (Some(ipns_key), Some(ipns_name), Some(folder_key)) =
-                                (&file_ipns_private_key, &file_meta_ipns_name, &folder_key_for_file_meta)
-                            {
-                                let mut file_meta_with_cid = file_meta;
-                                file_meta_with_cid.cid = file_cid;
-                                if let Err(e) = publish_file_metadata(
-                                    &api, &file_meta_with_cid, folder_key, ipns_key, ipns_name, &coordinator,
-                                    tee_public_key.as_deref(),
-                                    tee_key_epoch,
-                                    is_new_file,
-                                ).await {
-                                    log::warn!("Per-file IPNS publish failed for ino {}: {}", ino, e);
-                                }
-                            }
-
-                            Ok::<(), String>(())
-                        });
-
-                        if let Err(e) = result {
-                            log::error!("Background upload failed for ino {}: {}", ino, e);
-                        }
-                    });
-
-                    Ok(())
+                    Ok(UploadSpawnParams {
+                        api,
+                        rt,
+                        upload_tx,
+                        coordinator,
+                        tee_public_key,
+                        tee_key_epoch,
+                        ciphertext,
+                        file_meta,
+                        file_ipns_private_key,
+                        file_meta_ipns_name,
+                        folder_key_for_file_meta,
+                        old_file_cid,
+                        pruned_cids,
+                        write_gen,
+                        parent_ino,
+                        journal: journal_clone,
+                        journal_entry_id,
+                    })
                 })();
 
-                if let Err(e) = prepare_result {
-                    log::error!("File upload preparation failed for ino {}: {}", ino, e);
-                }
+                match prepare_result {
+                    Ok(params) => {
+                        // D-05: zeroize and delete plaintext temp file BEFORE spawning.
+                        handle.cleanup();
 
-                handle.cleanup();
+                        // Spawn background upload AFTER journal fsync; entry stays in journal
+                        // until success, preserving the write_generation stale-drain guard.
+                        let UploadSpawnParams {
+                            api, rt, upload_tx, coordinator, tee_public_key, tee_key_epoch,
+                            ciphertext, file_meta, file_ipns_private_key, file_meta_ipns_name,
+                            folder_key_for_file_meta, old_file_cid, pruned_cids, write_gen,
+                            parent_ino, journal: spawn_journal, journal_entry_id,
+                        } = params;
+                        std::thread::spawn(move || {
+                            let result = rt.block_on(async {
+                                let file_cid = cipherbox_api_client::ipfs::upload_content(&api, &ciphertext).await.map_err(|e| e.to_string())?;
+                                log::info!("File uploaded: ino {} -> CID {}", ino, file_cid);
+
+                                let _ = upload_tx.send(crate::FsEvent::UploadComplete(crate::UploadComplete {
+                                    ino,
+                                    new_cid: file_cid.clone(),
+                                    parent_ino,
+                                    old_file_cid,
+                                    pruned_cids,
+                                    write_generation: write_gen,
+                                }));
+
+                                if let (Some(ipns_key), Some(ipns_name), Some(folder_key)) =
+                                    (&file_ipns_private_key, &file_meta_ipns_name, &folder_key_for_file_meta)
+                                {
+                                    let mut file_meta_with_cid = file_meta;
+                                    file_meta_with_cid.cid = file_cid;
+                                    if let Err(e) = publish_file_metadata(
+                                        &api, &file_meta_with_cid, folder_key, ipns_key, ipns_name, &coordinator,
+                                        tee_public_key.as_deref(),
+                                        tee_key_epoch,
+                                        is_new_file,
+                                    ).await {
+                                        log::warn!("Per-file IPNS publish failed for ino {}: {}", ino, e);
+                                    }
+                                }
+
+                                // Remove journal entry on confirmed success (D-04).
+                                let _ = spawn_journal.remove(&journal_entry_id);
+
+                                Ok::<(), String>(())
+                            });
+
+                            if let Err(e) = result {
+                                // Do not remove the journal entry on failure — it persists for
+                                // replay (D-09). Plan 43-04's drain owner calls record_failure.
+                                log::error!("Background upload failed for ino {}: {}", ino, e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("File upload preparation failed for ino {}: {}", ino, e);
+                        handle.cleanup();
+                    }
+                }
             }
         }
     }
