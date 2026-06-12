@@ -655,7 +655,18 @@ describe('CipherBoxClient - extended', () => {
 
     it('purgeExpired validates retentionDays and emits bin:updated', async () => {
       vi.mocked(binOps.loadBin).mockResolvedValue({
-        entries: [{ id: 'e1', name: 'old.txt', deletedAt: 0, type: 'file' }],
+        entries: [
+          {
+            id: 'e1',
+            name: 'old.txt',
+            deletedAt: 0,
+            itemType: 'file' as const,
+            originalParentIpnsName: 'k51parent',
+            originalPath: 'My Vault',
+            size: 0,
+            mimeType: '',
+          },
+        ],
         sequenceNumber: 1,
         ipnsName: 'k51bin',
       });
