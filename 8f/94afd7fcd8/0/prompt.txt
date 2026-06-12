@@ -1,0 +1,29 @@
+/gsd:manager
+
+---
+
+how would a caller call unpin on a CID they do not own in the first place? how would they know the CID? is the unpin endpoint exposed publicly?
+
+---
+
+you did not answer my question, just presented the same answers for me to choose from
+
+---
+
+is there any downside to the loud 403? also, what is the unpin flow when the user is utilizing the BYO-ipfs capability?
+
+---
+
+so what was the feedback regarding downsides of the loud 403 response?
+
+---
+
+ok right, lets stick with the silent 2XX and audit log
+
+---
+
+ok right, lets stick with the silent 2XX and audit log
+
+---
+
+if the recommended option is utilized, would it not then be necessary for a reconcilliation job to run to identify cids that are pinned on kubo but have no corresponding entry in pinned_cids?
