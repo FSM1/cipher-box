@@ -602,11 +602,11 @@ Plans:
 **Goal:** Make FUSE writes durable: persisted out-of-callback pending-upload journal so `release()` no longer falsely acks then silently loses data, and mkdir parent-publish conflicts actually enqueue a retry instead of orphaning the child folder
 **Requirements:** Todos `2026-06-11-fuse-release-data-loss-before-remote-commit` + `2026-06-11-fuse-mkdir-parent-publish-orphan` (mkdir fix builds on the journal — both platforms, macOS + Windows)
 **Depends on:** Phase 41
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 Plans:
 **Wave 1**
 
-- [ ] 43-01-PLAN.md — Persist-backed WriteQueue journal in crates/sdk (JournalEntry/JournalOp, fsync, vault-scoped load, park-on-max-retry) + SyncStatus::WriteParked (TDD)
+- [x] 43-01-PLAN.md — Persist-backed WriteQueue journal in crates/sdk (JournalEntry/JournalOp, fsync, vault-scoped load, park-on-max-retry) + SyncStatus::WriteParked (TDD)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
