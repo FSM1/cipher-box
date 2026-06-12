@@ -545,6 +545,141 @@ mod tests {
         assert_eq!(loaded[0].id, "valid1");
     }
 
+    // ---- Task 4: parent_ipns_key_hex round-trip + ordering by created_at_ms tests ----
+
+    /// CR-01/D-04: UploadFile entry with parent_ipns_key_hex set round-trips unchanged.
+    #[test]
+    fn upload_entry_parent_ipns_key_hex_round_trips() {
+        let parent_key_hex = hex::encode(b"ecies-wrapped-parent-ipns-key-bytes-here");
+        let entry = JournalEntry {
+            id: "pk-upload".to_string(),
+            vault_root_ipns: "k51vault".to_string(),
+            op: JournalOp::UploadFile {
+                ciphertext_b64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"ct",
+                ),
+                wrapped_key_hex: hex::encode(b"wk"),
+                iv_hex: hex::encode(b"iv"),
+                file_meta_ipns_name: "k51file".to_string(),
+                file_ipns_key_hex: None,
+                parent_folder_ipns_name: "k51parent".to_string(),
+                parent_ipns_key_hex: parent_key_hex.clone(),
+                filename: "f.txt".to_string(),
+                size: 1,
+                created_at_ms: 1_000,
+            },
+            retries: 0,
+            status: JournalEntryStatus::Pending,
+        };
+        let json = serde_json::to_vec(&entry).expect("serialize");
+        let back: JournalEntry = serde_json::from_slice(&json).expect("deserialize");
+        if let JournalOp::UploadFile { parent_ipns_key_hex, .. } = &back.op {
+            assert_eq!(*parent_ipns_key_hex, parent_key_hex,
+                "parent_ipns_key_hex must round-trip unchanged");
+        } else {
+            panic!("Expected UploadFile");
+        }
+    }
+
+    /// CR-01/D-04: MkdirPublish entry with parent_ipns_key_hex set round-trips unchanged.
+    #[test]
+    fn mkdir_entry_parent_ipns_key_hex_round_trips() {
+        let parent_key_hex = hex::encode(b"ecies-wrapped-parent-ipns-key-mkdir");
+        let entry = JournalEntry {
+            id: "pk-mkdir".to_string(),
+            vault_root_ipns: "k51vault".to_string(),
+            op: JournalOp::MkdirPublish {
+                child_ipns_name: "k51child".to_string(),
+                child_folder_key_hex: hex::encode(b"fk"),
+                child_ipns_key_hex: hex::encode(b"ck"),
+                parent_folder_ipns_name: "k51parent".to_string(),
+                parent_ipns_key_hex: parent_key_hex.clone(),
+                name: "newdir".to_string(),
+                created_at_ms: 2_000,
+            },
+            retries: 0,
+            status: JournalEntryStatus::Pending,
+        };
+        let json = serde_json::to_vec(&entry).expect("serialize");
+        let back: JournalEntry = serde_json::from_slice(&json).expect("deserialize");
+        if let JournalOp::MkdirPublish { parent_ipns_key_hex, .. } = &back.op {
+            assert_eq!(*parent_ipns_key_hex, parent_key_hex,
+                "parent_ipns_key_hex must round-trip unchanged");
+        } else {
+            panic!("Expected MkdirPublish");
+        }
+    }
+
+    /// WR-01: ordered_for_replay sorts each group by created_at_ms ascending.
+    #[test]
+    fn replay_order_sorts_by_created_at_within_group() {
+        // Two UploadFile entries inserted newest-first; expect oldest-first after ordering.
+        let mut entry_2000 = make_upload_entry("up-2000", "v");
+        if let JournalOp::UploadFile { ref mut created_at_ms, .. } = entry_2000.op {
+            *created_at_ms = 2000;
+        }
+        let mut entry_1000 = make_upload_entry("up-1000", "v");
+        if let JournalOp::UploadFile { ref mut created_at_ms, .. } = entry_1000.op {
+            *created_at_ms = 1000;
+        }
+
+        let mut mkdir_early = make_mkdir_entry("mk-100", "v");
+        if let JournalOp::MkdirPublish { ref mut created_at_ms, .. } = mkdir_early.op {
+            *created_at_ms = 100;
+        }
+        let mut mkdir_late = make_mkdir_entry("mk-50", "v");
+        if let JournalOp::MkdirPublish { ref mut created_at_ms, .. } = mkdir_late.op {
+            *created_at_ms = 50;
+        }
+
+        // Insert in "wrong" order to verify sort is applied.
+        let entries = vec![entry_2000, entry_1000, mkdir_early, mkdir_late];
+        let ordered = WriteQueue::ordered_for_replay(entries);
+
+        // MkdirPublish entries must all come before UploadFile entries.
+        // Within MkdirPublish group: mk-50 (50ms) before mk-100 (100ms).
+        assert_eq!(ordered[0].id, "mk-50", "earliest mkdir must be first");
+        assert_eq!(ordered[1].id, "mk-100", "later mkdir must be second");
+        // Within UploadFile group: up-1000 (1000ms) before up-2000 (2000ms).
+        assert_eq!(ordered[2].id, "up-1000", "earliest upload must be third");
+        assert_eq!(ordered[3].id, "up-2000", "latest upload must be fourth");
+    }
+
+    /// D-05 extended: parent_ipns_key_hex in journal must be hex string, never raw bytes.
+    #[test]
+    fn journal_no_plaintext_with_parent_ipns_key() {
+        let raw_secret = b"raw_ipns_key_secret_bytes_12345678";
+        let wrapped_hex = hex::encode(raw_secret); // simulates user-ECIES-wrapped key
+        let entry = JournalEntry {
+            id: "noplain2".to_string(),
+            vault_root_ipns: "k51vault".to_string(),
+            op: JournalOp::UploadFile {
+                ciphertext_b64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"ct",
+                ),
+                wrapped_key_hex: hex::encode(b"wk"),
+                iv_hex: hex::encode(b"iv"),
+                file_meta_ipns_name: "k51file".to_string(),
+                file_ipns_key_hex: None,
+                parent_folder_ipns_name: "k51parent".to_string(),
+                parent_ipns_key_hex: wrapped_hex.clone(),
+                filename: "g.txt".to_string(),
+                size: 1,
+                created_at_ms: 1,
+            },
+            retries: 0,
+            status: JournalEntryStatus::Pending,
+        };
+        let json_str = String::from_utf8(serde_json::to_vec(&entry).unwrap()).unwrap();
+        // The field must be present and be the hex string.
+        assert!(json_str.contains(&wrapped_hex), "parent_ipns_key_hex hex must appear in JSON");
+        // Must not contain the raw bytes interpreted as a string.
+        assert!(!json_str.contains("raw_ipns_key_secret_bytes"),
+            "Journal must not contain raw key material as plaintext string");
+    }
+
     // ---- Task 3: replay ordering tests ----
 
     #[test]
