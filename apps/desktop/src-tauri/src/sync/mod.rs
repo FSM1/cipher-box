@@ -18,12 +18,15 @@ use cipherbox_sdk::SyncStatus;
 /// Start the SDK sync daemon with a Tauri tray status bridge.
 ///
 /// The `sync_now_rx` channel receives manual sync triggers from the tray menu.
+/// The `write_queue` must point at the same cb-journal directory the FUSE layer writes
+/// so the daemon can observe `Failed` entries and surface them via `WriteParked` (CR-07).
 /// Returns a `SyncDaemon` that should be run in a spawned tokio task.
 pub fn create_sync_daemon(
     state: Arc<cipherbox_sdk::KeyState>,
     app_handle: tauri::AppHandle,
     poll_interval: Duration,
     sync_now_rx: mpsc::Receiver<()>,
+    write_queue: cipherbox_sdk::WriteQueue,
 ) -> SyncDaemon {
     let app = app_handle;
     let status_callback = Arc::new(move |status: SyncStatus| {
@@ -53,5 +56,5 @@ pub fn create_sync_daemon(
         let _ = crate::tray::update_tray_status(&app, &tray_status);
     });
 
-    SyncDaemon::new(state, status_callback, poll_interval, sync_now_rx)
+    SyncDaemon::new(state, status_callback, poll_interval, sync_now_rx, write_queue)
 }
