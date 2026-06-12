@@ -635,7 +635,7 @@ Plans:
 **Goal:** Stop lost updates on concurrent IPNS writes in `packages/sdk-core`: on 409, re-fetch remote folder metadata and merge (children union, per-entry reconcile) before republishing, and extend CAS coverage to file records; full CRDT model explicitly deferred to the CRDT-inbox research todo
 **Requirements:** Todo `2026-06-11-ipns-409-retry-lost-update` (discuss-phase: confirm whether the Rust SDK CAS-publish path has the same lost-update pattern)
 **Depends on:** Phase 41
-**Plans:** 3/5 plans executed
+**Plans:** 5/5 plans complete
 Plans:
 **Wave 1**
 
@@ -648,8 +648,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 44-04-PLAN.md — SDK-package caller sweep: client.ts, bin, shared-write baseChildren (wave 3)
-- [ ] 44-05-PLAN.md — Web hooks caller sweep + file CAS rewire; D-09 no Rust (wave 3)
+- [x] 44-04-PLAN.md — SDK-package caller sweep: client.ts, bin, shared-write baseChildren (wave 3)
+- [x] 44-05-PLAN.md — Web hooks caller sweep + file CAS rewire; D-09 no Rust (wave 3)
 
 ---
 
