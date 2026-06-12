@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "433b5c61d889",
+  "strategy": "manual-commit",
+  "branch": "feat/fuse-write-durability",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/43/3b5c61d889/0/metadata.json",
+      "transcript": "/43/3b5c61d889/0/full.jsonl",
+      "content_hash": "/43/3b5c61d889/0/content_hash.txt",
+      "prompt": "/43/3b5c61d889/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 57063,
+    "cache_creation_tokens": 2908192,
+    "cache_read_tokens": 85270506,
+    "output_tokens": 323347,
+    "api_call_count": 325
+  }
+}
