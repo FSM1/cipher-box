@@ -602,7 +602,7 @@ Plans:
 **Goal:** Make FUSE writes durable: persisted out-of-callback pending-upload journal so `release()` no longer falsely acks then silently loses data, and mkdir parent-publish conflicts actually enqueue a retry instead of orphaning the child folder
 **Requirements:** Todos `2026-06-11-fuse-release-data-loss-before-remote-commit` + `2026-06-11-fuse-mkdir-parent-publish-orphan` (mkdir fix builds on the journal — both platforms, macOS + Windows)
 **Depends on:** Phase 41
-**Plans:** 8 plans (4 complete + 4 gap-closure)
+**Plans:** 5/8 plans executed
 Plans:
 **Wave 1**
 
@@ -619,7 +619,7 @@ Plans:
 
 **Wave 4** *(gap closure — verification blockers from 43-VERIFICATION.md)*
 
-- [ ] 43-05-PLAN.md — Journal schema + replay core: add user-wrapped parent_ipns_key_hex, replay signs/publishes parent IPNS (CR-01), unwrap file/child IPNS keys (CR-02/CR-03), created_at_ms ordering + nested-parent resolve + atomic 0600 perms + drop WriteQueue::default (WR-01/02/03/09)
+- [x] 43-05-PLAN.md — Journal schema + replay core: add user-wrapped parent_ipns_key_hex, replay signs/publishes parent IPNS (CR-01), unwrap file/child IPNS keys (CR-02/CR-03), created_at_ms ordering + nested-parent resolve + atomic 0600 perms + drop WriteQueue::default (WR-01/02/03/09)
 
 **Wave 5** *(blocked on Wave 4 — disjoint files, parallel)*
 
