@@ -15,13 +15,13 @@ created: 2026-06-12
 
 ## Test Infrastructure
 
-| Property               | Value                                                          |
-| ---------------------- | -------------------------------------------------------------- | -------- |
-| **Framework**          | jest (apps/api NestJS specs) / vitest (packages, web)          |
-| **Config file**        | apps/api/jest config in package.json                           |
-| **Quick run command**  | `pnpm --filter @cipherbox/api test -- --testPathPattern='(ipfs | vault)'` |
-| **Full suite command** | `pnpm --filter @cipherbox/api test`                            |
-| **Estimated runtime**  | ~60 seconds                                                    |
+| Property               | Value                                                              |
+| ---------------------- | ------------------------------------------------------------------ |
+| **Framework**          | jest (apps/api NestJS specs) / vitest (packages, web)              |
+| **Config file**        | apps/api/jest config in package.json                               |
+| **Quick run command**  | `pnpm --filter @cipherbox/api test -- --testPathPattern='(ipfs\|vault)'` |
+| **Full suite command** | `pnpm --filter @cipherbox/api test`                                |
+| **Estimated runtime**  | ~60 seconds                                                        |
 
 ---
 
