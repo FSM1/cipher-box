@@ -602,7 +602,7 @@ Plans:
 **Goal:** Make FUSE writes durable: persisted out-of-callback pending-upload journal so `release()` no longer falsely acks then silently loses data, and mkdir parent-publish conflicts actually enqueue a retry instead of orphaning the child folder
 **Requirements:** Todos `2026-06-11-fuse-release-data-loss-before-remote-commit` + `2026-06-11-fuse-mkdir-parent-publish-orphan` (mkdir fix builds on the journal — both platforms, macOS + Windows)
 **Depends on:** Phase 41
-**Plans:** 4/4 plans complete
+**Plans:** 8 plans (4 complete + 4 gap-closure)
 Plans:
 **Wave 1**
 
@@ -616,6 +616,19 @@ Plans:
 
 - [x] 43-03-PLAN.md — WinFsp wiring (Windows): handle_cleanup + handle_create mirror the fuser journal/retry changes
 - [x] 43-04-PLAN.md — Desktop: cb-journal dir injection, vault-scoped dependency-ordered replay on mount, WriteParked park notification + tray bridge
+
+**Wave 4** *(gap closure — verification blockers from 43-VERIFICATION.md)*
+
+- [ ] 43-05-PLAN.md — Journal schema + replay core: add user-wrapped parent_ipns_key_hex, replay signs/publishes parent IPNS (CR-01), unwrap file/child IPNS keys (CR-02/CR-03), created_at_ms ordering + nested-parent resolve + atomic 0600 perms + drop WriteQueue::default (WR-01/02/03/09)
+
+**Wave 5** *(blocked on Wave 4 — disjoint files, parallel)*
+
+- [ ] 43-06-PLAN.md — fuser write-side: handle_release EIO on prepare failure (CR-04), gate journal removal on confirmed parent publish (CR-08), journal user-wrapped child + parent IPNS keys (CR-03/CR-01), record_failure on background failure (CR-07)
+- [ ] 43-07-PLAN.md — Windows: fix UploadSpawnParams types so winfsp compiles (CR-05), Windows mount replay_for_vault (CR-06), mirror CR-03/CR-01/CR-04/CR-08/CR-07 in handle_cleanup + handle_create
+
+**Wave 6** *(blocked on Waves 4-5)*
+
+- [ ] 43-08-PLAN.md — SyncDaemon wired to real cb-journal WriteQueue; sync_cycle emits SyncStatus::WriteParked from on-disk Failed counts, making the park/notify pipeline reachable (CR-07)
 
 ### Phase 44: IPNS conflict handling
 
