@@ -31,10 +31,21 @@ import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord, batchPublishIpnsRecords, resolveIpnsRecord } from '../ipns';
 import { withPerf } from '../perf';
 import type { FileIpnsRecordPayload } from '../file';
+import { ConflictError } from '../errors';
+
+// [ASSUMED] Exponential backoff constants for the 409 retry loop (A1 — values reasoned, not spec)
+const BACKOFF_BASE_MS = 100;
+const BACKOFF_CAP_MS = 1500;
+
+/** Exponential backoff with ±50% jitter. */
+function retryDelayMs(attempt: number): number {
+  return Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_CAP_MS) * (0.5 + Math.random() * 0.5);
+}
 
 // Tree traversal utilities
 export { getDepth, calculateSubtreeDepth, isDescendantOf, type TreeNode } from './tree';
-export { mergeChildren } from './merge';
+import { mergeChildren } from './merge';
+export { mergeChildren };
 
 /**
  * Fetch and decrypt folder metadata from IPFS.
@@ -174,6 +185,7 @@ export async function createSubfolder(params: {
  */
 export async function updateFolderMetadataAndPublish(params: {
   children: FolderChild[];
+  baseChildren?: FolderChild[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
   ipnsPublicKey?: Uint8Array;
@@ -184,25 +196,24 @@ export async function updateFolderMetadataAndPublish(params: {
   keyEpoch?: number;
 }): Promise<{ cid: string; newSequenceNumber: bigint }> {
   return withPerf('folder:update-publish', async () => {
-    // 1. Create v2 folder metadata
-    const metadata: FolderMetadata = {
-      version: 'v2',
-      children: params.children,
-    };
-
-    // 2. Encrypt metadata with folder key
-    const encrypted = await encryptFolderMetadata(metadata, params.folderKey);
-
-    // 3. Upload to IPFS via backend relay
-    const jsonStr = JSON.stringify(encrypted);
-    const encryptedBytes = new TextEncoder().encode(jsonStr);
-    const { cid } = await addToIpfs(params.ctx, encryptedBytes);
-
-    // 4. Publish IPNS record with conflict retry
-    //    On 409, resolve current seq from IPNS and retry once
+    // Merge-and-republish retry loop (D-01 through D-05).
+    // encrypt+upload happens inside the loop so each attempt gets a fresh CID (D-03).
     let currentSeq = params.sequenceNumber;
+    let currentLocalChildren: FolderChild[] = params.children;
+    let lastRemoteSeq: bigint = params.sequenceNumber;
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      // 1. Build v2 metadata with current children, encrypt, upload → fresh CID (D-03)
+      const metadata: FolderMetadata = {
+        version: 'v2',
+        children: currentLocalChildren,
+      };
+      const encrypted = await encryptFolderMetadata(metadata, params.folderKey);
+      const jsonStr = JSON.stringify(encrypted);
+      const encryptedBytes = new TextEncoder().encode(jsonStr);
+      const { cid } = await addToIpfs(params.ctx, encryptedBytes);
+
+      // 2. CAS publish: expectedSequenceNumber guards against lost update
       const newSeq = currentSeq + 1n;
       try {
         await createAndPublishIpnsRecord({
@@ -221,20 +232,49 @@ export async function updateFolderMetadataAndPublish(params: {
         const is409 =
           (err as Error & { status?: number }).status === 409 ||
           (err as Error & { response?: { status?: number } }).response?.status === 409;
-        if (!is409 || attempt > 0) throw err;
+        if (!is409) throw err;
 
-        // Re-sync: resolve current seq from IPNS
+        // 3. Re-resolve authoritatively — ignore any seq hint in the error body (Pitfall 1+2)
         const resolved = await resolveIpnsRecord(params.ipnsName, params.ctx);
-        if (resolved) {
-          currentSeq = resolved.sequenceNumber;
-        } else {
-          throw err; // Can't resolve → give up
+        if (!resolved) {
+          throw new ConflictError(params.ipnsName, attempt + 1, lastRemoteSeq);
         }
+        currentSeq = resolved.sequenceNumber;
+        lastRemoteSeq = resolved.sequenceNumber;
+
+        // 4. Re-fetch + decrypt remote folder metadata
+        const remote = await fetchAndDecryptMetadata(resolved.cid, params.folderKey, params.ctx);
+
+        // 5. Three-way merge (D-01 / D-02)
+        if (params.baseChildren !== undefined) {
+          // D-01: caller provided base snapshot → proper three-way merge
+          currentLocalChildren = mergeChildren(
+            params.baseChildren,
+            currentLocalChildren,
+            remote.children
+          );
+        } else {
+          // D-02: no base → union fallback; log warning so the caller sweep is noticeable
+          console.warn(
+            '[sdk-core] updateFolderMetadataAndPublish: baseChildren not provided for ' +
+              params.ipnsName +
+              ' — using union fallback (deletes may resurrect). Caller should pass baseChildren.'
+          );
+          currentLocalChildren = mergeChildren([], currentLocalChildren, remote.children);
+        }
+
+        // 6. After the final attempt, throw ConflictError (D-05)
+        if (attempt === 3) {
+          throw new ConflictError(params.ipnsName, 4, lastRemoteSeq);
+        }
+
+        // 7. Backoff + jitter before next attempt (D-04)
+        await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
       }
     }
 
-    // Should not reach here, but TypeScript needs it
-    throw new Error('Publish failed after retry');
+    // Unreachable fallback (TypeScript exhaustion — ConflictError thrown inside the loop above)
+    throw new ConflictError(params.ipnsName, 4, lastRemoteSeq);
   });
 }
 
