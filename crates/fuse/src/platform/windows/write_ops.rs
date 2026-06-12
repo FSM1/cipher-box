@@ -85,6 +85,9 @@ pub mod implementation {
                 )
                 .map_err(|e| format!("Folder key wrapping failed: {}", e))?;
                 let encrypted_folder_key_hex = hex::encode(&wrapped_folder_key);
+                // Clone before the value is moved into InodeKind::Folder below (same
+                // pattern as fuser plan deviation 4 fix).
+                let encrypted_folder_key_hex_for_journal = encrypted_folder_key_hex.clone();
 
                 let ino = fs.inodes.allocate_ino();
                 let now = SystemTime::now();
@@ -135,10 +138,36 @@ pub mod implementation {
                 let (parent_metadata, parent_folder_key, parent_ipns_key, parent_ipns_name, parent_old_cid) =
                     fs.build_folder_metadata(parent_ino)?;
 
+                // D-04: journal the MkdirPublish entry with an fsync barrier before
+                // the directory entry is reported back to WinFsp (D-11b).
+                let mkdir_created_at_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let mkdir_journal_entry = cipherbox_sdk::JournalEntry {
+                    id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
+                    vault_root_ipns: fs.root_ipns_name.clone(),
+                    op: cipherbox_sdk::JournalOp::MkdirPublish {
+                        child_ipns_name: ipns_name.clone(),
+                        child_folder_key_hex: encrypted_folder_key_hex_for_journal,
+                        child_ipns_key_hex: encrypted_ipns_for_tee.clone().unwrap_or_default(),
+                        parent_folder_ipns_name: parent_ipns_name.clone(),
+                        name: name.to_string(),
+                        created_at_ms: mkdir_created_at_ms,
+                    },
+                    retries: 0,
+                    status: cipherbox_sdk::JournalEntryStatus::Pending,
+                };
+                let mkdir_journal_entry_id = mkdir_journal_entry.id.clone();
+                fs.journal.put(&mkdir_journal_entry)?;
+
                 let api = fs.api.clone();
                 let rt = fs.rt.clone();
                 let ipns_name_clone = ipns_name.clone();
                 let coordinator = fs.publish_coordinator.clone();
+                let upload_tx = fs.upload_tx.clone();
+                let journal_for_mkdir = fs.journal.clone();
+                let parent_ino_for_conflict = parent_ino;
 
                 std::thread::spawn(move || {
                     let result = rt.block_on(async {
@@ -190,8 +219,8 @@ pub mod implementation {
                             .map_err(|e| format!("Parent IPNS marshal failed: {}", e))?;
                         let parent_record_b64 = base64::engine::general_purpose::STANDARD.encode(&parent_marshaled);
                         // Parent folder publish after mkdir includes conflict detection.
-                        // On conflict, log a warning -- the debounced publish queue will retry.
-                        // TODO: Add full re-fetch+merge+retry for parent mkdir publish (v2).
+                        // On conflict, signal the FS thread via upload_tx so the debounced
+                        // publisher retries with a fresh sequence (D-11a).
                         let parent_req = cipherbox_api_client::IpnsPublishRequest {
                             ipns_name: parent_ipns_name.clone(),
                             record: parent_record_b64,
@@ -207,14 +236,19 @@ pub mod implementation {
                                 if let Some(old) = parent_old_cid {
                                     let _ = cipherbox_api_client::ipfs::unpin_content(&api, &old).await;
                                 }
+                                // Remove journal entry now that parent publish is confirmed (D-11b).
+                                let _ = journal_for_mkdir.remove(&mkdir_journal_entry_id);
+                                log::info!("Parent metadata published after mkdir");
                             }
                             cipherbox_api_client::PublishResult::Conflict { current_sequence_number } => {
+                                // Signal the FS thread to re-arm the debounced publisher with a
+                                // fresh sequence (D-11a). Journal entry stays until parent publish
+                                // confirms (D-11b) — do NOT remove it here.
                                 log::warn!(
-                                    "Conflict on parent publish after mkdir (expected seq {}, server has {}). \
-                                    Debounced publish will retry.",
+                                    "Conflict on parent mkdir publish (expected seq {}, server has {}). Signalling retry.",
                                     seq, current_sequence_number
                                 );
-                                // Do not unpin -- let the next debounced publish pick up fresh seq
+                                let _ = upload_tx.send(crate::FsEvent::MkdirConflict { parent_ino: parent_ino_for_conflict });
                             }
                         }
                         Ok::<(), String>(())
