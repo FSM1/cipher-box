@@ -595,7 +595,7 @@ this.driftOrphanedPins = new client.Counter({
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`pending_unpins` FK to `users`?**
    - What we know: `pin_migrations` has no FK to `users` (uses `user_id varchar`-equivalent). `pinned_cids` does have `ON DELETE CASCADE`.
