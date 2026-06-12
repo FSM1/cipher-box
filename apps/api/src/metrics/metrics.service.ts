@@ -40,6 +40,13 @@ export class MetricsService implements OnModuleInit {
   readonly delegatedRoutingRequests: client.Counter;
   readonly delegatedRoutingFallbacks: client.Counter;
 
+  // --- Counters (unpin audit) ---
+  readonly unpinCrossUserAttempts: client.Counter;
+  readonly driftOrphanedPinsTotal: client.Counter;
+
+  // --- Gauges (unpin outbox) ---
+  readonly pendingUnpinsGauge: client.Gauge;
+
   // --- Histograms ---
   readonly httpRequestDuration: client.Histogram;
   readonly ipfsIpnsDuration: client.Histogram;
@@ -164,6 +171,26 @@ export class MetricsService implements OnModuleInit {
       name: 'cipherbox_delegated_routing_fallbacks_total',
       help: 'Times the primary routing backend failed and fallback was used',
       labelNames: ['operation'],
+      registers: [this.registry],
+    });
+
+    // Counters (unpin audit)
+    this.unpinCrossUserAttempts = new client.Counter({
+      name: 'cipherbox_unpin_cross_user_attempts_total',
+      help: 'Unpin requests where the CID exists but belongs to another user',
+      registers: [this.registry],
+    });
+
+    this.driftOrphanedPinsTotal = new client.Counter({
+      name: 'cipherbox_drift_orphaned_pins_total',
+      help: 'Kubo pins not tracked in pinned_cids or pending_unpins (drift report)',
+      registers: [this.registry],
+    });
+
+    // Gauges (unpin outbox)
+    this.pendingUnpinsGauge = new client.Gauge({
+      name: 'cipherbox_pending_unpins_total',
+      help: 'CIDs in the pending_unpins outbox awaiting Kubo pin/rm',
       registers: [this.registry],
     });
 
