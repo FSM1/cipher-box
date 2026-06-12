@@ -571,19 +571,19 @@ fn send_error_notification(app: &AppHandle, message: &str) -> Result<(), String>
 - Comment at `write_ops.rs:583-584`: "Debounced publish will retry" — false; replaced by actual retry behavior.
 - Comment at `queue.rs:6-7`: "Memory-only queue per CONTEXT.md" — superseded by D-01.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Journal directory on Linux**
+1. **Journal directory on Linux** — RESOLVED: journal dir path injected from the mount orchestrator (implemented in plan 43-04).
    - What we know: `dirs::data_local_dir()` returns `~/.local/share` on Linux; app-specific subdirectory would be `~/.local/share/com.cipherbox.desktop/cb-journal/`.
    - What's unclear: Whether the Tauri `app_data_dir()` resolver is accessible from `crates/sdk` (it requires an AppHandle) or whether `dirs::data_local_dir()` should be used instead in sdk, with the concrete path injected at mount time from `apps/desktop`.
    - Recommendation: Inject the journal dir path into `WriteQueue::new(path)` from the mount orchestrator (in `apps/desktop/src-tauri/src/fuse/mod.rs`) — sdk never calls Tauri APIs directly.
 
-2. **New channel variant for mkdir conflict vs reusing UploadComplete**
+2. **New channel variant for mkdir conflict vs reusing UploadComplete** — RESOLVED: `FsEvent` enum with `UploadComplete` and `MkdirConflict { parent_ino }` variants (implemented in plan 43-02).
    - What we know: `UploadComplete` carries `ino, new_cid, parent_ino, old_file_cid, pruned_cids, write_generation` — none of these fields make sense for a mkdir conflict signal.
    - What's unclear: Whether to add a new enum variant to an existing channel enum or create a new `MkdirConflict` mpsc channel.
    - Recommendation: Add a `FsEvent` enum with `UploadComplete` and `MkdirConflict { parent_ino }` variants to the existing mpsc channel. Minimizes new channels while keeping types clear.
 
-3. **Replay at mount vs at login**
+3. **Replay at mount vs at login** — RESOLVED: replay in `mount_filesystem()` after the pre-populate step (implemented in plan 43-04).
    - What we know: `mount_filesystem()` in `fuse/mod.rs` runs after key material is available. The journal requires the public key for ECIES unwrapping on replay.
    - What's unclear: Whether replay belongs in `mount_filesystem()` or in an earlier auth step.
    - Recommendation: Replay in `mount_filesystem()` after the pre-populate step, since key material is already available there and the IPNS sequence numbers are already seeded.
