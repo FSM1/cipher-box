@@ -377,15 +377,19 @@ mod tests {
     }
 
     /// Create a unique temporary directory for test isolation.
+    ///
+    /// Uses a monotonically-increasing atomic counter combined with the thread ID
+    /// to guarantee uniqueness even when multiple tests run concurrently in the
+    /// same process.
     fn make_temp_queue() -> (WriteQueue, std::path::PathBuf) {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos();
-        let tid = format!("{:?}", std::thread::current().id());
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tid_raw = format!("{:?}", std::thread::current().id());
+        // Extract the numeric part of the thread ID string (e.g. "ThreadId(7)" → "7").
+        let tid_num: String = tid_raw.chars().filter(|c| c.is_ascii_digit()).collect();
         let dir = std::env::temp_dir()
-            .join(format!("cipherbox-journal-test-{}-{}", nanos, tid.len()));
+            .join(format!("cipherbox-journal-test-{}-{}", seq, tid_num));
         std::fs::create_dir_all(&dir).expect("create test journal dir");
         let q = WriteQueue::new(dir.clone(), 3);
         (q, dir)
