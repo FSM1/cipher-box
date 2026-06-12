@@ -635,11 +635,11 @@ Plans:
 **Goal:** Stop lost updates on concurrent IPNS writes in `packages/sdk-core`: on 409, re-fetch remote folder metadata and merge (children union, per-entry reconcile) before republishing, and extend CAS coverage to file records; full CRDT model explicitly deferred to the CRDT-inbox research todo
 **Requirements:** Todo `2026-06-11-ipns-409-retry-lost-update` (discuss-phase: confirm whether the Rust SDK CAS-publish path has the same lost-update pattern)
 **Depends on:** Phase 41
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 Plans:
 **Wave 1**
 
-- [ ] 44-01-PLAN.md — Pure building blocks: mergeChildren three-way merge + ConflictError (TDD, wave 1)
+- [x] 44-01-PLAN.md — Pure building blocks: mergeChildren three-way merge + ConflictError (TDD, wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

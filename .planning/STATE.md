@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Ready to execute
-last_updated: "2026-06-12T22:58:35.578Z"
+status: Executing Phase 44
+last_updated: "2026-06-12T23:03:06.738Z"
 last_activity: 2026-06-12
 progress:
   total_phases: 29
-  completed_phases: 27
-  total_plans: 113
-  completed_plans: 109
-  percent: 93
+  completed_phases: 28
+  total_plans: 122
+  completed_plans: 117
+  percent: 96
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 43 — fuse-write-durability
+**Current focus:** Phase 44 — ipns-conflict-handling
 
 ## Current Position
 
-Phase: 43 (fuse-write-durability) — EXECUTING
-Plan: 1 of 4
+Phase: 44 (ipns-conflict-handling) — EXECUTING
+Plan: 1 of 5
 Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 
 ## Performance Metrics
