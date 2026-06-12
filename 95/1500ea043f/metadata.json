@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "951500ea043f",
+  "strategy": "manual-commit",
+  "branch": "feat/api-unpin-integrity",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/42-api-unpin-integrity/42-01-PLAN.md",
+    ".planning/phases/42-api-unpin-integrity/42-02-PLAN.md",
+    ".planning/phases/42-api-unpin-integrity/42-03-PLAN.md",
+    ".planning/phases/42-api-unpin-integrity/42-PATTERNS.md",
+    ".planning/phases/42-api-unpin-integrity/42-VALIDATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/95/1500ea043f/0/metadata.json",
+      "transcript": "/95/1500ea043f/0/full.jsonl",
+      "content_hash": "/95/1500ea043f/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34837,
+    "cache_creation_tokens": 1307517,
+    "cache_read_tokens": 22020197,
+    "output_tokens": 146400,
+    "api_call_count": 110
+  }
+}
