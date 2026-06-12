@@ -94,6 +94,7 @@ pub struct JournalEntry {
 ///
 /// Replaces the memory-only `VecDeque`-based `WriteQueue` that lost all
 /// queued writes on app quit (root cause of release-data-loss todo).
+#[derive(Clone)]
 pub struct WriteQueue {
     /// Directory where journal files are stored; injected at construction time.
     pub(crate) journal_dir: PathBuf,
