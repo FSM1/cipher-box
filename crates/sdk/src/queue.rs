@@ -6,6 +6,290 @@
 //! The journal stores only ciphertext + ECIES-wrapped keys — never plaintext
 //! or raw key bytes (zero-knowledge constraint, D-05).
 
+use serde::{Deserialize, Serialize};
+use std::io::Write as _;
+use std::path::PathBuf;
+
+/// The operation encoded by a journal entry.
+///
+/// Variants cover both upload (D-03 UploadFile) and directory publish (D-03 MkdirPublish).
+/// No inode identifiers — all routing uses stable IPNS names (D-02).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum JournalOp {
+    /// A file upload awaiting IPFS pin + folder metadata update.
+    UploadFile {
+        /// Base64-encoded AES-256-GCM ciphertext.
+        ciphertext_b64: String,
+        /// ECIES-wrapped file key, hex-encoded.
+        wrapped_key_hex: String,
+        /// AES-GCM IV, hex-encoded.
+        iv_hex: String,
+        /// Per-file IPNS name for metadata pointer (stable across remount, D-02).
+        file_meta_ipns_name: String,
+        /// Optional per-file IPNS private key hex (present when key must be published).
+        file_ipns_key_hex: Option<String>,
+        /// Parent folder IPNS name (stable cross-remount, D-02).
+        parent_folder_ipns_name: String,
+        /// Original filename.
+        filename: String,
+        /// File size in bytes.
+        size: u64,
+        /// Creation timestamp, milliseconds since Unix epoch (serializable; replaces Instant).
+        created_at_ms: u64,
+    },
+    /// A directory creation awaiting IPNS publish + parent folder metadata update.
+    MkdirPublish {
+        /// New child folder IPNS name.
+        child_ipns_name: String,
+        /// Encrypted folder key hex.
+        child_folder_key_hex: String,
+        /// Child folder IPNS private key hex (TEE-wrapped).
+        child_ipns_key_hex: String,
+        /// Parent folder IPNS name.
+        parent_folder_ipns_name: String,
+        /// Directory name.
+        name: String,
+        /// Creation timestamp, milliseconds since Unix epoch.
+        created_at_ms: u64,
+    },
+}
+
+/// Lifecycle state of a journal entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum JournalEntryStatus {
+    /// Awaiting first upload attempt.
+    Pending,
+    /// Upload attempt currently in progress.
+    InProgress,
+    /// All retries exhausted; entry parked on disk for manual intervention (D-09).
+    Failed {
+        /// Last error message recorded before parking.
+        last_error: String,
+    },
+}
+
+/// A single durable journal entry.
+///
+/// Serialized as JSON to `<journal_dir>/<id>.json` with 0o600 permissions and
+/// an fsync barrier before the OS write-ack (D-04).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JournalEntry {
+    /// Unique identifier; hex-encoded 16 random bytes.
+    pub id: String,
+    /// Vault root IPNS name; used to scope replay per vault (D-07).
+    pub vault_root_ipns: String,
+    /// The journaled operation (UploadFile or MkdirPublish).
+    pub op: JournalOp,
+    /// Number of failed upload attempts.
+    pub retries: u32,
+    /// Current lifecycle state.
+    pub status: JournalEntryStatus,
+}
+
+/// Persist-backed durable write journal.
+///
+/// Each `put()` serializes the entry to JSON, writes it to
+/// `<journal_dir>/<id>.json`, and calls `sync_all()` (F_FULLFSYNC on macOS)
+/// before returning — ensuring crash recovery on next mount.
+///
+/// Replaces the memory-only `VecDeque`-based `WriteQueue` that lost all
+/// queued writes on app quit (root cause of release-data-loss todo).
+pub struct WriteQueue {
+    /// Directory where journal files are stored; injected at construction time.
+    pub(crate) journal_dir: PathBuf,
+    /// Maximum retry attempts before an entry is transitioned to `Failed`.
+    pub max_retries: u32,
+}
+
+impl WriteQueue {
+    /// Create a new `WriteQueue` backed by the given journal directory.
+    ///
+    /// The directory must already exist; this constructor does not create it.
+    pub fn new(journal_dir: PathBuf, max_retries: u32) -> Self {
+        Self {
+            journal_dir,
+            max_retries,
+        }
+    }
+
+    /// Persist an entry to disk with an fsync barrier.
+    ///
+    /// Writes `<journal_dir>/<entry.id>.json` with 0o600 permissions and
+    /// calls `sync_all()` before returning (F_FULLFSYNC on macOS, D-04 / T-43-02).
+    pub fn put(&self, entry: &JournalEntry) -> Result<(), String> {
+        let json = serde_json::to_vec(entry)
+            .map_err(|e| format!("Journal serialize failed: {}", e))?;
+
+        let path = self.journal_dir.join(format!("{}.json", entry.id));
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|e| format!("Journal open failed: {}", e))?;
+
+        file.write_all(&json)
+            .map_err(|e| format!("Journal write failed: {}", e))?;
+
+        // fsync barrier: F_FULLFSYNC on macOS, fdatasync on Linux (via Rust std).
+        // Matches crates/fuse/src/file_handle.rs:206-207 pattern.
+        file.sync_all()
+            .map_err(|e| format!("Journal fsync failed: {}", e))?;
+
+        // Restrict journal file to owner-read/write only (T-43-02).
+        // Matches crates/fuse/src/file_handle.rs:88-92 pattern.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &path,
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Remove an entry file from disk.
+    ///
+    /// Returns `Ok(())` if the file did not exist (idempotent).
+    pub fn remove(&self, id: &str) -> Result<(), String> {
+        let path = self.journal_dir.join(format!("{}.json", id));
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("Journal remove failed: {}", e)),
+        }
+    }
+
+    /// Load all journal entries belonging to `vault_root_ipns`.
+    ///
+    /// Skips files that cannot be parsed with a `log::warn!` (never panics — V5, T-43-03).
+    /// Returns only entries whose `vault_root_ipns` matches the given value (D-07).
+    pub fn load_all_for_vault(
+        &self,
+        vault_root_ipns: &str,
+    ) -> Result<Vec<JournalEntry>, String> {
+        let read_dir = std::fs::read_dir(&self.journal_dir)
+            .map_err(|e| format!("Journal dir read failed: {}", e))?;
+
+        let mut entries = Vec::new();
+
+        for dir_entry in read_dir {
+            let dir_entry =
+                dir_entry.map_err(|e| format!("Journal dir entry error: {}", e))?;
+            let path = dir_entry.path();
+
+            // Only process *.json files.
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            let bytes = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(e) => {
+                    log::warn!(
+                        "Journal: failed to read {:?}: {} — skipping",
+                        path,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            // Skip-with-warn on malformed JSON (T-43-03, V5).
+            let entry: JournalEntry = match serde_json::from_slice(&bytes) {
+                Ok(e) => e,
+                Err(e) => {
+                    log::warn!(
+                        "Journal: malformed entry at {:?}: {} — skipping",
+                        path,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            // Vault-scoping filter (D-07).
+            if entry.vault_root_ipns == vault_root_ipns {
+                entries.push(entry);
+            }
+        }
+
+        Ok(entries)
+    }
+
+    /// Overwrite the status of an entry on disk.
+    pub fn update_status(
+        &self,
+        id: &str,
+        status: JournalEntryStatus,
+    ) -> Result<(), String> {
+        let path = self.journal_dir.join(format!("{}.json", id));
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("Journal update_status read failed: {}", e))?;
+        let mut entry: JournalEntry = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Journal update_status parse failed: {}", e))?;
+        entry.status = status;
+        self.put(&entry)
+    }
+
+    /// Record a failed attempt for an entry.
+    ///
+    /// - If `entry.retries < self.max_retries`: increment retries, persist as Pending, return
+    ///   `JournalEntryStatus::Pending`.
+    /// - If `entry.retries >= self.max_retries`: transition to Failed (D-09 — kept on disk,
+    ///   never silently dropped), persist, and return `JournalEntryStatus::Failed`.
+    pub fn record_failure(
+        &self,
+        entry: &JournalEntry,
+        error: &str,
+    ) -> Result<JournalEntryStatus, String> {
+        if entry.retries >= self.max_retries {
+            // Park: transition to Failed, keep on disk (D-09).
+            let status = JournalEntryStatus::Failed {
+                last_error: error.to_string(),
+            };
+            self.update_status(&entry.id, status.clone())?;
+            Ok(status)
+        } else {
+            // Increment retries, stay Pending.
+            let mut updated = entry.clone();
+            updated.retries += 1;
+            updated.status = JournalEntryStatus::Pending;
+            self.put(&updated)?;
+            Ok(JournalEntryStatus::Pending)
+        }
+    }
+
+    /// Return entries re-ordered for safe replay.
+    ///
+    /// All `MkdirPublish` entries come before `UploadFile` entries (D-08):
+    /// a journaled mkdir for a parent folder must replay before file uploads
+    /// that target that folder. Relative order within each group is preserved.
+    pub fn ordered_for_replay(entries: Vec<JournalEntry>) -> Vec<JournalEntry> {
+        let mut mkdir_entries = Vec::new();
+        let mut upload_entries = Vec::new();
+
+        for entry in entries {
+            match &entry.op {
+                JournalOp::MkdirPublish { .. } => mkdir_entries.push(entry),
+                JournalOp::UploadFile { .. } => upload_entries.push(entry),
+            }
+        }
+
+        mkdir_entries.extend(upload_entries);
+        mkdir_entries
+    }
+}
+
+impl Default for WriteQueue {
+    fn default() -> Self {
+        Self::new(std::env::temp_dir().join("cipherbox-journal-default"), 5)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,12 +337,8 @@ mod tests {
     }
 
     /// Create a unique temporary directory for test isolation.
-    ///
-    /// Returns (WriteQueue, path) — the caller must call `std::fs::remove_dir_all(&path)` if
-    /// cleanup is desired. We use a UUID-like unique name to avoid test collisions.
     fn make_temp_queue() -> (WriteQueue, std::path::PathBuf) {
         use std::time::{SystemTime, UNIX_EPOCH};
-        // Unique suffix: nanos since epoch + thread id hash (no external crate).
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -222,6 +502,7 @@ mod tests {
             }
         );
 
+        // Entry must still exist on disk (D-09 — never silently dropped).
         let path = q.journal_dir.join("park1.json");
         assert!(path.exists(), "parked entry must remain on disk");
 
