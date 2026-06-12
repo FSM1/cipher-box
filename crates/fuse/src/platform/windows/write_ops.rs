@@ -1003,12 +1003,13 @@ pub mod implementation {
                                     write_generation: write_gen,
                                 }));
 
-                                // CR-08 mirror: only remove the journal entry after
-                                // per-file IPNS publish succeeds. Never remove on failure.
-                                // Parent-folder pointer publish gating relies on replay
-                                // idempotency cleanup (entries reprocessed on next mount
-                                // if the process dies before the debounced parent publish).
-                                let mut file_meta_publish_ok = true;
+                                // CR-08 mirror, mechanism b: the upload thread never removes
+                                // the journal entry — files without per-file IPNS keys would
+                                // otherwise be removed after upload_content alone, before the
+                                // debounced parent-pointer publish, reopening the orphan
+                                // window. Replay on next mount is the authoritative cleanup
+                                // path (idempotent already_present check), matching the fuser
+                                // path in read_ops.rs.
                                 if let (Some(ipns_key), Some(ipns_name), Some(folder_key)) =
                                     (&file_ipns_private_key, &file_meta_ipns_name, &folder_key_for_file_meta)
                                 {
@@ -1021,14 +1022,6 @@ pub mod implementation {
                                         is_new_file,
                                     ).await {
                                         log::warn!("Per-file IPNS publish failed for ino {}: {}", ino, e);
-                                        file_meta_publish_ok = false;
-                                    }
-                                }
-
-                                if file_meta_publish_ok {
-                                    // Remove journal entry only on confirmed per-file success.
-                                    if let Err(e) = spawn_journal.remove(&spawn_entry.id) {
-                                        log::warn!("cleanup: journal remove failed for ino {}: {}", ino, e);
                                     }
                                 }
 
