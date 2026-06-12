@@ -1,9 +1,10 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, Inject, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Vault } from './entities/vault.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
+import { PendingUnpin } from './entities/pending-unpin.entity';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
 import { User } from '../auth/entities/user.entity';
 import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
@@ -12,6 +13,8 @@ import { QuotaResponseDto } from './dto/quota.dto';
 import { VaultConfigResponseDto } from './dto/vault-config.dto';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
 import { TeeKeysDto } from '../tee/dto/tee-keys.dto';
+import { IPFS_PROVIDER, IpfsProvider } from '../ipfs/providers';
+import { MetricsService } from '../metrics/metrics.service';
 
 /**
  * Storage quota limit: 500 MiB
@@ -20,6 +23,8 @@ export const QUOTA_LIMIT_BYTES = 500 * 1024 * 1024; // 524,288,000 bytes
 
 @Injectable()
 export class VaultService {
+  private readonly logger = new Logger(VaultService.name);
+
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
@@ -29,8 +34,14 @@ export class VaultService {
     private readonly folderIpnsRepository: Repository<FolderIpns>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(PendingUnpin)
+    private readonly pendingUnpinRepository: Repository<PendingUnpin>,
     private readonly teeKeyStateService: TeeKeyStateService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly dataSource: DataSource,
+    @Inject(IPFS_PROVIDER)
+    private readonly ipfsProvider: IpfsProvider,
+    private readonly metricsService: MetricsService
   ) {}
 
   /**
@@ -216,6 +227,83 @@ export class VaultService {
       })
       .orIgnore() // ON CONFLICT DO NOTHING for idempotency
       .execute();
+  }
+
+  /**
+   * Guarded unpin: enforces ownership, serializes with per-CID advisory lock,
+   * decrements quota by deleting the caller's pinned_cids row inside a transaction,
+   * reference-counts across all users and only queues a physical unpin via the
+   * pending_unpins outbox when the count hits zero, emits cross-user audit telemetry,
+   * and best-effort attempts the inline Kubo pin/rm after commit.
+   *
+   * Security properties (D-01..D-05):
+   * - D-01: Ownership check; no-row path touches nothing (no oracle)
+   * - D-02: Cross-user attempt increments unpinCrossUserAttempts metric + warns
+   * - D-03: Row delete IS the quota decrement (in-transaction); Kubo outside
+   * - D-04: pg_advisory_xact_lock as first statement serializes concurrent deletes
+   * - D-05: orIgnore insert into outbox only when refcount === 0
+   */
+  async guardedUnpin(userId: string, cid: string): Promise<void> {
+    let outboxRowInserted = false;
+
+    await this.dataSource.transaction(async (manager) => {
+      const pinnedCidRepo = manager.getRepository(PinnedCid);
+      const pendingUnpinRepo = manager.getRepository(PendingUnpin);
+
+      // 1. Advisory xact lock — MUST be first statement (D-04)
+      // abs() avoids bigint-out-of-range on negative hashtext values (Pitfall 2)
+      const [{ h }] = (await manager.query(`SELECT abs(hashtext($1))::bigint AS h`, [cid])) as [
+        { h: string },
+      ];
+      await manager.query(`SELECT pg_advisory_xact_lock($1)`, [h]);
+
+      // 2. Ownership check (D-01)
+      const row = await pinnedCidRepo.findOne({ where: { userId, cid } });
+      if (!row) {
+        const otherRow = await pinnedCidRepo.findOne({ where: { cid } });
+        if (otherRow) {
+          this.logger.warn(`Cross-user unpin attempt userId=${userId} cid=${cid}`);
+          this.metricsService.unpinCrossUserAttempts.inc();
+        }
+        return; // silent 2XX (D-01: no oracle — same response for unknown vs cross-user)
+      }
+
+      // 3. Delete caller's row — this IS the quota decrement (D-03)
+      await pinnedCidRepo.delete({ userId, cid });
+
+      // 4. Refcount across all users (D-05, D-07: no origin filtering)
+      const result = await manager
+        .createQueryBuilder(PinnedCid, 'pc')
+        .select('COUNT(*)', 'count')
+        .where('pc.cid = :cid', { cid })
+        .getRawOne<{ count: string }>();
+      const refcount = parseInt(result?.count ?? '0', 10);
+
+      if (refcount === 0) {
+        // 5. Queue physical unpin via outbox — orIgnore dedupes concurrent inserts (Pitfall 5)
+        await pendingUnpinRepo
+          .createQueryBuilder()
+          .insert()
+          .into(PendingUnpin)
+          .values({ cid })
+          .orIgnore()
+          .execute();
+        outboxRowInserted = true;
+      }
+      // Transaction commits; advisory lock released automatically at end of transaction
+    });
+
+    // 6. Post-commit best-effort Kubo call (D-03 ordering: NEVER inside transaction, Pitfall 3)
+    if (outboxRowInserted) {
+      try {
+        await this.ipfsProvider.unpinFile(cid);
+        await this.pendingUnpinRepository.delete({ cid });
+      } catch {
+        // Leave outbox row for BullMQ retry worker — Kubo failure is not a request failure
+      }
+    }
+
+    this.metricsService.fileUnpins.inc();
   }
 
   /**
