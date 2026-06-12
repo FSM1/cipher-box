@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "0ce1eb1e61df",
+  "strategy": "manual-commit",
+  "branch": "feat/ipns-conflict-handling",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0c/e1eb1e61df/0/metadata.json",
+      "transcript": "/0c/e1eb1e61df/0/full.jsonl",
+      "content_hash": "/0c/e1eb1e61df/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 32520,
+    "cache_creation_tokens": 629926,
+    "cache_read_tokens": 14766565,
+    "output_tokens": 113391,
+    "api_call_count": 86
+  }
+}
