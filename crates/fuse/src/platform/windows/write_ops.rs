@@ -754,11 +754,12 @@ pub mod implementation {
 
                 // Spawn params struct separates the prepare+journal phase from the spawn
                 // phase so handle.cleanup() can run before the spawn (D-04, D-05).
+                // CR-05: field types corrected to match CipherBoxFS fields.
                 struct UploadSpawnParams {
-                    api: std::sync::Arc<cipherbox_api_client::ApiConfig>,
-                    rt: std::sync::Arc<tokio::runtime::Runtime>,
+                    api: std::sync::Arc<cipherbox_api_client::ApiClient>,
+                    rt: tokio::runtime::Handle,
                     upload_tx: std::sync::mpsc::Sender<crate::FsEvent>,
-                    coordinator: std::sync::Arc<crate::publish_coordinator::PublishCoordinator>,
+                    coordinator: std::sync::Arc<crate::PublishCoordinator>,
                     tee_public_key: Option<Vec<u8>>,
                     tee_key_epoch: Option<u32>,
                     ciphertext: Vec<u8>,
@@ -771,7 +772,8 @@ pub mod implementation {
                     write_gen: u64,
                     parent_ino: u64,
                     journal: cipherbox_sdk::WriteQueue,
-                    journal_entry_id: String,
+                    // CR-07: carry full entry so record_failure can be called on failure.
+                    journal_entry: cipherbox_sdk::JournalEntry,
                 }
 
                 let prepare_result = (|| -> Result<UploadSpawnParams, String> {
@@ -926,8 +928,6 @@ pub mod implementation {
                         retries: 0,
                         status: cipherbox_sdk::JournalEntryStatus::Pending,
                     };
-                    let journal_entry_id = journal_entry.id.clone();
-
                     // D-04: fsync journal entry to disk BEFORE spawning the upload thread.
                     // WinFsp cleanup has no explicit reply — the implicit ack occurs after
                     // the callback returns, but the fsync barrier here still protects against
@@ -972,7 +972,7 @@ pub mod implementation {
                         write_gen,
                         parent_ino,
                         journal: journal_clone,
-                        journal_entry_id,
+                        journal_entry,
                     })
                 })();
 
@@ -987,7 +987,7 @@ pub mod implementation {
                             api, rt, upload_tx, coordinator, tee_public_key, tee_key_epoch,
                             ciphertext, file_meta, file_ipns_private_key, file_meta_ipns_name,
                             folder_key_for_file_meta, old_file_cid, pruned_cids, write_gen,
-                            parent_ino, journal: spawn_journal, journal_entry_id,
+                            parent_ino, journal: spawn_journal, journal_entry: spawn_entry,
                         } = params;
                         std::thread::spawn(move || {
                             let result = rt.block_on(async {
@@ -1003,6 +1003,12 @@ pub mod implementation {
                                     write_generation: write_gen,
                                 }));
 
+                                // CR-08 mirror: only remove the journal entry after
+                                // per-file IPNS publish succeeds. Never remove on failure.
+                                // Parent-folder pointer publish gating relies on replay
+                                // idempotency cleanup (entries reprocessed on next mount
+                                // if the process dies before the debounced parent publish).
+                                let mut file_meta_publish_ok = true;
                                 if let (Some(ipns_key), Some(ipns_name), Some(folder_key)) =
                                     (&file_ipns_private_key, &file_meta_ipns_name, &folder_key_for_file_meta)
                                 {
@@ -1015,23 +1021,42 @@ pub mod implementation {
                                         is_new_file,
                                     ).await {
                                         log::warn!("Per-file IPNS publish failed for ino {}: {}", ino, e);
+                                        file_meta_publish_ok = false;
                                     }
                                 }
 
-                                // Remove journal entry on confirmed success (D-04).
-                                let _ = spawn_journal.remove(&journal_entry_id);
+                                if file_meta_publish_ok {
+                                    // Remove journal entry only on confirmed per-file success.
+                                    if let Err(e) = spawn_journal.remove(&spawn_entry.id) {
+                                        log::warn!("cleanup: journal remove failed for ino {}: {}", ino, e);
+                                    }
+                                }
 
                                 Ok::<(), String>(())
                             });
 
                             if let Err(e) = result {
-                                // Do not remove the journal entry on failure — it persists for
-                                // replay (D-09). Plan 43-04's drain owner calls record_failure.
+                                // CR-07: call record_failure on background upload error so the
+                                // retry/park pipeline has a production caller. Entry stays in
+                                // journal for replay (D-09).
                                 log::error!("Background upload failed for ino {}: {}", ino, e);
+                                if let Err(re) = spawn_journal.record_failure(&spawn_entry, &e) {
+                                    log::warn!("cleanup: record_failure failed for ino {}: {}", ino, re);
+                                }
                             }
                         });
                     }
                     Err(e) => {
+                        // CR-04 mirror: WinFsp handle_cleanup returns () and cannot
+                        // return a status code. However, the journal.put() that would
+                        // have journaled the entry is inside the prepare closure, so
+                        // on Err the entry is never written to disk — no success-implying
+                        // state is committed. The OS receives an implicit success ack
+                        // when the callback returns, but the in-memory inode state
+                        // reflects the failed encryption (cid still empty), so any
+                        // subsequent read returns stale or empty data, making the
+                        // failure visible. This matches the fuser CR-04 constraint:
+                        // WinFsp has no equivalent to reply.error(libc::EIO) here.
                         log::error!("File upload preparation failed for ino {}: {}", ino, e);
                         handle.cleanup();
                     }

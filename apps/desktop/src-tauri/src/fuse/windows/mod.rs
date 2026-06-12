@@ -91,17 +91,27 @@ mod mount_impl {
         // Pre-populate root folder BEFORE mounting so readdir has data immediately.
         let mut metadata_cache = cache::MetadataCache::new();
         log::info!("Pre-populating root folder from IPNS...");
-        let fetch_result: Result<(Vec<u8>, String), String> = async {
+        // CR-06: collect resolved sequence numbers to seed PublishCoordinator before replay,
+        // mirroring apps/desktop/src-tauri/src/fuse/mod.rs:135-140.
+        let fetch_result: Result<(Vec<u8>, String, u64), String> = async {
             let resolve_resp =
                 cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, &root_ipns_name).await.map_err(|e| e.to_string())?;
             let encrypted_bytes =
                 cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resolve_resp.cid).await.map_err(|e| e.to_string())?;
-            Ok((encrypted_bytes, resolve_resp.cid))
+            let seq = resolve_resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
+                log::warn!("Failed to parse root IPNS sequence '{}': {}", resolve_resp.sequence_number, e);
+                0
+            });
+            Ok((encrypted_bytes, resolve_resp.cid, seq))
         }
         .await;
 
+        // Accumulate (ipns_name, sequence) pairs for coordinator seeding.
+        let mut initial_sequences: Vec<(String, u64)> = Vec::new();
+
         match fetch_result {
-            Ok((encrypted_bytes, cid)) => {
+            Ok((encrypted_bytes, cid, root_seq)) => {
+                initial_sequences.push((root_ipns_name.clone(), root_seq));
                 match cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
                     Ok(metadata) => {
                         metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
@@ -206,7 +216,7 @@ mod mount_impl {
                                         sub_ino,
                                         sub_ipns
                                     );
-                                    let sub_result: Result<(Vec<u8>, String), String> = async {
+                                    let sub_result: Result<(Vec<u8>, String, u64), String> = async {
                                         let resp =
                                             cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, sub_ipns)
                                                 .await.map_err(|e| e.to_string())?;
@@ -215,11 +225,16 @@ mod mount_impl {
                                             &resp.cid,
                                         )
                                         .await.map_err(|e| e.to_string())?;
-                                        Ok((bytes, resp.cid))
+                                        let seq = resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
+                                            log::warn!("Failed to parse subfolder IPNS sequence '{}' for {}: {}", resp.sequence_number, sub_ipns, e);
+                                            0
+                                        });
+                                        Ok((bytes, resp.cid, seq))
                                     }
                                     .await;
                                     match sub_result {
-                                        Ok((enc_bytes, sub_cid)) => {
+                                        Ok((enc_bytes, sub_cid, sub_seq)) => {
+                                            initial_sequences.push((sub_ipns.clone(), sub_seq));
                                             match cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
                                                 Ok(sub_metadata) => {
                                                     metadata_cache.set(
@@ -329,6 +344,33 @@ mod mount_impl {
             }
         }
 
+        // CR-06: construct PublishCoordinator seeded from resolved sequences before replay,
+        // mirroring apps/desktop/src-tauri/src/fuse/mod.rs:219-229.
+        let publish_coordinator = {
+            let coord = Arc::new(PublishCoordinator::new());
+            for (name, seq) in &initial_sequences {
+                coord.record_publish(name, *seq);
+            }
+            if !initial_sequences.is_empty() {
+                log::info!("PublishCoordinator seeded with {} sequence(s) from pre-populate", initial_sequences.len());
+            }
+            coord
+        };
+
+        // CR-06: replay journal entries for this vault before mounting.
+        // Errors are logged inside replay and never fail the mount.
+        // Mirrors apps/desktop/src-tauri/src/fuse/mod.rs:231-242.
+        cipherbox_fuse::replay_for_vault(
+            &journal,
+            state.sdk.api.clone(),
+            &private_key,
+            &public_key,
+            &root_folder_key,
+            &root_ipns_name,
+            publish_coordinator.clone(),
+        )
+        .await;
+
         let fs = CipherBoxFS {
             inodes,
             metadata_cache,
@@ -360,7 +402,7 @@ mod mount_impl {
             upload_tx,
             journal,
             mutated_folders: HashMap::new(),
-            publish_coordinator: Arc::new(PublishCoordinator::new()),
+            publish_coordinator,
             publish_queue: HashMap::new(),
         };
 
