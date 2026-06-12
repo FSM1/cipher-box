@@ -602,7 +602,7 @@ Plans:
 **Goal:** Make FUSE writes durable: persisted out-of-callback pending-upload journal so `release()` no longer falsely acks then silently loses data, and mkdir parent-publish conflicts actually enqueue a retry instead of orphaning the child folder
 **Requirements:** Todos `2026-06-11-fuse-release-data-loss-before-remote-commit` + `2026-06-11-fuse-mkdir-parent-publish-orphan` (mkdir fix builds on the journal — both platforms, macOS + Windows)
 **Depends on:** Phase 41
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 Plans:
 **Wave 1**
 
@@ -610,7 +610,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 43-02-PLAN.md — fuser wiring (macOS + Linux): release journal-fsync-before-ack, mkdir MkdirPublish entry + FsEvent::MkdirConflict retry signal
+- [x] 43-02-PLAN.md — fuser wiring (macOS + Linux): release journal-fsync-before-ack, mkdir MkdirPublish entry + FsEvent::MkdirConflict retry signal
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
