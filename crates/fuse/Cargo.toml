@@ -13,6 +13,7 @@ winfsp = ["dep:winfsp", "dep:widestring"]
 cipherbox-crypto = { workspace = true }
 cipherbox-core = { workspace = true }
 cipherbox-api-client = { workspace = true }
+cipherbox-sdk = { workspace = true }
 
 # Platform-agnostic
 serde = { workspace = true }

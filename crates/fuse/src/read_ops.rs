@@ -796,14 +796,14 @@ pub(crate) mod implementation {
 
                             log::info!("File uploaded: ino {} -> CID {}", ino, file_cid);
 
-                            let _ = upload_tx.send(crate::UploadComplete {
+                            let _ = upload_tx.send(crate::FsEvent::UploadComplete(crate::UploadComplete {
                                 ino,
                                 new_cid: file_cid.clone(),
                                 parent_ino,
                                 old_file_cid,
                                 pruned_cids,
                                 write_generation: write_gen,
-                            });
+                            }));
 
                             if let (Some(ipns_key), Some(ipns_name), Some(folder_key)) =
                                 (&file_ipns_private_key, &file_meta_ipns_name, &folder_key_for_file_meta)

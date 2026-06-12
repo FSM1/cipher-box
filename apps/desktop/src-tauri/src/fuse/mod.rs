@@ -99,6 +99,20 @@ pub async fn mount_filesystem(
         let _ = std::fs::set_permissions(&temp_dir, std::fs::Permissions::from_mode(0o700));
     }
 
+    // Stable journal dir: persists across remounts so entries survive crash/restart.
+    let journal_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::env::temp_dir())
+        .join("cipherbox")
+        .join("cb-journal");
+    std::fs::create_dir_all(&journal_dir)
+        .map_err(|e| format!("Failed to create journal directory: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&journal_dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let journal = cipherbox_sdk::WriteQueue::new(journal_dir, 5);
+
     let mut inodes = cipherbox_fuse::inode::InodeTable::new();
     if let Some(root) = inodes.get_mut(cipherbox_fuse::inode::ROOT_INO) {
         root.kind = cipherbox_fuse::inode::InodeKind::Root {
@@ -110,7 +124,7 @@ pub async fn mount_filesystem(
     let (refresh_tx, refresh_rx) = std::sync::mpsc::channel::<PendingRefresh>();
     let (content_tx, content_rx) = std::sync::mpsc::channel::<PendingContent>();
     let (filepointer_tx, filepointer_rx) = std::sync::mpsc::channel::<PendingFilePointer>();
-    let (upload_tx, upload_rx) = std::sync::mpsc::channel::<UploadComplete>();
+    let (upload_tx, upload_rx) = std::sync::mpsc::channel::<cipherbox_fuse::FsEvent>();
 
     // Pre-populate root folder
     let mut metadata_cache = cipherbox_fuse::cache::MetadataCache::new();
@@ -222,6 +236,7 @@ pub async fn mount_filesystem(
         resolving_file_pointers: std::collections::HashSet::new(),
         pending_content: HashMap::new(),
         upload_rx, upload_tx,
+        journal,
         mutated_folders: HashMap::new(),
         publish_coordinator: {
             let coord = Arc::new(PublishCoordinator::new());
