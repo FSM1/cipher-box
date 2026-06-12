@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "7d0efec64cbc",
+  "strategy": "manual-commit",
+  "branch": "feat/ipns-conflict-handling",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/44-ipns-conflict-handling/44-01-PLAN.md",
+    ".planning/phases/44-ipns-conflict-handling/44-02-PLAN.md",
+    ".planning/phases/44-ipns-conflict-handling/44-03-PLAN.md",
+    ".planning/phases/44-ipns-conflict-handling/44-04-PLAN.md",
+    ".planning/phases/44-ipns-conflict-handling/44-05-PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7d/0efec64cbc/0/metadata.json",
+      "transcript": "/7d/0efec64cbc/0/full.jsonl",
+      "content_hash": "/7d/0efec64cbc/0/content_hash.txt",
+      "prompt": "/7d/0efec64cbc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 57506,
+    "cache_creation_tokens": 3323760,
+    "cache_read_tokens": 95011383,
+    "output_tokens": 348145,
+    "api_call_count": 353
+  }
+}
