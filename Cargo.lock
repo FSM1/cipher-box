@@ -742,6 +742,7 @@ dependencies = [
  "cipherbox-api-client",
  "cipherbox-core",
  "cipherbox-crypto",
+ "cipherbox-sdk",
  "dirs 5.0.1",
  "ecies",
  "ed25519-dalek",
