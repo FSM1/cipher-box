@@ -980,11 +980,15 @@ pub async fn replay_for_vault(
     }
 }
 
-/// Look up the folder key for `folder_ipns_name` by traversing the root metadata.
+/// Look up the folder key for `folder_ipns_name` via a bounded breadth-first descent.
+///
+/// WR-02: resolves parent folders nested two or more levels below root, not just
+/// direct children of root. The BFS is capped at `MAX_RESOLVE_DEPTH` to bound network
+/// round trips and prevent cycles.
 ///
 /// If `folder_ipns_name == root_ipns_name`, returns `root_folder_key` directly.
-/// Otherwise fetches and decrypts the root metadata to find the subfolder's
-/// ECIES-wrapped folder key and unwraps it with `private_key`.
+/// Otherwise starts from root and iterates through the folder tree level by level,
+/// decrypting each layer's metadata with the just-unwrapped folder key from the layer above.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 async fn resolve_folder_key(
     api: &ApiClient,
@@ -993,33 +997,57 @@ async fn resolve_folder_key(
     root_ipns_name: &str,
     folder_ipns_name: &str,
 ) -> Result<Vec<u8>, String> {
+    // Depth cap: limits network round trips and prevents infinite loops (WR-02).
+    const MAX_RESOLVE_DEPTH: usize = 32;
+
     if folder_ipns_name == root_ipns_name {
         return Ok(root_folder_key.to_vec());
     }
 
-    // Fetch and decrypt root metadata to locate the subfolder's encrypted key.
-    let resolve = cipherbox_api_client::ipns::resolve_ipns(api, root_ipns_name)
-        .await
-        .map_err(|e| format!("resolve root IPNS: {}", e))?;
-    let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolve.cid)
-        .await
-        .map_err(|e| format!("fetch root metadata: {}", e))?;
-    let root_meta = cipherbox_core::decrypt_metadata_from_ipfs_public(&enc_bytes, root_folder_key)
-        .map_err(|e| format!("decrypt root metadata: {}", e))?;
+    // BFS queue: (ipns_name_of_this_folder, unwrapped_folder_key_for_this_folder).
+    // Starts at root; each step expands to all subfolder children of the current node.
+    let mut queue: std::collections::VecDeque<(String, Vec<u8>)> = std::collections::VecDeque::new();
+    queue.push_back((root_ipns_name.to_string(), root_folder_key.to_vec()));
+    let mut depth = 0usize;
 
-    for child in &root_meta.children {
-        if let cipherbox_core::folder::FolderChild::Folder(f) = child {
-            if f.ipns_name == folder_ipns_name {
+    while let Some((current_ipns, current_folder_key)) = queue.pop_front() {
+        if depth >= MAX_RESOLVE_DEPTH {
+            return Err(format!(
+                "resolve_folder_key: depth cap ({}) exceeded looking for {} — aborting",
+                MAX_RESOLVE_DEPTH, folder_ipns_name
+            ));
+        }
+        depth += 1;
+
+        // Fetch and decrypt this folder's metadata.
+        let resolve = cipherbox_api_client::ipns::resolve_ipns(api, &current_ipns)
+            .await
+            .map_err(|e| format!("resolve IPNS {}: {}", current_ipns, e))?;
+        let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolve.cid)
+            .await
+            .map_err(|e| format!("fetch metadata for {}: {}", current_ipns, e))?;
+        let meta = cipherbox_core::decrypt_metadata_from_ipfs_public(&enc_bytes, &current_folder_key)
+            .map_err(|e| format!("decrypt metadata for {}: {}", current_ipns, e))?;
+
+        for child in &meta.children {
+            if let cipherbox_core::folder::FolderChild::Folder(f) = child {
                 let enc_key_bytes = hex::decode(&f.folder_key_encrypted)
-                    .map_err(|e| format!("hex decode folder_key_encrypted: {}", e))?;
-                let folder_key = cipherbox_crypto::ecies::unwrap_key(&enc_key_bytes, private_key)
-                    .map_err(|e| format!("unwrap folder key: {}", e))?;
-                return Ok(folder_key);
+                    .map_err(|e| format!("hex decode folder_key_encrypted for {}: {}", f.ipns_name, e))?;
+                let child_folder_key = cipherbox_crypto::ecies::unwrap_key(&enc_key_bytes, private_key)
+                    .map_err(|e| format!("unwrap folder key for {}: {}", f.ipns_name, e))?;
+
+                if f.ipns_name == folder_ipns_name {
+                    // Found the target folder.
+                    return Ok(child_folder_key);
+                }
+
+                // Enqueue for further descent.
+                queue.push_back((f.ipns_name.clone(), child_folder_key));
             }
         }
     }
 
-    Err(format!("folder IPNS {} not found in root metadata", folder_ipns_name))
+    Err(format!("folder IPNS {} not found in vault tree (searched {} nodes)", folder_ipns_name, depth))
 }
 
 /// Fetch, decrypt, merge, and CAS-publish a parent folder update.
