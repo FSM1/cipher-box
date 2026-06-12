@@ -502,14 +502,14 @@ The Rust FUSE at `crates/fuse/src/lib.rs:326-439` (`spawn_metadata_publish`) alr
 | A2 | `createAndPublishIpnsRecord` is preferred over `batchPublishIpnsRecords` for file CAS because batch doesn't throw 409 | Architecture Patterns / Pattern 4 | May need API investigation; if batch does throw 409 per record, can use batch |
 | A3 | `addFileToFolder`/`addFilesToFolder` batch conflict path is out of scope | Caller Sweep Map | If these also get 409 conflicts in practice, they need a separate retry |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Does `batchPublishIpnsRecords` propagate per-record 409 errors to the caller, or only `totalFailed`?**
+1. **Does `batchPublishIpnsRecords` propagate per-record 409 errors to the caller, or only `totalFailed`?** — RESOLVED: use `createAndPublishIpnsRecord` for file CAS (detectable 409); plan 44-03 asserts zero `batchPublishIpnsRecords` calls remain in `file/index.ts`.
    - What we know: `batchPublishIpnsRecords` returns `{ totalFailed, totalSucceeded }` on partial success.
    - What's unclear: Whether the server returns a per-record conflict signal in the batch response body that the TS client currently ignores.
    - Recommendation: Check `apps/api/src/ipns/ipns.service.ts` batch endpoint response shape. If it embeds per-record conflict info, the batch path can be extended. Otherwise use `createAndPublishIpnsRecord` for file CAS.
 
-2. **Is `maxVersionsPerFile` needed as a parameter to `updateFileMetadata` in sdk-core, or is the hardcoded `MAX_VERSIONS_PER_FILE = 10` acceptable for the conflict path?**
+2. **Is `maxVersionsPerFile` needed as a parameter to `updateFileMetadata` in sdk-core, or is the hardcoded `MAX_VERSIONS_PER_FILE = 10` acceptable for the conflict path?** — RESOLVED: optional `maxVersionsPerFile` param (default 10) added in plan 44-03; web callers pass the vault-settings value in plan 44-05.
    - What we know: Web callers read from `useVaultSettingsStore`; sdk-core has no access to Zustand.
    - What's unclear: Whether conflict-resolution version merges must respect the user's custom limit.
    - Recommendation: Add optional `maxVersionsPerFile` param, default 10. Web callers pass `useVaultSettingsStore.getState().settings.maxVersionsPerFile`.
