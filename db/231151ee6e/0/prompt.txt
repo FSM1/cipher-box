@@ -1,0 +1,13 @@
+/gsd:progress
+
+---
+
+/gsd:capture  --list
+
+---
+
+7-11 seem like great candidates for a "gap-closure" phase to be inserted as part of this milestone. happy to hear thoughs on whether these should be split into multiple phases, or handled as individual work items, grouped by related area, etc.
+
+---
+
+go ahead and add the 3 phases

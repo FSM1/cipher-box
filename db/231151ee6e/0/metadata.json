@@ -1,0 +1,192 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "db231151ee6e",
+  "session_id": "64f3fecd-7798-47ae-a077-c8dbf669a950",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-12T00:34:35.080747Z",
+  "branch": "docs/gap-closure-phases-42-44",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/phases/42-api-unpin-integrity/.gitkeep",
+    ".planning/phases/43-fuse-write-durability/.gitkeep",
+    ".planning/phases/44-ipns-conflict-handling/.gitkeep"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4cadee72d418",
+  "token_usage": {
+    "input_tokens": 66984,
+    "cache_creation_tokens": 323228,
+    "cache_read_tokens": 3346913,
+    "output_tokens": 18561,
+    "api_call_count": 29
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01SjfEeqtLCyGRbzsVGfb1bz",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4cadee72d418",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 86,
+        "end": 87,
+        "entry_ids": [
+          "5a6ce30f-7df8-4045-87fd-9e6fa4ee96ba"
+        ],
+        "tool_use_id": "toolu_01SjfEeqtLCyGRbzsVGfb1bz"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SjfEeqtLCyGRbzsVGfb1bz"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Close out the v1.1 milestone by converting five high-priority UAT-discovered bugs (two data-loss, one security, one quota leak, one concurrent-write issue) into structured roadmap phases, then land those planning additions on a docs branch.",
+    "outcome": "Three new phases (42: API unpin integrity, 43: FUSE write durability, 44: IPNS conflict handling) were added to ROADMAP.md with goals and todo cross-references, STATE.md was updated to reflect the milestone is back in progress, and all changes were committed to a docs branch with SSH signing.",
+    "learnings": {
+      "repo": [
+        "The `gsd-tools.cjs query phase.add` CLI automatically chains each newly added phase as a dependency of the previous one (42→43→44), even when phases are independent stacks — requires a manual ROADMAP.md edit after bulk additions.",
+        "The `state.add-roadmap-evolution` CLI handler fails silently rather than erroring; the STATE.md Roadmap Evolution section must be updated via direct Edit when the handler returns nothing.",
+        "STATE.md frontmatter fields (phase count, milestone status) are not updated by `phase.add` — they must be patched manually after bulk phase additions or the progress router will still report 'Milestone complete'.",
+        "Todo files in `.planning/todos/pending/` are not consumed when phases are added; they remain until the discuss/plan/execute cycle for each phase explicitly processes them.",
+        "Phases 42–44 depend only on Phase 41 (the last completed phase), not on each other — they touch independent stacks (NestJS API, Rust FUSE crate, TS SDK) and can be worked in any order."
+      ],
+      "code": [
+        {
+          "path": ".planning/ROADMAP.md",
+          "finding": "Three phase entries added for 42 (api-unpin-integrity), 43 (fuse-write-durability), 44 (ipns-conflict-handling); CLI-generated Depends-on chain (42→43→44) was incorrect and had to be manually corrected to all depend on Phase 41 only."
+        },
+        {
+          "path": ".planning/STATE.md",
+          "finding": "Status field must be manually flipped from 'Milestone complete' to 'In progress' and phase counters updated (26→29 total, current phase set to 42) after bulk phase additions — the phase.add CLI does not touch these."
+        }
+      ],
+      "workflow": [
+        "When grouping bugs into phases, coupling (shared files/subsystem) and design-risk are better axes than severity — severity was uniform across all five items, but coupling produced natural pairs (todos 9+11, todos 7+8) and isolated the one item with real design uncertainty (todo 10).",
+        "Bulk `phase.add` in zsh requires direct node invocation rather than shell-function-based `gsd_run` wrapper because zsh does not word-split variables.",
+        "The five source todos are left in pending/ as references during planning; they shouldn't be moved to completed/ until the actual phase execution is done."
+      ]
+    },
+    "friction": [
+      "`gsd_run query phase.add` auto-chained independent phases as sequential dependencies, requiring a manual ROADMAP.md edit to fix the incorrect Depends-on relationships.",
+      "`gsd_run query state.add-roadmap-evolution` handler failed silently on multiple attempts with no error output, requiring a fallback to direct STATE.md editing.",
+      "zsh variable-based `gsd_run` wrapper call failed for multi-argument phase.add — had to run the node command directly.",
+      "1Password SSH signing requires interactive desktop approval, adding latency to the commit step."
+    ],
+    "open_items": [
+      "PR creation was requested but not completed in this session — docs branch was committed but `gh pr create` was not run.",
+      "Phase 44 (IPNS conflict handling) has a scoping flag: check whether the Rust SDK has the same lost-update pattern as the TS SDK before planning begins.",
+      "Todos 1–5 (ERC-1271 wallet auth, CRDT inbox research, async search index, MFA factors, mock-ipns removal) remain in pending/ and are unscheduled.",
+      "Todo #6 (GitHub Actions Node 24 updates) has a June 2026 deadline and is still pending — not included in the gap-closure phases."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-12T00:33:49.798771Z",
+    "agent_lines": 48,
+    "agent_removed": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 48,
+    "total_lines_changed": 56,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 5756,
+      "user_lines_removed": 281,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".planning/tmp/ARCHITECTURE.md.wave1-original": 397,
+        ".planning/tmp/CONFIGURATION.md.wave1-original": 275,
+        ".planning/tmp/DEVELOPMENT.md.pre-supplement": 154,
+        ".planning/tmp/docs-work-manifest.json": 46,
+        ".planning/tmp/prefix-backups-iter2/CAPACITY.md": 347,
+        ".planning/tmp/prefix-backups-iter2/DATABASE_EVOLUTION_PROTOCOL.md": 362,
+        ".planning/tmp/prefix-backups-iter2/FILESYSTEM_SPECIFICATION.md": 190,
+        ".planning/tmp/prefix-backups-iter2/METADATA_EVOLUTION_PROTOCOL.md": 275,
+        ".planning/tmp/prefix-backups-iter2/METADATA_SCHEMAS.md": 480,
+        ".planning/tmp/prefix-backups/ARCHITECTURE.md": 397,
+        ".planning/tmp/prefix-backups/CAPACITY.md": 347,
+        ".planning/tmp/prefix-backups/DATABASE_EVOLUTION_PROTOCOL.md": 360,
+        ".planning/tmp/prefix-backups/DEVELOPMENT.md": 181,
+        ".planning/tmp/prefix-backups/FILESYSTEM_SPECIFICATION.md": 191,
+        ".planning/tmp/prefix-backups/METADATA_EVOLUTION_PROTOCOL.md": 276,
+        ".planning/tmp/prefix-backups/METADATA_SCHEMAS.md": 480,
+        ".planning/tmp/prefix-backups/VAULT_EXPORT_FORMAT.md": 811,
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 7,
+        ".planning/tmp/verify-AUTHENTICATION_ARCHITECTURE.md.json": 7,
+        ".planning/tmp/verify-CAPACITY.md.json": 14,
+        ".planning/tmp/verify-CONFIGURATION.md.json": 7,
+        ".planning/tmp/verify-CONTRIBUTING.md.json": 7,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 14,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 20,
+        ".planning/tmp/verify-GETTING-STARTED.md.json": 10,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 14,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 38,
+        ".planning/tmp/verify-README.md.json": 7,
+        ".planning/tmp/verify-SECURITY.md.json": 7,
+        ".planning/tmp/verify-SHARING.md.json": 7,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 7
+      },
+      "user_removed_per_file": {
+        ".planning/DEFERRED.md": 163,
+        ".planning/REFACTORING.md": 118
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5756,
+      "agent_lines_removed": 281
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5756,
+      "agent_lines_removed": 281
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5756,
+      "agent_lines_removed": 281
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5804,
+      "agent_lines_removed": 289
+    }
+  ]
+}
