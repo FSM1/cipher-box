@@ -602,7 +602,7 @@ Plans:
 **Goal:** Make FUSE writes durable: persisted out-of-callback pending-upload journal so `release()` no longer falsely acks then silently loses data, and mkdir parent-publish conflicts actually enqueue a retry instead of orphaning the child folder
 **Requirements:** Todos `2026-06-11-fuse-release-data-loss-before-remote-commit` + `2026-06-11-fuse-mkdir-parent-publish-orphan` (mkdir fix builds on the journal — both platforms, macOS + Windows)
 **Depends on:** Phase 41
-**Plans:** 5/8 plans executed
+**Plans:** 7/8 plans executed
 Plans:
 **Wave 1**
 
@@ -623,8 +623,8 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 — disjoint files, parallel)*
 
-- [ ] 43-06-PLAN.md — fuser write-side: handle_release EIO on prepare failure (CR-04), gate journal removal on confirmed parent publish (CR-08), journal user-wrapped child + parent IPNS keys (CR-03/CR-01), record_failure on background failure (CR-07)
-- [ ] 43-07-PLAN.md — Windows: fix UploadSpawnParams types so winfsp compiles (CR-05), Windows mount replay_for_vault (CR-06), mirror CR-03/CR-01/CR-04/CR-08/CR-07 in handle_cleanup + handle_create
+- [x] 43-06-PLAN.md — fuser write-side: handle_release EIO on prepare failure (CR-04), gate journal removal on confirmed parent publish (CR-08), journal user-wrapped child + parent IPNS keys (CR-03/CR-01), record_failure on background failure (CR-07)
+- [x] 43-07-PLAN.md — Windows: fix UploadSpawnParams types so winfsp compiles (CR-05), Windows mount replay_for_vault (CR-06), mirror CR-03/CR-01/CR-04/CR-08/CR-07 in handle_cleanup + handle_create
 
 **Wave 6** *(blocked on Waves 4-5)*
 
