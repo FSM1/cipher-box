@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Milestone complete
-last_updated: '2026-06-11T22:57:00.930Z'
+status: In progress — gap closure (phases 42-44)
+last_updated: '2026-06-12T00:30:00.000Z'
 last_activity: 2026-06-12
 progress:
-  total_phases: 26
+  total_phases: 29
   completed_phases: 26
   total_plans: 106
   completed_plans: 106
@@ -19,12 +19,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** All phases complete
+**Current focus:** Gap closure — UAT audit findings (phases 42-44)
 
 ## Current Position
 
-Phase: 41 (package-and-app-versioning-and-release-cycles) — COMPLETE
-Plan: 5 of 5 complete
+Phase: 42 (api-unpin-integrity) — not yet planned
+Plan: 0 of 0
+Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 
 ## Performance Metrics
 
@@ -228,6 +229,9 @@ Recent for v1.1:
 - Phase 36 added: Refactor upload progress in web app, to an inline progress display and remove the popup upload progress
 - Phase 37 added: Parallel batch upload pipeline — replace sequential per-file upload loop with parallel encrypt+pin and single folder metadata update
 - Phase 41 added: Package and app versioning and release cycles
+- Phase 42 added: API unpin integrity — ownership check, cross-user refcount, quota decrement (audit gap closure, todos 2026-06-11)
+- Phase 43 added: FUSE write durability — persisted upload journal, mkdir orphan fix (audit gap closure, todos 2026-06-11)
+- Phase 44 added: IPNS conflict handling — merge-on-409, file CAS (audit gap closure, todo 2026-06-11)
 
 ### Open Concerns
 

@@ -573,8 +573,41 @@ Plans:
 - [x] 41-04-PLAN.md — Staging tag format update (date-based) + Docker dual-tagging
 - [x] 41-05-PLAN.md — Desktop release tags + RP batched release configuration
 
+### Phase 42: API unpin integrity
+
+**Goal:** Close the unpin-path gaps in `apps/api`: verify caller owns a `pinned_cids(userId, cid)` row before unpinning, reference-count CIDs across users before issuing global Kubo `pin/rm`, delete the caller's row, and decrement quota via `recordUnpin` so deletes stop leaking quota
+**Requirements:** Todos `2026-06-11-ipfs-unpin-missing-ownership-check` + `2026-06-11-server-quota-never-decremented-on-unpin` (land together — unpin authorization, row deletion, and quota update must be consistent)
+**Depends on:** Phase 41
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 42 to break down)
+
+### Phase 43: FUSE write durability
+
+**Goal:** Make FUSE writes durable: persisted out-of-callback pending-upload journal so `release()` no longer falsely acks then silently loses data, and mkdir parent-publish conflicts actually enqueue a retry instead of orphaning the child folder
+**Requirements:** Todos `2026-06-11-fuse-release-data-loss-before-remote-commit` + `2026-06-11-fuse-mkdir-parent-publish-orphan` (mkdir fix builds on the journal — both platforms, macOS + Windows)
+**Depends on:** Phase 41
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 43 to break down)
+
+### Phase 44: IPNS conflict handling
+
+**Goal:** Stop lost updates on concurrent IPNS writes in `packages/sdk-core`: on 409, re-fetch remote folder metadata and merge (children union, per-entry reconcile) before republishing, and extend CAS coverage to file records; full CRDT model explicitly deferred to the CRDT-inbox research todo
+**Requirements:** Todo `2026-06-11-ipns-409-retry-lost-update` (discuss-phase: confirm whether the Rust SDK CAS-publish path has the same lost-update pattern)
+**Depends on:** Phase 41
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 44 to break down)
+
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-31_
-_Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 5 phases (36-40)_
+_Last updated: 2026-06-12_
+_Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 5 phases (36-40) | Gap closure: 3 phases (42-44)_
