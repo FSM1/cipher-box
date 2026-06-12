@@ -142,4 +142,4 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 
 ---
 
-Last updated: 2026-03-31 after Phase 40 Desktop Vault Settings Integration completed
+Last updated: 2026-06-12 after Phase 42 API Unpin Integrity completed (ownership-guarded unpin with cross-user refcounting, transactional quota decrement, pending-unpins outbox)
