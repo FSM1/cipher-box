@@ -22,7 +22,7 @@ import { MigrationModule } from './migration/migration.module';
 import { User } from './auth/entities/user.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { AuthMethod } from './auth/entities/auth-method.entity';
-import { Vault, PinnedCid } from './vault/entities';
+import { Vault, PinnedCid, PendingUnpin } from './vault/entities';
 import { FolderIpns } from './ipns/entities';
 import { TeeKeyState } from './tee/tee-key-state.entity';
 import { TeeKeyRotationLog } from './tee/tee-key-rotation-log.entity';
@@ -97,6 +97,7 @@ import { PinMigration } from './migration/migration.entity';
           ShareKey,
           ShareInvite,
           PinMigration,
+          PendingUnpin,
         ],
         synchronize: false,
         migrations: [join(__dirname, 'migrations', '*.js')],
