@@ -319,6 +319,21 @@ pub fn update_tray_status(app: &AppHandle, status: &TrayStatus) -> Result<(), St
     Ok(())
 }
 
+/// Send a system notification when one or more uploads are permanently parked (D-10).
+///
+/// Zero-knowledge copy: message must NOT include file names or paths that could leak
+/// vault contents into OS notification logs. Use neutral copy only.
+pub fn send_write_parked_notification(app: &AppHandle, message: &str) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title("CipherBox Upload Failed")
+        .body(message)
+        .show()
+        .map_err(|e| format!("Notification failed: {}", e))?;
+    Ok(())
+}
+
 /// Send a system notification for error states.
 fn send_error_notification(app: &AppHandle, message: &str) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
