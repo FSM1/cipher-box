@@ -216,6 +216,31 @@ pub async fn mount_filesystem(
         Err(e) => log::warn!("Root folder fetch failed (mount will show empty): {}", e),
     }
 
+    // Construct coordinator before replay so it can be seeded and shared.
+    let publish_coordinator = {
+        let coord = Arc::new(PublishCoordinator::new());
+        for (name, seq) in &initial_sequences {
+            coord.record_publish(name, *seq);
+        }
+        if !initial_sequences.is_empty() {
+            log::info!("PublishCoordinator seeded with {} sequence(s) from pre-populate", initial_sequences.len());
+        }
+        coord
+    };
+
+    // Replay journal entries for this vault before mounting (D-06, D-07, D-08).
+    // Errors are logged but never fail the mount — partial replay is better than no mount.
+    cipherbox_fuse::replay_for_vault(
+        &journal,
+        state.sdk.api.clone(),
+        &private_key,
+        &public_key,
+        &root_folder_key,
+        &root_ipns_name,
+        publish_coordinator.clone(),
+    )
+    .await;
+
     let fs = CipherBoxFS {
         inodes, metadata_cache,
         content_cache: cipherbox_fuse::cache::ContentCache::new(),
@@ -238,16 +263,7 @@ pub async fn mount_filesystem(
         upload_rx, upload_tx,
         journal,
         mutated_folders: HashMap::new(),
-        publish_coordinator: {
-            let coord = Arc::new(PublishCoordinator::new());
-            for (name, seq) in &initial_sequences {
-                coord.record_publish(name, *seq);
-            }
-            if !initial_sequences.is_empty() {
-                log::info!("PublishCoordinator seeded with {} sequence(s) from pre-populate", initial_sequences.len());
-            }
-            coord
-        },
+        publish_coordinator,
         publish_queue: HashMap::new(),
     };
 
