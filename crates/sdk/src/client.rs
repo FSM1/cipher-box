@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+use crate::queue::WriteQueue;
 use crate::state::{KeyState, SyncStatus};
 use crate::sync::SyncDaemon;
 
@@ -49,6 +50,8 @@ impl CipherBoxSdkClient {
     /// Start the background sync daemon.
     ///
     /// The `status_callback` is invoked on every status change (Idle, Syncing, Error).
+    /// The `write_queue` must point at the same cb-journal directory the FUSE layer uses
+    /// so the daemon can surface `Failed` entries via `WriteParked` (CR-07).
     /// Returns a `mpsc::Sender<()>` that can be used to trigger manual sync cycles
     /// (e.g., from a "Sync Now" tray menu item).
     ///
@@ -57,6 +60,7 @@ impl CipherBoxSdkClient {
         &mut self,
         status_callback: Arc<dyn Fn(SyncStatus) + Send + Sync>,
         poll_interval: Duration,
+        write_queue: WriteQueue,
     ) -> mpsc::Sender<()> {
         if self.sync_handle.is_some() {
             // Already running -- return existing trigger
@@ -70,7 +74,8 @@ impl CipherBoxSdkClient {
         let state = self.state.clone();
 
         let handle = tokio::spawn(async move {
-            let mut daemon = SyncDaemon::new(state, status_callback, poll_interval, sync_now_rx);
+            let mut daemon =
+                SyncDaemon::new(state, status_callback, poll_interval, sync_now_rx, write_queue);
             daemon.run().await;
         });
 
