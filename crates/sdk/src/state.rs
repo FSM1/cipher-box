@@ -17,6 +17,16 @@ pub enum SyncStatus {
     Idle,
     Syncing,
     Error(String),
+    /// One or more journal entries could not be uploaded after max retries (D-10).
+    ///
+    /// `pending` is the count of entries still awaiting a first successful attempt;
+    /// `failed` is the count of entries parked with `JournalEntryStatus::Failed`.
+    WriteParked {
+        /// Number of pending journal entries not yet attempted.
+        pending: u32,
+        /// Number of entries that exhausted retries and are parked on disk.
+        failed: u32,
+    },
 }
 
 /// Key material state shared across SDK components.
@@ -217,5 +227,29 @@ mod tests {
         assert_eq!(syncing, SyncStatus::Syncing);
         assert_eq!(error, SyncStatus::Error("timeout".to_string()));
         assert_ne!(idle, syncing);
+    }
+
+    #[test]
+    fn sync_status_write_parked_variant() {
+        let parked = SyncStatus::WriteParked {
+            pending: 2,
+            failed: 1,
+        };
+
+        assert_eq!(
+            parked,
+            SyncStatus::WriteParked {
+                pending: 2,
+                failed: 1,
+            }
+        );
+        assert_ne!(parked, SyncStatus::Idle);
+        assert_ne!(
+            parked,
+            SyncStatus::WriteParked {
+                pending: 0,
+                failed: 1,
+            }
+        );
     }
 }
