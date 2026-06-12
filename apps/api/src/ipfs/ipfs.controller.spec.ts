@@ -14,7 +14,9 @@ interface RequestWithUser extends ExpressRequest {
 describe('IpfsController', () => {
   let controller: IpfsController;
   let ipfsProvider: jest.Mocked<IpfsProvider>;
-  let vaultService: jest.Mocked<Pick<VaultService, 'checkQuota' | 'recordPin' | 'isUserByo'>>;
+  let vaultService: jest.Mocked<
+    Pick<VaultService, 'checkQuota' | 'recordPin' | 'isUserByo' | 'guardedUnpin'>
+  >;
   let mockEndTimer: jest.Mock;
   let mockStartTimer: jest.Mock;
 
@@ -29,6 +31,7 @@ describe('IpfsController', () => {
       checkQuota: jest.fn(),
       recordPin: jest.fn(),
       isUserByo: jest.fn(),
+      guardedUnpin: jest.fn(),
     };
 
     mockEndTimer = jest.fn();
@@ -74,35 +77,30 @@ describe('IpfsController', () => {
 
   describe('unpin', () => {
     const mockCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
+    const mockReq: RequestWithUser = { user: { id: 'userA' } } as RequestWithUser;
 
-    it('should call ipfsProvider.unpinFile with dto.cid', async () => {
+    // Test 1: delegates to guardedUnpin with req.user.id; ipfsProvider.unpinFile NOT called
+    it('should call vaultService.guardedUnpin with req.user.id and dto.cid', async () => {
       const unpinDto = { cid: mockCid };
 
-      ipfsProvider.unpinFile.mockResolvedValue(undefined);
+      vaultService.guardedUnpin.mockResolvedValue(undefined);
 
-      await controller.unpin(unpinDto);
+      await controller.unpin(mockReq, unpinDto);
 
-      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith(mockCid);
+      expect(vaultService.guardedUnpin).toHaveBeenCalledWith('userA', mockCid);
+      expect(vaultService.guardedUnpin).toHaveBeenCalledTimes(1);
+      expect(ipfsProvider.unpinFile).not.toHaveBeenCalled();
     });
 
-    it('should return { success: true }', async () => {
+    // Test 2: opaque { success: true } for all outcomes — controller does not branch
+    it('should return { success: true } and no additional fields', async () => {
       const unpinDto = { cid: mockCid };
 
-      ipfsProvider.unpinFile.mockResolvedValue(undefined);
+      vaultService.guardedUnpin.mockResolvedValue(undefined);
 
-      const result = await controller.unpin(unpinDto);
+      const result = await controller.unpin(mockReq, unpinDto);
 
-      expect(result).toEqual({ success: true });
-    });
-
-    it('should call provider exactly once', async () => {
-      const unpinDto = { cid: mockCid };
-
-      ipfsProvider.unpinFile.mockResolvedValue(undefined);
-
-      await controller.unpin(unpinDto);
-
-      expect(ipfsProvider.unpinFile).toHaveBeenCalledTimes(1);
+      expect(result).toStrictEqual({ success: true });
     });
   });
 
@@ -111,6 +109,7 @@ describe('IpfsController', () => {
     const mockSize = 1024;
     const mockReq: RequestWithUser = { user: { id: 'user-123' } } as RequestWithUser;
 
+    // Test 3: happy path unchanged — no guardedUnpin / unpinFile compensation call
     it('should check quota, pin file, record pin, and return result', async () => {
       const mockFile = {
         buffer: Buffer.from('encrypted file content'),
@@ -126,6 +125,8 @@ describe('IpfsController', () => {
       expect(vaultService.checkQuota).toHaveBeenCalledWith('user-123', 22);
       expect(ipfsProvider.pinFile).toHaveBeenCalledWith(mockFile.buffer);
       expect(vaultService.recordPin).toHaveBeenCalledWith('user-123', mockCid, mockSize);
+      expect(vaultService.guardedUnpin).not.toHaveBeenCalled();
+      expect(ipfsProvider.unpinFile).not.toHaveBeenCalled();
       expect(result).toEqual({ cid: mockCid, size: mockSize, recorded: true });
     });
 
@@ -142,19 +143,42 @@ describe('IpfsController', () => {
       expect(vaultService.recordPin).not.toHaveBeenCalled();
     });
 
-    it('should unpin file if recordPin fails', async () => {
+    // Test 4: compensation routes through guardedUnpin, NOT ipfsProvider.unpinFile; original error rethrown
+    it('should call guardedUnpin (not ipfsProvider.unpinFile) when recordPin fails', async () => {
       const mockFile = {
         buffer: Buffer.from('encrypted file content'),
         size: 22,
       } as Express.Multer.File;
 
+      const recordPinError = new Error('DB error');
       vaultService.checkQuota.mockResolvedValue(true);
       ipfsProvider.pinFile.mockResolvedValue({ cid: mockCid, size: mockSize });
-      vaultService.recordPin.mockRejectedValue(new Error('DB error'));
-      ipfsProvider.unpinFile.mockResolvedValue(undefined);
+      vaultService.recordPin.mockRejectedValue(recordPinError);
+      vaultService.guardedUnpin.mockResolvedValue(undefined);
 
       await expect(controller.upload(mockReq, mockFile)).rejects.toThrow('DB error');
-      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith(mockCid);
+
+      expect(vaultService.guardedUnpin).toHaveBeenCalledWith('user-123', mockCid);
+      expect(ipfsProvider.unpinFile).not.toHaveBeenCalled();
+    });
+
+    // Test 5: compensation is best-effort — guardedUnpin rejection is swallowed; original error thrown
+    it('should rethrow original recordPin error even if guardedUnpin also rejects', async () => {
+      const mockFile = {
+        buffer: Buffer.from('encrypted file content'),
+        size: 22,
+      } as Express.Multer.File;
+
+      const recordPinError = new Error('DB error');
+      vaultService.checkQuota.mockResolvedValue(true);
+      ipfsProvider.pinFile.mockResolvedValue({ cid: mockCid, size: mockSize });
+      vaultService.recordPin.mockRejectedValue(recordPinError);
+      vaultService.guardedUnpin.mockRejectedValue(new Error('guardedUnpin also failed'));
+
+      const thrown = await controller.upload(mockReq, mockFile).catch((e: unknown) => e);
+
+      expect(thrown).toBe(recordPinError);
+      expect((thrown as Error).message).toBe('DB error');
     });
 
     it('should not record pin if pinFile fails', async () => {
