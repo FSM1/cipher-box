@@ -111,21 +111,10 @@ impl SyncDaemon {
                     self.was_offline = false;
                 }
 
-                // Process queued writes (best-effort)
-                if !self.write_queue.is_empty() {
-                    log::info!(
-                        "Processing {} queued writes",
-                        self.write_queue.len()
-                    );
-                    // Write queue processing requires an UploadHandler implementation
-                    // which would use self.state.api. For v1, log pending items.
-                    // Full write queue processing with FUSE integration is deferred
-                    // to after the UploadHandler trait is wired to the ApiClient+FUSE layer.
-                    log::debug!(
-                        "Write queue has {} pending items",
-                        self.write_queue.len()
-                    );
-                }
+                // Write queue drain is handled by the FUSE layer (Plan 43-02+).
+                // The sync daemon receives status updates via the status_callback
+                // rather than directly processing entries here.
+                log::debug!("Sync cycle complete — FUSE drain handles journal replay");
 
                 (self.status_callback)(SyncStatus::Idle);
             }
