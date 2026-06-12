@@ -906,6 +906,7 @@ pub async fn replay_for_vault(
                 child_folder_key_hex,
                 child_ipns_key_hex,
                 parent_folder_ipns_name,
+                parent_ipns_key_hex,
                 name,
                 created_at_ms,
             } => {
@@ -919,6 +920,7 @@ pub async fn replay_for_vault(
                     child_folder_key_hex,
                     child_ipns_key_hex,
                     parent_folder_ipns_name,
+                    parent_ipns_key_hex,
                     name,
                     *created_at_ms,
                 )
@@ -940,6 +942,7 @@ pub async fn replay_for_vault(
                 file_meta_ipns_name,
                 file_ipns_key_hex,
                 parent_folder_ipns_name,
+                parent_ipns_key_hex,
                 filename,
                 size,
                 created_at_ms,
@@ -957,6 +960,7 @@ pub async fn replay_for_vault(
                     file_meta_ipns_name,
                     file_ipns_key_hex.as_deref(),
                     parent_folder_ipns_name,
+                    parent_ipns_key_hex,
                     filename,
                     *size,
                     *created_at_ms,
@@ -1020,16 +1024,32 @@ async fn resolve_folder_key(
 
 /// Fetch, decrypt, merge, and CAS-publish a parent folder update.
 ///
-/// This is the core D-06 implementation: never re-publishes the stale snapshot;
-/// always fetches current remote state first.
+/// Core CR-01 / D-06 implementation: fetches CURRENT remote metadata, merges, then
+/// signs and publishes an IPNS record with the provided unwrapped parent IPNS private key.
+/// Returns `Err` if the publish did not succeed (Conflict or key absent) so the caller
+/// retains the journal entry for the next mount.
+///
+/// IMPORTANT: `unpin_content` is NOT called on the pre-merge CID here. The old CID is
+/// unpinned only after a confirmed `PublishResult::Success` (T-43-19 — never unpin a CID
+/// that the live IPNS record still references).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
+// `parent_ipns_private_key_raw`: unwrapped (raw 32-byte) Ed25519 parent IPNS key for signing.
+// Must be obtained via ecies::unwrap_key(parent_ipns_key_hex). If empty, returns Err (CR-01).
 async fn fetch_merge_publish_parent(
     api: &ApiClient,
     folder_key: &[u8],
     parent_ipns_name: &str,
+    parent_ipns_private_key_raw: &[u8],
     coordinator: Arc<PublishCoordinator>,
     local_child: cipherbox_core::folder::FolderChild,
 ) -> Result<(), String> {
+    use base64::Engine;
+
+    // CR-01: if the caller could not unwrap the parent IPNS key, retain the entry.
+    if parent_ipns_private_key_raw.is_empty() {
+        return Err("parent IPNS private key unavailable — retaining journal entry".to_string());
+    }
+
     let lock = coordinator.get_lock(parent_ipns_name);
     let _guard = lock.lock().await;
 
@@ -1078,27 +1098,60 @@ async fn fetch_merge_publish_parent(
         .await
         .map_err(|e| format!("upload merged metadata: {}", e))?;
 
-    // We need the IPNS private key to publish. For the parent folder, we don't
-    // have the IPNS private key in the journal — only the parent IPNS name.
-    // The parent IPNS private key is required to sign the record.
-    // This means replay can only CAS-publish if the IPNS private key is available.
-    // Without it, we log a warning and skip the parent metadata update.
-    // The file/folder is still uploaded; only the parent metadata pointer is missing,
-    // which the existing debounced publisher will eventually resolve on the next session.
-    // This is a known limitation of replay without the parent IPNS key.
-    log::info!(
-        "replay: merged metadata uploaded (CID={}) for parent {} — but parent IPNS private key \
-         is not in the journal. The parent metadata will be updated on the next live session \
-         when the file appears in the inodes. Entry considered replayed (CID durable).",
-        new_cid,
-        parent_ipns_name
-    );
-    // Record that we attempted a publish at this sequence to avoid double-increment.
-    coordinator.record_publish(parent_ipns_name, seq);
+    // CR-01: sign and publish the parent IPNS record with the unwrapped key.
+    // Mirror the live mkdir parent-publish flow from write_ops.rs:596-641.
+    let parent_key_arr: [u8; 32] = parent_ipns_private_key_raw
+        .try_into()
+        .map_err(|_| format!(
+            "parent IPNS key has wrong length (got {}, expected 32) — retaining journal entry",
+            parent_ipns_private_key_raw.len()
+        ))?;
+    let new_seq = seq + 1;
+    let parent_value = format!("/ipfs/{}", new_cid);
+    let parent_record = cipherbox_core::create_ipns_record(&parent_key_arr, &parent_value, new_seq, 86_400_000)
+        .map_err(|e| format!("create parent IPNS record: {}", e))?;
+    let parent_marshaled = cipherbox_core::marshal_ipns_record(&parent_record)
+        .map_err(|e| format!("marshal parent IPNS record: {}", e))?;
+    let parent_record_b64 = base64::engine::general_purpose::STANDARD.encode(&parent_marshaled);
 
-    let _ = cipherbox_api_client::ipfs::unpin_content(api, &resolve.cid).await;
+    let parent_req = cipherbox_api_client::IpnsPublishRequest {
+        ipns_name: parent_ipns_name.to_string(),
+        record: parent_record_b64,
+        metadata_cid: new_cid.clone(),
+        encrypted_ipns_private_key: None,
+        key_epoch: None,
+        expected_sequence_number: Some(seq.to_string()),
+    };
 
-    Ok(())
+    match cipherbox_api_client::ipns::publish_ipns(api, &parent_req)
+        .await
+        .map_err(|e| format!("publish parent IPNS: {}", e))?
+    {
+        cipherbox_api_client::PublishResult::Success => {
+            // CR-01 / T-43-21: only advance the sequence cache on confirmed Success (IN-06 fix).
+            coordinator.record_publish(parent_ipns_name, new_seq);
+            // T-43-19: unpin the OLD CID (the one the live IPNS record no longer references)
+            // only AFTER the new record is confirmed live.
+            let _ = cipherbox_api_client::ipfs::unpin_content(api, &resolve.cid).await;
+            log::info!(
+                "replay: parent IPNS published for {} (new_seq={}, new_cid={})",
+                parent_ipns_name, new_seq, new_cid
+            );
+            Ok(())
+        }
+        cipherbox_api_client::PublishResult::Conflict { current_sequence_number } => {
+            // T-43-18: CAS conflict — do NOT remove the journal entry; retain for next mount.
+            // The new_cid is still pinned on IPFS which is safe (it just won't be referenced yet).
+            log::warn!(
+                "replay: CAS conflict on parent {} (expected seq {}, server has {:?}) — retaining entry",
+                parent_ipns_name, seq, current_sequence_number
+            );
+            Err(format!(
+                "IPNS conflict on parent {} (server seq {:?}) — will retry on next mount",
+                parent_ipns_name, current_sequence_number
+            ))
+        }
+    }
 }
 
 /// Replay a single `MkdirPublish` journal entry.
@@ -1113,8 +1166,11 @@ async fn replay_mkdir_entry(
     coordinator: Arc<PublishCoordinator>,
     child_ipns_name: &str,
     child_folder_key_hex: &str,
+    // child_ipns_key_hex: user-ECIES-wrapped child IPNS key; written as-is (CR-03, no re-wrap).
     child_ipns_key_hex: &str,
     parent_folder_ipns_name: &str,
+    // parent_ipns_key_hex: user-ECIES-wrapped parent IPNS key from journal (CR-01).
+    parent_ipns_key_hex: &str,
     name: &str,
     created_at_ms: u64,
 ) -> Result<(), String> {
@@ -1127,11 +1183,26 @@ async fn replay_mkdir_entry(
     )
     .await?;
 
+    // CR-01: hex-decode and ecies-unwrap the journaled parent IPNS key.
+    // Returns Err if the key is absent/malformed so the entry is retained (T-43-20).
+    let parent_ipns_key_raw = if parent_ipns_key_hex.is_empty() {
+        return Err("parent_ipns_key_hex is empty in MkdirPublish entry — retaining for retry".to_string());
+    } else {
+        let wrapped_bytes = hex::decode(parent_ipns_key_hex)
+            .map_err(|e| format!("hex decode parent_ipns_key_hex: {} — retaining entry", e))?;
+        cipherbox_crypto::ecies::unwrap_key(&wrapped_bytes, private_key)
+            .map_err(|e| format!("ecies unwrap parent IPNS key: {} — retaining entry", e))?
+    };
+
+    // CR-03: write the user-ECIES-wrapped child IPNS key as-is into FolderEntry.
+    // The journal already stores the user-wrapped form (populated by 43-06 write side fix).
+    // No re-wrap here — that would produce a doubly-wrapped key.
     let child_entry = cipherbox_core::folder::FolderChild::Folder(cipherbox_core::folder::FolderEntry {
         id: format!("replay-{}", child_ipns_name),
         name: name.to_string(),
         ipns_name: child_ipns_name.to_string(),
         folder_key_encrypted: child_folder_key_hex.to_string(),
+        // CR-03: user-ECIES-wrapped child IPNS key, matching build_folder_metadata convention.
         ipns_private_key_encrypted: child_ipns_key_hex.to_string(),
         created_at: created_at_ms,
         modified_at: created_at_ms,
@@ -1141,6 +1212,7 @@ async fn replay_mkdir_entry(
         api,
         &parent_folder_key,
         parent_folder_ipns_name,
+        &parent_ipns_key_raw,
         coordinator,
         child_entry,
     )
@@ -1155,7 +1227,7 @@ async fn replay_mkdir_entry(
 async fn replay_upload_entry(
     api: &ApiClient,
     private_key: &[u8],
-    public_key: &[u8],
+    _public_key: &[u8],
     root_folder_key: &[u8],
     root_ipns_name: &str,
     coordinator: Arc<PublishCoordinator>,
@@ -1165,11 +1237,24 @@ async fn replay_upload_entry(
     file_meta_ipns_name: &str,
     file_ipns_key_hex: Option<&str>,
     parent_folder_ipns_name: &str,
+    // parent_ipns_key_hex: user-ECIES-wrapped parent IPNS private key from journal (CR-01).
+    parent_ipns_key_hex: &str,
     filename: &str,
     size: u64,
     created_at_ms: u64,
 ) -> Result<(), String> {
     use base64::Engine;
+
+    // CR-01: hex-decode and ecies-unwrap the journaled parent IPNS key.
+    // Returns Err if the key is absent/malformed so the entry is retained (T-43-20).
+    let parent_ipns_key_raw = if parent_ipns_key_hex.is_empty() {
+        return Err("parent_ipns_key_hex is empty in UploadFile entry — retaining for retry".to_string());
+    } else {
+        let wrapped_bytes = hex::decode(parent_ipns_key_hex)
+            .map_err(|e| format!("hex decode parent_ipns_key_hex: {} — retaining entry", e))?;
+        cipherbox_crypto::ecies::unwrap_key(&wrapped_bytes, private_key)
+            .map_err(|e| format!("ecies unwrap parent IPNS key: {} — retaining entry", e))?
+    };
 
     // Step 1: re-upload ciphertext (idempotent — same plaintext → same ciphertext → same CID).
     let ciphertext = base64::engine::general_purpose::STANDARD
@@ -1194,9 +1279,15 @@ async fn replay_upload_entry(
     // Step 3: re-publish file IPNS metadata if key is available.
     if let Some(file_ipns_key_hex_str) = file_ipns_key_hex {
         if !file_ipns_key_hex_str.is_empty() {
-            let file_ipns_key_bytes = hex::decode(file_ipns_key_hex_str)
+            // CR-02: ecies-unwrap the ECIES-wrapped file IPNS key before casting to [u8;32].
+            // The journaled key is user-ECIES-wrapped (~117 bytes), NOT a raw 32-byte key.
+            // Directly casting the wrapped bytes always fails (they're ~117 bytes, not 32).
+            let file_ipns_key_wrapped = hex::decode(file_ipns_key_hex_str)
                 .map_err(|e| format!("hex decode file_ipns_key: {}", e))?;
-            let file_ipns_key = zeroize::Zeroizing::new(file_ipns_key_bytes);
+            let file_ipns_key_raw = cipherbox_crypto::ecies::unwrap_key(&file_ipns_key_wrapped, private_key)
+                .map_err(|e| format!("ecies unwrap file IPNS key: {}", e))?;
+            let file_ipns_key = zeroize::Zeroizing::new(file_ipns_key_raw);
+
             let parent_folder_key_arr: [u8; 32] = parent_folder_key
                 .as_slice()
                 .try_into()
@@ -1221,10 +1312,14 @@ async fn replay_upload_entry(
             let current_seq = coordinator.resolve_sequence(api, file_meta_ipns_name).await?;
             let new_seq = current_seq + 1;
 
+            // CR-02: cast the unwrapped raw key (32 bytes) — this will always succeed.
             let ipns_key_arr: [u8; 32] = file_ipns_key
                 .as_slice()
                 .try_into()
-                .map_err(|_| "Invalid file IPNS key length for replay".to_string())?;
+                .map_err(|_| format!(
+                    "Invalid file IPNS key length after unwrap (got {} bytes, expected 32)",
+                    file_ipns_key.len()
+                ))?;
 
             let sealed = cipherbox_core::folder::encrypt_file_metadata(&file_meta, &parent_folder_key_arr)
                 .map_err(|e| format!("encrypt file metadata: {}", e))?;
@@ -1272,14 +1367,9 @@ async fn replay_upload_entry(
         id: format!("replay-{}", file_meta_ipns_name),
         name: filename.to_string(),
         file_meta_ipns_name: file_meta_ipns_name.to_string(),
-        ipns_private_key_encrypted: file_ipns_key_hex.map(|k| {
-            // Re-wrap the file IPNS key with the user's current public key for storage.
-            hex::decode(k)
-                .ok()
-                .and_then(|bytes| cipherbox_crypto::wrap_key(&bytes, public_key).ok())
-                .map(|wrapped| hex::encode(&wrapped))
-                .unwrap_or_default()
-        }),
+        // CR-02: store the journaled file_ipns_key_hex AS-IS — it is already user-ECIES-wrapped.
+        // Do NOT re-wrap: that would produce a doubly-wrapped key in the stored FilePointer.
+        ipns_private_key_encrypted: file_ipns_key_hex.map(|k| k.to_string()),
         created_at: created_at_ms,
         modified_at: created_at_ms,
     });
@@ -1288,6 +1378,7 @@ async fn replay_upload_entry(
         api,
         &parent_folder_key,
         parent_folder_ipns_name,
+        &parent_ipns_key_raw,
         coordinator,
         file_pointer,
     )

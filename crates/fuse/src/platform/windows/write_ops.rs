@@ -144,14 +144,24 @@ pub mod implementation {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
+                // CR-01: journal the user-ECIES-wrapped parent IPNS key for replay signing.
+                let parent_ipns_key_hex_for_journal = cipherbox_crypto::wrap_key(&parent_ipns_key, &fs.public_key)
+                    .map(|w| hex::encode(&w))
+                    .unwrap_or_default();
+                // CR-03: journal the user-ECIES-wrapped child IPNS key (not TEE-wrapped).
+                let child_ipns_key_hex_user_wrapped = cipherbox_crypto::wrap_key(&ipns_private_key, &fs.public_key)
+                    .map(|w| hex::encode(&w))
+                    .unwrap_or_else(|_| encrypted_ipns_for_tee.clone().unwrap_or_default());
+
                 let mkdir_journal_entry = cipherbox_sdk::JournalEntry {
                     id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
                     vault_root_ipns: fs.root_ipns_name.clone(),
                     op: cipherbox_sdk::JournalOp::MkdirPublish {
                         child_ipns_name: ipns_name.clone(),
                         child_folder_key_hex: encrypted_folder_key_hex_for_journal,
-                        child_ipns_key_hex: encrypted_ipns_for_tee.clone().unwrap_or_default(),
+                        child_ipns_key_hex: child_ipns_key_hex_user_wrapped,
                         parent_folder_ipns_name: parent_ipns_name.clone(),
+                        parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
                         name: name.to_string(),
                         created_at_ms: mkdir_created_at_ms,
                     },
@@ -863,6 +873,20 @@ pub mod implementation {
                         })
                         .unwrap_or_else(|| fs.root_ipns_name.clone());
 
+                    // CR-01: journal the user-ECIES-wrapped parent IPNS key for replay signing.
+                    let parent_ipns_key_hex_for_journal = fs.inodes.get(parent_ino)
+                        .and_then(|inode| match &inode.kind {
+                            InodeKind::Root { ipns_private_key, .. } => ipns_private_key.as_deref(),
+                            InodeKind::Folder { ipns_private_key, .. } => ipns_private_key.as_deref(),
+                            _ => None,
+                        })
+                        .and_then(|raw_key| {
+                            cipherbox_crypto::wrap_key(raw_key, &fs.public_key)
+                                .map(|w| hex::encode(&w))
+                                .ok()
+                        })
+                        .unwrap_or_default();
+
                     let file_meta_ipns_name_str = file_meta_ipns_name
                         .clone()
                         .unwrap_or_default();
@@ -894,6 +918,7 @@ pub mod implementation {
                                     })
                             }).flatten(),
                             parent_folder_ipns_name,
+                            parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
                             filename: file_name,
                             size: file_size,
                             created_at_ms: now_ms,

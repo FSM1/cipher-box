@@ -800,6 +800,23 @@ pub(crate) mod implementation {
                         })
                         .unwrap_or_else(|| fs.root_ipns_name.clone());
 
+                    // CR-01: journal the user-ECIES-wrapped parent IPNS key so replay can
+                    // sign and publish the parent IPNS record at crash-recovery time.
+                    // Wrap the raw parent IPNS private key (from the inode) with the user's
+                    // EC public key — same form as FolderEntry.ipns_private_key_encrypted.
+                    let parent_ipns_key_hex_for_journal = fs.inodes.get(parent_ino)
+                        .and_then(|inode| match &inode.kind {
+                            InodeKind::Root { ipns_private_key, .. } => ipns_private_key.as_deref(),
+                            InodeKind::Folder { ipns_private_key, .. } => ipns_private_key.as_deref(),
+                            _ => None,
+                        })
+                        .and_then(|raw_key| {
+                            cipherbox_crypto::wrap_key(raw_key, &fs.public_key)
+                                .map(|w| hex::encode(&w))
+                                .ok()
+                        })
+                        .unwrap_or_default();
+
                     let file_meta_ipns_name_str = file_meta_ipns_name
                         .clone()
                         .unwrap_or_default();
@@ -831,6 +848,7 @@ pub(crate) mod implementation {
                                     })
                             }).flatten(),
                             parent_folder_ipns_name,
+                            parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
                             filename: file_name,
                             size: file_size,
                             created_at_ms: now_ms,
