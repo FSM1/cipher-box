@@ -579,17 +579,23 @@ Plans:
 **Requirements:** Todos `2026-06-11-ipfs-unpin-missing-ownership-check` + `2026-06-11-server-quota-never-decremented-on-unpin` (land together — unpin authorization, row deletion, and quota update must be consistent)
 **Depends on:** Phase 41
 **Plans:** 8 plans
-
 Plans:
+**Wave 1**
 
 - [ ] 42-01-PLAN.md — PendingUnpin entity, 2 migrations, app.module registration, 3 audit/drift/outbox metrics (wave 1)
 - [ ] 42-02-PLAN.md — Web quota reconcile: fetchQuota after removeUsage in deleteFile, D-12 (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 42-03-PLAN.md — VaultService.guardedUnpin: ownership + advisory lock + refcount + outbox + audit (wave 2)
 - [ ] 42-04-PLAN.md — [BLOCKING] apply migrations to live DB; verify pending_unpins + idx_pinned_cids_cid exist (wave 2)
+- [ ] 42-08-PLAN.md — Grafana alert on cipherbox_unpin_cross_user_attempts_total, D-02/D-10 (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 42-05-PLAN.md — IpfsController unpin delegation + upload compensation via guardedUnpin + api:generate (wave 3)
 - [ ] 42-06-PLAN.md — pending-unpins BullMQ drain worker + read-only drift report job, D-05/D-06 (wave 3)
 - [ ] 42-07-PLAN.md — One-shot non-BYO backfill script restoring honest quota, D-09 (wave 3)
-- [ ] 42-08-PLAN.md — Grafana alert on cipherbox_unpin_cross_user_attempts_total, D-02/D-10 (wave 2)
 
 ### Phase 43: FUSE write durability
 
