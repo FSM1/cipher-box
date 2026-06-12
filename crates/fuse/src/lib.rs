@@ -106,6 +106,16 @@ pub enum PendingFilePointer {
     },
 }
 
+/// Events sent from background upload/mkdir threads to the FS thread.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub enum FsEvent {
+    /// A background file upload completed.
+    UploadComplete(UploadComplete),
+    /// A parent-folder publish after mkdir hit a conflict; the FS thread should
+    /// re-arm the debounced publisher so it retries with a fresh sequence.
+    MkdirConflict { parent_ino: u64 },
+}
+
 /// Notification from a background upload thread that a file upload completed.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct UploadComplete {
@@ -563,10 +573,13 @@ pub struct CipherBoxFS {
     pub filepointer_tx: std::sync::mpsc::Sender<PendingFilePointer>,
     pub resolving_file_pointers: std::collections::HashSet<u64>,
     pub pending_content: HashMap<u64, Vec<u8>>,
-    pub upload_rx: std::sync::mpsc::Receiver<UploadComplete>,
-    pub upload_tx: std::sync::mpsc::Sender<UploadComplete>,
+    pub upload_rx: std::sync::mpsc::Receiver<FsEvent>,
+    pub upload_tx: std::sync::mpsc::Sender<FsEvent>,
     pub publish_coordinator: Arc<PublishCoordinator>,
     pub publish_queue: HashMap<u64, PublishQueueEntry>,
+    /// Durable write journal — persists pending uploads and mkdir-publishes to disk
+    /// so they survive a crash or remount.  Callbacks write here before acking the OS.
+    pub journal: cipherbox_sdk::WriteQueue,
 }
 
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
@@ -651,22 +664,32 @@ impl CipherBoxFS {
     }
 
     pub fn drain_upload_completions(&mut self) {
-        while let Ok(result) = self.upload_rx.try_recv() {
-            if let Some(inode) = self.inodes.get_mut(result.ino) {
-                if inode.write_generation == result.write_generation {
-                    if let inode::InodeKind::File { ref mut cid, .. } = inode.kind { *cid = result.new_cid.clone(); }
+        while let Ok(event) = self.upload_rx.try_recv() {
+            match event {
+                FsEvent::UploadComplete(result) => {
+                    if let Some(inode) = self.inodes.get_mut(result.ino) {
+                        if inode.write_generation == result.write_generation {
+                            if let inode::InodeKind::File { ref mut cid, .. } = inode.kind { *cid = result.new_cid.clone(); }
+                        }
+                    }
+                    if let Some(inode) = self.inodes.get(result.ino) {
+                        if inode.write_generation == result.write_generation {
+                            if let Some(plaintext) = self.pending_content.remove(&result.ino) { self.content_cache.set(&result.new_cid, plaintext); }
+                        }
+                    }
+                    for pruned_cid in &result.pruned_cids {
+                        let api = self.api.clone(); let cid = pruned_cid.clone();
+                        self.rt.spawn(async move { let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid).await; });
+                    }
+                    if let Some(entry) = self.publish_queue.get_mut(&result.parent_ino) { entry.pending_uploads = entry.pending_uploads.saturating_sub(1); }
+                }
+                FsEvent::MkdirConflict { parent_ino } => {
+                    // Re-arm the debounced publisher so it retries the parent publish
+                    // with a fresh sequence number (D-11a).
+                    self.mutated_folders.insert(parent_ino, std::time::Instant::now());
+                    self.queue_publish(parent_ino, false);
                 }
             }
-            if let Some(inode) = self.inodes.get(result.ino) {
-                if inode.write_generation == result.write_generation {
-                    if let Some(plaintext) = self.pending_content.remove(&result.ino) { self.content_cache.set(&result.new_cid, plaintext); }
-                }
-            }
-            for pruned_cid in &result.pruned_cids {
-                let api = self.api.clone(); let cid = pruned_cid.clone();
-                self.rt.spawn(async move { let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid).await; });
-            }
-            if let Some(entry) = self.publish_queue.get_mut(&result.parent_ino) { entry.pending_uploads = entry.pending_uploads.saturating_sub(1); }
         }
         self.flush_publish_queue();
     }
