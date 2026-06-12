@@ -200,6 +200,7 @@ export async function uploadToSharedFolder(
       const updatedChildren = [...swCtx.children, filePointer];
       const { newSequenceNumber } = await updateFolderMetadataAndPublish({
         children: updatedChildren,
+        baseChildren: swCtx.children,
         folderKey: swCtx.folderKey,
         ipnsPrivateKey: swCtx.ipnsPrivateKey,
         ipnsName: swCtx.ipnsName,
@@ -295,6 +296,7 @@ export async function createSharedSubfolder(
     const updatedChildren = [...swCtx.children, folderEntry];
     const { newSequenceNumber } = await updateFolderMetadataAndPublish({
       children: updatedChildren,
+      baseChildren: swCtx.children,
       folderKey: swCtx.folderKey,
       ipnsPrivateKey: swCtx.ipnsPrivateKey,
       ipnsName: swCtx.ipnsName,
@@ -349,6 +351,7 @@ export async function renameInSharedFolder(
 
   const { newSequenceNumber } = await updateFolderMetadataAndPublish({
     children: updatedChildren,
+    baseChildren: swCtx.children,
     folderKey: swCtx.folderKey,
     ipnsPrivateKey: swCtx.ipnsPrivateKey,
     ipnsName: swCtx.ipnsName,
@@ -376,6 +379,7 @@ export async function deleteFromSharedFolder(
 
   const { newSequenceNumber } = await updateFolderMetadataAndPublish({
     children: updatedChildren,
+    baseChildren: swCtx.children,
     folderKey: swCtx.folderKey,
     ipnsPrivateKey: swCtx.ipnsPrivateKey,
     ipnsName: swCtx.ipnsName,
@@ -446,8 +450,8 @@ export async function updateSharedFile(params: {
         params.ctx
       );
 
-      // 6. Update file metadata
-      const { ipnsRecord } = await updateFileMetadata({
+      // 6. Update file metadata (publishes internally via CAS — Plan 03)
+      await updateFileMetadata({
         fileIpnsPrivateKey: ipnsPrivKey,
         fileMetaIpnsName: params.filePointer.fileMetaIpnsName,
         folderKey: params.folderKey,
@@ -463,8 +467,10 @@ export async function updateSharedFile(params: {
         ctx: params.ctx,
       });
 
-      // 7. Publish updated file IPNS record
-      await batchPublishIpnsRecords([{ ...ipnsRecord, recordType: 'file' as const }], params.ctx);
+      // Note: batchPublishIpnsRecords for the file record was here pre-Plan-03.
+      // updateFileMetadata now publishes internally with CAS; the separate publish
+      // has been removed to avoid double-publish. prunedCids from version overflow
+      // are dropped here (pre-existing Phase-42 deferred leak — not regressed).
 
       // 8. Update share_key for recipient
       const recipientWrappedKey = await wrapKey(fileKey, params.recipientPublicKey);

@@ -233,6 +233,7 @@ export async function addToBin(params: {
   if (!folder) throw new Error('Folder not loaded');
 
   // 1. Remove item from folder metadata
+  const baseChildren = [...folder.children];
   const { updatedChildren, removedItem } = sdkCore.deleteFromFolder({
     children: folder.children,
     childId: params.childId,
@@ -241,6 +242,7 @@ export async function addToBin(params: {
   // 2. Publish updated folder metadata
   const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedChildren,
+    baseChildren,
     folderKey: folder.folderKey,
     ipnsPrivateKey: folder.ipnsKeypair.privateKey,
     ipnsName: params.folderIpnsName,
@@ -333,11 +335,13 @@ export async function restoreFromBin(params: {
     child = { ...child, name: newName };
   }
 
+  const baseChildren = [...targetFolder.children];
   const updatedFolderChildren = [...targetFolder.children, child];
 
   // 4. Publish updated folder metadata
   const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedFolderChildren,
+    baseChildren,
     folderKey: targetFolder.folderKey,
     ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
     ipnsName: params.targetFolderIpnsName,
