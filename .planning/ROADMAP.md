@@ -578,7 +578,7 @@ Plans:
 **Goal:** Close the unpin-path gaps in `apps/api`: verify caller owns a `pinned_cids(userId, cid)` row before unpinning, reference-count CIDs across users before issuing global Kubo `pin/rm`, delete the caller's row, and decrement quota via `recordUnpin` so deletes stop leaking quota
 **Requirements:** Todos `2026-06-11-ipfs-unpin-missing-ownership-check` + `2026-06-11-server-quota-never-decremented-on-unpin` (land together — unpin authorization, row deletion, and quota update must be consistent)
 **Depends on:** Phase 41
-**Plans:** 2/8 plans executed
+**Plans:** 5/8 plans executed
 Plans:
 **Wave 1**
 
@@ -587,9 +587,9 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 42-03-PLAN.md — VaultService.guardedUnpin: ownership + advisory lock + refcount + outbox + audit (wave 2)
-- [ ] 42-04-PLAN.md — [BLOCKING] apply migrations to live DB; verify pending_unpins + idx_pinned_cids_cid exist (wave 2)
-- [ ] 42-08-PLAN.md — Grafana alert on cipherbox_unpin_cross_user_attempts_total, D-02/D-10 (wave 2)
+- [x] 42-03-PLAN.md — VaultService.guardedUnpin: ownership + advisory lock + refcount + outbox + audit (wave 2)
+- [x] 42-04-PLAN.md — [BLOCKING] apply migrations to live DB; verify pending_unpins + idx_pinned_cids_cid exist (wave 2)
+- [x] 42-08-PLAN.md — Grafana alert on cipherbox_unpin_cross_user_attempts_total, D-02/D-10 (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
