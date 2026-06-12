@@ -578,7 +578,7 @@ Plans:
 **Goal:** Close the unpin-path gaps in `apps/api`: verify caller owns a `pinned_cids(userId, cid)` row before unpinning, reference-count CIDs across users before issuing global Kubo `pin/rm`, delete the caller's row, and decrement quota via `recordUnpin` so deletes stop leaking quota
 **Requirements:** Todos `2026-06-11-ipfs-unpin-missing-ownership-check` + `2026-06-11-server-quota-never-decremented-on-unpin` (land together — unpin authorization, row deletion, and quota update must be consistent)
 **Depends on:** Phase 41
-**Plans:** 5/8 plans executed
+**Plans:** 8/8 plans complete
 Plans:
 **Wave 1**
 
@@ -593,9 +593,9 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 42-05-PLAN.md — IpfsController unpin delegation + upload compensation via guardedUnpin + api:generate (wave 3)
-- [ ] 42-06-PLAN.md — pending-unpins BullMQ drain worker + read-only drift report job, D-05/D-06 (wave 3)
-- [ ] 42-07-PLAN.md — One-shot non-BYO backfill script restoring honest quota, D-09 (wave 3)
+- [x] 42-05-PLAN.md — IpfsController unpin delegation + upload compensation via guardedUnpin + api:generate (wave 3)
+- [x] 42-06-PLAN.md — pending-unpins BullMQ drain worker + read-only drift report job, D-05/D-06 (wave 3)
+- [x] 42-07-PLAN.md — One-shot non-BYO backfill script restoring honest quota, D-09 (wave 3)
 
 ### Phase 43: FUSE write durability
 
