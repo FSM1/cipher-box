@@ -19,6 +19,7 @@ export async function deleteFile(cid: string, sizeBytes: number): Promise<void> 
   // 2. Update local quota
   const quotaStore = useQuotaStore.getState();
   quotaStore.removeUsage(sizeBytes);
+  quotaStore.fetchQuota().catch((err) => logger.warn('quota reconcile failed', err));
 
   // TEE unenrollment is handled by SDK's fireAndForgetUnenroll() on delete.
 }
