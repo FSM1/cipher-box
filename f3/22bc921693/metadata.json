@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f322bc921693",
+  "strategy": "manual-commit",
+  "branch": "feat/fuse-write-durability",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/43-fuse-write-durability/43-01-PLAN.md",
+    ".planning/phases/43-fuse-write-durability/43-02-PLAN.md",
+    ".planning/phases/43-fuse-write-durability/43-03-PLAN.md",
+    ".planning/phases/43-fuse-write-durability/43-04-PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f3/22bc921693/0/metadata.json",
+      "transcript": "/f3/22bc921693/0/full.jsonl",
+      "content_hash": "/f3/22bc921693/0/content_hash.txt",
+      "prompt": "/f3/22bc921693/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 55530,
+    "cache_creation_tokens": 2216637,
+    "cache_read_tokens": 66661786,
+    "output_tokens": 257897,
+    "api_call_count": 255
+  }
+}
