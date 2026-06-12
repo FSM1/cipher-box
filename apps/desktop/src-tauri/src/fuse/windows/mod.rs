@@ -62,6 +62,15 @@ mod mount_impl {
         std::fs::create_dir_all(&temp_dir)
             .map_err(|e| format!("Failed to create temp directory: {}", e))?;
 
+        // Stable journal dir for durable write journal
+        let journal_dir = dirs::data_local_dir()
+            .unwrap_or_else(|| std::env::temp_dir())
+            .join("cipherbox")
+            .join("cb-journal");
+        std::fs::create_dir_all(&journal_dir)
+            .map_err(|e| format!("Failed to create journal directory: {}", e))?;
+        let journal = cipherbox_sdk::WriteQueue::new(journal_dir, 5);
+
         // Build the inode table
         let mut inodes = inode::InodeTable::new();
 
@@ -77,7 +86,7 @@ mod mount_impl {
         let (refresh_tx, refresh_rx) = std::sync::mpsc::channel::<PendingRefresh>();
         let (content_tx, content_rx) = std::sync::mpsc::channel::<PendingContent>();
         let (filepointer_tx, filepointer_rx) = std::sync::mpsc::channel::<PendingFilePointer>();
-        let (upload_tx, upload_rx) = std::sync::mpsc::channel::<UploadComplete>();
+        let (upload_tx, upload_rx) = std::sync::mpsc::channel::<cipherbox_fuse::FsEvent>();
 
         // Pre-populate root folder BEFORE mounting so readdir has data immediately.
         let mut metadata_cache = cache::MetadataCache::new();
@@ -349,6 +358,7 @@ mod mount_impl {
             pending_content: HashMap::new(),
             upload_rx,
             upload_tx,
+            journal,
             mutated_folders: HashMap::new(),
             publish_coordinator: Arc::new(PublishCoordinator::new()),
             publish_queue: HashMap::new(),
