@@ -9,6 +9,8 @@
 use serde::{Deserialize, Serialize};
 use std::io::Write as _;
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 /// The operation encoded by a journal entry.
 ///
@@ -30,6 +32,14 @@ pub enum JournalOp {
         file_ipns_key_hex: Option<String>,
         /// Parent folder IPNS name (stable cross-remount, D-02).
         parent_folder_ipns_name: String,
+        /// User-ECIES-wrapped parent folder IPNS private key, hex-encoded.
+        ///
+        /// This is the same form stored in `FolderEntry.ipns_private_key_encrypted`
+        /// everywhere in the metadata: wrapped with the user's EC public key via ECIES
+        /// (`cipherbox_crypto::wrap_key`). Only the user's private key can unwrap it at
+        /// replay time. Never raw, never TEE-wrapped. Required for CR-01 (replay must
+        /// sign and publish the parent IPNS record). Part of the D-04 zero-knowledge family.
+        parent_ipns_key_hex: String,
         /// Original filename.
         filename: String,
         /// File size in bytes.
@@ -43,10 +53,20 @@ pub enum JournalOp {
         child_ipns_name: String,
         /// Encrypted folder key hex.
         child_folder_key_hex: String,
-        /// Child folder IPNS private key hex (TEE-wrapped).
+        /// User-ECIES-wrapped child folder IPNS private key, hex-encoded.
+        ///
+        /// Matches `FolderEntry.ipns_private_key_encrypted` — user-ECIES-wrapped via
+        /// `cipherbox_crypto::wrap_key(&child_ipns_private_key, &user_public_key)`.
+        /// Never TEE-wrapped (CR-03 fix). Replay writes this directly into
+        /// `FolderEntry.ipns_private_key_encrypted` without re-wrapping.
         child_ipns_key_hex: String,
         /// Parent folder IPNS name.
         parent_folder_ipns_name: String,
+        /// User-ECIES-wrapped parent folder IPNS private key, hex-encoded.
+        ///
+        /// Same semantics as `UploadFile::parent_ipns_key_hex`: unwrappable only with
+        /// the user's private key at replay time. Required for CR-01. Part of D-04 family.
+        parent_ipns_key_hex: String,
         /// Directory name.
         name: String,
         /// Creation timestamp, milliseconds since Unix epoch.
@@ -115,18 +135,25 @@ impl WriteQueue {
 
     /// Persist an entry to disk with an fsync barrier.
     ///
-    /// Writes `<journal_dir>/<entry.id>.json` with 0o600 permissions and
+    /// Writes `<journal_dir>/<entry.id>.json` with 0o600 permissions set atomically
+    /// at create time (WR-03a — no readable window between create and chmod), then
     /// calls `sync_all()` before returning (F_FULLFSYNC on macOS, D-04 / T-43-02).
+    /// After the file fsync, the parent journal directory is also fsynced so the new
+    /// directory entry is durable on crash (WR-03b).
     pub fn put(&self, entry: &JournalEntry) -> Result<(), String> {
         let json = serde_json::to_vec(entry)
             .map_err(|e| format!("Journal serialize failed: {}", e))?;
 
         let path = self.journal_dir.join(format!("{}.json", entry.id));
 
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
+        // WR-03a: set 0o600 atomically at create time via OpenOptionsExt::mode().
+        // On non-Unix platforms the mode() call is absent; permissions stay platform default.
+        let mut open_opts = std::fs::OpenOptions::new();
+        open_opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        open_opts.mode(0o600);
+
+        let mut file = open_opts
             .open(&path)
             .map_err(|e| format!("Journal open failed: {}", e))?;
 
@@ -138,16 +165,10 @@ impl WriteQueue {
         file.sync_all()
             .map_err(|e| format!("Journal fsync failed: {}", e))?;
 
-        // Restrict journal file to owner-read/write only (T-43-02).
-        // Matches crates/fuse/src/file_handle.rs:88-92 pattern.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                &path,
-                std::fs::Permissions::from_mode(0o600),
-            );
-        }
+        // WR-03b: fsync the parent journal directory so the new dirent is durable.
+        // Errors are ignored on platforms where directory fsync is unsupported.
+        let _ = std::fs::File::open(&self.journal_dir)
+            .and_then(|d| d.sync_all());
 
         Ok(())
     }
@@ -155,10 +176,17 @@ impl WriteQueue {
     /// Remove an entry file from disk.
     ///
     /// Returns `Ok(())` if the file did not exist (idempotent).
+    /// After a successful removal, syncs the parent journal directory so the
+    /// deleted dirent is durable on crash (WR-03b).
     pub fn remove(&self, id: &str) -> Result<(), String> {
         let path = self.journal_dir.join(format!("{}.json", id));
         match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // WR-03b: fsync parent dir after removal.
+                let _ = std::fs::File::open(&self.journal_dir)
+                    .and_then(|d| d.sync_all());
+                Ok(())
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(format!("Journal remove failed: {}", e)),
         }
@@ -268,7 +296,11 @@ impl WriteQueue {
     ///
     /// All `MkdirPublish` entries come before `UploadFile` entries (D-08):
     /// a journaled mkdir for a parent folder must replay before file uploads
-    /// that target that folder. Relative order within each group is preserved.
+    /// that target that folder.
+    ///
+    /// Within each group, entries are sorted ascending by `created_at_ms` (WR-01)
+    /// so nested mkdirs and repeated writes replay in original creation order,
+    /// regardless of filesystem `read_dir` ordering.
     pub fn ordered_for_replay(entries: Vec<JournalEntry>) -> Vec<JournalEntry> {
         let mut mkdir_entries = Vec::new();
         let mut upload_entries = Vec::new();
@@ -280,14 +312,19 @@ impl WriteQueue {
             }
         }
 
+        // WR-01: sort each group by created_at_ms ascending (stable sort preserves
+        // relative order of entries with identical timestamps).
+        mkdir_entries.sort_by_key(|e| match &e.op {
+            JournalOp::MkdirPublish { created_at_ms, .. } => *created_at_ms,
+            JournalOp::UploadFile { created_at_ms, .. } => *created_at_ms,
+        });
+        upload_entries.sort_by_key(|e| match &e.op {
+            JournalOp::MkdirPublish { created_at_ms, .. } => *created_at_ms,
+            JournalOp::UploadFile { created_at_ms, .. } => *created_at_ms,
+        });
+
         mkdir_entries.extend(upload_entries);
         mkdir_entries
-    }
-}
-
-impl Default for WriteQueue {
-    fn default() -> Self {
-        Self::new(std::env::temp_dir().join("cipherbox-journal-default"), 5)
     }
 }
 
@@ -311,6 +348,7 @@ mod tests {
                 file_meta_ipns_name: "k51filemetaipns".to_string(),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parentfolder".to_string(),
+                parent_ipns_key_hex: hex::encode(b"ecies-wrapped-parent-ipns-key"),
                 filename: "test.txt".to_string(),
                 size: 42,
                 created_at_ms: 1_700_000_000_000,
@@ -329,6 +367,7 @@ mod tests {
                 child_folder_key_hex: hex::encode(b"folderkey"),
                 child_ipns_key_hex: hex::encode(b"ipnskey"),
                 parent_folder_ipns_name: "k51parentfolder".to_string(),
+                parent_ipns_key_hex: hex::encode(b"ecies-wrapped-parent-ipns-key"),
                 name: "my_dir".to_string(),
                 created_at_ms: 1_700_000_000_001,
             },
