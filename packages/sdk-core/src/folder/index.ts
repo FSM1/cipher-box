@@ -34,6 +34,7 @@ import type { FileIpnsRecordPayload } from '../file';
 
 // Tree traversal utilities
 export { getDepth, calculateSubtreeDepth, isDescendantOf, type TreeNode } from './tree';
+export { mergeChildren } from './merge';
 
 /**
  * Fetch and decrypt folder metadata from IPFS.

@@ -1,3 +1,6 @@
+// Errors
+export { ConflictError, isConflictExhausted } from './errors';
+
 // Types
 export type {
   SdkContext,
@@ -31,6 +34,7 @@ export {
   addFileToFolder,
   addFilesToFolder,
   replaceFileInFolder,
+  mergeChildren,
 } from './folder';
 
 // Tree traversal utilities
