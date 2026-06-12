@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::queue::WriteQueue;
 use crate::state::{KeyState, SyncStatus};
 
 /// Default polling interval for IPNS sync (30 seconds).
@@ -37,8 +36,6 @@ pub struct SyncDaemon {
     cached_sequence_numbers: HashMap<String, u64>,
     /// Channel receiver for manual sync triggers (from tray "Sync Now" button).
     sync_now_rx: mpsc::Receiver<()>,
-    /// Offline write queue for deferred uploads.
-    write_queue: WriteQueue,
     /// Whether the last poll attempt detected offline state.
     was_offline: bool,
 }
@@ -61,7 +58,6 @@ impl SyncDaemon {
             poll_interval,
             cached_sequence_numbers: HashMap::new(),
             sync_now_rx,
-            write_queue: WriteQueue::default(),
             was_offline: false,
         }
     }
@@ -189,10 +185,6 @@ impl SyncDaemon {
         Ok(())
     }
 
-    /// Access the write queue for enqueuing offline writes.
-    pub fn write_queue_mut(&mut self) -> &mut WriteQueue {
-        &mut self.write_queue
-    }
 }
 
 /// Sanitize error messages before displaying in tray status or notifications.
