@@ -689,6 +689,8 @@ pub(crate) mod implementation {
                     write_gen: u64,
                     journal: cipherbox_sdk::WriteQueue,
                     journal_entry_id: String,
+                    // CR-07: snapshot carried into spawn closure for record_failure on failure.
+                    journal_entry_snapshot: cipherbox_sdk::JournalEntry,
                 }
 
                 let prepare_result = (|| -> Result<UploadSpawnParams, String> {
@@ -857,6 +859,9 @@ pub(crate) mod implementation {
                         status: cipherbox_sdk::JournalEntryStatus::Pending,
                     };
                     let journal_entry_id = journal_entry.id.clone();
+                    // CR-07: clone the entry before put() moves it; snapshot is carried
+                    // into the spawn closure so record_failure can transition the entry.
+                    let journal_entry_snapshot = journal_entry.clone();
 
                     // D-04: fsync journal entry to disk BEFORE acking the OS.
                     fs.journal.put(&journal_entry)?;
@@ -901,6 +906,7 @@ pub(crate) mod implementation {
                         write_gen,
                         journal: journal_clone,
                         journal_entry_id,
+                        journal_entry_snapshot,
                     })
                 })();
 
@@ -918,6 +924,7 @@ pub(crate) mod implementation {
                             ciphertext, file_meta, file_ipns_private_key, file_meta_ipns_name,
                             folder_key_for_file_meta, ino: spawn_ino, parent_ino, old_file_cid,
                             pruned_cids, write_gen, journal: spawn_journal, journal_entry_id,
+                            journal_entry_snapshot,
                         } = params;
                         std::thread::spawn(move || {
                             let result = rt.block_on(async {
@@ -957,23 +964,44 @@ pub(crate) mod implementation {
                                     );
                                 }
 
-                                // Remove journal entry on confirmed success (D-04).
-                                let _ = spawn_journal.remove(&journal_entry_id);
+                                // CR-08 (mechanism b): do NOT remove the journal entry here.
+                                // The parent folder pointer is published by the debounced
+                                // publisher AFTER this thread exits. Removing the entry before
+                                // that publish is confirmed creates an irrecoverable orphan
+                                // window on crash. Replay is the authoritative cleanup path:
+                                // replay's already_present check returns Ok and the caller
+                                // removes the entry once the child is confirmed in the parent
+                                // metadata on the next mount.
+                                let _ = &journal_entry_id; // suppress unused-variable warning
 
                                 Ok::<(), String>(())
                             });
 
                             if let Err(e) = result {
-                                // Do not remove the journal entry on failure — it persists for
-                                // replay (D-09). Plan 43-04's drain owner calls record_failure.
+                                // CR-07: call record_failure so retries increment and the entry
+                                // parks as Failed after max_retries (D-09). Never silently drop.
+                                if let Err(re) = spawn_journal.record_failure(&journal_entry_snapshot, &e) {
+                                    log::warn!(
+                                        "record_failure failed for ino {}: {}",
+                                        spawn_ino, re
+                                    );
+                                }
                                 log::error!("Background upload failed for ino {}: {}", spawn_ino, e);
                             }
                         });
                         return; // reply already sent
                     }
                     Err(e) => {
+                        // CR-04: reply EIO and return — do NOT fall through to reply.ok().
+                        // The inode's kind was already reset and pending_content inserted
+                        // earlier in the prepare closure; those in-memory mutations remain,
+                        // which is consistent with the OS treating the write as failed (the
+                        // client will retry or report the error). A journal entry was NOT
+                        // fsynced, so there is nothing to remove.
                         log::error!("File upload preparation failed for ino {}: {}", ino, e);
                         handle.cleanup();
+                        reply.error(libc::EIO);
+                        return;
                     }
                 }
             }
