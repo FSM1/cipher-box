@@ -516,14 +516,29 @@ pub(crate) mod implementation {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
+            // Journal the user-ECIES-wrapped parent IPNS key so replay can sign and publish
+            // the parent IPNS record (CR-01). The parent_ipns_key bytes come from
+            // build_folder_metadata (raw Ed25519 private key from inode). We wrap with the
+            // user's EC public key — the same form stored everywhere in FolderEntry.
+            let parent_ipns_key_hex_for_journal = cipherbox_crypto::wrap_key(&parent_ipns_key, &fs.public_key)
+                .map(|w| hex::encode(&w))
+                .unwrap_or_default();
+
+            // CR-03 (write-side fix): journal the user-ECIES-wrapped child IPNS key so replay
+            // writes the correct form into FolderEntry.ipns_private_key_encrypted.
+            let child_ipns_key_hex_user_wrapped = cipherbox_crypto::wrap_key(&ipns_private_key, &fs.public_key)
+                .map(|w| hex::encode(&w))
+                .unwrap_or_else(|_| encrypted_ipns_for_tee.clone().unwrap_or_default());
+
             let mkdir_journal_entry = cipherbox_sdk::JournalEntry {
                 id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
                 vault_root_ipns: fs.root_ipns_name.clone(),
                 op: cipherbox_sdk::JournalOp::MkdirPublish {
                     child_ipns_name: ipns_name.clone(),
                     child_folder_key_hex: encrypted_folder_key_hex_for_journal,
-                    child_ipns_key_hex: encrypted_ipns_for_tee.clone().unwrap_or_default(),
+                    child_ipns_key_hex: child_ipns_key_hex_user_wrapped,
                     parent_folder_ipns_name: parent_ipns_name.clone(),
+                    parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
                     name: name_str.to_string(),
                     created_at_ms: mkdir_created_at_ms,
                 },

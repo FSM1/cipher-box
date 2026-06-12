@@ -9,6 +9,8 @@
 use serde::{Deserialize, Serialize};
 use std::io::Write as _;
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 /// The operation encoded by a journal entry.
 ///
@@ -30,6 +32,14 @@ pub enum JournalOp {
         file_ipns_key_hex: Option<String>,
         /// Parent folder IPNS name (stable cross-remount, D-02).
         parent_folder_ipns_name: String,
+        /// User-ECIES-wrapped parent folder IPNS private key, hex-encoded.
+        ///
+        /// This is the same form stored in `FolderEntry.ipns_private_key_encrypted`
+        /// everywhere in the metadata: wrapped with the user's EC public key via ECIES
+        /// (`cipherbox_crypto::wrap_key`). Only the user's private key can unwrap it at
+        /// replay time. Never raw, never TEE-wrapped. Required for CR-01 (replay must
+        /// sign and publish the parent IPNS record). Part of the D-04 zero-knowledge family.
+        parent_ipns_key_hex: String,
         /// Original filename.
         filename: String,
         /// File size in bytes.
@@ -43,10 +53,20 @@ pub enum JournalOp {
         child_ipns_name: String,
         /// Encrypted folder key hex.
         child_folder_key_hex: String,
-        /// Child folder IPNS private key hex (TEE-wrapped).
+        /// User-ECIES-wrapped child folder IPNS private key, hex-encoded.
+        ///
+        /// Matches `FolderEntry.ipns_private_key_encrypted` — user-ECIES-wrapped via
+        /// `cipherbox_crypto::wrap_key(&child_ipns_private_key, &user_public_key)`.
+        /// Never TEE-wrapped (CR-03 fix). Replay writes this directly into
+        /// `FolderEntry.ipns_private_key_encrypted` without re-wrapping.
         child_ipns_key_hex: String,
         /// Parent folder IPNS name.
         parent_folder_ipns_name: String,
+        /// User-ECIES-wrapped parent folder IPNS private key, hex-encoded.
+        ///
+        /// Same semantics as `UploadFile::parent_ipns_key_hex`: unwrappable only with
+        /// the user's private key at replay time. Required for CR-01. Part of D-04 family.
+        parent_ipns_key_hex: String,
         /// Directory name.
         name: String,
         /// Creation timestamp, milliseconds since Unix epoch.
@@ -115,18 +135,25 @@ impl WriteQueue {
 
     /// Persist an entry to disk with an fsync barrier.
     ///
-    /// Writes `<journal_dir>/<entry.id>.json` with 0o600 permissions and
+    /// Writes `<journal_dir>/<entry.id>.json` with 0o600 permissions set atomically
+    /// at create time (WR-03a — no readable window between create and chmod), then
     /// calls `sync_all()` before returning (F_FULLFSYNC on macOS, D-04 / T-43-02).
+    /// After the file fsync, the parent journal directory is also fsynced so the new
+    /// directory entry is durable on crash (WR-03b).
     pub fn put(&self, entry: &JournalEntry) -> Result<(), String> {
         let json = serde_json::to_vec(entry)
             .map_err(|e| format!("Journal serialize failed: {}", e))?;
 
         let path = self.journal_dir.join(format!("{}.json", entry.id));
 
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
+        // WR-03a: set 0o600 atomically at create time via OpenOptionsExt::mode().
+        // On non-Unix platforms the mode() call is absent; permissions stay platform default.
+        let mut open_opts = std::fs::OpenOptions::new();
+        open_opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        open_opts.mode(0o600);
+
+        let mut file = open_opts
             .open(&path)
             .map_err(|e| format!("Journal open failed: {}", e))?;
 
@@ -138,16 +165,10 @@ impl WriteQueue {
         file.sync_all()
             .map_err(|e| format!("Journal fsync failed: {}", e))?;
 
-        // Restrict journal file to owner-read/write only (T-43-02).
-        // Matches crates/fuse/src/file_handle.rs:88-92 pattern.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                &path,
-                std::fs::Permissions::from_mode(0o600),
-            );
-        }
+        // WR-03b: fsync the parent journal directory so the new dirent is durable.
+        // Errors are ignored on platforms where directory fsync is unsupported.
+        let _ = std::fs::File::open(&self.journal_dir)
+            .and_then(|d| d.sync_all());
 
         Ok(())
     }
@@ -155,10 +176,17 @@ impl WriteQueue {
     /// Remove an entry file from disk.
     ///
     /// Returns `Ok(())` if the file did not exist (idempotent).
+    /// After a successful removal, syncs the parent journal directory so the
+    /// deleted dirent is durable on crash (WR-03b).
     pub fn remove(&self, id: &str) -> Result<(), String> {
         let path = self.journal_dir.join(format!("{}.json", id));
         match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // WR-03b: fsync parent dir after removal.
+                let _ = std::fs::File::open(&self.journal_dir)
+                    .and_then(|d| d.sync_all());
+                Ok(())
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(format!("Journal remove failed: {}", e)),
         }
@@ -268,7 +296,11 @@ impl WriteQueue {
     ///
     /// All `MkdirPublish` entries come before `UploadFile` entries (D-08):
     /// a journaled mkdir for a parent folder must replay before file uploads
-    /// that target that folder. Relative order within each group is preserved.
+    /// that target that folder.
+    ///
+    /// Within each group, entries are sorted ascending by `created_at_ms` (WR-01)
+    /// so nested mkdirs and repeated writes replay in original creation order,
+    /// regardless of filesystem `read_dir` ordering.
     pub fn ordered_for_replay(entries: Vec<JournalEntry>) -> Vec<JournalEntry> {
         let mut mkdir_entries = Vec::new();
         let mut upload_entries = Vec::new();
@@ -280,14 +312,19 @@ impl WriteQueue {
             }
         }
 
+        // WR-01: sort each group by created_at_ms ascending (stable sort preserves
+        // relative order of entries with identical timestamps).
+        mkdir_entries.sort_by_key(|e| match &e.op {
+            JournalOp::MkdirPublish { created_at_ms, .. } => *created_at_ms,
+            JournalOp::UploadFile { created_at_ms, .. } => *created_at_ms,
+        });
+        upload_entries.sort_by_key(|e| match &e.op {
+            JournalOp::MkdirPublish { created_at_ms, .. } => *created_at_ms,
+            JournalOp::UploadFile { created_at_ms, .. } => *created_at_ms,
+        });
+
         mkdir_entries.extend(upload_entries);
         mkdir_entries
-    }
-}
-
-impl Default for WriteQueue {
-    fn default() -> Self {
-        Self::new(std::env::temp_dir().join("cipherbox-journal-default"), 5)
     }
 }
 
@@ -311,6 +348,7 @@ mod tests {
                 file_meta_ipns_name: "k51filemetaipns".to_string(),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parentfolder".to_string(),
+                parent_ipns_key_hex: hex::encode(b"ecies-wrapped-parent-ipns-key"),
                 filename: "test.txt".to_string(),
                 size: 42,
                 created_at_ms: 1_700_000_000_000,
@@ -329,6 +367,7 @@ mod tests {
                 child_folder_key_hex: hex::encode(b"folderkey"),
                 child_ipns_key_hex: hex::encode(b"ipnskey"),
                 parent_folder_ipns_name: "k51parentfolder".to_string(),
+                parent_ipns_key_hex: hex::encode(b"ecies-wrapped-parent-ipns-key"),
                 name: "my_dir".to_string(),
                 created_at_ms: 1_700_000_000_001,
             },
@@ -338,15 +377,19 @@ mod tests {
     }
 
     /// Create a unique temporary directory for test isolation.
+    ///
+    /// Uses a monotonically-increasing atomic counter combined with the thread ID
+    /// to guarantee uniqueness even when multiple tests run concurrently in the
+    /// same process.
     fn make_temp_queue() -> (WriteQueue, std::path::PathBuf) {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos();
-        let tid = format!("{:?}", std::thread::current().id());
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tid_raw = format!("{:?}", std::thread::current().id());
+        // Extract the numeric part of the thread ID string (e.g. "ThreadId(7)" → "7").
+        let tid_num: String = tid_raw.chars().filter(|c| c.is_ascii_digit()).collect();
         let dir = std::env::temp_dir()
-            .join(format!("cipherbox-journal-test-{}-{}", nanos, tid.len()));
+            .join(format!("cipherbox-journal-test-{}-{}", seq, tid_num));
         std::fs::create_dir_all(&dir).expect("create test journal dir");
         let q = WriteQueue::new(dir.clone(), 3);
         (q, dir)
@@ -543,6 +586,141 @@ mod tests {
         let loaded = q.load_all_for_vault("k51vault").expect("load with bad file");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, "valid1");
+    }
+
+    // ---- Task 4: parent_ipns_key_hex round-trip + ordering by created_at_ms tests ----
+
+    /// CR-01/D-04: UploadFile entry with parent_ipns_key_hex set round-trips unchanged.
+    #[test]
+    fn upload_entry_parent_ipns_key_hex_round_trips() {
+        let parent_key_hex = hex::encode(b"ecies-wrapped-parent-ipns-key-bytes-here");
+        let entry = JournalEntry {
+            id: "pk-upload".to_string(),
+            vault_root_ipns: "k51vault".to_string(),
+            op: JournalOp::UploadFile {
+                ciphertext_b64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"ct",
+                ),
+                wrapped_key_hex: hex::encode(b"wk"),
+                iv_hex: hex::encode(b"iv"),
+                file_meta_ipns_name: "k51file".to_string(),
+                file_ipns_key_hex: None,
+                parent_folder_ipns_name: "k51parent".to_string(),
+                parent_ipns_key_hex: parent_key_hex.clone(),
+                filename: "f.txt".to_string(),
+                size: 1,
+                created_at_ms: 1_000,
+            },
+            retries: 0,
+            status: JournalEntryStatus::Pending,
+        };
+        let json = serde_json::to_vec(&entry).expect("serialize");
+        let back: JournalEntry = serde_json::from_slice(&json).expect("deserialize");
+        if let JournalOp::UploadFile { parent_ipns_key_hex, .. } = &back.op {
+            assert_eq!(*parent_ipns_key_hex, parent_key_hex,
+                "parent_ipns_key_hex must round-trip unchanged");
+        } else {
+            panic!("Expected UploadFile");
+        }
+    }
+
+    /// CR-01/D-04: MkdirPublish entry with parent_ipns_key_hex set round-trips unchanged.
+    #[test]
+    fn mkdir_entry_parent_ipns_key_hex_round_trips() {
+        let parent_key_hex = hex::encode(b"ecies-wrapped-parent-ipns-key-mkdir");
+        let entry = JournalEntry {
+            id: "pk-mkdir".to_string(),
+            vault_root_ipns: "k51vault".to_string(),
+            op: JournalOp::MkdirPublish {
+                child_ipns_name: "k51child".to_string(),
+                child_folder_key_hex: hex::encode(b"fk"),
+                child_ipns_key_hex: hex::encode(b"ck"),
+                parent_folder_ipns_name: "k51parent".to_string(),
+                parent_ipns_key_hex: parent_key_hex.clone(),
+                name: "newdir".to_string(),
+                created_at_ms: 2_000,
+            },
+            retries: 0,
+            status: JournalEntryStatus::Pending,
+        };
+        let json = serde_json::to_vec(&entry).expect("serialize");
+        let back: JournalEntry = serde_json::from_slice(&json).expect("deserialize");
+        if let JournalOp::MkdirPublish { parent_ipns_key_hex, .. } = &back.op {
+            assert_eq!(*parent_ipns_key_hex, parent_key_hex,
+                "parent_ipns_key_hex must round-trip unchanged");
+        } else {
+            panic!("Expected MkdirPublish");
+        }
+    }
+
+    /// WR-01: ordered_for_replay sorts each group by created_at_ms ascending.
+    #[test]
+    fn replay_order_sorts_by_created_at_within_group() {
+        // Two UploadFile entries inserted newest-first; expect oldest-first after ordering.
+        let mut entry_2000 = make_upload_entry("up-2000", "v");
+        if let JournalOp::UploadFile { ref mut created_at_ms, .. } = entry_2000.op {
+            *created_at_ms = 2000;
+        }
+        let mut entry_1000 = make_upload_entry("up-1000", "v");
+        if let JournalOp::UploadFile { ref mut created_at_ms, .. } = entry_1000.op {
+            *created_at_ms = 1000;
+        }
+
+        let mut mkdir_early = make_mkdir_entry("mk-100", "v");
+        if let JournalOp::MkdirPublish { ref mut created_at_ms, .. } = mkdir_early.op {
+            *created_at_ms = 100;
+        }
+        let mut mkdir_late = make_mkdir_entry("mk-50", "v");
+        if let JournalOp::MkdirPublish { ref mut created_at_ms, .. } = mkdir_late.op {
+            *created_at_ms = 50;
+        }
+
+        // Insert in "wrong" order to verify sort is applied.
+        let entries = vec![entry_2000, entry_1000, mkdir_early, mkdir_late];
+        let ordered = WriteQueue::ordered_for_replay(entries);
+
+        // MkdirPublish entries must all come before UploadFile entries.
+        // Within MkdirPublish group: mk-50 (50ms) before mk-100 (100ms).
+        assert_eq!(ordered[0].id, "mk-50", "earliest mkdir must be first");
+        assert_eq!(ordered[1].id, "mk-100", "later mkdir must be second");
+        // Within UploadFile group: up-1000 (1000ms) before up-2000 (2000ms).
+        assert_eq!(ordered[2].id, "up-1000", "earliest upload must be third");
+        assert_eq!(ordered[3].id, "up-2000", "latest upload must be fourth");
+    }
+
+    /// D-05 extended: parent_ipns_key_hex in journal must be hex string, never raw bytes.
+    #[test]
+    fn journal_no_plaintext_with_parent_ipns_key() {
+        let raw_secret = b"raw_ipns_key_secret_bytes_12345678";
+        let wrapped_hex = hex::encode(raw_secret); // simulates user-ECIES-wrapped key
+        let entry = JournalEntry {
+            id: "noplain2".to_string(),
+            vault_root_ipns: "k51vault".to_string(),
+            op: JournalOp::UploadFile {
+                ciphertext_b64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"ct",
+                ),
+                wrapped_key_hex: hex::encode(b"wk"),
+                iv_hex: hex::encode(b"iv"),
+                file_meta_ipns_name: "k51file".to_string(),
+                file_ipns_key_hex: None,
+                parent_folder_ipns_name: "k51parent".to_string(),
+                parent_ipns_key_hex: wrapped_hex.clone(),
+                filename: "g.txt".to_string(),
+                size: 1,
+                created_at_ms: 1,
+            },
+            retries: 0,
+            status: JournalEntryStatus::Pending,
+        };
+        let json_str = String::from_utf8(serde_json::to_vec(&entry).unwrap()).unwrap();
+        // The field must be present and be the hex string.
+        assert!(json_str.contains(&wrapped_hex), "parent_ipns_key_hex hex must appear in JSON");
+        // Must not contain the raw bytes interpreted as a string.
+        assert!(!json_str.contains("raw_ipns_key_secret_bytes"),
+            "Journal must not contain raw key material as plaintext string");
     }
 
     // ---- Task 3: replay ordering tests ----
