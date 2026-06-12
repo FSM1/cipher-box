@@ -13,6 +13,6 @@ pub mod sync;
 
 pub use client::CipherBoxSdkClient;
 pub use error::SdkError;
-pub use queue::WriteQueue;
+pub use queue::{JournalEntry, JournalEntryStatus, JournalOp, WriteQueue};
 pub use state::{KeyState, SyncStatus};
 pub use sync::SyncDaemon;
