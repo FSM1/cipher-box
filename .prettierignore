@@ -1,0 +1,15 @@
+# GSD planning directory - generated/structured markdown and JSON;
+# prettier reformatting breaks tables and inline commands in planning docs
+.planning/
+
+# GSD workflow files - vendor/generated content with non-standard syntax
+# (mirrors the GSD section of .markdownlintignore)
+.claude/agents/gsd-*.md
+.claude/commands/gsd/
+.claude/gsd-core/
+.claude/gsd-pristine/
+.claude/gsd-migration-journal/
+.claude/gsd-local-patches/
+
+# Finalized specifications - do not modify
+00-Preliminary-R&D/
