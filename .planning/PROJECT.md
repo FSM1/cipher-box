@@ -142,4 +142,4 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 
 ---
 
-Last updated: 2026-06-12 after Phase 42 API Unpin Integrity completed (ownership-guarded unpin with cross-user refcounting, transactional quota decrement, pending-unpins outbox)
+Last updated: 2026-06-13 after Phase 44 IPNS Conflict Handling completed. UAT-audit gap-closure phases 42-44 all done: Phase 42 ownership-guarded unpin (cross-user refcounting, transactional quota decrement, pending-unpins outbox); Phase 43 FUSE write durability (fsynced ciphertext journal, replay-on-mount, mkdir-conflict retry, park notifications across macOS/Linux/Windows); Phase 44 IPNS conflict handling (three-way folder merge on 409 with publishedChildren convergence, file-record CAS with loser-becomes-version). v1.1 milestone complete.
