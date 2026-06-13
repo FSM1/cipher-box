@@ -350,15 +350,22 @@ export async function updateFileMetadata(params: {
         maxVersions
       );
 
-      // Accumulate prunedCids
-      prunedCids = [...prunedCids, ...extraPruned];
-
       // Build merged metadata
       const mergedMetadata: FileMetadata = {
         ...winner,
         versions: mergedVersions.length > 0 ? mergedVersions : undefined,
         modifiedAt: winner.modifiedAt ?? Date.now(),
       };
+
+      // Filter accumulated prunedCids against the set of CIDs actually referenced by the
+      // published mergedMetadata (CR-02 / D-07): a CID resurrected into mergedMetadata.versions
+      // by the remote merge must NOT be returned for unpinning.  De-dupe the combined set first
+      // to prevent phantom unpin retries from duplicate entries.
+      const referenced = new Set([
+        mergedMetadata.cid,
+        ...(mergedMetadata.versions ?? []).map((v) => v.cid),
+      ]);
+      prunedCids = [...new Set([...prunedCids, ...extraPruned])].filter((c) => !referenced.has(c));
 
       // Re-encrypt and re-upload merged metadata
       currentCid = await encryptAndUpload(mergedMetadata, params.folderKey, params.ctx);

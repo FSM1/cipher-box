@@ -332,6 +332,112 @@ describe('updateFileMetadata CAS + conflict', () => {
     expect(result.newSequenceNumber).toBe(7n);
   });
 
+  it('WR-08: prunedCids does not contain CIDs referenced by the published mergedMetadata (CR-02 filter)', async () => {
+    // CR-02 scenario: a CID pruned by the pre-conflict positional slice is resurrected
+    // into mergedMetadata.versions[] by the remote's data. Without the fix it ends up in
+    // prunedCids and gets unconditionally unpinned, destroying a live version.
+    //
+    // maxVersionsPerFile = 2
+    // localCurrent.versions = [v-old(100), v-NEW(9000)]  (unsorted — old first, NEW at position 1)
+    // createVersion=true → allVersions = [pre-update-cid(~Date.now()), v-old(100), v-NEW(9000)]
+    //   positional slice(0,2): versions = [pre-update-cid, v-old]
+    //   positional slice(2):   prunedCids = ['v-NEW']       ← CR-02 victim (high ts, wrong position)
+    //
+    // Local always wins: updatedMetadata.modifiedAt = Date.now() >> remoteModifiedAt=1
+    // remote.versions = [v-NEW(9000)]    ← remote retained v-NEW
+    // loserAsVersion.cid = 'remote-cid', ts = 1
+    //
+    // mergeVersions a=[pre-update-cid(now), v-old(100), remote-cid(1)]
+    //              b=[v-NEW(9000)]    cap=2
+    // combined deduped sorted: [pre-update-cid(now), v-NEW(9000), v-old(100), remote-cid(1)]
+    // capped at 2: mergedVersions = [pre-update-cid, v-NEW]    ← v-NEW resurrected!
+    // extraPruned = ['v-old', 'remote-cid']
+    //
+    // BEFORE fix: prunedCids = ['v-NEW','v-old','remote-cid']
+    //   publishedRefs = {merged-upload-cid, pre-update-cid, v-NEW}
+    //   overlap = ['v-NEW']  ← destructive unpin of a live version
+    //
+    // AFTER fix: reference filter removes 'v-NEW' → prunedCids = ['v-old','remote-cid']
+    //   v-old is genuinely overflowed and not referenced → stays in prunedCids (assertion c)
+
+    const existingVersions: VersionEntry[] = [
+      makeVersion('v-old', 100), // older, at position 0
+      makeVersion('v-NEW', 9000), // high timestamp but at position 1 — pruned by positional slice
+    ];
+    const localCurrent = {
+      ...baseCurrentMetadata,
+      cid: 'pre-update-cid',
+      versions: existingVersions,
+    };
+
+    // Remote retains v-NEW — mergeVersions will resurrect it into mergedVersions
+    const remoteMeta = {
+      ...baseCurrentMetadata,
+      cid: 'remote-cid',
+      fileKeyEncrypted: 'remote-key',
+      fileIv: 'remote-iv',
+      size: 400,
+      modifiedAt: 1, // very old; local always wins
+      versions: [makeVersion('v-NEW', 9000)] as VersionEntry[],
+    };
+
+    vi.mocked(resolveIpnsRecord)
+      .mockResolvedValueOnce({ cid: 'old-meta', sequenceNumber: 5n, signatureVerified: true })
+      .mockResolvedValueOnce({
+        cid: 'remote-meta-cid',
+        sequenceNumber: 6n,
+        signatureVerified: true,
+      });
+
+    const conflict409 = Object.assign(new Error('Conflict'), { status: 409 });
+    vi.mocked(createAndPublishIpnsRecord)
+      .mockRejectedValueOnce(conflict409)
+      .mockResolvedValueOnce({ success: true, sequenceNumber: 7n });
+
+    vi.mocked(fetchFromIpfs).mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify({ iv: 'r-iv', data: 'r-data' }))
+    );
+    decryptFileMetadata.mockResolvedValue(remoteMeta as any);
+
+    vi.mocked(addToIpfs)
+      .mockResolvedValueOnce({ cid: 'initial-upload-cid' } as any)
+      .mockResolvedValueOnce({ cid: 'merged-upload-cid' } as any);
+
+    const result = await updateFileMetadata({
+      fileIpnsPrivateKey: mockPrivateKey,
+      fileMetaIpnsName: 'k51-file-ipns',
+      folderKey: mockFolderKey,
+      currentMetadata: localCurrent,
+      updates: { cid: 'local-new-cid', size: 800 },
+      createVersion: true,
+      maxVersionsPerFile: 2,
+      ctx: mockCtx,
+    });
+
+    // (a) Retry encryptFileMetadata payload (calls[1][0]) must show v-NEW resurrected in versions[].
+    //     Local wins → loser=remoteMeta → loserAsVersion.cid='remote-cid' (ts=1, pruned by cap).
+    //     v-NEW (ts=9000) from remote.versions survives in mergedVersions via input b.
+    const retryPayload = encryptFileMetadata.mock.calls[1][0];
+    const retryVersionCids: string[] = (retryPayload.versions ?? []).map(
+      (v: VersionEntry) => v.cid
+    );
+    expect(retryVersionCids).toContain('v-NEW');
+
+    // (b) CR-02 core assertion: prunedCids ∩ published references must be empty.
+    //     Before fix: 'v-NEW' is in both prunedCids (initial prune) and mergedVersions → overlap=['v-NEW']
+    //     After fix: 'v-NEW' is filtered out → overlap=[]
+    const publishedRefs = new Set([
+      result.metadataCid,
+      ...(retryPayload.versions ?? []).map((v: VersionEntry) => v.cid),
+    ]);
+    const overlap = result.prunedCids.filter((c) => publishedRefs.has(c));
+    expect(overlap).toHaveLength(0);
+
+    // (c) 'v-old' is genuinely overflowed (not in mergedVersions) — must still be pruned.
+    //     This ensures the reference filter is not over-broad.
+    expect(result.prunedCids).toContain('v-old');
+  });
+
   it('throws ConflictError after second consecutive 409', async () => {
     vi.mocked(resolveIpnsRecord)
       .mockResolvedValueOnce({ cid: 'old-meta', sequenceNumber: 5n, signatureVerified: true })
