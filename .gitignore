@@ -44,3 +44,6 @@ tests/e2e/test-results/*
 .claude/settings.local.json
 .claude/gsd-migration-journal/
 .worktale/
+
+# GSD planning scratch (docs-generation backups, wave manifests)
+.planning/tmp/

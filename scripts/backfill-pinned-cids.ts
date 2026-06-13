@@ -40,6 +40,10 @@ config();
 const BATCH_SIZE = 10;
 const DRY_RUN = process.argv.includes('--dry-run');
 const KUBO_API_URL = process.env.IPFS_LOCAL_API_URL ?? 'http://localhost:5001';
+// Bound the Kubo pin/ls fetch so a network stall can't hang the backfill
+// (matches pending-unpin.processor.ts). A timeout aborts into the catch below,
+// which exits non-zero with zero deletes.
+const KUBO_PIN_LS_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // DataSource — mirrors run-migrations.ts bootstrap exactly
@@ -84,6 +88,7 @@ async function run(): Promise<void> {
     try {
       const res = await fetch(`${KUBO_API_URL}/api/v0/pin/ls?type=recursive`, {
         method: 'POST',
+        signal: AbortSignal.timeout(KUBO_PIN_LS_TIMEOUT_MS),
       });
       if (!res.ok) {
         const errText = await res.text().catch(() => '(unreadable)');
@@ -167,6 +172,7 @@ async function run(): Promise<void> {
       // Live delete in batches (BATCH_SIZE = 10, mirrors migration.processor)
       // -------------------------------------------------------------------
       let totalDeleted = 0;
+      let failedBatches = 0;
       const ids = rowsToDelete.map((r) => r.id);
 
       for (let i = 0; i < ids.length; i += BATCH_SIZE) {
@@ -176,6 +182,7 @@ async function run(): Promise<void> {
           totalDeleted += batch.length;
           console.log(`  Deleted batch offset=${i} size=${batch.length} (total=${totalDeleted})`);
         } catch (batchErr: unknown) {
+          failedBatches += 1;
           const msg = batchErr instanceof Error ? batchErr.message : String(batchErr);
           console.error(
             `  ERROR at batch offset=${i}: ${msg}. Skipping batch; remaining batches continue.`
@@ -186,6 +193,15 @@ async function run(): Promise<void> {
       console.log(
         `\nBackfill complete. Total rows deleted: ${totalDeleted} / ${rowsToDelete.length}`
       );
+
+      // A partial backfill must not look healthy to automation — exit non-zero.
+      if (failedBatches > 0) {
+        console.error(
+          `Backfill finished with ${failedBatches} failed batch(es); exiting non-zero.`
+        );
+        await dataSource.destroy();
+        process.exit(1);
+      }
     }
 
     await dataSource.destroy();

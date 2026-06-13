@@ -158,7 +158,11 @@ describe('IpfsController', () => {
 
       await expect(controller.upload(mockReq, mockFile)).rejects.toThrow('DB error');
 
-      expect(vaultService.guardedUnpin).toHaveBeenCalledWith('user-123', mockCid);
+      // Internal rollback suppresses the cross-user audit so a deduped-CID
+      // compensation can't emit a false cross-user security signal.
+      expect(vaultService.guardedUnpin).toHaveBeenCalledWith('user-123', mockCid, {
+        suppressCrossUserAudit: true,
+      });
       expect(ipfsProvider.unpinFile).not.toHaveBeenCalled();
     });
 

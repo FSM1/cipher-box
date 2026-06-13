@@ -123,7 +123,11 @@ export class IpfsController {
       // have refcounted to zero between the Kubo pin above and recordPin here,
       // leaving this uploader with a row-but-no-pin. Cryptographically negligible
       // (requires identical ciphertext + sub-second window). Drift report detects.
-      await this.vaultService.guardedUnpin(req.user.id, result.cid).catch(() => undefined);
+      // Internal compensation, not an external probe: suppress cross-user audit
+      // so a deduped-CID rollback can't emit a false cross-user security signal.
+      await this.vaultService
+        .guardedUnpin(req.user.id, result.cid, { suppressCrossUserAudit: true })
+        .catch(() => undefined);
       throw err;
     }
     this.metricsService.fileUploads.inc();

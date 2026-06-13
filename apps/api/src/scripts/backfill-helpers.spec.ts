@@ -82,4 +82,9 @@ describe('parseKuboPinLs', () => {
     const result = parseKuboPinLs(ndjson);
     expect(result).toEqual(new Set(['cid-present']));
   });
+
+  it('throws on a malformed NDJSON line (fail closed before delete decisions)', () => {
+    const ndjson = JSON.stringify({ Keys: { 'cid-a': {} } }) + '\nnot-json{';
+    expect(() => parseKuboPinLs(ndjson)).toThrow(/Malformed Kubo pin\/ls NDJSON/);
+  });
 });
