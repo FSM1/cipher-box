@@ -361,4 +361,51 @@ describe('updateFolderMetadataAndPublish conflict handling', () => {
       return !isConflictExhausted(err) && (err as Error).message === 'Internal Server Error';
     });
   });
+
+  it('returns publishedChildren containing merged local+remote set after 409 (WR-08 folder)', async () => {
+    // Tests CR-01: the published merged children must be surfaced to callers so
+    // the next write composes from the correct base, not the stale pre-merge local set.
+    // Non-empty baseChildren exercises the three-way merge path (WR-08).
+    const ctx = createMockContext();
+    const baseChild = makeFile('base-1', 'base-file.txt');
+    const localChild = makeFile('local-2', 'local-file.txt');
+    const remoteChild = makeFile('remote-3', 'remote-file.txt');
+
+    const conflictErr = Object.assign(new Error('conflict'), { status: 409 });
+    mockFns.createAndPublishIpnsRecord
+      .mockRejectedValueOnce(conflictErr)
+      .mockResolvedValueOnce({ success: true, sequenceNumber: '8', ipnsName: 'k51merged' });
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      sequenceNumber: 7n,
+      cid: 'QmRemoteMerged',
+      ipnsName: 'k51merged',
+    });
+
+    mockFns.fetchFromIpfs.mockResolvedValue(makeRemoteBlob());
+    // Remote folder already has baseChild + remoteChild (remote-only child not in local set)
+    mockFns.decryptFolderMetadata.mockResolvedValue({
+      version: 'v2' as const,
+      children: [baseChild, remoteChild],
+    });
+
+    const result = await updateFolderMetadataAndPublish({
+      children: [baseChild, localChild],
+      // Non-empty baseChildren — exercises three-way merge (WR-08)
+      baseChildren: [baseChild],
+      folderKey: new Uint8Array(32).fill(1),
+      ipnsPrivateKey: new Uint8Array(64).fill(2),
+      ipnsName: 'k51merged',
+      sequenceNumber: 6n,
+      ctx,
+    });
+
+    // publishedChildren must be the merged published set, not the stale pre-merge local set
+    expect(result.publishedChildren).toBeDefined();
+    const publishedIds = result.publishedChildren.map((c: FolderChild) => c.id);
+    // Local-only child must survive the merge
+    expect(publishedIds).toContain('local-2');
+    // Remote-only child must be included (proves three-way merge ran, not a local-only publish)
+    expect(publishedIds).toContain('remote-3');
+  });
 });

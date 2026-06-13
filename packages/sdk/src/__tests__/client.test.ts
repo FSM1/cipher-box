@@ -300,6 +300,7 @@ describe('CipherBoxClient', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       const result = await client.deleteItem('folder-ipns', 'file1');

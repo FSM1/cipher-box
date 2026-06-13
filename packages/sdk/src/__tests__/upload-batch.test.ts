@@ -100,6 +100,7 @@ function setupBatchMocks(fileCount: number, failIndices: number[] = []) {
   vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
     cid: 'bafyfolder-updated',
     newSequenceNumber: 2n,
+    publishedChildren: [],
   });
 
   vi.mocked(sdkCore.batchPublishIpnsRecords).mockResolvedValue({

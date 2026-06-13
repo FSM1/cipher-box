@@ -155,6 +155,7 @@ describe('bin operations', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
       vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin', size: 3, recorded: true });
       vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
@@ -218,6 +219,7 @@ describe('bin operations', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
       vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin', size: 3, recorded: true });
       vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({

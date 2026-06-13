@@ -240,7 +240,7 @@ export async function addToBin(params: {
   });
 
   // 2. Publish updated folder metadata
-  const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
+  const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedChildren,
     baseChildren,
     folderKey: folder.folderKey,
@@ -250,8 +250,8 @@ export async function addToBin(params: {
     ctx: params.binCtx.ctx,
   });
 
-  // 3. Update folder state
-  folder.children = updatedChildren;
+  // 3. Update folder state — adopt merged published set (CR-01)
+  folder.children = publishedChildren;
   folder.sequenceNumber = newSequenceNumber;
   folder.lastLoadedAt = Date.now();
   params.folderTree.set(params.folderIpnsName, folder);
@@ -339,7 +339,7 @@ export async function restoreFromBin(params: {
   const updatedFolderChildren = [...targetFolder.children, child];
 
   // 4. Publish updated folder metadata
-  const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
+  const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedFolderChildren,
     baseChildren,
     folderKey: targetFolder.folderKey,
@@ -349,8 +349,8 @@ export async function restoreFromBin(params: {
     ctx: params.binCtx.ctx,
   });
 
-  // 5. Update folder state
-  targetFolder.children = updatedFolderChildren;
+  // 5. Update folder state — adopt merged published set (CR-01)
+  targetFolder.children = publishedChildren;
   targetFolder.sequenceNumber = newSequenceNumber;
   targetFolder.lastLoadedAt = Date.now();
   params.folderTree.set(params.targetFolderIpnsName, targetFolder);
