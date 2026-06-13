@@ -2,6 +2,35 @@
 
 > Pending ideas and deferred work. Consolidated 2026-06-12 from the former `.planning/DEFERRED.md` and `.planning/REFACTORING.md` (gsd-health W019 remediation).
 
+## Status Reconciliation (2026-06-13)
+
+The inventories below are a verbatim snapshot dated 2026-03-31 and predate phases 36-44. They were reviewed against the current codebase on 2026-06-13. The original tables are preserved unchanged for the historical record; the current status of changed items is authoritative here.
+
+### Now implemented (previously listed as open)
+
+| Item                                                           | Section             | Shipped in                                                                                                                        |
+| -------------------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Full retirement of `folder.service.ts`                         | Code Quality        | Phase 38 / PR #422 — file deleted, 0 importers                                                                                    |
+| Full retirement of `bin.service.ts`                            | Code Quality        | Phase 38 / PR #422 — deleted, logic moved to SDK                                                                                  |
+| Remove crypto → core circular devDependency                    | Code Quality        | Phase 38 / PR #422                                                                                                                |
+| User-configurable bin retention period                         | Data Management     | Phase 39 — per-user `VaultSettings.recycleBinRetentionDays`                                                                       |
+| Auto-merge of non-conflicting folder changes (three-way merge) | Sync & Conflict     | Phase 44 — `mergeChildren` in `sdk-core/folder/merge.ts`                                                                          |
+| M5 — `reWrapForRecipients` surfaces failures                   | Security (Phase 14) | Done — failure toast + `share:reWrapFailed` event. Residual: file-update caller ignores `failedRecipients`; no desktop subscriber |
+| L1 — `/shares/lookup` always returns 200 `{ exists }`          | Security (Phase 14) | Done — no 404/200 oracle                                                                                                          |
+| Tier 3.6 — `InitVaultDto` uses generated type                  | Refactoring         | Done                                                                                                                              |
+| Tier 3.9 — `publishBatch` delegates to shared `publishRecord`  | Refactoring         | Done                                                                                                                              |
+
+### Still open, promoted to actionable todos (2026-06-13)
+
+These were genuinely open and tracked nowhere actionable (only in stale review docs + this snapshot), so they are now `.planning/todos/pending/`:
+
+- **M1** — share `itemName` stored plaintext at rest → `2026-06-13-encrypt-share-itemname-at-rest.md`
+- **S1, S2, S3** — IPNS signed-record validation, verification enforcement, key-zeroization convention → `2026-06-13-ipns-signature-storage-review-deferred.md`
+
+### Still open, remaining in this backlog
+
+All other items below remain open and correctly tracked here: the deferred feature set (sharing, desktop UI, MFA, performance, etc.), the `uint8ToBase64` dedup (Tier 3.3 — confirmed still 4-5 copies, no shared util), and Tier-3 cleanups 3.1, 3.2, 3.4, 3.5, 3.7, 3.8, 3.10, 3.11, 3.12, 3.13, 3.14.
+
 ## Deferred Items Inventory
 
 **Last updated:** 2026-03-31
