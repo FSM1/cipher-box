@@ -50,6 +50,7 @@ describe('deleteFile', () => {
 
     expect(callOrder[0]).toBe('unpinFromIpfs');
     expect(callOrder[1]).toBe('removeUsage');
+    expect(callOrder[2]).toBe('fetchQuota');
     expect(mockFetchQuota).toHaveBeenCalledOnce();
   });
 
