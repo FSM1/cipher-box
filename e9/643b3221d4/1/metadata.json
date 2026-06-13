@@ -1,0 +1,137 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e9643b3221d4",
+  "session_id": "64f3fecd-7798-47ae-a077-c8dbf669a950",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-13T11:44:38.41721Z",
+  "branch": "feat/api-unpin-integrity",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/DEFERRED.md",
+    ".planning/REFACTORING.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "60ff2b29e725",
+  "checkpoint_transcript_start": 182,
+  "transcript_lines_at_start": 182,
+  "token_usage": {
+    "input_tokens": 139,
+    "cache_creation_tokens": 2422,
+    "cache_read_tokens": 776041,
+    "output_tokens": 2069,
+    "api_call_count": 5
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01SjfEeqtLCyGRbzsVGfb1bz",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "60ff2b29e725",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 86,
+        "end": 87,
+        "entry_ids": [
+          "5a6ce30f-7df8-4045-87fd-9e6fa4ee96ba"
+        ],
+        "tool_use_id": "toolu_01SjfEeqtLCyGRbzsVGfb1bz"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SjfEeqtLCyGRbzsVGfb1bz"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Create a PR documenting gap-closure phases 42-44 (api-unpin-integrity, fuse-write-durability, ipns-conflict-handling) by updating ROADMAP.md, STATE.md, and creating phase directory stubs, then merge and return to main.",
+    "outcome": "PR #484 was successfully created on branch docs/gap-closure-phases-42-44 with an SSH-signed commit (4db53bf90), merged to main, and the local repo was updated via git pull with all 5 changed files present.",
+    "learnings": {
+      "repo": [
+        "PR title CI check requires conventional-commit format without parentheses (no scope parens like 'docs(planning): ...').",
+        "Phase directories are stubbed with .gitkeep files under .planning/phases/<phase-name>/.",
+        "DEFERRED.md and REFACTORING.md exist under .planning/ and had pre-existing deletions on the working tree that were intentionally not committed.",
+        "The repo uses SSH signing (via 1Password) for commits, requiring a signing approval prompt during commit."
+      ],
+      "code": [
+        {
+          "path": ".planning/ROADMAP.md",
+          "finding": "Updated with 37-line additions covering phases 42-44 gap-closure entries."
+        },
+        {
+          "path": ".planning/STATE.md",
+          "finding": "Updated with 16-line additions reflecting new phase state."
+        },
+        {
+          "path": ".planning/phases/42-api-unpin-integrity/.gitkeep",
+          "finding": "New phase stub created for phase 42."
+        },
+        {
+          "path": ".planning/phases/43-fuse-write-durability/.gitkeep",
+          "finding": "New phase stub created for phase 43."
+        },
+        {
+          "path": ".planning/phases/44-ipns-conflict-handling/.gitkeep",
+          "finding": "New phase stub created for phase 44."
+        }
+      ],
+      "workflow": [
+        "lint-staged runs on commit and takes ~15 seconds before 1Password SSH signing prompt appears.",
+        "gh CLI used to create PRs; reports uncommitted working tree changes as a warning but still succeeds.",
+        "After merging a docs branch, the workflow suggests /gsd:discuss-phase or /gsd:plan-phase as the next step."
+      ]
+    },
+    "friction": [
+      "3 uncommitted changes warning from gh during PR creation due to pre-existing deletions of DEFERRED.md and REFACTORING.md lingering on the working tree."
+    ],
+    "open_items": [
+      "DEFERRED.md and REFACTORING.md deletions remain uncommitted on the working tree and need to be handled separately.",
+      "Next step is /gsd:discuss-phase 42 or /gsd:plan-phase 42 to begin actual implementation of phase 42 (api-unpin-integrity).",
+      ".planning/tmp/ contents were also left uncommitted."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-13T11:44:23.393123Z",
+    "agent_lines": 0,
+    "agent_removed": 281,
+    "human_added": 19,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 19,
+    "total_lines_changed": 300,
+    "agent_percentage": 93.66666666666667,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5756,
+      "agent_lines_removed": 281
+    }
+  ]
+}
