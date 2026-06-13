@@ -19,6 +19,40 @@
     "output_tokens": 4092,
     "api_call_count": 6
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01T2REj1PieuiBV98x6CiG4S",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6482f38e91dd",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 108,
+        "end": 109,
+        "entry_ids": [
+          "cf143d2d-a2d2-460e-9eed-69e145244c01"
+        ],
+        "tool_use_id": "toolu_01T2REj1PieuiBV98x6CiG4S"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01T2REj1PieuiBV98x6CiG4S"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    }
+  ],
   "summary": {
     "intent": "Fix a failing prettier lint check in CI for PR #485 (feat/api-unpin-integrity) and then run /resolve-pr-reviews on it.",
     "outcome": "Lint errors in pending-unpin.processor.spec.ts were fixed via eslint --fix and the commit was pushed to re-trigger CI. The /resolve-pr-reviews step was not yet executed.",
