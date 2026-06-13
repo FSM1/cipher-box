@@ -95,6 +95,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await client.renameItem('folder-ipns', 'file1', 'renamed.txt');
@@ -141,6 +142,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await client.moveItem('src-ipns', 'dest-ipns', 'file1');
@@ -210,6 +212,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       const result = await client.uploadFile(
@@ -270,6 +273,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await shareClient.uploadFile(
@@ -319,6 +323,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       // Should not throw — no shareCallbacks means no re-wrapping
@@ -372,6 +377,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await shareClient.uploadFile(
@@ -424,6 +430,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       // Upload should still succeed even if re-wrapping fails

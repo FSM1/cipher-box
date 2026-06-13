@@ -106,6 +106,7 @@ export async function uploadToSharedFolder(
   params: { data: Uint8Array; fileName: string; mimeType?: string }
 ): Promise<{
   updatedChildren: FolderChild[];
+  publishedChildren: FolderChild[];
   newSequenceNumber: bigint;
   filePointer: FilePointer;
 }> {
@@ -198,7 +199,7 @@ export async function uploadToSharedFolder(
 
       // 10. Add file to folder children and publish
       const updatedChildren = [...swCtx.children, filePointer];
-      const { newSequenceNumber } = await updateFolderMetadataAndPublish({
+      const { newSequenceNumber, publishedChildren } = await updateFolderMetadataAndPublish({
         children: updatedChildren,
         baseChildren: swCtx.children,
         folderKey: swCtx.folderKey,
@@ -223,7 +224,7 @@ export async function uploadToSharedFolder(
         console.warn('[shared-write] Failed to add share_keys for uploaded file:', err);
       }
 
-      return { updatedChildren, newSequenceNumber, filePointer };
+      return { updatedChildren, publishedChildren, newSequenceNumber, filePointer };
     } finally {
       ipnsKeypair.privateKey.fill(0);
     }
@@ -248,6 +249,7 @@ export async function createSharedSubfolder(
   params: { name: string }
 ): Promise<{
   updatedChildren: FolderChild[];
+  publishedChildren: FolderChild[];
   newSequenceNumber: bigint;
   folderEntry: FolderEntry;
 }> {
@@ -294,7 +296,7 @@ export async function createSharedSubfolder(
 
     // 5. Add to parent folder and publish
     const updatedChildren = [...swCtx.children, folderEntry];
-    const { newSequenceNumber } = await updateFolderMetadataAndPublish({
+    const { newSequenceNumber, publishedChildren } = await updateFolderMetadataAndPublish({
       children: updatedChildren,
       baseChildren: swCtx.children,
       folderKey: swCtx.folderKey,
@@ -324,7 +326,7 @@ export async function createSharedSubfolder(
       console.warn('[shared-write] Failed to add share_keys for subfolder:', err);
     }
 
-    return { updatedChildren, newSequenceNumber, folderEntry };
+    return { updatedChildren, publishedChildren, newSequenceNumber, folderEntry };
   } finally {
     subfolderKey.fill(0);
     keypair.privateKey.fill(0);
@@ -344,12 +346,16 @@ export async function createSharedSubfolder(
 export async function renameInSharedFolder(
   swCtx: SharedWriteContext,
   params: { itemId: string; newName: string }
-): Promise<{ updatedChildren: FolderChild[]; newSequenceNumber: bigint }> {
+): Promise<{
+  updatedChildren: FolderChild[];
+  publishedChildren: FolderChild[];
+  newSequenceNumber: bigint;
+}> {
   const updatedChildren = swCtx.children.map((child) =>
     child.id === params.itemId ? { ...child, name: params.newName, modifiedAt: Date.now() } : child
   );
 
-  const { newSequenceNumber } = await updateFolderMetadataAndPublish({
+  const { newSequenceNumber, publishedChildren } = await updateFolderMetadataAndPublish({
     children: updatedChildren,
     baseChildren: swCtx.children,
     folderKey: swCtx.folderKey,
@@ -359,7 +365,7 @@ export async function renameInSharedFolder(
     ctx: swCtx.ctx,
   });
 
-  return { updatedChildren, newSequenceNumber };
+  return { updatedChildren, publishedChildren, newSequenceNumber };
 }
 
 // ---------------------------------------------------------------------------
@@ -374,10 +380,14 @@ export async function renameInSharedFolder(
 export async function deleteFromSharedFolder(
   swCtx: SharedWriteContext,
   params: { itemId: string }
-): Promise<{ updatedChildren: FolderChild[]; newSequenceNumber: bigint }> {
+): Promise<{
+  updatedChildren: FolderChild[];
+  publishedChildren: FolderChild[];
+  newSequenceNumber: bigint;
+}> {
   const updatedChildren = swCtx.children.filter((child) => child.id !== params.itemId);
 
-  const { newSequenceNumber } = await updateFolderMetadataAndPublish({
+  const { newSequenceNumber, publishedChildren } = await updateFolderMetadataAndPublish({
     children: updatedChildren,
     baseChildren: swCtx.children,
     folderKey: swCtx.folderKey,
@@ -387,7 +397,7 @@ export async function deleteFromSharedFolder(
     ctx: swCtx.ctx,
   });
 
-  return { updatedChildren, newSequenceNumber };
+  return { updatedChildren, publishedChildren, newSequenceNumber };
 }
 
 // ---------------------------------------------------------------------------
