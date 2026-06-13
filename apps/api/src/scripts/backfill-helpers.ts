@@ -40,6 +40,9 @@ export function selectRowsToDelete(rows: BackfillRow[], kuboPinSet: Set<string>)
  *
  * Returns an empty Set for blank/whitespace-only input — the caller should
  * treat an empty Set as an abort signal (unreachable/empty Kubo).
+ *
+ * Throws on a malformed (non-JSON) line: a corrupt/truncated response must abort
+ * the destructive backfill rather than proceed with an undercounted CID set.
  */
 export function parseKuboPinLs(text: string): Set<string> {
   const cids = new Set<string>();
@@ -57,7 +60,11 @@ export function parseKuboPinLs(text: string): Set<string> {
         }
       }
     } catch {
-      // Non-JSON progress lines — skip silently
+      // Fail closed: a malformed (non-JSON) line means a corrupt or truncated
+      // pin/ls response. Silently skipping it would undercount the live CID set
+      // and could misclassify legitimately-pinned rows as phantoms — a destructive
+      // backfill must abort before any delete decision rather than guess.
+      throw new Error(`Malformed Kubo pin/ls NDJSON line: ${trimmed.slice(0, 200)}`);
     }
   }
   return cids;

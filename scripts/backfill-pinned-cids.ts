@@ -40,6 +40,10 @@ config();
 const BATCH_SIZE = 10;
 const DRY_RUN = process.argv.includes('--dry-run');
 const KUBO_API_URL = process.env.IPFS_LOCAL_API_URL ?? 'http://localhost:5001';
+// Bound the Kubo pin/ls fetch so a network stall can't hang the backfill
+// (matches pending-unpin.processor.ts). A timeout aborts into the catch below,
+// which exits non-zero with zero deletes.
+const KUBO_PIN_LS_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // DataSource — mirrors run-migrations.ts bootstrap exactly
@@ -84,6 +88,7 @@ async function run(): Promise<void> {
     try {
       const res = await fetch(`${KUBO_API_URL}/api/v0/pin/ls?type=recursive`, {
         method: 'POST',
+        signal: AbortSignal.timeout(KUBO_PIN_LS_TIMEOUT_MS),
       });
       if (!res.ok) {
         const errText = await res.text().catch(() => '(unreadable)');
