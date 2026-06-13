@@ -1,0 +1,206 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e9643b3221d4",
+  "session_id": "76fc2ea9-e2ee-4422-b71b-cf9b885217c1",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-13T11:45:48.944812Z",
+  "branch": "feat/api-unpin-integrity",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/DEFERRED.md",
+    ".planning/REFACTORING.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a513d2e6947c",
+  "token_usage": {
+    "input_tokens": 104503,
+    "cache_creation_tokens": 770589,
+    "cache_read_tokens": 25954881,
+    "output_tokens": 143293,
+    "api_call_count": 131
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Generate and verify a complete documentation suite for the cipher-box monorepo using the GSD docs-update workflow, then ship it via PR. A follow-up health check fixed planning directory integrity issues.",
+    "outcome": "Shipped PR #482 with 29 files (+2683/-477): 10 new/regenerated canonical docs, 6 corrected existing specs, 12 per-package READMEs. PR #483 then fixed planning health (invalid config value, missing VALIDATION.md, 5 non-canonical files relocated). Health check now reports 0 errors, 0 warnings.",
+    "learnings": {
+      "repo": [
+        "packages/crypto/src/ was renamed to packages/core/src/ — METADATA_SCHEMAS.md and METADATA_EVOLUTION_PROTOCOL.md had 15+ stale path references to the old location",
+        "folder.service.ts no longer exists; folder depth enforcement lives in apps/web/src/hooks/useFolderMutations.ts (createFolder at :102, moveFolder at :283)",
+        "TEE republish interval is 6 hours (REPUBLISH_INTERVAL_HOURS=6 in republish.service.ts), not 3 hours as CAPACITY.md claimed in three places",
+        "crates/core/src/file.rs is an 11-line re-export shim; FileMetadata and VersionEntry are actually defined in crates/core/src/folder.rs",
+        "recovery.html accepts hex-only private keys for v2 recovery; base64 is explicitly rejected at line 1102, and v1 inline-file recovery is unsupported (logs error and skips)",
+        "docker/docker-compose.yml has 5 services including an undocumented someguy delegated-routing service (port 8190 routing API, 4004 libp2p) and mock-ipns-routing (loopback 3001)",
+        "TEE worker simulator defaults to port 3001, conflicting with mock-ipns-routing; workaround is PORT=3002 when running both",
+        "folder_ipns table has IDX_folder_ipns_user_id on user_id and unique constraint on (user_id, ipns_name); no owner_public_key column exists",
+        "8 load test scenario files use checkThresholds (not 5 as CAPACITY.md claimed): ipns-publish-storm, spike-test, sustained-load, sdk-folder-read, mixed-workload, upload-throughput, sdk-upload-pipeline, sdk-ipns-contention",
+        "apps/api/src/migrations/ contains 16 files; DATABASE_EVOLUTION_PROTOCOL.md only listed 14 (missing AddSignedRecordToFolderIpns and AddPublicKeyToFolderIpns)",
+        "someguy's 8190 routing API is published locally but internal-only in staging docker-compose.staging.yml",
+        "planning config.json had model_profile set to 'adaptive' which is invalid; valid values are quality/balanced/budget/inherit"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "finding": "REPUBLISH_INTERVAL_HOURS = 6 (not 3 as multiple docs stated)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 102,
+          "end_line": 102,
+          "finding": "createFolder MAX_FOLDER_DEPTH check (folder.service.ts doesn't exist)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 283,
+          "end_line": 283,
+          "finding": "moveFolder destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH check"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 101,
+          "end_line": 103,
+          "finding": "TypeORM synchronize/migrations/migrationsRun config (was incorrectly documented as lines 85-87)"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 85,
+          "end_line": 91,
+          "finding": "FolderMetadata struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 72,
+          "end_line": 80,
+          "finding": "FolderChild struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 29,
+          "end_line": 46,
+          "finding": "FolderEntry struct definition"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 173,
+          "end_line": 199,
+          "finding": "FileMetadata struct (file.rs is only a re-export shim; fixer initially pointed at wrong file)"
+        },
+        {
+          "path": "crates/core/src/folder.rs",
+          "line": 152,
+          "end_line": 167,
+          "finding": "VersionEntry struct (same re-export issue as FileMetadata)"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/src/channel.rs",
+          "finding": "Vendored fuser source with FUSE-T socket patch lives here, not in crates/fuse which is a regular Cargo dependency"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/recovery.html",
+          "line": 1102,
+          "end_line": 1102,
+          "finding": "Hex-only restriction for v2 private key input; base64 explicitly unsupported"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/recovery.html",
+          "line": 931,
+          "end_line": 931,
+          "finding": "v1 format not supported — logs error and continues (skips item)"
+        },
+        {
+          "path": "packages/core/src/registry/schema.ts",
+          "line": 142,
+          "end_line": 142,
+          "finding": "publicKey length check is 64 (Ed25519, not 130 for secp256k1 as METADATA_SCHEMAS claimed)"
+        }
+      ],
+      "workflow": [
+        "GSD commit helper (gsd_run query commit) can report false commit_failed due to lint-staged spinner output in stdout; always verify success via git log rather than trusting the helper's exit signal",
+        "When parallel background agents auto-recover from transient API errors, stop any manually-respawned duplicates immediately (TaskStop) before the original finishes and overwrites the completed file",
+        "Background agents killed by process exit lose in-flight state; check on-disk file existence before assuming work was lost and re-dispatching",
+        "Markdownlint MD040 (code fences missing language tag) must be fixed before commit; lint-staged enforces this in the repo",
+        "Deeper re-verification passes can surface claims the first pass missed (e.g., METADATA_SCHEMAS line ranges); the 2-iteration fix-loop cap means residual issues after iteration 2 require manual inline edits"
+      ]
+    },
+    "friction": [
+      "Two Wave-1 agents hit transient API errors (socket closed, stream idle timeout) after 55-74 tool calls, requiring manual respawns and TaskStop race management",
+      "A Claude Code process exit mid-session killed all 5 iteration-2 fix agents simultaneously; their partial edits had to be inferred from on-disk state and applied manually",
+      "TaskStop returned errors for the two orphaned Wave-1 respawns (they had already been killed by the process restart, not by TaskStop)",
+      "METADATA_SCHEMAS required the most fix iterations: the iteration-2 automated fixer introduced new Rust line-range errors by using the re-export file.rs instead of the actual folder.rs, requiring a third manual pass with verifier-confirmed line numbers",
+      "GSD commit helper false-negative on the ship-record commit caused unnecessary uncertainty about whether the commit landed"
+    ],
+    "open_items": [
+      "20 VERIFY markers placed in docs/CONFIGURATION.md (12) and docs/DEPLOYMENT.md (6) for infrastructure claims not provable from the repo (Web3Auth dashboard values, Grafana Cloud URLs, staging host/VPS provisioning, Render deployment)",
+      "SECURITY.md has 2 VERIFY markers for claims requiring manual confirmation (GitHub private vulnerability reporting enablement, security contact email)",
+      "DEVELOPMENT.md infra table still omits the someguy service's internal routing role details beyond ports — could use a brief description of what delegated routing does",
+      "Phase 34 (e2e-test-expansion-staging-baselines) VALIDATION.md was backfilled from RESEARCH.md structure but the actual validation work may still need to run",
+      "The 5 archived W019 files (ENVIRONMENTS.md, FEATURES.md, SCOPING_RATIONALE.md, plus DEFERRED.md and REFACTORING.md consolidated into BACKLOG.md) should be reviewed to confirm nothing actionable was lost in the consolidation"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-13T11:44:39.155336Z",
+    "agent_lines": 0,
+    "agent_removed": 281,
+    "human_added": 19,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 19,
+    "total_lines_changed": 300,
+    "agent_percentage": 93.66666666666667,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 5710,
+      "user_lines_removed": 0,
+      "agent_lines_added": 46,
+      "agent_lines_removed": 281,
+      "user_added_per_file": {
+        ".planning/tmp/ARCHITECTURE.md.wave1-original": 397,
+        ".planning/tmp/CONFIGURATION.md.wave1-original": 275,
+        ".planning/tmp/DEVELOPMENT.md.pre-supplement": 154,
+        ".planning/tmp/prefix-backups-iter2/CAPACITY.md": 347,
+        ".planning/tmp/prefix-backups-iter2/DATABASE_EVOLUTION_PROTOCOL.md": 362,
+        ".planning/tmp/prefix-backups-iter2/FILESYSTEM_SPECIFICATION.md": 190,
+        ".planning/tmp/prefix-backups-iter2/METADATA_EVOLUTION_PROTOCOL.md": 275,
+        ".planning/tmp/prefix-backups-iter2/METADATA_SCHEMAS.md": 480,
+        ".planning/tmp/prefix-backups/ARCHITECTURE.md": 397,
+        ".planning/tmp/prefix-backups/CAPACITY.md": 347,
+        ".planning/tmp/prefix-backups/DATABASE_EVOLUTION_PROTOCOL.md": 360,
+        ".planning/tmp/prefix-backups/DEVELOPMENT.md": 181,
+        ".planning/tmp/prefix-backups/FILESYSTEM_SPECIFICATION.md": 191,
+        ".planning/tmp/prefix-backups/METADATA_EVOLUTION_PROTOCOL.md": 276,
+        ".planning/tmp/prefix-backups/METADATA_SCHEMAS.md": 480,
+        ".planning/tmp/prefix-backups/VAULT_EXPORT_FORMAT.md": 811,
+        ".planning/tmp/verify-ARCHITECTURE.md.json": 7,
+        ".planning/tmp/verify-AUTHENTICATION_ARCHITECTURE.md.json": 7,
+        ".planning/tmp/verify-CAPACITY.md.json": 14,
+        ".planning/tmp/verify-CONFIGURATION.md.json": 7,
+        ".planning/tmp/verify-CONTRIBUTING.md.json": 7,
+        ".planning/tmp/verify-DATABASE_EVOLUTION_PROTOCOL.md.json": 14,
+        ".planning/tmp/verify-DEPLOYMENT.md.json": 7,
+        ".planning/tmp/verify-DEVELOPMENT.md.json": 7,
+        ".planning/tmp/verify-FILESYSTEM_SPECIFICATION.md.json": 20,
+        ".planning/tmp/verify-GETTING-STARTED.md.json": 10,
+        ".planning/tmp/verify-METADATA_EVOLUTION_PROTOCOL.md.json": 14,
+        ".planning/tmp/verify-METADATA_SCHEMAS.md.json": 38,
+        ".planning/tmp/verify-README.md.json": 7,
+        ".planning/tmp/verify-SECURITY.md.json": 7,
+        ".planning/tmp/verify-SHARING.md.json": 7,
+        ".planning/tmp/verify-TESTING.md.json": 7,
+        ".planning/tmp/verify-VAULT_EXPORT_FORMAT.md.json": 7
+      }
+    }
+  ]
+}

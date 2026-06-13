@@ -3,7 +3,7 @@
   "checkpoint_id": "e9643b3221d4",
   "strategy": "manual-commit",
   "branch": "feat/api-unpin-integrity",
-  "checkpoints_count": 5,
+  "checkpoints_count": 8,
   "files_touched": [
     ".husky/commit-msg",
     ".husky/post-commit",
@@ -25,13 +25,19 @@
       "transcript": "/e9/643b3221d4/1/full.jsonl",
       "content_hash": "/e9/643b3221d4/1/content_hash.txt",
       "prompt": "/e9/643b3221d4/1/prompt.txt"
+    },
+    {
+      "metadata": "/e9/643b3221d4/2/metadata.json",
+      "transcript": "/e9/643b3221d4/2/full.jsonl",
+      "content_hash": "/e9/643b3221d4/2/content_hash.txt",
+      "prompt": "/e9/643b3221d4/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 67176,
-    "cache_creation_tokens": 3872167,
-    "cache_read_tokens": 136949690,
-    "output_tokens": 455063,
-    "api_call_count": 458
+    "input_tokens": 171679,
+    "cache_creation_tokens": 4642756,
+    "cache_read_tokens": 162904571,
+    "output_tokens": 598356,
+    "api_call_count": 589
   }
 }
