@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "a008f31915b8",
+  "session_id": "eae1b4bd-fe3d-40ed-9c53-b3dee340c487",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-13T15:50:19.70729Z",
+  "branch": "feat/fuse-write-durability",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/services/delete.service.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "b5bb70445e53",
+  "token_usage": {
+    "input_tokens": 18091,
+    "cache_creation_tokens": 101377,
+    "cache_read_tokens": 1899820,
+    "output_tokens": 39165,
+    "api_call_count": 24
+  },
+  "summary": {
+    "intent": "Prepare the already-implemented phase 43 (FUSE write durability) branch for shipping by integrating the newly merged phase 42 main into it and getting it into a PR-ready state.",
+    "outcome": "Branch successfully integrated with main: all phase-42 merge conflicts resolved, stray artifacts removed, and the diff reduced to exactly the 17 phase-43 source files. Four runtime UAT checks remain pending before the PR can be opened.",
+    "learnings": {
+      "repo": [
+        "Phase 43 source files (fuse/sdk/desktop/Cargo.lock) are fully disjoint from phase 42 files (API/web), making conflict resolution straightforward: all phase-42 conflicts resolve to main's version.",
+        "The web vitest config skips `.spec.ts` files; canonical test files use `.test.ts`. A leftover `delete.service.spec.ts` (pre-squash draft) survived on the branch and would never have run.",
+        "release-please-config.json is not in .prettierignore and prettier prefers inline array format; main's expanded multi-line format is actually a prettier violation that slipped through, making the cosmetic diff unavoidable.",
+        "Phase 43 had 8 code review criticals (CR-01..CR-08) that were all closed by gap-closure plans 43-05..08; round-2 verification confirmed 18/18 must-haves, zero gaps, zero regressions.",
+        "Two new deferred todos were added during phase 42: encrypt-share-itemname-at-rest and ipns-signature-storage-review."
+      ],
+      "code": [],
+      "workflow": [
+        "When a feature branch predates a squash merge on main, merge main into the branch (don't rebase) to avoid re-litigating the squashed commits in the PR diff.",
+        "lint-staged with prettier can reject deletion-only commits as 'empty' due to a quirk in how staged deletions interact with the hook pipeline.",
+        "Husky/lint-staged hooks can silently reformat files during conflict resolution, reverting explicit git checkouts — verify file state after each resolve step."
+      ]
+    },
+    "friction": [
+      "Branch predated the phase-42 squash merge, requiring a full merge-main-in pass before the branch was PR-able; a naive PR would have tried to revert phase 42.",
+      "Transient file lock on delete.service.ts interrupted the batch conflict resolution, requiring a retry.",
+      "release-please-config.json: prettier reformatted it back to inline during the husky hook, reverting the explicit reset to main's expanded version — the cosmetic diff vs main is now permanent.",
+      "Cleanup commit initially rejected as 'empty' by lint-staged when only a file deletion was staged."
+    ],
+    "open_items": [
+      "4 runtime UAT items pending (require live desktop + mounted vault): journal survival after SIGKILL, park notification render with OS notification, mkdir orphan survival across restart, and ciphertext-only journal verification.",
+      "Push branch and open PR — deferred until UAT passes.",
+      "release-please-config.json has a minor cosmetic line-format difference vs main (inline vs expanded array); flagged as unavoidable but worth noting for reviewers.",
+      "New todo: encrypt share itemName at rest (2026-06-13-encrypt-share-itemname-at-rest.md).",
+      "New deferred todo: IPNS signature storage review (2026-06-13-ipns-signature-storage-review-deferred.md)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-13T15:49:41.418972Z",
+    "agent_lines": 0,
+    "agent_removed": 73,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 73,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
