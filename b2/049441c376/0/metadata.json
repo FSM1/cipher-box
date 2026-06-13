@@ -1,0 +1,144 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b2049441c376",
+  "session_id": "eae1b4bd-fe3d-40ed-9c53-b3dee340c487",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-13T17:45:23.678942Z",
+  "branch": "feat/fuse-write-durability",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "crates/fuse/src/lib.rs",
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "apps/desktop/src-tauri/src/fuse/windows/mod.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "40dde51c3681",
+  "checkpoint_transcript_start": 206,
+  "transcript_lines_at_start": 206,
+  "token_usage": {
+    "input_tokens": 6737,
+    "cache_creation_tokens": 435079,
+    "cache_read_tokens": 28319950,
+    "output_tokens": 190258,
+    "api_call_count": 101
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Run all 4 UAT tests for the phase-43 journal/sync feature against a full local stack using the existing headless login mode (`--dev-key`), rather than deferring tests that were assumed to require manual UI interaction.",
+    "outcome": "All 4 UAT tests were executed live on real infrastructure; 3 findings were discovered (filename cleartext leak, WriteParked unreachable at runtime, replay convergence failure for never-published IPNS records). F2 and F3 were fixed, regression-tested, and committed. F1 was deferred to an existing todo.",
+    "learnings": {
+      "repo": [
+        "`--dev-key` headless auth mode exists in the debug binary, paired with `/auth/test-login` (email `dev-key@cipherbox.local`, secret `e2e-test-secret-ci-only`) — designed for agent-driven UAT, documented in apps/desktop/CLAUDE.md.",
+        "Access token TTL is 15 minutes — live UAT sessions must complete within that window or restart the app for a fresh token.",
+        "`IDENTITY_JWT_PRIVATE_KEY` is optional in non-production: `jwt-issuer.service.ts:38` generates an ephemeral RS256 keypair when unset, so the API boots cleanly with only `NODE_ENV=test`.",
+        "This dev machine has both macFUSE and FUSE-T installed; pkg-config resolves `fuse` → macFUSE by default. The CI recipe avoids this by aliasing `fuse-t.pc → fuse.pc` (Version 2.9.9) — must replicate locally or the binary links the wrong lib and the mount silently never materializes despite fuser logging 'confirmed'.",
+        "The desktop e2e harness (`tests/desktop-e2e/scripts/`) is fully scriptable: `run-all.sh`, `wait-for-mount.sh`, `test-conflict-detection.sh` all exist and work against the local docker stack.",
+        "`replay_for_vault` already skips `Failed` entries (lib.rs:898) — the park semantics are correct once entries actually reach `Failed` status.",
+        "The background upload in read_ops.rs calls `record_failure` exactly once per attempt with no retry loop — entries can only ever reach `retries=1`, never the `max_retries=5` threshold needed to park.",
+        "`replay_for_vault` never called `record_failure` on replay failure — it only logged 'will retry on next mount', meaning replay failures were invisible to the park mechanism.",
+        "Per-file IPNS records created during live first-publish include TEE enrollment (`encrypted_ipns_private_key = wrap_key(file_ipns_key, tee_key)` + `key_epoch`) — replay must replicate this or the TEE can't republish the record after 24h."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 898,
+          "end_line": 898,
+          "finding": "replay_for_vault skips entries with status Failed — park semantics are correct, the gap was entries never reaching Failed"
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 934,
+          "end_line": 935,
+          "finding": "F2: Err arm on replay_upload_entry only logged 'will retry on next mount', never called record_failure — fixed to call journal.record_failure(entry, &e)"
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 975,
+          "end_line": 976,
+          "finding": "F2: Second Err arm (replay_mkdir_entry) had the same missing record_failure call — same fix applied"
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 1340,
+          "end_line": 1340,
+          "finding": "F3: replay_upload_entry called coordinator.resolve_sequence() which errors 'not found' for files whose per-file IPNS was never created — fixed to detect not-found and create-as-first-publish with TEE enrollment"
+        },
+        {
+          "path": "crates/fuse/src/read_ops.rs",
+          "line": 983,
+          "end_line": 983,
+          "finding": "record_failure called exactly once per upload attempt, no retry loop — this is why entries cap at retries=1 and WriteParked can never fire at runtime"
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 137,
+          "end_line": 153,
+          "finding": "WriteParked emission logic in sync.rs counts Failed entries — correct, but unreachable because entries never reach Failed status at runtime (F2)"
+        },
+        {
+          "path": "crates/fuse/src/operations.rs",
+          "line": 125,
+          "end_line": 125,
+          "finding": "publish_file_metadata handles live first-publish: sets is_first_publish=true, seq via next_file_publish_sequence(true,None), and TEE-enrolls the per-file IPNS key — replay must mirror this for F3 fix"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/jwt-issuer.service.ts",
+          "line": 38,
+          "end_line": 38,
+          "finding": "Generates ephemeral RS256 keypair when IDENTITY_JWT_PRIVATE_KEY is unset in non-production — API boots without secrets"
+        }
+      ],
+      "workflow": [
+        "When a dev machine has conflicting FUSE implementations, create a pkg-config shim (`fuse.pc` aliased to the correct lib) in a local directory and prepend it to `PKG_CONFIG_PATH` before building — then verify with `pkg-config --libs fuse` before the cargo build.",
+        "After a `kill -9` or force-unmount leaves `~/CipherBox` in a wedged state, kill the stale `go-nfsv4` process and run `diskutil unmount force ~/CipherBox` before relaunching.",
+        "FUSE-T mounts surface as `smbfs` entries in the mount table — check for `fuse-t._smb._tcp.local` in `mount` output to confirm the mount materialized at the OS level, not just in fuser logs.",
+        "The `bopnd2ejn`-style background task IDs from the Bash tool don't survive between tool calls — use `/health` curl polls or `pgrep` to confirm background processes are still running.",
+        "zsh glob patterns in Bash tool scripts that find no matches abort the entire command (not just that step) — use `find` instead of globs when the files may not exist yet."
+      ]
+    },
+    "friction": [
+      "macFUSE and FUSE-T both installed on the dev machine — pkg-config silently resolved to macFUSE (kext not loaded), causing the mount to never materialize even though fuser logged 'mount confirmed'. Required a rebuild after creating a pkg-config shim.",
+      "15-minute access token TTL caused a 401 mid-test after elapsed wall-clock time during the FUSE-T debugging phase — required a full app restart before each test phase.",
+      "apps/desktop/.env was permission-blocked — couldn't read it to verify env key values; had to infer from `.env.example` and inline env vars.",
+      "fuser logging 'FUSE mount confirmed' even when the OS-level mount never materialized was a misleading false positive that took significant debugging time to diagnose.",
+      "zsh glob abort in a Bash tool script (`*.json` matched nothing) caused the entire crash+API-restart sequence to abort, leaving the app running and requiring manual cleanup.",
+      "`nohup &` relaunches inside tool shells didn't survive tool call exit — processes died, leaving mounts in wedged states.",
+      "Sandbox hypothesis (mount syscall blocked by Bash sandbox) was a dead end — required a rebuild before discovering the real macFUSE/FUSE-T root cause.",
+      "FUSE-T SMB mount pre-populates the inode table on mount — files converged remotely by replay are invisible in the current session without a remount."
+    ],
+    "open_items": [
+      "F1: `\"filename\"` stored in cleartext in `cb-journal/*.json` — violates ciphertext-only journal requirement; tracked in existing todo `2026-06-13-encrypt-share-itemname-at-rest`, deferred intentionally.",
+      "Windows/winfsp build path (`apps/desktop/src-tauri/src/fuse/windows/mod.rs`) updated with the F3 TEE params but can't be compiled on macOS — correctness relies on CI Windows build.",
+      "Pre-existing rustfmt drift in `cache.rs` (flagged during format check but predates this work) — not addressed.",
+      "Files that converge via replay are not visible in the current mount session's inode table — require a remount to surface; no in-session cache invalidation mechanism exists.",
+      "WriteParked tray notification has never been exercised at runtime (only via unit tests that call `record_failure` 5× directly) — should be validated end-to-end after F2 fix lands in a real multi-failure scenario."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-13T17:44:15.977727Z",
+    "agent_lines": 160,
+    "agent_removed": 11,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 160,
+    "total_lines_changed": 171,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

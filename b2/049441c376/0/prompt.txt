@@ -1,0 +1,2 @@
+<system-reminder>Message sent at Sat 2026-06-13 16:12:52 UTC.</system-reminder>
+Surely some of these test can be run against a full local stack and executed by the agent using the headless login mode
