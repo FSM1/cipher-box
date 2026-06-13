@@ -943,6 +943,21 @@ describe('VaultService', () => {
       expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
     });
 
+    it('no-row, cross-user, suppressCrossUserAudit: does NOT increment counter (internal rollback)', async () => {
+      // own row: null; any-user row: present (would normally count as cross-user)
+      mockManagerPinnedCidRepo.findOne
+        .mockResolvedValueOnce(null) // own findOne (userId + cid)
+        .mockResolvedValueOnce({ userId: 'otherUser', cid: testCid }); // any-user findOne (cid only)
+
+      await expect(
+        service.guardedUnpin(testUserId, testCid, { suppressCrossUserAudit: true })
+      ).resolves.toBeUndefined();
+
+      expect(mockMetricsService.unpinCrossUserAttempts.inc).not.toHaveBeenCalled();
+      expect(mockManagerPinnedCidRepo.delete).not.toHaveBeenCalled();
+      expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
+    });
+
     it('owned, refcount > 0: deletes caller row but does NOT insert outbox row or call Kubo', async () => {
       mockManagerPinnedCidRepo.findOne.mockResolvedValue(mockPinnedRow);
       mockManagerQueryBuilder.getRawOne.mockResolvedValue({ count: '1' });
@@ -991,13 +1006,15 @@ describe('VaultService', () => {
 
       const callOrder: string[] = [];
       mockManager.query.mockImplementation((sql: string) => {
-        if (sql.includes('hashtext')) {
-          callOrder.push('hashtext');
-          return Promise.resolve([{ h: '123456789' }]);
-        }
+        // The lock now computes its key inline, so the SQL contains both
+        // 'pg_advisory_xact_lock' and 'hashtext' — match the lock first.
         if (sql.includes('pg_advisory_xact_lock')) {
           callOrder.push('advisory_lock');
           return Promise.resolve([]);
+        }
+        if (sql.includes('hashtext')) {
+          callOrder.push('hashtext');
+          return Promise.resolve([{ h: '123456789' }]);
         }
         return Promise.resolve([]);
       });

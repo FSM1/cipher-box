@@ -5,7 +5,7 @@ vi.mock('../lib/api/ipfs', () => ({
 }));
 
 const mockRemoveUsage = vi.fn();
-const mockFetchQuota = vi.fn().mockResolvedValue(undefined);
+const mockFetchQuota = vi.fn().mockResolvedValue(true);
 
 vi.mock('../stores/quota.store', () => ({
   useQuotaStore: {
@@ -30,7 +30,7 @@ import { deleteFile } from './delete.service';
 describe('deleteFile', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFetchQuota.mockResolvedValue(undefined);
+    mockFetchQuota.mockResolvedValue(true);
   });
 
   it('calls unpinFromIpfs, then removeUsage, then fetchQuota in order', async () => {
@@ -43,6 +43,7 @@ describe('deleteFile', () => {
     });
     mockFetchQuota.mockImplementationOnce(async () => {
       callOrder.push('fetchQuota');
+      return true;
     });
 
     await deleteFile('bafytest123', 1024);
@@ -52,16 +53,15 @@ describe('deleteFile', () => {
     expect(mockFetchQuota).toHaveBeenCalledOnce();
   });
 
-  it('resolves even when fetchQuota rejects, and logs a warning', async () => {
-    const fetchError = new Error('quota endpoint unreachable');
-    mockFetchQuota.mockRejectedValueOnce(fetchError);
+  it('resolves and logs a warning when fetchQuota reports failure', async () => {
+    mockFetchQuota.mockResolvedValueOnce(false);
 
     await expect(deleteFile('bafytest456', 2048)).resolves.toBeUndefined();
 
     // Give the fire-and-forget microtask a chance to settle
     await Promise.resolve();
 
-    expect(logger.warn).toHaveBeenCalledWith('quota reconcile failed', fetchError);
+    expect(logger.warn).toHaveBeenCalledWith('quota reconcile failed');
   });
 
   it('invokes both removeUsage and fetchQuota before resolving', async () => {

@@ -11,6 +11,9 @@ import { MetricsService } from '../../metrics/metrics.service';
 
 const BATCH_SIZE = 50;
 
+// Bound the Kubo pin/ls call so a network hang can't stall the drift job forever.
+const KUBO_PIN_LS_TIMEOUT_MS = 30_000;
+
 @Processor('pending-unpins')
 export class PendingUnpinProcessor extends WorkerHost {
   private readonly logger = new Logger(PendingUnpinProcessor.name);
@@ -102,9 +105,20 @@ export class PendingUnpinProcessor extends WorkerHost {
    * Kubo pin/ls returns NDJSON (not a single JSON object) — see Pitfall 6.
    */
   private async fetchKuboPins(): Promise<Set<string>> {
-    const response = await fetch(`${this.apiUrl}/api/v0/pin/ls?type=recursive`, {
-      method: 'POST',
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.apiUrl}/api/v0/pin/ls?type=recursive`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(KUBO_PIN_LS_TIMEOUT_MS),
+      });
+    } catch (err) {
+      // AbortSignal.timeout fires a TimeoutError; surface a clear message so the
+      // drift job's failure is diagnosable rather than an opaque hang/abort.
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Kubo pin/ls request failed or timed out after ${KUBO_PIN_LS_TIMEOUT_MS}ms: ${message}`
+      );
+    }
 
     if (!response.ok) {
       const text = await response.text();
