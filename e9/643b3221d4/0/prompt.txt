@@ -82,3 +82,7 @@ please continue
 ---
 
 ok, since phase 42 changes are ready, should we get a PR for this up now?
+
+---
+
+can we also clean up the husky and other working tree noise on this pr already?
