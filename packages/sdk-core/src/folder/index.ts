@@ -194,7 +194,7 @@ export async function updateFolderMetadataAndPublish(params: {
   ctx: SdkContext;
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
-}): Promise<{ cid: string; newSequenceNumber: bigint }> {
+}): Promise<{ cid: string; newSequenceNumber: bigint; publishedChildren: FolderChild[] }> {
   return withPerf('folder:update-publish', async () => {
     // Merge-and-republish retry loop (D-01 through D-05).
     // encrypt+upload happens inside the loop so each attempt gets a fresh CID (D-03).
@@ -227,7 +227,7 @@ export async function updateFolderMetadataAndPublish(params: {
           expectedSequenceNumber: currentSeq.toString(),
           ctx: params.ctx,
         });
-        return { cid, newSequenceNumber: newSeq };
+        return { cid, newSequenceNumber: newSeq, publishedChildren: currentLocalChildren };
       } catch (err) {
         const is409 =
           (err as Error & { status?: number }).status === 409 ||
