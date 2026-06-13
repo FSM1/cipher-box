@@ -578,11 +578,24 @@ Plans:
 **Goal:** Close the unpin-path gaps in `apps/api`: verify caller owns a `pinned_cids(userId, cid)` row before unpinning, reference-count CIDs across users before issuing global Kubo `pin/rm`, delete the caller's row, and decrement quota via `recordUnpin` so deletes stop leaking quota
 **Requirements:** Todos `2026-06-11-ipfs-unpin-missing-ownership-check` + `2026-06-11-server-quota-never-decremented-on-unpin` (land together — unpin authorization, row deletion, and quota update must be consistent)
 **Depends on:** Phase 41
-**Plans:** 0 plans
-
+**Plans:** 8/8 plans complete
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd-plan-phase 42 to break down)
+- [x] 42-01-PLAN.md — PendingUnpin entity, 2 migrations, app.module registration, 3 audit/drift/outbox metrics (wave 1)
+- [x] 42-02-PLAN.md — Web quota reconcile: fetchQuota after removeUsage in deleteFile, D-12 (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 42-03-PLAN.md — VaultService.guardedUnpin: ownership + advisory lock + refcount + outbox + audit (wave 2)
+- [x] 42-04-PLAN.md — [BLOCKING] apply migrations to live DB; verify pending_unpins + idx_pinned_cids_cid exist (wave 2)
+- [x] 42-08-PLAN.md — Grafana alert on cipherbox_unpin_cross_user_attempts_total, D-02/D-10 (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 42-05-PLAN.md — IpfsController unpin delegation + upload compensation via guardedUnpin + api:generate (wave 3)
+- [x] 42-06-PLAN.md — pending-unpins BullMQ drain worker + read-only drift report job, D-05/D-06 (wave 3)
+- [x] 42-07-PLAN.md — One-shot non-BYO backfill script restoring honest quota, D-09 (wave 3)
 
 ### Phase 43: FUSE write durability
 

@@ -112,7 +112,7 @@
       "component": "@cipherbox/api-client",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.38.1"
+      "release-as": "0.39.0"
     },
     "packages/sdk-core": {
       "release-type": "node",

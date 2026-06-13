@@ -119,7 +119,15 @@ export class IpfsController {
     try {
       await this.vaultService.recordPin(req.user.id, result.cid, result.size);
     } catch (err) {
-      await this.ipfsProvider.unpinFile(result.cid).catch(() => undefined);
+      // RACE WINDOW NOTE (D-13): a concurrent deleter of the same deduped CID could
+      // have refcounted to zero between the Kubo pin above and recordPin here,
+      // leaving this uploader with a row-but-no-pin. Cryptographically negligible
+      // (requires identical ciphertext + sub-second window). Drift report detects.
+      // Internal compensation, not an external probe: suppress cross-user audit
+      // so a deduped-CID rollback can't emit a false cross-user security signal.
+      await this.vaultService
+        .guardedUnpin(req.user.id, result.cid, { suppressCrossUserAudit: true })
+        .catch(() => undefined);
       throw err;
     }
     this.metricsService.fileUploads.inc();
@@ -141,9 +149,8 @@ export class IpfsController {
     status: 401,
     description: 'Unauthorized - JWT token required',
   })
-  async unpin(@Body() dto: UnpinDto): Promise<UnpinResponseDto> {
-    await this.ipfsProvider.unpinFile(dto.cid);
-    this.metricsService.fileUnpins.inc();
+  async unpin(@Request() req: RequestWithUser, @Body() dto: UnpinDto): Promise<UnpinResponseDto> {
+    await this.vaultService.guardedUnpin(req.user.id, dto.cid);
     return { success: true };
   }
 

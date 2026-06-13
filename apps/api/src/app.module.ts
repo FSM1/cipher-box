@@ -19,10 +19,11 @@ import { RepublishModule } from './republish/republish.module';
 import { DeviceApprovalModule } from './device-approval/device-approval.module';
 import { SharesModule } from './shares/shares.module';
 import { MigrationModule } from './migration/migration.module';
+import { PendingUnpinModule } from './ipfs/pending-unpin/pending-unpin.module';
 import { User } from './auth/entities/user.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { AuthMethod } from './auth/entities/auth-method.entity';
-import { Vault, PinnedCid } from './vault/entities';
+import { Vault, PinnedCid, PendingUnpin } from './vault/entities';
 import { FolderIpns } from './ipns/entities';
 import { TeeKeyState } from './tee/tee-key-state.entity';
 import { TeeKeyRotationLog } from './tee/tee-key-rotation-log.entity';
@@ -97,6 +98,7 @@ import { PinMigration } from './migration/migration.entity';
           ShareKey,
           ShareInvite,
           PinMigration,
+          PendingUnpin,
         ],
         synchronize: false,
         migrations: [join(__dirname, 'migrations', '*.js')],
@@ -120,6 +122,7 @@ import { PinMigration } from './migration/migration.entity';
     DeviceApprovalModule,
     SharesModule,
     MigrationModule,
+    PendingUnpinModule,
   ],
   controllers: [AppController],
   providers: [

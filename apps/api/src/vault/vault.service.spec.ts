@@ -2,13 +2,17 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { VaultService, QUOTA_LIMIT_BYTES } from './vault.service';
 import { Vault } from './entities/vault.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
+import { PendingUnpin } from './entities/pending-unpin.entity';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
 import { User } from '../auth/entities/user.entity';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
+import { MetricsService } from '../metrics/metrics.service';
 import { InitVaultDto } from './dto/init-vault.dto';
+import { IPFS_PROVIDER } from '../ipfs/providers';
 
 describe('VaultService', () => {
   let service: VaultService;
@@ -45,6 +49,43 @@ describe('VaultService', () => {
   };
   let mockConfigService: {
     get: jest.Mock;
+  };
+
+  // guardedUnpin mocks
+  let mockDataSource: {
+    transaction: jest.Mock;
+  };
+  let mockManager: {
+    getRepository: jest.Mock;
+    query: jest.Mock;
+    createQueryBuilder: jest.Mock;
+  };
+  let mockManagerPinnedCidRepo: {
+    findOne: jest.Mock;
+    delete: jest.Mock;
+  };
+  let mockManagerPendingUnpinRepo: {
+    createQueryBuilder: jest.Mock;
+  };
+  let mockManagerQueryBuilder: {
+    select: jest.Mock;
+    where: jest.Mock;
+    getRawOne: jest.Mock;
+    insert: jest.Mock;
+    into: jest.Mock;
+    values: jest.Mock;
+    orIgnore: jest.Mock;
+    execute: jest.Mock;
+  };
+  let mockIpfsProvider: {
+    unpinFile: jest.Mock;
+  };
+  let mockMetricsService: {
+    unpinCrossUserAttempts: { inc: jest.Mock };
+    fileUnpins: { inc: jest.Mock };
+  };
+  let mockPendingUnpinRepository: {
+    delete: jest.Mock;
   };
 
   // Test data
@@ -115,6 +156,61 @@ describe('VaultService', () => {
       }),
     };
 
+    // Initialize guardedUnpin mocks
+    mockManagerQueryBuilder = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ count: '0' }),
+      insert: jest.fn().mockReturnThis(),
+      into: jest.fn().mockReturnThis(),
+      values: jest.fn().mockReturnThis(),
+      orIgnore: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({}),
+    };
+
+    mockManagerPinnedCidRepo = {
+      findOne: jest.fn(),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+
+    mockManagerPendingUnpinRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue(mockManagerQueryBuilder),
+    };
+
+    mockManager = {
+      getRepository: jest.fn().mockImplementation((Entity: unknown) => {
+        if (Entity === PinnedCid) return mockManagerPinnedCidRepo;
+        if (Entity === PendingUnpin) return mockManagerPendingUnpinRepo;
+        return {};
+      }),
+      query: jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('hashtext')) return Promise.resolve([{ h: '123456789' }]);
+        return Promise.resolve([]);
+      }),
+      createQueryBuilder: jest.fn().mockReturnValue(mockManagerQueryBuilder),
+    };
+
+    mockDataSource = {
+      transaction: jest
+        .fn()
+        .mockImplementation(async (cb: (manager: unknown) => Promise<unknown>) => {
+          return cb(mockManager);
+        }),
+    };
+
+    mockIpfsProvider = {
+      unpinFile: jest.fn().mockResolvedValue(undefined),
+    };
+
+    mockMetricsService = {
+      unpinCrossUserAttempts: { inc: jest.fn() },
+      fileUnpins: { inc: jest.fn() },
+    };
+
+    mockPendingUnpinRepository = {
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         VaultService,
@@ -135,12 +231,28 @@ describe('VaultService', () => {
           useValue: mockUserRepo,
         },
         {
+          provide: getRepositoryToken(PendingUnpin),
+          useValue: mockPendingUnpinRepository,
+        },
+        {
           provide: TeeKeyStateService,
           useValue: mockTeeKeyStateService,
         },
         {
           provide: ConfigService,
           useValue: mockConfigService,
+        },
+        {
+          provide: DataSource,
+          useValue: mockDataSource,
+        },
+        {
+          provide: IPFS_PROVIDER,
+          useValue: mockIpfsProvider,
+        },
+        {
+          provide: MetricsService,
+          useValue: mockMetricsService,
         },
       ],
     }).compile();
@@ -800,6 +912,123 @@ describe('VaultService', () => {
       const result = await service.getQuota(testUserId);
 
       expect(result.advisory).toBe(false);
+    });
+  });
+
+  describe('guardedUnpin', () => {
+    const testCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
+    const mockPinnedRow = { userId: testUserId, cid: testCid };
+
+    it('no-row, CID unknown: resolves without touching Kubo, quota, or cross-user counter', async () => {
+      mockManagerPinnedCidRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.guardedUnpin(testUserId, testCid)).resolves.toBeUndefined();
+
+      expect(mockManagerPinnedCidRepo.delete).not.toHaveBeenCalled();
+      expect(mockManagerPendingUnpinRepo.createQueryBuilder).not.toHaveBeenCalled();
+      expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
+      expect(mockMetricsService.unpinCrossUserAttempts.inc).not.toHaveBeenCalled();
+    });
+
+    it('no-row, cross-user: calls unpinCrossUserAttempts.inc and logger.warn, no delete, no Kubo', async () => {
+      // own row: null; any-user row: has a row (cross-user)
+      mockManagerPinnedCidRepo.findOne
+        .mockResolvedValueOnce(null) // own findOne (userId + cid)
+        .mockResolvedValueOnce({ userId: 'otherUser', cid: testCid }); // any-user findOne (cid only)
+
+      await expect(service.guardedUnpin(testUserId, testCid)).resolves.toBeUndefined();
+
+      expect(mockMetricsService.unpinCrossUserAttempts.inc).toHaveBeenCalledTimes(1);
+      expect(mockManagerPinnedCidRepo.delete).not.toHaveBeenCalled();
+      expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
+    });
+
+    it('no-row, cross-user, suppressCrossUserAudit: does NOT increment counter (internal rollback)', async () => {
+      // own row: null; any-user row: present (would normally count as cross-user)
+      mockManagerPinnedCidRepo.findOne
+        .mockResolvedValueOnce(null) // own findOne (userId + cid)
+        .mockResolvedValueOnce({ userId: 'otherUser', cid: testCid }); // any-user findOne (cid only)
+
+      await expect(
+        service.guardedUnpin(testUserId, testCid, { suppressCrossUserAudit: true })
+      ).resolves.toBeUndefined();
+
+      expect(mockMetricsService.unpinCrossUserAttempts.inc).not.toHaveBeenCalled();
+      expect(mockManagerPinnedCidRepo.delete).not.toHaveBeenCalled();
+      expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
+    });
+
+    it('owned, refcount > 0: deletes caller row but does NOT insert outbox row or call Kubo', async () => {
+      mockManagerPinnedCidRepo.findOne.mockResolvedValue(mockPinnedRow);
+      mockManagerQueryBuilder.getRawOne.mockResolvedValue({ count: '1' });
+
+      await expect(service.guardedUnpin(testUserId, testCid)).resolves.toBeUndefined();
+
+      expect(mockManagerPinnedCidRepo.delete).toHaveBeenCalledWith({
+        userId: testUserId,
+        cid: testCid,
+      });
+      expect(mockManagerQueryBuilder.execute).not.toHaveBeenCalled();
+      expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
+    });
+
+    it('owned, refcount === 0: inserts outbox row inside transaction, then calls Kubo and deletes outbox row post-commit', async () => {
+      mockManagerPinnedCidRepo.findOne.mockResolvedValue(mockPinnedRow);
+      mockManagerQueryBuilder.getRawOne.mockResolvedValue({ count: '0' });
+      mockIpfsProvider.unpinFile.mockResolvedValue(undefined);
+
+      await expect(service.guardedUnpin(testUserId, testCid)).resolves.toBeUndefined();
+
+      expect(mockManagerPinnedCidRepo.delete).toHaveBeenCalledWith({
+        userId: testUserId,
+        cid: testCid,
+      });
+      expect(mockManagerQueryBuilder.orIgnore).toHaveBeenCalled();
+      expect(mockManagerQueryBuilder.execute).toHaveBeenCalled();
+      expect(mockIpfsProvider.unpinFile).toHaveBeenCalledWith(testCid);
+      expect(mockPendingUnpinRepository.delete).toHaveBeenCalledWith({ cid: testCid });
+    });
+
+    it('owned, refcount === 0, Kubo throws: guardedUnpin still resolves, outbox row left (for worker)', async () => {
+      mockManagerPinnedCidRepo.findOne.mockResolvedValue(mockPinnedRow);
+      mockManagerQueryBuilder.getRawOne.mockResolvedValue({ count: '0' });
+      mockIpfsProvider.unpinFile.mockRejectedValue(new Error('Kubo unavailable'));
+
+      await expect(service.guardedUnpin(testUserId, testCid)).resolves.toBeUndefined();
+
+      expect(mockIpfsProvider.unpinFile).toHaveBeenCalledWith(testCid);
+      expect(mockPendingUnpinRepository.delete).not.toHaveBeenCalled();
+    });
+
+    it('advisory lock ordering: pg_advisory_xact_lock is called via manager.query BEFORE pinnedCidRepo.delete', async () => {
+      mockManagerPinnedCidRepo.findOne.mockResolvedValue(mockPinnedRow);
+      mockManagerQueryBuilder.getRawOne.mockResolvedValue({ count: '1' });
+
+      const callOrder: string[] = [];
+      mockManager.query.mockImplementation((sql: string) => {
+        // The lock now computes its key inline, so the SQL contains both
+        // 'pg_advisory_xact_lock' and 'hashtext' — match the lock first.
+        if (sql.includes('pg_advisory_xact_lock')) {
+          callOrder.push('advisory_lock');
+          return Promise.resolve([]);
+        }
+        if (sql.includes('hashtext')) {
+          callOrder.push('hashtext');
+          return Promise.resolve([{ h: '123456789' }]);
+        }
+        return Promise.resolve([]);
+      });
+      mockManagerPinnedCidRepo.delete.mockImplementation(() => {
+        callOrder.push('delete');
+        return Promise.resolve({ affected: 1 });
+      });
+
+      await service.guardedUnpin(testUserId, testCid);
+
+      const lockIdx = callOrder.indexOf('advisory_lock');
+      const deleteIdx = callOrder.indexOf('delete');
+      expect(lockIdx).toBeGreaterThanOrEqual(0);
+      expect(deleteIdx).toBeGreaterThan(lockIdx);
     });
   });
 });
