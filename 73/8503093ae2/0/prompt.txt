@@ -1,0 +1,13 @@
+Verify each finding against current code. Fix only still-valid issues, skip the
+rest with a brief reason, keep changes minimal, and validate.
+
+Outside diff comments:
+In `@apps/web/src/services/delete.service.test.ts`:
+- Around line 51-53: The test promises to verify "then fetchQuota in order" but
+only checks mockFetchQuota was called once; update the assertions to also verify
+ordering by adding an expectation that callOrder[2] (the third call) equals
+'fetchQuota' and optionally replace mockFetchQuota assertion with
+expect(mockFetchQuota).toHaveBeenCalledTimes(1) for clarity. Locate the
+assertions around callOrder and mockFetchQuota in delete.service.test.ts and add
+expect(callOrder[2]).toBe('fetchQuota'); while keeping or changing the existing
+mockFetchQuota assertion to toHaveBeenCalledTimes(1).
