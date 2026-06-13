@@ -464,8 +464,9 @@ export function useFileOperations() {
           sequenceNumber: parentFolder.sequenceNumber,
           ctx: getSdkClient().getContext(),
         })
-          .then(({ newSequenceNumber }) => {
+          .then(({ newSequenceNumber, publishedChildren }) => {
             useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
+            useFolderStore.getState().updateFolderChildren(parentId, publishedChildren);
           })
           .catch((err) => {
             if (isConflictExhausted(err)) {

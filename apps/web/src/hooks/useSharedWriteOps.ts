@@ -141,9 +141,9 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
                 mimeType: file.type || undefined,
               });
               p.sequenceNumberRef.current = result.newSequenceNumber;
-              p.folderChildrenRef.current = result.updatedChildren;
+              p.folderChildrenRef.current = result.publishedChildren;
               p.setCurrentSequenceNumber(result.newSequenceNumber);
-              p.setFolderChildren(result.updatedChildren);
+              p.setFolderChildren(result.publishedChildren);
             },
             async () => {
               await resyncSharedFolder();
@@ -188,9 +188,9 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
               };
               const result = await createSharedSubfolder(freshCtx, { name });
               p.sequenceNumberRef.current = result.newSequenceNumber;
-              p.folderChildrenRef.current = result.updatedChildren;
+              p.folderChildrenRef.current = result.publishedChildren;
               p.setCurrentSequenceNumber(result.newSequenceNumber);
-              p.setFolderChildren(result.updatedChildren);
+              p.setFolderChildren(result.publishedChildren);
             },
             async () => {
               await resyncSharedFolder();
@@ -235,9 +235,9 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
               };
               const result = await renameInSharedFolder(freshCtx, { itemId: item.id, newName });
               p.sequenceNumberRef.current = result.newSequenceNumber;
-              p.folderChildrenRef.current = result.updatedChildren;
+              p.folderChildrenRef.current = result.publishedChildren;
               p.setCurrentSequenceNumber(result.newSequenceNumber);
-              p.setFolderChildren(result.updatedChildren);
+              p.setFolderChildren(result.publishedChildren);
             },
             async () => {
               await resyncSharedFolder();
@@ -345,9 +345,9 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
               };
               const result = await deleteFromSharedFolder(freshCtx, { itemId: item.id });
               p.sequenceNumberRef.current = result.newSequenceNumber;
-              p.folderChildrenRef.current = result.updatedChildren;
+              p.folderChildrenRef.current = result.publishedChildren;
               p.setCurrentSequenceNumber(result.newSequenceNumber);
-              p.setFolderChildren(result.updatedChildren);
+              p.setFolderChildren(result.publishedChildren);
             },
             async () => {
               await resyncSharedFolder();
