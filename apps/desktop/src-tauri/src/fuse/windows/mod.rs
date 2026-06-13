@@ -368,6 +368,8 @@ mod mount_impl {
             &root_folder_key,
             &root_ipns_name,
             publish_coordinator.clone(),
+            tee_public_key.as_deref(),
+            tee_key_epoch,
         )
         .await;
 

@@ -238,6 +238,8 @@ pub async fn mount_filesystem(
         &root_folder_key,
         &root_ipns_name,
         publish_coordinator.clone(),
+        tee_public_key.as_deref(),
+        tee_key_epoch,
     )
     .await;
 
