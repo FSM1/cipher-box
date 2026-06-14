@@ -233,6 +233,7 @@ Recent for v1.1:
 - Phase 42 added: API unpin integrity — ownership check, cross-user refcount, quota decrement (audit gap closure, todos 2026-06-11)
 - Phase 43 added: FUSE write durability — persisted upload journal, mkdir orphan fix (audit gap closure, todos 2026-06-11)
 - Phase 44 added: IPNS conflict handling — merge-on-409, file CAS (audit gap closure, todo 2026-06-11)
+- Phase 45 added: Desktop FUSE write-durability cleanup — Rust hygiene refactors + test coverage for phase 43/44 journal+replay (todos #11, #12, #14, #15, #18, #19, #20); excludes data-loss bugs #7/#8/#17
 
 ### Open Concerns
 

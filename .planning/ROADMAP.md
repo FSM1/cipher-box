@@ -656,6 +656,33 @@ Plans:
 - [x] 44-06-PLAN.md — Return publishedChildren from updateFolderMetadataAndPublish + adopt at all 14 caller sites so the next write composes from the merged set (CR-01, WR-08 folder test)
 - [x] 44-07-PLAN.md — Filter prunedCids against published mergedMetadata references before return so live version CIDs are never unpinned (CR-02, WR-08 file test)
 
+### Phase 45: Desktop FUSE write-durability cleanup
+
+**Goal:** Rust-only hygiene refactors and added test coverage for the Phase 43/44 FUSE write journal and crash-recovery replay code. No behavior change — pay down the structural debt that accumulated while shipping durable writes, and harden the replay path with tests. Explicitly excludes the desktop-fuse data-loss bugs (mkdir-orphan, release() silent loss, stale-mount recovery), which are tracked separately as bug work.
+**Requirements:** Consolidate the duplicated `fuser`/`winfsp` journal write paths; extract a shared journal-dir + max-retries helper; replace stringly-typed code in replay (empty-string journal-key sentinel → `Option<String>`, not-found string match → typed error); reduce repeated work in replay (memoize `resolve_folder_key`, reuse `publish_file_metadata` + a cas-publish helper); raise Phase-43 rust write-durability test coverage. All changes must preserve current behavior and keep crash-recovery semantics intact.
+**Depends on:** Phase 44
+**Plans:** 0 plans
+
+Scope (captured todos):
+
+- [ ] #11 — Consolidate `fuser` and `winfsp` journal write paths
+- [ ] #12 — Extract a shared journal-dir and max-retries helper
+- [ ] #15 — Memoize `resolve_folder_key` during replay
+- [ ] #18 — Replace empty-string journal key sentinel with `Option<String>`
+- [ ] #19 — Replace not-found string match with a typed error in replay
+- [ ] #20 — Reuse `publish_file_metadata` and a cas-publish helper in replay
+- [ ] #14 — Improve Phase-43 rust write-durability test coverage
+
+Out of scope (tracked as separate bug work):
+
+- #7 FUSE mkdir orphans the new folder when parent publish conflicts
+- #8 FUSE release() reports success then can silently lose data
+- #17 Recover stale FUSE mount after crash on Linux startup
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 45 to break down)
+
 ---
 
 _Roadmap created: 2026-03-07_
