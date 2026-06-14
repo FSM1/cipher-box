@@ -26,25 +26,30 @@ pub async fn start_sync_daemon(
 /// writes via `WriteParked` notifications, so it MUST be started once the vault
 /// is mounted; otherwise failed uploads never reach the user (G-43-UAT-01).
 pub fn spawn_sync_daemon(app: tauri::AppHandle, state: &AppState) -> Result<(), String> {
-    // Idempotent: if a daemon is already running, keep it. The daemon reads auth/vault
-    // state from the shared KeyState each poll, so it adapts across re-auth without a
-    // restart — spawning a second loop would leave two daemons polling and double every
-    // status update and WriteParked notification (the D-10 spam this phase prevents).
-    if let Ok(guard) = state.sync_trigger.read() {
+    // Idempotent singleton: if a daemon is already running, keep it. The daemon reads
+    // auth/vault state from the shared KeyState each poll, so it adapts across re-auth
+    // without a restart — spawning a second loop would leave two daemons polling and
+    // double every status update and WriteParked notification (the D-10 spam this phase
+    // prevents).
+    let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
+
+    // Check-and-set the trigger sender under a single write lock so two concurrent
+    // callers can't both pass the "already running?" check and each spawn a daemon. A
+    // poisoned lock is surfaced as an error rather than silently ignored — ignoring it
+    // would spawn a daemon whose sender the tray "Sync Now" button could never reach.
+    {
+        let mut guard = state
+            .sync_trigger
+            .write()
+            .map_err(|_| "sync_trigger lock poisoned".to_string())?;
         if guard.is_some() {
             log::debug!("Sync daemon already running; skipping spawn");
             return Ok(());
         }
+        *guard = Some(tx);
     }
 
     log::info!("Starting background sync daemon");
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
-
-    // Store the sender in AppState so the tray "Sync Now" button can trigger syncs
-    if let Ok(mut guard) = state.sync_trigger.write() {
-        *guard = Some(tx);
-    }
 
     // Build the journal directory using the same resolution as the FUSE mount
     // (apps/desktop/src-tauri/src/fuse/mod.rs) so daemon and FUSE share the
