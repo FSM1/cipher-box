@@ -74,6 +74,16 @@ pub enum JournalOp {
     },
 }
 
+impl JournalOp {
+    /// Creation timestamp (ms since Unix epoch) carried by every variant.
+    pub fn created_at_ms(&self) -> u64 {
+        match self {
+            JournalOp::MkdirPublish { created_at_ms, .. }
+            | JournalOp::UploadFile { created_at_ms, .. } => *created_at_ms,
+        }
+    }
+}
+
 /// Lifecycle state of a journal entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum JournalEntryStatus {
@@ -314,14 +324,8 @@ impl WriteQueue {
 
         // WR-01: sort each group by created_at_ms ascending (stable sort preserves
         // relative order of entries with identical timestamps).
-        mkdir_entries.sort_by_key(|e| match &e.op {
-            JournalOp::MkdirPublish { created_at_ms, .. } => *created_at_ms,
-            JournalOp::UploadFile { created_at_ms, .. } => *created_at_ms,
-        });
-        upload_entries.sort_by_key(|e| match &e.op {
-            JournalOp::MkdirPublish { created_at_ms, .. } => *created_at_ms,
-            JournalOp::UploadFile { created_at_ms, .. } => *created_at_ms,
-        });
+        mkdir_entries.sort_by_key(|e| e.op.created_at_ms());
+        upload_entries.sort_by_key(|e| e.op.created_at_ms());
 
         mkdir_entries.extend(upload_entries);
         mkdir_entries
@@ -430,13 +434,14 @@ mod tests {
     /// D-05: journal must not persist plaintext or raw key bytes.
     #[test]
     fn journal_no_plaintext() {
-        let plaintext_probe = "super_secret_plaintext_content";
         let entry = make_upload_entry("noplain", "k51vault");
         let json = serde_json::to_vec(&entry).expect("serialize");
         let json_str = String::from_utf8(json).expect("utf8");
+        // Keys must be stored encoded, never as raw bytes: make_upload_entry wraps the
+        // raw bytes b"wrappedkey", so the literal must not appear — only its hex form.
         assert!(
-            !json_str.contains(plaintext_probe),
-            "Journal must not contain plaintext"
+            !json_str.contains("wrappedkey"),
+            "Journal must store keys hex-encoded, not as raw bytes"
         );
         assert!(
             !json_str.contains("\"plaintext\""),

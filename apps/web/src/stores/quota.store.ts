@@ -17,7 +17,10 @@ const initialState = {
 let quotaSessionVersion = 0;
 
 type QuotaState = typeof initialState & {
-  fetchQuota: () => Promise<void>;
+  // Resolves true when the quota was refreshed (or the response was discarded as
+  // stale after a session reset), false when the underlying fetch failed. Never
+  // rejects, so fire-and-forget callers can branch on the result without a catch.
+  fetchQuota: () => Promise<boolean>;
   removeUsage: (bytes: number) => void;
   canUpload: (bytes: number) => boolean;
   reset: () => void;
@@ -31,7 +34,7 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const quota: QuotaResponse = await vaultApi.getQuota();
-      if (requestVersion !== quotaSessionVersion) return;
+      if (requestVersion !== quotaSessionVersion) return true;
       set({
         usedBytes: quota.usedBytes,
         limitBytes: quota.limitBytes,
@@ -39,9 +42,12 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
         advisory: quota.advisory ?? false,
         loading: false,
       });
+      return true;
     } catch {
-      if (requestVersion !== quotaSessionVersion) return;
+      // Stale response after a session reset: not a real failure, don't signal one.
+      if (requestVersion !== quotaSessionVersion) return true;
       set({ error: 'Failed to fetch quota', loading: false });
+      return false;
     }
   },
 

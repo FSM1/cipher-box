@@ -160,9 +160,7 @@ describe('PendingUnpinProcessor', () => {
       } as unknown as Response);
 
       // DB set: pinned_cids has cidA; pending_unpins is empty
-      mockPinnedCidRepository.find.mockResolvedValue([
-        { cid: 'cidA' } as PinnedCid,
-      ]);
+      mockPinnedCidRepository.find.mockResolvedValue([{ cid: 'cidA' } as PinnedCid]);
       mockPendingUnpinRepository.find.mockResolvedValue([]);
 
       await processor.process(makeJob('drift-report'));
@@ -187,9 +185,7 @@ describe('PendingUnpinProcessor', () => {
         text: jest.fn().mockResolvedValue(ndjson),
       } as unknown as Response);
 
-      mockPinnedCidRepository.find.mockResolvedValue([
-        { cid: 'cidA' } as PinnedCid,
-      ]);
+      mockPinnedCidRepository.find.mockResolvedValue([{ cid: 'cidA' } as PinnedCid]);
       mockPendingUnpinRepository.find.mockResolvedValue([]);
 
       await processor.process(makeJob('drift-report'));

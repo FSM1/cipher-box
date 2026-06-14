@@ -242,6 +242,21 @@ Additionally, `SyncDaemon` constructs `WriteQueue::default()` (`sync.rs:64`) poi
 **Issue:** `fetch_merge_publish_parent` seeds the sequence cache via `record_publish(parent_ipns_name, seq)` despite publishing nothing. Currently masked by CR-01; remove when reworking that function so the cache only reflects confirmed publishes.
 **Fix:** Delete the call; `resolve_sequence` already updated the cache with the resolved value.
 
+## Post-Review Resolution (2026-06-14)
+
+All 8 critical findings (CR-01..CR-08) were verified resolved via a code cross-check against the current implementation and a CodeRabbit re-review on 2026-06-14.
+
+| Finding | Status | Resolution (commits) |
+| ------- | ------ | -------------------- |
+| CR-01 | FIXED | Replay now journals the user-ECIES-wrapped parent IPNS key, CAS-publishes the parent IPNS record, returns `Err` until `PublishResult::Success` (entry retained on failure), and unpins only in the post-Success arm against the stale pre-merge CID (4bc1a0278, 0b8545bad, 7633cf795). |
+| CR-02 | FIXED | `replay_upload_entry` now unwraps the journaled key with the user private key before the `[u8;32]` conversion, and step 4 stores the journaled wrapped hex as-is with no double-wrap (4bc1a0278, 0b8545bad). |
+| CR-03 | FIXED | Both fuser and winfsp paths journal the user-ECIES-wrapped child IPNS key; the TEE-wrapped key is segregated to the live publish request, the residual TEE fallback was removed, and journal IPNS-key wraps now warn-and-empty on failure (this change). |
+| CR-04 | FIXED | The fuser prepare-failure path returns `reply.error(EIO)` instead of `reply.ok()`, and all in-memory mutations (inode kind/attr, pending_content, queued publish) are deferred until after the journal fsync, so a failure leaves no partial state and needs no rollback; Windows Cleanup returns VOID, so the same no-mutation-on-failure deferral is its mitigation (4e8c48020, this change). |
+| CR-05 | FIXED | `UploadSpawnParams` now uses `Arc<ApiClient>`, `tokio::runtime::Handle`, and `Arc<crate::PublishCoordinator>`; CI compiles `cargo check --features winfsp` (963468eed). |
+| CR-06 | FIXED | Windows mount now calls `replay_for_vault` and seeds the coordinator, mirroring macOS (ad2339d7e). |
+| CR-07 | FIXED | `SyncDaemon` is wired to the real cb-journal `WriteQueue` (Default impl removed); `sync_cycle` loads entries via `load_all_for_vault` and emits `SyncStatus::WriteParked`, background-upload failures call `record_failure`, and the tray surfaces WriteParked plus a notification (d5cae52fc, 0d4cc08c4, 7633cf795, 7a9f3ca75, 5b6455c34). |
+| CR-08 | FIXED | Entry removal is now replay-only and parent-publish-gated; the live upload thread no longer removes entries and `publish_file_metadata` failure no longer triggers removal (4e8c48020, 293de3f4c). |
+
 ---
 
 Reviewed: 2026-06-12T19:13:45Z

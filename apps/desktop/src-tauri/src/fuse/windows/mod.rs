@@ -64,7 +64,10 @@ mod mount_impl {
 
         // Stable journal dir for durable write journal
         let journal_dir = dirs::data_local_dir()
-            .unwrap_or_else(|| std::env::temp_dir())
+            .unwrap_or_else(|| {
+                log::warn!("data_local_dir unavailable; journal will use temp_dir (may not survive reboot)");
+                std::env::temp_dir()
+            })
             .join("cipherbox")
             .join("cb-journal");
         std::fs::create_dir_all(&journal_dir)
@@ -368,6 +371,8 @@ mod mount_impl {
             &root_folder_key,
             &root_ipns_name,
             publish_coordinator.clone(),
+            tee_public_key.as_deref(),
+            tee_key_epoch,
         )
         .await;
 

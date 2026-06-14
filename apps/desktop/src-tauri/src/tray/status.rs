@@ -43,10 +43,19 @@ impl TrayStatus {
 
     /// Returns `true` when the app is authenticated and has (or had) a mounted filesystem.
     ///
-    /// True for Syncing, Synced, Offline (connected but temporarily unreachable).
-    /// False for NotConnected, Mounting, Error, WriteParked.
+    /// True for Syncing, Synced, Offline, and WriteParked — states where the user is
+    /// authenticated and can still take recovery actions. In particular WriteParked keeps
+    /// Logout enabled (gated on this) so a user with parked uploads is not locked out of
+    /// the tray. (Open/Sync are gated separately by `is_mounted`/`is_syncable`.)
+    /// False for NotConnected, Mounting, Error.
     pub fn is_connected(&self) -> bool {
-        matches!(self, TrayStatus::Syncing | TrayStatus::Synced | TrayStatus::Offline)
+        matches!(
+            self,
+            TrayStatus::Syncing
+                | TrayStatus::Synced
+                | TrayStatus::Offline
+                | TrayStatus::WriteParked
+        )
     }
 }
 
@@ -73,6 +82,7 @@ mod tests {
         assert!(TrayStatus::Synced.is_connected());
         assert!(TrayStatus::Offline.is_connected());
         assert!(!TrayStatus::Error("oops".into()).is_connected());
-        assert!(!TrayStatus::WriteParked.is_connected());
+        // WriteParked is authenticated + mounted: stays connected so Logout remains enabled.
+        assert!(TrayStatus::WriteParked.is_connected());
     }
 }

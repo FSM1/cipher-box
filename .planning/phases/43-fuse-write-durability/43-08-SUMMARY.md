@@ -150,6 +150,18 @@ The threat register entries T-43-31/T-43-32/T-43-33 from the plan are fully miti
 
 ## Self-Check
 
+### Post-Review Resolution
+
+The phase-43 code review (`43-REVIEW.md`) flagged 8 critical findings (CR-01..CR-08)
+on 2026-06-12, including CR-07 which this plan addresses. As of 2026-06-14, all 8
+criticals were verified resolved via a code cross-check against the current
+implementation and a CodeRabbit re-review. See the "Post-Review Resolution
+(2026-06-14)" section in `43-REVIEW.md` for the per-finding status and commits.
+
+The Self-Check below predates that reconciliation; it confirms this plan's own
+deliverables, and the resolution note above closes the gap against the review's
+critical findings.
+
 ---
 
 Checking created files exist...

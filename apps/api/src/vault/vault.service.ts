@@ -239,29 +239,33 @@ export class VaultService {
    * Security properties (D-01..D-05):
    * - D-01: Ownership check; no-row path touches nothing (no oracle)
    * - D-02: Cross-user attempt increments unpinCrossUserAttempts metric + warns
+   *         (skipped when options.suppressCrossUserAudit is set — used by internal
+   *         upload-rollback compensation, which is not an external probe)
    * - D-03: Row delete IS the quota decrement (in-transaction); Kubo outside
    * - D-04: pg_advisory_xact_lock as first statement serializes concurrent deletes
    * - D-05: orIgnore insert into outbox only when refcount === 0
    */
-  async guardedUnpin(userId: string, cid: string): Promise<void> {
+  async guardedUnpin(
+    userId: string,
+    cid: string,
+    options?: { suppressCrossUserAudit?: boolean }
+  ): Promise<void> {
     let outboxRowInserted = false;
 
     await this.dataSource.transaction(async (manager) => {
       const pinnedCidRepo = manager.getRepository(PinnedCid);
       const pendingUnpinRepo = manager.getRepository(PendingUnpin);
 
-      // 1. Advisory xact lock — MUST be first statement (D-04)
+      // 1. Advisory xact lock — MUST be the first transactional statement (D-04)
+      // Compute the lock key inline so the lock is literally the first statement;
       // abs() avoids bigint-out-of-range on negative hashtext values (Pitfall 2)
-      const [{ h }] = (await manager.query(`SELECT abs(hashtext($1))::bigint AS h`, [cid])) as [
-        { h: string },
-      ];
-      await manager.query(`SELECT pg_advisory_xact_lock($1)`, [h]);
+      await manager.query(`SELECT pg_advisory_xact_lock(abs(hashtext($1))::bigint)`, [cid]);
 
       // 2. Ownership check (D-01)
       const row = await pinnedCidRepo.findOne({ where: { userId, cid } });
       if (!row) {
         const otherRow = await pinnedCidRepo.findOne({ where: { cid } });
-        if (otherRow) {
+        if (otherRow && !options?.suppressCrossUserAudit) {
           this.logger.warn(`Cross-user unpin attempt userId=${userId} cid=${cid}`);
           this.metricsService.unpinCrossUserAttempts.inc();
         }

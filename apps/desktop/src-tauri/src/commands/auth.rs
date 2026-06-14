@@ -281,6 +281,15 @@ pub(crate) async fn complete_auth_setup(
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;
                 let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
                 log::info!("Filesystem mounted at {}", crate::fuse::mount_point().display());
+
+                // Start the background sync daemon now that the vault is mounted.
+                // Every auth flow (OAuth, email, session-restore, dev-key test-login)
+                // funnels through complete_auth_setup, so this is the single point that
+                // guarantees the daemon runs — without it, parked writes never surface
+                // via WriteParked notifications (G-43-UAT-01).
+                if let Err(e) = super::sync::spawn_sync_daemon(app.clone(), state) {
+                    log::warn!("Failed to start sync daemon (non-fatal): {}", e);
+                }
             }
             Err(e) => {
                 let err_msg = format!("Filesystem mount failed: {}", e);

@@ -57,8 +57,14 @@ export class PendingUnpinModule implements OnModuleInit {
         'PendingUnpin schedulers registered: drain every 5 min, drift report every hour'
       );
     } catch (error) {
-      // Redis may be unavailable during development; non-fatal
       const message = error instanceof Error ? error.message : String(error);
+      // Outside production, Redis may be unavailable (local dev / tests) — non-fatal.
+      // In production, swallowing this would leave drain/drift jobs unregistered and
+      // pending_unpins stuck with no recovery, so fail fast on startup instead.
+      if (process.env.NODE_ENV === 'production') {
+        this.logger.error(`Failed to register PendingUnpin schedulers: ${message}`);
+        throw error;
+      }
       this.logger.warn(`Failed to register PendingUnpin schedulers (non-fatal): ${message}`);
     }
   }
