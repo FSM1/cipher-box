@@ -8,9 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::Write as _;
-use std::path::PathBuf;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::PathBuf;
 
 /// The operation encoded by a journal entry.
 ///
@@ -151,8 +151,8 @@ impl WriteQueue {
     /// After the file fsync, the parent journal directory is also fsynced so the new
     /// directory entry is durable on crash (WR-03b).
     pub fn put(&self, entry: &JournalEntry) -> Result<(), String> {
-        let json = serde_json::to_vec(entry)
-            .map_err(|e| format!("Journal serialize failed: {}", e))?;
+        let json =
+            serde_json::to_vec(entry).map_err(|e| format!("Journal serialize failed: {}", e))?;
 
         let path = self.journal_dir.join(format!("{}.json", entry.id));
 
@@ -177,8 +177,7 @@ impl WriteQueue {
 
         // WR-03b: fsync the parent journal directory so the new dirent is durable.
         // Errors are ignored on platforms where directory fsync is unsupported.
-        let _ = std::fs::File::open(&self.journal_dir)
-            .and_then(|d| d.sync_all());
+        let _ = std::fs::File::open(&self.journal_dir).and_then(|d| d.sync_all());
 
         Ok(())
     }
@@ -193,8 +192,7 @@ impl WriteQueue {
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 // WR-03b: fsync parent dir after removal.
-                let _ = std::fs::File::open(&self.journal_dir)
-                    .and_then(|d| d.sync_all());
+                let _ = std::fs::File::open(&self.journal_dir).and_then(|d| d.sync_all());
                 Ok(())
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -206,18 +204,14 @@ impl WriteQueue {
     ///
     /// Skips files that cannot be parsed with a `log::warn!` (never panics — V5, T-43-03).
     /// Returns only entries whose `vault_root_ipns` matches the given value (D-07).
-    pub fn load_all_for_vault(
-        &self,
-        vault_root_ipns: &str,
-    ) -> Result<Vec<JournalEntry>, String> {
+    pub fn load_all_for_vault(&self, vault_root_ipns: &str) -> Result<Vec<JournalEntry>, String> {
         let read_dir = std::fs::read_dir(&self.journal_dir)
             .map_err(|e| format!("Journal dir read failed: {}", e))?;
 
         let mut entries = Vec::new();
 
         for dir_entry in read_dir {
-            let dir_entry =
-                dir_entry.map_err(|e| format!("Journal dir entry error: {}", e))?;
+            let dir_entry = dir_entry.map_err(|e| format!("Journal dir entry error: {}", e))?;
             let path = dir_entry.path();
 
             // Only process *.json files.
@@ -228,11 +222,7 @@ impl WriteQueue {
             let bytes = match std::fs::read(&path) {
                 Ok(b) => b,
                 Err(e) => {
-                    log::warn!(
-                        "Journal: failed to read {:?}: {} — skipping",
-                        path,
-                        e
-                    );
+                    log::warn!("Journal: failed to read {:?}: {} — skipping", path, e);
                     continue;
                 }
             };
@@ -241,11 +231,7 @@ impl WriteQueue {
             let entry: JournalEntry = match serde_json::from_slice(&bytes) {
                 Ok(e) => e,
                 Err(e) => {
-                    log::warn!(
-                        "Journal: malformed entry at {:?}: {} — skipping",
-                        path,
-                        e
-                    );
+                    log::warn!("Journal: malformed entry at {:?}: {} — skipping", path, e);
                     continue;
                 }
             };
@@ -260,11 +246,7 @@ impl WriteQueue {
     }
 
     /// Overwrite the status of an entry on disk.
-    pub fn update_status(
-        &self,
-        id: &str,
-        status: JournalEntryStatus,
-    ) -> Result<(), String> {
+    pub fn update_status(&self, id: &str, status: JournalEntryStatus) -> Result<(), String> {
         let path = self.journal_dir.join(format!("{}.json", id));
         let bytes = std::fs::read(&path)
             .map_err(|e| format!("Journal update_status read failed: {}", e))?;
@@ -391,8 +373,7 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
-        let dir = std::env::temp_dir()
-            .join(format!("cipherbox-journal-test-{}-{}", pid, seq));
+        let dir = std::env::temp_dir().join(format!("cipherbox-journal-test-{}-{}", pid, seq));
         std::fs::create_dir_all(&dir).expect("create test journal dir");
         let q = WriteQueue::new(dir.clone(), 3);
         (q, dir)
@@ -483,8 +464,10 @@ mod tests {
     #[test]
     fn load_all_for_vault_excludes_foreign_vault() {
         let (q, _dir) = make_temp_queue();
-        q.put(&make_upload_entry("vault-a-1", "vault-A")).expect("put a");
-        q.put(&make_upload_entry("vault-b-1", "vault-B")).expect("put b");
+        q.put(&make_upload_entry("vault-a-1", "vault-A"))
+            .expect("put a");
+        q.put(&make_upload_entry("vault-b-1", "vault-B"))
+            .expect("put b");
 
         let loaded_a = q.load_all_for_vault("vault-A").expect("load a");
         assert_eq!(loaded_a.len(), 1);
@@ -542,7 +525,9 @@ mod tests {
         };
         q.put(&entry).expect("put initial");
 
-        let result = q.record_failure(&entry, "connection refused").expect("record_failure");
+        let result = q
+            .record_failure(&entry, "connection refused")
+            .expect("record_failure");
         assert_eq!(
             result,
             JournalEntryStatus::Failed {
@@ -585,9 +570,12 @@ mod tests {
         let bad_path = dir.join("bad.json");
         std::fs::write(&bad_path, b"not valid json {{{{").expect("write bad");
 
-        q.put(&make_upload_entry("valid1", "k51vault")).expect("put valid");
+        q.put(&make_upload_entry("valid1", "k51vault"))
+            .expect("put valid");
 
-        let loaded = q.load_all_for_vault("k51vault").expect("load with bad file");
+        let loaded = q
+            .load_all_for_vault("k51vault")
+            .expect("load with bad file");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, "valid1");
     }
@@ -621,9 +609,15 @@ mod tests {
         };
         let json = serde_json::to_vec(&entry).expect("serialize");
         let back: JournalEntry = serde_json::from_slice(&json).expect("deserialize");
-        if let JournalOp::UploadFile { parent_ipns_key_hex, .. } = &back.op {
-            assert_eq!(*parent_ipns_key_hex, parent_key_hex,
-                "parent_ipns_key_hex must round-trip unchanged");
+        if let JournalOp::UploadFile {
+            parent_ipns_key_hex,
+            ..
+        } = &back.op
+        {
+            assert_eq!(
+                *parent_ipns_key_hex, parent_key_hex,
+                "parent_ipns_key_hex must round-trip unchanged"
+            );
         } else {
             panic!("Expected UploadFile");
         }
@@ -650,9 +644,15 @@ mod tests {
         };
         let json = serde_json::to_vec(&entry).expect("serialize");
         let back: JournalEntry = serde_json::from_slice(&json).expect("deserialize");
-        if let JournalOp::MkdirPublish { parent_ipns_key_hex, .. } = &back.op {
-            assert_eq!(*parent_ipns_key_hex, parent_key_hex,
-                "parent_ipns_key_hex must round-trip unchanged");
+        if let JournalOp::MkdirPublish {
+            parent_ipns_key_hex,
+            ..
+        } = &back.op
+        {
+            assert_eq!(
+                *parent_ipns_key_hex, parent_key_hex,
+                "parent_ipns_key_hex must round-trip unchanged"
+            );
         } else {
             panic!("Expected MkdirPublish");
         }
@@ -663,20 +663,36 @@ mod tests {
     fn replay_order_sorts_by_created_at_within_group() {
         // Two UploadFile entries inserted newest-first; expect oldest-first after ordering.
         let mut entry_2000 = make_upload_entry("up-2000", "v");
-        if let JournalOp::UploadFile { ref mut created_at_ms, .. } = entry_2000.op {
+        if let JournalOp::UploadFile {
+            ref mut created_at_ms,
+            ..
+        } = entry_2000.op
+        {
             *created_at_ms = 2000;
         }
         let mut entry_1000 = make_upload_entry("up-1000", "v");
-        if let JournalOp::UploadFile { ref mut created_at_ms, .. } = entry_1000.op {
+        if let JournalOp::UploadFile {
+            ref mut created_at_ms,
+            ..
+        } = entry_1000.op
+        {
             *created_at_ms = 1000;
         }
 
         let mut mkdir_early = make_mkdir_entry("mk-100", "v");
-        if let JournalOp::MkdirPublish { ref mut created_at_ms, .. } = mkdir_early.op {
+        if let JournalOp::MkdirPublish {
+            ref mut created_at_ms,
+            ..
+        } = mkdir_early.op
+        {
             *created_at_ms = 100;
         }
         let mut mkdir_late = make_mkdir_entry("mk-50", "v");
-        if let JournalOp::MkdirPublish { ref mut created_at_ms, .. } = mkdir_late.op {
+        if let JournalOp::MkdirPublish {
+            ref mut created_at_ms,
+            ..
+        } = mkdir_late.op
+        {
             *created_at_ms = 50;
         }
 
@@ -721,10 +737,15 @@ mod tests {
         };
         let json_str = String::from_utf8(serde_json::to_vec(&entry).unwrap()).unwrap();
         // The field must be present and be the hex string.
-        assert!(json_str.contains(&wrapped_hex), "parent_ipns_key_hex hex must appear in JSON");
+        assert!(
+            json_str.contains(&wrapped_hex),
+            "parent_ipns_key_hex hex must appear in JSON"
+        );
         // Must not contain the raw bytes interpreted as a string.
-        assert!(!json_str.contains("raw_ipns_key_secret_bytes"),
-            "Journal must not contain raw key material as plaintext string");
+        assert!(
+            !json_str.contains("raw_ipns_key_secret_bytes"),
+            "Journal must not contain raw key material as plaintext string"
+        );
     }
 
     // ---- Task 3: replay ordering tests ----
@@ -798,7 +819,9 @@ mod tests {
 
         // Construct a fresh WriteQueue on the same directory (next mount).
         let q2 = WriteQueue::new(dir.clone(), 3);
-        let loaded = q2.load_all_for_vault("k51vaultcrash").expect("load after crash");
+        let loaded = q2
+            .load_all_for_vault("k51vaultcrash")
+            .expect("load after crash");
 
         assert_eq!(loaded.len(), 1, "entry must survive across simulated crash");
         assert_eq!(loaded[0].id, "crash01");
@@ -833,14 +856,19 @@ mod tests {
         std::fs::write(&bad_path, truncated).expect("write truncated file");
 
         // Also put one well-formed entry so we can verify it is returned.
-        q.put(&make_upload_entry("good01", "k51vaultpartial")).expect("put good entry");
+        q.put(&make_upload_entry("good01", "k51vaultpartial"))
+            .expect("put good entry");
 
         // load_all_for_vault must skip the truncated file and return only the good entry.
         let loaded = q
             .load_all_for_vault("k51vaultpartial")
             .expect("load must not panic on partial file");
 
-        assert_eq!(loaded.len(), 1, "only the well-formed entry must be returned");
+        assert_eq!(
+            loaded.len(),
+            1,
+            "only the well-formed entry must be returned"
+        );
         assert_eq!(loaded[0].id, "good01");
     }
 
@@ -883,7 +911,9 @@ mod tests {
         );
 
         // The entry must remain on disk (D-09 — never silently dropped).
-        let after = q.load_all_for_vault("k51vaultretry").expect("load after exhaustion");
+        let after = q
+            .load_all_for_vault("k51vaultretry")
+            .expect("load after exhaustion");
         assert_eq!(
             after.len(),
             1,
