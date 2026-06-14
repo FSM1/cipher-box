@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Ready to plan
-last_updated: "2026-06-12T17:33:14.554Z"
-last_activity: 2026-06-12
+status: Phase 43 shipped — PR #487
+last_updated: "2026-06-14T12:37:25.820Z"
+last_activity: 2026-06-14
 progress:
   total_phases: 29
   completed_phases: 27
-  total_plans: 109
+  total_plans: 113
   completed_plans: 109
   percent: 93
 ---
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 42 — api-unpin-integrity
+**Current focus:** Phase 43 — fuse-write-durability
 
 ## Current Position
 
-Phase: 43
-Plan: Not started
+Phase: 43 (fuse-write-durability) — SHIPPED (PR #487, verified passed)
+Plan: 8 of 8
 Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 
 ## Performance Metrics
@@ -241,7 +241,7 @@ Recent for v1.1:
 
 ### Pending Todos
 
-12 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
+18 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
 
 ### Resolved
 

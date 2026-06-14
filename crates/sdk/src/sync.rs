@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::queue::WriteQueue;
+use crate::queue::{JournalEntryStatus, WriteQueue};
 use crate::state::{KeyState, SyncStatus};
 
 /// Default polling interval for IPNS sync (30 seconds).
@@ -37,10 +37,11 @@ pub struct SyncDaemon {
     cached_sequence_numbers: HashMap<String, u64>,
     /// Channel receiver for manual sync triggers (from tray "Sync Now" button).
     sync_now_rx: mpsc::Receiver<()>,
-    /// Offline write queue for deferred uploads.
-    write_queue: WriteQueue,
     /// Whether the last poll attempt detected offline state.
     was_offline: bool,
+    /// Durable write journal (cb-journal). Injected at construction so the daemon
+    /// reads the same on-disk entries the FUSE layer writes (CR-07).
+    write_queue: WriteQueue,
 }
 
 impl SyncDaemon {
@@ -49,11 +50,15 @@ impl SyncDaemon {
     /// The `sync_now_rx` channel receives manual sync triggers from the tray menu.
     /// The `status_callback` is invoked on every status change, replacing the
     /// previous Tauri-specific `update_tray_status` calls.
+    /// The `write_queue` must point at the same cb-journal directory the FUSE layer uses
+    /// so the daemon can observe on-disk `Failed` entries and surface them via `WriteParked`
+    /// (CR-07 — no `WriteQueue::default()` allowed; the `Default` impl was removed in 43-05).
     pub fn new(
         state: Arc<KeyState>,
         status_callback: Arc<dyn Fn(SyncStatus) + Send + Sync>,
         poll_interval: Duration,
         sync_now_rx: mpsc::Receiver<()>,
+        write_queue: WriteQueue,
     ) -> Self {
         Self {
             state,
@@ -61,8 +66,8 @@ impl SyncDaemon {
             poll_interval,
             cached_sequence_numbers: HashMap::new(),
             sync_now_rx,
-            write_queue: WriteQueue::default(),
             was_offline: false,
+            write_queue,
         }
     }
 
@@ -111,20 +116,48 @@ impl SyncDaemon {
                     self.was_offline = false;
                 }
 
-                // Process queued writes (best-effort)
-                if !self.write_queue.is_empty() {
-                    log::info!(
-                        "Processing {} queued writes",
-                        self.write_queue.len()
-                    );
-                    // Write queue processing requires an UploadHandler implementation
-                    // which would use self.state.api. For v1, log pending items.
-                    // Full write queue processing with FUSE integration is deferred
-                    // to after the UploadHandler trait is wired to the ApiClient+FUSE layer.
-                    log::debug!(
-                        "Write queue has {} pending items",
-                        self.write_queue.len()
-                    );
+                // Write queue drain is handled by the FUSE layer (Plan 43-02+).
+                // The sync daemon observes journal counts and surfaces parked writes
+                // to the user via the status_callback (CR-07).
+                log::debug!("Sync cycle complete — checking journal for parked writes");
+
+                // CR-07: read on-disk Failed counts from the cb-journal and emit
+                // WriteParked when entries are permanently parked.
+                //
+                // Behavior:
+                //   failed > 0  → emit WriteParked{pending, failed} (fires tray notification);
+                //                 return immediately without also emitting Idle, so the parked
+                //                 state remains the user-visible status for this cycle.
+                //   failed == 0 → emit Idle to keep the tray clean.
+                //                 pending-only state (transient retries) is silent — the
+                //                 bridge in sync/mod.rs ignores WriteParked{failed:0} for
+                //                 notifications, so emitting Idle avoids spurious status flap.
+                let root_ipns_opt = self.state.root_ipns_name.read().await.clone();
+                if let Some(root_ipns_name) = root_ipns_opt {
+                    match self.write_queue.load_all_for_vault(&root_ipns_name) {
+                        Ok(entries) => {
+                            let failed = entries
+                                .iter()
+                                .filter(|e| matches!(e.status, JournalEntryStatus::Failed { .. }))
+                                .count() as u32;
+                            let pending = entries
+                                .iter()
+                                .filter(|e| {
+                                    matches!(
+                                        e.status,
+                                        JournalEntryStatus::Pending | JournalEntryStatus::InProgress
+                                    )
+                                })
+                                .count() as u32;
+                            if failed > 0 {
+                                (self.status_callback)(SyncStatus::WriteParked { pending, failed });
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Journal read failed during sync cycle: {} — proceeding to Idle", e);
+                        }
+                    }
                 }
 
                 (self.status_callback)(SyncStatus::Idle);
@@ -200,10 +233,6 @@ impl SyncDaemon {
         Ok(())
     }
 
-    /// Access the write queue for enqueuing offline writes.
-    pub fn write_queue_mut(&mut self) -> &mut WriteQueue {
-        &mut self.write_queue
-    }
 }
 
 /// Sanitize error messages before displaying in tray status or notifications.

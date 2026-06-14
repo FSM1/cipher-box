@@ -62,6 +62,14 @@ coverage:
         informational: true
         flags:
           - desktop
+      rust:
+        paths:
+          - crates/**
+        target: auto
+        threshold: 5%
+        informational: true
+        flags:
+          - rust
     patch:
       default:
         target: 80%
@@ -96,6 +104,10 @@ flags:
   desktop:
     paths:
       - apps/desktop/src-tauri/src/**
+    carryforward: true
+  rust:
+    paths:
+      - crates/**
     carryforward: true
 
 comment:

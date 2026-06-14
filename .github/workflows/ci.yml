@@ -664,6 +664,17 @@ jobs:
           flags: desktop
           fail_ci_if_error: false
 
+      # Same workspace lcov, re-uploaded under the `rust` flag so codecov surfaces
+      # crates/** coverage (the durable journal/replay logic + its unit tests). The
+      # `desktop` flag's path filter discards crate lines; this flag keeps them.
+      - name: Upload Rust crate coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: desktop-lcov.info
+          flags: rust
+          fail_ci_if_error: false
+
   vector-parity:
     name: Cross-Language Vector Parity
     needs: [changes, cargo-linux, test]

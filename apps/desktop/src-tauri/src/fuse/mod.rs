@@ -99,6 +99,23 @@ pub async fn mount_filesystem(
         let _ = std::fs::set_permissions(&temp_dir, std::fs::Permissions::from_mode(0o700));
     }
 
+    // Stable journal dir: persists across remounts so entries survive crash/restart.
+    let journal_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| {
+            log::warn!("data_local_dir unavailable; journal will use temp_dir (may not survive reboot)");
+            std::env::temp_dir()
+        })
+        .join("cipherbox")
+        .join("cb-journal");
+    std::fs::create_dir_all(&journal_dir)
+        .map_err(|e| format!("Failed to create journal directory: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&journal_dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let journal = cipherbox_sdk::WriteQueue::new(journal_dir, 5);
+
     let mut inodes = cipherbox_fuse::inode::InodeTable::new();
     if let Some(root) = inodes.get_mut(cipherbox_fuse::inode::ROOT_INO) {
         root.kind = cipherbox_fuse::inode::InodeKind::Root {
@@ -110,7 +127,7 @@ pub async fn mount_filesystem(
     let (refresh_tx, refresh_rx) = std::sync::mpsc::channel::<PendingRefresh>();
     let (content_tx, content_rx) = std::sync::mpsc::channel::<PendingContent>();
     let (filepointer_tx, filepointer_rx) = std::sync::mpsc::channel::<PendingFilePointer>();
-    let (upload_tx, upload_rx) = std::sync::mpsc::channel::<UploadComplete>();
+    let (upload_tx, upload_rx) = std::sync::mpsc::channel::<cipherbox_fuse::FsEvent>();
 
     // Pre-populate root folder
     let mut metadata_cache = cipherbox_fuse::cache::MetadataCache::new();
@@ -202,6 +219,33 @@ pub async fn mount_filesystem(
         Err(e) => log::warn!("Root folder fetch failed (mount will show empty): {}", e),
     }
 
+    // Construct coordinator before replay so it can be seeded and shared.
+    let publish_coordinator = {
+        let coord = Arc::new(PublishCoordinator::new());
+        for (name, seq) in &initial_sequences {
+            coord.record_publish(name, *seq);
+        }
+        if !initial_sequences.is_empty() {
+            log::info!("PublishCoordinator seeded with {} sequence(s) from pre-populate", initial_sequences.len());
+        }
+        coord
+    };
+
+    // Replay journal entries for this vault before mounting (D-06, D-07, D-08).
+    // Errors are logged but never fail the mount — partial replay is better than no mount.
+    cipherbox_fuse::replay_for_vault(
+        &journal,
+        state.sdk.api.clone(),
+        &private_key,
+        &public_key,
+        &root_folder_key,
+        &root_ipns_name,
+        publish_coordinator.clone(),
+        tee_public_key.as_deref(),
+        tee_key_epoch,
+    )
+    .await;
+
     let fs = CipherBoxFS {
         inodes, metadata_cache,
         content_cache: cipherbox_fuse::cache::ContentCache::new(),
@@ -222,17 +266,9 @@ pub async fn mount_filesystem(
         resolving_file_pointers: std::collections::HashSet::new(),
         pending_content: HashMap::new(),
         upload_rx, upload_tx,
+        journal,
         mutated_folders: HashMap::new(),
-        publish_coordinator: {
-            let coord = Arc::new(PublishCoordinator::new());
-            for (name, seq) in &initial_sequences {
-                coord.record_publish(name, *seq);
-            }
-            if !initial_sequences.is_empty() {
-                log::info!("PublishCoordinator seeded with {} sequence(s) from pre-populate", initial_sequences.len());
-            }
-            coord
-        },
+        publish_coordinator,
         publish_queue: HashMap::new(),
     };
 

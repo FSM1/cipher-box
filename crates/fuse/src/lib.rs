@@ -106,6 +106,16 @@ pub enum PendingFilePointer {
     },
 }
 
+/// Events sent from background upload/mkdir threads to the FS thread.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub enum FsEvent {
+    /// A background file upload completed.
+    UploadComplete(UploadComplete),
+    /// A parent-folder publish after mkdir hit a conflict; the FS thread should
+    /// re-arm the debounced publisher so it retries with a fresh sequence.
+    MkdirConflict { parent_ino: u64 },
+}
+
 /// Notification from a background upload thread that a file upload completed.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct UploadComplete {
@@ -563,10 +573,13 @@ pub struct CipherBoxFS {
     pub filepointer_tx: std::sync::mpsc::Sender<PendingFilePointer>,
     pub resolving_file_pointers: std::collections::HashSet<u64>,
     pub pending_content: HashMap<u64, Vec<u8>>,
-    pub upload_rx: std::sync::mpsc::Receiver<UploadComplete>,
-    pub upload_tx: std::sync::mpsc::Sender<UploadComplete>,
+    pub upload_rx: std::sync::mpsc::Receiver<FsEvent>,
+    pub upload_tx: std::sync::mpsc::Sender<FsEvent>,
     pub publish_coordinator: Arc<PublishCoordinator>,
     pub publish_queue: HashMap<u64, PublishQueueEntry>,
+    /// Durable write journal — persists pending uploads and mkdir-publishes to disk
+    /// so they survive a crash or remount.  Callbacks write here before acking the OS.
+    pub journal: cipherbox_sdk::WriteQueue,
 }
 
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
@@ -651,22 +664,32 @@ impl CipherBoxFS {
     }
 
     pub fn drain_upload_completions(&mut self) {
-        while let Ok(result) = self.upload_rx.try_recv() {
-            if let Some(inode) = self.inodes.get_mut(result.ino) {
-                if inode.write_generation == result.write_generation {
-                    if let inode::InodeKind::File { ref mut cid, .. } = inode.kind { *cid = result.new_cid.clone(); }
+        while let Ok(event) = self.upload_rx.try_recv() {
+            match event {
+                FsEvent::UploadComplete(result) => {
+                    if let Some(inode) = self.inodes.get_mut(result.ino) {
+                        if inode.write_generation == result.write_generation {
+                            if let inode::InodeKind::File { ref mut cid, .. } = inode.kind { *cid = result.new_cid.clone(); }
+                        }
+                    }
+                    if let Some(inode) = self.inodes.get(result.ino) {
+                        if inode.write_generation == result.write_generation {
+                            if let Some(plaintext) = self.pending_content.remove(&result.ino) { self.content_cache.set(&result.new_cid, plaintext); }
+                        }
+                    }
+                    for pruned_cid in &result.pruned_cids {
+                        let api = self.api.clone(); let cid = pruned_cid.clone();
+                        self.rt.spawn(async move { let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid).await; });
+                    }
+                    if let Some(entry) = self.publish_queue.get_mut(&result.parent_ino) { entry.pending_uploads = entry.pending_uploads.saturating_sub(1); }
+                }
+                FsEvent::MkdirConflict { parent_ino } => {
+                    // Re-arm the debounced publisher so it retries the parent publish
+                    // with a fresh sequence number (D-11a).
+                    self.mutated_folders.insert(parent_ino, std::time::Instant::now());
+                    self.queue_publish(parent_ino, false);
                 }
             }
-            if let Some(inode) = self.inodes.get(result.ino) {
-                if inode.write_generation == result.write_generation {
-                    if let Some(plaintext) = self.pending_content.remove(&result.ino) { self.content_cache.set(&result.new_cid, plaintext); }
-                }
-            }
-            for pruned_cid in &result.pruned_cids {
-                let api = self.api.clone(); let cid = pruned_cid.clone();
-                self.rt.spawn(async move { let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid).await; });
-            }
-            if let Some(entry) = self.publish_queue.get_mut(&result.parent_ino) { entry.pending_uploads = entry.pending_uploads.saturating_sub(1); }
         }
         self.flush_publish_queue();
     }
@@ -833,6 +856,636 @@ impl CipherBoxFS {
     }
 }
 
+/// Replay all pending journal entries for the given vault on mount.
+///
+/// Loads all entries for `root_ipns_name` (D-07 vault-scoping), orders them
+/// MkdirPublish-before-UploadFile (D-08), then for each entry fetches the parent
+/// folder's CURRENT remote metadata, merges the journaled child entry via
+/// `merge_folder_children`, and CAS-publishes with retry (D-06 — never re-publishes
+/// the stale journaled snapshot).
+///
+/// Errors are logged but never fail the mount — a partially-replayed journal is
+/// better than a failed mount.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub async fn replay_for_vault(
+    journal: &cipherbox_sdk::WriteQueue,
+    api: Arc<ApiClient>,
+    private_key: &[u8],
+    public_key: &[u8],
+    root_folder_key: &[u8],
+    root_ipns_name: &str,
+    coordinator: Arc<PublishCoordinator>,
+    // F3: TEE key/epoch so a first-publish replay (per-file IPNS never created in the
+    // original failed session) can enroll the record for TEE republishing.
+    tee_public_key: Option<&[u8]>,
+    tee_key_epoch: Option<u32>,
+) {
+    let entries = match journal.load_all_for_vault(root_ipns_name) {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("replay_for_vault: failed to load journal entries: {}", e);
+            return;
+        }
+    };
+
+    if entries.is_empty() {
+        return;
+    }
+
+    log::info!("replay_for_vault: replaying {} journal entry(s) for vault {}", entries.len(), root_ipns_name);
+
+    // D-08: MkdirPublish entries process before UploadFile entries.
+    let ordered = cipherbox_sdk::WriteQueue::ordered_for_replay(entries);
+
+    for entry in &ordered {
+        // Skip already-failed entries (user must manually intervene for those).
+        if matches!(entry.status, cipherbox_sdk::JournalEntryStatus::Failed { .. }) {
+            log::info!("replay_for_vault: skipping failed entry {} (status=Failed)", entry.id);
+            continue;
+        }
+
+        match &entry.op {
+            cipherbox_sdk::JournalOp::MkdirPublish {
+                child_ipns_name,
+                child_folder_key_hex,
+                child_ipns_key_hex,
+                parent_folder_ipns_name,
+                parent_ipns_key_hex,
+                name,
+                created_at_ms,
+            } => {
+                let result = replay_mkdir_entry(
+                    &api,
+                    private_key,
+                    root_folder_key,
+                    root_ipns_name,
+                    coordinator.clone(),
+                    child_ipns_name,
+                    child_folder_key_hex,
+                    child_ipns_key_hex,
+                    parent_folder_ipns_name,
+                    parent_ipns_key_hex,
+                    name,
+                    *created_at_ms,
+                )
+                .await;
+                match result {
+                    Ok(()) => {
+                        log::info!("replay_for_vault: MkdirPublish {} replayed successfully", entry.id);
+                        let _ = journal.remove(&entry.id);
+                    }
+                    Err(e) => {
+                        // F2: record the failure so retries accumulate across mounts and the
+                        // entry parks as Failed at max_retries (D-09), making the WriteParked
+                        // notification reachable at runtime instead of retrying forever.
+                        match journal.record_failure(entry, &e) {
+                            Ok(cipherbox_sdk::JournalEntryStatus::Failed { .. }) => log::error!(
+                                "replay_for_vault: MkdirPublish {} parked as Failed after {} retries: {}",
+                                entry.id, journal.max_retries, e
+                            ),
+                            Ok(_) => log::warn!(
+                                "replay_for_vault: MkdirPublish {} failed: {} (retry {}/{}, will retry on next mount)",
+                                entry.id, e, entry.retries + 1, journal.max_retries
+                            ),
+                            Err(re) => log::warn!(
+                                "replay_for_vault: MkdirPublish {} failed: {}; record_failure also errored: {}",
+                                entry.id, e, re
+                            ),
+                        }
+                    }
+                }
+            }
+            cipherbox_sdk::JournalOp::UploadFile {
+                ciphertext_b64,
+                wrapped_key_hex,
+                iv_hex,
+                file_meta_ipns_name,
+                file_ipns_key_hex,
+                parent_folder_ipns_name,
+                parent_ipns_key_hex,
+                filename,
+                size,
+                created_at_ms,
+            } => {
+                let result = replay_upload_entry(
+                    &api,
+                    private_key,
+                    public_key,
+                    root_folder_key,
+                    root_ipns_name,
+                    coordinator.clone(),
+                    ciphertext_b64,
+                    wrapped_key_hex,
+                    iv_hex,
+                    file_meta_ipns_name,
+                    file_ipns_key_hex.as_deref(),
+                    parent_folder_ipns_name,
+                    parent_ipns_key_hex,
+                    filename,
+                    *size,
+                    *created_at_ms,
+                    tee_public_key,
+                    tee_key_epoch,
+                )
+                .await;
+                match result {
+                    Ok(()) => {
+                        log::info!("replay_for_vault: UploadFile {} ('{}') replayed successfully", entry.id, filename);
+                        let _ = journal.remove(&entry.id);
+                    }
+                    Err(e) => {
+                        // F2: record the failure so retries accumulate across mounts and the
+                        // entry parks as Failed at max_retries (D-09), making the WriteParked
+                        // notification reachable at runtime instead of retrying forever.
+                        match journal.record_failure(entry, &e) {
+                            Ok(cipherbox_sdk::JournalEntryStatus::Failed { .. }) => log::error!(
+                                "replay_for_vault: UploadFile {} ('{}') parked as Failed after {} retries: {}",
+                                entry.id, filename, journal.max_retries, e
+                            ),
+                            Ok(_) => log::warn!(
+                                "replay_for_vault: UploadFile {} ('{}') failed: {} (retry {}/{}, will retry on next mount)",
+                                entry.id, filename, e, entry.retries + 1, journal.max_retries
+                            ),
+                            Err(re) => log::warn!(
+                                "replay_for_vault: UploadFile {} ('{}') failed: {}; record_failure also errored: {}",
+                                entry.id, filename, e, re
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Look up the folder key for `folder_ipns_name` via a bounded breadth-first descent.
+///
+/// WR-02: resolves parent folders nested two or more levels below root, not just
+/// direct children of root. The BFS is capped at `MAX_RESOLVE_NODES` to bound network
+/// round trips and prevent cycles.
+///
+/// If `folder_ipns_name == root_ipns_name`, returns `root_folder_key` directly.
+/// Otherwise starts from root and iterates through the folder tree level by level,
+/// decrypting each layer's metadata with the just-unwrapped folder key from the layer above.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+async fn resolve_folder_key(
+    api: &ApiClient,
+    private_key: &[u8],
+    root_folder_key: &[u8],
+    root_ipns_name: &str,
+    folder_ipns_name: &str,
+) -> Result<Vec<u8>, String> {
+    // Node-visit cap: bounds total network round trips and prevents infinite loops
+    // (WR-02). This counts nodes visited across the BFS, not tree depth.
+    const MAX_RESOLVE_NODES: usize = 32;
+
+    if folder_ipns_name == root_ipns_name {
+        return Ok(root_folder_key.to_vec());
+    }
+
+    // BFS queue: (ipns_name_of_this_folder, unwrapped_folder_key_for_this_folder).
+    // Starts at root; each step expands to all subfolder children of the current node.
+    let mut queue: std::collections::VecDeque<(String, Vec<u8>)> = std::collections::VecDeque::new();
+    queue.push_back((root_ipns_name.to_string(), root_folder_key.to_vec()));
+    let mut nodes_visited = 0usize;
+
+    while let Some((current_ipns, current_folder_key)) = queue.pop_front() {
+        if nodes_visited >= MAX_RESOLVE_NODES {
+            return Err(format!(
+                "resolve_folder_key: node cap ({}) exceeded looking for {} — aborting",
+                MAX_RESOLVE_NODES, folder_ipns_name
+            ));
+        }
+        nodes_visited += 1;
+
+        // Fetch and decrypt this folder's metadata.
+        let resolve = cipherbox_api_client::ipns::resolve_ipns(api, &current_ipns)
+            .await
+            .map_err(|e| format!("resolve IPNS {}: {}", current_ipns, e))?;
+        let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolve.cid)
+            .await
+            .map_err(|e| format!("fetch metadata for {}: {}", current_ipns, e))?;
+        let meta = cipherbox_core::decrypt_metadata_from_ipfs_public(&enc_bytes, &current_folder_key)
+            .map_err(|e| format!("decrypt metadata for {}: {}", current_ipns, e))?;
+
+        for child in &meta.children {
+            if let cipherbox_core::folder::FolderChild::Folder(f) = child {
+                let enc_key_bytes = hex::decode(&f.folder_key_encrypted)
+                    .map_err(|e| format!("hex decode folder_key_encrypted for {}: {}", f.ipns_name, e))?;
+                let child_folder_key = cipherbox_crypto::ecies::unwrap_key(&enc_key_bytes, private_key)
+                    .map_err(|e| format!("unwrap folder key for {}: {}", f.ipns_name, e))?;
+
+                if f.ipns_name == folder_ipns_name {
+                    // Found the target folder.
+                    return Ok(child_folder_key);
+                }
+
+                // Enqueue for further descent.
+                queue.push_back((f.ipns_name.clone(), child_folder_key));
+            }
+        }
+    }
+
+    Err(format!("folder IPNS {} not found in vault tree (searched {} nodes)", folder_ipns_name, nodes_visited))
+}
+
+/// Fetch, decrypt, merge, and CAS-publish a parent folder update.
+///
+/// Core CR-01 / D-06 implementation: fetches CURRENT remote metadata, merges, then
+/// signs and publishes an IPNS record with the provided unwrapped parent IPNS private key.
+/// Returns `Err` if the publish did not succeed (Conflict or key absent) so the caller
+/// retains the journal entry for the next mount.
+///
+/// IMPORTANT: `unpin_content` is NOT called on the pre-merge CID here. The old CID is
+/// unpinned only after a confirmed `PublishResult::Success` (T-43-19 — never unpin a CID
+/// that the live IPNS record still references).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+// `parent_ipns_private_key_raw`: unwrapped (raw 32-byte) Ed25519 parent IPNS key for signing.
+// Must be obtained via ecies::unwrap_key(parent_ipns_key_hex). If empty, returns Err (CR-01).
+async fn fetch_merge_publish_parent(
+    api: &ApiClient,
+    folder_key: &[u8],
+    parent_ipns_name: &str,
+    parent_ipns_private_key_raw: &[u8],
+    coordinator: Arc<PublishCoordinator>,
+    local_child: cipherbox_core::folder::FolderChild,
+) -> Result<(), String> {
+    use base64::Engine;
+
+    // CR-01: if the caller could not unwrap the parent IPNS key, retain the entry.
+    if parent_ipns_private_key_raw.is_empty() {
+        return Err("parent IPNS private key unavailable — retaining journal entry".to_string());
+    }
+
+    let lock = coordinator.get_lock(parent_ipns_name);
+    let _guard = lock.lock().await;
+
+    // D-06: fetch CURRENT remote metadata (not the stale journaled snapshot).
+    let resolve = cipherbox_api_client::ipns::resolve_ipns(api, parent_ipns_name)
+        .await
+        .map_err(|e| format!("resolve parent IPNS {}: {}", parent_ipns_name, e))?;
+    let remote_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolve.cid)
+        .await
+        .map_err(|e| format!("fetch parent metadata: {}", e))?;
+    let remote_meta = cipherbox_core::decrypt_metadata_from_ipfs_public(&remote_bytes, folder_key)
+        .map_err(|e| format!("decrypt parent metadata: {}", e))?;
+
+    // D-06 idempotency: check if the child is already present in the remote.
+    let child_ipns_key = match &local_child {
+        cipherbox_core::folder::FolderChild::Folder(f) => f.ipns_name.clone(),
+        cipherbox_core::folder::FolderChild::File(f) => f.file_meta_ipns_name.clone(),
+    };
+    let already_present = remote_meta.children.iter().any(|c| {
+        let ipns = match c {
+            cipherbox_core::folder::FolderChild::Folder(f) => &f.ipns_name,
+            cipherbox_core::folder::FolderChild::File(f) => &f.file_meta_ipns_name,
+        };
+        ipns == &child_ipns_key
+    });
+    if already_present {
+        log::info!(
+            "replay: child {} already present in parent {} — skipping merge (idempotent, Pitfall 5)",
+            child_ipns_key,
+            parent_ipns_name
+        );
+        return Ok(());
+    }
+
+    // Merge local child into remote (union merge).
+    let local_meta = cipherbox_core::folder::FolderMetadata {
+        version: "v2".to_string(),
+        children: vec![local_child],
+    };
+    let merged = merge_folder_children(&local_meta, remote_meta);
+
+    // Encrypt and upload the merged metadata.
+    let json_bytes = encrypt_metadata_to_json(&merged, folder_key)?;
+    let seq = coordinator.resolve_sequence(api, parent_ipns_name).await?;
+    let new_cid = cipherbox_api_client::ipfs::upload_content(api, &json_bytes)
+        .await
+        .map_err(|e| format!("upload merged metadata: {}", e))?;
+
+    // CR-01: sign and publish the parent IPNS record with the unwrapped key.
+    // Mirror the live mkdir parent-publish flow from write_ops.rs:596-641.
+    let parent_key_arr: [u8; 32] = parent_ipns_private_key_raw
+        .try_into()
+        .map_err(|_| format!(
+            "parent IPNS key has wrong length (got {}, expected 32) — retaining journal entry",
+            parent_ipns_private_key_raw.len()
+        ))?;
+    let new_seq = seq + 1;
+    let parent_value = format!("/ipfs/{}", new_cid);
+    let parent_record = cipherbox_core::create_ipns_record(&parent_key_arr, &parent_value, new_seq, 86_400_000)
+        .map_err(|e| format!("create parent IPNS record: {}", e))?;
+    let parent_marshaled = cipherbox_core::marshal_ipns_record(&parent_record)
+        .map_err(|e| format!("marshal parent IPNS record: {}", e))?;
+    let parent_record_b64 = base64::engine::general_purpose::STANDARD.encode(&parent_marshaled);
+
+    let parent_req = cipherbox_api_client::IpnsPublishRequest {
+        ipns_name: parent_ipns_name.to_string(),
+        record: parent_record_b64,
+        metadata_cid: new_cid.clone(),
+        encrypted_ipns_private_key: None,
+        key_epoch: None,
+        expected_sequence_number: Some(seq.to_string()),
+    };
+
+    match cipherbox_api_client::ipns::publish_ipns(api, &parent_req)
+        .await
+        .map_err(|e| format!("publish parent IPNS: {}", e))?
+    {
+        cipherbox_api_client::PublishResult::Success => {
+            // CR-01 / T-43-21: only advance the sequence cache on confirmed Success (IN-06 fix).
+            coordinator.record_publish(parent_ipns_name, new_seq);
+            // T-43-19: unpin the OLD CID (the one the live IPNS record no longer references)
+            // only AFTER the new record is confirmed live.
+            let _ = cipherbox_api_client::ipfs::unpin_content(api, &resolve.cid).await;
+            log::info!(
+                "replay: parent IPNS published for {} (new_seq={}, new_cid={})",
+                parent_ipns_name, new_seq, new_cid
+            );
+            Ok(())
+        }
+        cipherbox_api_client::PublishResult::Conflict { current_sequence_number } => {
+            // T-43-18: CAS conflict — do NOT remove the journal entry; retain for next mount.
+            // The new_cid is still pinned on IPFS which is safe (it just won't be referenced yet).
+            log::warn!(
+                "replay: CAS conflict on parent {} (expected seq {}, server has {:?}) — retaining entry",
+                parent_ipns_name, seq, current_sequence_number
+            );
+            Err(format!(
+                "IPNS conflict on parent {} (server seq {:?}) — will retry on next mount",
+                parent_ipns_name, current_sequence_number
+            ))
+        }
+    }
+}
+
+/// Replay a single `MkdirPublish` journal entry.
+/// Fetches current parent metadata, merges child folder entry, CAS-publishes.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+#[allow(clippy::too_many_arguments)]
+async fn replay_mkdir_entry(
+    api: &ApiClient,
+    private_key: &[u8],
+    root_folder_key: &[u8],
+    root_ipns_name: &str,
+    coordinator: Arc<PublishCoordinator>,
+    child_ipns_name: &str,
+    child_folder_key_hex: &str,
+    // child_ipns_key_hex: user-ECIES-wrapped child IPNS key; written as-is (CR-03, no re-wrap).
+    child_ipns_key_hex: &str,
+    parent_folder_ipns_name: &str,
+    // parent_ipns_key_hex: user-ECIES-wrapped parent IPNS key from journal (CR-01).
+    parent_ipns_key_hex: &str,
+    name: &str,
+    created_at_ms: u64,
+) -> Result<(), String> {
+    let parent_folder_key = resolve_folder_key(
+        api,
+        private_key,
+        root_folder_key,
+        root_ipns_name,
+        parent_folder_ipns_name,
+    )
+    .await?;
+
+    // CR-01: hex-decode and ecies-unwrap the journaled parent IPNS key.
+    // Returns Err if the key is absent/malformed so the entry is retained (T-43-20).
+    let parent_ipns_key_raw = if parent_ipns_key_hex.is_empty() {
+        return Err("parent_ipns_key_hex is empty in MkdirPublish entry — retaining for retry".to_string());
+    } else {
+        let wrapped_bytes = hex::decode(parent_ipns_key_hex)
+            .map_err(|e| format!("hex decode parent_ipns_key_hex: {} — retaining entry", e))?;
+        cipherbox_crypto::ecies::unwrap_key(&wrapped_bytes, private_key)
+            .map_err(|e| format!("ecies unwrap parent IPNS key: {} — retaining entry", e))?
+    };
+
+    // CR-03: write the user-ECIES-wrapped child IPNS key as-is into FolderEntry.
+    // The journal already stores the user-wrapped form (populated by 43-06 write side fix).
+    // No re-wrap here — that would produce a doubly-wrapped key.
+    let child_entry = cipherbox_core::folder::FolderChild::Folder(cipherbox_core::folder::FolderEntry {
+        id: format!("replay-{}", child_ipns_name),
+        name: name.to_string(),
+        ipns_name: child_ipns_name.to_string(),
+        folder_key_encrypted: child_folder_key_hex.to_string(),
+        // CR-03: user-ECIES-wrapped child IPNS key, matching build_folder_metadata convention.
+        ipns_private_key_encrypted: child_ipns_key_hex.to_string(),
+        created_at: created_at_ms,
+        modified_at: created_at_ms,
+    });
+
+    fetch_merge_publish_parent(
+        api,
+        &parent_folder_key,
+        parent_folder_ipns_name,
+        &parent_ipns_key_raw,
+        coordinator,
+        child_entry,
+    )
+    .await
+}
+
+/// Replay a single `UploadFile` journal entry.
+/// Re-uploads ciphertext (idempotent CID), re-publishes file IPNS, merges file pointer
+/// into current parent metadata.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+#[allow(clippy::too_many_arguments)]
+async fn replay_upload_entry(
+    api: &ApiClient,
+    private_key: &[u8],
+    _public_key: &[u8],
+    root_folder_key: &[u8],
+    root_ipns_name: &str,
+    coordinator: Arc<PublishCoordinator>,
+    ciphertext_b64: &str,
+    wrapped_key_hex: &str,
+    iv_hex: &str,
+    file_meta_ipns_name: &str,
+    file_ipns_key_hex: Option<&str>,
+    parent_folder_ipns_name: &str,
+    // parent_ipns_key_hex: user-ECIES-wrapped parent IPNS private key from journal (CR-01).
+    parent_ipns_key_hex: &str,
+    filename: &str,
+    size: u64,
+    created_at_ms: u64,
+    // F3: TEE key/epoch for first-publish enrollment when the per-file IPNS record
+    // was never created in the original (failed) session.
+    tee_public_key: Option<&[u8]>,
+    tee_key_epoch: Option<u32>,
+) -> Result<(), String> {
+    use base64::Engine;
+
+    // CR-01: hex-decode and ecies-unwrap the journaled parent IPNS key.
+    // Returns Err if the key is absent/malformed so the entry is retained (T-43-20).
+    let parent_ipns_key_raw = if parent_ipns_key_hex.is_empty() {
+        return Err("parent_ipns_key_hex is empty in UploadFile entry — retaining for retry".to_string());
+    } else {
+        let wrapped_bytes = hex::decode(parent_ipns_key_hex)
+            .map_err(|e| format!("hex decode parent_ipns_key_hex: {} — retaining entry", e))?;
+        cipherbox_crypto::ecies::unwrap_key(&wrapped_bytes, private_key)
+            .map_err(|e| format!("ecies unwrap parent IPNS key: {} — retaining entry", e))?
+    };
+
+    // Step 1: re-upload ciphertext (idempotent — same plaintext → same ciphertext → same CID).
+    let ciphertext = base64::engine::general_purpose::STANDARD
+        .decode(ciphertext_b64)
+        .map_err(|e| format!("base64 decode ciphertext: {}", e))?;
+    let file_cid = cipherbox_api_client::ipfs::upload_content(api, &ciphertext)
+        .await
+        .map_err(|e| format!("upload ciphertext: {}", e))?;
+
+    log::info!("replay: re-uploaded ciphertext for '{}' -> CID {}", filename, file_cid);
+
+    // Step 2: resolve parent folder key for subsequent steps.
+    let parent_folder_key = resolve_folder_key(
+        api,
+        private_key,
+        root_folder_key,
+        root_ipns_name,
+        parent_folder_ipns_name,
+    )
+    .await?;
+
+    // Step 3: re-publish file IPNS metadata if key is available.
+    if let Some(file_ipns_key_hex_str) = file_ipns_key_hex {
+        if !file_ipns_key_hex_str.is_empty() {
+            // CR-02: ecies-unwrap the ECIES-wrapped file IPNS key before casting to [u8;32].
+            // The journaled key is user-ECIES-wrapped (~117 bytes), NOT a raw 32-byte key.
+            // Directly casting the wrapped bytes always fails (they're ~117 bytes, not 32).
+            let file_ipns_key_wrapped = hex::decode(file_ipns_key_hex_str)
+                .map_err(|e| format!("hex decode file_ipns_key: {}", e))?;
+            let file_ipns_key_raw = cipherbox_crypto::ecies::unwrap_key(&file_ipns_key_wrapped, private_key)
+                .map_err(|e| format!("ecies unwrap file IPNS key: {}", e))?;
+            let file_ipns_key = zeroize::Zeroizing::new(file_ipns_key_raw);
+
+            let parent_folder_key_arr: [u8; 32] = parent_folder_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| "Invalid parent folder key length".to_string())?;
+
+            let file_meta = cipherbox_core::folder::FileMetadata {
+                version: "v1".to_string(),
+                cid: file_cid.clone(),
+                file_key_encrypted: wrapped_key_hex.to_string(),
+                file_iv: iv_hex.to_string(),
+                size,
+                mime_type: String::new(),
+                encryption_mode: "GCM".to_string(),
+                created_at: created_at_ms,
+                modified_at: created_at_ms,
+                versions: None,
+            };
+
+            // CR-02: cast the unwrapped raw key (32 bytes) — this will always succeed.
+            let ipns_key_arr: [u8; 32] = file_ipns_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| format!(
+                    "Invalid file IPNS key length after unwrap (got {} bytes, expected 32)",
+                    file_ipns_key.len()
+                ))?;
+
+            // F3: determine whether the per-file IPNS record already exists. If the original
+            // upload failed before ever creating it, resolve returns not-found and this is a
+            // FIRST publish (seq 0 + TEE enrollment), mirroring the live path
+            // (operations.rs::publish_file_metadata). Otherwise it is an update (seq + 1).
+            // A transient resolve error (not "not found") is propagated so the entry is
+            // retained for retry rather than creating a duplicate record at seq 0.
+            let (is_first_publish, new_seq) = match coordinator.resolve_sequence(api, file_meta_ipns_name).await {
+                Ok(current_seq) => (false, current_seq + 1),
+                Err(e) if e.to_lowercase().contains("not found") => {
+                    log::info!(
+                        "replay: per-file IPNS '{}' not found — creating as first publish (seq 0)",
+                        file_meta_ipns_name
+                    );
+                    (true, next_file_publish_sequence(true, None)?)
+                }
+                Err(e) => return Err(format!("resolve file IPNS sequence: {} — retaining entry", e)),
+            };
+
+            let sealed = cipherbox_core::folder::encrypt_file_metadata(&file_meta, &parent_folder_key_arr)
+                .map_err(|e| format!("encrypt file metadata: {}", e))?;
+            let iv_hex_meta = hex::encode(&sealed[..12]);
+            let data_b64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
+            let json = serde_json::json!({ "iv": iv_hex_meta, "data": data_b64 });
+            let json_bytes = serde_json::to_vec(&json)
+                .map_err(|e| format!("serialize file metadata JSON: {}", e))?;
+            let file_meta_cid = cipherbox_api_client::ipfs::upload_content(api, &json_bytes)
+                .await
+                .map_err(|e| format!("upload file metadata: {}", e))?;
+
+            let value = format!("/ipfs/{}", file_meta_cid);
+            let record = cipherbox_core::create_ipns_record(&ipns_key_arr, &value, new_seq, 86_400_000)
+                .map_err(|e| format!("create file IPNS record: {}", e))?;
+            let marshaled = cipherbox_core::marshal_ipns_record(&record)
+                .map_err(|e| format!("marshal file IPNS record: {}", e))?;
+            let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
+
+            // F3: enroll the per-file IPNS key with the TEE on first publish only, so the
+            // newly created record is republished every ~6h and does not expire after its
+            // 24h TTL. Mirrors operations.rs::publish_file_metadata TEE enrollment.
+            let (encrypted_ipns_for_tee, tee_epoch) = match (is_first_publish, tee_public_key, tee_key_epoch) {
+                (true, Some(tee_key), Some(epoch)) => {
+                    let wrapped = cipherbox_crypto::wrap_key(file_ipns_key.as_slice(), tee_key)
+                        .map_err(|e| format!("TEE key wrapping failed: {} — retaining entry", e))?;
+                    (Some(hex::encode(&wrapped)), Some(epoch))
+                }
+                (true, Some(_), None) => {
+                    return Err("TEE public key present but key_epoch missing — retaining entry".to_string());
+                }
+                _ => (None, None),
+            };
+
+            let req = cipherbox_api_client::IpnsPublishRequest {
+                ipns_name: file_meta_ipns_name.to_string(),
+                record: record_b64,
+                metadata_cid: file_meta_cid,
+                encrypted_ipns_private_key: encrypted_ipns_for_tee,
+                key_epoch: tee_epoch,
+                expected_sequence_number: None,
+            };
+            match cipherbox_api_client::ipns::publish_ipns(api, &req)
+                .await
+                .map_err(|e| format!("{}", e))?
+            {
+                cipherbox_api_client::PublishResult::Success => {
+                    coordinator.record_publish(file_meta_ipns_name, new_seq);
+                    log::info!(
+                        "replay: file IPNS published for '{}' (seq {}, first_publish={})",
+                        filename, new_seq, is_first_publish
+                    );
+                }
+                cipherbox_api_client::PublishResult::Conflict { .. } => {
+                    log::warn!("replay: file IPNS conflict for '{}' — file CID is durable, continuing", filename);
+                }
+            }
+        }
+    }
+
+    // Step 4: merge file pointer into parent folder metadata (D-06 fetch-and-merge).
+    let file_pointer = cipherbox_core::folder::FolderChild::File(cipherbox_core::folder::FilePointer {
+        id: format!("replay-{}", file_meta_ipns_name),
+        name: filename.to_string(),
+        file_meta_ipns_name: file_meta_ipns_name.to_string(),
+        // CR-02: store the journaled file_ipns_key_hex AS-IS — it is already user-ECIES-wrapped.
+        // Do NOT re-wrap: that would produce a doubly-wrapped key in the stored FilePointer.
+        ipns_private_key_encrypted: file_ipns_key_hex.map(|k| k.to_string()),
+        created_at: created_at_ms,
+        modified_at: created_at_ms,
+    });
+
+    fetch_merge_publish_parent(
+        api,
+        &parent_folder_key,
+        parent_folder_ipns_name,
+        &parent_ipns_key_raw,
+        coordinator,
+        file_pointer,
+    )
+    .await
+}
+
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 fn uuid_from_ino(ino: u64) -> String {
     format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}", (ino >> 32) as u32, ((ino >> 16) & 0xFFFF) as u16,
@@ -863,5 +1516,78 @@ mod tests {
     #[test]
     fn next_file_publish_sequence_rejects_missing_existing_sequence() {
         assert!(next_file_publish_sequence(false, None).is_err());
+    }
+
+    // F2: replay_for_vault must record each failed replay so retries accumulate across
+    // mounts and the entry parks as Failed at max_retries (D-09). Before the fix the
+    // failure arm only logged "will retry on next mount", so retries never advanced and
+    // the WriteParked notification was unreachable. An UploadFile entry with an empty
+    // parent_ipns_key_hex makes replay_upload_entry return Err immediately (no network),
+    // so this exercises the failure path deterministically.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    #[tokio::test]
+    async fn replay_records_failure_and_parks_at_max_retries() {
+        use cipherbox_sdk::{JournalEntry, JournalEntryStatus, JournalOp, WriteQueue};
+        use std::sync::Arc;
+
+        let dir = std::env::temp_dir()
+            .join("cb-f2-replay-park-test")
+            .join(format!("{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = WriteQueue::new(dir.clone(), 5);
+        let vault = "k51vaultf2park";
+
+        let entry = JournalEntry {
+            id: "f2entry".to_string(),
+            vault_root_ipns: vault.to_string(),
+            op: JournalOp::UploadFile {
+                ciphertext_b64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"ct",
+                ),
+                wrapped_key_hex: hex::encode(b"wk"),
+                iv_hex: hex::encode(b"iv"),
+                file_meta_ipns_name: "k51filemeta".to_string(),
+                file_ipns_key_hex: None,
+                parent_folder_ipns_name: vault.to_string(),
+                parent_ipns_key_hex: String::new(), // empty -> immediate Err in replay
+                filename: "f2.txt".to_string(),
+                size: 2,
+                created_at_ms: 1_700_000_000_000,
+            },
+            retries: 4, // one below max_retries
+            status: JournalEntryStatus::Pending,
+        };
+        journal.put(&entry).unwrap();
+
+        let api = Arc::new(cipherbox_api_client::ApiClient::new("http://127.0.0.1:1"));
+        let coordinator = Arc::new(super::PublishCoordinator::new());
+
+        // First replay: failure increments retries 4 -> 5, stays Pending.
+        super::replay_for_vault(
+            &journal, api.clone(), &[0u8; 32], &[0u8; 33], &[0u8; 32], vault,
+            coordinator.clone(), None, None,
+        )
+        .await;
+        let after1 = journal.load_all_for_vault(vault).unwrap();
+        let e1 = after1.iter().find(|e| e.id == "f2entry").expect("entry retained after failure");
+        assert_eq!(e1.retries, 5, "retries must increment on a failed replay (F2)");
+        assert!(matches!(e1.status, JournalEntryStatus::Pending), "still Pending below max");
+
+        // Second replay: retries already at max -> parks as Failed (kept on disk, D-09).
+        super::replay_for_vault(
+            &journal, api, &[0u8; 32], &[0u8; 33], &[0u8; 32], vault,
+            coordinator, None, None,
+        )
+        .await;
+        let after2 = journal.load_all_for_vault(vault).unwrap();
+        let e2 = after2.iter().find(|e| e.id == "f2entry").expect("parked entry kept on disk");
+        assert!(
+            matches!(e2.status, JournalEntryStatus::Failed { .. }),
+            "entry must park as Failed at max_retries so WriteParked becomes reachable (F2)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

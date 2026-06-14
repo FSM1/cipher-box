@@ -152,14 +152,14 @@
       "component": "cipherbox-fuse",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.5.4"
+      "release-as": "0.6.0"
     },
     "crates/sdk": {
       "release-type": "rust",
       "component": "cipherbox-sdk",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.5.1"
+      "release-as": "0.6.0"
     }
   }
 }

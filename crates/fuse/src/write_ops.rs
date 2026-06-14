@@ -443,6 +443,8 @@ pub(crate) mod implementation {
             )
             .map_err(|e| format!("Folder key wrapping failed: {}", e))?;
             let encrypted_folder_key_hex = hex::encode(&wrapped_folder_key);
+            // Clone for use in the journal entry (original is moved into the inode below).
+            let encrypted_folder_key_hex_for_journal = encrypted_folder_key_hex.clone();
 
             let ino = fs.inodes.allocate_ino();
             let now = SystemTime::now();
@@ -508,10 +510,63 @@ pub(crate) mod implementation {
             let (parent_metadata, parent_folder_key, parent_ipns_key, parent_ipns_name, parent_old_cid) =
                 fs.build_folder_metadata(parent)?;
 
+            // D-04: journal the MkdirPublish entry with an fsync barrier before reply.entry().
+            // This closes the crash-before-thread-runs window (T-43-07 / D-11b).
+            let mkdir_created_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            // Journal the user-ECIES-wrapped parent IPNS key so replay can sign and publish
+            // the parent IPNS record (CR-01). The parent_ipns_key bytes come from
+            // build_folder_metadata (raw Ed25519 private key from inode). We wrap with the
+            // user's EC public key — the same form stored everywhere in FolderEntry.
+            let parent_ipns_key_hex_for_journal = cipherbox_crypto::wrap_key(&parent_ipns_key, &fs.public_key)
+                .map(|w| hex::encode(&w))
+                .unwrap_or_else(|e| {
+                    // Same posture as the child key (CR-03): an empty string parks the entry on
+                    // replay rather than persisting a degraded key silently. Surface it in logs.
+                    log::warn!("Failed to wrap parent IPNS key for journal: {}", e);
+                    String::new()
+                });
+
+            // CR-03 (write-side fix): journal the user-ECIES-wrapped child IPNS key so replay
+            // writes the correct form into FolderEntry.ipns_private_key_encrypted.
+            let child_ipns_key_hex_user_wrapped = cipherbox_crypto::wrap_key(&ipns_private_key, &fs.public_key)
+                .map(|w| hex::encode(&w))
+                .unwrap_or_else(|e| {
+                    // CR-03: never fall back to the TEE-wrapped key here — replay writes this
+                    // value into FolderEntry.ipns_private_key_encrypted, which must be
+                    // user-ECIES-wrapped. An empty string makes replay park the entry rather
+                    // than brick the folder with an unusable key.
+                    log::warn!("Failed to wrap child IPNS key for journal: {}", e);
+                    String::new()
+                });
+
+            let mkdir_journal_entry = cipherbox_sdk::JournalEntry {
+                id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
+                vault_root_ipns: fs.root_ipns_name.clone(),
+                op: cipherbox_sdk::JournalOp::MkdirPublish {
+                    child_ipns_name: ipns_name.clone(),
+                    child_folder_key_hex: encrypted_folder_key_hex_for_journal,
+                    child_ipns_key_hex: child_ipns_key_hex_user_wrapped,
+                    parent_folder_ipns_name: parent_ipns_name.clone(),
+                    parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
+                    name: name_str.to_string(),
+                    created_at_ms: mkdir_created_at_ms,
+                },
+                retries: 0,
+                status: cipherbox_sdk::JournalEntryStatus::Pending,
+            };
+            let mkdir_journal_entry_id = mkdir_journal_entry.id.clone();
+            fs.journal.put(&mkdir_journal_entry)?;
+
             let api = fs.api.clone();
             let rt = fs.rt.clone();
             let ipns_name_clone = ipns_name.clone();
             let coordinator = fs.publish_coordinator.clone();
+            let upload_tx = fs.upload_tx.clone();
+            let journal_for_mkdir = fs.journal.clone();
+            let parent_ino = parent;
 
             std::thread::spawn(move || {
                 let result = rt.block_on(async {
@@ -579,9 +634,8 @@ pub(crate) mod implementation {
                         .encode(&parent_marshaled);
 
                     // Parent folder publish after mkdir includes conflict detection.
-                    // On conflict, log a warning -- the debounced publish queue will
-                    // retry the parent metadata on the next cycle.
-                    // TODO: Add full re-fetch+merge+retry for parent mkdir publish (v2).
+                    // On conflict, signal the FS thread via upload_tx so the debounced
+                    // publisher retries with a fresh sequence (D-11a).
                     let parent_req = cipherbox_api_client::IpnsPublishRequest {
                         ipns_name: parent_ipns_name.clone(),
                         record: parent_record_b64,
@@ -597,15 +651,19 @@ pub(crate) mod implementation {
                             if let Some(old) = parent_old_cid {
                                 let _ = cipherbox_api_client::ipfs::unpin_content(&api, &old).await;
                             }
+                            // Remove journal entry now that parent publish is confirmed (D-11b).
+                            let _ = journal_for_mkdir.remove(&mkdir_journal_entry_id);
                             log::info!("Parent metadata published after mkdir");
                         }
                         cipherbox_api_client::PublishResult::Conflict { current_sequence_number } => {
+                            // Signal the FS thread to re-arm the debounced publisher with a
+                            // fresh sequence (D-11a). Journal entry stays until parent publish
+                            // confirms (D-11b) — do NOT remove it here.
                             log::warn!(
-                                "Conflict on parent publish after mkdir (expected seq {}, server has {}). \
-                                Debounced publish will retry.",
+                                "Conflict on parent mkdir publish (expected seq {}, server has {}). Signalling retry.",
                                 seq, current_sequence_number
                             );
-                            // Do not record_publish or unpin -- let the next debounced publish pick up fresh seq
+                            let _ = upload_tx.send(crate::FsEvent::MkdirConflict { parent_ino });
                         }
                     }
                     Ok::<(), String>(())
