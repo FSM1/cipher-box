@@ -26,6 +26,17 @@ pub async fn start_sync_daemon(
 /// writes via `WriteParked` notifications, so it MUST be started once the vault
 /// is mounted; otherwise failed uploads never reach the user (G-43-UAT-01).
 pub fn spawn_sync_daemon(app: tauri::AppHandle, state: &AppState) -> Result<(), String> {
+    // Idempotent: if a daemon is already running, keep it. The daemon reads auth/vault
+    // state from the shared KeyState each poll, so it adapts across re-auth without a
+    // restart — spawning a second loop would leave two daemons polling and double every
+    // status update and WriteParked notification (the D-10 spam this phase prevents).
+    if let Ok(guard) = state.sync_trigger.read() {
+        if guard.is_some() {
+            log::debug!("Sync daemon already running; skipping spawn");
+            return Ok(());
+        }
+    }
+
     log::info!("Starting background sync daemon");
 
     let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
