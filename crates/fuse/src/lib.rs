@@ -1393,7 +1393,7 @@ async fn replay_upload_entry(
             // retained for retry rather than creating a duplicate record at seq 0.
             let (is_first_publish, new_seq) = match coordinator.resolve_sequence(api, file_meta_ipns_name).await {
                 Ok(current_seq) => (false, current_seq + 1),
-                Err(e) if e.contains("not found") => {
+                Err(e) if e.to_lowercase().contains("not found") => {
                     log::info!(
                         "replay: per-file IPNS '{}' not found — creating as first publish (seq 0)",
                         file_meta_ipns_name

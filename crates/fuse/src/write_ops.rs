@@ -522,13 +522,25 @@ pub(crate) mod implementation {
             // user's EC public key — the same form stored everywhere in FolderEntry.
             let parent_ipns_key_hex_for_journal = cipherbox_crypto::wrap_key(&parent_ipns_key, &fs.public_key)
                 .map(|w| hex::encode(&w))
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    // Same posture as the child key (CR-03): an empty string parks the entry on
+                    // replay rather than persisting a degraded key silently. Surface it in logs.
+                    log::warn!("Failed to wrap parent IPNS key for journal: {}", e);
+                    String::new()
+                });
 
             // CR-03 (write-side fix): journal the user-ECIES-wrapped child IPNS key so replay
             // writes the correct form into FolderEntry.ipns_private_key_encrypted.
             let child_ipns_key_hex_user_wrapped = cipherbox_crypto::wrap_key(&ipns_private_key, &fs.public_key)
                 .map(|w| hex::encode(&w))
-                .unwrap_or_else(|_| encrypted_ipns_for_tee.clone().unwrap_or_default());
+                .unwrap_or_else(|e| {
+                    // CR-03: never fall back to the TEE-wrapped key here — replay writes this
+                    // value into FolderEntry.ipns_private_key_encrypted, which must be
+                    // user-ECIES-wrapped. An empty string makes replay park the entry rather
+                    // than brick the folder with an unusable key.
+                    log::warn!("Failed to wrap child IPNS key for journal: {}", e);
+                    String::new()
+                });
 
             let mkdir_journal_entry = cipherbox_sdk::JournalEntry {
                 id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),

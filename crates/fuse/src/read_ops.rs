@@ -757,29 +757,12 @@ pub(crate) mod implementation {
                         .filter(|v| !v.is_empty())
                         .cloned();
 
-                    if let Some(inode) = fs.inodes.get_mut(ino) {
-                        let cached_hex = match &inode.kind {
-                            InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
-                            _ => None,
-                        };
-                        inode.kind = InodeKind::File {
-                            cid: String::new(),
-                            encrypted_file_key: encrypted_file_key_hex.clone(),
-                            iv: iv_hex.clone(),
-                            size: file_size,
-                            encryption_mode: "GCM".to_string(),
-                            file_meta_ipns_name: file_meta_ipns_name.clone(),
-                            file_meta_resolved: true,
-                            file_ipns_private_key: file_ipns_private_key.clone(),
-                            file_ipns_key_encrypted_hex: cached_hex,
-                            versions: versions_for_meta.clone(),
-                        };
-                        inode.attr.size = file_size;
-                        inode.attr.blocks = (file_size + 511) / 512;
-                        inode.attr.mtime = SystemTime::now();
-                    }
-
-                    fs.pending_content.insert(ino, plaintext);
+                    // CR-04: all in-memory mutations (inode kind/attr, pending_content,
+                    // queued publish) are deferred until AFTER the journal entry is fsynced
+                    // (below). If any prepare step fails — including journal.put — the closure
+                    // returns Err having mutated nothing, so the Err arm replies EIO with no
+                    // rollback and the debounced publisher can never emit metadata for a write
+                    // the OS was told failed.
 
                     let write_gen = fs.inodes.get(ino)
                         .map(|i| i.write_generation)
@@ -790,8 +773,6 @@ pub(crate) mod implementation {
                         .unwrap_or(ROOT_INO);
 
                     let folder_key_for_file_meta = fs.get_folder_key(parent_ino);
-
-                    fs.queue_publish(parent_ino, true);
 
                     // Resolve parent IPNS name for stable journal entry (D-02).
                     let parent_folder_ipns_name = fs.inodes.get(parent_ino)
@@ -815,6 +796,10 @@ pub(crate) mod implementation {
                         .and_then(|raw_key| {
                             cipherbox_crypto::wrap_key(raw_key, &fs.public_key)
                                 .map(|w| hex::encode(&w))
+                                .map_err(|e| {
+                                    log::warn!("Failed to wrap parent IPNS key for journal: {}", e);
+                                    e
+                                })
                                 .ok()
                         })
                         .unwrap_or_default();
@@ -840,7 +825,10 @@ pub(crate) mod implementation {
                                     .map(|k| {
                                         cipherbox_crypto::ecies::wrap_key(k, &fs.public_key)
                                             .map(|w| hex::encode(&w))
-                                            .unwrap_or_default()
+                                            .unwrap_or_else(|e| {
+                                                log::warn!("Failed to wrap file IPNS key for journal: {}", e);
+                                                String::new()
+                                            })
                                     })
                                     .or_else(|| {
                                         fs.inodes.get(ino).and_then(|i| match &i.kind {
@@ -865,6 +853,35 @@ pub(crate) mod implementation {
 
                     // D-04: fsync journal entry to disk BEFORE acking the OS.
                     fs.journal.put(&journal_entry)?;
+
+                    // CR-04: journal is durably committed — now apply the in-memory write.
+                    // Deferred from above so a prepare/journal failure leaves no partial state
+                    // (no inode mutation, no pending_content, no queued parent publish).
+                    if let Some(inode) = fs.inodes.get_mut(ino) {
+                        let cached_hex = match &inode.kind {
+                            InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
+                            _ => None,
+                        };
+                        inode.kind = InodeKind::File {
+                            cid: String::new(),
+                            encrypted_file_key: encrypted_file_key_hex.clone(),
+                            iv: iv_hex.clone(),
+                            size: file_size,
+                            encryption_mode: "GCM".to_string(),
+                            file_meta_ipns_name: file_meta_ipns_name.clone(),
+                            file_meta_resolved: true,
+                            file_ipns_private_key: file_ipns_private_key.clone(),
+                            file_ipns_key_encrypted_hex: cached_hex,
+                            versions: versions_for_meta.clone(),
+                        };
+                        inode.attr.size = file_size;
+                        inode.attr.blocks = (file_size + 511) / 512;
+                        inode.attr.mtime = SystemTime::now();
+                    }
+
+                    fs.pending_content.insert(ino, plaintext);
+
+                    fs.queue_publish(parent_ino, true);
 
                     let api = fs.api.clone();
                     let rt = fs.rt.clone();
@@ -993,11 +1010,10 @@ pub(crate) mod implementation {
                     }
                     Err(e) => {
                         // CR-04: reply EIO and return — do NOT fall through to reply.ok().
-                        // The inode's kind was already reset and pending_content inserted
-                        // earlier in the prepare closure; those in-memory mutations remain,
-                        // which is consistent with the OS treating the write as failed (the
-                        // client will retry or report the error). A journal entry was NOT
-                        // fsynced, so there is nothing to remove.
+                        // All in-memory mutations (inode kind/attr, pending_content, queued
+                        // publish) are deferred until after the journal fsync, so a failure
+                        // here has mutated nothing: no rollback needed, and no journal entry
+                        // was fsynced, so there is nothing to remove.
                         log::error!("File upload preparation failed for ino {}: {}", ino, e);
                         handle.cleanup();
                         reply.error(libc::EIO);

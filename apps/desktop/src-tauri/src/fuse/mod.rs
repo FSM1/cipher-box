@@ -101,7 +101,10 @@ pub async fn mount_filesystem(
 
     // Stable journal dir: persists across remounts so entries survive crash/restart.
     let journal_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| std::env::temp_dir())
+        .unwrap_or_else(|| {
+            log::warn!("data_local_dir unavailable; journal will use temp_dir (may not survive reboot)");
+            std::env::temp_dir()
+        })
         .join("cipherbox")
         .join("cb-journal");
     std::fs::create_dir_all(&journal_dir)

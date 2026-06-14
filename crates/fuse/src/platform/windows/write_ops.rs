@@ -145,13 +145,25 @@ pub mod implementation {
                     .unwrap_or_default()
                     .as_millis() as u64;
                 // CR-01: journal the user-ECIES-wrapped parent IPNS key for replay signing.
-                let parent_ipns_key_hex_for_journal = cipherbox_crypto::wrap_key(&parent_ipns_key, &fs.public_key)
+                let parent_ipns_key_hex_for_journal = cipherbox_crypto::ecies::wrap_key(&parent_ipns_key, &fs.public_key)
                     .map(|w| hex::encode(&w))
-                    .unwrap_or_default();
+                    .unwrap_or_else(|e| {
+                        // Same posture as the child key (CR-03): an empty string parks the entry on
+                        // replay rather than persisting a degraded key silently. Surface it in logs.
+                        log::warn!("Failed to wrap parent IPNS key for journal: {}", e);
+                        String::new()
+                    });
                 // CR-03: journal the user-ECIES-wrapped child IPNS key (not TEE-wrapped).
-                let child_ipns_key_hex_user_wrapped = cipherbox_crypto::wrap_key(&ipns_private_key, &fs.public_key)
+                let child_ipns_key_hex_user_wrapped = cipherbox_crypto::ecies::wrap_key(&ipns_private_key, &fs.public_key)
                     .map(|w| hex::encode(&w))
-                    .unwrap_or_else(|_| encrypted_ipns_for_tee.clone().unwrap_or_default());
+                    .unwrap_or_else(|e| {
+                        // CR-03: never fall back to the TEE-wrapped key here — replay writes this
+                        // value into FolderEntry.ipns_private_key_encrypted, which must be
+                        // user-ECIES-wrapped. An empty string makes replay park the entry rather
+                        // than brick the folder with an unusable key.
+                        log::warn!("Failed to wrap child IPNS key for journal: {}", e);
+                        String::new()
+                    });
 
                 let mkdir_journal_entry = cipherbox_sdk::JournalEntry {
                     id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
@@ -831,6 +843,91 @@ pub mod implementation {
                         .filter(|v| !v.is_empty())
                         .cloned();
 
+                    // CR-04: defer the in-memory write (inode kind/attr + generation bump,
+                    // pending_content, queued publish) until AFTER the journal fsync below, so a
+                    // prepare/journal failure mutates nothing. WinFsp Cleanup cannot signal an
+                    // error to the OS, so leaving no partial state on failure is the only safe
+                    // posture available on this path.
+                    let parent_ino = fs.inodes.get(ino).map(|i| i.parent_ino).unwrap_or(ROOT_INO);
+                    let folder_key_for_file_meta = fs.get_folder_key(parent_ino);
+
+                    // Resolve parent IPNS name for stable journal entry (D-02).
+                    let parent_folder_ipns_name = fs.inodes.get(parent_ino)
+                        .and_then(|inode| match &inode.kind {
+                            InodeKind::Root { ipns_name, .. } => ipns_name.clone(),
+                            InodeKind::Folder { ipns_name, .. } => Some(ipns_name.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| fs.root_ipns_name.clone());
+
+                    // CR-01: journal the user-ECIES-wrapped parent IPNS key for replay signing.
+                    let parent_ipns_key_hex_for_journal = fs.inodes.get(parent_ino)
+                        .and_then(|inode| match &inode.kind {
+                            InodeKind::Root { ipns_private_key, .. } => ipns_private_key.as_deref(),
+                            InodeKind::Folder { ipns_private_key, .. } => ipns_private_key.as_deref(),
+                            _ => None,
+                        })
+                        .and_then(|raw_key| {
+                            cipherbox_crypto::ecies::wrap_key(raw_key, &fs.public_key)
+                                .map(|w| hex::encode(&w))
+                                .map_err(|e| {
+                                    log::warn!("Failed to wrap parent IPNS key for journal: {}", e);
+                                    e
+                                })
+                                .ok()
+                        })
+                        .unwrap_or_default();
+
+                    let file_meta_ipns_name_str = file_meta_ipns_name
+                        .clone()
+                        .unwrap_or_default();
+
+                    // Build journal entry referencing ciphertext only — no plaintext (D-05).
+                    use base64::Engine;
+                    let ciphertext_b64 = base64::engine::general_purpose::STANDARD.encode(&ciphertext);
+                    let wrapped_key_hex = encrypted_file_key_hex.clone();
+                    let journal_entry = cipherbox_sdk::JournalEntry {
+                        id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
+                        vault_root_ipns: fs.root_ipns_name.clone(),
+                        op: cipherbox_sdk::JournalOp::UploadFile {
+                            ciphertext_b64,
+                            wrapped_key_hex,
+                            iv_hex: iv_hex.clone(),
+                            file_meta_ipns_name: file_meta_ipns_name_str,
+                            file_ipns_key_hex: file_meta_ipns_name.as_ref().map(|_| {
+                                file_ipns_private_key.as_ref()
+                                    .map(|k| {
+                                        cipherbox_crypto::ecies::wrap_key(k, &fs.public_key)
+                                            .map(|w| hex::encode(&w))
+                                            .unwrap_or_else(|e| {
+                                                log::warn!("Failed to wrap file IPNS key for journal: {}", e);
+                                                String::new()
+                                            })
+                                    })
+                                    .or_else(|| {
+                                        fs.inodes.get(ino).and_then(|i| match &i.kind {
+                                            InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
+                                            _ => None,
+                                        })
+                                    })
+                            }).flatten(),
+                            parent_folder_ipns_name,
+                            parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
+                            filename: file_name,
+                            size: file_size,
+                            created_at_ms: now_ms,
+                        },
+                        retries: 0,
+                        status: cipherbox_sdk::JournalEntryStatus::Pending,
+                    };
+                    // D-04: fsync journal entry to disk BEFORE spawning the upload thread.
+                    // WinFsp cleanup has no explicit reply — the implicit ack occurs after
+                    // the callback returns, but the fsync barrier here still protects against
+                    // crash-before-spawn data loss.
+                    fs.journal.put(&journal_entry)?;
+
+                    // CR-04: journal durably committed — now apply the in-memory write.
+                    // Deferred from above so a prepare/journal failure leaves no partial state.
                     if let Some(inode) = fs.inodes.get_mut(ino) {
                         let cached_hex = match &inode.kind {
                             InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
@@ -862,77 +959,8 @@ pub mod implementation {
                     let write_gen = fs.inodes.get(ino)
                         .map(|i| i.write_generation)
                         .unwrap_or(0);
-                    let parent_ino = fs.inodes.get(ino).map(|i| i.parent_ino).unwrap_or(ROOT_INO);
-                    let folder_key_for_file_meta = fs.get_folder_key(parent_ino);
+
                     fs.queue_publish(parent_ino, true);
-
-                    // Resolve parent IPNS name for stable journal entry (D-02).
-                    let parent_folder_ipns_name = fs.inodes.get(parent_ino)
-                        .and_then(|inode| match &inode.kind {
-                            InodeKind::Root { ipns_name, .. } => ipns_name.clone(),
-                            InodeKind::Folder { ipns_name, .. } => Some(ipns_name.clone()),
-                            _ => None,
-                        })
-                        .unwrap_or_else(|| fs.root_ipns_name.clone());
-
-                    // CR-01: journal the user-ECIES-wrapped parent IPNS key for replay signing.
-                    let parent_ipns_key_hex_for_journal = fs.inodes.get(parent_ino)
-                        .and_then(|inode| match &inode.kind {
-                            InodeKind::Root { ipns_private_key, .. } => ipns_private_key.as_deref(),
-                            InodeKind::Folder { ipns_private_key, .. } => ipns_private_key.as_deref(),
-                            _ => None,
-                        })
-                        .and_then(|raw_key| {
-                            cipherbox_crypto::wrap_key(raw_key, &fs.public_key)
-                                .map(|w| hex::encode(&w))
-                                .ok()
-                        })
-                        .unwrap_or_default();
-
-                    let file_meta_ipns_name_str = file_meta_ipns_name
-                        .clone()
-                        .unwrap_or_default();
-
-                    // Build journal entry referencing ciphertext only — no plaintext (D-05).
-                    use base64::Engine;
-                    let ciphertext_b64 = base64::engine::general_purpose::STANDARD.encode(&ciphertext);
-                    let wrapped_key_hex = encrypted_file_key_hex.clone();
-                    let journal_entry = cipherbox_sdk::JournalEntry {
-                        id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
-                        vault_root_ipns: fs.root_ipns_name.clone(),
-                        op: cipherbox_sdk::JournalOp::UploadFile {
-                            ciphertext_b64,
-                            wrapped_key_hex,
-                            iv_hex: iv_hex.clone(),
-                            file_meta_ipns_name: file_meta_ipns_name_str,
-                            file_ipns_key_hex: file_meta_ipns_name.as_ref().map(|_| {
-                                file_ipns_private_key.as_ref()
-                                    .map(|k| {
-                                        cipherbox_crypto::ecies::wrap_key(k, &fs.public_key)
-                                            .map(|w| hex::encode(&w))
-                                            .unwrap_or_default()
-                                    })
-                                    .or_else(|| {
-                                        fs.inodes.get(ino).and_then(|i| match &i.kind {
-                                            InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
-                                            _ => None,
-                                        })
-                                    })
-                            }).flatten(),
-                            parent_folder_ipns_name,
-                            parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
-                            filename: file_name,
-                            size: file_size,
-                            created_at_ms: now_ms,
-                        },
-                        retries: 0,
-                        status: cipherbox_sdk::JournalEntryStatus::Pending,
-                    };
-                    // D-04: fsync journal entry to disk BEFORE spawning the upload thread.
-                    // WinFsp cleanup has no explicit reply — the implicit ack occurs after
-                    // the callback returns, but the fsync barrier here still protects against
-                    // crash-before-spawn data loss.
-                    fs.journal.put(&journal_entry)?;
 
                     let api = fs.api.clone();
                     let rt = fs.rt.clone();
@@ -1040,16 +1068,13 @@ pub mod implementation {
                         });
                     }
                     Err(e) => {
-                        // CR-04 mirror: WinFsp handle_cleanup returns () and cannot
-                        // return a status code. However, the journal.put() that would
-                        // have journaled the entry is inside the prepare closure, so
-                        // on Err the entry is never written to disk — no success-implying
-                        // state is committed. The OS receives an implicit success ack
-                        // when the callback returns, but the in-memory inode state
-                        // reflects the failed encryption (cid still empty), so any
-                        // subsequent read returns stale or empty data, making the
-                        // failure visible. This matches the fuser CR-04 constraint:
-                        // WinFsp has no equivalent to reply.error(libc::EIO) here.
+                        // CR-04 mirror: WinFsp handle_cleanup returns () and cannot return a
+                        // status code, so there is no equivalent to reply.error(libc::EIO).
+                        // All in-memory mutations are deferred until after the journal fsync
+                        // (inside the prepare closure), so on Err nothing was committed: no
+                        // journal entry on disk, and the inode/pending_content/publish-queue
+                        // state is unchanged from before the write. A subsequent read returns
+                        // the original data — the failed write simply did not take effect.
                         log::error!("File upload preparation failed for ino {}: {}", ino, e);
                         handle.cleanup();
                     }
