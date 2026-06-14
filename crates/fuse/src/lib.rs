@@ -1021,7 +1021,7 @@ pub async fn replay_for_vault(
 /// Look up the folder key for `folder_ipns_name` via a bounded breadth-first descent.
 ///
 /// WR-02: resolves parent folders nested two or more levels below root, not just
-/// direct children of root. The BFS is capped at `MAX_RESOLVE_DEPTH` to bound network
+/// direct children of root. The BFS is capped at `MAX_RESOLVE_NODES` to bound network
 /// round trips and prevent cycles.
 ///
 /// If `folder_ipns_name == root_ipns_name`, returns `root_folder_key` directly.
@@ -1035,8 +1035,9 @@ async fn resolve_folder_key(
     root_ipns_name: &str,
     folder_ipns_name: &str,
 ) -> Result<Vec<u8>, String> {
-    // Depth cap: limits network round trips and prevents infinite loops (WR-02).
-    const MAX_RESOLVE_DEPTH: usize = 32;
+    // Node-visit cap: bounds total network round trips and prevents infinite loops
+    // (WR-02). This counts nodes visited across the BFS, not tree depth.
+    const MAX_RESOLVE_NODES: usize = 32;
 
     if folder_ipns_name == root_ipns_name {
         return Ok(root_folder_key.to_vec());
@@ -1046,16 +1047,16 @@ async fn resolve_folder_key(
     // Starts at root; each step expands to all subfolder children of the current node.
     let mut queue: std::collections::VecDeque<(String, Vec<u8>)> = std::collections::VecDeque::new();
     queue.push_back((root_ipns_name.to_string(), root_folder_key.to_vec()));
-    let mut depth = 0usize;
+    let mut nodes_visited = 0usize;
 
     while let Some((current_ipns, current_folder_key)) = queue.pop_front() {
-        if depth >= MAX_RESOLVE_DEPTH {
+        if nodes_visited >= MAX_RESOLVE_NODES {
             return Err(format!(
-                "resolve_folder_key: depth cap ({}) exceeded looking for {} — aborting",
-                MAX_RESOLVE_DEPTH, folder_ipns_name
+                "resolve_folder_key: node cap ({}) exceeded looking for {} — aborting",
+                MAX_RESOLVE_NODES, folder_ipns_name
             ));
         }
-        depth += 1;
+        nodes_visited += 1;
 
         // Fetch and decrypt this folder's metadata.
         let resolve = cipherbox_api_client::ipns::resolve_ipns(api, &current_ipns)
@@ -1085,7 +1086,7 @@ async fn resolve_folder_key(
         }
     }
 
-    Err(format!("folder IPNS {} not found in vault tree (searched {} nodes)", folder_ipns_name, depth))
+    Err(format!("folder IPNS {} not found in vault tree (searched {} nodes)", folder_ipns_name, nodes_visited))
 }
 
 /// Fetch, decrypt, merge, and CAS-publish a parent folder update.
