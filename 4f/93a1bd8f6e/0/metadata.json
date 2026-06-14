@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "4f93a1bd8f6e",
+  "session_id": "50a19cf3-e9e0-4593-b0a0-59ce53bd97ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T22:29:33.641601Z",
+  "branch": "feat/desktop-fuse-write-durability-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/fuse/src/lib.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8e8867e734ef",
+  "token_usage": {
+    "input_tokens": 23304,
+    "cache_creation_tokens": 270037,
+    "cache_read_tokens": 15603507,
+    "output_tokens": 161509,
+    "api_call_count": 95
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Merge origin/main into the phase-44 branch (feat/ipns-conflict-handling), ship it as a PR, and resolve any CI failures or review comments that arose.",
+    "outcome": "Successfully merged 28 conflicts (taking main's reviewed phase-42/43 code wholesale), created PR #488, fixed two CI failures (stale test assertion + malformed commit messages via filter-branch rewrite), resolved 2 CodeRabbit threads, and confirmed the PR merged to main with all required checks green.",
+    "learnings": {
+      "repo": [
+        "Web app vitest only picks up `*.test.ts` files — `*.spec.ts` are silently skipped. NestJS API uses `.spec.ts` by convention (and those run), but web/sdk test files must be `*.test.ts`.",
+        "This repo uses `Entire-Checkpoint:` commit trailers, not `gate_status:` trailers — a TDD audit table populated from `gate_status:` would be all-missing rows.",
+        "PR titles must follow conventional-commit format enforced by `pr-title.yml` CI; the GSD template's literal `Phase N: name` title would have been rejected.",
+        "Repo is squash-only with PR_TITLE as the squash-commit subject, so the conventional PR title (not branch history) is what lands on main.",
+        "`required_signatures: false` — history rewrites without re-signing are allowed on this repo.",
+        "The Release Preview required check enforces conventional-commit format on every commit (excluding merges) that touches a versioned package; violations exit 1 and block merge.",
+        "Release Preview pushes a `chore(release): set release targets for PR #N` commit to the branch after a successful run — always fetch before pushing to avoid non-fast-forward.",
+        "1Password SSH signing hangs in sandbox; git commits require unsandboxed bash. `--no-gpg-sign` is not an option (signatures are enforced).",
+        "The gsd commit helper has a known false-negative: reports `commit_failed` but the commit actually lands — verify with `git log` rather than retrying.",
+        "Phase-44 code is isolated to `packages/sdk-core/`, `packages/sdk/`, and `apps/web/src/hooks/` — no overlap with the phase-42/43 Rust/API/desktop files."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/delete.service.ts",
+          "line": 24,
+          "end_line": 25,
+          "finding": "fetchQuota() is fire-and-forget (void + .then only); it warns on resolved-falsy with a single logger.warn arg and has no .catch — a rejection is silently swallowed, never logged."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/file.test.ts",
+          "line": 158,
+          "end_line": 158,
+          "finding": "mockPrivateKey was declared once at describe scope without beforeEach reinit; updateFileMetadata zeroizes it in-place (file/index.ts:399), leaving all-zero bytes for every subsequent test in the suite."
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 399,
+          "end_line": 399,
+          "finding": "params.fileIpnsPrivateKey.fill(0) zeroizes the caller's buffer in-place after use — any test sharing a key reference across cases will see zeros after the first invocation."
+        },
+        {
+          "path": "packages/sdk/src/share/shared-write.ts",
+          "line": 510,
+          "end_line": 510,
+          "finding": "Comment confirms: updateFileMetadata now publishes internally with CAS; the separate batchPublishIpnsRecords call was deliberately removed from updateSharedFile to avoid double-publish. Tests asserting the old direct call are stale."
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "main's guardedUnpin is a strict refinement of the branch's earlier cut: adds suppressCrossUserAudit option and inline lock computation. The branch's version was the pre-PR-review draft."
+        }
+      ],
+      "workflow": [
+        "When merging branches with parallel feature implementations, determine which conflicted files the current branch's unique work actually touched before choosing a resolution strategy — if zero overlap, taking the other side wholesale is safe.",
+        "git filter-branch with --msg-filter can fix commit messages without touching tree content; verify the rewrite is message-only by diffing tree bytes before force-pushing.",
+        "Bundle related fixes (test fix + commit message rewrite) into a single push to minimize CI cycles.",
+        "For Release Preview failures, weigh `release:none` (kills all version bumps for the PR) vs a history rewrite (preserves releases but requires force-push) — rewrite is almost always correct for a real feature branch.",
+        "Delegating verbose build verification (pnpm typecheck, cargo check --workspace) to a sub-agent keeps the main context focused and returns only pass/fail + errors.",
+        "When a CodeRabbit comment targets a test file, always check whether that file actually runs in CI before patching the assertion — a dead duplicate is better deleted than fixed.",
+        "Fetch before every push when a bot (Release Preview, release-please) may have pushed to the branch between your last pull and your push."
+      ]
+    },
+    "friction": [
+      "Transient git index.lock collision on two files (crates/fuse/src/commands/sync.rs, crates/fuse/src/fuse/mod.rs) during bulk `git checkout --theirs` — caused by a file watcher, resolved on retry after confirming lock was gone.",
+      "git filter-repo was not installed; had to fall back to the deprecated git filter-branch for the commit message rewrite.",
+      "28 merge conflicts arose because phases 42 and 43 were implemented independently on both the feature branch (sequentially) and their own PR branches that had already merged to main — a structural branching issue, not a one-off.",
+      "Phase-44 verification ran sdk-core (196/196) but not the full packages/sdk suite, so the stale batchPublishIpnsRecords assertion in shared-write.test.ts only surfaced in CI after the PR was created.",
+      "The gsd commit helper false-negative required an extra git log verification step after every commit to confirm the commit actually landed.",
+      "CodeRabbit suggested patching the assertion in the dead delete.service.spec.ts rather than identifying it as a stale duplicate — required manual investigation to find the canonical .test.ts and choose deletion over patching."
+    ],
+    "open_items": [
+      "Three TODOs filed to .planning/todos/pending during phase-44 work: folder writes leak baseChildren/publishedChildren bookkeeping; unify file and folder IPNS CAS retry into one publishWithCas helper; updateSharedFile discards prunedCids from updateFileMetadata.",
+      "filter-branch backup refs (refs/original/…) remain locally after the commit message rewrite — harmless but can be cleaned up with `git update-ref -d refs/original/refs/heads/feat/ipns-conflict-handling`.",
+      "/gsd:complete-milestone has not been run yet — STATE.md already marks v1.1 milestone complete, but the GSD workflow step was noted as the suggested next command.",
+      "release-please will cut version bumps for packages/sdk-core, packages/sdk, and apps/web once PR #488 is processed — release PR not yet created at end of session."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-14T22:28:23.736238Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 645,
+    "human_modified": 227,
+    "human_removed": 0,
+    "total_committed": 645,
+    "total_lines_changed": 924,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}

@@ -1,0 +1,41 @@
+ok now switch to phase 44 branch
+
+---
+
+ok, I think we need to merge origin/main in to this branch
+
+---
+
+from what I remember /simplify and some coderabbit reviews have been run on this code right?
+
+---
+
+/gsd:ship 44
+
+---
+
+The release label preview job failed: https://github.com/FSM1/cipher-box/actions/runs/27503695501/job/81291028393
+
+---
+
+<task-notification>
+<task-id>bvwbv4cm3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/76fc2ea9-e2ee-4422-b71b-cf9b885217c1/tasks/bvwbv4cm3.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll Release Preview and Test checks until terminal" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwll9x4qm</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/76fc2ea9-e2ee-4422-b71b-cf9b885217c1/tasks/bwll9x4qm.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll remaining required checks until terminal" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/resolve-pr-reviews
