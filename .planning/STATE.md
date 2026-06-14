@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: milestone
-status: Milestone complete
-last_updated: "2026-06-14T22:15:46.140Z"
+milestone_name: IPFS Infrastructure
+status: Executing Phase 45
+last_updated: "2026-06-14T22:30:57.999Z"
 last_activity: 2026-06-14
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 7
-  completed_plans: 7
-  percent: 100
+  total_phases: 30
+  completed_phases: 29
+  total_plans: 130
+  completed_plans: 125
+  percent: 96
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 44 — ipns-conflict-handling
+**Current focus:** Phase 45 — desktop-fuse-write-durability-cleanup
 
 ## Current Position
 
-Phase: 44
-Plan: Not started
+Phase: 45 (desktop-fuse-write-durability-cleanup) — EXECUTING
+Plan: 2 of 6
 Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 
 ## Performance Metrics
@@ -135,6 +135,7 @@ Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 | Phase 41 P03    | 3min     | 2 tasks | 2 files   |
 | Phase 41 P04    | 2min     | 2 tasks | 2 files   |
 | Phase 41 P05    | 3min     | 2 tasks | 3 files   |
+| Phase 45 P01    | 8min     | 2 tasks | 2 files   |
 
 ## Accumulated Context
 
@@ -144,6 +145,9 @@ See PROJECT.md Key Decisions table for full list with outcomes.
 
 Recent for v1.1:
 
+- make_temp_queue in crates/sdk/src/queue.rs uses pid+counter (not tid+counter) to prevent inter-run temp dir collisions (Phase 45 P01 Rule-1 fix)
+- T-45-07 uses root-shortcut path (folder_ipns_name==root_ipns_name) for deterministic resolve_folder_key test without network; marked for #15 extension
+- T-45-08 placed in crates/fuse/src/lib.rs (not apps/desktop) to keep characterization tests co-located with merge_folder_children under test
 - Network-first with self-hosted Someguy + DB fallback adopted as IPNS resolution strategy (revised from DB-first during Phase 19 context -- see 19-SCOPING_RATIONALE.md #1)
 - rootFolderKey DB copy kept as permanent fallback (never drop column, IPFS copy for recovery independence)
 - BYO-IPFS affects pinning only, all IPNS publishes still route through CipherBox API
