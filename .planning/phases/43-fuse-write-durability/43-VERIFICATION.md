@@ -1,9 +1,13 @@
 ---
 phase: 43-fuse-write-durability
 verified: 2026-06-13T05:00:00Z
-status: human_needed
+status: passed
 score: 18/18 must-haves verified
 overrides_applied: 0
+human_verification_completed:
+  date: 2026-06-14
+  confirmed_by: user
+  result: "All 4 manual UAT items (SIGKILL replay, park notification, mkdir-orphan survival, ciphertext-only journal) verified on macOS, Linux, and Windows; automated headless UAT passed on all platforms."
 re_verification:
   previous_status: gaps_found
   previous_score: 9/18
@@ -38,7 +42,7 @@ human_verification:
 
 **Phase Goal:** Make FUSE writes durable: persisted out-of-callback pending-upload journal so `release()` no longer falsely acks then silently loses data, and mkdir parent-publish conflicts actually enqueue a retry instead of orphaning the child folder.
 **Verified:** 2026-06-13T05:00:00Z
-**Status:** human_needed
+**Status:** passed (human verification completed 2026-06-14 — see `human_verification_completed`)
 **Re-verification:** Yes — round 2 after gap closure (plans 43-05..43-08)
 
 ## Goal Achievement
