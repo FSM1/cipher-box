@@ -1,0 +1,144 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "dd51f176ebc0",
+  "session_id": "eae1b4bd-fe3d-40ed-9c53-b3dee340c487",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T01:36:23.042113Z",
+  "branch": "feat/ipns-conflict-handling",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a588a544425d",
+  "token_usage": {
+    "input_tokens": 40300,
+    "cache_creation_tokens": 1108610,
+    "cache_read_tokens": 50995796,
+    "output_tokens": 332167,
+    "api_call_count": 173
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_019rN748wfJ49BeygF6D5hoX",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a588a544425d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1031,
+        "end": 1032,
+        "entry_ids": [
+          "984f9ef5-fcdc-4911-9659-5b9bc7d69eba"
+        ],
+        "tool_use_id": "toolu_019rN748wfJ49BeygF6D5hoX"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019rN748wfJ49BeygF6D5hoX"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Complete phase 43 (FUSE write durability) remaining tasks — integrate main, run UAT against a live local stack, and then begin phase 44 (IPNS conflict handling) wrap-up work.",
+    "outcome": "Phase 43 branch integrated, two critical runtime bugs found and fixed (park unreachable, replay never converges first-publish failures), live headless UAT run against a full local stack, branch pushed for Windows/Linux VM UAT (Windows already passed). Phase 44's net changes were simplified via /simplify with 3 deferred cleanup todos captured.",
+    "learnings": {
+      "repo": [
+        "Phase 44 (feat/ipns-conflict-handling) is stacked on phase 43; a naive diff-vs-main includes stale 42/43 code — must diff against origin/feat/fuse-write-durability to isolate 44's net work.",
+        "Headless desktop auth uses --dev-key flag + /auth/test-login endpoint (email dev-key@cipherbox.local, secret e2e-test-secret-ci-only); bypasses Web3Auth for CI/agent-driven testing.",
+        "Access token TTL is 15 minutes — headless sessions exceeding this get 401s on upload; restart the app to refresh.",
+        "Journal paths per OS: macOS ~/Library/Application Support/cipherbox/cb-journal, Linux ~/.local/share/cipherbox/cb-journal, Windows %LOCALAPPDATA%\\cipherbox\\cb-journal.",
+        "describeIf = process.env.CI ? describe.skip : describe pattern gates SDK integration tests — they fail locally without a live API seed but are skipped in CI; not real failures.",
+        "IDENTITY_JWT_PRIVATE_KEY is optional — jwt-issuer.service.ts generates an ephemeral RS256 keypair when unset in non-production; local stack runs fine without secrets.",
+        "Todo creation follows the GSD canonical format via gsd-tools.cjs — frontmatter fields: created/title/area/files, with gsd-generated slug.",
+        "Prettier's preferred format for release-please-config.json is the inline array form; main carried a pre-existing prettier violation that the branch merge incidentally fixed."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 934,
+          "end_line": 975,
+          "finding": "replay_for_vault Err arms only logged 'will retry on next mount' — never called record_failure. Entries capped at retries=1, never reached max_retries=5, WriteParked never fired. Fixed by calling journal.record_failure(entry, &e) in both Err arms."
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 898,
+          "end_line": 898,
+          "finding": "replay_for_vault already filters out Failed entries — correct park semantics were wired, just never reachable before the record_failure fix."
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 1340,
+          "end_line": 1340,
+          "finding": "replay_upload_entry called coordinator.resolve_sequence() assuming is_first_publish=false; for files whose original upload failed before per-file IPNS creation, this errors 'IPNS name not found' forever. Fixed by detecting not-found and creating the record as first-publish (seq 0) with TEE enrollment, mirroring the live path."
+        },
+        {
+          "path": "crates/fuse/src/read_ops.rs",
+          "line": 983,
+          "end_line": 983,
+          "finding": "Background upload runs exactly once and calls record_failure once on failure — no internal retry loop. Unit tests that called record_failure 5x directly masked the fact that entries could never organically reach the park threshold at runtime."
+        },
+        {
+          "path": "crates/fuse/src/sync.rs",
+          "line": 137,
+          "end_line": 153,
+          "finding": "WriteParked logic counts Failed-status journal entries and emits WriteParked{pending, failed} — correct design, but unreachable until the record_failure fix was applied."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "line": 58,
+          "end_line": 59,
+          "finding": "tee_public_key and tee_key_epoch are already in scope at the replay call site — made it feasible to add full TEE enrollment to the F3 create-on-missing fix without threading new parameters through the stack."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/file.test.ts",
+          "finding": "vi.mock('../errors') fully re-implements the module; adding a new export (is409) to errors.ts requires adding it to the mock too, otherwise the mock shadows it and 5 dependent tests fail."
+        }
+      ],
+      "workflow": [
+        "macOS with both macFUSE and FUSE-T installed: pkg-config resolves 'fuse' to macFUSE (kext-based); fix by creating a fuse.pc shim that aliases to fuse-t.pc (Version 2.9.9). Without this, fuser logs 'mount confirmed' but no OS-level mount materializes — a silent false positive.",
+        "winfsp-sys and windows-future crates don't build on macOS — Windows-specific desktop code (windows/mod.rs edits) can only be compile-verified on a Windows box or CI (desktop-e2e.yml, windows-latest runner).",
+        "The authoritative local stack recipe is .github/workflows/desktop-e2e.yml — mirrors exactly what CI does and avoids subtle env differences.",
+        "Merging main into a stacked branch: conflicts are entirely predictable — only files modified by both phases conflict; resolve toward main for the earlier phase's finalized files.",
+        "lint-staged with prettier can reject a deletion-only commit as 'empty' if prettier reformats the only modified file back to its original state before staging — check git status carefully before diagnosing a hook as broken.",
+        "When a stacked branch can't be finalized, /simplify can still be applied to the net diff (git diff base-branch...HEAD) and the cleanup commits will survive the eventual rebase cleanly."
+      ]
+    },
+    "friction": [
+      "macFUSE vs FUSE-T conflict took significant debugging time — fuser reported 'mount confirmed' even with the wrong library, masking the real failure until inspecting the fuse-t daemon logs and running strings on the binary.",
+      "15-minute access token TTL caused a 401 mid-UAT, requiring a full app restart and re-run of the write sanity test.",
+      "winfsp path cannot be compiled or runtime-tested on macOS, leaving the F3 edit to windows/mod.rs unverified until the user ran it on a Windows VM.",
+      "lint-staged reformatted release-please-config.json after checkout-main resolved it, causing the cleanup commit to be rejected as empty — required understanding prettier's preferred format to resolve.",
+      "The zsh glob in a Bash tool call (*.json before any files existed) aborted a multi-step crash-test sequence early, requiring re-run.",
+      "FUSE-T mount wedged after a force-unmount mid-session, blocking a clean relaunch until the stale go-nfsv4 process was killed manually.",
+      "Phase 44 cannot be finalized until phase 43 lands on main due to stacking — adds sequencing overhead.",
+      "Adding is409 export to errors.ts broke 5 existing tests because vi.mock('../errors') fully shadows the module and didn't include the new export."
+    ],
+    "open_items": [
+      "Linux UAT in progress at session end — pending confirmation before phase 43 PR can be opened.",
+      "Phase 43 PR not yet opened — held until Linux UAT completes.",
+      "F1: 'filename' field stored in cleartext in at-rest journal (cb-journal/*.json) — deferred to existing todo 2026-06-13-encrypt-share-itemname-at-rest.md.",
+      "Phase 44: stale test in shared-write.test.ts still asserts the removed batchPublishIpnsRecords call — needs a one-line fix before phase 44 PR.",
+      "Phase 44 PR waiting for phase 43 to land on main (stacking dependency) — then rebase and open.",
+      "2026-06-14-unify-file-and-folder-ipns-cas-retry-into-one-publishwithcas.md: file and folder each have their own CAS-retry engine that have already drifted; a shared publishWithCas skeleton is needed.",
+      "2026-06-14-folder-writes-leak-basechildren-and-publishedchildren-bookke.md: ~14 call sites manually snapshot and adopt merged results; should be a stateful wrapper.",
+      "2026-06-14-updatesharedfile-discards-prunedcids-from-updatefilemetadata.md: updateSharedFile drops prunedCids returned by updateFileMetadata, causing a pinned-storage leak (sibling caller useFileOperations.ts honors them correctly).",
+      "Crash/park/journal UAT scripts for Linux (.sh) and Windows (.ps1) were proposed but not written — existing run-all scripts don't cover F2/F3 scenarios."
+    ]
+  }
+}
