@@ -85,8 +85,19 @@ _Accepted risks do not resurface in future audit runs._
 | Audit Date | Threats Total | Closed | Open | Run By |
 | ---------- | ------------- | ------ | ---- | ------ |
 | 2026-06-14 | 26 | 26 | 0 | gsd-security-auditor (sonnet) |
+| 2026-06-14 | 1 (post-audit) | 1 | 0 | CodeRabbit CLI re-review → fix `9f3c56181` |
 
 Breakdown: 19 `mitigate` verified present in implementation (file:line evidence above) + 7 `accept` documented in the Accepted Risks Log. Auditor verdict: SECURED. No unregistered threat flags; all SUMMARY.md threat flags map to registered IDs.
+
+### Post-Audit Findings (CodeRabbit CLI, 2026-06-14)
+
+A CodeRabbit CLI review of the phase-44 diff, run **after** the SECURED verdict above, surfaced one critical data-loss bug the gsd-security-auditor missed:
+
+- **Critical — local version history lost when the remote wins a file conflict.** `updateFileMetadata`'s 409 merge passed `remoteMeta.versions` (not `loser.versions`) as the second `mergeVersions` argument. When latest-wins selects the remote, the loser is the _local_ metadata, so the local writer's prior version history was silently dropped.
+- **Why the audit missed it:** **T-44-09**'s "both directions tested" evidence over-trusted the remote-wins test, which used empty version arrays and never actually drove the remote-wins merge branch — `updateFileMetadata` stamps `updatedMetadata.modifiedAt = Date.now()`, so local wins unless the remote timestamp is future-dated. This is precisely the **T-44-21** "shallow conflict tests" class.
+- **Resolution (commit `9f3c56181`):** second arg corrected to `loser.versions`; added a remote-wins history-preservation regression test (forces the branch with a far-future remote `modifiedAt`); also exported `is409` from the sdk-core barrel and added `is409` unit tests. Full sdk-core suite 196/196 green.
+
+With the fix, **T-44-09** and **T-44-21** mitigations are now genuinely backed by tests. `threats_open` remains **0** (finding found _and_ fixed).
 
 ---
 
