@@ -155,7 +155,9 @@ describe('mergeVersions', () => {
 describe('updateFileMetadata CAS + conflict', () => {
   const mockCtx = { axiosInstance: null } as any;
   const mockFolderKey = new Uint8Array(32).fill(1);
-  const mockPrivateKey = new Uint8Array(32).fill(2);
+  // Reinitialized per test in beforeEach: updateFileMetadata zeroizes
+  // fileIpnsPrivateKey in-place, so a shared buffer would be all-zero after test 1.
+  let mockPrivateKey: Uint8Array;
 
   const baseCurrentMetadata = {
     version: 'v1' as const,
@@ -172,6 +174,7 @@ describe('updateFileMetadata CAS + conflict', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockPrivateKey = new Uint8Array(32).fill(2);
 
     const coreMocks = await vi.importMock<typeof import('@cipherbox/core')>('@cipherbox/core');
     encryptFileMetadata = vi.mocked(coreMocks.encryptFileMetadata);
