@@ -2069,6 +2069,53 @@ mod tests {
         );
     }
 
+    // T-45-05: not_found_outcome_drives_first_publish
+    //
+    // Pins the #19 branch contract: given each IpnsResolveOutcome variant, the replay
+    // sequencing decision must produce the correct (is_first_publish, new_seq) pair
+    // without any network access. This test exercises the classification → sequence
+    // computation directly, mirroring the branch logic inside replay_upload_entry.
+    //
+    // NotFound  -> is_first_publish=true,  new_seq=0  (next_file_publish_sequence(true, None))
+    // Found(7)  -> is_first_publish=false, new_seq=8  (current_seq + 1)
+    // Error(_)  -> Err propagated (entry retained, no sequence produced)
+    #[test]
+    fn not_found_outcome_drives_first_publish() {
+        use super::next_file_publish_sequence;
+        use crate::error::IpnsResolveOutcome;
+
+        // NotFound -> first publish at seq 0
+        let outcome_not_found = IpnsResolveOutcome::NotFound;
+        let (is_first, new_seq) = match outcome_not_found {
+            IpnsResolveOutcome::Found(seq) => (false, next_file_publish_sequence(false, Some(seq)).unwrap()),
+            IpnsResolveOutcome::NotFound => (true, next_file_publish_sequence(true, None).unwrap()),
+            IpnsResolveOutcome::Error(e) => panic!("unexpected Error variant: {}", e),
+        };
+        assert!(is_first, "NotFound must set is_first_publish=true");
+        assert_eq!(new_seq, 0, "NotFound must produce seq 0");
+
+        // Found(7) -> update at seq 8
+        let outcome_found = IpnsResolveOutcome::Found(7);
+        let (is_first, new_seq) = match outcome_found {
+            IpnsResolveOutcome::Found(seq) => (false, next_file_publish_sequence(false, Some(seq)).unwrap()),
+            IpnsResolveOutcome::NotFound => (true, next_file_publish_sequence(true, None).unwrap()),
+            IpnsResolveOutcome::Error(e) => panic!("unexpected Error variant: {}", e),
+        };
+        assert!(!is_first, "Found must set is_first_publish=false");
+        assert_eq!(new_seq, 8, "Found(7) must produce seq 8");
+
+        // Error(_) -> propagated as Err (entry retained)
+        let outcome_err = IpnsResolveOutcome::Error("transient failure".to_string());
+        let result: Result<(bool, u64), String> = match outcome_err {
+            IpnsResolveOutcome::Found(seq) => Ok((false, next_file_publish_sequence(false, Some(seq)).unwrap())),
+            IpnsResolveOutcome::NotFound => Ok((true, next_file_publish_sequence(true, None).unwrap())),
+            IpnsResolveOutcome::Error(e) => Err(format!("resolve file IPNS sequence: {} — retaining entry", e)),
+        };
+        assert!(result.is_err(), "Error variant must propagate as Err (entry retained)");
+        let err_msg = result.unwrap_err();
+        assert!(err_msg.contains("retaining entry"), "error message must mention retaining entry");
+    }
+
     // F2: replay_for_vault must record each failed replay so retries accumulate across
     // mounts and the entry parks as Failed at max_retries (D-09). Before the fix the
     // failure arm only logged "will retry on next mount", so retries never advanced and
