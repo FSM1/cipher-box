@@ -382,18 +382,17 @@ mod tests {
 
     /// Create a unique temporary directory for test isolation.
     ///
-    /// Uses a monotonically-increasing atomic counter combined with the thread ID
-    /// to guarantee uniqueness even when multiple tests run concurrently in the
-    /// same process.
+    /// Uses process ID + a monotonically-increasing atomic counter to guarantee
+    /// uniqueness across both concurrent tests within a run and separate test-binary
+    /// invocations (which would otherwise reuse the same counter values with the same
+    /// thread IDs, causing stale files from prior runs to contaminate load results).
     fn make_temp_queue() -> (WriteQueue, std::path::PathBuf) {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tid_raw = format!("{:?}", std::thread::current().id());
-        // Extract the numeric part of the thread ID string (e.g. "ThreadId(7)" → "7").
-        let tid_num: String = tid_raw.chars().filter(|c| c.is_ascii_digit()).collect();
+        let pid = std::process::id();
         let dir = std::env::temp_dir()
-            .join(format!("cipherbox-journal-test-{}-{}", seq, tid_num));
+            .join(format!("cipherbox-journal-test-{}-{}", pid, seq));
         std::fs::create_dir_all(&dir).expect("create test journal dir");
         let q = WriteQueue::new(dir.clone(), 3);
         (q, dir)
@@ -778,5 +777,121 @@ mod tests {
         assert_eq!(ordered[0].id, "up-first");
         assert_eq!(ordered[1].id, "up-second");
         assert_eq!(ordered[2].id, "up-third");
+    }
+
+    // ---- T-45-01: crash mid-write entry survives reload ----
+    //
+    // Characterization test: an entry written via `put` but never `remove`d (simulating
+    // a process kill after the fsync) must survive a fresh `WriteQueue::new` + `load_all_for_vault`
+    // on the same directory. Proves the fsync-before-ack crash-recovery guarantee.
+
+    #[test]
+    fn crash_mid_write_entry_survives_reload() {
+        let (q, dir) = make_temp_queue();
+        let entry = make_upload_entry("crash01", "k51vaultcrash");
+
+        // Simulate successful fsync-commit (D-04) — entry is on disk.
+        q.put(&entry).expect("put");
+
+        // Drop the first queue WITHOUT calling remove() — simulates process kill.
+        drop(q);
+
+        // Construct a fresh WriteQueue on the same directory (next mount).
+        let q2 = WriteQueue::new(dir.clone(), 3);
+        let loaded = q2.load_all_for_vault("k51vaultcrash").expect("load after crash");
+
+        assert_eq!(loaded.len(), 1, "entry must survive across simulated crash");
+        assert_eq!(loaded[0].id, "crash01");
+        assert_eq!(
+            loaded[0].status,
+            JournalEntryStatus::Pending,
+            "recovered entry must be Pending (not Failed)"
+        );
+    }
+
+    // ---- T-45-02: partial journal write is skipped not panicked ----
+    //
+    // Characterization test: a truncated (half-written) journal file on disk must be
+    // skipped with a warning and must NOT panic. `load_all_for_vault` must still return
+    // the one well-formed entry. Pins V5 / T-43-03 skip-with-warn behavior so refactors
+    // cannot regress it.
+
+    #[test]
+    fn partial_journal_write_is_skipped_not_panicked() {
+        let (q, dir) = make_temp_queue();
+
+        // Build the full JSON for an entry, then write only the first half — simulating
+        // an OS crash in the middle of a write (before sync_all completed or on power loss).
+        let full_entry = make_upload_entry("partial-victim", "k51vaultpartial");
+        let full_json = serde_json::to_vec(&full_entry).expect("serialize for truncation test");
+        let half_len = full_json.len() / 2;
+        let truncated = &full_json[..half_len];
+
+        // Write the truncated bytes directly using the same filename scheme as `put`:
+        // `<journal_dir>/<id>.json` (see WriteQueue::put, line 157).
+        let bad_path = dir.join("partial-victim.json");
+        std::fs::write(&bad_path, truncated).expect("write truncated file");
+
+        // Also put one well-formed entry so we can verify it is returned.
+        q.put(&make_upload_entry("good01", "k51vaultpartial")).expect("put good entry");
+
+        // load_all_for_vault must skip the truncated file and return only the good entry.
+        let loaded = q
+            .load_all_for_vault("k51vaultpartial")
+            .expect("load must not panic on partial file");
+
+        assert_eq!(loaded.len(), 1, "only the well-formed entry must be returned");
+        assert_eq!(loaded[0].id, "good01");
+    }
+
+    // ---- T-45-03: retry exhaustion keeps failed entry on disk ----
+    //
+    // Characterization test: calling `record_failure` max_retries + 1 times on the same
+    // entry must transition it to `JournalEntryStatus::Failed` and must NOT remove the
+    // file (D-09 — parked entries are never silently dropped). `load_all_for_vault` after
+    // exhaustion must still return exactly 1 entry.
+
+    #[test]
+    fn retry_exhaustion_keeps_failed_entry_on_disk() {
+        // make_temp_queue builds a WriteQueue with max_retries = 3.
+        let (q, _dir) = make_temp_queue();
+        let entry = make_upload_entry("retry-exhaust", "k51vaultretry");
+        q.put(&entry).expect("put initial entry");
+
+        // Call record_failure 4 times (max_retries=3, so the 4th call crosses the threshold).
+        // record_failure reloads from disk on each call; we must reload the current
+        // on-disk entry before each call so `entry.retries` is accurate.
+        let mut current = entry.clone();
+        let mut last_status = JournalEntryStatus::Pending;
+        for _ in 0..4 {
+            last_status = q
+                .record_failure(&current, "simulated error")
+                .expect("record_failure must not error");
+            // Reload from disk so the next call uses the updated retries counter.
+            let on_disk = q.load_all_for_vault("k51vaultretry").expect("reload");
+            current = on_disk
+                .into_iter()
+                .find(|e| e.id == "retry-exhaust")
+                .expect("entry must still be on disk");
+        }
+
+        // After 4 failures (retries=0→1→2→3→Failed), the final status must be Failed.
+        assert!(
+            matches!(last_status, JournalEntryStatus::Failed { .. }),
+            "status after exhaustion must be Failed, got {:?}",
+            last_status
+        );
+
+        // The entry must remain on disk (D-09 — never silently dropped).
+        let after = q.load_all_for_vault("k51vaultretry").expect("load after exhaustion");
+        assert_eq!(
+            after.len(),
+            1,
+            "failed entry must remain on disk (not removed) after retry exhaustion"
+        );
+        assert!(
+            matches!(after[0].status, JournalEntryStatus::Failed { .. }),
+            "on-disk status must be Failed"
+        );
     }
 }
