@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-06-14T22:49:04.225Z"
-last_activity: 2026-06-14
+last_updated: "2026-06-15T00:58:00.000Z"
+last_activity: 2026-06-15
 progress:
   total_phases: 30
   completed_phases: 29
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 45 (desktop-fuse-write-durability-cleanup) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 
 ## Performance Metrics
@@ -138,6 +138,7 @@ Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 | Phase 45 P01    | 8min     | 2 tasks | 2 files   |
 | Phase 45-desktop-fuse-write-durability-cleanup P45-02 | 8min | 1 tasks | 3 files |
 | Phase 45 P03 | 7min | 2 tasks | 4 files |
+| Phase 45 P04 | 8min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -269,3 +270,5 @@ Last activity: 2026-06-14
 ## Decisions
 
 - [Phase ?]: deser_opt_string maps legacy empty-string file_meta_ipns_name to None; serde compat shim mandatory for pre-Phase-45 journal replay
+- [Phase 45-04]: IpnsResolveOutcome lives in error.rs with #[derive(Debug)] only — not thiserror, it is an outcome not an error
+- [Phase 45-04]: resolve_ipns_for_replay preserves both contains(not found) and contains(404) predicates to avoid classification regression

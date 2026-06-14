@@ -691,7 +691,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 45-04-PLAN.md — Typed IpnsResolveOutcome in replay (#19)
+- [x] 45-04-PLAN.md — Typed IpnsResolveOutcome in replay (#19)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
