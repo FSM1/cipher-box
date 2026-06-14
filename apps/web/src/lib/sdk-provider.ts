@@ -87,16 +87,27 @@ export function reconfigurePinning(pinningConfig?: PinningConfig): void {
  * (which loads folders into Zustand) and SDK operations (which require
  * folders in the SDK's internal state).
  *
- * Only registers if the SDK doesn't already have the folder. The SDK's
- * internal state (sequence number, children, keys) is authoritative once
- * a folder is registered — all mutations go through the SDK.
+ * Registers the folder if the SDK doesn't already track it. If it does, the
+ * SDK's internal state is authoritative for SDK-routed mutations, but is
+ * reconciled forward when the store has observed a strictly-newer IPNS sequence
+ * (e.g. from a direct file replace/version publish) to avoid stale-sequence 409s
+ * and merge-driven resurrection of deleted items.
  */
 export function ensureFolderRegistered(folder: FolderNode): void {
   const client = getSdkClient();
 
-  // Don't overwrite if SDK already has this folder — its internal state
-  // is authoritative (correct sequence number, keys, children from mutations)
-  if (client.hasFolder(folder.ipnsName)) return;
+  // Already tracked: the SDK folderTree is authoritative for SDK-routed
+  // mutations, but the Zustand store can advance *past* it when the web app
+  // publishes folder metadata directly via sdk-core (e.g. file replace/version
+  // edits bump modifiedAt + sequence in the store without routing through the
+  // client). Reconcile so a following SDK mutation (delete/move) doesn't publish
+  // with a stale sequence (→ 409) against a stale base, which the 409 merge would
+  // resolve by resurrecting the just-deleted child. Only adopted when strictly
+  // newer, so SDK-advanced state stays authoritative.
+  if (client.hasFolder(folder.ipnsName)) {
+    client.reconcileFolderState(folder.ipnsName, folder.children, folder.sequenceNumber);
+    return;
+  }
 
   // Guard: don't register placeholder folders with empty key material —
   // would cause crypto/IPNS errors on subsequent mutations
