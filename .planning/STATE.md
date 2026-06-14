@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Executing Phase 43
-last_updated: "2026-06-12T18:20:31.168Z"
-last_activity: 2026-06-12
+status: Phase 43 shipped — PR #487
+last_updated: "2026-06-14T12:37:25.820Z"
+last_activity: 2026-06-14
 progress:
   total_phases: 29
   completed_phases: 27
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 
 ## Current Position
 
-Phase: 43 (fuse-write-durability) — EXECUTING
-Plan: 1 of 4
+Phase: 43 (fuse-write-durability) — SHIPPED (PR #487, verified passed)
+Plan: 8 of 8
 Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 
 ## Performance Metrics
