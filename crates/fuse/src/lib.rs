@@ -1141,6 +1141,17 @@ impl CipherBoxFS {
     }
 }
 
+/// Platform-unified `publish_file_metadata` for replay.
+///
+/// Under the `fuse` feature, delegates to `crate::operations::implementation`.
+/// Under the `winfsp` feature (without `fuse`), delegates to
+/// `crate::platform::windows::operations::implementation`.
+/// Identical signatures on both sides (same function, duplicated per platform).
+#[cfg(feature = "fuse")]
+use crate::operations::implementation::publish_file_metadata;
+#[cfg(all(feature = "winfsp", not(feature = "fuse")))]
+use crate::platform::windows::operations::implementation::publish_file_metadata;
+
 /// Replay all pending journal entries for the given vault on mount.
 ///
 /// Loads all entries for `root_ipns_name` (D-07 vault-scoping), orders them
@@ -1186,6 +1197,13 @@ pub async fn replay_for_vault(
     // D-08: MkdirPublish entries process before UploadFile entries.
     let ordered = cipherbox_sdk::WriteQueue::ordered_for_replay(entries);
 
+    // #15: local to one replay_for_vault call; never persisted.
+    // Seeded with the root key so that root-shortcut lookups (folder_ipns_name == root)
+    // are served directly from the cache without entering resolve_folder_key at all.
+    let mut folder_key_cache: std::collections::HashMap<String, Vec<u8>> =
+        std::collections::HashMap::new();
+    folder_key_cache.insert(root_ipns_name.to_string(), root_folder_key.to_vec());
+
     for entry in &ordered {
         // Skip already-failed entries (user must manually intervene for those).
         if matches!(
@@ -1214,6 +1232,7 @@ pub async fn replay_for_vault(
                     private_key,
                     root_folder_key,
                     root_ipns_name,
+                    &mut folder_key_cache,
                     coordinator.clone(),
                     child_ipns_name,
                     child_folder_key_hex,
@@ -1271,6 +1290,7 @@ pub async fn replay_for_vault(
                     public_key,
                     root_folder_key,
                     root_ipns_name,
+                    &mut folder_key_cache,
                     coordinator.clone(),
                     ciphertext_b64,
                     wrapped_key_hex,
@@ -1396,6 +1416,38 @@ async fn resolve_folder_key(
         "folder IPNS {} not found in vault tree (searched {} nodes)",
         folder_ipns_name, nodes_visited
     ))
+}
+
+/// Memoizing wrapper around `resolve_folder_key` for use within a single `replay_for_vault` call.
+///
+/// #15: on cache hit returns the clone immediately without entering the BFS; on miss runs
+/// `resolve_folder_key` (BFS unchanged — `MAX_RESOLVE_NODES` cap and root-shortcut intact),
+/// inserts the result into the cache, and returns it.
+///
+/// The cache is declared inside `replay_for_vault` and dropped at the end of that call —
+/// it is never persisted and never shared with the running filesystem.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+async fn resolve_folder_key_cached(
+    cache: &mut std::collections::HashMap<String, Vec<u8>>,
+    api: &ApiClient,
+    private_key: &[u8],
+    root_folder_key: &[u8],
+    root_ipns_name: &str,
+    folder_ipns_name: &str,
+) -> Result<Vec<u8>, String> {
+    if let Some(key) = cache.get(folder_ipns_name) {
+        return Ok(key.clone());
+    }
+    let key = resolve_folder_key(
+        api,
+        private_key,
+        root_folder_key,
+        root_ipns_name,
+        folder_ipns_name,
+    )
+    .await?;
+    cache.insert(folder_ipns_name.to_string(), key.clone());
+    Ok(key)
 }
 
 /// Fetch, decrypt, merge, and CAS-publish a parent folder update.
@@ -1544,6 +1596,8 @@ async fn replay_mkdir_entry(
     private_key: &[u8],
     root_folder_key: &[u8],
     root_ipns_name: &str,
+    // #15: per-replay folder-key cache; seeded with root key in replay_for_vault.
+    folder_key_cache: &mut std::collections::HashMap<String, Vec<u8>>,
     coordinator: Arc<PublishCoordinator>,
     child_ipns_name: &str,
     child_folder_key_hex: &str,
@@ -1555,7 +1609,8 @@ async fn replay_mkdir_entry(
     name: &str,
     created_at_ms: u64,
 ) -> Result<(), String> {
-    let parent_folder_key = resolve_folder_key(
+    let parent_folder_key = resolve_folder_key_cached(
+        folder_key_cache,
         api,
         private_key,
         root_folder_key,
@@ -1614,6 +1669,8 @@ async fn replay_upload_entry(
     _public_key: &[u8],
     root_folder_key: &[u8],
     root_ipns_name: &str,
+    // #15: per-replay folder-key cache; seeded with root key in replay_for_vault.
+    folder_key_cache: &mut std::collections::HashMap<String, Vec<u8>>,
     coordinator: Arc<PublishCoordinator>,
     ciphertext_b64: &str,
     wrapped_key_hex: &str,
@@ -1661,7 +1718,10 @@ async fn replay_upload_entry(
     );
 
     // Step 2: resolve parent folder key for subsequent steps.
-    let parent_folder_key = resolve_folder_key(
+    // #15: uses the memoizing wrapper — on cache hit (same parent seen earlier in this replay)
+    // returns immediately without BFS; on miss runs resolve_folder_key unchanged.
+    let parent_folder_key = resolve_folder_key_cached(
+        folder_key_cache,
         api,
         private_key,
         root_folder_key,
@@ -1685,12 +1745,10 @@ async fn replay_upload_entry(
                 let file_ipns_key_raw =
                     cipherbox_crypto::ecies::unwrap_key(&file_ipns_key_wrapped, private_key)
                         .map_err(|e| format!("ecies unwrap file IPNS key: {}", e))?;
+                // Step 1 complete: `file_ipns_key` is the unwrapped Zeroizing key.
+                // CR-02: the raw key is zeroized on drop; no cast to [u8;32] needed here
+                // because publish_file_metadata accepts &Zeroizing<Vec<u8>> and casts internally.
                 let file_ipns_key = zeroize::Zeroizing::new(file_ipns_key_raw);
-
-                let parent_folder_key_arr: [u8; 32] = parent_folder_key
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| "Invalid parent folder key length".to_string())?;
 
                 let file_meta = cipherbox_core::folder::FileMetadata {
                     version: "v1".to_string(),
@@ -1705,14 +1763,6 @@ async fn replay_upload_entry(
                     versions: None,
                 };
 
-                // CR-02: cast the unwrapped raw key (32 bytes) — this will always succeed.
-                let ipns_key_arr: [u8; 32] = file_ipns_key.as_slice().try_into().map_err(|_| {
-                    format!(
-                        "Invalid file IPNS key length after unwrap (got {} bytes, expected 32)",
-                        file_ipns_key.len()
-                    )
-                })?;
-
                 // F3: determine whether the per-file IPNS record already exists. If the original
                 // upload failed before ever creating it, resolve returns not-found and this is a
                 // FIRST publish (seq 0 + TEE enrollment), mirroring the live path
@@ -1721,18 +1771,18 @@ async fn replay_upload_entry(
                 // retained for retry rather than creating a duplicate record at seq 0.
                 // #19: classification is centralised in resolve_ipns_for_replay; the typed
                 // IpnsResolveOutcome replaces the brittle .contains("not found") inline match.
-                let (is_first_publish, new_seq) = {
+                let is_first_publish = {
                     use crate::error::IpnsResolveOutcome;
                     match resolve_ipns_for_replay(coordinator.as_ref(), api, file_meta_ipns_name)
                         .await
                     {
-                        IpnsResolveOutcome::Found(current_seq) => (false, current_seq + 1),
+                        IpnsResolveOutcome::Found(_) => false,
                         IpnsResolveOutcome::NotFound => {
                             log::info!(
                                 "replay: per-file IPNS '{}' not found — creating as first publish (seq 0)",
                                 file_meta_ipns_name
                             );
-                            (true, next_file_publish_sequence(true, None)?)
+                            true
                         }
                         IpnsResolveOutcome::Error(e) => {
                             return Err(format!(
@@ -1743,78 +1793,30 @@ async fn replay_upload_entry(
                     }
                 };
 
-                let sealed = cipherbox_core::folder::encrypt_file_metadata(
+                // #20: delegate encrypt→upload→IPNS-record→TEE-wrap→publish to the shared
+                // `publish_file_metadata` (operations.rs / platform/windows/operations.rs).
+                // Only ECIES-unwrap (Step 1, above) and `is_first_publish` (Step F3, above) stay
+                // local — publish_file_metadata handles all remaining publish steps including
+                // TEE enrollment on first publish and `record_publish` for sequence tracking.
+                publish_file_metadata(
+                    api,
                     &file_meta,
-                    &parent_folder_key_arr,
+                    &parent_folder_key,
+                    &file_ipns_key,
+                    file_meta_ipns_name,
+                    coordinator.as_ref(),
+                    tee_public_key,
+                    tee_key_epoch,
+                    is_first_publish,
                 )
-                .map_err(|e| format!("encrypt file metadata: {}", e))?;
-                let iv_hex_meta = hex::encode(&sealed[..12]);
-                let data_b64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
-                let json = serde_json::json!({ "iv": iv_hex_meta, "data": data_b64 });
-                let json_bytes = serde_json::to_vec(&json)
-                    .map_err(|e| format!("serialize file metadata JSON: {}", e))?;
-                let file_meta_cid = cipherbox_api_client::ipfs::upload_content(api, &json_bytes)
-                    .await
-                    .map_err(|e| format!("upload file metadata: {}", e))?;
+                .await
+                .map_err(|e| format!("replay file IPNS publish: {}", e))?;
 
-                let value = format!("/ipfs/{}", file_meta_cid);
-                let record =
-                    cipherbox_core::create_ipns_record(&ipns_key_arr, &value, new_seq, 86_400_000)
-                        .map_err(|e| format!("create file IPNS record: {}", e))?;
-                let marshaled = cipherbox_core::marshal_ipns_record(&record)
-                    .map_err(|e| format!("marshal file IPNS record: {}", e))?;
-                let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
-
-                // F3: enroll the per-file IPNS key with the TEE on first publish only, so the
-                // newly created record is republished every ~6h and does not expire after its
-                // 24h TTL. Mirrors operations.rs::publish_file_metadata TEE enrollment.
-                let (encrypted_ipns_for_tee, tee_epoch) =
-                    match (is_first_publish, tee_public_key, tee_key_epoch) {
-                        (true, Some(tee_key), Some(epoch)) => {
-                            let wrapped =
-                                cipherbox_crypto::wrap_key(file_ipns_key.as_slice(), tee_key)
-                                    .map_err(|e| {
-                                        format!("TEE key wrapping failed: {} — retaining entry", e)
-                                    })?;
-                            (Some(hex::encode(&wrapped)), Some(epoch))
-                        }
-                        (true, Some(_), None) => {
-                            return Err(
-                                "TEE public key present but key_epoch missing — retaining entry"
-                                    .to_string(),
-                            );
-                        }
-                        _ => (None, None),
-                    };
-
-                let req = cipherbox_api_client::IpnsPublishRequest {
-                    ipns_name: file_meta_ipns_name.to_string(),
-                    record: record_b64,
-                    metadata_cid: file_meta_cid,
-                    encrypted_ipns_private_key: encrypted_ipns_for_tee,
-                    key_epoch: tee_epoch,
-                    expected_sequence_number: None,
-                };
-                match cipherbox_api_client::ipns::publish_ipns(api, &req)
-                    .await
-                    .map_err(|e| format!("{}", e))?
-                {
-                    cipherbox_api_client::PublishResult::Success => {
-                        coordinator.record_publish(file_meta_ipns_name, new_seq);
-                        log::info!(
-                            "replay: file IPNS published for '{}' (seq {}, first_publish={})",
-                            filename,
-                            new_seq,
-                            is_first_publish
-                        );
-                    }
-                    cipherbox_api_client::PublishResult::Conflict { .. } => {
-                        log::warn!(
-                            "replay: file IPNS conflict for '{}' — file CID is durable, continuing",
-                            filename
-                        );
-                    }
-                }
+                log::info!(
+                    "replay: file IPNS published for '{}' (first_publish={})",
+                    filename,
+                    is_first_publish
+                );
             }
         }
     }
@@ -1962,38 +1964,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // T-45-07: resolve_folder_key returns the same key for two calls with the same
-    // parent_folder_ipns_name. Uses the root-shortcut (folder_ipns_name == root_ipns_name
-    // at lib.rs:1042) so the result is deterministic without network access.
+    // T-45-07: Two calls to `resolve_folder_key_cached` with the same folder_ipns_name
+    // (the root IPNS, using the root-shortcut path so no network is needed) hit the cache
+    // on the second call. Assertions:
+    //   1. Both calls return identical key bytes.
+    //   2. The cache contains exactly one entry for the queried name after both calls.
+    //   3. The returned key equals root_folder_key (root-shortcut invariant preserved).
     //
-    // This test characterizes the observable *equality* invariant that the #15 memoization
-    // cache must preserve. After #15 lands, extend this test to additionally assert that
-    // the BFS runs only once (via call-count or cache inspection).
-    //
-    // #15 will extend: assert BFS runs once via cache
+    // The cache is pre-seeded with the root key (mirroring replay_for_vault), so the FIRST
+    // call also hits the cache — zero BFS traversals for root lookups.
+    // Extends the Plan-01 placeholder which only tested resolve_folder_key equality.
     #[cfg(any(feature = "fuse", feature = "winfsp"))]
     #[tokio::test]
     async fn resolve_folder_key_cache_resolves_shared_parent_once() {
         use std::sync::Arc;
-        // root_ipns_name == folder_ipns_name triggers the early-return shortcut
-        // (lib.rs:1042): `if folder_ipns_name == root_ipns_name { return Ok(root_folder_key.to_vec()); }`
-        // This gives us a deterministic result with zero network calls.
+
         let root_folder_key = [0u8; 32];
         let root_ipns_name = "k51rootipns45t07";
 
         let api = Arc::new(cipherbox_api_client::ApiClient::new("http://127.0.0.1:1"));
 
-        let key1 = super::resolve_folder_key(
+        // Seed the cache exactly as replay_for_vault does (#15).
+        let mut cache: std::collections::HashMap<String, Vec<u8>> =
+            std::collections::HashMap::new();
+        cache.insert(root_ipns_name.to_string(), root_folder_key.to_vec());
+
+        // First lookup: cache hit (seeded above) — no BFS, no network.
+        let key1 = super::resolve_folder_key_cached(
+            &mut cache,
             &api,
-            &[0u8; 32], // private_key (unused on root-shortcut path)
+            &[0u8; 32], // private_key (unused on cache-hit path)
             &root_folder_key,
             root_ipns_name,
-            root_ipns_name, // folder_ipns_name == root -> immediate return
+            root_ipns_name, // folder_ipns_name == root
         )
         .await
-        .expect("resolve first call must succeed via root shortcut");
+        .expect("first cached resolve must succeed");
 
-        let key2 = super::resolve_folder_key(
+        // Cache must hold exactly one entry after the first lookup.
+        assert_eq!(
+            cache.len(),
+            1,
+            "cache must have exactly one entry after first lookup (root key was pre-seeded)"
+        );
+
+        // Second lookup: another cache hit for the same name — no new entry.
+        let key2 = super::resolve_folder_key_cached(
+            &mut cache,
             &api,
             &[0u8; 32],
             &root_folder_key,
@@ -2001,16 +2018,25 @@ mod tests {
             root_ipns_name,
         )
         .await
-        .expect("resolve second call must succeed via root shortcut");
+        .expect("second cached resolve must succeed");
 
+        // Cache still has exactly one entry — the second lookup did NOT insert a duplicate.
+        assert_eq!(
+            cache.len(),
+            1,
+            "cache must still have one entry after second lookup (same key — not duplicated)"
+        );
+
+        // Both calls returned identical bytes.
         assert_eq!(
             key1, key2,
-            "two resolve_folder_key calls with the same parent must return identical key bytes"
+            "two resolve_folder_key_cached calls with the same parent must return identical key bytes"
         );
+        // The returned value is the root folder key (root-shortcut / cache-seeded invariant).
         assert_eq!(
             key1,
             root_folder_key.to_vec(),
-            "root shortcut must return root_folder_key unchanged"
+            "cached resolve must return root_folder_key unchanged"
         );
     }
 
@@ -2116,7 +2142,9 @@ mod tests {
         // NotFound -> first publish at seq 0
         let outcome_not_found = IpnsResolveOutcome::NotFound;
         let (is_first, new_seq) = match outcome_not_found {
-            IpnsResolveOutcome::Found(seq) => (false, next_file_publish_sequence(false, Some(seq)).unwrap()),
+            IpnsResolveOutcome::Found(seq) => {
+                (false, next_file_publish_sequence(false, Some(seq)).unwrap())
+            }
             IpnsResolveOutcome::NotFound => (true, next_file_publish_sequence(true, None).unwrap()),
             IpnsResolveOutcome::Error(e) => panic!("unexpected Error variant: {}", e),
         };
@@ -2126,7 +2154,9 @@ mod tests {
         // Found(7) -> update at seq 8
         let outcome_found = IpnsResolveOutcome::Found(7);
         let (is_first, new_seq) = match outcome_found {
-            IpnsResolveOutcome::Found(seq) => (false, next_file_publish_sequence(false, Some(seq)).unwrap()),
+            IpnsResolveOutcome::Found(seq) => {
+                (false, next_file_publish_sequence(false, Some(seq)).unwrap())
+            }
             IpnsResolveOutcome::NotFound => (true, next_file_publish_sequence(true, None).unwrap()),
             IpnsResolveOutcome::Error(e) => panic!("unexpected Error variant: {}", e),
         };
@@ -2136,13 +2166,26 @@ mod tests {
         // Error(_) -> propagated as Err (entry retained)
         let outcome_err = IpnsResolveOutcome::Error("transient failure".to_string());
         let result: Result<(bool, u64), String> = match outcome_err {
-            IpnsResolveOutcome::Found(seq) => Ok((false, next_file_publish_sequence(false, Some(seq)).unwrap())),
-            IpnsResolveOutcome::NotFound => Ok((true, next_file_publish_sequence(true, None).unwrap())),
-            IpnsResolveOutcome::Error(e) => Err(format!("resolve file IPNS sequence: {} — retaining entry", e)),
+            IpnsResolveOutcome::Found(seq) => {
+                Ok((false, next_file_publish_sequence(false, Some(seq)).unwrap()))
+            }
+            IpnsResolveOutcome::NotFound => {
+                Ok((true, next_file_publish_sequence(true, None).unwrap()))
+            }
+            IpnsResolveOutcome::Error(e) => Err(format!(
+                "resolve file IPNS sequence: {} — retaining entry",
+                e
+            )),
         };
-        assert!(result.is_err(), "Error variant must propagate as Err (entry retained)");
+        assert!(
+            result.is_err(),
+            "Error variant must propagate as Err (entry retained)"
+        );
         let err_msg = result.unwrap_err();
-        assert!(err_msg.contains("retaining entry"), "error message must mention retaining entry");
+        assert!(
+            err_msg.contains("retaining entry"),
+            "error message must mention retaining entry"
+        );
     }
 
     // F2: replay_for_vault must record each failed replay so retries accumulate across
