@@ -688,7 +688,6 @@ pub(crate) mod implementation {
                     pruned_cids: Vec<String>,
                     write_gen: u64,
                     journal: cipherbox_sdk::WriteQueue,
-                    journal_entry_id: String,
                     // CR-07: snapshot carried into spawn closure for record_failure on failure.
                     journal_entry_snapshot: cipherbox_sdk::JournalEntry,
                 }
@@ -820,7 +819,7 @@ pub(crate) mod implementation {
                             wrapped_key_hex,
                             iv_hex: iv_hex.clone(),
                             file_meta_ipns_name: file_meta_ipns_name_str,
-                            file_ipns_key_hex: file_meta_ipns_name.as_ref().map(|_| {
+                            file_ipns_key_hex: file_meta_ipns_name.as_ref().and_then(|_| {
                                 file_ipns_private_key.as_ref()
                                     .map(|k| {
                                         cipherbox_crypto::ecies::wrap_key(k, &fs.public_key)
@@ -836,7 +835,7 @@ pub(crate) mod implementation {
                                             _ => None,
                                         })
                                     })
-                            }).flatten(),
+                            }),
                             parent_folder_ipns_name,
                             parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
                             filename: file_name,
@@ -846,7 +845,6 @@ pub(crate) mod implementation {
                         retries: 0,
                         status: cipherbox_sdk::JournalEntryStatus::Pending,
                     };
-                    let journal_entry_id = journal_entry.id.clone();
                     // CR-07: clone the entry before put() moves it; snapshot is carried
                     // into the spawn closure so record_failure can transition the entry.
                     let journal_entry_snapshot = journal_entry.clone();
@@ -922,7 +920,6 @@ pub(crate) mod implementation {
                         pruned_cids,
                         write_gen,
                         journal: journal_clone,
-                        journal_entry_id,
                         journal_entry_snapshot,
                     })
                 })();
@@ -940,7 +937,7 @@ pub(crate) mod implementation {
                             api, rt, upload_tx, coordinator, tee_public_key, tee_key_epoch,
                             ciphertext, file_meta, file_ipns_private_key, file_meta_ipns_name,
                             folder_key_for_file_meta, ino: spawn_ino, parent_ino, old_file_cid,
-                            pruned_cids, write_gen, journal: spawn_journal, journal_entry_id,
+                            pruned_cids, write_gen, journal: spawn_journal,
                             journal_entry_snapshot,
                         } = params;
                         std::thread::spawn(move || {
@@ -989,7 +986,6 @@ pub(crate) mod implementation {
                                 // replay's already_present check returns Ok and the caller
                                 // removes the entry once the child is confirmed in the parent
                                 // metadata on the next mount.
-                                let _ = &journal_entry_id; // suppress unused-variable warning
 
                                 Ok::<(), String>(())
                             });

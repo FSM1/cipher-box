@@ -894,7 +894,7 @@ pub mod implementation {
                             wrapped_key_hex,
                             iv_hex: iv_hex.clone(),
                             file_meta_ipns_name: file_meta_ipns_name_str,
-                            file_ipns_key_hex: file_meta_ipns_name.as_ref().map(|_| {
+                            file_ipns_key_hex: file_meta_ipns_name.as_ref().and_then(|_| {
                                 file_ipns_private_key.as_ref()
                                     .map(|k| {
                                         cipherbox_crypto::ecies::wrap_key(k, &fs.public_key)
@@ -910,7 +910,7 @@ pub mod implementation {
                                             _ => None,
                                         })
                                     })
-                            }).flatten(),
+                            }),
                             parent_folder_ipns_name,
                             parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
                             filename: file_name,

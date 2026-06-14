@@ -74,6 +74,16 @@ pub enum JournalOp {
     },
 }
 
+impl JournalOp {
+    /// Creation timestamp (ms since Unix epoch) carried by every variant.
+    pub fn created_at_ms(&self) -> u64 {
+        match self {
+            JournalOp::MkdirPublish { created_at_ms, .. }
+            | JournalOp::UploadFile { created_at_ms, .. } => *created_at_ms,
+        }
+    }
+}
+
 /// Lifecycle state of a journal entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum JournalEntryStatus {
@@ -314,14 +324,8 @@ impl WriteQueue {
 
         // WR-01: sort each group by created_at_ms ascending (stable sort preserves
         // relative order of entries with identical timestamps).
-        mkdir_entries.sort_by_key(|e| match &e.op {
-            JournalOp::MkdirPublish { created_at_ms, .. } => *created_at_ms,
-            JournalOp::UploadFile { created_at_ms, .. } => *created_at_ms,
-        });
-        upload_entries.sort_by_key(|e| match &e.op {
-            JournalOp::MkdirPublish { created_at_ms, .. } => *created_at_ms,
-            JournalOp::UploadFile { created_at_ms, .. } => *created_at_ms,
-        });
+        mkdir_entries.sort_by_key(|e| e.op.created_at_ms());
+        upload_entries.sort_by_key(|e| e.op.created_at_ms());
 
         mkdir_entries.extend(upload_entries);
         mkdir_entries
