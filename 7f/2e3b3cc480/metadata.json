@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "7f2e3b3cc480",
+  "strategy": "manual-commit",
+  "branch": "feat/ipns-conflict-handling",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/__tests__/file.test.ts",
+    "packages/sdk-core/src/errors.ts",
+    "packages/sdk-core/src/file/index.ts",
+    "packages/sdk-core/src/folder/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7f/2e3b3cc480/0/metadata.json",
+      "transcript": "/7f/2e3b3cc480/0/full.jsonl",
+      "content_hash": "/7f/2e3b3cc480/0/content_hash.txt",
+      "prompt": "/7f/2e3b3cc480/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 15254,
+    "cache_creation_tokens": 552239,
+    "cache_read_tokens": 18647790,
+    "output_tokens": 88542,
+    "api_call_count": 39
+  }
+}
