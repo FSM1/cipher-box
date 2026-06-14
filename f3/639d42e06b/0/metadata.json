@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f3639d42e06b",
+  "session_id": "58e12827-d076-4c9d-a93d-3f15de588da5",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T02:15:11.719238Z",
+  "branch": "feat/ipns-conflict-handling",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "5931e6882276",
+  "token_usage": {
+    "input_tokens": 21800,
+    "cache_creation_tokens": 199039,
+    "cache_read_tokens": 6995613,
+    "output_tokens": 82839,
+    "api_call_count": 57
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Run the GSD secure-phase workflow for Phase 44 (ipns-conflict-handling) to verify all STRIDE threat mitigations are covered, then run a CodeRabbit CLI review of the phase-44 diff and fix all findings.",
+    "outcome": "44-SECURITY.md was created and committed with all 26 threats verified (19 mitigated, 7 accepted). CodeRabbit surfaced a critical data-loss bug in the 409 file-conflict merge path; all 4 findings were fixed, 196 tests pass, and 44-SECURITY.md was updated with a post-audit correction note.",
+    "learnings": {
+      "repo": [
+        "The gsd-security-auditor subagent writes its output to the repo-root SECURITY.md instead of the phase-scoped path — requires manual restoration and redirect every run.",
+        "Phase 44 spans feat/ipns-conflict-handling; phases 42, 43, and 44 are all stacked on that branch. Phase-44-only base commit is 150db25d9 (first phase-44 commit parent: 2db838ef6).",
+        "sdk-core dist/ is gitignored — build artifacts never enter commits.",
+        "updateFileMetadata stamps updatedMetadata.modifiedAt = Date.now() at publish (file/index.ts:270), making local almost always win latest-wins conflicts. Remote-wins path requires explicit far-future timestamp in tests.",
+        "lint-staged runs prettier on staged test files and folds the formatting into the commit automatically.",
+        "The GSD commit helper (gsd_run query commit) frequently returns commit_failed even when the commit lands — always verify with git log, never retry blindly."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 347,
+          "end_line": 347,
+          "finding": "Critical data-loss bug: second arg to mergeVersions was hardcoded to remoteMeta.versions instead of loser.versions. When remote wins, loser is local metadata, so local version history was silently dropped. Fix: remoteMeta.versions → loser.versions."
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 262,
+          "end_line": 270,
+          "finding": "With createVersion: false, loser.versions carries local history and loser.cid = local-cid. modifiedAt is overwritten to Date.now() at line 270, meaning remote must have a far-future timestamp to actually win in tests."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/file.test.ts",
+          "line": 237,
+          "end_line": 237,
+          "finding": "Pre-existing remote-wins test used empty local versions and never asserted history preservation — it passed with the bug present. Never actually exercised the remote-wins branch because of the modifiedAt stamp."
+        },
+        {
+          "path": "packages/sdk-core/src/index.ts",
+          "line": 2,
+          "end_line": 2,
+          "finding": "is409 was missing from the barrel export despite SUMMARY claiming it was re-exported. No external consumer existed yet, so it was a consistency gap rather than a functional break."
+        },
+        {
+          "path": "packages/sdk-core/src/errors.ts",
+          "finding": "is409 uses optional chaining throughout — safe to call with null/undefined arguments without throwing."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit CLI (v0.5.4, `coderabbit review --base-sha <sha>`) scopes reviews to a specific commit range — essential for stacked branches where main..HEAD spans multiple phases.",
+        "After a security audit, immediately run a code review pass — auditors verify mitigation presence but don't catch implementation bugs in the mitigation code itself.",
+        "When a post-audit bug is found, update SECURITY.md with a post-audit findings subsection to keep the security record historically accurate rather than silently patching the original audit.",
+        "The short-circuit rule (threats_open: 0 AND register_authored_at_plan_time: true → skip auditor) only applies when mitigations are pre-verified; 19 unverified mitigates correctly bypassed it."
+      ]
+    },
+    "friction": [
+      "gsd-security-auditor wrote its report to the repo-root SECURITY.md (public disclosure policy) instead of the phase-scoped path — required git diff inspection, git restore, and manual redirect. No guard in the workflow against this.",
+      "GSD commit helper returns commit_failed even on success — creates false alarm and requires git log verification every time.",
+      "The critical data-loss bug (T-44-09 / T-44-21) existed when the SECURED verdict was signed — the audit over-trusted test names without verifying test assertions covered both directions.",
+      "Shell glob errors in Bash when checking is409 usages required re-running the grep with corrected quoting.",
+      "The test fixture for the remote-wins regression test initially had the wrong winner because modifiedAt gets overwritten to Date.now() — required a second iteration with a far-future remote timestamp."
+    ],
+    "open_items": [
+      "Re-run coderabbit review against final HEAD to confirm 0 remaining findings (was launching at end of transcript, result not shown).",
+      "The gsd-security-auditor root-SECURITY.md clobber issue should be fixed in the auditor prompt/constraints so it targets the phase-scoped path without manual intervention.",
+      "T-44-09 and T-44-21 in 44-SECURITY.md now reference the post-audit fix but the original audit register still shows CLOSED — consider whether future audits should re-verify patched threats.",
+      "is409 has no dedicated unit test in file.test.ts (only in folder-merge.test.ts after this session) — minor coverage gap if the two usages diverge."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
