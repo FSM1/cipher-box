@@ -813,7 +813,7 @@ Each refactor item is validated by the tests that exercise the code path being c
 | A3 | The memoized folder-key cache for #15 is safe because folder keys never change for the lifetime of a folder (no re-keying operation exists) | Item #15 | If a re-keying operation is added later, the cache may return stale keys |
 | A4 | `commands/sync.rs` constructs the WriteQueue path via `dirs::data_local_dir()...join("cipherbox").join("cb-journal")` with `max_retries = 5` (from 43-08-SUMMARY.md description; not directly read) | Item #12 | If the actual code uses different values, the dedup helper will need adjustment |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should the shared upload-journal builder (#11) be an inherent method on `CipherBoxFS` or a free function?**
    - Both fuser and winfsp paths take `&mut CipherBoxFS` — an inherent method avoids passing the struct by reference. The main risk is borrow-checker conflicts if the closure currently borrows multiple fields of `fs` simultaneously. Recommend: inherent method that takes the `ino` and `fh` parameters and accesses `self.inodes`, `self.journal`, etc. directly.

@@ -15,22 +15,24 @@ created: 2026-06-14
 
 ## Test Infrastructure
 
-| Property               | Value                                               |
-| ---------------------- | --------------------------------------------------- |
-| **Framework**          | {pytest 7.x / jest 29.x / vitest / go test / other} |
-| **Config file**        | {path or "none — Wave 0 installs"}                  |
-| **Quick run command**  | `{quick command}`                                   |
-| **Full suite command** | `{full command}`                                    |
-| **Estimated runtime**  | ~{N} seconds                                        |
+| Property               | Value                                                                     |
+| ---------------------- | ------------------------------------------------------------------------- |
+| **Framework**          | `cargo test` (Rust, built-in test harness; async via `#[tokio::test]`)    |
+| **Config file**        | none — workspace `Cargo.toml`; `cipherbox-fuse` default feature = `fuse`  |
+| **Quick run command**  | `cargo test -p cipherbox-fuse`                                            |
+| **Full suite command** | `cargo test -p cipherbox-fuse -p cipherbox-sdk`                          |
+| **Estimated runtime**  | ~30 seconds                                                               |
+
+> Lint/format gates (run before commit, not per-task): `cargo clippy -p cipherbox-fuse --all-targets -- -D warnings` and `cargo fmt --check`. Windows-only `winfsp` paths compile under `--no-default-features --features winfsp` (not exercised on macOS/Linux CI).
 
 ---
 
 ## Sampling Rate
 
-- **After every task commit:** Run `{quick run command}`
-- **After every plan wave:** Run `{full suite command}`
+- **After every task commit:** Run `cargo test -p cipherbox-fuse`
+- **After every plan wave:** Run `cargo test -p cipherbox-fuse -p cipherbox-sdk`
 - **Before `/gsd-verify-work`:** Full suite must be green
-- **Max feedback latency:** {N} seconds
+- **Max feedback latency:** 30 seconds
 
 ---
 
