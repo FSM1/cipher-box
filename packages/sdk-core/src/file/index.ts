@@ -20,7 +20,7 @@ import { wrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { resolveIpnsRecord, createAndPublishIpnsRecord } from '../ipns';
-import { ConflictError } from '../errors';
+import { ConflictError, is409 } from '../errors';
 
 /** IPNS record lifetime: 24 hours in milliseconds */
 const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -201,10 +201,7 @@ export async function resolveFileMetadata(
     throw new Error('File metadata IPNS not found');
   }
 
-  const encryptedBytes = await fetchFromIpfs(ctx, resolved.cid);
-  const encryptedJson = new TextDecoder().decode(encryptedBytes);
-  const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
-  const metadata = await decryptFileMetadata(encrypted, folderKey);
+  const metadata = await fetchAndDecryptFileMetadata(resolved.cid, folderKey, ctx);
 
   return { metadata, metadataCid: resolved.cid };
 }
@@ -273,17 +270,20 @@ export async function updateFileMetadata(params: {
     modifiedAt: Date.now(),
   };
 
-  // 3. Resolve current IPNS to get sequence number (CAS base)
-  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName, params.ctx);
+  // 3+4. Resolve the current IPNS record (CAS base) and encrypt+upload the updated
+  //      metadata concurrently — they are independent (the uploaded CID does not
+  //      depend on the resolved sequence number), saving one serial round trip.
+  const [resolved, uploadedCid] = await Promise.all([
+    resolveIpnsRecord(params.fileMetaIpnsName, params.ctx),
+    encryptAndUpload(updatedMetadata, params.folderKey, params.ctx),
+  ]);
   if (!resolved) {
     throw new Error(
       `Cannot update file metadata: existing IPNS record not found for ${params.fileMetaIpnsName}`
     );
   }
   let currentSeq = resolved.sequenceNumber;
-
-  // 4. Encrypt and upload the initial updated metadata
-  let currentCid = await encryptAndUpload(updatedMetadata, params.folderKey, params.ctx);
+  let currentCid = uploadedCid;
 
   // 5. Publish with CAS — on 409 apply latest-wins + loser-becomes-version, then retry once
   try {
@@ -304,11 +304,7 @@ export async function updateFileMetadata(params: {
         prunedCids,
       };
     } catch (err) {
-      const is409 =
-        (err as Error & { status?: number }).status === 409 ||
-        (err as Error & { response?: { status?: number } }).response?.status === 409;
-
-      if (!is409) throw err; // Non-409: propagate unchanged
+      if (!is409(err)) throw err; // Non-409: propagate unchanged
 
       // --- Conflict merge ---
       // Re-resolve authoritatively
@@ -320,10 +316,11 @@ export async function updateFileMetadata(params: {
       currentSeq = lastRemoteSeq;
 
       // Fetch and decrypt remote FileMetadata
-      const remoteEncryptedBytes = await fetchFromIpfs(params.ctx, reResolved.cid);
-      const remoteEncryptedJson = new TextDecoder().decode(remoteEncryptedBytes);
-      const remoteEncrypted: EncryptedFileMetadata = JSON.parse(remoteEncryptedJson);
-      const remoteMeta = await decryptFileMetadata(remoteEncrypted, params.folderKey);
+      const remoteMeta = await fetchAndDecryptFileMetadata(
+        reResolved.cid,
+        params.folderKey,
+        params.ctx
+      );
 
       // Latest-wins by modifiedAt (>= prefers local on tie)
       const localModifiedAt = updatedMetadata.modifiedAt ?? 0;
@@ -387,11 +384,7 @@ export async function updateFileMetadata(params: {
           prunedCids,
         };
       } catch (retryErr) {
-        const retryIs409 =
-          (retryErr as Error & { status?: number }).status === 409 ||
-          (retryErr as Error & { response?: { status?: number } }).response?.status === 409;
-
-        if (retryIs409) {
+        if (is409(retryErr)) {
           throw new ConflictError(params.fileMetaIpnsName, 2, currentSeq);
         }
         throw retryErr;
@@ -418,4 +411,19 @@ async function encryptAndUpload(
   const encryptedBytes = new TextEncoder().encode(jsonStr);
   const { cid } = await addToIpfs(ctx, encryptedBytes);
   return cid;
+}
+
+/**
+ * Helper: fetch encrypted FileMetadata from IPFS by CID and decrypt with folderKey.
+ * The read-half companion to encryptAndUpload (mirrors folder's fetchAndDecryptMetadata).
+ */
+async function fetchAndDecryptFileMetadata(
+  cid: string,
+  folderKey: Uint8Array,
+  ctx: SdkContext
+): Promise<FileMetadata> {
+  const encryptedBytes = await fetchFromIpfs(ctx, cid);
+  const encryptedJson = new TextDecoder().decode(encryptedBytes);
+  const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
+  return decryptFileMetadata(encrypted, folderKey);
 }

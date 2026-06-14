@@ -43,6 +43,9 @@ vi.mock('../errors', () => ({
       this.lastRemoteSeq = lastRemoteSeq;
     }
   },
+  is409: (error: unknown): boolean =>
+    (error as { status?: number } | null)?.status === 409 ||
+    (error as { response?: { status?: number } } | null)?.response?.status === 409,
 }));
 
 // ---------------------------------------------------------------------------

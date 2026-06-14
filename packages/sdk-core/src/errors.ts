@@ -24,3 +24,15 @@ export class ConflictError extends Error {
 export function isConflictExhausted(error: unknown): error is ConflictError {
   return error instanceof ConflictError;
 }
+
+/**
+ * True when an error represents an IPNS CAS conflict (HTTP 409) from the publish
+ * endpoint. The conflict status can surface either directly on the error or
+ * nested under `.response.status`, depending on the transport layer.
+ */
+export function is409(error: unknown): boolean {
+  return (
+    (error as { status?: number } | null)?.status === 409 ||
+    (error as { response?: { status?: number } } | null)?.response?.status === 409
+  );
+}

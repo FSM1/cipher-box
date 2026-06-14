@@ -31,7 +31,7 @@ import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord, batchPublishIpnsRecords, resolveIpnsRecord } from '../ipns';
 import { withPerf } from '../perf';
 import type { FileIpnsRecordPayload } from '../file';
-import { ConflictError } from '../errors';
+import { ConflictError, is409 } from '../errors';
 
 // [ASSUMED] Exponential backoff constants for the 409 retry loop (A1 — values reasoned, not spec)
 const BACKOFF_BASE_MS = 100;
@@ -229,10 +229,7 @@ export async function updateFolderMetadataAndPublish(params: {
         });
         return { cid, newSequenceNumber: newSeq, publishedChildren: currentLocalChildren };
       } catch (err) {
-        const is409 =
-          (err as Error & { status?: number }).status === 409 ||
-          (err as Error & { response?: { status?: number } }).response?.status === 409;
-        if (!is409) throw err;
+        if (!is409(err)) throw err;
 
         // 3. Re-resolve authoritatively — ignore any seq hint in the error body (Pitfall 1+2)
         const resolved = await resolveIpnsRecord(params.ipnsName, params.ctx);
