@@ -197,6 +197,31 @@ pub fn next_file_publish_sequence(
         .ok_or_else(|| "Missing current sequence for existing file IPNS record".to_string())
 }
 
+/// Classifies an IPNS resolve result into a typed [`crate::error::IpnsResolveOutcome`].
+///
+/// Wraps [`PublishCoordinator::resolve_sequence`] and maps:
+/// - `Ok(seq)` → `Found(seq)`
+/// - `Err(e)` where `e` signals 404 / "not found" → `NotFound`
+/// - `Err(e)` otherwise → `Error(e)` (non-404; entry should be retained)
+///
+/// Centralises the brittle substring match (#19) so `replay_upload_entry` matches
+/// on the typed enum rather than calling `.to_lowercase().contains("not found")` inline.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+async fn resolve_ipns_for_replay(
+    coordinator: &PublishCoordinator,
+    api: &cipherbox_api_client::ApiClient,
+    ipns_name: &str,
+) -> crate::error::IpnsResolveOutcome {
+    use crate::error::IpnsResolveOutcome;
+    match coordinator.resolve_sequence(api, ipns_name).await {
+        Ok(seq) => IpnsResolveOutcome::Found(seq),
+        Err(e) if e.to_lowercase().contains("not found") || e.contains("404") => {
+            IpnsResolveOutcome::NotFound
+        }
+        Err(e) => IpnsResolveOutcome::Error(e),
+    }
+}
+
 /// Coordinates IPNS publish operations to prevent sequence number races.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct PublishCoordinator {
@@ -1694,23 +1719,27 @@ async fn replay_upload_entry(
                 // (operations.rs::publish_file_metadata). Otherwise it is an update (seq + 1).
                 // A transient resolve error (not "not found") is propagated so the entry is
                 // retained for retry rather than creating a duplicate record at seq 0.
-                let (is_first_publish, new_seq) = match coordinator
-                    .resolve_sequence(api, file_meta_ipns_name)
-                    .await
-                {
-                    Ok(current_seq) => (false, current_seq + 1),
-                    Err(e) if e.to_lowercase().contains("not found") => {
-                        log::info!(
+                // #19: classification is centralised in resolve_ipns_for_replay; the typed
+                // IpnsResolveOutcome replaces the brittle .contains("not found") inline match.
+                let (is_first_publish, new_seq) = {
+                    use crate::error::IpnsResolveOutcome;
+                    match resolve_ipns_for_replay(coordinator.as_ref(), api, file_meta_ipns_name)
+                        .await
+                    {
+                        IpnsResolveOutcome::Found(current_seq) => (false, current_seq + 1),
+                        IpnsResolveOutcome::NotFound => {
+                            log::info!(
                                 "replay: per-file IPNS '{}' not found — creating as first publish (seq 0)",
                                 file_meta_ipns_name
                             );
-                        (true, next_file_publish_sequence(true, None)?)
-                    }
-                    Err(e) => {
-                        return Err(format!(
-                            "resolve file IPNS sequence: {} — retaining entry",
-                            e
-                        ))
+                            (true, next_file_publish_sequence(true, None)?)
+                        }
+                        IpnsResolveOutcome::Error(e) => {
+                            return Err(format!(
+                                "resolve file IPNS sequence: {} — retaining entry",
+                                e
+                            ))
+                        }
                     }
                 };
 

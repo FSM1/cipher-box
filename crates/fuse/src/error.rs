@@ -1,5 +1,19 @@
 use thiserror::Error;
 
+/// Typed outcome for IPNS sequence resolution.
+///
+/// Replaces stringly-typed `.contains("not found")` matches in the replay path.
+/// Defined as a plain outcome enum — `#[derive(Debug)]` only, NOT `thiserror::Error`.
+#[derive(Debug)]
+pub enum IpnsResolveOutcome {
+    /// IPNS record exists; contains the current sequence number.
+    Found(u64),
+    /// IPNS record does not exist (404 / "not found").
+    NotFound,
+    /// Resolution failed for a non-404 reason.
+    Error(String),
+}
+
 #[derive(Debug, Error)]
 pub enum FuseError {
     #[error("Crypto error: {0}")]
