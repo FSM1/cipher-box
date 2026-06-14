@@ -1250,7 +1250,7 @@ pub async fn replay_for_vault(
                     ciphertext_b64,
                     wrapped_key_hex,
                     iv_hex,
-                    file_meta_ipns_name,
+                    file_meta_ipns_name.as_deref(),
                     file_ipns_key_hex.as_deref(),
                     parent_folder_ipns_name,
                     parent_ipns_key_hex,
@@ -1593,7 +1593,7 @@ async fn replay_upload_entry(
     ciphertext_b64: &str,
     wrapped_key_hex: &str,
     iv_hex: &str,
-    file_meta_ipns_name: &str,
+    file_meta_ipns_name: Option<&str>,
     file_ipns_key_hex: Option<&str>,
     parent_folder_ipns_name: &str,
     // parent_ipns_key_hex: user-ECIES-wrapped parent IPNS private key from journal (CR-01).
@@ -1645,59 +1645,65 @@ async fn replay_upload_entry(
     )
     .await?;
 
-    // Step 3: re-publish file IPNS metadata if key is available.
+    // Step 3: re-publish file IPNS metadata if both the IPNS key AND the IPNS name are
+    // available. The name guard (Option<&str>) replaces the old empty-string sentinel (#18):
+    // None means "no per-file IPNS record" and the publish block is skipped, preserving
+    // the existing behavior where an absent name → no per-file publish (T-45-03-DUR).
     if let Some(file_ipns_key_hex_str) = file_ipns_key_hex {
         if !file_ipns_key_hex_str.is_empty() {
-            // CR-02: ecies-unwrap the ECIES-wrapped file IPNS key before casting to [u8;32].
-            // The journaled key is user-ECIES-wrapped (~117 bytes), NOT a raw 32-byte key.
-            // Directly casting the wrapped bytes always fails (they're ~117 bytes, not 32).
-            let file_ipns_key_wrapped = hex::decode(file_ipns_key_hex_str)
-                .map_err(|e| format!("hex decode file_ipns_key: {}", e))?;
-            let file_ipns_key_raw =
-                cipherbox_crypto::ecies::unwrap_key(&file_ipns_key_wrapped, private_key)
-                    .map_err(|e| format!("ecies unwrap file IPNS key: {}", e))?;
-            let file_ipns_key = zeroize::Zeroizing::new(file_ipns_key_raw);
+            if let Some(file_meta_ipns_name) = file_meta_ipns_name {
+                // CR-02: ecies-unwrap the ECIES-wrapped file IPNS key before casting to [u8;32].
+                // The journaled key is user-ECIES-wrapped (~117 bytes), NOT a raw 32-byte key.
+                // Directly casting the wrapped bytes always fails (they're ~117 bytes, not 32).
+                let file_ipns_key_wrapped = hex::decode(file_ipns_key_hex_str)
+                    .map_err(|e| format!("hex decode file_ipns_key: {}", e))?;
+                let file_ipns_key_raw =
+                    cipherbox_crypto::ecies::unwrap_key(&file_ipns_key_wrapped, private_key)
+                        .map_err(|e| format!("ecies unwrap file IPNS key: {}", e))?;
+                let file_ipns_key = zeroize::Zeroizing::new(file_ipns_key_raw);
 
-            let parent_folder_key_arr: [u8; 32] = parent_folder_key
-                .as_slice()
-                .try_into()
-                .map_err(|_| "Invalid parent folder key length".to_string())?;
+                let parent_folder_key_arr: [u8; 32] = parent_folder_key
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| "Invalid parent folder key length".to_string())?;
 
-            let file_meta = cipherbox_core::folder::FileMetadata {
-                version: "v1".to_string(),
-                cid: file_cid.clone(),
-                file_key_encrypted: wrapped_key_hex.to_string(),
-                file_iv: iv_hex.to_string(),
-                size,
-                mime_type: String::new(),
-                encryption_mode: "GCM".to_string(),
-                created_at: created_at_ms,
-                modified_at: created_at_ms,
-                versions: None,
-            };
+                let file_meta = cipherbox_core::folder::FileMetadata {
+                    version: "v1".to_string(),
+                    cid: file_cid.clone(),
+                    file_key_encrypted: wrapped_key_hex.to_string(),
+                    file_iv: iv_hex.to_string(),
+                    size,
+                    mime_type: String::new(),
+                    encryption_mode: "GCM".to_string(),
+                    created_at: created_at_ms,
+                    modified_at: created_at_ms,
+                    versions: None,
+                };
 
-            // CR-02: cast the unwrapped raw key (32 bytes) — this will always succeed.
-            let ipns_key_arr: [u8; 32] = file_ipns_key.as_slice().try_into().map_err(|_| {
-                format!(
-                    "Invalid file IPNS key length after unwrap (got {} bytes, expected 32)",
-                    file_ipns_key.len()
-                )
-            })?;
+                // CR-02: cast the unwrapped raw key (32 bytes) — this will always succeed.
+                let ipns_key_arr: [u8; 32] = file_ipns_key.as_slice().try_into().map_err(|_| {
+                    format!(
+                        "Invalid file IPNS key length after unwrap (got {} bytes, expected 32)",
+                        file_ipns_key.len()
+                    )
+                })?;
 
-            // F3: determine whether the per-file IPNS record already exists. If the original
-            // upload failed before ever creating it, resolve returns not-found and this is a
-            // FIRST publish (seq 0 + TEE enrollment), mirroring the live path
-            // (operations.rs::publish_file_metadata). Otherwise it is an update (seq + 1).
-            // A transient resolve error (not "not found") is propagated so the entry is
-            // retained for retry rather than creating a duplicate record at seq 0.
-            let (is_first_publish, new_seq) =
-                match coordinator.resolve_sequence(api, file_meta_ipns_name).await {
+                // F3: determine whether the per-file IPNS record already exists. If the original
+                // upload failed before ever creating it, resolve returns not-found and this is a
+                // FIRST publish (seq 0 + TEE enrollment), mirroring the live path
+                // (operations.rs::publish_file_metadata). Otherwise it is an update (seq + 1).
+                // A transient resolve error (not "not found") is propagated so the entry is
+                // retained for retry rather than creating a duplicate record at seq 0.
+                let (is_first_publish, new_seq) = match coordinator
+                    .resolve_sequence(api, file_meta_ipns_name)
+                    .await
+                {
                     Ok(current_seq) => (false, current_seq + 1),
                     Err(e) if e.to_lowercase().contains("not found") => {
                         log::info!(
-                        "replay: per-file IPNS '{}' not found — creating as first publish (seq 0)",
-                        file_meta_ipns_name
-                    );
+                                "replay: per-file IPNS '{}' not found — creating as first publish (seq 0)",
+                                file_meta_ipns_name
+                            );
                         (true, next_file_publish_sequence(true, None)?)
                     }
                     Err(e) => {
@@ -1708,84 +1714,92 @@ async fn replay_upload_entry(
                     }
                 };
 
-            let sealed =
-                cipherbox_core::folder::encrypt_file_metadata(&file_meta, &parent_folder_key_arr)
-                    .map_err(|e| format!("encrypt file metadata: {}", e))?;
-            let iv_hex_meta = hex::encode(&sealed[..12]);
-            let data_b64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
-            let json = serde_json::json!({ "iv": iv_hex_meta, "data": data_b64 });
-            let json_bytes = serde_json::to_vec(&json)
-                .map_err(|e| format!("serialize file metadata JSON: {}", e))?;
-            let file_meta_cid = cipherbox_api_client::ipfs::upload_content(api, &json_bytes)
-                .await
-                .map_err(|e| format!("upload file metadata: {}", e))?;
+                let sealed = cipherbox_core::folder::encrypt_file_metadata(
+                    &file_meta,
+                    &parent_folder_key_arr,
+                )
+                .map_err(|e| format!("encrypt file metadata: {}", e))?;
+                let iv_hex_meta = hex::encode(&sealed[..12]);
+                let data_b64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
+                let json = serde_json::json!({ "iv": iv_hex_meta, "data": data_b64 });
+                let json_bytes = serde_json::to_vec(&json)
+                    .map_err(|e| format!("serialize file metadata JSON: {}", e))?;
+                let file_meta_cid = cipherbox_api_client::ipfs::upload_content(api, &json_bytes)
+                    .await
+                    .map_err(|e| format!("upload file metadata: {}", e))?;
 
-            let value = format!("/ipfs/{}", file_meta_cid);
-            let record =
-                cipherbox_core::create_ipns_record(&ipns_key_arr, &value, new_seq, 86_400_000)
-                    .map_err(|e| format!("create file IPNS record: {}", e))?;
-            let marshaled = cipherbox_core::marshal_ipns_record(&record)
-                .map_err(|e| format!("marshal file IPNS record: {}", e))?;
-            let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
+                let value = format!("/ipfs/{}", file_meta_cid);
+                let record =
+                    cipherbox_core::create_ipns_record(&ipns_key_arr, &value, new_seq, 86_400_000)
+                        .map_err(|e| format!("create file IPNS record: {}", e))?;
+                let marshaled = cipherbox_core::marshal_ipns_record(&record)
+                    .map_err(|e| format!("marshal file IPNS record: {}", e))?;
+                let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
 
-            // F3: enroll the per-file IPNS key with the TEE on first publish only, so the
-            // newly created record is republished every ~6h and does not expire after its
-            // 24h TTL. Mirrors operations.rs::publish_file_metadata TEE enrollment.
-            let (encrypted_ipns_for_tee, tee_epoch) =
-                match (is_first_publish, tee_public_key, tee_key_epoch) {
-                    (true, Some(tee_key), Some(epoch)) => {
-                        let wrapped = cipherbox_crypto::wrap_key(file_ipns_key.as_slice(), tee_key)
-                            .map_err(|e| {
-                                format!("TEE key wrapping failed: {} — retaining entry", e)
-                            })?;
-                        (Some(hex::encode(&wrapped)), Some(epoch))
-                    }
-                    (true, Some(_), None) => {
-                        return Err(
-                            "TEE public key present but key_epoch missing — retaining entry"
-                                .to_string(),
+                // F3: enroll the per-file IPNS key with the TEE on first publish only, so the
+                // newly created record is republished every ~6h and does not expire after its
+                // 24h TTL. Mirrors operations.rs::publish_file_metadata TEE enrollment.
+                let (encrypted_ipns_for_tee, tee_epoch) =
+                    match (is_first_publish, tee_public_key, tee_key_epoch) {
+                        (true, Some(tee_key), Some(epoch)) => {
+                            let wrapped =
+                                cipherbox_crypto::wrap_key(file_ipns_key.as_slice(), tee_key)
+                                    .map_err(|e| {
+                                        format!("TEE key wrapping failed: {} — retaining entry", e)
+                                    })?;
+                            (Some(hex::encode(&wrapped)), Some(epoch))
+                        }
+                        (true, Some(_), None) => {
+                            return Err(
+                                "TEE public key present but key_epoch missing — retaining entry"
+                                    .to_string(),
+                            );
+                        }
+                        _ => (None, None),
+                    };
+
+                let req = cipherbox_api_client::IpnsPublishRequest {
+                    ipns_name: file_meta_ipns_name.to_string(),
+                    record: record_b64,
+                    metadata_cid: file_meta_cid,
+                    encrypted_ipns_private_key: encrypted_ipns_for_tee,
+                    key_epoch: tee_epoch,
+                    expected_sequence_number: None,
+                };
+                match cipherbox_api_client::ipns::publish_ipns(api, &req)
+                    .await
+                    .map_err(|e| format!("{}", e))?
+                {
+                    cipherbox_api_client::PublishResult::Success => {
+                        coordinator.record_publish(file_meta_ipns_name, new_seq);
+                        log::info!(
+                            "replay: file IPNS published for '{}' (seq {}, first_publish={})",
+                            filename,
+                            new_seq,
+                            is_first_publish
                         );
                     }
-                    _ => (None, None),
-                };
-
-            let req = cipherbox_api_client::IpnsPublishRequest {
-                ipns_name: file_meta_ipns_name.to_string(),
-                record: record_b64,
-                metadata_cid: file_meta_cid,
-                encrypted_ipns_private_key: encrypted_ipns_for_tee,
-                key_epoch: tee_epoch,
-                expected_sequence_number: None,
-            };
-            match cipherbox_api_client::ipns::publish_ipns(api, &req)
-                .await
-                .map_err(|e| format!("{}", e))?
-            {
-                cipherbox_api_client::PublishResult::Success => {
-                    coordinator.record_publish(file_meta_ipns_name, new_seq);
-                    log::info!(
-                        "replay: file IPNS published for '{}' (seq {}, first_publish={})",
-                        filename,
-                        new_seq,
-                        is_first_publish
-                    );
-                }
-                cipherbox_api_client::PublishResult::Conflict { .. } => {
-                    log::warn!(
-                        "replay: file IPNS conflict for '{}' — file CID is durable, continuing",
-                        filename
-                    );
+                    cipherbox_api_client::PublishResult::Conflict { .. } => {
+                        log::warn!(
+                            "replay: file IPNS conflict for '{}' — file CID is durable, continuing",
+                            filename
+                        );
+                    }
                 }
             }
         }
     }
 
     // Step 4: merge file pointer into parent folder metadata (D-06 fetch-and-merge).
+    // Use unwrap_or_default() for the IPNS name in the FilePointer: when None (no per-file
+    // IPNS record), an empty string preserves the pre-Phase-45 behavior where files without
+    // a per-file IPNS name are still merged into the parent via their FilePointer entry.
+    let file_meta_ipns_name_str = file_meta_ipns_name.unwrap_or_default();
     let file_pointer =
         cipherbox_core::folder::FolderChild::File(cipherbox_core::folder::FilePointer {
-            id: format!("replay-{}", file_meta_ipns_name),
+            id: format!("replay-{}", file_meta_ipns_name_str),
             name: filename.to_string(),
-            file_meta_ipns_name: file_meta_ipns_name.to_string(),
+            file_meta_ipns_name: file_meta_ipns_name_str.to_string(),
             // CR-02: store the journaled file_ipns_key_hex AS-IS — it is already user-ECIES-wrapped.
             // Do NOT re-wrap: that would produce a doubly-wrapped key in the stored FilePointer.
             ipns_private_key_encrypted: file_ipns_key_hex.map(|k| k.to_string()),
@@ -1873,7 +1887,7 @@ mod tests {
                 ),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
-                file_meta_ipns_name: "k51filemeta45t06".to_string(),
+                file_meta_ipns_name: Some("k51filemeta45t06".to_string()),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: vault.to_string(),
                 parent_ipns_key_hex: hex::encode(b"ecies-parent-key"),
@@ -2085,7 +2099,7 @@ mod tests {
                 ),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
-                file_meta_ipns_name: "k51filemeta".to_string(),
+                file_meta_ipns_name: Some("k51filemeta".to_string()),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: vault.to_string(),
                 parent_ipns_key_hex: String::new(), // empty -> immediate Err in replay
