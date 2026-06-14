@@ -340,10 +340,13 @@ export async function updateFileMetadata(params: {
         encryptionMode: (loser.encryptionMode as 'GCM' | 'CTR') ?? 'GCM',
       };
 
-      // Merge: winner's versions + loserAsVersion merged with remote's versions
+      // Merge: winner's versions + loserAsVersion merged with the loser's version history.
+      // The second arg MUST be loser.versions, not remoteMeta.versions: when the remote wins
+      // (localWins === false) the loser is the LOCAL metadata, so passing remoteMeta.versions
+      // would silently drop the local writer's prior version history.
       const { versions: mergedVersions, prunedCids: extraPruned } = mergeVersions(
         [...(winner.versions ?? []), loserAsVersion],
-        remoteMeta.versions,
+        loser.versions,
         maxVersions
       );
 

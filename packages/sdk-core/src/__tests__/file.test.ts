@@ -285,6 +285,74 @@ describe('updateFileMetadata CAS + conflict', () => {
     expect(result.newSequenceNumber).toBe(7n);
   });
 
+  it('preserves local version history when remote wins conflict (loser.versions)', async () => {
+    // Regression test: when the remote write wins a 409, the loser is the LOCAL metadata,
+    // so its prior version history must survive the merge. A previous bug passed
+    // remoteMeta.versions (not loser.versions) as the second mergeVersions arg, silently
+    // dropping the local writer's history. maxVersions defaults to 10 → nothing is capped.
+    //
+    // updateFileMetadata stamps updatedMetadata.modifiedAt = Date.now(), so the only way to
+    // force the remote to win latest-wins is a remote modifiedAt beyond now (far-future ts).
+    const localVersions: VersionEntry[] = [
+      makeVersion('local-v1', 4000),
+      makeVersion('local-v2', 2000),
+    ];
+    const localCurrent = {
+      ...baseCurrentMetadata,
+      cid: 'local-cid',
+      versions: localVersions,
+    };
+    const remoteMeta = {
+      ...baseCurrentMetadata,
+      cid: 'remote-cid',
+      fileKeyEncrypted: 'remote-key',
+      fileIv: 'remote-iv',
+      size: 999,
+      modifiedAt: 9_999_999_999_999, // far future (~year 2286) > Date.now() → remote wins
+      versions: [makeVersion('remote-v1', 6000)] as VersionEntry[],
+    };
+
+    vi.mocked(resolveIpnsRecord)
+      .mockResolvedValueOnce({ cid: 'old-meta', sequenceNumber: 5n, signatureVerified: true })
+      .mockResolvedValueOnce({
+        cid: 'remote-meta-cid',
+        sequenceNumber: 6n,
+        signatureVerified: true,
+      });
+
+    const conflict409 = Object.assign(new Error('Conflict'), { status: 409 });
+    vi.mocked(createAndPublishIpnsRecord)
+      .mockRejectedValueOnce(conflict409)
+      .mockResolvedValueOnce({ success: true, sequenceNumber: 7n });
+
+    vi.mocked(fetchFromIpfs).mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify({ iv: 'r-iv', data: 'r-data' }))
+    );
+    decryptFileMetadata.mockResolvedValue(remoteMeta as any);
+
+    await updateFileMetadata({
+      fileIpnsPrivateKey: mockPrivateKey,
+      fileMetaIpnsName: 'k51-file-ipns',
+      folderKey: mockFolderKey,
+      currentMetadata: localCurrent,
+      updates: { cid: 'local-cid', size: localCurrent.size },
+      createVersion: false,
+      ctx: mockCtx,
+    });
+
+    // The retry (merged) payload must retain the local writer's prior version history…
+    const retryPayload = encryptFileMetadata.mock.calls[1][0];
+    const retryVersionCids: string[] = (retryPayload.versions ?? []).map(
+      (v: VersionEntry) => v.cid
+    );
+    expect(retryVersionCids).toContain('local-v1');
+    expect(retryVersionCids).toContain('local-v2');
+    // …plus the local current content promoted to a version (loser-becomes-version)…
+    expect(retryVersionCids).toContain('local-cid');
+    // …and the winning remote's own history.
+    expect(retryVersionCids).toContain('remote-v1');
+  });
+
   it('keeps local content as winner and preserves remote content as version when local is newer', async () => {
     const localModifiedAt = 9000; // local newer → local wins
     const remoteModifiedAt = 3000;

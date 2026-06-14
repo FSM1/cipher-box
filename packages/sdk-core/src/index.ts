@@ -1,5 +1,5 @@
 // Errors
-export { ConflictError, isConflictExhausted } from './errors';
+export { ConflictError, isConflictExhausted, is409 } from './errors';
 
 // Types
 export type {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/core';
-import { ConflictError, isConflictExhausted } from '../errors';
+import { ConflictError, isConflictExhausted, is409 } from '../errors';
 import { mergeChildren } from '../folder/merge';
 
 // These tests cover the pure (synchronous) ConflictError class and
@@ -67,6 +67,30 @@ describe('ConflictError', () => {
 
   it('isConflictExhausted returns false for plain object', () => {
     expect(isConflictExhausted({})).toBe(false);
+  });
+});
+
+describe('is409', () => {
+  it('returns true for error with direct status 409', () => {
+    expect(is409({ status: 409 })).toBe(true);
+  });
+
+  it('returns true for error with nested response.status 409', () => {
+    expect(is409({ response: { status: 409 } })).toBe(true);
+  });
+
+  it('returns false for non-409 status', () => {
+    expect(is409({ status: 500 })).toBe(false);
+    expect(is409({ response: { status: 404 } })).toBe(false);
+  });
+
+  it('returns false for plain Error', () => {
+    expect(is409(new Error('other'))).toBe(false);
+  });
+
+  it('returns false for null and undefined', () => {
+    expect(is409(null)).toBe(false);
+    expect(is409(undefined)).toBe(false);
   });
 });
 
