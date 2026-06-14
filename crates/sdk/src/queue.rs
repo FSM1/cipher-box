@@ -12,6 +12,18 @@ use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
+/// Serde compat deserializer for `Option<String>` fields that were previously stored
+/// as `String` with an empty-string sentinel.
+///
+/// Old journal entries (pre-Phase-45) persist `"file_meta_ipns_name": ""` when the
+/// field is absent. The new type is `Option<String>`, which serializes as `null` or
+/// is omitted. This helper maps `""` → `None` so old on-disk entries still deserialize
+/// correctly under the new type (T-45-03-INT mitigation).
+fn deser_opt_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    let s: Option<String> = Option::deserialize(d)?;
+    Ok(s.filter(|v| !v.is_empty()))
+}
+
 /// The operation encoded by a journal entry.
 ///
 /// Variants cover both upload (D-03 UploadFile) and directory publish (D-03 MkdirPublish).
@@ -27,7 +39,13 @@ pub enum JournalOp {
         /// AES-GCM IV, hex-encoded.
         iv_hex: String,
         /// Per-file IPNS name for metadata pointer (stable across remount, D-02).
-        file_meta_ipns_name: String,
+        ///
+        /// `None` when the inode has no per-file IPNS record. Replaces the former
+        /// empty-string sentinel. The compat deserializer (`deser_opt_string`) maps
+        /// legacy `""` values from pre-Phase-45 on-disk journals to `None` so old
+        /// entries still replay (T-45-03-INT).
+        #[serde(default, deserialize_with = "deser_opt_string")]
+        file_meta_ipns_name: Option<String>,
         /// Optional per-file IPNS private key hex (present when key must be published).
         file_ipns_key_hex: Option<String>,
         /// Parent folder IPNS name (stable cross-remount, D-02).
@@ -331,7 +349,7 @@ mod tests {
                 ),
                 wrapped_key_hex: hex::encode(b"wrappedkey"),
                 iv_hex: hex::encode(b"iv123456"),
-                file_meta_ipns_name: "k51filemetaipns".to_string(),
+                file_meta_ipns_name: Some("k51filemetaipns".to_string()),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parentfolder".to_string(),
                 parent_ipns_key_hex: hex::encode(b"ecies-wrapped-parent-ipns-key"),
@@ -596,7 +614,7 @@ mod tests {
                 ),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
-                file_meta_ipns_name: "k51file".to_string(),
+                file_meta_ipns_name: Some("k51file".to_string()),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parent".to_string(),
                 parent_ipns_key_hex: parent_key_hex.clone(),
@@ -724,7 +742,7 @@ mod tests {
                 ),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
-                file_meta_ipns_name: "k51file".to_string(),
+                file_meta_ipns_name: Some("k51file".to_string()),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parent".to_string(),
                 parent_ipns_key_hex: wrapped_hex.clone(),
