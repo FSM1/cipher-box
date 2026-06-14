@@ -21,6 +21,71 @@
     "output_tokens": 3698,
     "api_call_count": 4
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014rCzrGTGCWhuxzfe9b6gBq",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "fa77a06a67ee",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 148,
+        "end": 149,
+        "entry_ids": [
+          "e6fd6b8d-6c60-4a4c-866a-7e338f84e302"
+        ],
+        "tool_use_id": "toolu_014rCzrGTGCWhuxzfe9b6gBq"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014rCzrGTGCWhuxzfe9b6gBq"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01DCUfsVry2BayRydGKrCK2e",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "fa77a06a67ee",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 262,
+        "end": 263,
+        "entry_ids": [
+          "ab0d64ec-0331-4b6f-b9f8-e75a0808b740"
+        ],
+        "tool_use_id": "toolu_01DCUfsVry2BayRydGKrCK2e"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01DCUfsVry2BayRydGKrCK2e"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
   "summary": {
     "intent": "Complete a planning phase (phase 45: desktop fuse write durability cleanup) by creating a VALIDATION.md file and committing it as part of a structured GSD workflow.",
     "outcome": "VALIDATION.md was written to .planning/phases/45-desktop-fuse-write-durability-cleanup/ and committed; security config was read and API surface regeneration was triggered.",
