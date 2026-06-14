@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2ccaf9e5bf93",
+  "strategy": "manual-commit",
+  "branch": "feat/fuse-write-durability",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".planning/phases/43-fuse-write-durability/43-08-SUMMARY.md",
+    ".planning/phases/43-fuse-write-durability/43-REVIEW.md",
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "apps/desktop/src-tauri/src/fuse/windows/mod.rs",
+    "crates/fuse/src/lib.rs",
+    "crates/fuse/src/platform/windows/write_ops.rs",
+    "crates/fuse/src/read_ops.rs",
+    "crates/fuse/src/write_ops.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2c/caf9e5bf93/0/metadata.json",
+      "transcript": "/2c/caf9e5bf93/0/full.jsonl",
+      "content_hash": "/2c/caf9e5bf93/0/content_hash.txt",
+      "prompt": "/2c/caf9e5bf93/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 15927,
+    "cache_creation_tokens": 451990,
+    "cache_read_tokens": 9482795,
+    "output_tokens": 130664,
+    "api_call_count": 69
+  }
+}
