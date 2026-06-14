@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "dbc0571c3c74",
+  "strategy": "manual-commit",
+  "branch": "feat/desktop-fuse-write-durability-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/db/c0571c3c74/0/metadata.json",
+      "transcript": "/db/c0571c3c74/0/full.jsonl",
+      "content_hash": "/db/c0571c3c74/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14768,
+    "cache_creation_tokens": 195052,
+    "cache_read_tokens": 5484666,
+    "output_tokens": 59856,
+    "api_call_count": 43
+  }
+}
