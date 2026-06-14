@@ -241,7 +241,7 @@ Recent for v1.1:
 
 ### Pending Todos
 
-12 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
+18 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
 
 ### Resolved
 
