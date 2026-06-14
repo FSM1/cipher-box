@@ -19,7 +19,8 @@ import {
 import { wrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
-import { resolveIpnsRecord } from '../ipns';
+import { resolveIpnsRecord, createAndPublishIpnsRecord } from '../ipns';
+import { ConflictError, is409 } from '../errors';
 
 /** IPNS record lifetime: 24 hours in milliseconds */
 const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -45,6 +46,44 @@ export type FileIpnsRecordPayload = {
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
 };
+
+/**
+ * Merge two VersionEntry arrays into a single deduped, sorted, capped result.
+ *
+ * Algorithm (RESEARCH Pattern 5):
+ * 1. combined = [...a, ...b]
+ * 2. dedupe by `cid` (first occurrence wins via Set filter)
+ * 3. sort by `timestamp` DESC (newest first)
+ * 4. `versions` = first `maxVersions` entries; `prunedCids` = remaining cids
+ *
+ * @param a - First array (or undefined)
+ * @param b - Second array (or undefined)
+ * @param maxVersions - Maximum number of versions to keep
+ * @returns merged versions and pruned cids
+ */
+export function mergeVersions(
+  a: VersionEntry[] | undefined,
+  b: VersionEntry[] | undefined,
+  maxVersions: number
+): { versions: VersionEntry[]; prunedCids: string[] } {
+  const combined = [...(a ?? []), ...(b ?? [])];
+
+  // Dedupe by cid — first occurrence wins
+  const seen = new Set<string>();
+  const deduped = combined.filter((v) => {
+    if (seen.has(v.cid)) return false;
+    seen.add(v.cid);
+    return true;
+  });
+
+  // Sort newest first
+  deduped.sort((x, y) => y.timestamp - x.timestamp);
+
+  const versions = deduped.slice(0, maxVersions);
+  const prunedCids = deduped.slice(maxVersions).map((v) => v.cid);
+
+  return { versions, prunedCids };
+}
 
 /**
  * Create a per-file IPNS metadata record.
@@ -162,10 +201,7 @@ export async function resolveFileMetadata(
     throw new Error('File metadata IPNS not found');
   }
 
-  const encryptedBytes = await fetchFromIpfs(ctx, resolved.cid);
-  const encryptedJson = new TextDecoder().decode(encryptedBytes);
-  const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
-  const metadata = await decryptFileMetadata(encrypted, folderKey);
+  const metadata = await fetchAndDecryptFileMetadata(resolved.cid, folderKey, ctx);
 
   return { metadata, metadataCid: resolved.cid };
 }
@@ -173,10 +209,18 @@ export async function resolveFileMetadata(
 /**
  * Update an existing file's per-IPNS metadata record.
  *
- * Merges updates into the current metadata, re-encrypts, uploads to IPFS,
- * and creates a new IPNS record with an incremented sequence number.
+ * Publishes with CAS (expectedSequenceNumber) to close the TOCTOU window (D-06).
+ * On 409 conflict, applies latest-wins semantics by modifiedAt: the winner keeps
+ * its content pointer; the loser's content is preserved as a VersionEntry (D-07).
+ * versions[] union-merged/deduped/sorted/capped by maxVersionsPerFile (default 10).
+ * Throws ConflictError after two total publish attempts.
  *
- * @returns Updated IPNS record payload for publish, plus CIDs of pruned versions to unpin
+ * Contract change from original: now publishes internally via createAndPublishIpnsRecord
+ * and returns { ipnsName, metadataCid, newSequenceNumber, prunedCids }.
+ * The old return shape { ipnsRecord, prunedCids } is replaced. Plan 04 callers
+ * (useFileOperations.ts:416, shared-write.ts:450) must be updated to consume this shape.
+ *
+ * @returns Published IPNS name, CID, sequence number, and pruned version CIDs
  */
 export async function updateFileMetadata(params: {
   fileIpnsPrivateKey: Uint8Array;
@@ -187,12 +231,17 @@ export async function updateFileMetadata(params: {
     Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size' | 'encryptionMode'>
   >;
   createVersion: boolean;
+  maxVersionsPerFile?: number;
   ctx: SdkContext;
 }): Promise<{
-  ipnsRecord: FileIpnsRecordPayload;
+  ipnsName: string;
+  metadataCid: string;
+  newSequenceNumber: bigint;
   prunedCids: string[];
 }> {
-  // 1. Build version history
+  const maxVersions = params.maxVersionsPerFile ?? MAX_VERSIONS_PER_FILE;
+
+  // 1. Build version history for the initial (pre-conflict) metadata
   let versions: VersionEntry[] | undefined;
   let prunedCids: string[] = [];
 
@@ -207,8 +256,8 @@ export async function updateFileMetadata(params: {
     };
     const allVersions = [versionEntry, ...(params.currentMetadata.versions ?? [])];
 
-    versions = allVersions.slice(0, MAX_VERSIONS_PER_FILE);
-    prunedCids = allVersions.slice(MAX_VERSIONS_PER_FILE).map((v) => v.cid);
+    versions = allVersions.slice(0, maxVersions);
+    prunedCids = allVersions.slice(maxVersions).map((v) => v.cid);
   } else {
     versions = params.currentMetadata.versions;
   }
@@ -221,40 +270,163 @@ export async function updateFileMetadata(params: {
     modifiedAt: Date.now(),
   };
 
-  // 3. Resolve current IPNS to get sequence number
-  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName, params.ctx);
+  // 3+4. Resolve the current IPNS record (CAS base) and encrypt+upload the updated
+  //      metadata concurrently — they are independent (the uploaded CID does not
+  //      depend on the resolved sequence number), saving one serial round trip.
+  const [resolved, uploadedCid] = await Promise.all([
+    resolveIpnsRecord(params.fileMetaIpnsName, params.ctx),
+    encryptAndUpload(updatedMetadata, params.folderKey, params.ctx),
+  ]);
   if (!resolved) {
     throw new Error(
       `Cannot update file metadata: existing IPNS record not found for ${params.fileMetaIpnsName}`
     );
   }
-  const newSeq = resolved.sequenceNumber + 1n;
+  let currentSeq = resolved.sequenceNumber;
+  let currentCid = uploadedCid;
 
-  // 4. Encrypt updated metadata with folderKey
-  const encrypted = await encryptFileMetadata(updatedMetadata, params.folderKey);
+  // 5. Publish with CAS — on 409 apply latest-wins + loser-becomes-version, then retry once
+  try {
+    // Attempt 1
+    try {
+      const result = await createAndPublishIpnsRecord({
+        ipnsPrivateKey: params.fileIpnsPrivateKey,
+        ipnsName: params.fileMetaIpnsName,
+        metadataCid: currentCid,
+        sequenceNumber: currentSeq + 1n,
+        expectedSequenceNumber: currentSeq.toString(),
+        ctx: params.ctx,
+      });
+      return {
+        ipnsName: params.fileMetaIpnsName,
+        metadataCid: currentCid,
+        newSequenceNumber: result.sequenceNumber,
+        prunedCids,
+      };
+    } catch (err) {
+      if (!is409(err)) throw err; // Non-409: propagate unchanged
 
-  // 5. Upload to IPFS
+      // --- Conflict merge ---
+      // Re-resolve authoritatively
+      const reResolved = await resolveIpnsRecord(params.fileMetaIpnsName, params.ctx);
+      if (!reResolved) {
+        throw new ConflictError(params.fileMetaIpnsName, 1, currentSeq);
+      }
+      const lastRemoteSeq = reResolved.sequenceNumber;
+      currentSeq = lastRemoteSeq;
+
+      // Fetch and decrypt remote FileMetadata
+      const remoteMeta = await fetchAndDecryptFileMetadata(
+        reResolved.cid,
+        params.folderKey,
+        params.ctx
+      );
+
+      // Latest-wins by modifiedAt (>= prefers local on tie)
+      const localModifiedAt = updatedMetadata.modifiedAt ?? 0;
+      const remoteModifiedAt = remoteMeta.modifiedAt ?? 0;
+      const localWins = localModifiedAt >= remoteModifiedAt;
+
+      const winner = localWins ? updatedMetadata : remoteMeta;
+      const loser = localWins ? remoteMeta : updatedMetadata;
+
+      // The loser's current content becomes a VersionEntry
+      const loserAsVersion: VersionEntry = {
+        cid: loser.cid,
+        fileKeyEncrypted: loser.fileKeyEncrypted,
+        fileIv: loser.fileIv,
+        size: loser.size,
+        timestamp: loser.modifiedAt ?? Date.now(),
+        encryptionMode: (loser.encryptionMode as 'GCM' | 'CTR') ?? 'GCM',
+      };
+
+      // Merge: winner's versions + loserAsVersion merged with the loser's version history.
+      // The second arg MUST be loser.versions, not remoteMeta.versions: when the remote wins
+      // (localWins === false) the loser is the LOCAL metadata, so passing remoteMeta.versions
+      // would silently drop the local writer's prior version history.
+      const { versions: mergedVersions, prunedCids: extraPruned } = mergeVersions(
+        [...(winner.versions ?? []), loserAsVersion],
+        loser.versions,
+        maxVersions
+      );
+
+      // Build merged metadata
+      const mergedMetadata: FileMetadata = {
+        ...winner,
+        versions: mergedVersions.length > 0 ? mergedVersions : undefined,
+        modifiedAt: winner.modifiedAt ?? Date.now(),
+      };
+
+      // Filter accumulated prunedCids against the set of CIDs actually referenced by the
+      // published mergedMetadata (CR-02 / D-07): a CID resurrected into mergedMetadata.versions
+      // by the remote merge must NOT be returned for unpinning.  De-dupe the combined set first
+      // to prevent phantom unpin retries from duplicate entries.
+      const referenced = new Set([
+        mergedMetadata.cid,
+        ...(mergedMetadata.versions ?? []).map((v) => v.cid),
+      ]);
+      prunedCids = [...new Set([...prunedCids, ...extraPruned])].filter((c) => !referenced.has(c));
+
+      // Re-encrypt and re-upload merged metadata
+      currentCid = await encryptAndUpload(mergedMetadata, params.folderKey, params.ctx);
+
+      // Attempt 2 (retry)
+      try {
+        const retryResult = await createAndPublishIpnsRecord({
+          ipnsPrivateKey: params.fileIpnsPrivateKey,
+          ipnsName: params.fileMetaIpnsName,
+          metadataCid: currentCid,
+          sequenceNumber: currentSeq + 1n,
+          expectedSequenceNumber: currentSeq.toString(),
+          ctx: params.ctx,
+        });
+        return {
+          ipnsName: params.fileMetaIpnsName,
+          metadataCid: currentCid,
+          newSequenceNumber: retryResult.sequenceNumber,
+          prunedCids,
+        };
+      } catch (retryErr) {
+        if (is409(retryErr)) {
+          throw new ConflictError(params.fileMetaIpnsName, 2, currentSeq);
+        }
+        throw retryErr;
+      }
+    }
+  } finally {
+    // Zeroize the private key on all exit paths (T-44-12 / PATTERNS shared pattern).
+    // Caller passes the key buffer; fill(0) zeroes it in-place after publish completes.
+    params.fileIpnsPrivateKey.fill(0);
+  }
+}
+
+/**
+ * Helper: encrypt FileMetadata with folderKey and upload to IPFS.
+ * Returns the resulting CID.
+ */
+async function encryptAndUpload(
+  metadata: FileMetadata,
+  folderKey: Uint8Array,
+  ctx: SdkContext
+): Promise<string> {
+  const encrypted = await encryptFileMetadata(metadata, folderKey);
   const jsonStr = JSON.stringify(encrypted);
   const encryptedBytes = new TextEncoder().encode(jsonStr);
-  const { cid: metadataCid } = await addToIpfs(params.ctx, encryptedBytes);
+  const { cid } = await addToIpfs(ctx, encryptedBytes);
+  return cid;
+}
 
-  // 6. Create new IPNS record with incremented sequence number
-  const record = await createIpnsRecord(
-    params.fileIpnsPrivateKey,
-    `/ipfs/${metadataCid}`,
-    newSeq,
-    IPNS_LIFETIME_MS
-  );
-
-  const recordBytes = marshalIpnsRecord(record);
-  const recordBase64 = uint8ToBase64(recordBytes);
-
-  return {
-    ipnsRecord: {
-      ipnsName: params.fileMetaIpnsName,
-      recordBase64,
-      metadataCid,
-    },
-    prunedCids,
-  };
+/**
+ * Helper: fetch encrypted FileMetadata from IPFS by CID and decrypt with folderKey.
+ * The read-half companion to encryptAndUpload (mirrors folder's fetchAndDecryptMetadata).
+ */
+async function fetchAndDecryptFileMetadata(
+  cid: string,
+  folderKey: Uint8Array,
+  ctx: SdkContext
+): Promise<FileMetadata> {
+  const encryptedBytes = await fetchFromIpfs(ctx, cid);
+  const encryptedJson = new TextDecoder().decode(encryptedBytes);
+  const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
+  return decryptFileMetadata(encrypted, folderKey);
 }

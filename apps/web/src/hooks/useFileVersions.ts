@@ -4,7 +4,11 @@ import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
-import { replaceFileInFolder, updateFolderMetadataAndPublish } from '@cipherbox/sdk-core';
+import {
+  replaceFileInFolder,
+  updateFolderMetadataAndPublish,
+  isConflictExhausted,
+} from '@cipherbox/sdk-core';
 import { getSdkClient } from '../lib/sdk-provider';
 import {
   resolveFileMetadata,
@@ -125,20 +129,29 @@ export function useFileVersions() {
         if (migratedIpnsPrivateKeyEncrypted) {
           updateFolderMetadataAndPublish({
             children: updatedChildren,
+            baseChildren: parentFolder.children,
             folderKey: parentFolder.folderKey,
             ipnsPrivateKey: parentFolder.ipnsPrivateKey,
             ipnsName: parentFolder.ipnsName,
             sequenceNumber: parentFolder.sequenceNumber,
             ctx: getSdkClient().getContext(),
           })
-            .then(({ newSequenceNumber }) => {
+            .then(({ newSequenceNumber, publishedChildren }) => {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
+              useFolderStore.getState().updateFolderChildren(parentId, publishedChildren);
             })
             .catch((err) => {
-              logger.warn(
-                '[Versions] Lazy IPNS key migration: folder re-publish failed, will retry:',
-                err
-              );
+              if (isConflictExhausted(err)) {
+                logger.warn(
+                  '[Versions] Lazy IPNS key migration: folder re-publish conflict exhausted after retries:',
+                  err
+                );
+              } else {
+                logger.warn(
+                  '[Versions] Lazy IPNS key migration: folder re-publish failed, will retry:',
+                  err
+                );
+              }
             });
         }
 
@@ -250,20 +263,29 @@ export function useFileVersions() {
 
           updateFolderMetadataAndPublish({
             children: updatedChildren,
+            baseChildren: parentFolder.children,
             folderKey: parentFolder.folderKey,
             ipnsPrivateKey: parentFolder.ipnsPrivateKey,
             ipnsName: parentFolder.ipnsName,
             sequenceNumber: parentFolder.sequenceNumber,
             ctx: getSdkClient().getContext(),
           })
-            .then(({ newSequenceNumber }) => {
+            .then(({ newSequenceNumber, publishedChildren }) => {
               useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
+              useFolderStore.getState().updateFolderChildren(parentId, publishedChildren);
             })
             .catch((err) => {
-              logger.warn(
-                '[Versions] Lazy IPNS key migration: folder re-publish failed, will retry:',
-                err
-              );
+              if (isConflictExhausted(err)) {
+                logger.warn(
+                  '[Versions] Lazy IPNS key migration: folder re-publish conflict exhausted after retries:',
+                  err
+                );
+              } else {
+                logger.warn(
+                  '[Versions] Lazy IPNS key migration: folder re-publish failed, will retry:',
+                  err
+                );
+              }
             });
         }
 

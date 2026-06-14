@@ -408,22 +408,25 @@ export class CipherBoxClient {
 
       try {
         // 3. Add folder entry to parent's children
+        const baseChildren = [...parent.children];
         const updatedChildren: FolderChild[] = [...parent.children, folder];
 
         // 4. Update parent metadata and publish
-        const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
-          children: updatedChildren,
-          folderKey: parent.folderKey,
-          ipnsPrivateKey: parent.ipnsKeypair.privateKey,
-          ipnsName: parentIpnsName,
-          sequenceNumber: parent.sequenceNumber,
-          ctx: this.ctx,
-          encryptedIpnsPrivateKey: encryptedIpnsPrivateKey,
-          keyEpoch,
-        });
+        const { newSequenceNumber, publishedChildren } =
+          await sdkCore.updateFolderMetadataAndPublish({
+            children: updatedChildren,
+            baseChildren,
+            folderKey: parent.folderKey,
+            ipnsPrivateKey: parent.ipnsKeypair.privateKey,
+            ipnsName: parentIpnsName,
+            sequenceNumber: parent.sequenceNumber,
+            ctx: this.ctx,
+            encryptedIpnsPrivateKey: encryptedIpnsPrivateKey,
+            keyEpoch,
+          });
 
-        // 5. Update parent state
-        parent.children = updatedChildren;
+        // 5. Update parent state — adopt merged published set (CR-01)
+        parent.children = publishedChildren;
         parent.sequenceNumber = newSequenceNumber;
         parent.lastLoadedAt = Date.now();
         this.folderTree.set(parentIpnsName, parent);
@@ -431,6 +434,7 @@ export class CipherBoxClient {
         // 6. Publish empty metadata for the new subfolder
         await sdkCore.updateFolderMetadataAndPublish({
           children: [],
+          baseChildren: [],
           folderKey,
           ipnsPrivateKey,
           ipnsName: folder.ipnsName,
@@ -445,7 +449,7 @@ export class CipherBoxClient {
           type: 'folder:updated',
           folderId: parentIpnsName,
           ipnsName: parentIpnsName,
-          children: updatedChildren,
+          children: publishedChildren,
           sequenceNumber: newSequenceNumber,
         });
 
@@ -489,6 +493,7 @@ export class CipherBoxClient {
       if (!folder) throw new Error('Folder not loaded');
 
       // 1. Rename in metadata (pure operation)
+      const baseChildren = [...folder.children];
       const { updatedChildren } = sdkCore.renameInFolder({
         children: folder.children,
         childId,
@@ -496,17 +501,20 @@ export class CipherBoxClient {
       });
 
       // 2. Publish updated metadata
-      const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
-        children: updatedChildren,
-        folderKey: folder.folderKey,
-        ipnsPrivateKey: folder.ipnsKeypair.privateKey,
-        ipnsName: folderIpnsName,
-        sequenceNumber: folder.sequenceNumber,
-        ctx: this.ctx,
-      });
+      const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
+        {
+          children: updatedChildren,
+          baseChildren,
+          folderKey: folder.folderKey,
+          ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+          ipnsName: folderIpnsName,
+          sequenceNumber: folder.sequenceNumber,
+          ctx: this.ctx,
+        }
+      );
 
-      // 3. Update internal state
-      folder.children = updatedChildren;
+      // 3. Update internal state — adopt merged published set (CR-01)
+      folder.children = publishedChildren;
       folder.sequenceNumber = newSequenceNumber;
       folder.lastLoadedAt = Date.now();
       this.folderTree.set(folderIpnsName, folder);
@@ -516,7 +524,7 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
-        children: updatedChildren,
+        children: publishedChildren,
         sequenceNumber: newSequenceNumber,
       });
     });
@@ -540,6 +548,8 @@ export class CipherBoxClient {
       if (!dest) throw new Error('Destination folder not loaded');
 
       // 1. Compute updated children for both folders (pure operation)
+      const baseDestChildren = [...dest.children];
+      const baseSourceChildren = [...source.children];
       const { updatedSourceChildren, updatedDestChildren } = sdkCore.moveItem({
         sourceChildren: source.children,
         destChildren: dest.children,
@@ -549,6 +559,7 @@ export class CipherBoxClient {
       // 2. Publish destination first (add-before-remove for crash safety)
       const destResult = await sdkCore.updateFolderMetadataAndPublish({
         children: updatedDestChildren,
+        baseChildren: baseDestChildren,
         folderKey: dest.folderKey,
         ipnsPrivateKey: dest.ipnsKeypair.privateKey,
         ipnsName: destIpnsName,
@@ -559,6 +570,7 @@ export class CipherBoxClient {
       // 3. Publish source (remove)
       const sourceResult = await sdkCore.updateFolderMetadataAndPublish({
         children: updatedSourceChildren,
+        baseChildren: baseSourceChildren,
         folderKey: source.folderKey,
         ipnsPrivateKey: source.ipnsKeypair.privateKey,
         ipnsName: sourceIpnsName,
@@ -566,10 +578,10 @@ export class CipherBoxClient {
         ctx: this.ctx,
       });
 
-      // 4. Update internal state
-      source.children = updatedSourceChildren;
+      // 4. Update internal state — adopt merged published sets (CR-01)
+      source.children = sourceResult.publishedChildren;
       source.sequenceNumber = sourceResult.newSequenceNumber;
-      dest.children = updatedDestChildren;
+      dest.children = destResult.publishedChildren;
       dest.sequenceNumber = destResult.newSequenceNumber;
       this.folderTree.set(sourceIpnsName, source);
       this.folderTree.set(destIpnsName, dest);
@@ -579,14 +591,14 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: sourceIpnsName,
         ipnsName: sourceIpnsName,
-        children: updatedSourceChildren,
+        children: sourceResult.publishedChildren,
         sequenceNumber: sourceResult.newSequenceNumber,
       });
       this.emitter.emit({
         type: 'folder:updated',
         folderId: destIpnsName,
         ipnsName: destIpnsName,
-        children: updatedDestChildren,
+        children: destResult.publishedChildren,
         sequenceNumber: destResult.newSequenceNumber,
       });
     });
@@ -608,23 +620,27 @@ export class CipherBoxClient {
       if (!folder) throw new Error('Folder not loaded');
 
       // 1. Remove from metadata (pure operation)
+      const baseChildren = [...folder.children];
       const { updatedChildren, removedItem } = sdkCore.deleteFromFolder({
         children: folder.children,
         childId,
       });
 
       // 2. Publish updated metadata
-      const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
-        children: updatedChildren,
-        folderKey: folder.folderKey,
-        ipnsPrivateKey: folder.ipnsKeypair.privateKey,
-        ipnsName: folderIpnsName,
-        sequenceNumber: folder.sequenceNumber,
-        ctx: this.ctx,
-      });
+      const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
+        {
+          children: updatedChildren,
+          baseChildren,
+          folderKey: folder.folderKey,
+          ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+          ipnsName: folderIpnsName,
+          sequenceNumber: folder.sequenceNumber,
+          ctx: this.ctx,
+        }
+      );
 
-      // 3. Update internal state
-      folder.children = updatedChildren;
+      // 3. Update internal state — adopt merged published set (CR-01)
+      folder.children = publishedChildren;
       folder.sequenceNumber = newSequenceNumber;
       folder.lastLoadedAt = Date.now();
       this.folderTree.set(folderIpnsName, folder);
@@ -634,7 +650,7 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
-        children: updatedChildren,
+        children: publishedChildren,
         sequenceNumber: newSequenceNumber,
       });
 
@@ -710,6 +726,7 @@ export class CipherBoxClient {
 
       try {
         // 2. Add FilePointer to folder's children
+        const baseChildren = [...folder.children];
         const { updatedChildren } = sdkCore.addFilePointerToFolder({
           children: folder.children,
           fileId,
@@ -725,6 +742,7 @@ export class CipherBoxClient {
           sdkCore.batchPublishIpnsRecords([uploadResult.ipnsRecord], this.ctx),
           sdkCore.updateFolderMetadataAndPublish({
             children: updatedChildren,
+            baseChildren,
             folderKey: folder.folderKey,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
@@ -772,10 +790,10 @@ export class CipherBoxClient {
           });
         }
 
-        const { newSequenceNumber } = folderResult.value;
+        const { newSequenceNumber, publishedChildren } = folderResult.value;
 
-        // 4. Update internal state
-        folder.children = updatedChildren;
+        // 4. Update internal state — adopt merged published set (CR-01)
+        folder.children = publishedChildren;
         folder.sequenceNumber = newSequenceNumber;
         folder.lastLoadedAt = Date.now();
         this.folderTree.set(folderIpnsName, folder);
@@ -791,7 +809,7 @@ export class CipherBoxClient {
           type: 'folder:updated',
           folderId: folderIpnsName,
           ipnsName: folderIpnsName,
-          children: updatedChildren,
+          children: publishedChildren,
           sequenceNumber: newSequenceNumber,
         });
 
@@ -949,7 +967,9 @@ export class CipherBoxClient {
           folderKey: folder.folderKey,
           ctx: this.ctx,
         });
-        let mergedChildren = freshFolder?.metadata.children ?? folder.children;
+        const initialChildren = freshFolder?.metadata.children ?? folder.children;
+        const baseChildren = [...initialChildren];
+        let mergedChildren = initialChildren;
         const freshSeq = freshFolder?.sequenceNumber ?? folder.sequenceNumber;
 
         // Add FilePointers for all successful uploads (skip collisions gracefully)
@@ -989,6 +1009,7 @@ export class CipherBoxClient {
         const [folderResult, batchResult] = await Promise.allSettled([
           sdkCore.updateFolderMetadataAndPublish({
             children: mergedChildren,
+            baseChildren,
             folderKey: folder.folderKey,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
@@ -1031,10 +1052,10 @@ export class CipherBoxClient {
           });
         }
 
-        const { newSequenceNumber } = folderResult.value;
+        const { newSequenceNumber, publishedChildren } = folderResult.value;
 
-        // Update internal state
-        folder.children = mergedChildren;
+        // Update internal state — adopt merged published set (CR-01)
+        folder.children = publishedChildren;
         folder.sequenceNumber = newSequenceNumber;
         folder.lastLoadedAt = Date.now();
         this.folderTree.set(folderIpnsName, folder);
@@ -1053,7 +1074,7 @@ export class CipherBoxClient {
           type: 'folder:updated',
           folderId: folderIpnsName,
           ipnsName: folderIpnsName,
-          children: mergedChildren,
+          children: publishedChildren,
           sequenceNumber: newSequenceNumber,
         });
 

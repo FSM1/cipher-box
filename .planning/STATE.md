@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Phase 43 shipped — PR #487
-last_updated: "2026-06-14T12:37:25.820Z"
+status: Milestone complete
+last_updated: "2026-06-14T15:38:15.838Z"
 last_activity: 2026-06-14
 progress:
-  total_phases: 29
-  completed_phases: 27
-  total_plans: 113
-  completed_plans: 109
-  percent: 93
+  total_phases: 1
+  completed_phases: 1
+  total_plans: 7
+  completed_plans: 7
+  percent: 100
 ---
 
 # Project State
@@ -20,19 +20,19 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 43 — fuse-write-durability
+**Current focus:** Phase 44 — ipns-conflict-handling
 
 ## Current Position
 
-Phase: 43 (fuse-write-durability) — SHIPPED (PR #487, verified passed)
-Plan: 8 of 8
+Phase: 44
+Plan: Not started
 Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 169 (72 M1 + 83 M2 + 6 M3)
+- Total plans completed: 176 (72 M1 + 83 M2 + 6 M3)
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
@@ -241,7 +241,7 @@ Recent for v1.1:
 
 ### Pending Todos
 
-18 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
+12 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
 
 ### Resolved
 
@@ -257,4 +257,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-06-12
+Last activity: 2026-06-14

@@ -1,6 +1,57 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/core';
-import { renameInFolder, deleteFromFolder, addFilePointerToFolder, moveItem } from '../folder';
+import {
+  renameInFolder,
+  deleteFromFolder,
+  addFilePointerToFolder,
+  moveItem,
+  updateFolderMetadataAndPublish,
+} from '../folder';
+import { isConflictExhausted } from '../errors';
+import { createMockContext } from './helpers';
+
+// ---------------------------------------------------------------------------
+// Module mocks for updateFolderMetadataAndPublish tests
+// vi.mock calls are hoisted to the top of the file by vitest.
+// vi.hoisted() is hoisted before vi.mock() so its result is available in factories.
+// ---------------------------------------------------------------------------
+
+const mockFns = vi.hoisted(() => ({
+  createAndPublishIpnsRecord: vi.fn(),
+  resolveIpnsRecord: vi.fn(),
+  addToIpfs: vi.fn(),
+  fetchFromIpfs: vi.fn(),
+  encryptFolderMetadata: vi.fn(),
+  decryptFolderMetadata: vi.fn(),
+}));
+
+vi.mock('@cipherbox/crypto', () => ({
+  generateEd25519Keypair: vi.fn(),
+  deriveIpnsName: vi.fn(),
+  deriveEd25519PublicKey: vi.fn().mockReturnValue(new Uint8Array(32).fill(7)),
+  generateRandomBytes: vi.fn(),
+  wrapKey: vi.fn(),
+  bytesToHex: vi.fn(),
+  hexToBytes: vi.fn(),
+}));
+
+vi.mock('@cipherbox/core', () => ({
+  encryptFolderMetadata: mockFns.encryptFolderMetadata,
+  decryptFolderMetadata: mockFns.decryptFolderMetadata,
+  createIpnsRecord: vi.fn(),
+  marshalIpnsRecord: vi.fn(),
+}));
+
+vi.mock('../ipfs', () => ({
+  addToIpfs: mockFns.addToIpfs,
+  fetchFromIpfs: mockFns.fetchFromIpfs,
+}));
+
+vi.mock('../ipns', () => ({
+  createAndPublishIpnsRecord: mockFns.createAndPublishIpnsRecord,
+  batchPublishIpnsRecords: vi.fn(),
+  resolveIpnsRecord: mockFns.resolveIpnsRecord,
+}));
 
 // These tests cover the pure (synchronous) folder metadata operations.
 // async operations (loadFolderMetadata, updateFolderMetadataAndPublish, createSubfolder)
@@ -157,5 +208,204 @@ describe('Folder operations', () => {
         'An item with this name already exists in destination'
       );
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Conflict handling tests for updateFolderMetadataAndPublish
+// Uses the shared mockFns references wired into the vi.mock factories above.
+// ---------------------------------------------------------------------------
+
+/** Build a minimal remote metadata blob for fetchFromIpfs to return. */
+function makeRemoteBlob(): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify({ iv: 'r', data: 'd' }));
+}
+
+describe('updateFolderMetadataAndPublish conflict handling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmFreshCid' });
+    mockFns.encryptFolderMetadata.mockResolvedValue({ iv: 'iv', data: 'data' });
+  });
+
+  it('merges remote children on 409 then republishes (no lost update)', async () => {
+    const ctx = createMockContext();
+    const localChild = makeFile('local-1', 'local-file.txt');
+    const remoteChild = makeFile('remote-1', 'remote-file.txt');
+
+    const conflictErr = Object.assign(new Error('conflict'), { status: 409 });
+    mockFns.createAndPublishIpnsRecord
+      .mockRejectedValueOnce(conflictErr)
+      .mockResolvedValueOnce({ success: true, sequenceNumber: '6', ipnsName: 'k51test' });
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      sequenceNumber: 5n,
+      cid: 'QmRemoteCid',
+      ipnsName: 'k51test',
+    });
+
+    mockFns.fetchFromIpfs.mockResolvedValue(makeRemoteBlob());
+
+    mockFns.decryptFolderMetadata.mockResolvedValue({
+      version: 'v2' as const,
+      children: [remoteChild],
+    });
+
+    // Track what FolderMetadata is encrypted each attempt
+    const encryptedMetas: unknown[] = [];
+    mockFns.encryptFolderMetadata.mockImplementation(async (meta: unknown) => {
+      encryptedMetas.push(meta);
+      return { iv: 'iv', data: 'data' };
+    });
+
+    const result = await updateFolderMetadataAndPublish({
+      children: [localChild],
+      baseChildren: [],
+      folderKey: new Uint8Array(32).fill(1),
+      ipnsPrivateKey: new Uint8Array(64).fill(2),
+      ipnsName: 'k51test',
+      sequenceNumber: 4n,
+      ctx,
+    });
+
+    expect(result.cid).toBe('QmFreshCid');
+    expect(result.newSequenceNumber).toBe(6n);
+
+    // Second encrypt call must include BOTH local and remote children (merged, no lost update)
+    expect(encryptedMetas).toHaveLength(2);
+    const secondMeta = encryptedMetas[1] as { version: string; children: FolderChild[] };
+    const childIds = secondMeta.children.map((c: FolderChild) => c.id);
+    expect(childIds).toContain('local-1');
+    expect(childIds).toContain('remote-1');
+  });
+
+  it('logs a union-fallback warning when baseChildren omitted', async () => {
+    const ctx = createMockContext();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const conflictErr = Object.assign(new Error('conflict'), { status: 409 });
+    mockFns.createAndPublishIpnsRecord
+      .mockRejectedValueOnce(conflictErr)
+      .mockResolvedValueOnce({ success: true, sequenceNumber: '2', ipnsName: 'k51warn' });
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      sequenceNumber: 1n,
+      cid: 'QmRemote',
+      ipnsName: 'k51warn',
+    });
+
+    mockFns.fetchFromIpfs.mockResolvedValue(makeRemoteBlob());
+    mockFns.decryptFolderMetadata.mockResolvedValue({ version: 'v2' as const, children: [] });
+
+    await updateFolderMetadataAndPublish({
+      children: [makeFile('f1', 'test.txt')],
+      // baseChildren intentionally omitted to trigger union fallback (D-02)
+      folderKey: new Uint8Array(32),
+      ipnsPrivateKey: new Uint8Array(64),
+      ipnsName: 'k51warn',
+      sequenceNumber: 0n,
+      ctx,
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('baseChildren not provided'));
+
+    warnSpy.mockRestore();
+  });
+
+  it('throws ConflictError after 4 failed attempts', async () => {
+    const ctx = createMockContext();
+
+    const conflictErr = Object.assign(new Error('conflict'), { status: 409 });
+    mockFns.createAndPublishIpnsRecord.mockRejectedValue(conflictErr);
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      sequenceNumber: 10n,
+      cid: 'QmAlwaysConflict',
+      ipnsName: 'k51exhaust',
+    });
+
+    mockFns.fetchFromIpfs.mockResolvedValue(makeRemoteBlob());
+    mockFns.decryptFolderMetadata.mockResolvedValue({ version: 'v2' as const, children: [] });
+
+    await expect(
+      updateFolderMetadataAndPublish({
+        children: [makeFile('f1', 'file.txt')],
+        baseChildren: [],
+        folderKey: new Uint8Array(32),
+        ipnsPrivateKey: new Uint8Array(64),
+        ipnsName: 'k51exhaust',
+        sequenceNumber: 9n,
+        ctx,
+      })
+    ).rejects.toSatisfy((err: unknown) => {
+      return isConflictExhausted(err) && err.attempts === 4 && err.ipnsName === 'k51exhaust';
+    });
+  });
+
+  it('does not throw ConflictError for non-409 errors', async () => {
+    const ctx = createMockContext();
+
+    const serverErr = Object.assign(new Error('Internal Server Error'), { status: 500 });
+    mockFns.createAndPublishIpnsRecord.mockRejectedValue(serverErr);
+
+    await expect(
+      updateFolderMetadataAndPublish({
+        children: [makeFile('f1', 'file.txt')],
+        folderKey: new Uint8Array(32),
+        ipnsPrivateKey: new Uint8Array(64),
+        ipnsName: 'k51nonconflict',
+        sequenceNumber: 0n,
+        ctx,
+      })
+    ).rejects.toSatisfy((err: unknown) => {
+      return !isConflictExhausted(err) && (err as Error).message === 'Internal Server Error';
+    });
+  });
+
+  it('returns publishedChildren containing merged local+remote set after 409 (WR-08 folder)', async () => {
+    // Tests CR-01: the published merged children must be surfaced to callers so
+    // the next write composes from the correct base, not the stale pre-merge local set.
+    // Non-empty baseChildren exercises the three-way merge path (WR-08).
+    const ctx = createMockContext();
+    const baseChild = makeFile('base-1', 'base-file.txt');
+    const localChild = makeFile('local-2', 'local-file.txt');
+    const remoteChild = makeFile('remote-3', 'remote-file.txt');
+
+    const conflictErr = Object.assign(new Error('conflict'), { status: 409 });
+    mockFns.createAndPublishIpnsRecord
+      .mockRejectedValueOnce(conflictErr)
+      .mockResolvedValueOnce({ success: true, sequenceNumber: '8', ipnsName: 'k51merged' });
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      sequenceNumber: 7n,
+      cid: 'QmRemoteMerged',
+      ipnsName: 'k51merged',
+    });
+
+    mockFns.fetchFromIpfs.mockResolvedValue(makeRemoteBlob());
+    // Remote folder already has baseChild + remoteChild (remote-only child not in local set)
+    mockFns.decryptFolderMetadata.mockResolvedValue({
+      version: 'v2' as const,
+      children: [baseChild, remoteChild],
+    });
+
+    const result = await updateFolderMetadataAndPublish({
+      children: [baseChild, localChild],
+      // Non-empty baseChildren — exercises three-way merge (WR-08)
+      baseChildren: [baseChild],
+      folderKey: new Uint8Array(32).fill(1),
+      ipnsPrivateKey: new Uint8Array(64).fill(2),
+      ipnsName: 'k51merged',
+      sequenceNumber: 6n,
+      ctx,
+    });
+
+    // publishedChildren must be the merged published set, not the stale pre-merge local set
+    expect(result.publishedChildren).toBeDefined();
+    const publishedIds = result.publishedChildren.map((c: FolderChild) => c.id);
+    // Local-only child must survive the merge
+    expect(publishedIds).toContain('local-2');
+    // Remote-only child must be included (proves three-way merge ran, not a local-only publish)
+    expect(publishedIds).toContain('remote-3');
   });
 });

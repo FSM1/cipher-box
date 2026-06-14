@@ -7,24 +7,24 @@ import { unpinFromIpfs } from '../lib/api/ipfs';
 import {
   addFileToFolder,
   addFilesToFolder,
-  replaceFileInFolder,
   updateFolderMetadataAndPublish,
+  updateFileMetadata,
+  isConflictExhausted,
 } from '@cipherbox/sdk-core';
 import { getSdkClient } from '../lib/sdk-provider';
 import { reWrapForRecipients } from '../services/share.service';
 import {
   createFileMetadata,
   resolveFileMetadata,
-  updateFileMetadata,
   shouldCreateVersion,
   getFileIpnsPrivateKey,
 } from '../services/file-metadata.service';
-import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
 import type { FolderChild, FilePointer } from '@cipherbox/core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { getRootFolderState, resyncFolder, withConflictRetry } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
 import { useNotificationStore } from '../stores/notification.store';
+import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { logger } from '../lib/logger';
 
 /**
@@ -409,11 +409,11 @@ export function useFileOperations() {
         // 4. Determine whether to create a version entry
         const createVersion = shouldCreateVersion(currentMetadata, fileData.forceVersion ?? false);
 
-        let ipnsRecord: FileIpnsRecordPayload;
         let prunedCids: string[];
         try {
-          // 5. Update file metadata and publish new IPNS record
-          ({ ipnsRecord, prunedCids } = await updateFileMetadata({
+          // 5. Update file metadata — publishes internally with CAS (Plan 03 new contract).
+          // Returns { ipnsName, metadataCid, newSequenceNumber, prunedCids }; publish is done.
+          ({ prunedCids } = await updateFileMetadata({
             fileIpnsPrivateKey,
             fileMetaIpnsName: filePointer.fileMetaIpnsName,
             folderKey: parentFolder.folderKey,
@@ -426,20 +426,15 @@ export function useFileOperations() {
               ...(fileData.newEncryptionMode ? { encryptionMode: fileData.newEncryptionMode } : {}),
             },
             createVersion,
+            maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
+            ctx: getSdkClient().getContext(),
           }));
         } finally {
           fileIpnsPrivateKey.fill(0);
         }
 
-        // 6. Publish only the file IPNS record (folder metadata untouched!)
-        await replaceFileInFolder({
-          children: parentFolder.children,
-          fileId: fileData.fileId,
-          fileIpnsRecord: ipnsRecord,
-          ctx: getSdkClient().getContext(),
-        });
-
-        // 7. Update local state -- touch modifiedAt and persist migrated IPNS key if applicable
+        // 6. (File IPNS record is already published inside updateFileMetadata above.)
+        //    Update local state -- touch modifiedAt and persist migrated IPNS key if applicable.
         const updatedChildren = parentFolder.children.map((child) => {
           if (child.type === 'file' && child.id === fileData.fileId) {
             return {
@@ -456,21 +451,32 @@ export function useFileOperations() {
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
 
-        // 7b. Republish folder metadata so other clients (e.g. FUSE desktop mount)
+        // 6b. Republish folder metadata so other clients (e.g. FUSE desktop mount)
         // see the updated modifiedAt on the FilePointer and re-resolve the file.
+        // Pre-mutation parentFolder.children is the correct baseChildren snapshot
+        // (updatedChildren is the post-mutation set, so the base is the original children).
         updateFolderMetadataAndPublish({
           children: updatedChildren,
+          baseChildren: parentFolder.children,
           folderKey: parentFolder.folderKey,
           ipnsPrivateKey: parentFolder.ipnsPrivateKey,
           ipnsName: parentFolder.ipnsName,
           sequenceNumber: parentFolder.sequenceNumber,
           ctx: getSdkClient().getContext(),
         })
-          .then(({ newSequenceNumber }) => {
+          .then(({ newSequenceNumber, publishedChildren }) => {
             useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
+            useFolderStore.getState().updateFolderChildren(parentId, publishedChildren);
           })
           .catch((err) => {
-            logger.warn('[FileOps] Folder metadata re-publish after file edit failed:', err);
+            if (isConflictExhausted(err)) {
+              logger.warn(
+                '[FileOps] Folder metadata re-publish after file edit: conflict exhausted after retries:',
+                err
+              );
+            } else {
+              logger.warn('[FileOps] Folder metadata re-publish after file edit failed:', err);
+            }
           });
 
         // 8. Re-wrap new file key for share recipients (fire-and-forget)

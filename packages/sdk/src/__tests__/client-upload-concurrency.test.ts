@@ -129,7 +129,7 @@ describe('CipherBoxClient.uploadFile - concurrent pin orchestration', () => {
       callLog.push('folder:start');
       await Promise.resolve();
       callLog.push('folder:end');
-      return { cid: 'bafyfolder', newSequenceNumber: 2n };
+      return { cid: 'bafyfolder', newSequenceNumber: 2n, publishedChildren: [] };
     });
 
     await client.uploadFile('folder-ipns', new Uint8Array([1, 2, 3]), 'new.txt', 'text/plain');
@@ -156,6 +156,7 @@ describe('CipherBoxClient.uploadFile - concurrent pin orchestration', () => {
     vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
       cid: 'bafyfolder',
       newSequenceNumber: 2n,
+      publishedChildren: [],
     });
 
     // Should NOT throw -- batch publish failure is non-critical
@@ -208,6 +209,7 @@ describe('CipherBoxClient.uploadFile - concurrent pin orchestration', () => {
     vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
       cid: 'bafyfolder',
       newSequenceNumber: 2n,
+      publishedChildren: [],
     });
 
     const result = await client.uploadFile(

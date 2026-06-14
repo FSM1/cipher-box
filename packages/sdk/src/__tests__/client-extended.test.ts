@@ -95,6 +95,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await client.renameItem('folder-ipns', 'file1', 'renamed.txt');
@@ -141,6 +142,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await client.moveItem('src-ipns', 'dest-ipns', 'file1');
@@ -210,6 +212,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       const result = await client.uploadFile(
@@ -270,6 +273,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await shareClient.uploadFile(
@@ -319,6 +323,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       // Should not throw — no shareCallbacks means no re-wrapping
@@ -372,6 +377,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await shareClient.uploadFile(
@@ -424,6 +430,7 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       // Upload should still succeed even if re-wrapping fails
@@ -655,7 +662,18 @@ describe('CipherBoxClient - extended', () => {
 
     it('purgeExpired validates retentionDays and emits bin:updated', async () => {
       vi.mocked(binOps.loadBin).mockResolvedValue({
-        entries: [{ id: 'e1', name: 'old.txt', deletedAt: 0, type: 'file' }],
+        entries: [
+          {
+            id: 'e1',
+            name: 'old.txt',
+            deletedAt: 0,
+            itemType: 'file' as const,
+            originalParentIpnsName: 'k51parent',
+            originalPath: 'My Vault',
+            size: 0,
+            mimeType: '',
+          },
+        ],
         sequenceNumber: 1,
         ipnsName: 'k51bin',
       });

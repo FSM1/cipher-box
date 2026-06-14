@@ -233,14 +233,16 @@ export async function addToBin(params: {
   if (!folder) throw new Error('Folder not loaded');
 
   // 1. Remove item from folder metadata
+  const baseChildren = [...folder.children];
   const { updatedChildren, removedItem } = sdkCore.deleteFromFolder({
     children: folder.children,
     childId: params.childId,
   });
 
   // 2. Publish updated folder metadata
-  const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
+  const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedChildren,
+    baseChildren,
     folderKey: folder.folderKey,
     ipnsPrivateKey: folder.ipnsKeypair.privateKey,
     ipnsName: params.folderIpnsName,
@@ -248,8 +250,8 @@ export async function addToBin(params: {
     ctx: params.binCtx.ctx,
   });
 
-  // 3. Update folder state
-  folder.children = updatedChildren;
+  // 3. Update folder state — adopt merged published set (CR-01)
+  folder.children = publishedChildren;
   folder.sequenceNumber = newSequenceNumber;
   folder.lastLoadedAt = Date.now();
   params.folderTree.set(params.folderIpnsName, folder);
@@ -333,11 +335,13 @@ export async function restoreFromBin(params: {
     child = { ...child, name: newName };
   }
 
+  const baseChildren = [...targetFolder.children];
   const updatedFolderChildren = [...targetFolder.children, child];
 
   // 4. Publish updated folder metadata
-  const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
+  const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedFolderChildren,
+    baseChildren,
     folderKey: targetFolder.folderKey,
     ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
     ipnsName: params.targetFolderIpnsName,
@@ -345,8 +349,8 @@ export async function restoreFromBin(params: {
     ctx: params.binCtx.ctx,
   });
 
-  // 5. Update folder state
-  targetFolder.children = updatedFolderChildren;
+  // 5. Update folder state — adopt merged published set (CR-01)
+  targetFolder.children = publishedChildren;
   targetFolder.sequenceNumber = newSequenceNumber;
   targetFolder.lastLoadedAt = Date.now();
   params.folderTree.set(params.targetFolderIpnsName, targetFolder);

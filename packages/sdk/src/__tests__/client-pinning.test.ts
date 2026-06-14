@@ -92,6 +92,7 @@ describe('CipherBoxClient pinning', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await client.uploadFile('folder-ipns', new Uint8Array([1]), 'new.txt', 'text/plain');
@@ -142,6 +143,7 @@ describe('CipherBoxClient pinning', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await client.uploadFile('folder-ipns', new Uint8Array([1]), 'new.txt', 'text/plain');
@@ -192,6 +194,7 @@ describe('CipherBoxClient pinning', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       // Upload should fail -- no silent CipherBox fallback
@@ -249,6 +252,7 @@ describe('CipherBoxClient pinning', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await client.uploadFile('folder-ipns', new Uint8Array([1]), 'new.txt', 'text/plain');
@@ -309,6 +313,7 @@ describe('CipherBoxClient pinning', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       await client.uploadFile('folder-ipns', new Uint8Array([1]), 'new.txt', 'text/plain');
@@ -358,6 +363,7 @@ describe('CipherBoxClient pinning', () => {
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
         newSequenceNumber: 2n,
+        publishedChildren: [],
       });
 
       const events: SdkEvent[] = [];
@@ -404,6 +410,7 @@ describe('CipherBoxClient pinning', () => {
         vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
           cid: 'bafynew',
           newSequenceNumber: 2n,
+          publishedChildren: [],
         });
       };
 

@@ -106,6 +106,7 @@ export async function uploadToSharedFolder(
   params: { data: Uint8Array; fileName: string; mimeType?: string }
 ): Promise<{
   updatedChildren: FolderChild[];
+  publishedChildren: FolderChild[];
   newSequenceNumber: bigint;
   filePointer: FilePointer;
 }> {
@@ -198,8 +199,9 @@ export async function uploadToSharedFolder(
 
       // 10. Add file to folder children and publish
       const updatedChildren = [...swCtx.children, filePointer];
-      const { newSequenceNumber } = await updateFolderMetadataAndPublish({
+      const { newSequenceNumber, publishedChildren } = await updateFolderMetadataAndPublish({
         children: updatedChildren,
+        baseChildren: swCtx.children,
         folderKey: swCtx.folderKey,
         ipnsPrivateKey: swCtx.ipnsPrivateKey,
         ipnsName: swCtx.ipnsName,
@@ -222,7 +224,7 @@ export async function uploadToSharedFolder(
         console.warn('[shared-write] Failed to add share_keys for uploaded file:', err);
       }
 
-      return { updatedChildren, newSequenceNumber, filePointer };
+      return { updatedChildren, publishedChildren, newSequenceNumber, filePointer };
     } finally {
       ipnsKeypair.privateKey.fill(0);
     }
@@ -247,6 +249,7 @@ export async function createSharedSubfolder(
   params: { name: string }
 ): Promise<{
   updatedChildren: FolderChild[];
+  publishedChildren: FolderChild[];
   newSequenceNumber: bigint;
   folderEntry: FolderEntry;
 }> {
@@ -293,8 +296,9 @@ export async function createSharedSubfolder(
 
     // 5. Add to parent folder and publish
     const updatedChildren = [...swCtx.children, folderEntry];
-    const { newSequenceNumber } = await updateFolderMetadataAndPublish({
+    const { newSequenceNumber, publishedChildren } = await updateFolderMetadataAndPublish({
       children: updatedChildren,
+      baseChildren: swCtx.children,
       folderKey: swCtx.folderKey,
       ipnsPrivateKey: swCtx.ipnsPrivateKey,
       ipnsName: swCtx.ipnsName,
@@ -322,7 +326,7 @@ export async function createSharedSubfolder(
       console.warn('[shared-write] Failed to add share_keys for subfolder:', err);
     }
 
-    return { updatedChildren, newSequenceNumber, folderEntry };
+    return { updatedChildren, publishedChildren, newSequenceNumber, folderEntry };
   } finally {
     subfolderKey.fill(0);
     keypair.privateKey.fill(0);
@@ -342,13 +346,18 @@ export async function createSharedSubfolder(
 export async function renameInSharedFolder(
   swCtx: SharedWriteContext,
   params: { itemId: string; newName: string }
-): Promise<{ updatedChildren: FolderChild[]; newSequenceNumber: bigint }> {
+): Promise<{
+  updatedChildren: FolderChild[];
+  publishedChildren: FolderChild[];
+  newSequenceNumber: bigint;
+}> {
   const updatedChildren = swCtx.children.map((child) =>
     child.id === params.itemId ? { ...child, name: params.newName, modifiedAt: Date.now() } : child
   );
 
-  const { newSequenceNumber } = await updateFolderMetadataAndPublish({
+  const { newSequenceNumber, publishedChildren } = await updateFolderMetadataAndPublish({
     children: updatedChildren,
+    baseChildren: swCtx.children,
     folderKey: swCtx.folderKey,
     ipnsPrivateKey: swCtx.ipnsPrivateKey,
     ipnsName: swCtx.ipnsName,
@@ -356,7 +365,7 @@ export async function renameInSharedFolder(
     ctx: swCtx.ctx,
   });
 
-  return { updatedChildren, newSequenceNumber };
+  return { updatedChildren, publishedChildren, newSequenceNumber };
 }
 
 // ---------------------------------------------------------------------------
@@ -371,11 +380,16 @@ export async function renameInSharedFolder(
 export async function deleteFromSharedFolder(
   swCtx: SharedWriteContext,
   params: { itemId: string }
-): Promise<{ updatedChildren: FolderChild[]; newSequenceNumber: bigint }> {
+): Promise<{
+  updatedChildren: FolderChild[];
+  publishedChildren: FolderChild[];
+  newSequenceNumber: bigint;
+}> {
   const updatedChildren = swCtx.children.filter((child) => child.id !== params.itemId);
 
-  const { newSequenceNumber } = await updateFolderMetadataAndPublish({
+  const { newSequenceNumber, publishedChildren } = await updateFolderMetadataAndPublish({
     children: updatedChildren,
+    baseChildren: swCtx.children,
     folderKey: swCtx.folderKey,
     ipnsPrivateKey: swCtx.ipnsPrivateKey,
     ipnsName: swCtx.ipnsName,
@@ -383,7 +397,7 @@ export async function deleteFromSharedFolder(
     ctx: swCtx.ctx,
   });
 
-  return { updatedChildren, newSequenceNumber };
+  return { updatedChildren, publishedChildren, newSequenceNumber };
 }
 
 // ---------------------------------------------------------------------------
@@ -446,8 +460,8 @@ export async function updateSharedFile(params: {
         params.ctx
       );
 
-      // 6. Update file metadata
-      const { ipnsRecord } = await updateFileMetadata({
+      // 6. Update file metadata (publishes internally via CAS — Plan 03)
+      await updateFileMetadata({
         fileIpnsPrivateKey: ipnsPrivKey,
         fileMetaIpnsName: params.filePointer.fileMetaIpnsName,
         folderKey: params.folderKey,
@@ -463,8 +477,10 @@ export async function updateSharedFile(params: {
         ctx: params.ctx,
       });
 
-      // 7. Publish updated file IPNS record
-      await batchPublishIpnsRecords([{ ...ipnsRecord, recordType: 'file' as const }], params.ctx);
+      // Note: batchPublishIpnsRecords for the file record was here pre-Plan-03.
+      // updateFileMetadata now publishes internally with CAS; the separate publish
+      // has been removed to avoid double-publish. prunedCids from version overflow
+      // are dropped here (pre-existing Phase-42 deferred leak — not regressed).
 
       // 8. Update share_key for recipient
       const recipientWrappedKey = await wrapKey(fileKey, params.recipientPublicKey);
