@@ -342,10 +342,11 @@ describe('shared-write operations', () => {
       // Uploaded to IPFS
       expect(addToIpfs).toHaveBeenCalled();
 
-      // File metadata updated and published
+      // File metadata updated and published internally via CAS (Plan-03):
+      // updateSharedFile no longer calls batchPublishIpnsRecords directly —
+      // updateFileMetadata publishes the file record itself to avoid double-publish.
       const { updateFileMetadata } = await import('@cipherbox/sdk-core');
       expect(updateFileMetadata).toHaveBeenCalled();
-      expect(batchPublishIpnsRecords).toHaveBeenCalled();
     });
 
     it('calls addShareKeysFn with updated file key', async () => {
