@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-06-14T22:37:13.644Z"
+last_updated: "2026-06-14T22:49:04.225Z"
 last_activity: 2026-06-14
 progress:
   total_phases: 30
   completed_phases: 29
   total_plans: 130
-  completed_plans: 126
+  completed_plans: 127
   percent: 97
 ---
 
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 45 (desktop-fuse-write-durability-cleanup) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 
 ## Performance Metrics
@@ -137,6 +137,7 @@ Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 | Phase 41 P05    | 3min     | 2 tasks | 3 files   |
 | Phase 45 P01    | 8min     | 2 tasks | 2 files   |
 | Phase 45-desktop-fuse-write-durability-cleanup P45-02 | 8min | 1 tasks | 3 files |
+| Phase 45 P03 | 7min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -264,3 +265,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 ---
 
 Last activity: 2026-06-14
+
+## Decisions
+
+- [Phase ?]: deser_opt_string maps legacy empty-string file_meta_ipns_name to None; serde compat shim mandatory for pre-Phase-45 journal replay
