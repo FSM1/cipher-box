@@ -1,0 +1,107 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "c3eb9d1ad133",
+  "session_id": "50a19cf3-e9e0-4593-b0a0-59ce53bd97ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T22:24:52.35945Z",
+  "branch": "feat/desktop-fuse-write-durability-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/sdk/src/queue.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8e8867e734ef",
+  "token_usage": {
+    "input_tokens": 23304,
+    "cache_creation_tokens": 270037,
+    "cache_read_tokens": 15603507,
+    "output_tokens": 161509,
+    "api_call_count": 95
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Merge origin/main into the phase-44 branch (feat/ipns-conflict-handling), ship the work as PR #488, and resolve all CI failures and review comments to get the PR merged.",
+    "outcome": "PR #488 was created, all CI checks passed after fixing a stale test assertion and malformed commit message scopes, 2 CodeRabbit threads were resolved, and the PR was merged to main (52 files, +6360/-201 lines).",
+    "learnings": {
+      "repo": [
+        "Web vitest only runs *.test.ts files — *.spec.ts files in apps/web are silently skipped by the test runner, making them dead code. apps/api (NestJS/jest) legitimately uses .spec.ts convention.",
+        "The Release Preview CI job enforces conventional-commit messages on every commit touching a versioned package; it exits 1 on violations and is a required-to-merge check.",
+        "The `release:none` label escape hatch cancels ALL version bumps for the PR — wrong for real features; fixing commit messages is the correct path.",
+        "Repo is squash-merge only (PR_TITLE as the squash subject), so the conventional-commit PR title is what lands on main, not the individual commit messages — but the Release Preview job still validates those commit messages on the PR branch.",
+        "GSD ship workflow's literal 'Phase N: name' PR title format is rejected by pr-title.yml CI; must use a conventional-commit format instead.",
+        "required_signatures is false, so filter-branch message-only rewrites without re-signing are allowed.",
+        "The Release Preview bot pushes a `chore(release): set release targets for PR #N` commit to the branch after PR creation — must fetch before any subsequent pushes to avoid non-fast-forward errors.",
+        "gsd commit helper has a known false-negative: reports `commit_failed` but the commit actually lands; verify with git log.",
+        "Phase-44 code lives entirely in packages/sdk-core/, packages/sdk/, and apps/web/src/hooks/ — zero overlap with apps/api/, apps/desktop/, or crates/.",
+        "The packages/sdk test suite was not run during phase-44 local verification (only sdk-core was), which allowed a stale test to slip through to CI.",
+        "1Password SSH signing requires unsandboxed Bash; sandboxed commands hang waiting for the Touch ID prompt."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/delete.service.ts",
+          "line": 24,
+          "end_line": 25,
+          "finding": "fetchQuota() is fire-and-forget with .then() only — no .catch(), so a rejection is silently swallowed and never reaches logger.warn. The warn only fires on resolved-falsy (one argument), not on rejection."
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 399,
+          "end_line": 399,
+          "finding": "params.fileIpnsPrivateKey.fill(0) zeroizes the key buffer in-place after use. Any test that shares a mockPrivateKey across test cases at describe scope will see an all-zero key after the first invocation."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/file.test.ts",
+          "line": 158,
+          "end_line": 158,
+          "finding": "mockPrivateKey was declared once at describe scope; after the first test ran updateFileMetadata it was zeroed. Fixed by moving to let + reinit in beforeEach."
+        },
+        {
+          "path": "packages/sdk/src/share/shared-write.ts",
+          "line": 510,
+          "end_line": 510,
+          "finding": "Comment explicitly states: updateFileMetadata now publishes internally with CAS; the separate batchPublishIpnsRecords call was removed from updateSharedFile to avoid double-publish. The shared-write.test.ts assertion for batchPublishIpnsRecords was stale."
+        }
+      ],
+      "workflow": [
+        "When a long-running branch carries its own sequential implementation of phases that were later merged separately via their own PRs, all conflicts on the already-merged phases should take origin/main's versions (the PR-reviewed canonical ones). Verify zero overlap with the branch's unique phase before applying wholesale.",
+        "Before resolving conflicts wholesale with 'theirs', map each conflicted file to its branch commits to confirm the current branch's unique work has zero overlap with the conflicting files.",
+        "Use `git filter-branch --msg-filter` for message-only rewrites; verify afterward with `git diff <old-tip>` to confirm the tree is byte-identical (empty diff = message-only).",
+        "Force-push with --force-with-lease after history rewrites, not --force, to guard against concurrent bot pushes.",
+        "When a PR branch has 100+ commits but the net diff is small, check `git diff base...HEAD` (three dots) to confirm the actual PR surface area — cosmetic history from a long branch collapses on squash-merge.",
+        "Delegating slow/verbose build checks (pnpm typecheck, cargo check) to sub-agents keeps the main context window clean and avoids token bloat from build output.",
+        "Post PR review replies via REST (--field not -f for in_reply_to integer), resolve threads via GraphQL mutation resolveReviewThread.",
+        "When deleting a stale duplicate test file, prefer deletion over patching the broken assertions — deleting removes the confusion permanently and loses no real coverage if the canonical version exists."
+      ]
+    },
+    "friction": [
+      "Transient git index.lock collision hit two files (commands/sync.rs, fuse/mod.rs) during batch conflict resolution — likely caused by a background file watcher; had to retry those two files after the lock cleared.",
+      "Two commits from early phase-44 work used 'feat 44-02:' and 'test 44-02:' (space instead of parentheses for scope), blocking the required Release Preview CI check and requiring a filter-branch history rewrite after PR creation.",
+      "packages/sdk tests were not included in phase-44 local verification, so a stale batchPublishIpnsRecords assertion in shared-write.test.ts only surfaced in CI after the PR was created.",
+      "The gsd commit helper false-negative (reporting commit_failed when the commit succeeded) requires a redundant git log verification step after every gsd commit invocation.",
+      "git filter-repo is not installed; had to use the deprecated git filter-branch instead.",
+      "The GSD ship workflow's PR title template ('Phase N: name') conflicts with the repo's conventional-commit CI enforcement — required deviation from the workflow spec to avoid a CI failure on a required check.",
+      "delete.service.spec.ts was a stale branch-phase-42 duplicate that survived the merge because the filenames differed (no conflict), only surfacing as a CodeRabbit finding post-PR."
+    ],
+    "open_items": [
+      "3 pending todos filed during phase-44 work remain unaddressed: folder-writes-leak-basechildren-and-publishedchildren-bookkeeping, unify-file-and-folder-ipns-cas-retry-into-one-publishwithcas, updatesharedfile-discards-prunedcids-from-updatefilemetadata.",
+      "Local refs/original/... backup ref from filter-branch rewrite was intentionally left in place for rollback safety — can be dropped when no longer needed.",
+      "/gsd-complete-milestone was not run despite STATE.md marking the v1.1 milestone as complete — the GSD loop's completion step is still pending.",
+      "Phase-44 code's interaction with main's refined phase-42/43 versions (disjoint files, compatible interfaces) was verified to compile but was not re-reviewed end-to-end since the prior reviews covered them independently."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-14T22:23:39.302787Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 115,
+    "human_modified": 7,
+    "human_removed": 0,
+    "total_committed": 115,
+    "total_lines_changed": 122,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
