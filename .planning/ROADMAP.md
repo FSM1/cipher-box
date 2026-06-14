@@ -661,7 +661,7 @@ Plans:
 **Goal:** Rust-only hygiene refactors and added test coverage for the Phase 43/44 FUSE write journal and crash-recovery replay code. No behavior change — pay down the structural debt that accumulated while shipping durable writes, and harden the replay path with tests. Explicitly excludes the desktop-fuse data-loss bugs (mkdir-orphan, release() silent loss, stale-mount recovery), which are tracked separately as bug work.
 **Requirements:** Consolidate the duplicated `fuser`/`winfsp` journal write paths; extract a shared journal-dir + max-retries helper; replace stringly-typed code in replay (empty-string journal-key sentinel → `Option<String>`, not-found string match → typed error); reduce repeated work in replay (memoize `resolve_folder_key`, reuse `publish_file_metadata` + a cas-publish helper); raise Phase-43 rust write-durability test coverage. All changes must preserve current behavior and keep crash-recovery semantics intact.
 **Depends on:** Phase 44
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans complete
 
 Scope (captured todos):
 
@@ -699,7 +699,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 45-06-PLAN.md — Consolidate fuser/winfsp journal write paths into journal_helpers (#11)
+- [x] 45-06-PLAN.md — Consolidate fuser/winfsp journal write paths into journal_helpers (#11)
 
 ---
 

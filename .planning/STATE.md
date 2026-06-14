@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Ready to execute
-last_updated: "2026-06-14T23:09:56.550Z"
+status: Phase complete — ready for verification
+last_updated: "2026-06-14T23:29:33.306Z"
 last_activity: 2026-06-14
 progress:
   total_phases: 30
-  completed_phases: 29
+  completed_phases: 30
   total_plans: 130
-  completed_plans: 129
-  percent: 97
+  completed_plans: 130
+  percent: 100
 ---
 
 # Project State
@@ -140,6 +140,7 @@ Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 | Phase 45 P03 | 7min | 2 tasks | 4 files |
 | Phase 45 P04 | 8min | 1 tasks | 2 files |
 | Phase 45 P05 | 12 | 2 tasks | 1 files |
+| Phase 45 P06 | 90 | - tasks | - files |
 
 ## Accumulated Context
 
@@ -275,3 +276,6 @@ Last activity: 2026-06-14
 - [Phase 45-04]: resolve_ipns_for_replay preserves both contains(not found) and contains(404) predicates to avoid classification regression
 - [Phase ?]: Conditional use imports route replay to fuse->operations::implementation and winfsp->platform::windows::operations::implementation for publish_file_metadata
 - [Phase ?]: folder_key_cache seeded with root key in replay_for_vault; resolve_folder_key_cached wrapper memoizes per replay call, never persisted or shared
+- [Phase ?]: journal_helpers: helper takes &OpenFileHandle directly (open_files entry removed before call)
+- [Phase ?]: journal_helpers: WinFsp write_gen read after write_generation bump; fuser uses result field captured before mutation
+- [Phase ?]: journal_helpers: build_mkdir_journal_entry called after child inode inserted so build_folder_metadata sees new child
