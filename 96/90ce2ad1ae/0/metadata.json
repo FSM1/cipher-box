@@ -1,0 +1,159 @@
+{
+  "cli_version": "0.7.5",
+  "checkpoint_id": "9690ce2ad1ae",
+  "session_id": "d165590e-f2c8-4e72-b24d-58906239376f",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T02:35:34.193047016Z",
+  "branch": "feat/fuse-write-durability",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/sync/mod.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "62dde4c056d6",
+  "token_usage": {
+    "input_tokens": 22811,
+    "cache_creation_tokens": 380797,
+    "cache_read_tokens": 45191024,
+    "output_tokens": 204023,
+    "api_call_count": 238
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Uo4VpyN8TyzUjQ8e4gwPEy",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "62dde4c056d6",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1090,
+        "end": 1091,
+        "entry_ids": [
+          "72d51f0c-ac28-4b97-a86f-13054341ed17"
+        ],
+        "tool_use_id": "toolu_01Uo4VpyN8TyzUjQ8e4gwPEy"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uo4VpyN8TyzUjQ8e4gwPEy"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Run the Phase 43 FUSE write-durability UAT on Linux against a local stack (API, mock-ipns-router, Linux desktop) connected to a shared Docker Compose infra at 192.168.133.49.",
+    "outcome": "All 4 UAT tests completed on Linux/FUSE (Tests 1-3 PASS, Test 4 reproduced known gap G-43-UAT-02). A notification spam bug was found, fixed, and committed. A stale-mount-after-crash finding was logged as a GSD todo. The push to remote was in progress at session end.",
+    "learnings": {
+      "repo": [
+        "Cargo builds go to the workspace-root target/ (e.g. /home/michael/Code/cipher-box/target/debug/), NOT the crate-local apps/desktop/src-tauri/target/debug/. A stale Feb 28 binary in the crate-local path caused a multi-hour phantom deadlock investigation.",
+        "Debug builds load devUrl (http://localhost:1420) via Tauri config — the vite dev server must be running for the webview to load anything. The hidden dev-key webview (visible:false) will silently fail to run auth JS without it.",
+        "WebKitGTK in headless/no-GPU Linux environments requires: WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 (bwrap can't map uid without user namespaces), LIBGL_ALWAYS_SOFTWARE=1 + MESA_GL_VERSION_OVERRIDE=3.3 (no Vulkan/Zink), and setsid for proper process group handling.",
+        "Journal entries are intentionally retained on disk after a successful runtime upload (not removed until next mount replay) — this is design decision CR-08. Normal-seeming 'Pending' entries post-upload are expected.",
+        "test-login (test-auth.service.ts) does NOT provision a vault. The client must create it during onboarding. A user with is_new=false but no IPNS record (e.g. stale uninitialized vault in shared Postgres) will hang resolving a never-published record.",
+        "The shared Postgres at 192.168.133.49 had a stale dev-key@cipherbox.local user with initialized_at=null and 21 orphaned pins from a prior partial run. Deleting the user cascades vault + pins cleanly.",
+        "SyncStatus::WriteParked is emitted by the SDK daemon on every 30s poll while any Failed entry exists — it is level-triggered by design. The desktop callback must edge-trigger notifications itself.",
+        "The cipherbox-desktop binary's feature flag defaults to 'fuse' (libfuse3) on Linux — no explicit flag needed for the correct FUSE build."
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "line": 69,
+          "end_line": 86,
+          "finding": "Stale-mount-after-crash bug: after a SIGKILL, ~/CipherBox is a disconnected FUSE mount (ENOTCONN). mount_path.exists() calls stat() which returns ENOTCONN → false. Code takes the create_dir_all branch → EEXIST → 'Failed to create mount point: File exists (os error 17)', skipping the stale-cleanup else-branch. Normal relaunches hit the else-branch and log 'Cleaned stale mount point'; only ENOTCONN state triggers the failure."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/sync/mod.rs",
+          "line": 42,
+          "end_line": 56,
+          "finding": "WriteParked notification was level-triggered: send_write_parked_notification fired on every sync cycle while failed > 0. Fixed by adding an AtomicU32 watermark (last_notified_failed) that only fires when failed count rises above the last-notified value, and resets to 0 on Idle/failed==0. Watermark must NOT reset on Syncing (daemon emits Syncing at start of every cycle at sdk/src/sync.rs:109)."
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 935,
+          "end_line": 994,
+          "finding": "Journal entry removal (journal.remove) only happens in the mount-time replay path, not in the runtime upload-completion handler. Successful runtime uploads leave entries as Pending on disk by design (CR-08)."
+        },
+        {
+          "path": "crates/sdk/src/sync.rs",
+          "line": 109,
+          "end_line": 109,
+          "finding": "Daemon emits Syncing at the start of every poll cycle before emitting WriteParked or Idle. Any edge-trigger reset placed on Syncing will re-arm the notification every cycle, recreating the spam."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 42,
+          "end_line": 56,
+          "finding": "initialize_vault: first log 'Publishing vault key blob' appears after local crypto ops (generate_random_bytes, HKDF, ECIES — all sync, no locks). If this log never appears, the function body is not executing at all, likely a stale binary issue."
+        }
+      ],
+      "workflow": [
+        "pkill pattern matching: pkill <pattern> in the same shell as a backgrounded '... <pattern> &' will self-match and kill the shell (exit 144). Use the bracket trick [c]ipherbox-desktop or separate kill and launch into distinct Bash calls.",
+        "Verify binary freshness by checking modification time before running (ls -la target/debug/). When builds seem to have no effect, check for a stale binary in a crate-local target/ that is shadowing the workspace-root target/.",
+        "ptrace_scope=1 blocks strace/gdb attach to non-child processes. Run the binary under gdb as a child (gdb --args ./binary) to capture backtraces; strace works on child processes launched by the shell.",
+        "When a debug-build Tauri app's webview produces no output (no page load, no JS), check whether the vite dev server is running — the devUrl config makes the entire app dependent on it in debug mode.",
+        "For shared-Postgres test environments, always check for stale test users with partial state (initialized_at=null) before running UAT that provisions new vaults.",
+        "GSD capture flow: /gsd:capture (no flag) routes to add-todo workflow, writes to .planning/todos/pending/, updates STATE.md count, and commits via gsd tool scoped to the todo file only."
+      ]
+    },
+    "friction": [
+      "Stale crate-local binary (Feb 28) in apps/desktop/src-tauri/target/debug/ shadowed the real workspace-root build. Running against it produced a phantom async deadlock investigation that consumed the majority of the session.",
+      "WebKitGTK required multiple rounds of debugging (GL failure → sandbox failure → X11 backend → llvmpipe) before finding the correct combination: WEBKIT_DISABLE_SANDBOX + LIBGL_ALWAYS_SOFTWARE + setsid + vite dev server.",
+      "pkill self-match pattern caused repeated accidental shell kills throughout the session when kill and launch were in the same Bash command.",
+      "Shared Postgres had a stale dev-key@cipherbox.local user with an uninitialized vault, causing the app to hang resolving a never-published IPNS record — required manual DB cleanup via a Node script run from the api directory (pg module not resolvable from /tmp).",
+      "ptrace_scope=1 blocked strace on the live process; had to relaunch under gdb as a child to capture backtraces.",
+      "No psql client on the dev machine required routing Postgres cleanup through a Node.js script.",
+      "cargo build output confusion: the build command ran successfully but the crate-local stale binary was being invoked, making it appear the build had no effect for an extended period."
+    ],
+    "open_items": [
+      "Stale-mount-after-crash recovery (Linux only): mount_filesystem needs to detect ENOTCONN on stat() and run fusermount3 -u before attempting to mount, or fall through EEXIST to the stale-cleanup path. Logged as GSD todo (2026-06-14-recover-stale-fuse-mount-after-crash-on-linux-startup.md, area: desktop-fuse).",
+      "G-43-UAT-02 (carried over from Windows): filename and size fields are plaintext in cb-journal/*.json entries. Content/keys/IV are encrypted but metadata is not.",
+      "The 'mount failed' OS notification copy is non-actionable — user has no in-app recovery path and must manually run fusermount3 -u ~/CipherBox. Should be addressed alongside the stale-mount fix.",
+      "Push to remote (feat/fuse-write-durability) was requested at session end but the transcript ends at the commit step — verify the push completed.",
+      "The notification spam fix AtomicU32 watermark resets on Idle/failed==0 but does not account for a subset of parked entries being resolved while others remain — consider tracking failed IDs rather than count if partial-clear behavior matters."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-14T02:34:16.024426859Z",
+    "agent_lines": 25,
+    "agent_removed": 9,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 1,
+    "total_committed": 26,
+    "total_lines_changed": 36,
+    "agent_percentage": 94.44444444444444,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 27,
+      "agent_lines_removed": 9
+    }
+  ]
+}

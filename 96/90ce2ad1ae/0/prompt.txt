@@ -1,0 +1,25 @@
+please switch to the phase 43 branch
+
+---
+
+please switch to the phase 43 branch
+
+---
+
+the branch exists, `feat/fuse` but I dont remember the exact name
+
+---
+
+ok, now I need you to build the api, mock-ipns-router and linux desktop apps and run the uat against this local stack. the docker compose stack is accessible on 192.168.133.49
+
+---
+
+the notification does keep reappearing on every sync, since the item is still in the parked area
+
+---
+
+yeah please fix the notification spam
+
+---
+
+yes please clean up the dev key vault, and log the stale-mount-after-crash using /gsd:capture flow

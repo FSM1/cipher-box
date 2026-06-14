@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.5",
+  "checkpoint_id": "9690ce2ad1ae",
+  "strategy": "manual-commit",
+  "branch": "feat/fuse-write-durability",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/sync/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/96/90ce2ad1ae/0/metadata.json",
+      "transcript": "/96/90ce2ad1ae/0/full.jsonl",
+      "content_hash": "/96/90ce2ad1ae/0/content_hash.txt",
+      "prompt": "/96/90ce2ad1ae/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22811,
+    "cache_creation_tokens": 380797,
+    "cache_read_tokens": 45191024,
+    "output_tokens": 204023,
+    "api_call_count": 238
+  }
+}
