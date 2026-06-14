@@ -63,16 +63,10 @@ mod mount_impl {
             .map_err(|e| format!("Failed to create temp directory: {}", e))?;
 
         // Stable journal dir for durable write journal
-        let journal_dir = dirs::data_local_dir()
-            .unwrap_or_else(|| {
-                log::warn!("data_local_dir unavailable; journal will use temp_dir (may not survive reboot)");
-                std::env::temp_dir()
-            })
-            .join("cipherbox")
-            .join("cb-journal");
+        let journal_dir = crate::fuse::default_journal_dir();
         std::fs::create_dir_all(&journal_dir)
             .map_err(|e| format!("Failed to create journal directory: {}", e))?;
-        let journal = cipherbox_sdk::WriteQueue::new(journal_dir, 5);
+        let journal = cipherbox_sdk::WriteQueue::new(journal_dir, crate::fuse::JOURNAL_MAX_RETRIES);
 
         // Build the inode table
         let mut inodes = inode::InodeTable::new();

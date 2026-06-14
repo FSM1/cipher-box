@@ -51,16 +51,12 @@ pub fn spawn_sync_daemon(app: tauri::AppHandle, state: &AppState) -> Result<(), 
 
     log::info!("Starting background sync daemon");
 
-    // Build the journal directory using the same resolution as the FUSE mount
-    // (apps/desktop/src-tauri/src/fuse/mod.rs) so daemon and FUSE share the
-    // same on-disk journal (CR-07).
-    let journal_dir = dirs::data_local_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("cipherbox")
-        .join("cb-journal");
+    // Build the journal directory using the shared helper so daemon and FUSE
+    // always resolve the same on-disk path (CR-07).
+    let journal_dir = crate::fuse::default_journal_dir();
     std::fs::create_dir_all(&journal_dir)
         .map_err(|e| format!("Failed to create journal directory: {}", e))?;
-    let write_queue = cipherbox_sdk::WriteQueue::new(journal_dir, 5);
+    let write_queue = cipherbox_sdk::WriteQueue::new(journal_dir, crate::fuse::JOURNAL_MAX_RETRIES);
 
     let sdk_state = state.sdk.clone();
 
