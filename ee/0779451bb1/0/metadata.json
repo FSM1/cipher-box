@@ -51,6 +51,37 @@
         "label": "Skill: gsd:execute-phase",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01DCUfsVry2BayRydGKrCK2e",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "fa77a06a67ee",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 262,
+        "end": 263,
+        "entry_ids": [
+          "ab0d64ec-0331-4b6f-b9f8-e75a0808b740"
+        ],
+        "tool_use_id": "toolu_01DCUfsVry2BayRydGKrCK2e"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01DCUfsVry2BayRydGKrCK2e"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:code-review",
+        "default_collapsed": true
+      }
     }
   ],
   "summary": {
