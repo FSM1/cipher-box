@@ -1,0 +1,107 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "52515563f6ea",
+  "session_id": "50a19cf3-e9e0-4593-b0a0-59ce53bd97ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T16:19:01.626579Z",
+  "branch": "feat/ipns-conflict-handling",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8e8867e734ef",
+  "token_usage": {
+    "input_tokens": 23163,
+    "cache_creation_tokens": 261527,
+    "cache_read_tokens": 13867097,
+    "output_tokens": 154644,
+    "api_call_count": 89
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Merge origin/main into the phase-44 branch (feat/ipns-conflict-handling), then execute the full GSD ship workflow to create PR #488, and resolve any CI failures or review comments that surfaced.",
+    "outcome": "Successfully merged 28 conflicts (all phase-42/43 duplication, zero phase-44 overlap), created PR #488, fixed two CI failures (stale SDK test + malformed commit messages via filter-branch rewrite), and resolved two CodeRabbit review comments (deleted a stale duplicate .spec.ts, fixed mockPrivateKey reinit in file.test.ts). All required checks green; PR is MERGEABLE.",
+    "learnings": {
+      "repo": [
+        "The repo uses Entire-Checkpoint: trailers not gate_status: trailers — a per-commit TDD audit table would be 100% 'missing' rows and is not applicable here.",
+        ".spec.ts files are silently skipped by web vitest; only .test.ts files run in CI. A stale delete.service.spec.ts existed alongside the canonical delete.service.test.ts without either conflicting or running.",
+        "PR titles must follow conventional-commit format enforced by pr-title.yml CI; the GSD template's literal 'Phase 44: ...' title would have been rejected.",
+        "Repo is squash-only merge with PR_TITLE as the squash commit subject — malformed commit messages in branch history only matter to the Release Preview required check, not to the final commit on main.",
+        "required_signatures is false — message-only history rewrites without re-signing are permitted.",
+        "Release Preview is a required check that enforces conventional-commit format on every commit touching a versioned package; it skips merge commits explicitly.",
+        "The release:none escape hatch cancels ALL version bumps for the PR — wrong for a real feature release.",
+        "After Release Preview passes, the bot pushes a chore(release): set release targets for PR #N commit to the branch; local must be synced before further pushes.",
+        "1Password SSH signing requires unsandboxed Bash — commits hang if sandboxed.",
+        "The gsd commit helper returns commit_failed as a known false negative; outcome must be verified via git log.",
+        "env -u GITHUB_TOKEN is required when creating PRs via gh cli in this repo.",
+        "Phase-44 verification checked sdk-core (196/196) but not the full packages/sdk suite — CI was first to catch the stale assertion in packages/sdk."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/delete.service.ts",
+          "line": 24,
+          "end_line": 26,
+          "finding": "fetchQuota is called as a fire-and-forget void promise with no .catch — rejections are silently swallowed and never reach logger.warn. The stale .spec.ts incorrectly tested for a rejection path that can never fire."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/shared-write.test.ts",
+          "line": 348,
+          "end_line": 348,
+          "finding": "Stale assertion: expected batchPublishIpnsRecords to be called, but phase-44 Plan-03 moved IPNS publishing inside updateFileMetadata (CAS) to avoid double-publish. The updateFileMetadata assertion on line 347 already covered publishing."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/file.test.ts",
+          "line": 158,
+          "end_line": 158,
+          "finding": "mockPrivateKey declared once at describe scope; the impl calls fill(0) on it, so subsequent tests in the suite receive a zeroed key. Fix: reinitialize in beforeEach."
+        },
+        {
+          "path": "apps/web/src/services/delete.service.spec.ts",
+          "line": 1,
+          "finding": "100%-redundant, broken, never-run duplicate of delete.service.test.ts. Originated from the branch's own phase-42 work and survived the merge because the filenames differed (.spec.ts vs .test.ts). Deleted."
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "main's guardedUnpin is a strict refinement of this branch's version: adds suppressCrossUserAudit option and inline lock computation. Confirmed the pattern that main's reviewed phase-42/43 versions are canonical when conflicts arise."
+        }
+      ],
+      "workflow": [
+        "Before resolving merge conflicts, determine if conflicting files were touched by the branch's unique work. If zero overlap, taking 'theirs' for all code files is safe and correct when main has the reviewed/canonical version.",
+        "For a branch with its own sequential implementation of multiple phases where earlier phases already merged to main, the net diff (main...HEAD) can be phase-N-only even with hundreds of commits in history — verify with git diff --name-only before writing the PR body.",
+        "Delegating verbose typecheck/cargo-check runs to sub-agents with strict guardrails (no test suites, no edits) keeps main context clean and avoids RAM pressure.",
+        "git filter-branch for message-only rewrites: verify with empty git diff <orig>..<new> (tree byte-identical) and confirm merge parents are preserved before force-pushing.",
+        "Use --force-with-lease (not --force) after history rewrite to avoid overwriting concurrent bot commits.",
+        "When a release bot pushes to a PR branch after CI runs (e.g. chore(release) commits), always fetch before any subsequent push to avoid rejection.",
+        "For required CI checks, poll in background tasks rather than blocking the main context — use task notifications for completion."
+      ]
+    },
+    "friction": [
+      "Transient git index.lock collision on two files (commands/sync.rs, fuse/mod.rs) during bulk conflict resolution — caused by a file watcher, required a second resolution pass.",
+      "Release Preview CI failure caused by malformed commit messages (feat 44-02: with a space instead of feat(44-02):) — required a verified message-only filter-branch rewrite and force-push, adding a full extra CI cycle.",
+      "SDK test failure surfaced in CI but not in phase-44 local verification because the sdk-core suite was checked but not the full packages/sdk suite.",
+      "gsd commit helper false-negative on commit_failed requires verifying every commit via git log rather than trusting the helper's return value.",
+      "The 124-commit PR history (phases 42+43+44) made the TDD audit section impractical — the repo also doesn't use gate_status: trailers, requiring a custom explanatory note instead of the standard table.",
+      "Phase-44 branch carried its own phase-42 copies of delete.service tests as .spec.ts files that survived the merge silently (different filename, no conflict, never run in CI)."
+    ],
+    "open_items": [
+      "filter-branch backup ref (refs/original/…) remains locally — safe to drop with git update-ref -d refs/original/refs/heads/feat/ipns-conflict-handling.",
+      "PR #488 still needs approval and merge once CodeRabbit re-review settles (non-blocking but pending at session end).",
+      "/gsd:complete-milestone should be run after merge — phase 44 was the last gap-closure phase and STATE.md already marks the v1.1 milestone complete.",
+      "The stale .spec.ts pattern (branch's own phase work leaving duplicate test files that survive merge because of filename differences) may exist for other phases — worth a one-time scan for *.spec.ts files in apps/web."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
