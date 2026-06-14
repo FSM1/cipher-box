@@ -1,0 +1,147 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "0d7f33e40012",
+  "session_id": "d2d5197a-fafc-43e2-b0c9-7b63f690e863",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T18:18:12.036262Z",
+  "branch": "fix/folder-tree-desync-resurrects-deleted-file",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/lib/sdk-provider.ts",
+    "packages/sdk/src/__tests__/client-extended.test.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8e6d00ec32a8",
+  "token_usage": {
+    "input_tokens": 12961,
+    "cache_creation_tokens": 371410,
+    "cache_read_tokens": 14542045,
+    "output_tokens": 109486,
+    "api_call_count": 98
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Determine whether a failing Web E2E test (TC08 in recycle-bin.spec.ts) was a real regression or flaky, and if real, fix the root cause introduced by PR #488.",
+    "outcome": "Root cause was identified and fixed: a two-store desync between Zustand useFolderStore and the SDK client's internal folderTree caused a stale IPNS sequence on delete, producing a 409 that the new merge logic resolved by resurrecting the deleted file. Fix adds reconcileFolderState to the SDK client and calls it in ensureFolderRegistered. Commit was pushed unsigned and a PR + web-e2e dispatch were queued at end of session.",
+    "learnings": {
+      "repo": [
+        "Folder state is maintained in two separate stores: Zustand useFolderStore (web) and the SDK client's internal folderTree. They can desync when sdk-core is called directly, bypassing the SDK client.",
+        "File replace (updateFile) publishes folder metadata directly via sdk-core and updates only the Zustand store — the SDK folderTree is never notified, leaving it at a stale IPNS sequence.",
+        "Soft-delete is not optimistic: the file only disappears from the UI after deleteToBin() completes an IPNS publish and emits folder:updated. A thrown error is silently swallowed at useFileBrowserActions.ts:515-516.",
+        "merge.ts edit-beats-delete branch (lines 47-52) resurrects a locally-deleted child if remote.modifiedAt > base.modifiedAt — correct logic given valid inputs, but produces resurrection when the base snapshot is stale.",
+        "folder/index.ts:253-260 has a 409 fallback to union merge when baseChildren is not provided, which can also resurrect deleted items, but delete callers do pass baseChildren so this was not the active branch.",
+        "ensureFolderRegistered (sdk-provider.ts:99) no-ops unconditionally when a folder is already registered, treating SDK state as authoritative even after direct sdk-core publishes advance the web store past it.",
+        "ci-e2e.yml triggers web-e2e.yml via workflow_call; web-e2e.yml supports workflow_dispatch with a ref input (inputs.ref || github.sha), enabling CI runs against feature branches.",
+        "dist/ is gitignored and rebuilt in CI — only source files need to be committed.",
+        "integration.test.ts has pre-existing ECONNREFUSED failures requiring a live API server; these appear in broad test runs but are not regressions."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/folder/merge.ts",
+          "line": 47,
+          "end_line": 52,
+          "finding": "edit-beats-delete branch: resurrects a locally-deleted child when remote.modifiedAt > base.modifiedAt. Correct given valid inputs; becomes a bug when base is stale (pre-replace snapshot)."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 253,
+          "end_line": 260,
+          "finding": "409 fallback: when baseChildren is not provided, falls back to a union merge that never deletes ('deletes may resurrect' warning). Delete callers do pass baseChildren so this branch was not active in TC08."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/useFileBrowserActions.ts",
+          "line": 512,
+          "end_line": 517,
+          "finding": "Delete errors are caught, logger.error'd, and silently swallowed — no user-visible feedback, and the list item is never removed since folder:updated never fires."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "line": 458,
+          "end_line": 480,
+          "finding": "After a file replace, the folder-metadata republish (step 6b) is fire-and-forget (not awaited). It bumps modifiedAt and IPNS sequence in the Zustand store only; the SDK folderTree is never updated."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 94,
+          "end_line": 99,
+          "finding": "ensureFolderRegistered no-ops when the folder is already registered — SDK internal state is treated as authoritative. This is the desync point: a direct sdk-core publish advances the web store but not the SDK folderTree."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-extended.test.ts",
+          "line": 777,
+          "end_line": 777,
+          "finding": "Existing registerFolder test — used as the convention anchor for the new reconcileFolderState unit tests added by this fix."
+        }
+      ],
+      "workflow": [
+        "Playwright traces capture browser console messages and network call status codes but not request bodies — useful for confirming 409s and resurrection but not for inspecting IPNS sequence numbers.",
+        "Browser console.warn messages (e.g. from in-browser merge logic) don't appear in CI server-side job logs — grepping CI logs for browser warnings is a dead end.",
+        "Non-contiguous CI failure pattern (fail → pass → fail across commits) is a strong signal toward flakiness, but a single deterministic symptom (same test, same failure mode, 179/180 each time) overrides that heuristic.",
+        "1Password SSH signing requires the desktop app to be unlocked and its SSH agent active; background/headless sessions cannot trigger the signing prompt, requiring either user intervention or an unsigned fallback commit.",
+        "GitHub artifact downloads can fail transiently and benefit from a retry-with-backoff approach."
+      ]
+    },
+    "friction": [
+      "1Password SSH signer was locked throughout the session, blocking signed commits and requiring two failed retries before the user authorized an unsigned commit.",
+      "gh CLI job log fetching required multiple retry attempts before succeeding (16k line log).",
+      "Browser console output is not captured in CI server-side logs, making it impossible to confirm in-browser merge warnings from the log alone — required downloading the Playwright trace artifact.",
+      "Playwright trace request bodies are not captured, so IPNS sequence numbers could not be directly verified from the trace.",
+      "Artifact download needed explicit retry-with-backoff tooling to succeed.",
+      "The broad SDK test run returned misleading ECONNREFUSED failures that initially appeared to be new failures caused by the fix."
+    ],
+    "open_items": [
+      "The unsigned commit will show as 'Unverified' on GitHub and may need re-signing (git commit --amend -S) from the user's machine before the PR can merge if branch protection requires signed commits.",
+      "Web E2E run against the fix branch was dispatched but results were not yet available at end of session — TC08 pass/fail is still unconfirmed end-to-end.",
+      "Silent delete failure UX (useFileBrowserActions.ts:515-516): a failed delete shows no user-visible error and the file stays in the list with no feedback. Noted as a correctness/UX gap independent of the flake.",
+      "The PR creation step was still in progress (branch pushed, PR body written) but the gh pr create command had not yet executed at end of session."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-14T18:17:13.80927Z",
+    "agent_lines": 111,
+    "agent_removed": 6,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 111,
+    "total_lines_changed": 117,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 111,
+      "agent_lines_removed": 6,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 111,
+      "agent_lines_removed": 6,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

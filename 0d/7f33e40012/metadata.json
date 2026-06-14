@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "0d7f33e40012",
+  "strategy": "manual-commit",
+  "branch": "fix/folder-tree-desync-resurrects-deleted-file",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/lib/sdk-provider.ts",
+    "packages/sdk/src/__tests__/client-extended.test.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0d/7f33e40012/0/metadata.json",
+      "transcript": "/0d/7f33e40012/0/full.jsonl",
+      "content_hash": "/0d/7f33e40012/0/content_hash.txt",
+      "prompt": "/0d/7f33e40012/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12961,
+    "cache_creation_tokens": 371410,
+    "cache_read_tokens": 14542045,
+    "output_tokens": 109486,
+    "api_call_count": 98
+  }
+}
