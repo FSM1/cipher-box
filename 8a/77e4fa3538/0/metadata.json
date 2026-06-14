@@ -1,0 +1,129 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "8a77e4fa3538",
+  "session_id": "d2d5197a-fafc-43e2-b0c9-7b63f690e863",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T18:52:46.795896Z",
+  "branch": "docs/capture-sdk-folder-state-unification",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-14-unify-folder-state-ownership-in-sdk-client.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "23a655526b58",
+  "checkpoint_transcript_start": 532,
+  "transcript_lines_at_start": 532,
+  "token_usage": {
+    "input_tokens": 294,
+    "cache_creation_tokens": 56790,
+    "cache_read_tokens": 4680167,
+    "output_tokens": 28755,
+    "api_call_count": 18
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_013khpaHe5mr1yRcicWYhcdE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "23a655526b58",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 612,
+        "end": 613,
+        "entry_ids": [
+          "3f6ba602-6119-413d-95f6-b0f0846fbdc3"
+        ],
+        "tool_use_id": "toolu_013khpaHe5mr1yRcicWYhcdE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013khpaHe5mr1yRcicWYhcdE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Document the architectural improvement opportunity (unifying folder-state ownership in the SDK client) as a structured GSD todo, following the resolution of PR #489's deterministic web-e2e failure.",
+    "outcome": "A todo file was created at `.planning/todos/pending/2026-06-14-unify-folder-state-ownership-in-sdk-client.md` and committed on an isolated docs branch separate from PR #489, capturing the full bypass-path inventory, proposed projection design, and exit criteria.",
+    "learnings": {
+      "repo": [
+        "Folder state is duplicated across two stores: web Zustand `useFolderStore` (apps/web) and SDK client `folderTree` (packages/sdk/client.ts); they drift when web mutation code calls sdk-core directly rather than routing through the client.",
+        "SDK-routed mutations (deleteToBin, move, rename, create) update both folderTree and emit folder:updated → store consistently; bypass paths update only the Zustand store.",
+        "The SDK client is also consumed headless by the desktop FUSE mount (no Zustand), making the SDK — not the web store — the correct single source of truth; making the SDK stateless is ruled out.",
+        "client.registerFolder has an existing 'gradual SDK adoption bridge' comment, confirming the intent was always to fully own folder loading through the client.",
+        "`commit_docs: true` and `.planning/` being tracked means capturing a todo on a feature branch would include it in the PR — requires isolating captures to a separate docs branch."
+      ],
+      "code": [
+        {
+          "path": "apps/web/hooks/useFileOperations.ts",
+          "finding": "updateFile performs a fire-and-forget '6b' republish that calls sdk-core directly (updateFolderMetadataAndPublish/replaceFileInFolder), bypassing the client and updating only the Zustand store — this is a bypass-path leak."
+        },
+        {
+          "path": "apps/web/hooks/useFileVersions.ts",
+          "finding": "handleRestoreVersion and handleDeleteVersion (+ lazy IPNS-key migration) also call sdk-core directly, bypassing the SDK client and creating the same desync risk."
+        },
+        {
+          "path": "packages/sdk/client.ts",
+          "finding": "reconcileFolderState + ensureFolderRegistered were added in PR #489 as a band-aid reconciliation patch; they become dead code once the full architectural unification is complete and should be deleted as the exit criterion."
+        }
+      ],
+      "workflow": [
+        "When `.planning/` is git-tracked and you're on a feature branch (e.g. a bugfix PR), capture planning docs on an isolated docs branch to avoid polluting the PR diff.",
+        "Before creating a todo, check for duplicates — an adjacent todo about CAS-retry deduplication existed; the new todo was scoped distinctly (state ownership vs code-shape duplication) and cross-linked.",
+        "GSD's `commit_docs` config controls whether the tool auto-commits planning files; when true, the capture workflow respects gitignore and only stages specified files."
+      ]
+    },
+    "friction": [
+      "1Password was locked throughout the session, making all commits unsigned; PR #489 will show 'Unverified' and may block merge if branch protection requires signed commits.",
+      "Capturing a todo required branching off main to avoid leaking planning docs into the open bugfix PR — an extra step not required in a clean-branch context.",
+      "The `gsd_run query init.todos` bootstrap command is long and fragile (checks 15+ config paths) — requires the gsd-tools.cjs shim to be locatable."
+    ],
+    "open_items": [
+      "Medium multi-PR architectural refactor: convert bypass paths (useFileOperations.updateFile, useFileVersions.handleRestoreVersion/handleDeleteVersion) into SDK client methods (client.replaceFile, client.updateFileMetadata) that own publish + sequence bookkeeping + folder:updated emission.",
+      "Make useFolderStore a projection: children/sequenceNumber written only via folder:updated events, never by web mutation code.",
+      "Delete client.reconcileFolderState once the full refactor lands (it becomes dead code; desync is impossible by construction).",
+      "Residual sub-second race in PR #489: a delete can fire between a replace's publish landing and its .then updating the store seq — TC08's 3s wait hides it but it remains real.",
+      "Re-sign the PR #489 commit once 1Password is unlocked: `git commit --amend --no-edit -S && git push --force-with-lease`."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-14T18:52:11.400518Z",
+    "agent_lines": 77,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 77,
+    "total_lines_changed": 77,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
