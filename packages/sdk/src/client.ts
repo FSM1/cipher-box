@@ -301,6 +301,41 @@ export class CipherBoxClient {
     });
   }
 
+  /**
+   * Reconcile an already-registered folder's children + sequence with a newer
+   * snapshot observed outside this client.
+   *
+   * The web app publishes folder metadata directly via sdk-core for some
+   * operations (notably file replace / version edits, which bump `modifiedAt`
+   * and the IPNS sequence in the Zustand store without routing through this
+   * client). That advances the store past the SDK's `folderTree`, which
+   * `registerFolder` otherwise treats as authoritative. A later SDK-routed
+   * mutation (delete, move) would then publish with a stale sequence number
+   * (→ 409) against a stale base snapshot; the 409 merge resolves that by
+   * *resurrecting* the just-deleted child, because edit-beats-delete sees
+   * `remote.modifiedAt > staleBase.modifiedAt`.
+   *
+   * Adopt the snapshot only when it is strictly newer (higher IPNS sequence)
+   * than what the SDK holds, so SDK-routed mutations that have already advanced
+   * the folderTree remain authoritative. Keys, folderKey and metadata are
+   * preserved — only children and sequence move forward. No-op when the folder
+   * is not tracked.
+   *
+   * @param ipnsName - Folder's IPNS name
+   * @param children - Current folder children observed by the caller
+   * @param sequenceNumber - IPNS sequence the caller has observed
+   */
+  reconcileFolderState(ipnsName: string, children: FolderChild[], sequenceNumber: bigint): void {
+    const existing = this.folderTree.get(ipnsName);
+    if (!existing) return;
+    if (sequenceNumber <= existing.sequenceNumber) return;
+
+    existing.children = [...children];
+    existing.sequenceNumber = sequenceNumber;
+    existing.lastLoadedAt = Date.now();
+    this.folderTree.set(ipnsName, existing);
+  }
+
   // ---- Internal state access (for bin/share modules) ----
 
   /** @internal Get the folder tree for bin/share operations */
