@@ -17,3 +17,7 @@ while I am running UAT on linux (windows is already done as you can see) is ther
 ---
 
 can we in the mean time run a /simplify on the clean phase 44 changes
+
+---
+
+yeah planning todos is good
