@@ -1,0 +1,149 @@
+{
+  "cli_version": "0.7.5",
+  "checkpoint_id": "694ee2823b5b",
+  "session_id": "d165590e-f2c8-4e72-b24d-58906239376f",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T02:32:06.407336648Z",
+  "branch": "feat/fuse-write-durability",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "22530abfea4e",
+  "token_usage": {
+    "input_tokens": 22670,
+    "cache_creation_tokens": 371187,
+    "cache_read_tokens": 42937489,
+    "output_tokens": 196492,
+    "api_call_count": 232
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Uo4VpyN8TyzUjQ8e4gwPEy",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "22530abfea4e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1090,
+        "end": 1091,
+        "entry_ids": [
+          "72d51f0c-ac28-4b97-a86f-13054341ed17"
+        ],
+        "tool_use_id": "toolu_01Uo4VpyN8TyzUjQ8e4gwPEy"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uo4VpyN8TyzUjQ8e4gwPEy"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Run the Phase 43 (feat/fuse-write-durability) UAT tests on a Linux/FUSE stack by building the API, mock-ipns-router, and Linux desktop apps locally against a Docker Compose stack at 192.168.133.49.",
+    "outcome": "All four UAT tests were executed: Tests 1, 2, and 3 passed; Test 4 reproduced the known G-43-UAT-02 gap (plaintext filenames in journal). Two new bugs were found — parked-write notification spam (fixed in sync/mod.rs and verified via dbus) and stale-FUSE-mount-after-crash not auto-recovering on Linux (logged as a GSD todo). Dev-key vault was cleaned up.",
+    "learnings": {
+      "repo": [
+        "cargo builds the desktop to the workspace-root target/ (e.g. cipher-box/target/debug/cipherbox-desktop), NOT the crate-local apps/desktop/src-tauri/target/debug/ — a stale Feb 28 binary in the crate-local path caused an extensive phantom-deadlock investigation",
+        "mock-ipns-router is a standalone npm package, not part of the pnpm workspace — requires separate npm install/build",
+        "test-login does NOT provision a vault; the client must run initialize_vault during onboarding — a pre-existing dev-key user with initialized_at=null on the shared Postgres caused a hang because isNew=false skipped init and tried to resolve a never-published IPNS record",
+        "Journal entries are intentionally retained after successful runtime uploads; they are only removed during the next-mount replay path (not at upload completion) — this is the CR-08 design point",
+        "Debug builds of the desktop load devUrl (http://localhost:1420) rather than the embedded dist, so WebKitGTK in a headless environment also requires a running vite dev server on :1420",
+        "GSD todos use area 'desktop-fuse' for FUSE-related desktop work and live in .planning/todos/pending/ with date-prefixed slugs",
+        "The docker compose stack (postgres, ipfs, redis, someguy) lives at 192.168.133.49; API migrations were already applied from a prior run"
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "line": 69,
+          "end_line": 86,
+          "finding": "Stale-mount recovery bug: after a SIGKILL, ~/CipherBox is a disconnected FUSE mount (ENOTCONN). mount_path.exists() calls stat() which returns ENOTCONN → false, so the code takes the create_dir_all branch. The directory entry still exists → EEXIST → 'Failed to create mount point: File exists'. The stale-cleanup else-branch is never reached. Fix: detect ENOTCONN before create_dir_all and run fusermount3 -u, or fall through EEXIST to the stale-cleanup path."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/sync/mod.rs",
+          "line": 42,
+          "end_line": 56,
+          "finding": "Level-triggered park notification: send_write_parked_notification fired on every WriteParked { failed > 0 } status emission (every 30s poll). Fixed by adding an AtomicU32 watermark (last_notified_failed) — toast only fires when failed count rises above the last-notified value; watermark resets on Idle/failed==0. The Syncing status (emitted at the start of every cycle) must NOT reset the watermark or spam returns."
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 935,
+          "end_line": 994,
+          "finding": "journal.remove is in the mount-time replay path only — successful runtime uploads intentionally leave the journal entry as Pending until the next remount, where replay's already-present check cleans it up."
+        },
+        {
+          "path": "crates/sdk/src/sync.rs",
+          "line": 109,
+          "end_line": 109,
+          "finding": "The sync daemon emits Syncing at the start of every cycle, then either WriteParked or Idle — this is why the notification watermark must not be reset on Syncing."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 1,
+          "end_line": 50,
+          "finding": "initialize_vault logs 'Publishing vault key blob' before any IPFS upload. If that log never appears, execution never entered the function body — check for stale binaries before assuming an async deadlock."
+        }
+      ],
+      "workflow": [
+        "WebKitGTK in a headless Linux environment requires three env vars to work: WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 (bwrap cannot map uid), LIBGL_ALWAYS_SOFTWARE=1 + MESA_LOADER_DRIVER_OVERRIDE=llvmpipe (Zink/Vulkan unavailable), and a running vite dev server on :1420 for debug builds",
+        "pkill patterns that include the launch command itself cause self-kills; use character-class bracket tricks (e.g. [c]ipherbox-desktop) to exclude the current shell process",
+        "dbus-monitor can count OS notifications over a timed window (gdbus monitor --session --dest org.freedesktop.Notifications) to verify edge-triggered deduplication",
+        "ptrace_scope=1 (default on many Linux systems) blocks attaching to non-child processes; launch the target under gdb as a child to get backtraces",
+        "When a GSD todo is committed, use --files to scope the commit to only the new todo file — avoids accidentally sweeping in uncommitted code changes"
+      ]
+    },
+    "friction": [
+      "Stale Feb 28 binary at apps/desktop/src-tauri/target/debug/cipherbox-desktop (crate-local path) was run instead of the current workspace-root binary for the entire debugging session — led to a multi-hour phantom async-deadlock investigation",
+      "Shared Postgres had a stale dev-key@cipherbox.local user with initialized_at=null from a prior run; required manual delete via Node script to get a clean new-user provisioning path",
+      "WebKitGTK web process refused to spawn in the headless environment without iterating through five separate env-var combinations before finding the working set",
+      "pkill self-matched the launch command line repeatedly across the session, requiring a workaround pattern",
+      "ptrace_scope=1 blocked gdb attach to live process; had to relaunch under gdb as a child",
+      "cargo build appeared to succeed but output to workspace-root target/ while the old crate-local binary remained untouched — no warning or error, silent stale artifact"
+    ],
+    "open_items": [
+      "Stale FUSE mount after crash not auto-recovered on Linux (fuse/mod.rs:69-86): logged as GSD todo, fix not yet implemented — requires detecting ENOTCONN and running fusermount3 -u before create_dir_all, or falling through EEXIST to stale-cleanup",
+      "G-43-UAT-02: plaintext filenames and sizes in cb-journal/*.json (and folder names for mkdir) — carried over from Windows UAT, not fixed",
+      "Parked-write notification spam fix (sync/mod.rs) was built and verified but not yet committed to feat/fuse-write-durability",
+      "Linux UAT results not yet recorded into 43-UAT.md or a Linux-specific variant",
+      "Notification copy for mount failure ('mount failed') is not actionable — user has no in-app way to recover; suggested improvement to prompt 'run fusermount3 -u ~/CipherBox to recover'"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 27,
+      "agent_lines_removed": 9
+    }
+  ]
+}
