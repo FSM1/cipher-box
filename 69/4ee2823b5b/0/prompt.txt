@@ -19,3 +19,7 @@ the notification does keep reappearing on every sync, since the item is still in
 ---
 
 yeah please fix the notification spam
+
+---
+
+yes please clean up the dev key vault, and log the stale-mount-after-crash using /gsd:capture flow
