@@ -872,6 +872,139 @@ mod tests {
         assert_eq!(loaded[0].id, "good01");
     }
 
+    // ---- T-45-04: Option<String> sentinel — None round-trip and legacy "" compat ----
+
+    /// T-45-04: an UploadFile entry with `file_meta_ipns_name: None` serializes to
+    /// JSON and deserializes back as `None` (not `Some("")`).
+    ///
+    /// This is the GREEN-gate for the #18 refactor. Until the field type is changed
+    /// to `Option<String>` with the serde compat shim, this test FAILS (compile error).
+    #[test]
+    fn upload_entry_none_ipns_round_trips() {
+        let entry = JournalEntry {
+            id: "t4504-none".to_string(),
+            vault_root_ipns: "k51vault4504".to_string(),
+            op: JournalOp::UploadFile {
+                ciphertext_b64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"ct",
+                ),
+                wrapped_key_hex: hex::encode(b"wk"),
+                iv_hex: hex::encode(b"iv"),
+                file_meta_ipns_name: None,
+                file_ipns_key_hex: None,
+                parent_folder_ipns_name: "k51parent4504".to_string(),
+                parent_ipns_key_hex: hex::encode(b"ecies-parent"),
+                filename: "t4504.txt".to_string(),
+                size: 0,
+                created_at_ms: 1_000,
+            },
+            retries: 0,
+            status: JournalEntryStatus::Pending,
+        };
+        let json = serde_json::to_vec(&entry).expect("serialize");
+        let back: JournalEntry = serde_json::from_slice(&json).expect("deserialize");
+        if let JournalOp::UploadFile {
+            file_meta_ipns_name,
+            ..
+        } = &back.op
+        {
+            assert_eq!(
+                *file_meta_ipns_name, None,
+                "None file_meta_ipns_name must round-trip as None"
+            );
+        } else {
+            panic!("Expected UploadFile");
+        }
+    }
+
+    /// T-45-04-compat: a JSON payload written by the OLD build (which stored
+    /// `"file_meta_ipns_name": ""`) must deserialize to `None` under the new
+    /// `Option<String>` type via the `deser_opt_string` compat shim.
+    ///
+    /// Also asserts that a real name `"file_meta_ipns_name": "k51..."` loads as
+    /// `Some("k51...")`, and that a missing field (`#[serde(default)]`) also loads
+    /// as `None`.
+    ///
+    /// The JSON is hand-written (raw string literal) because the new type can no
+    /// longer PRODUCE `""` — old bytes must be authored by hand to simulate
+    /// pre-Phase-45 on-disk journal entries.
+    #[test]
+    fn legacy_empty_string_ipns_loads_as_none() {
+        // Case 1: old build stored "".
+        let old_json = r#"{
+            "id": "t4504-compat-empty",
+            "vault_root_ipns": "k51vault4504compat",
+            "op": {
+                "UploadFile": {
+                    "ciphertext_b64": "Y3Q=",
+                    "wrapped_key_hex": "776b",
+                    "iv_hex": "6976",
+                    "file_meta_ipns_name": "",
+                    "file_ipns_key_hex": null,
+                    "parent_folder_ipns_name": "k51parent",
+                    "parent_ipns_key_hex": "6563696573",
+                    "filename": "old.txt",
+                    "size": 1,
+                    "created_at_ms": 1000
+                }
+            },
+            "retries": 0,
+            "status": "Pending"
+        }"#;
+        let entry: JournalEntry =
+            serde_json::from_str(old_json).expect("old-format JSON must deserialize");
+        if let JournalOp::UploadFile {
+            file_meta_ipns_name,
+            ..
+        } = &entry.op
+        {
+            assert_eq!(
+                *file_meta_ipns_name, None,
+                "legacy empty-string must deserialize as None via compat shim"
+            );
+        } else {
+            panic!("Expected UploadFile");
+        }
+
+        // Case 2: real name must load as Some(...).
+        let real_name_json = r#"{
+            "id": "t4504-compat-real",
+            "vault_root_ipns": "k51vault4504compat",
+            "op": {
+                "UploadFile": {
+                    "ciphertext_b64": "Y3Q=",
+                    "wrapped_key_hex": "776b",
+                    "iv_hex": "6976",
+                    "file_meta_ipns_name": "k51filemetaipns",
+                    "file_ipns_key_hex": null,
+                    "parent_folder_ipns_name": "k51parent",
+                    "parent_ipns_key_hex": "6563696573",
+                    "filename": "real.txt",
+                    "size": 1,
+                    "created_at_ms": 1000
+                }
+            },
+            "retries": 0,
+            "status": "Pending"
+        }"#;
+        let entry2: JournalEntry =
+            serde_json::from_str(real_name_json).expect("real-name JSON must deserialize");
+        if let JournalOp::UploadFile {
+            file_meta_ipns_name,
+            ..
+        } = &entry2.op
+        {
+            assert_eq!(
+                *file_meta_ipns_name,
+                Some("k51filemetaipns".to_string()),
+                "real name must deserialize as Some(name)"
+            );
+        } else {
+            panic!("Expected UploadFile");
+        }
+    }
+
     // ---- T-45-03: retry exhaustion keeps failed entry on disk ----
     //
     // Characterization test: calling `record_failure` max_retries + 1 times on the same
