@@ -10,6 +10,7 @@ pub mod error;
 pub mod file_handle;
 pub mod helpers;
 pub mod inode;
+pub mod journal_helpers;
 
 // FUSE operations (macOS/Linux - fuser-based)
 #[cfg(feature = "fuse")]

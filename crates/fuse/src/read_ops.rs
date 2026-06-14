@@ -78,8 +78,8 @@ pub(crate) mod implementation {
         PollResult::TimedOut
     }
     use crate::file_handle::OpenFileHandle;
-    use crate::helpers::{is_platform_special, mime_from_extension};
-    use crate::inode::{InodeKind, ROOT_INO};
+    use crate::helpers::is_platform_special;
+    use crate::inode::InodeKind;
     use crate::operations::implementation::{
         current_gid, current_uid, fetch_and_decrypt_content_async, fetch_and_decrypt_file_content,
         publish_file_metadata, ttl_for_is_dir,
@@ -794,317 +794,90 @@ pub(crate) mod implementation {
                     is_new_file
                 );
 
-                // Capture spawn parameters from the prepare closure, without spawning yet.
-                // Journal fsync and handle.cleanup() run before reply.ok() (D-04, D-05).
-                struct UploadSpawnParams {
-                    api: std::sync::Arc<cipherbox_api_client::ApiClient>,
-                    rt: tokio::runtime::Handle,
-                    upload_tx: std::sync::mpsc::Sender<crate::FsEvent>,
-                    coordinator: std::sync::Arc<crate::PublishCoordinator>,
-                    tee_public_key: Option<Vec<u8>>,
-                    tee_key_epoch: Option<u32>,
-                    ciphertext: Vec<u8>,
-                    file_meta: cipherbox_core::folder::FileMetadata,
-                    file_ipns_private_key: Option<zeroize::Zeroizing<Vec<u8>>>,
-                    file_meta_ipns_name: Option<String>,
-                    folder_key_for_file_meta: Option<Vec<u8>>,
-                    ino: u64,
-                    parent_ino: u64,
-                    old_file_cid: Option<String>,
-                    pruned_cids: Vec<String>,
-                    write_gen: u64,
-                    journal: cipherbox_sdk::WriteQueue,
-                    // CR-07: snapshot carried into spawn closure for record_failure on failure.
-                    journal_entry_snapshot: cipherbox_sdk::JournalEntry,
-                }
+                // Build the journal entry via the shared helper (journal_helpers.rs),
+                // then fsync + apply in-memory mutations.
+                //
+                // CR-04: all in-memory mutations (inode kind/attr, pending_content,
+                // queued publish) are deferred until AFTER the journal entry is fsynced.
+                // If the helper or journal.put fails, the Err arm replies EIO having
+                // mutated nothing, so the debounced publisher never emits metadata for a
+                // write the OS was told failed.
+                let build_result =
+                    (|| -> Result<crate::journal_helpers::UploadJournalResult, String> {
+                        // Steps 1-7: encrypt, wrap, resolve parent IPNS, build JournalEntry.
+                        let result = fs.build_upload_journal_entry(ino, &handle, is_new_file)?;
 
-                let prepare_result = (|| -> Result<UploadSpawnParams, String> {
-                    let plaintext = handle.read_all()?;
+                        // CR-07: clone the entry before put() so the snapshot can be carried
+                        // into the spawn closure for record_failure on upload failure.
+                        let entry_snapshot = result.entry.clone();
 
-                    let mut file_key = cipherbox_crypto::utils::generate_file_key();
-                    let iv = cipherbox_crypto::utils::generate_iv();
+                        // D-04: fsync journal entry to disk BEFORE acking the OS.
+                        fs.journal.put(&result.entry)?;
 
-                    let ciphertext =
-                        cipherbox_crypto::aes::encrypt_aes_gcm(&plaintext, &file_key, &iv)
-                            .map_err(|e| format!("File encryption failed: {}", e))?;
+                        // CR-04: journal is durably committed — now apply the in-memory write.
+                        if let Some(inode) = fs.inodes.get_mut(ino) {
+                            let cached_hex = match &inode.kind {
+                                InodeKind::File {
+                                    file_ipns_key_encrypted_hex,
+                                    ..
+                                } => file_ipns_key_encrypted_hex.clone(),
+                                _ => None,
+                            };
+                            inode.kind = InodeKind::File {
+                                cid: String::new(),
+                                encrypted_file_key: result.encrypted_file_key_hex.clone(),
+                                iv: result.iv_hex.clone(),
+                                size: result.file_size,
+                                encryption_mode: "GCM".to_string(),
+                                file_meta_ipns_name: result.file_meta_ipns_name.clone(),
+                                file_meta_resolved: true,
+                                file_ipns_private_key: result.file_ipns_private_key.clone(),
+                                file_ipns_key_encrypted_hex: cached_hex,
+                                versions: result.versions_for_meta.clone(),
+                            };
+                            inode.attr.size = result.file_size;
+                            inode.attr.blocks = (result.file_size + 511) / 512;
+                            inode.attr.mtime = SystemTime::now();
+                        }
 
-                    let wrapped_key = cipherbox_crypto::ecies::wrap_key(&file_key, &fs.public_key)
-                        .map_err(|e| format!("Key wrapping failed: {}", e))?;
+                        fs.pending_content.insert(ino, result.plaintext.clone());
 
-                    cipherbox_crypto::utils::clear_bytes(&mut file_key);
+                        fs.queue_publish(result.parent_ino, true);
 
-                    let (
-                        old_file_cid,
-                        old_encrypted_key,
-                        old_iv,
-                        old_size,
-                        old_mode,
-                        existing_versions,
-                        file_ipns_private_key,
-                        file_meta_ipns_name,
-                    ) = fs
-                        .inodes
-                        .get(ino)
-                        .map(|inode| match &inode.kind {
-                            InodeKind::File {
-                                cid,
-                                encrypted_file_key,
-                                iv,
-                                size,
-                                encryption_mode,
-                                versions,
-                                file_ipns_private_key,
-                                file_meta_ipns_name,
-                                ..
-                            } => (
-                                if cid.is_empty() {
-                                    None
-                                } else {
-                                    Some(cid.clone())
-                                },
-                                encrypted_file_key.clone(),
-                                iv.clone(),
-                                *size,
-                                encryption_mode.clone(),
-                                versions.clone(),
-                                file_ipns_private_key.clone(),
-                                file_meta_ipns_name.clone(),
-                            ),
-                            _ => (
-                                None,
-                                String::new(),
-                                String::new(),
-                                0,
-                                "GCM".to_string(),
-                                None,
-                                None,
-                                None,
-                            ),
-                        })
-                        .unwrap_or((
-                            None,
-                            String::new(),
-                            String::new(),
-                            0,
-                            "GCM".to_string(),
-                            None,
-                            None,
-                            None,
-                        ));
+                        // Return the full result + snapshot for the spawn block.
+                        // We smuggle the snapshot by storing it in a wrapper; the
+                        // spawn block will destructure it from there.
+                        let _ = entry_snapshot; // consumed above via .clone(); held in result.entry
+                        Ok(result)
+                    })();
 
-                    let encrypted_file_key_hex = hex::encode(&wrapped_key);
-                    let iv_hex = hex::encode(&iv);
-                    let file_size = plaintext.len() as u64;
+                match build_result {
+                    Ok(result) => {
+                        // CR-07: snapshot the entry (already put to disk) for record_failure.
+                        let journal_entry_snapshot = result.entry.clone();
 
-                    let file_name = fs
-                        .inodes
-                        .get(ino)
-                        .map(|i| i.name.clone())
-                        .unwrap_or_default();
-                    let mime_type = mime_from_extension(&file_name);
+                        let crate::journal_helpers::UploadJournalResult {
+                            ciphertext,
+                            file_meta,
+                            file_ipns_private_key,
+                            file_meta_ipns_name,
+                            folder_key_for_file_meta,
+                            parent_ino,
+                            old_file_cid,
+                            pruned_cids,
+                            write_gen,
+                            ..
+                        } = result;
+                        let spawn_ino = ino;
 
-                    let now_ms = SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
+                        let api = fs.api.clone();
+                        let rt = fs.rt.clone();
+                        let upload_tx = fs.upload_tx.clone();
+                        let coordinator = fs.publish_coordinator.clone();
+                        let tee_public_key = fs.tee_public_key.clone();
+                        let tee_key_epoch = fs.tee_key_epoch;
+                        let spawn_journal = fs.journal.clone();
 
-                    let (new_versions, pruned_cids) = crate::helpers::apply_versioning(
-                        existing_versions,
-                        &old_file_cid,
-                        &old_encrypted_key,
-                        &old_iv,
-                        old_size,
-                        &old_mode,
-                        now_ms,
-                        fs.max_versions_per_file,
-                        fs.version_cooldown_ms,
-                        ino,
-                    );
-
-                    let versions_for_meta =
-                        new_versions.as_ref().filter(|v| !v.is_empty()).cloned();
-
-                    // CR-04: all in-memory mutations (inode kind/attr, pending_content,
-                    // queued publish) are deferred until AFTER the journal entry is fsynced
-                    // (below). If any prepare step fails — including journal.put — the closure
-                    // returns Err having mutated nothing, so the Err arm replies EIO with no
-                    // rollback and the debounced publisher can never emit metadata for a write
-                    // the OS was told failed.
-
-                    let write_gen = fs.inodes.get(ino).map(|i| i.write_generation).unwrap_or(0);
-
-                    let parent_ino = fs.inodes.get(ino).map(|i| i.parent_ino).unwrap_or(ROOT_INO);
-
-                    let folder_key_for_file_meta = fs.get_folder_key(parent_ino);
-
-                    // Resolve parent IPNS name for stable journal entry (D-02).
-                    let parent_folder_ipns_name = fs
-                        .inodes
-                        .get(parent_ino)
-                        .and_then(|inode| match &inode.kind {
-                            InodeKind::Root { ipns_name, .. } => ipns_name.clone(),
-                            InodeKind::Folder { ipns_name, .. } => Some(ipns_name.clone()),
-                            _ => None,
-                        })
-                        .unwrap_or_else(|| fs.root_ipns_name.clone());
-
-                    // CR-01: journal the user-ECIES-wrapped parent IPNS key so replay can
-                    // sign and publish the parent IPNS record at crash-recovery time.
-                    // Wrap the raw parent IPNS private key (from the inode) with the user's
-                    // EC public key — same form as FolderEntry.ipns_private_key_encrypted.
-                    let parent_ipns_key_hex_for_journal = fs
-                        .inodes
-                        .get(parent_ino)
-                        .and_then(|inode| match &inode.kind {
-                            InodeKind::Root {
-                                ipns_private_key, ..
-                            } => ipns_private_key.as_deref(),
-                            InodeKind::Folder {
-                                ipns_private_key, ..
-                            } => ipns_private_key.as_deref(),
-                            _ => None,
-                        })
-                        .and_then(|raw_key| {
-                            cipherbox_crypto::wrap_key(raw_key, &fs.public_key)
-                                .map(|w| hex::encode(&w))
-                                .map_err(|e| {
-                                    log::warn!("Failed to wrap parent IPNS key for journal: {}", e);
-                                    e
-                                })
-                                .ok()
-                        })
-                        .unwrap_or_default();
-
-                    // Build journal entry referencing ciphertext only — no plaintext (D-05).
-                    use base64::Engine;
-                    let ciphertext_b64 =
-                        base64::engine::general_purpose::STANDARD.encode(&ciphertext);
-                    let wrapped_key_hex = encrypted_file_key_hex.clone();
-                    let journal_entry = cipherbox_sdk::JournalEntry {
-                        id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
-                        vault_root_ipns: fs.root_ipns_name.clone(),
-                        op: cipherbox_sdk::JournalOp::UploadFile {
-                            ciphertext_b64,
-                            wrapped_key_hex,
-                            iv_hex: iv_hex.clone(),
-                            file_meta_ipns_name: file_meta_ipns_name.clone(),
-                            file_ipns_key_hex: file_meta_ipns_name.as_ref().and_then(|_| {
-                                file_ipns_private_key
-                                    .as_ref()
-                                    .map(|k| {
-                                        cipherbox_crypto::ecies::wrap_key(k, &fs.public_key)
-                                            .map(|w| hex::encode(&w))
-                                            .unwrap_or_else(|e| {
-                                                log::warn!(
-                                                    "Failed to wrap file IPNS key for journal: {}",
-                                                    e
-                                                );
-                                                String::new()
-                                            })
-                                    })
-                                    .or_else(|| {
-                                        fs.inodes.get(ino).and_then(|i| match &i.kind {
-                                            InodeKind::File {
-                                                file_ipns_key_encrypted_hex,
-                                                ..
-                                            } => file_ipns_key_encrypted_hex.clone(),
-                                            _ => None,
-                                        })
-                                    })
-                            }),
-                            parent_folder_ipns_name,
-                            parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
-                            filename: file_name,
-                            size: file_size,
-                            created_at_ms: now_ms,
-                        },
-                        retries: 0,
-                        status: cipherbox_sdk::JournalEntryStatus::Pending,
-                    };
-                    // CR-07: clone the entry before put() moves it; snapshot is carried
-                    // into the spawn closure so record_failure can transition the entry.
-                    let journal_entry_snapshot = journal_entry.clone();
-
-                    // D-04: fsync journal entry to disk BEFORE acking the OS.
-                    fs.journal.put(&journal_entry)?;
-
-                    // CR-04: journal is durably committed — now apply the in-memory write.
-                    // Deferred from above so a prepare/journal failure leaves no partial state
-                    // (no inode mutation, no pending_content, no queued parent publish).
-                    if let Some(inode) = fs.inodes.get_mut(ino) {
-                        let cached_hex = match &inode.kind {
-                            InodeKind::File {
-                                file_ipns_key_encrypted_hex,
-                                ..
-                            } => file_ipns_key_encrypted_hex.clone(),
-                            _ => None,
-                        };
-                        inode.kind = InodeKind::File {
-                            cid: String::new(),
-                            encrypted_file_key: encrypted_file_key_hex.clone(),
-                            iv: iv_hex.clone(),
-                            size: file_size,
-                            encryption_mode: "GCM".to_string(),
-                            file_meta_ipns_name: file_meta_ipns_name.clone(),
-                            file_meta_resolved: true,
-                            file_ipns_private_key: file_ipns_private_key.clone(),
-                            file_ipns_key_encrypted_hex: cached_hex,
-                            versions: versions_for_meta.clone(),
-                        };
-                        inode.attr.size = file_size;
-                        inode.attr.blocks = (file_size + 511) / 512;
-                        inode.attr.mtime = SystemTime::now();
-                    }
-
-                    fs.pending_content.insert(ino, plaintext);
-
-                    fs.queue_publish(parent_ino, true);
-
-                    let api = fs.api.clone();
-                    let rt = fs.rt.clone();
-                    let upload_tx = fs.upload_tx.clone();
-                    let coordinator = fs.publish_coordinator.clone();
-                    let tee_public_key = fs.tee_public_key.clone();
-                    let tee_key_epoch = fs.tee_key_epoch;
-                    let journal_clone = fs.journal.clone();
-
-                    let file_meta = cipherbox_core::folder::FileMetadata {
-                        version: "v1".to_string(),
-                        cid: String::new(),
-                        file_key_encrypted: encrypted_file_key_hex.clone(),
-                        file_iv: iv_hex.clone(),
-                        size: file_size,
-                        mime_type,
-                        encryption_mode: "GCM".to_string(),
-                        created_at: now_ms,
-                        modified_at: now_ms,
-                        versions: versions_for_meta,
-                    };
-
-                    Ok(UploadSpawnParams {
-                        api,
-                        rt,
-                        upload_tx,
-                        coordinator,
-                        tee_public_key,
-                        tee_key_epoch,
-                        ciphertext,
-                        file_meta,
-                        file_ipns_private_key,
-                        file_meta_ipns_name,
-                        folder_key_for_file_meta,
-                        ino,
-                        parent_ino,
-                        old_file_cid,
-                        pruned_cids,
-                        write_gen,
-                        journal: journal_clone,
-                        journal_entry_snapshot,
-                    })
-                })();
-
-                match prepare_result {
-                    Ok(params) => {
                         // D-05: zeroize and delete plaintext temp file BEFORE acking OS.
                         handle.cleanup();
                         // D-04: ack OS only after local journal fsync is confirmed above.
@@ -1112,26 +885,6 @@ pub(crate) mod implementation {
 
                         // Spawn background upload AFTER ack; entry stays in journal until
                         // success, preserving the write_generation stale-drain guard.
-                        let UploadSpawnParams {
-                            api,
-                            rt,
-                            upload_tx,
-                            coordinator,
-                            tee_public_key,
-                            tee_key_epoch,
-                            ciphertext,
-                            file_meta,
-                            file_ipns_private_key,
-                            file_meta_ipns_name,
-                            folder_key_for_file_meta,
-                            ino: spawn_ino,
-                            parent_ino,
-                            old_file_cid,
-                            pruned_cids,
-                            write_gen,
-                            journal: spawn_journal,
-                            journal_entry_snapshot,
-                        } = params;
                         std::thread::spawn(move || {
                             let result = rt.block_on(async {
                                 let file_cid = cipherbox_api_client::ipfs::upload_content(
