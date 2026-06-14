@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "d6e33b5f68ce",
+  "session_id": "58e12827-d076-4c9d-a93d-3f15de588da5",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T02:10:27.267953Z",
+  "branch": "feat/ipns-conflict-handling",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "5a4a520a54a4",
+  "token_usage": {
+    "input_tokens": 17895,
+    "cache_creation_tokens": 180220,
+    "cache_read_tokens": 6046889,
+    "output_tokens": 72061,
+    "api_call_count": 52
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Run the GSD secure-phase workflow for Phase 44 (ipns-conflict-handling) to produce a verified SECURITY.md, then run a CodeRabbit CLI review of the phase-44 diff and apply all findings.",
+    "outcome": "Phase 44 SECURITY.md was created at the correct phase-scoped path with all 26 threats verified (19 mitigated, 7 accepted). CodeRabbit surfaced a critical data-loss bug in the file conflict merge path; all 4 findings were fixed, tested (196 tests pass), and committed.",
+    "learnings": {
+      "repo": [
+        "Branch feat/ipns-conflict-handling stacks phases 42, 43, and 44; phase-44-only base commit is 150db25d9 (20 files, ~1.5k lines).",
+        "dist/ is gitignored in sdk-core — build artifacts do not appear in git status.",
+        "The root SECURITY.md is the project's public GitHub vulnerability disclosure policy and must not be overwritten by phase audit artifacts.",
+        "Phase 44 was split into 7 sub-plans, each with a formal <threat_model> block, totalling 26 registered threats."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 346,
+          "end_line": 351,
+          "finding": "Critical data-loss bug: mergeVersions() was passed remoteMeta.versions as the second arg in both branches. When remote wins, the loser is local metadata, so the second arg must be loser.versions — otherwise local version history is silently dropped and only the current CID survives."
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 262,
+          "end_line": 262,
+          "finding": "With createVersion: false, loser.versions retains the full local history — this is the list that was being dropped by the bug above."
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 270,
+          "end_line": 270,
+          "finding": "updatedMetadata.modifiedAt is overwritten to Date.now() before the winner comparison, so test fixtures must set remoteMeta.modifiedAt to a future timestamp (Date.now() + offset) to force the remote-wins branch — setting it to any value <= now() will make local win."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/file.test.ts",
+          "line": 237,
+          "end_line": 237,
+          "finding": "The remote-wins conflict test used empty local versions arrays, which masked the data-loss bug — the test only asserted the loser's current CID became a VersionEntry, not that prior version history was preserved."
+        },
+        {
+          "path": "packages/sdk-core/src/errors.ts",
+          "finding": "is409() uses optional chaining throughout, so it safely returns false for null/undefined inputs without throwing — safe to unit-test with those values."
+        }
+      ],
+      "workflow": [
+        "The gsd-security-auditor subagent writes its output to the repo-root SECURITY.md instead of the phase-scoped path; the orchestrator must detect and move the file after the subagent returns.",
+        "The GSD commit helper (gsd_run query commit) frequently returns commit_failed as a false-negative while the commit actually lands — always verify with git log before retrying.",
+        "CodeRabbit CLI (v0.5.4, auth as github/FSM1) supports --from <sha> to scope a review to a specific base commit, which is essential when multiple phases are stacked on one branch.",
+        "When the security auditor returns SECURED but a subsequent code review finds a bug in the mitigated area, the SECURITY.md threat entries that covered that area should be flagged as partially invalidated until the fix is committed."
+      ]
+    },
+    "friction": [
+      "gsd-security-auditor wrote its phase audit report into the repo-root SECURITY.md (the public disclosure policy) instead of the phase-scoped path — required manual detection, git restore, and re-writing the file to the correct location.",
+      "GSD commit helper returned commit_failed on a commit that actually succeeded, requiring git log verification to avoid a double-commit.",
+      "First grep for is409 usages hit a shell glob expansion error and returned no results, requiring a corrected invocation.",
+      "Initial remote-wins test fixture was wrong: updatedMetadata.modifiedAt is overwritten to Date.now() internally, so the fixture accidentally produced a local-wins scenario — test passed for the wrong reason and required a second fixture fix."
+    ],
+    "open_items": [
+      "44-SECURITY.md threat entries T-44-09 and T-44-21 reference unit tests as mitigation evidence, but those tests were inadequate at audit time — the SECURITY.md audit trail should be updated to note the post-audit fix commit.",
+      "The gsd-security-auditor agent prompt/constraints should be patched to write phase audit output to the phase-scoped path rather than the repo root, to prevent recurrence across all future secure-phase runs.",
+      "is409 was omitted from the sdk-core barrel export despite the Phase 44 SUMMARY claiming it was re-exported — worth auditing other new exports in phases 42-44 for similar barrel gaps."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
