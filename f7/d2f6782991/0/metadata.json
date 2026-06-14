@@ -1,0 +1,72 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f7d2f6782991",
+  "session_id": "3a36fbb6-7a1c-43c1-ba57-00a483a2326c",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T22:16:03.337415Z",
+  "branch": "feat/desktop-fuse-write-durability-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/45-desktop-fuse-write-durability-cleanup/45-RESEARCH.md",
+    ".planning/phases/45-desktop-fuse-write-durability-cleanup/45-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "fa77a06a67ee",
+  "token_usage": {
+    "input_tokens": 12095,
+    "cache_creation_tokens": 108409,
+    "cache_read_tokens": 2190177,
+    "output_tokens": 28699,
+    "api_call_count": 23
+  },
+  "summary": {
+    "intent": "Execute the gsd plan-phase workflow for Phase 45 (FUSE write-journal/replay Rust hygiene refactor), running the full research → plan → verify pipeline with pattern mapping, security gate, and validation artifact generation.",
+    "outcome": "Phase 45 planning completed end-to-end: RESEARCH.md, VALIDATION.md, PATTERNS.md, and 6 PLAN.md files across 5 waves were generated and committed; verification passed with no blocking issues; two non-blocking doc warnings were resolved.",
+    "learnings": {
+      "repo": [
+        "The Rust crate for FUSE functionality is named `cipherbox-fuse` with a default feature flag `fuse`; the regex-based API surface extractor does not cover Rust (returns 0 symbols).",
+        "The commit helper script returns a false-negative `commit_failed` status even on successful commits when lint-staged output is present; git log is required to confirm landing.",
+        "Phase 45 is scoped exclusively to Rust write-journal/replay hygiene (7 scope items, no behavior change, no frontend, no ORM schema) — UI and schema-push gates do not apply.",
+        "Security enforcement (ASVS L1 threat model required per PLAN.md) and pattern-mapper are both active for this project.",
+        "Context window for the planner was 200k; cross-phase enrichment was not triggered."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/45-desktop-fuse-write-durability-cleanup/45-VALIDATION.md",
+          "finding": "Template placeholders for Test Infrastructure and Sampling sections must be filled with real cargo commands (`cargo test -p cipherbox-fuse --features fuse`) before the verification checker considers the file complete."
+        },
+        {
+          "path": ".planning/phases/45-desktop-fuse-write-durability-cleanup/45-RESEARCH.md",
+          "finding": "Open Questions headings in RESEARCH.md must be annotated with `(RESOLVED)` after planning or the plan checker flags them as a non-blocking warning."
+        }
+      ],
+      "workflow": [
+        "The `--research-phase` / research-only mode is a cheaper iteration loop than full replanning — useful for correction cycles that only need updated research artifacts.",
+        "The plan checker distinguishes blocking vs. non-blocking findings; non-blocking warnings (doc quality) do not trigger a revision loop but should be resolved before committing final artifacts.",
+        "Pattern mapping (PATTERNS.md with file:line analogs) is committed before spawning the planner so the planner can reference existing conventions.",
+        "VALIDATION.md is generated and committed in a dedicated step (5.5) after research but before planning, ensuring validation strategy is locked before plan authoring begins."
+      ]
+    },
+    "friction": [
+      "The commit helper script emits a false-negative `commit_failed` status on success when lint-staged output is present, requiring a follow-up `git log` to confirm the commit landed (commit `340e93efe`).",
+      "The regex-based API surface extractor silently returns 0 symbols for Rust projects, requiring the planner to proceed without an extracted API surface rather than surfacing an explicit 'not supported' message."
+    ],
+    "open_items": [
+      "Out-of-scope bugs were identified during research but intentionally excluded from Phase 45 plans to preserve the no-behavior-change constraint — these should be tracked separately.",
+      "Two non-blocking verification warnings were resolved post-verification rather than caught pre-commit, suggesting the VALIDATION.md template and RESEARCH.md Open Questions convention could be enforced earlier in the workflow."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-14T22:15:40.357853Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 2,
+    "human_modified": 11,
+    "human_removed": 0,
+    "total_committed": 2,
+    "total_lines_changed": 13,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
