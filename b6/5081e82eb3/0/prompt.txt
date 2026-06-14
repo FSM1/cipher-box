@@ -1,0 +1,21 @@
+/gsd:progress
+
+---
+
+/gsd:capture --list
+
+---
+
+I agree that a desktop-fuse cleanup is in order - I think a phase specifically for this is the right way to go.
+
+---
+
+the `everything fuse + sdk` option, does that refer specifically to the rusk sdk, or the typescript sdk as well?
+
+---
+
+ok can we go back to the options I was presented with?
+
+---
+
+ok, lets indeed stick with the recommendation of option 1
