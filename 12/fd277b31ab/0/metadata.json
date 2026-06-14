@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "12fd277b31ab",
+  "session_id": "50a19cf3-e9e0-4593-b0a0-59ce53bd97ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T15:39:08.59491Z",
+  "branch": "feat/ipns-conflict-handling",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "cb273f07615e",
+  "token_usage": {
+    "input_tokens": 21943,
+    "cache_creation_tokens": 126326,
+    "cache_read_tokens": 3433543,
+    "output_tokens": 67775,
+    "api_call_count": 43
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Merge origin/main into the phase-44 feature branch (feat/ipns-conflict-handling) to pick up independently-merged phase-42/43 work, then ship phase 44 (IPNS conflict handling) by creating a PR via the /gsd-ship workflow.",
+    "outcome": "Successfully resolved 28 merge conflicts by taking origin/main's canonical phase-42/43 implementations, verified the merged tree compiles clean (TypeScript + Rust), and created PR #488 at https://github.com/FSM1/cipher-box/pull/488 with auto-generated body and STATE.md tracking commit.",
+    "learnings": {
+      "repo": [
+        "Phase 44 ('IPNS conflict handling') lives entirely in packages/sdk-core/, packages/sdk/, and apps/web/src/hooks/ — zero overlap with phase-42/43 code files.",
+        "The repo uses Entire-Checkpoint: git trailers, not gate_status: trailers, so the GSD ship workflow's TDD Audit section produces all-'missing' rows and is noise for this project.",
+        "CI enforces conventional-commit PR titles via pr-title.yml — the GSD default 'Phase N: Name' title format is rejected; must use a scoped conventional-commit title.",
+        "git commits require 1Password SSH signing and must be run unsandboxed in the background; they hang in the default sandbox.",
+        "Pre-push hook syncs an Entire checkpoint; pre-commit hook runs eslint, prettier, and markdownlint with auto-fix folded into the commit.",
+        "PR creation requires env -u GITHUB_TOKEN (per project memory) to avoid credential conflicts.",
+        "No ship.pr_body_sections configured in the GSD config (returns []).",
+        "Phase 44 previously received a full review stack: gsd code-review (44-REVIEW.md), gsd-security-auditor + CodeRabbit CLI re-review (44-SECURITY.md), and a /simplify pass."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/services/vault.service.ts",
+          "finding": "origin/main's guardedUnpin is a strict refinement of this branch's version, adding a suppressCrossUserAudit option and inline lock computation — main's reviewed version is canonical."
+        },
+        {
+          "path": "packages/sdk-core/src/services/updateFileMetadata.ts",
+          "finding": "Critical data-loss bug caught by CodeRabbit: 409 merge path passed remoteMeta.versions instead of loser.versions to mergeVersions, silently dropping the local writer's prior version history when remote won a conflict. Fixed in commit 9f3c56181, documented in 44-SECURITY.md under 'Post-Audit Findings (CodeRabbit CLI, 2026-06-14)'."
+        },
+        {
+          "path": "packages/sdk-core/src/errors.ts",
+          "finding": "is409() predicate was extracted here from three inline 409-check duplications across the phase-44 feature during the /simplify pass."
+        }
+      ],
+      "workflow": [
+        "When a long-lived feature branch carries parallel implementations of features that were independently merged to main, the correct resolution strategy is to take main's reviewed version for those files wholesale — confirm zero overlap with the branch's unique work before applying.",
+        "Delegating slow builds (pnpm typecheck, cargo check --workspace) to a sub-agent protects main context from verbose output while still blocking on pass/fail.",
+        "git index.lock collisions during bulk conflict resolution can be transient (triggered by file watchers) — verify the lock is gone before assuming it needs manual removal.",
+        "The GSD ship TDD audit step should be adapted or skipped for repos that use a non-gate_status trailer convention; generating a 124-row all-missing table is misleading rather than informative.",
+        "Checking the net main...HEAD diff (not just commit count) before writing the PR body is essential when a branch carries multi-phase history — the net diff correctly showed only phase-44 files despite 124 commits."
+      ]
+    },
+    "friction": [
+      "No branch named phase-44 existed; had to infer feat/ipns-conflict-handling from planning artifacts, adding a lookup round-trip.",
+      "28 conflicts across 5 subsystems (api, desktop, fuse, sdk, scripts) from parallel phase-42/43 implementations on both sides of the merge.",
+      "Transient git index.lock collision blocked two Rust files (commands/sync.rs, fuse/mod.rs) during bulk conflict resolution — required a stale-lock check before retrying.",
+      "GSD ship workflow's default PR title format ('Phase 44: IPNS conflict handling') violates the repo's conventional-commit CI rule and required manual override to avoid a CI failure.",
+      "The TDD Audit step is structurally inapplicable to this repo (uses Entire-Checkpoint: not gate_status: trailers), but the workflow still requires reasoning through it to produce an honest PR body note."
+    ],
+    "open_items": [
+      "PR #488 still needs CI to pass and at least one reviewer approval before merge — no reviewer was explicitly requested during the ship workflow.",
+      "Phase-44 code's integration with main's refined phase-42/43 implementations (e.g., the updated guardedUnpin interface) has not been formally reviewed — the merge verification confirmed compile-time compatibility but not behavioral correctness at the seam.",
+      "The branch history includes 124 commits spanning phases 42–44; a squash-merge would collapse them, but a standard merge would carry that full history into main — merge strategy for PR #488 not decided."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

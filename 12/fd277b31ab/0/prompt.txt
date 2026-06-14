@@ -1,0 +1,13 @@
+ok now switch to phase 44 branch
+
+---
+
+ok, I think we need to merge origin/main in to this branch
+
+---
+
+from what I remember /simplify and some coderabbit reviews have been run on this code right?
+
+---
+
+/gsd:ship 44
