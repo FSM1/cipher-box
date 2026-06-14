@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "887be6f7ff59",
+  "session_id": "50a19cf3-e9e0-4593-b0a0-59ce53bd97ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T15:49:44.447575Z",
+  "branch": "feat/ipns-conflict-handling",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "007a95908a1b",
+  "token_usage": {
+    "input_tokens": 22461,
+    "cache_creation_tokens": 190231,
+    "cache_read_tokens": 6505891,
+    "output_tokens": 106547,
+    "api_call_count": 60
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Merge origin/main into the phase-44 branch (IPNS conflict handling), then execute the full GSD ship workflow to create a PR and track the milestone completion.",
+    "outcome": "Successfully merged origin/main (28 conflicts resolved, TypeScript + Rust compile clean), created PR #488, and fixed a stale SDK test surfaced by CI — though the Release Preview required check was still failing at transcript end due to two non-conventional commit messages from earlier phase work.",
+    "learnings": {
+      "repo": [
+        "Repo is squash-only (PR_TITLE becomes commit subject on main), so 124-commit history with cosmetic phase-42/43 commits is harmless — they collapse on merge.",
+        "required_signatures is false — history rewrites without re-signing are permitted.",
+        "Release Preview job (.github/scripts/pr-release-preview.js) enforces conventional-commit format on every individual commit touching a versioned package, not just the PR title — exit 1 makes it a required-to-merge check.",
+        "The `release:none` label escape hatch cancels all version bumps for the PR entirely — wrong for a real feature, only use for pure docs/chore PRs.",
+        "Repo uses Entire-Checkpoint: trailers instead of gate_status: trailers, so the GSD TDD-audit table would produce 124 all-missing rows (noise); replaced with a transparency note.",
+        "CI enforces conventional-commit PR titles via pr-title.yml — the GSD workflow's default 'Phase 44: ...' title would have been rejected.",
+        "Bot pushes to the branch between local commits are a known gotcha; fetch before pushing to avoid non-fast-forward failures.",
+        "Pre-push hook syncs an Entire-checkpoint; pre-commit runs eslint/prettier/markdownlint and folds auto-fixes into the commit.",
+        "1Password SSH signing requires unsandboxed Bash — the sandboxed environment hangs on commit.",
+        "The gsd commit helper reports commit_failed as a known false negative; always verify via git log rather than trusting the helper exit status."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/__tests__/shared-write.test.ts",
+          "line": 348,
+          "end_line": 348,
+          "finding": "Stale assertion: test still expected batchPublishIpnsRecords to be called directly, but phase-44 Plan-03 moved IPNS publishing inside updateFileMetadata (CAS path), so updateSharedFile no longer calls it. The assertion at line 347 (updateFileMetadata was called) already covers the publish step."
+        },
+        {
+          "path": "packages/sdk/src/shared-write.ts",
+          "line": 510,
+          "end_line": 510,
+          "finding": "Comment documents the architectural change: updateFileMetadata now publishes internally with CAS; the separate batchPublishIpnsRecords call was removed from updateSharedFile to avoid double-publish."
+        },
+        {
+          "path": "apps/api/src/services/vault.service.ts",
+          "finding": "origin/main's guardedUnpin is a strict superset of this branch's version — adds suppressCrossUserAudit option and inline lock computation. Pattern: phase-42/43 implementations were refined on their dedicated PR branches before merging to main, leaving this branch with older divergent copies."
+        }
+      ],
+      "workflow": [
+        "When a long-running branch carries sequential implementation of multiple phases and those earlier phases have since landed on main via separate PRs, resolve all conflicts for the already-merged phases by taking main's versions wholesale — verify zero overlap with the current phase's file footprint before applying.",
+        "Delegate verbose typecheck/cargo-check runs to a sub-agent to keep the main context window clean; return only pass/fail + errors.",
+        "Verify compilation after a complex merge before committing — the merge commit itself should be clean.",
+        "Phase verification running only the sub-package test suite (sdk-core) rather than the full monorepo suite can miss stale tests in dependent packages (sdk) that import the refactored code."
+      ]
+    },
+    "friction": [
+      "Transient git index.lock collision mid-conflict-resolution blocked two files (commands/sync.rs, fuse/mod.rs) — required a lock check and retry.",
+      "gsd commit helper false-negative on commit_failed requires verifying every commit via git log rather than trusting the helper, adding an extra verification step each time.",
+      "The ship workflow's default PR title format ('Phase 44: ...') would have been rejected by the repo's CI conventional-commit enforcement — required a judgment call deviation from the workflow template.",
+      "Two early phase-44 commits used 'feat 44-02:' / 'test 44-02:' (space instead of scope parens), which passed local hooks but triggered the Release Preview required check — a latent issue that only surfaced at PR creation.",
+      "Phase-44 verification was run against sdk-core only; the full packages/sdk test suite wasn't run, allowing a stale test to reach CI undetected."
+    ],
+    "open_items": [
+      "Release Preview required check still failing at transcript end: commits b433553b6 ('feat 44-02:') and 0b826ca65 ('test 44-02:') have non-conventional subjects and touch packages/sdk-core. Fixing requires either a history rewrite (force-push) or accepting the check failure.",
+      "PR #488 pending full CI pass (Lint, Detect Changes, Release Preview, and CodeRabbit auto-review all queued) before merge.",
+      "Run /gsd:complete-milestone after PR #488 merges — STATE.md already marks v1.1 milestone complete but the workflow step hasn't been executed.",
+      "Consider running full monorepo test suite (not just sub-package) as part of phase verification to catch stale tests in dependent packages earlier."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
