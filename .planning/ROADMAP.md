@@ -680,12 +680,25 @@ Out of scope (tracked as separate bug work):
 - #17 Recover stale FUSE mount after crash on Linux startup
 
 Plans:
+**Wave 1**
 
 - [ ] 45-01-PLAN.md — Write-durability + replay test safety net (#14)
 - [ ] 45-02-PLAN.md — Shared journal-dir + max-retries helper (#12)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 45-03-PLAN.md — Option<String> file-meta-ipns sentinel + serde compat (#18)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 45-04-PLAN.md — Typed IpnsResolveOutcome in replay (#19)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 45-05-PLAN.md — Reuse publish_file_metadata + memoize resolve_folder_key in replay (#20, #15)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 45-06-PLAN.md — Consolidate fuser/winfsp journal write paths into journal_helpers (#11)
 
 ---
