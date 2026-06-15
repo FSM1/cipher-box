@@ -488,7 +488,7 @@ fn wrap_key_to_hex(raw_key: &[u8], public_key: &[u8], label: &str) -> String {
 // keypair so `wrap_key` ECIES-wraps key material (Threat T-46-02). Network-free.
 #[cfg(all(test, feature = "fuse"))]
 mod tests {
-    use crate::test_support::make_test_fs_with_keypair;
+    use crate::test_support::{make_isolated_journal_dir, make_test_fs_with_keypair};
     use base64::Engine;
     use zeroize::Zeroizing;
 
@@ -508,8 +508,9 @@ mod tests {
         let fs = make_test_fs_with_keypair(private_key, public_key);
 
         // A fresh write handle backed by a temp file with real content.
-        let temp_dir = std::env::temp_dir().join("cb-test-upload");
-        std::fs::create_dir_all(&temp_dir).unwrap();
+        // Isolated per-test dir keyed by process id + counter so parallel test
+        // binaries never collide on a shared path (T-46-04).
+        let temp_dir = make_isolated_journal_dir();
         let ino = 4242u64; // not present in inodes → treated as a brand-new file
         let mut handle =
             crate::file_handle::OpenFileHandle::new_write(ino, &temp_dir, None).unwrap();
@@ -552,7 +553,6 @@ mod tests {
 
         // Plaintext is carried transiently in memory only, never in the entry.
         assert_eq!(result.plaintext, plaintext);
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[tokio::test]
