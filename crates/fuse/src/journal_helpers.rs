@@ -483,11 +483,121 @@ fn wrap_key_to_hex(raw_key: &[u8], public_key: &[u8], label: &str) -> String {
         })
 }
 
-#[cfg(test)]
+// REQ-6: builder round-trip tests. Gated on `feature = "fuse"` because they use
+// the `crate::test_support` harness (itself fuse-feature-gated) and a real EC
+// keypair so `wrap_key` ECIES-wraps key material (Threat T-46-02). Network-free.
+#[cfg(all(test, feature = "fuse"))]
 mod tests {
-    // Unit tests for journal_helpers live in crates/fuse/src/lib.rs (alongside
-    // the existing characterization tests) and in crates/sdk/src/queue.rs
-    // (journal round-trip tests).  This module intentionally has no runtime
-    // network dependencies so there are no tests that require a live
-    // CipherBoxFS instance here.
+    use crate::test_support::{make_isolated_journal_dir, make_test_fs_with_keypair};
+    use base64::Engine;
+    use zeroize::Zeroizing;
+
+    /// Generate a real secp256k1 keypair (33-byte compressed pubkey, 32-byte
+    /// secret) via the `ecies` dev-dep. A zero vec is NOT a valid curve point.
+    fn real_keypair() -> (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) {
+        let (sk, pk) = ecies::utils::generate_keypair();
+        (
+            Zeroizing::new(sk.serialize().to_vec()),
+            Zeroizing::new(pk.serialize().to_vec()),
+        )
+    }
+
+    #[tokio::test]
+    async fn build_upload_journal_entry_round_trips() {
+        let (private_key, public_key) = real_keypair();
+        let fs = make_test_fs_with_keypair(private_key, public_key);
+
+        // A fresh write handle backed by a temp file with real content.
+        // Isolated per-test dir keyed by process id + counter so parallel test
+        // binaries never collide on a shared path (T-46-04).
+        let temp_dir = make_isolated_journal_dir();
+        let ino = 4242u64; // not present in inodes → treated as a brand-new file
+        let mut handle =
+            crate::file_handle::OpenFileHandle::new_write(ino, &temp_dir, None).unwrap();
+        let plaintext = b"hello cipherbox upload round trip";
+        handle.write_at(0, plaintext).unwrap();
+
+        let result = fs
+            .build_upload_journal_entry(ino, &handle, /* is_new_file */ true)
+            .expect("upload builder must succeed with a real keypair");
+
+        match &result.entry.op {
+            cipherbox_sdk::JournalOp::UploadFile {
+                ciphertext_b64,
+                wrapped_key_hex,
+                ..
+            } => {
+                // Ciphertext is journalled and base64-decodes.
+                assert!(!ciphertext_b64.is_empty(), "ciphertext_b64 must be non-empty");
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(ciphertext_b64)
+                    .expect("ciphertext_b64 must base64-decode");
+                assert!(!decoded.is_empty(), "decoded ciphertext must be non-empty");
+                assert_ne!(
+                    decoded.as_slice(),
+                    plaintext.as_slice(),
+                    "journalled bytes must be ciphertext, never plaintext (T-46-01)"
+                );
+                // The file key is ECIES-wrapped (present, hex-encoded), never raw.
+                assert!(
+                    !wrapped_key_hex.is_empty(),
+                    "wrapped_key_hex must be present and ECIES-wrapped (T-46-02)"
+                );
+                assert!(
+                    hex::decode(wrapped_key_hex).is_ok(),
+                    "wrapped_key_hex must be valid hex"
+                );
+            }
+            other => panic!("expected UploadFile op, got {:?}", other),
+        }
+
+        // Plaintext is carried transiently in memory only, never in the entry.
+        assert_eq!(result.plaintext, plaintext);
+    }
+
+    #[tokio::test]
+    async fn build_mkdir_journal_entry_round_trips() {
+        let (private_key, public_key) = real_keypair();
+        let fs = make_test_fs_with_keypair(private_key, public_key);
+
+        let parent_ino = crate::inode::ROOT_INO;
+        let child_ino = 9001u64;
+        let child_ipns_private_key = Zeroizing::new(vec![3u8; 32]);
+
+        let result = fs
+            .build_mkdir_journal_entry(
+                parent_ino,
+                child_ino,
+                "newdir",
+                &[5u8; 32],          // folder_key
+                "k51child-newdir",   // child ipns name
+                child_ipns_private_key,
+                "deadbeef",          // encrypted_folder_key_hex
+            )
+            .expect("mkdir builder must succeed against the root parent");
+
+        assert_eq!(result.ino, child_ino, "result must reference the new child");
+        match &result.entry.op {
+            cipherbox_sdk::JournalOp::MkdirPublish {
+                child_ipns_name,
+                name,
+                child_ipns_key_hex,
+                parent_ipns_key_hex,
+                ..
+            } => {
+                assert_eq!(child_ipns_name, "k51child-newdir");
+                assert_eq!(name, "newdir");
+                // Both IPNS keys are ECIES-wrapped (non-empty hex), never raw.
+                assert!(
+                    !child_ipns_key_hex.is_empty() && hex::decode(child_ipns_key_hex).is_ok(),
+                    "child IPNS key must be ECIES-wrapped hex (T-46-02)"
+                );
+                assert!(
+                    !parent_ipns_key_hex.is_empty() && hex::decode(parent_ipns_key_hex).is_ok(),
+                    "parent IPNS key must be ECIES-wrapped hex (T-46-02)"
+                );
+            }
+            other => panic!("expected MkdirPublish op, got {:?}", other),
+        }
+    }
 }

@@ -90,23 +90,47 @@ pub async fn mount_filesystem(
         return Err("Mount point is a symlink -- refusing to proceed".to_string());
     }
 
+    // A crash can leave the mount path as a stale FUSE mount backed by a dead
+    // in-process server, blocking remount before the create / clean-stale
+    // decision below. We authoritatively detect and clear it per platform:
+    //   - Linux: stat() returns ENOTCONN so `exists()` lies (returns false) and
+    //     `create_dir_all` then fails with EEXIST; detect via
+    //     /proc/self/mountinfo and unmount via `fusermount3 -u`.
+    //   - macOS (FUSE-T/SMB): mount lingers as a stale `smbfs` mount; detect via
+    //     `mount(8)` and clear via `umount`, then `diskutil unmount force`.
+    // Both are best-effort and never block the mount.
+    #[cfg(target_os = "linux")]
+    cipherbox_fuse::platform::linux::recover_stale_mount(&mount_path);
+    #[cfg(target_os = "macos")]
+    cipherbox_fuse::platform::macos::recover_stale_mount(&mount_path);
+
     if !mount_path.exists() {
-        std::fs::create_dir_all(&mount_path)
-            .map_err(|e| format!("Failed to create mount point: {}", e))?;
+        // On Linux this recovers once from a stale FUSE mount whose dirent still
+        // exists (surfaces as EEXIST even though `exists()` returned false); on
+        // other platforms it is a plain `create_dir_all`.
+        #[cfg(target_os = "linux")]
+        let create_result = cipherbox_fuse::platform::linux::create_mount_point_dir(&mount_path);
+        #[cfg(not(target_os = "linux"))]
+        let create_result = std::fs::create_dir_all(&mount_path);
+        create_result.map_err(|e| format!("Failed to create mount point: {}", e))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&mount_path, std::fs::Permissions::from_mode(0o700));
         }
-    } else {
-        if let Ok(entries) = std::fs::read_dir(&mount_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() { let _ = std::fs::remove_dir_all(&path); }
-                else { let _ = std::fs::remove_file(&path); }
-            }
-            log::info!("Cleaned stale mount point: {}", mount_path.display());
+    }
+
+    // Clean crash residue regardless of which branch created/recovered the mount
+    // point: the Linux recovery path (stale mount -> exists() lies ->
+    // create_mount_point_dir EEXIST retry) lands in the create branch above, not
+    // only the plain-exists case. On a freshly created empty dir this is a no-op.
+    if let Ok(entries) = std::fs::read_dir(&mount_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() { let _ = std::fs::remove_dir_all(&path); }
+            else { let _ = std::fs::remove_file(&path); }
         }
+        log::info!("Cleaned stale mount point: {}", mount_path.display());
     }
 
     #[cfg(target_os = "macos")]
