@@ -140,6 +140,54 @@ describe('publishWithCas', () => {
     expect(result.prunedCids).toContain('cidB');
   });
 
+  it('Test 4b: prunedCids accumulate and dedupe across multiple merge rounds', async () => {
+    const params = makeParams({
+      merge: vi
+        .fn()
+        .mockReturnValueOnce({ merged: { value: 'merged-1' }, prunedCids: ['cidA', 'cidB'] })
+        .mockReturnValueOnce({ merged: { value: 'merged-2' }, prunedCids: ['cidB', 'cidC'] }),
+    });
+    const conflictError = { response: { status: 409 } };
+    // Two consecutive 409s force two merge rounds, then the third publish succeeds.
+    mockFns.createAndPublishIpnsRecord
+      .mockRejectedValueOnce(conflictError)
+      .mockRejectedValueOnce(conflictError)
+      .mockResolvedValueOnce({ sequenceNumber: 9n });
+    mockFns.resolveIpnsRecord
+      .mockResolvedValueOnce({ cid: 'bafy-remote-1', sequenceNumber: 6n })
+      .mockResolvedValueOnce({ cid: 'bafy-remote-2', sequenceNumber: 7n });
+    params.decodeRemote.mockResolvedValue({ value: 'remote' });
+    params.encodeAndUpload.mockResolvedValue('bafy-cid');
+
+    const result = await publishWithCas(params);
+
+    // The overlapping 'cidB' from the two rounds is de-duplicated by the engine.
+    expect(params.merge).toHaveBeenCalledTimes(2);
+    expect(result.prunedCids).toEqual(['cidA', 'cidB', 'cidC']);
+    expect(result.prunedCids).toHaveLength(3);
+  });
+
+  it('Test 4c: 409 then a null re-resolve throws ConflictError without decoding or merging', async () => {
+    const params = makeParams();
+    const conflictError = { response: { status: 409 } };
+    mockFns.createAndPublishIpnsRecord.mockRejectedValue(conflictError);
+    // Record disappeared between publish and re-resolve (race) — re-resolve returns null.
+    mockFns.resolveIpnsRecord.mockResolvedValue(null);
+
+    // Capture the rejection from a single invocation (no second call → no mock bleed).
+    const err = await publishWithCas(params).catch((e) => e);
+    expect(err).toBeInstanceOf(ConflictError);
+    // Thrown on the first attempt's failed re-resolve.
+    expect((err as ConflictError).attempts).toBe(1);
+    expect((err as ConflictError).ipnsName).toBe('k51test');
+
+    // Re-resolve is attempted exactly once; decode/merge are skipped because the
+    // remote record could not be resolved.
+    expect(mockFns.resolveIpnsRecord).toHaveBeenCalledTimes(1);
+    expect(params.decodeRemote).not.toHaveBeenCalled();
+    expect(params.merge).not.toHaveBeenCalled();
+  });
+
   it('Test 5: non-409 error is rethrown immediately without retry', async () => {
     const params = makeParams();
     const serverError = { status: 500 };

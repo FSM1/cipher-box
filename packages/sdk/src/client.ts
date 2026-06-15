@@ -1332,7 +1332,8 @@ export class CipherBoxClient {
    * @param fileId - ID of the file (FilePointer) whose version is deleted
    * @param versionIndex - Index of the version being deleted (caller-resolved)
    * @param params - Pre-resolved key + metadata + version-pruned updates + deletedCid
-   * @returns The deleted version's CID the caller should unpin
+   * @returns The deleted version's `deletedCid` plus any `prunedCids` produced by a
+   *   409-conflict merge round inside `updateFileMetadata` — the caller must unpin both.
    */
   async deleteFileVersion(
     parentIpnsName: string,
@@ -1349,7 +1350,7 @@ export class CipherBoxClient {
       /** Hex-encoded re-wrapped IPNS key to persist on the FilePointer (lazy migration). */
       migratedIpnsPrivateKeyEncrypted?: string;
     }
-  ): Promise<{ deletedCid?: string }> {
+  ): Promise<{ deletedCid?: string; prunedCids: string[] }> {
     void versionIndex;
     return this.withOperation('deleteFileVersion', async () => {
       const folder = this.folderTree.get(parentIpnsName);
@@ -1362,7 +1363,11 @@ export class CipherBoxClient {
 
       // 1. Publish file metadata (CAS internally). updateFileMetadata zeroes the
       //    fileIpnsPrivateKey in its own finally (T-47-01) — do NOT zero it here.
-      await sdkCore.updateFileMetadata({
+      //    Capture prunedCids: deleting a version never caps the history (count
+      //    decreases), but a 409-conflict merge round can re-add versions past the
+      //    cap, and those CIDs must be unpinned by the caller (matches replaceFile /
+      //    restoreFileVersion).
+      const { prunedCids } = await sdkCore.updateFileMetadata({
         fileIpnsPrivateKey: params.fileIpnsPrivateKey,
         fileMetaIpnsName: filePointer.fileMetaIpnsName,
         folderKey: folder.folderKey,
@@ -1392,7 +1397,7 @@ export class CipherBoxClient {
         sequenceNumber: folder.sequenceNumber,
       });
 
-      return { deletedCid: params.deletedCid };
+      return { deletedCid: params.deletedCid, prunedCids };
     });
   }
 

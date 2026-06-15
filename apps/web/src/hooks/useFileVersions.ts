@@ -193,6 +193,7 @@ export function useFileVersions() {
           deletedCid,
         } = computeDeleteVersionUpdate(currentMetadata, versionIndex);
 
+        let prunedCids: string[] = [];
         try {
           // client.deleteFileVersion owns the file IPNS publish (CAS internally), the
           // conditional folder publish for lazy IPNS-key migration, folderTree
@@ -200,22 +201,35 @@ export function useFileVersions() {
           // children/sequenceNumber are written ONLY by the folder:updated subscription —
           // no direct store writes here. fileIpnsPrivateKey is zeroed in this finally
           // (T-47-01); sdk-core updateFileMetadata also zeroes its own copy.
-          await getSdkClient().deleteFileVersion(parentFolder.ipnsName, fileId, versionIndex, {
-            fileIpnsPrivateKey,
-            currentMetadata: prunedMetadata,
-            updates,
-            deletedCid,
-            maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
-            ...(migratedIpnsPrivateKeyEncrypted ? { migratedIpnsPrivateKeyEncrypted } : {}),
-          });
+          ({ prunedCids } = await getSdkClient().deleteFileVersion(
+            parentFolder.ipnsName,
+            fileId,
+            versionIndex,
+            {
+              fileIpnsPrivateKey,
+              currentMetadata: prunedMetadata,
+              updates,
+              deletedCid,
+              maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
+              ...(migratedIpnsPrivateKeyEncrypted ? { migratedIpnsPrivateKeyEncrypted } : {}),
+            }
+          ));
         } finally {
           fileIpnsPrivateKey.fill(0);
         }
 
-        // Unpin deleted version CID
+        // Unpin the explicitly deleted version CID.
         unpinFromIpfs(deletedCid).catch((err) =>
           logger.warn('[Versions] Unpin deleted CID failed:', err)
         );
+
+        // Unpin any CIDs pruned by a 409-conflict merge inside the publish (distinct
+        // from deletedCid; only non-empty when a concurrent write forced a merge round).
+        for (const prunedCid of prunedCids) {
+          unpinFromIpfs(prunedCid).catch((err) =>
+            logger.warn('[Versions] Unpin pruned CID failed:', err)
+          );
+        }
 
         // Refresh quota
         useQuotaStore.getState().fetchQuota();

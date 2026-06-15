@@ -273,6 +273,29 @@ describe('CipherBoxClient - file ops', () => {
       expect(updated?.children).toEqual(folder?.children);
     });
 
+    it('returns prunedCids from a conflict-merge round for the caller to unpin', async () => {
+      setupFolder(client);
+
+      // A 409-conflict merge inside updateFileMetadata can re-add versions past the
+      // cap; deleteFileVersion must surface those CIDs so the web tier unpins them.
+      vi.mocked(sdkCore.updateFileMetadata).mockResolvedValue({
+        ipnsName: 'k51file',
+        metadataCid: 'bafyafterdelete',
+        newSequenceNumber: 6n,
+        prunedCids: ['cidMergePruned1', 'cidMergePruned2'],
+      });
+
+      const result = await client.deleteFileVersion('folder-ipns', 'file1', 0, {
+        fileIpnsPrivateKey: new Uint8Array(64).fill(3),
+        currentMetadata: makeCurrentMetadata(),
+        updates: { cid: 'bafyold' },
+        deletedCid: 'cidDeleted',
+      });
+
+      expect(result.deletedCid).toBe('cidDeleted');
+      expect(result.prunedCids).toEqual(['cidMergePruned1', 'cidMergePruned2']);
+    });
+
     it('does a conditional folder publish on key migration and advances the folder sequence', async () => {
       const events: SdkEvent[] = [];
       client.on((e) => events.push(e));
