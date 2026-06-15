@@ -90,9 +90,30 @@ pub async fn mount_filesystem(
         return Err("Mount point is a symlink -- refusing to proceed".to_string());
     }
 
+    // Linux-only: a crash can leave the mount path as a disconnected/stale FUSE
+    // mount where stat() returns ENOTCONN, so `exists()` lies (returns false)
+    // and `create_dir_all` then fails with EEXIST. Authoritatively detect the
+    // stale mount via /proc/self/mountinfo and unmount it before the create /
+    // clean-stale decision below. Best-effort; never blocks the mount.
+    #[cfg(target_os = "linux")]
+    cipherbox_fuse::platform::linux::recover_stale_mount(&mount_path);
+
     if !mount_path.exists() {
-        std::fs::create_dir_all(&mount_path)
-            .map_err(|e| format!("Failed to create mount point: {}", e))?;
+        if let Err(e) = std::fs::create_dir_all(&mount_path) {
+            // Belt-and-suspenders for the Linux stale-mount case: a disconnected
+            // FUSE mount whose dirent still exists surfaces as EEXIST even though
+            // `exists()` returned false. Recover once and retry before erroring.
+            #[cfg(target_os = "linux")]
+            if cipherbox_fuse::platform::linux::should_recover_then_retry(e.kind()) {
+                cipherbox_fuse::platform::linux::recover_stale_mount(&mount_path);
+                std::fs::create_dir_all(&mount_path)
+                    .map_err(|e| format!("Failed to create mount point: {}", e))?;
+            } else {
+                return Err(format!("Failed to create mount point: {}", e));
+            }
+            #[cfg(not(target_os = "linux"))]
+            return Err(format!("Failed to create mount point: {}", e));
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
