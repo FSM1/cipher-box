@@ -1,0 +1,151 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1f67ab10e915",
+  "session_id": "e88312bf-d442-45c1-b751-dc3a82edfd9e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T20:51:42.312075Z",
+  "branch": "feat/phase-47-sdk-folder-state-publish-consolidation",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "c152df04118f",
+  "token_usage": {
+    "input_tokens": 15530,
+    "cache_creation_tokens": 605152,
+    "cache_read_tokens": 27192332,
+    "output_tokens": 153207,
+    "api_call_count": 163
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_013oUpDepo9CQohLWcmEVsLD",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c152df04118f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 792,
+        "end": 793,
+        "entry_ids": [
+          "1c900cdb-12f2-4ac3-a0da-f8cf3458bc21"
+        ],
+        "tool_use_id": "toolu_013oUpDepo9CQohLWcmEVsLD"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013oUpDepo9CQohLWcmEVsLD"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Debug and fix failing E2E CI on all platforms after merging the phase 46 PR, then address CodeRabbit review comments on the open phase 47 PR (#494) and audit all mutative web paths for correct SDK-client routing.",
+    "outcome": "Root cause identified as contract drift in `edit-filepointer.mjs` from PR #488 (not phase 46); fix merged as PR #495 and validated green on all three platforms. Phase 47 PR #494 updated with CodeRabbit fixes, a `deleteFileVersion`/`restoreFileVersion` pin-leak fix, removal of dead upload code, and a captured todo for the remaining `useSharedWriteOps` routing gap.",
+    "learnings": {
+      "repo": [
+        "`ci-e2e.yml` has no `pull_request` trigger — runs only on push to main or manual dispatch, so SDK contract changes (like #488) are never E2E-tested before merge",
+        "The `desktop` path filter in `ci-e2e.yml` only watches `packages/crypto/src/**`, not `packages/sdk-core/**` or `tests/desktop-e2e/**`, so SDK changes don't trigger Desktop E2E even on main",
+        "E2E helper scripts in `packages/sdk-core/scripts/*.mjs` are not typechecked or linted — they silently drift from SDK contract changes and only fail in CI",
+        "NestJS `ValidationPipe` runs with `forbidNonWhitelisted: true` (confirmed in `main.ts`), so any unknown DTO property produces a fast deterministic 400 with no server-side error log",
+        "`updateFileMetadata` (post-#488) now publishes the file IPNS record internally and returns `{ ipnsName, metadataCid, newSequenceNumber, prunedCids }` — it no longer returns `ipnsRecord`; `replaceFileInFolder` is now only used by the version-restore path",
+        "`useSharedWriteOps.ts` uses a `SharedWriteContext` / local refs pattern intentionally — shared-with-me folders are not tracked in the owner's SDK client `folderTree`, so direct `@cipherbox/sdk` function calls there are by-design, not a bug",
+        "`handleAddFile`/`handleAddFiles` in `useFileOperations.ts` (lines 44–334) were dead code using the old direct `sdk-core` publish pattern; the live upload path goes through `getSdkClient().uploadFiles()` via `useDropUpload.ts`",
+        "`deleteFileVersion` and `restoreFileVersion` web hooks were both discarding SDK-returned `prunedCids` from 409-conflict merge rounds, causing orphaned IPNS pins — now fixed to unpin the deduped union of web-computed and SDK-returned CIDs",
+        "Background + unsandboxed `git commit` (via `dangerouslyDisableSandbox`) is required for 1Password SSH-signed commits; the signer gets permanently wedged after a timed-out attempt and requires a 1Password app restart to recover"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/scripts/edit-filepointer.mjs",
+          "line": 9,
+          "end_line": 11,
+          "finding": "Was destructuring `{ ipnsRecord }` from `updateFileMetadata` (now undefined post-#488) and passing it to `replaceFileInFolder`, producing `{ ipnsName: undefined, record: undefined }` → deterministic 400 on all platforms"
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 218,
+          "end_line": 218,
+          "finding": "Contract change from #488: `updateFileMetadata` publishes file IPNS record internally; return shape changed from `{ ipnsRecord, prunedCids }` to `{ ipnsName, metadataCid, newSequenceNumber, prunedCids }` — confirmed in built `.d.ts`"
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 275,
+          "end_line": 275,
+          "finding": "`resolveIpnsRecord` + not-found throw ran before the `try` block, so `fileIpnsPrivateKey.fill(0)` in `finally` was skipped on resolution failures — moved both inside the `try` to satisfy T-47-01 caller-owned-zeroing requirement"
+        },
+        {
+          "path": "packages/sdk-core/src/cas.ts",
+          "line": 22,
+          "end_line": 22,
+          "finding": "Jitter formula `(0.5 + Math.random() * 0.5)` yields `[0.5, 1.0)` — one-sided bias (always early), not the documented ±50%. Fixed to `(0.5 + Math.random())` → `[0.5x, 1.5x)`"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1365,
+          "end_line": 1365,
+          "finding": "`deleteFileVersion` discarded the `updateFileMetadata` return including `prunedCids` from conflict-merge rounds. Its two sibling methods (`replaceFile` l.1172, `restoreFileVersion` l.1283) both capture and return them — was an inconsistency causing orphaned pins"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileVersions.ts",
+          "line": 102,
+          "end_line": 109,
+          "finding": "`restoreFileVersion` hook unpinned only web-computed cap-pruning CIDs (`computeRestoreVersionUpdate`); SDK-returned `prunedCids` from 409-conflict merges were silently discarded — same leak class as `deleteFileVersion`"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "line": 44,
+          "end_line": 334,
+          "finding": "`handleAddFile` (l.44–175) and `handleAddFiles` (l.187–334) were dead code calling `sdk-core` `addFileToFolder`/`addFilesToFolder` directly, bypassing the SDK client `folderTree`. Active upload path is `useDropUpload.ts` → `getSdkClient().uploadFiles()`. Removed."
+        }
+      ],
+      "workflow": [
+        "When CI logs are expired or too large for `gh run view --log`, download uploaded log artifacts with `gh run download` to access api.log and other structured logs",
+        "Manual workflow dispatch (`gh workflow run`) is required to trigger E2E on fix branches when `ci-e2e.yml` has no `pull_request` trigger; `--ref` sets the branch",
+        "Multi-lens adversarial review workflow before committing complex fixes catches edge cases (double-unpin, mock bleed, scope regression) that unit tests miss",
+        "CodeRabbit CLI (`coderabbit review --agent --base-commit <sha>`) used for offline diff reviews when GitHub rate-limited; scoping to branch merge-base is essential",
+        "Checking the built `.d.ts` files in dist is the authoritative way to verify what contract the SDK exports to its consumers (E2E scripts import from dist, not source)"
+      ]
+    },
+    "friction": [
+      "1Password SSH signer gets permanently wedged after a timed-out `git commit` attempt — requires full 1Password app restart; `timeout 45` guard can trigger this condition",
+      "CI E2E logs expire or are too large to retrieve via `gh run view --log`; artifact download is a workaround but captures api.log only, not test stdout",
+      "`ci-e2e.yml` has no `pull_request` trigger, so the E2E gap that allowed #488's contract drift to reach main is structural — PRs are never E2E-tested before merge",
+      "The `desktop` path filter excludes `packages/sdk-core/**`, so SDK changes on main don't trigger Desktop E2E either, compounding the above",
+      "Phase-46 PR being docs-only meant the CI failure was initially misattributed to that merge rather than the earlier #488 code change"
+    ],
+    "open_items": [
+      "Add `packages/sdk-core/src/**`, `packages/sdk/src/**`, and `tests/desktop-e2e/**` to the `desktop` path filter in `ci-e2e.yml` so SDK contract changes trigger Desktop E2E on push to main",
+      "Optionally add a `pull_request` trigger to `ci-e2e.yml` so E2E runs before merge (separate PR from #495 fix)",
+      "Route `useSharedWriteOps` mutations through the SDK client for single folder-state ownership over shared folders — captured as GSD todo `.planning/todos/pending/2026-06-15-route-shared-folder-writes-through-the-sdk-client.md`",
+      "Phase 47 PR #494 (`feat/phase-47-sdk-folder-state-publish-consolidation`) is still open and pending merge — 3 new commits pushed this session"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
