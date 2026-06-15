@@ -3,20 +3,15 @@ import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useQuotaStore } from '../stores/quota.store';
+import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
-import {
-  replaceFileInFolder,
-  updateFolderMetadataAndPublish,
-  isConflictExhausted,
-} from '@cipherbox/sdk-core';
 import { getSdkClient } from '../lib/sdk-provider';
 import {
   resolveFileMetadata,
-  restoreVersion,
-  deleteVersion,
+  computeRestoreVersionUpdate,
+  computeDeleteVersionUpdate,
   getFileIpnsPrivateKey,
 } from '../services/file-metadata.service';
-import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
 import type { FilePointer } from '@cipherbox/core';
 import { getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
@@ -87,72 +82,33 @@ export function useFileVersions() {
             auth.vaultKeypair.publicKey
           );
 
-        let ipnsRecord: FileIpnsRecordPayload;
-        let prunedCids: string[];
+        // Compute the restore transform in the web tier (pure, no publish). The
+        // transformed currentMetadata carries the post-restore versions array; updates
+        // carries the restored content fields. Routed through the SDK client so the
+        // folderTree stays authoritative.
+        const {
+          currentMetadata: restoredMetadata,
+          updates,
+          prunedCids,
+        } = computeRestoreVersionUpdate(currentMetadata, versionIndex);
+
         try {
-          // Call restoreVersion service function
-          ({ ipnsRecord, prunedCids } = await restoreVersion({
+          // client.restoreFileVersion owns the file IPNS publish (CAS internally), the
+          // conditional folder publish for lazy IPNS-key migration, folderTree
+          // bookkeeping, and the folder:updated emission. The store's
+          // children/sequenceNumber are written ONLY by the folder:updated subscription —
+          // no direct store writes here. fileIpnsPrivateKey is zeroed in this finally
+          // (T-47-01); sdk-core updateFileMetadata also zeroes its own copy.
+          await getSdkClient().restoreFileVersion(parentFolder.ipnsName, fileId, versionIndex, {
             fileIpnsPrivateKey,
-            fileMetaIpnsName: filePointer.fileMetaIpnsName,
-            folderKey: parentFolder.folderKey,
-            currentMetadata,
-            versionIndex,
-          }));
+            currentMetadata: restoredMetadata,
+            updates,
+            createVersion: false,
+            maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
+            ...(migratedIpnsPrivateKeyEncrypted ? { migratedIpnsPrivateKeyEncrypted } : {}),
+          });
         } finally {
           fileIpnsPrivateKey.fill(0);
-        }
-
-        // Publish the IPNS record (folder metadata untouched)
-        await replaceFileInFolder({
-          children: parentFolder.children,
-          fileId,
-          fileIpnsRecord: ipnsRecord,
-          ctx: getSdkClient().getContext(),
-        });
-
-        // Update local folder state (modifiedAt and migrated IPNS key on FilePointer)
-        const updatedChildren = parentFolder.children.map((child) => {
-          if (child.type === 'file' && child.id === fileId) {
-            return {
-              ...child,
-              modifiedAt: Date.now(),
-              ...(migratedIpnsPrivateKeyEncrypted
-                ? { ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted }
-                : {}),
-            };
-          }
-          return child;
-        });
-        useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
-
-        // Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
-        if (migratedIpnsPrivateKeyEncrypted) {
-          updateFolderMetadataAndPublish({
-            children: updatedChildren,
-            baseChildren: parentFolder.children,
-            folderKey: parentFolder.folderKey,
-            ipnsPrivateKey: parentFolder.ipnsPrivateKey,
-            ipnsName: parentFolder.ipnsName,
-            sequenceNumber: parentFolder.sequenceNumber,
-            ctx: getSdkClient().getContext(),
-          })
-            .then(({ newSequenceNumber, publishedChildren }) => {
-              useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
-              useFolderStore.getState().updateFolderChildren(parentId, publishedChildren);
-            })
-            .catch((err) => {
-              if (isConflictExhausted(err)) {
-                logger.warn(
-                  '[Versions] Lazy IPNS key migration: folder re-publish conflict exhausted after retries:',
-                  err
-                );
-              } else {
-                logger.warn(
-                  '[Versions] Lazy IPNS key migration: folder re-publish failed, will retry:',
-                  err
-                );
-              }
-            });
         }
 
         // Unpin pruned version CIDs
@@ -228,65 +184,32 @@ export function useFileVersions() {
             auth.vaultKeypair.publicKey
           );
 
-        let ipnsRecord: FileIpnsRecordPayload;
-        let deletedCid: string;
+        // Compute the delete transform in the web tier (pure, no publish). The
+        // transformed currentMetadata carries the pruned versions array; updates is
+        // empty (current content unchanged). Routed through the SDK client.
+        const {
+          currentMetadata: prunedMetadata,
+          updates,
+          deletedCid,
+        } = computeDeleteVersionUpdate(currentMetadata, versionIndex);
+
         try {
-          // Call deleteVersion service function
-          ({ ipnsRecord, deletedCid } = await deleteVersion({
+          // client.deleteFileVersion owns the file IPNS publish (CAS internally), the
+          // conditional folder publish for lazy IPNS-key migration, folderTree
+          // bookkeeping, and the folder:updated emission. The store's
+          // children/sequenceNumber are written ONLY by the folder:updated subscription —
+          // no direct store writes here. fileIpnsPrivateKey is zeroed in this finally
+          // (T-47-01); sdk-core updateFileMetadata also zeroes its own copy.
+          await getSdkClient().deleteFileVersion(parentFolder.ipnsName, fileId, versionIndex, {
             fileIpnsPrivateKey,
-            fileMetaIpnsName: filePointer.fileMetaIpnsName,
-            folderKey: parentFolder.folderKey,
-            currentMetadata,
-            versionIndex,
-          }));
+            currentMetadata: prunedMetadata,
+            updates,
+            deletedCid,
+            maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
+            ...(migratedIpnsPrivateKeyEncrypted ? { migratedIpnsPrivateKeyEncrypted } : {}),
+          });
         } finally {
           fileIpnsPrivateKey.fill(0);
-        }
-
-        // Publish the IPNS record (folder metadata untouched)
-        await replaceFileInFolder({
-          children: parentFolder.children,
-          fileId,
-          fileIpnsRecord: ipnsRecord,
-          ctx: getSdkClient().getContext(),
-        });
-
-        // Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
-        if (migratedIpnsPrivateKeyEncrypted) {
-          const updatedChildren = parentFolder.children.map((child) => {
-            if (child.type === 'file' && child.id === fileId) {
-              return { ...child, ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted };
-            }
-            return child;
-          });
-          useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
-
-          updateFolderMetadataAndPublish({
-            children: updatedChildren,
-            baseChildren: parentFolder.children,
-            folderKey: parentFolder.folderKey,
-            ipnsPrivateKey: parentFolder.ipnsPrivateKey,
-            ipnsName: parentFolder.ipnsName,
-            sequenceNumber: parentFolder.sequenceNumber,
-            ctx: getSdkClient().getContext(),
-          })
-            .then(({ newSequenceNumber, publishedChildren }) => {
-              useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
-              useFolderStore.getState().updateFolderChildren(parentId, publishedChildren);
-            })
-            .catch((err) => {
-              if (isConflictExhausted(err)) {
-                logger.warn(
-                  '[Versions] Lazy IPNS key migration: folder re-publish conflict exhausted after retries:',
-                  err
-                );
-              } else {
-                logger.warn(
-                  '[Versions] Lazy IPNS key migration: folder re-publish failed, will retry:',
-                  err
-                );
-              }
-            });
         }
 
         // Unpin deleted version CID

@@ -4,13 +4,7 @@ import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
-import {
-  addFileToFolder,
-  addFilesToFolder,
-  updateFolderMetadataAndPublish,
-  updateFileMetadata,
-  isConflictExhausted,
-} from '@cipherbox/sdk-core';
+import { addFileToFolder, addFilesToFolder } from '@cipherbox/sdk-core';
 import { getSdkClient } from '../lib/sdk-provider';
 import { reWrapForRecipients } from '../services/share.service';
 import {
@@ -411,73 +405,37 @@ export function useFileOperations() {
 
         let prunedCids: string[];
         try {
-          // 5. Update file metadata — publishes internally with CAS (Plan 03 new contract).
-          // Returns { ipnsName, metadataCid, newSequenceNumber, prunedCids }; publish is done.
-          ({ prunedCids } = await updateFileMetadata({
-            fileIpnsPrivateKey,
-            fileMetaIpnsName: filePointer.fileMetaIpnsName,
-            folderKey: parentFolder.folderKey,
-            currentMetadata,
-            updates: {
-              cid: fileData.newCid,
-              fileKeyEncrypted: fileData.newFileKeyEncrypted,
-              fileIv: fileData.newFileIv,
-              size: fileData.newSize,
-              ...(fileData.newEncryptionMode ? { encryptionMode: fileData.newEncryptionMode } : {}),
-            },
-            createVersion,
-            maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
-            ctx: getSdkClient().getContext(),
-          }));
+          // 5/6. Route the file replace through the SDK client. client.replaceFile owns
+          //    the file IPNS publish (via sdk-core updateFileMetadata, CAS internally),
+          //    the folder touch (bump modifiedAt on the FilePointer + persist any migrated
+          //    IPNS key), folderTree bookkeeping, and the folder:updated emission. The
+          //    store's children/sequenceNumber are written ONLY by the folder:updated
+          //    subscription — no direct store writes here (PR #489 desync closed).
+          //    fileIpnsPrivateKey is resolved above and zeroed in this finally (T-47-01);
+          //    sdk-core updateFileMetadata also zeroes its own copy.
+          ({ prunedCids } = await getSdkClient().replaceFile(
+            parentFolder.ipnsName,
+            fileData.fileId,
+            {
+              fileIpnsPrivateKey,
+              currentMetadata,
+              updates: {
+                cid: fileData.newCid,
+                fileKeyEncrypted: fileData.newFileKeyEncrypted,
+                fileIv: fileData.newFileIv,
+                size: fileData.newSize,
+                ...(fileData.newEncryptionMode
+                  ? { encryptionMode: fileData.newEncryptionMode }
+                  : {}),
+              },
+              createVersion,
+              maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
+              ...(migratedIpnsPrivateKeyEncrypted ? { migratedIpnsPrivateKeyEncrypted } : {}),
+            }
+          ));
         } finally {
           fileIpnsPrivateKey.fill(0);
         }
-
-        // 6. (File IPNS record is already published inside updateFileMetadata above.)
-        //    Update local state -- touch modifiedAt and persist migrated IPNS key if applicable.
-        const updatedChildren = parentFolder.children.map((child) => {
-          if (child.type === 'file' && child.id === fileData.fileId) {
-            return {
-              ...child,
-              modifiedAt: Date.now(),
-              ...(migratedIpnsPrivateKeyEncrypted
-                ? { ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted }
-                : {}),
-            };
-          }
-          return child;
-        });
-
-        const store = useFolderStore.getState();
-        store.updateFolderChildren(parentId, updatedChildren);
-
-        // 6b. Republish folder metadata so other clients (e.g. FUSE desktop mount)
-        // see the updated modifiedAt on the FilePointer and re-resolve the file.
-        // Pre-mutation parentFolder.children is the correct baseChildren snapshot
-        // (updatedChildren is the post-mutation set, so the base is the original children).
-        updateFolderMetadataAndPublish({
-          children: updatedChildren,
-          baseChildren: parentFolder.children,
-          folderKey: parentFolder.folderKey,
-          ipnsPrivateKey: parentFolder.ipnsPrivateKey,
-          ipnsName: parentFolder.ipnsName,
-          sequenceNumber: parentFolder.sequenceNumber,
-          ctx: getSdkClient().getContext(),
-        })
-          .then(({ newSequenceNumber, publishedChildren }) => {
-            useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
-            useFolderStore.getState().updateFolderChildren(parentId, publishedChildren);
-          })
-          .catch((err) => {
-            if (isConflictExhausted(err)) {
-              logger.warn(
-                '[FileOps] Folder metadata re-publish after file edit: conflict exhausted after retries:',
-                err
-              );
-            } else {
-              logger.warn('[FileOps] Folder metadata re-publish after file edit failed:', err);
-            }
-          });
 
         // 8. Re-wrap new file key for share recipients (fire-and-forget)
         (async () => {

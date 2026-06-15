@@ -88,24 +88,18 @@ export function reconfigurePinning(pinningConfig?: PinningConfig): void {
  * folders in the SDK's internal state).
  *
  * Registers the folder if the SDK doesn't already track it. If it does, the
- * SDK's internal state is authoritative for SDK-routed mutations, but is
- * reconciled forward when the store has observed a strictly-newer IPNS sequence
- * (e.g. from a direct file replace/version publish) to avoid stale-sequence 409s
- * and merge-driven resurrection of deleted items.
+ * SDK's internal folderTree is authoritative and left untouched: all
+ * folder-state mutations (including file replace/version edits) now route
+ * through SDK client methods, so the SDK sequence never lags the store and no
+ * forward reconciliation is needed (Phase 47 / PR #489 closure).
  */
 export function ensureFolderRegistered(folder: FolderNode): void {
   const client = getSdkClient();
 
-  // Already tracked: the SDK folderTree is authoritative for SDK-routed
-  // mutations, but the Zustand store can advance *past* it when the web app
-  // publishes folder metadata directly via sdk-core (e.g. file replace/version
-  // edits bump modifiedAt + sequence in the store without routing through the
-  // client). Reconcile so a following SDK mutation (delete/move) doesn't publish
-  // with a stale sequence (→ 409) against a stale base, which the 409 merge would
-  // resolve by resurrecting the just-deleted child. Only adopted when strictly
-  // newer, so SDK-advanced state stays authoritative.
+  // Already tracked: the SDK folderTree is authoritative. No reconciliation —
+  // every folder-state mutation flows through the client, so the store can no
+  // longer advance past the SDK's internal sequence.
   if (client.hasFolder(folder.ipnsName)) {
-    client.reconcileFolderState(folder.ipnsName, folder.children, folder.sequenceNumber);
     return;
   }
 
