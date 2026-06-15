@@ -1,13 +1,14 @@
 ---
 phase: 46-desktop-fuse-data-loss-bugs-replay-hardening
 verified: 2026-06-15T12:43:02Z
-status: human_needed
+status: verified
 score: 6/6 must-haves verified
 overrides_applied: 0
 human_verification:
   - test: "Linux remount-after-SIGKILL: mount the desktop FUSE vault on Linux, SIGKILL the app mid-mount to leave a stale/disconnected mount (stat returns ENOTCONN, Path::exists() lies), then restart the app."
     expected: "App auto-recovers — recover_stale_mount reads /proc/self/mountinfo, unmounts via fusermount3 -u (or lazy -z -u), create_mount_point_dir succeeds (recover-then-retry on EEXIST), and the vault remounts cleanly with NO user-facing 'Failed to create mount point' error and no notify."
     why_human: "recover_stale_mount + the mountinfo/EEXIST unit tests are #[cfg(target_os = linux)] and do not compile/run on the macOS verification host. The end-to-end stale-mount recovery (real fusermount3, real ENOTCONN kernel state) cannot be exercised by unit tests on this platform."
+    result: "PASSED — confirmed on a Linux host 2026-06-15: after SIGKILL mid-mount, the app auto-recovers the stale mount and the vault remounts cleanly with no error and no notify."
 ---
 
 # Phase 46: Desktop FUSE data-loss bugs + replay hardening Verification Report
@@ -15,7 +16,7 @@ human_verification:
 **Phase Goal:** Close the desktop FUSE write-durability work Phase 45 deferred — three data-loss bugs (mkdir orphan on parent-publish conflict, release() false-durability ack, stale-mount recovery on crash), two replay-path hardening follow-ups (PR #491), and remaining read_ops/write_ops + journal_helpers test coverage. Behavior-changing correctness/durability fixes.
 
 **Verified:** 2026-06-15T12:43:02Z
-**Status:** human_needed
+**Status:** verified (Linux remount-after-SIGKILL UAT passed 2026-06-15)
 **Re-verification:** No — initial verification
 
 ## Goal Achievement
@@ -106,6 +107,7 @@ The `flush` no-op (`handle_flush` returns ok) is a **documented accepted limitat
 **Test:** On a Linux host, mount the desktop FUSE vault, SIGKILL the app mid-mount to leave a stale/disconnected mount (stat returns ENOTCONN, `Path::exists()` returns false), then restart the app.
 **Expected:** App auto-recovers — reads `/proc/self/mountinfo`, unmounts via `fusermount3 -u` (or lazy `-z -u`), `create_mount_point_dir` succeeds via recover-then-retry on EEXIST, vault remounts cleanly with no "Failed to create mount point" error and no notify.
 **Why human:** `recover_stale_mount` and its mountinfo/EEXIST unit tests are `#[cfg(target_os = "linux")]` and do not compile/run on the macOS verification host. End-to-end recovery (real fusermount3, real ENOTCONN kernel state) is not exercisable by unit tests on this platform.
+**Result:** ✓ PASSED — confirmed on a Linux host 2026-06-15. After SIGKILL mid-mount left a stale/disconnected mount, restarting the app auto-recovered it (stale mount unmounted, mount point recreated, vault remounted cleanly) with no "Failed to create mount point" error and no notify.
 
 ### Gaps Summary
 
