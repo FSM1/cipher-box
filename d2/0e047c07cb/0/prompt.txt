@@ -1,0 +1,5 @@
+https://github.com/FSM1/cipher-box/pull/491#pullrequestreview-4493841428 contains 2 outside of diff range comments which should probably be evaluated
+
+---
+
+implement #1 and #2
