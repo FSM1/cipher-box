@@ -23,7 +23,7 @@
     "ui_review": true,
     "research_before_questions": true,
     "skip_discuss": false,
-    "use_worktrees": false
+    "use_worktrees": true
   },
   "git": {
     "branching_strategy": "phase",
