@@ -57,8 +57,6 @@ export function useFolder() {
     moveItems: folderMutations.moveItems,
     deleteItem: folderMutations.deleteItem,
     deleteItems: folderMutations.deleteItems,
-    addFile: fileOperations.addFile,
-    addFiles: fileOperations.addFiles,
     updateFile: fileOperations.updateFile,
     restoreVersion: fileVersions.restoreVersion,
     deleteVersion: fileVersions.deleteVersion,

@@ -92,6 +92,7 @@ export function useFileVersions() {
           prunedCids,
         } = computeRestoreVersionUpdate(currentMetadata, versionIndex);
 
+        let mergePrunedCids: string[] = [];
         try {
           // client.restoreFileVersion owns the file IPNS publish (CAS internally), the
           // conditional folder publish for lazy IPNS-key migration, folderTree
@@ -99,20 +100,26 @@ export function useFileVersions() {
           // children/sequenceNumber are written ONLY by the folder:updated subscription —
           // no direct store writes here. fileIpnsPrivateKey is zeroed in this finally
           // (T-47-01); sdk-core updateFileMetadata also zeroes its own copy.
-          await getSdkClient().restoreFileVersion(parentFolder.ipnsName, fileId, versionIndex, {
-            fileIpnsPrivateKey,
-            currentMetadata: restoredMetadata,
-            updates,
-            createVersion: false,
-            maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
-            ...(migratedIpnsPrivateKeyEncrypted ? { migratedIpnsPrivateKeyEncrypted } : {}),
-          });
+          ({ prunedCids: mergePrunedCids } = await getSdkClient().restoreFileVersion(
+            parentFolder.ipnsName,
+            fileId,
+            versionIndex,
+            {
+              fileIpnsPrivateKey,
+              currentMetadata: restoredMetadata,
+              updates,
+              createVersion: false,
+              maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
+              ...(migratedIpnsPrivateKeyEncrypted ? { migratedIpnsPrivateKeyEncrypted } : {}),
+            }
+          ));
         } finally {
           fileIpnsPrivateKey.fill(0);
         }
 
-        // Unpin pruned version CIDs
-        for (const prunedCid of prunedCids) {
+        // Unpin pruned version CIDs: the restore's own cap-pruning (web-computed) plus
+        // any CIDs pruned by a 409-conflict merge inside the SDK publish (deduped).
+        for (const prunedCid of new Set([...prunedCids, ...mergePrunedCids])) {
           unpinFromIpfs(prunedCid).catch((err) =>
             logger.warn('[Versions] Unpin pruned CID failed:', err)
           );
