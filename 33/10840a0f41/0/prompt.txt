@@ -1,0 +1,5 @@
+pelase add tests for @crates/fuse/src/journal_helpers.rs - this file is currently entirely untested.
+
+---
+
+what about the @src/read_ops.rs and @src/write_ops.rs files that also have 0% patch coverage
