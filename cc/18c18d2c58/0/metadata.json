@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "cc18c18d2c58",
+  "session_id": "fa272e9e-42b1-4669-b018-72e17add5018",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T21:55:11.557438Z",
+  "branch": "fix/owner-edit-folder-not-loaded",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/hooks/useFileOperations.ts",
+    "apps/web/src/hooks/useFileVersions.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "50d24a5389aa",
+  "token_usage": {
+    "input_tokens": 12930,
+    "cache_creation_tokens": 314550,
+    "cache_read_tokens": 7572662,
+    "output_tokens": 62789,
+    "api_call_count": 57
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T21:54:37.469645Z",
+    "agent_lines": 20,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 20,
+    "total_lines_changed": 22,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
