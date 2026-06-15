@@ -313,7 +313,12 @@ impl PublishCoordinator {
         let resp = cipherbox_api_client::ipns::resolve_ipns(api, ipns_name)
             .await
             .map_err(|e| format!("IPNS resolve failed for {}: {}", ipns_name, e))?;
-        let resolved = resp.sequence_number.parse::<u64>().unwrap_or(0);
+        let resolved = resp.sequence_number.parse::<u64>().map_err(|e| {
+            format!(
+                "Invalid IPNS sequence '{}' for {}: {}",
+                resp.sequence_number, ipns_name, e
+            )
+        })?;
         let cached = self.get_cached(ipns_name).unwrap_or(0);
         let seq = std::cmp::max(resolved, cached);
         self.update_cache(ipns_name, seq);
