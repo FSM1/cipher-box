@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1e934539e49e",
+  "session_id": "e88312bf-d442-45c1-b751-dc3a82edfd9e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T19:38:06.055146Z",
+  "branch": "feat/phase-47-sdk-folder-state-publish-consolidation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useFileOperations.ts",
+    "apps/web/src/hooks/useFileVersions.ts",
+    "apps/web/src/hooks/useFolder.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "28e3f74e8fc1",
+  "checkpoint_transcript_start": 643,
+  "transcript_lines_at_start": 643,
+  "token_usage": {
+    "input_tokens": 564,
+    "cache_creation_tokens": 60080,
+    "cache_read_tokens": 6312593,
+    "output_tokens": 32145,
+    "api_call_count": 24
+  },
+  "session_metrics": {
+    "turn_count": 13
+  },
+  "summary": {
+    "intent": "Fold a latent pin-leak fix for `restoreFileVersion`'s web hook into PR #494, then audit all mutative web app calls to confirm they route through the new SDK client methods rather than direct `sdk-core` publishes.",
+    "outcome": "Fixed `restoreFileVersion` to unpin SDK-returned `prunedCids` (not just web-computed ones), removed ~310 lines of dead upload code (`handleAddFile`/`handleAddFiles`) that bypassed `client.folderTree`, confirmed all active mutation paths route through the SDK client, and committed the combined fold-in with root typecheck and all affected tests passing.",
+    "learnings": {
+      "repo": [
+        "`prunedCids` has two independent sources: web-computed cap-pruning (deterministic) and SDK-returned conflict-merge pruning (only on 409). They are conceptually disjoint but must be unioned and deduped when unpinning.",
+        "`useSharedWriteOps.ts` uses `SharedWriteContext`/refs rather than `client.folderTree` by design — shared-with-me folders are a separate subsystem, not a bypass.",
+        "Active single/batch upload routes through `useDropUpload.ts:147` → `getSdkClient().uploadFiles()`. The `handleAddFile`/`handleAddFiles` methods in `useFileOperations.ts` were dead code using the old direct `sdk-core` pattern.",
+        "`useFolder.ts:39` re-exports the entire `useFileOperations` object, so verifying dead code required tracing that no consumer destructures `.addFile`/`.addFiles` from `useFolder()`.",
+        "Of 38 audited operations: 18 correctly routed through SDK client, 11 legitimately out-of-scope (device-registry, vault-settings, BYO config — separate non-folder IPNS records), 9 were bypasses (2 dead code, 5 by-design shared-folder subsystem, 2 duplicates)."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useFileVersions.ts",
+          "finding": "Restore hook was only unpinning web-computed `prunedCids` and discarding the SDK-returned `prunedCids` from conflict-merge — same latent pin-leak as `deleteFileVersion` but not flagged by CodeRabbit."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "line": 44,
+          "end_line": 175,
+          "finding": "`handleAddFile` is dead code — calls `addFileToFolder` directly from `@cipherbox/sdk-core`, bypassing `client.folderTree`. No live consumer exists despite being re-exported via `useFolder`."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "line": 187,
+          "end_line": 334,
+          "finding": "`handleAddFiles` is dead code — calls `addFilesToFolder` directly from `@cipherbox/sdk-core` (publishes IPNS at `sdk-core/src/folder/index.ts:565`), bypassing `client.folderTree`."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1313,
+          "finding": "`restoreFileVersion` already returns `prunedCids` from the SDK; the web hook was silently discarding them before this fix."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedWriteOps.ts",
+          "line": 138,
+          "end_line": 346,
+          "finding": "All five shared-write operations (`uploadToSharedFolder`, `createSharedSubfolder`, `renameInSharedFolder`, `updateSharedFile`, `deleteFromSharedFolder`) use `SharedWriteContext` built from folder refs — by design, not a folderTree bypass."
+        }
+      ],
+      "workflow": [
+        "A 5-agent parallel audit workflow (38 ops, 107 tool uses, ~263k tokens) was effective for mapping SDK-routing coverage across the web app surface.",
+        "Delegating a mechanical ~310-line deletion to a sub-agent with exact constraints + typecheck gate kept the main context lean without losing correctness guarantees.",
+        "Background + unsandboxed commit mode is required when the 1Password signer needs Touch ID; this should be anticipated before committing in that environment.",
+        "Verification chain: root typecheck (all package builds + web `tsc -b`) + per-package test suites before committing — typecheck alone is insufficient for catching import-removal regressions."
+      ]
+    },
+    "friction": [
+      "1Password Touch ID prompt is required for background unsandboxed commits, introducing a manual gate that can stall automated commit flows.",
+      "The audit workflow result was truncated at 20,880 chars in the task notification, requiring a separate full-file read to get the complete findings map.",
+      "The `useFolder.ts` re-export pattern obscured dead-code status of `addFile`/`addFiles` — tracing required two additional grep passes to confirm no live consumer."
+    ],
+    "open_items": [
+      "Commit `bpclf138s` was running in background at session end — push to `feat/phase-47-sdk-folder-state-publish-consolidation` (PR #494) still pending confirmation.",
+      "`useSharedWriteOps.ts` shared-write paths are currently out-of-scope for `client.folderTree` integration — if shared folders are ever brought under unified state management, these five call sites need to be migrated.",
+      "Broader Phase 47 SDK folder-state publish consolidation work likely continues beyond PR #494."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T19:37:19.926054Z",
+    "agent_lines": 19,
+    "agent_removed": 320,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 19,
+    "total_lines_changed": 339,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 23,
+      "agent_lines_removed": 10,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
