@@ -25,6 +25,10 @@ pub mod write_ops;
 // Platform-specific modules
 pub mod platform;
 
+// Test-only harness (make_test_fs / CaptureSender / reply_error_code).
+#[cfg(all(test, feature = "fuse"))]
+mod test_support;
+
 // Re-exports
 pub use cache::{ContentCache, MetadataCache};
 pub use error::FuseError;
