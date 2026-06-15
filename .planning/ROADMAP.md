@@ -717,12 +717,12 @@ Plans:
 
 Scope (captured todos):
 
-- [ ] FUSE mkdir orphans the new folder when parent publish conflicts (bug, high) — `2026-06-11-fuse-mkdir-parent-publish-orphan.md`
-- [ ] FUSE release() reports success then can silently lose data (bug, high) — `2026-06-11-fuse-release-data-loss-before-remote-commit.md`
-- [ ] Recover stale FUSE mount after crash on Linux startup (bug) — `2026-06-14-recover-stale-fuse-mount-after-crash-on-linux-startup.md`
-- [ ] Park legacy empty `file_meta_ipns_name` replay entries instead of empty FilePointer (PR #491 follow-up) — `2026-06-15-replay-empty-file-meta-ipns-name-publishes-empty-filepointer.md`
-- [ ] Use a strict (cache-bypassing) IPNS resolve in replay classification (PR #491 follow-up) — `2026-06-15-replay-resolve-ipns-strict-resolve-path-no-cache-fallback.md`
-- [ ] Improve Phase-43 rust write-durability test coverage — Tier 2 read_ops/write_ops harness + journal_helpers builders (Tier 1 landed in Phase 45) — `2026-06-14-improve-phase-43-rust-test-coverage.md`
+- [x] FUSE mkdir orphans the new folder when parent publish conflicts (bug, high) — `2026-06-11-fuse-mkdir-parent-publish-orphan.md`
+- [x] FUSE release() reports success then can silently lose data (bug, high) — `2026-06-11-fuse-release-data-loss-before-remote-commit.md`
+- [x] Recover stale FUSE mount after crash on Linux startup (bug) — `2026-06-14-recover-stale-fuse-mount-after-crash-on-linux-startup.md`
+- [x] Park legacy empty `file_meta_ipns_name` replay entries instead of empty FilePointer (PR #491 follow-up) — `2026-06-15-replay-empty-file-meta-ipns-name-publishes-empty-filepointer.md`
+- [x] Use a strict (cache-bypassing) IPNS resolve in replay classification (PR #491 follow-up) — `2026-06-15-replay-resolve-ipns-strict-resolve-path-no-cache-fallback.md`
+- [x] Improve Phase-43 rust write-durability test coverage — Tier 2 read_ops/write_ops harness + journal_helpers builders (Tier 1 landed in Phase 45) — `2026-06-14-improve-phase-43-rust-test-coverage.md`
 
 ### Phase 47: SDK folder-state and publish-path consolidation
 
@@ -748,10 +748,10 @@ Plans:
 
 Scope (captured todos):
 
-- [ ] Unify folder-state ownership in the SDK client (medium) — `2026-06-14-unify-folder-state-ownership-in-sdk-client.md`
-- [ ] Unify file and folder IPNS CAS-retry into one publishWithCas helper (sdk-core) — `2026-06-14-unify-file-and-folder-ipns-cas-retry-into-one-publishwithcas.md`
-- [ ] Folder writes leak baseChildren/publishedChildren bookkeeping to call sites — `2026-06-14-folder-writes-leak-basechildren-and-publishedchildren-bookke.md`
-- [ ] updateSharedFile discards prunedCids from updateFileMetadata causing pin leak (medium) — `2026-06-14-updatesharedfile-discards-prunedcids-from-updatefilemetadata.md`
+- [x] Unify folder-state ownership in the SDK client (medium) — `2026-06-14-unify-folder-state-ownership-in-sdk-client.md`
+- [x] Unify file and folder IPNS CAS-retry into one publishWithCas helper (sdk-core) — `2026-06-14-unify-file-and-folder-ipns-cas-retry-into-one-publishwithcas.md`
+- [x] Folder writes leak baseChildren/publishedChildren bookkeeping to call sites — `2026-06-14-folder-writes-leak-basechildren-and-publishedchildren-bookke.md`
+- [x] updateSharedFile discards prunedCids from updateFileMetadata causing pin leak (medium) — `2026-06-14-updatesharedfile-discards-prunedcids-from-updatefilemetadata.md`
 
 ---
 
