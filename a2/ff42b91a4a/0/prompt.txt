@@ -1,0 +1,5 @@
+what has been done about the gsd todo's that this PR is based on?
+
+---
+
+yeah please go ahead, except for leaving 14 in pending, so that it is picked up on the next run

@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "a2ff42b91a4a",
+  "session_id": "ddff1841-6b38-4472-9268-91a6c1263314",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T01:38:19.373092Z",
+  "branch": "feat/desktop-fuse-write-durability-cleanup",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/todos/pending/2026-06-14-improve-phase-43-rust-test-coverage.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "14dd5f9eb9b4",
+  "checkpoint_transcript_start": 321,
+  "transcript_lines_at_start": 321,
+  "token_usage": {
+    "input_tokens": 421,
+    "cache_creation_tokens": 29681,
+    "cache_read_tokens": 3389181,
+    "output_tokens": 18592,
+    "api_call_count": 17
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Audit which GSD todos from the Phase 45 PR had been completed, reconcile bookkeeping (move done todos, tick ROADMAP checkboxes), and consolidate duplicate test-coverage tracking.",
+    "outcome": "6 of 7 Phase 45 todos moved to done/, their ROADMAP checkboxes ticked, and a duplicate test-coverage todo folded into todo #14 which remains in pending for the next phase.",
+    "learnings": {
+      "repo": [
+        "Phase 45 scoped 7 todos (#11, #12, #14, #15, #18, #19, #20); all were implemented in code but bookkeeping was never reconciled — a known gap flagged in the phase's own VERIFICATION.md.",
+        "Todo #14 has a 3-tier structure: Tier 1 (write-durability/replay safety-net tests) was delivered in Phase 45; Tier 2/3 (read_ops.rs/write_ops.rs callback + replay-orchestration coverage requiring trait seams/test harness) was explicitly deferred.",
+        "The ReplySender wall hit during the session maps exactly to #14 Tier 2, meaning new todos risk duplicating existing pending work — cross-referencing pending todos before filing new ones is important.",
+        "Completed todos live in .planning/todos/done/ and are tracked with checkboxes in .planning/ROADMAP.md around lines 668–674."
+      ],
+      "code": [
+        {
+          "path": ".planning/todos/pending/2026-06-14-improve-phase-43-rust-test-coverage.md",
+          "finding": "Todo #14 tracks fuse test coverage gap in three tiers; Tier 1 done (6 T-45 tests), Tier 2/3 (read_ops/write_ops handler coverage, ~522 lines needing trait seams) still open."
+        },
+        {
+          "path": ".planning/ROADMAP.md",
+          "line": 668,
+          "end_line": 674,
+          "finding": "Phase 45 scope checkboxes for todos #11, #12, #15, #18, #19, #20 were all [ ] despite code being implemented; ticked to [x] in this session."
+        }
+      ],
+      "workflow": [
+        "Phase VERIFICATION.md files can flag doc-update gaps explicitly while still marking status: passed — code evidence and bookkeeping are tracked separately.",
+        "Before filing a new todo, check pending/ for overlapping items to avoid tracking the same gap twice.",
+        "Bookkeeping reconciliation (moving todos, ticking ROADMAP boxes) should be done as a small standalone commit separate from code changes."
+      ]
+    },
+    "friction": [
+      "All 7 Phase 45 todos were left in pending/ and all 7 ROADMAP boxes left unchecked after the phase completed — the code landed but the paperwork was never done.",
+      "A newly filed todo (2026-06-15-fuse-test-coverage) duplicated the open Tier 2/3 of existing todo #14, requiring reconciliation and deletion of the duplicate."
+    ],
+    "open_items": [
+      "Todo #14 Tier 2/3: read_ops.rs and write_ops.rs callback + replay-orchestration test coverage (~522 lines), blocked on ReplySender trait seams / test harness — deferred to next phase.",
+      "Todo #14 Tier 1 completion status should be recorded explicitly in the todo file to mark progress for whoever picks it up next."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T01:38:01.423194Z",
+    "agent_lines": 54,
+    "agent_removed": 7,
+    "human_added": 222,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 276,
+    "total_lines_changed": 576,
+    "agent_percentage": 10.590277777777777,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}

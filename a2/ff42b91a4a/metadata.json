@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "a2ff42b91a4a",
+  "strategy": "manual-commit",
+  "branch": "feat/desktop-fuse-write-durability-cleanup",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/todos/pending/2026-06-14-improve-phase-43-rust-test-coverage.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a2/ff42b91a4a/0/metadata.json",
+      "transcript": "/a2/ff42b91a4a/0/full.jsonl",
+      "content_hash": "/a2/ff42b91a4a/0/content_hash.txt",
+      "prompt": "/a2/ff42b91a4a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 421,
+    "cache_creation_tokens": 29681,
+    "cache_read_tokens": 3389181,
+    "output_tokens": 18592,
+    "api_call_count": 17
+  }
+}
