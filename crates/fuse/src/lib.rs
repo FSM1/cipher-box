@@ -2495,3 +2495,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+// REQ-6: Sample handler tests proving the test_support harness works. Gated on
+// `feature = "fuse"` because they construct `fuser::Reply*` values and use the
+// `crate::test_support` module (which is itself fuse-feature-gated).
+#[cfg(all(test, feature = "fuse"))]
+mod handler_harness_tests {
+    use crate::test_support::{make_test_fs, reply_error_code, CaptureSender};
+    use fuser::{Reply, ReplyAttr, ReplyEmpty};
+    use std::sync::{Arc, Mutex};
+
+    /// getattr on the root inode must reply with error == 0 (success) — the
+    /// metadata-only path needs no network and proves CaptureSender captures the
+    /// out-header.
+    #[tokio::test]
+    async fn getattr_returns_ok_for_root() {
+        let mut fs = make_test_fs();
+        let cap = Arc::new(Mutex::new(Vec::new()));
+        let reply = <ReplyAttr as Reply>::new(1, CaptureSender(cap.clone()));
+        crate::read_ops::implementation::handle_getattr(&mut fs, crate::inode::ROOT_INO, reply);
+        assert_eq!(reply_error_code(&cap), 0, "getattr root must reply ok");
+    }
+
+    /// flush is a no-op that replies error == 0 (durability lives on release).
+    /// Also satisfies the REQ-2 flush-no-op verification consumed by Plan 04.
+    #[tokio::test]
+    async fn flush_returns_ok() {
+        let cap = Arc::new(Mutex::new(Vec::new()));
+        let reply = <ReplyEmpty as Reply>::new(1, CaptureSender(cap.clone()));
+        crate::read_ops::implementation::handle_flush(reply);
+        assert_eq!(reply_error_code(&cap), 0, "flush must reply ok");
+    }
+}
