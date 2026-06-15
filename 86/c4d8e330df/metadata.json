@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "86c4d8e330df",
+  "strategy": "manual-commit",
+  "branch": "docs/roadmap-phases-46-47-desktop-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/todos/done/2026-03-23-investigate-removal-of-mock-ipns-routing-layer.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/86/c4d8e330df/0/metadata.json",
+      "transcript": "/86/c4d8e330df/0/full.jsonl",
+      "content_hash": "/86/c4d8e330df/0/content_hash.txt",
+      "prompt": "/86/c4d8e330df/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28022,
+    "cache_creation_tokens": 73081,
+    "cache_read_tokens": 6268123,
+    "output_tokens": 24546,
+    "api_call_count": 23
+  }
+}

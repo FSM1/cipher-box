@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "86c4d8e330df",
+  "session_id": "ddff1841-6b38-4472-9268-91a6c1263314",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T02:02:11.242229Z",
+  "branch": "docs/roadmap-phases-46-47-desktop-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/todos/done/2026-03-23-investigate-removal-of-mock-ipns-routing-layer.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "395c204d1424",
+  "checkpoint_transcript_start": 414,
+  "transcript_lines_at_start": 414,
+  "token_usage": {
+    "input_tokens": 28022,
+    "cache_creation_tokens": 73081,
+    "cache_read_tokens": 6268123,
+    "output_tokens": 24546,
+    "api_call_count": 23
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "After Phase 45 merged to main, review all 19 pending todos, group them by area, create two new planning phases (one for outstanding FUSE/desktop bugs, one for SDK refactors), and close todo #5 (mock-ipns-routing investigation) as won't-address.",
+    "outcome": "Two new phases were added to ROADMAP.md and STATE.md (Phase 46 for FUSE/desktop bugs covering todos #7, #8, #12, #14, #18, #19 and Phase 47 for SDK changes covering todos #11, #15, #16, #17), phase directories were created with .gitkeep files, todo #5 was moved to done with a won't-address note, and all changes were committed on a new branch off main.",
+    "learnings": {
+      "repo": [
+        "fuse, desktop-fuse, and desktop area labels all refer to the same codebase area (the Rust FUSE driver in crates/fuse/)",
+        "Phase 45 (desktop FUSE write-durability cleanup) merged with 6496 insertions touching crates/fuse/src/lib.rs, journal_helpers.rs, write_ops.rs, read_ops.rs, and crates/sdk/src/queue.rs",
+        "Planning changes must never be committed directly to main — always branch first",
+        "The GSD system tracks todos in .planning/todos/pending/ and .planning/todos/done/ with markdown files; closing a todo means moving the file and optionally annotating the resolution",
+        "STATE.md tracks multiple fields that need updating when phases are added: frontmatter phase counts, current position, roadmap evolution section, and pending todo count"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD phase creation requires three coordinated steps: ROADMAP.md entry, STATE.md updates (multiple fields), and phase directory with .gitkeep",
+        "When closing a todo as won't-address rather than implemented, annotating the file with a closing reason prevents confusion in git history",
+        "STATE.md frequently requires multiple sequential edit passes because its fields are spread across frontmatter, a current-position section, and an accumulated-context section"
+      ]
+    },
+    "friction": [
+      "STATE.md required 6 separate Edit calls to update all relevant fields — the file's structure scatters related metadata across multiple sections making atomic updates difficult",
+      "The assistant had to discover the 'never commit to main' constraint mid-task (after already being on main) rather than it being checked upfront"
+    ],
+    "open_items": [
+      "Phase 46 (FUSE/desktop bugs): #7 FUSE mkdir parent-publish orphan, #8 FUSE release() silent data loss, #12 Phase 43 Rust test coverage Tier 2, #14 stale FUSE mount recovery on Linux crash, #18 park legacy empty file_meta_ipns_name replay entries, #19 strict cache-bypassing IPNS resolve in replay",
+      "Phase 47 (SDK refactors): #11 folder writes baseChildren/publishedChildren bookkeeping leak, #15 unify file/folder IPNS CAS-retry into publishWithCas, #16 unify folder-state ownership in SDK client, #17 updateSharedFile discards prunedCids causing pin leak",
+      "CI: #6 Node 24 GitHub Actions updates (deadline-sensitive, June 2026), #13 pin Actions to immutable SHAs",
+      "Auth: #1 ERC-1271 contract wallet auth, #4 alternative MFA factor types",
+      "Architecture: #2 CRDT-based IPNS inbox for serverless share discovery",
+      "UI: #3 async/incremental search index build for large vaults",
+      "Shares: #9 encrypt share itemName at rest (Phase 14 finding M1)",
+      "IPNS: #10 signature storage review — signedRecord validation, verification, zeroization (S1/S2/S3)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T02:01:25.928647Z",
+    "agent_lines": 68,
+    "agent_removed": 11,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 68,
+    "total_lines_changed": 102,
+    "agent_percentage": 77.45098039215686,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}

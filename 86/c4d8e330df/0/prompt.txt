@@ -1,0 +1,9 @@
+/gsd:capture --list
+
+---
+
+ok could you give me the list of these items grouped by the area impacted (noting that fuse/desktop/desktop-fuse are the same area)
+
+---
+
+ok, create 2 phases, 1 for outstanding desktop todos, and a second one for the 4 sdk changes. todo #5 can be moved to done, as not being addressed.
