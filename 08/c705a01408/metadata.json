@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "08c705a01408",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-47-sdk-folder-state-publish-consolidation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/46-desktop-fuse-data-loss-bugs-replay-hardening/46-VERIFICATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/08/c705a01408/0/metadata.json",
+      "transcript": "/08/c705a01408/0/full.jsonl",
+      "content_hash": "/08/c705a01408/0/content_hash.txt",
+      "prompt": "/08/c705a01408/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 564,
+    "cache_creation_tokens": 383831,
+    "cache_read_tokens": 8973478,
+    "output_tokens": 17720,
+    "api_call_count": 24
+  }
+}

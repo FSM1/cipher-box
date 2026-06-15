@@ -1,0 +1,135 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "08c705a01408",
+  "session_id": "e88312bf-d442-45c1-b751-dc3a82edfd9e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T21:06:54.03925Z",
+  "branch": "feat/phase-47-sdk-folder-state-publish-consolidation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/46-desktop-fuse-data-loss-bugs-replay-hardening/46-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "b545c0c8fcbb",
+  "checkpoint_transcript_start": 902,
+  "transcript_lines_at_start": 902,
+  "token_usage": {
+    "input_tokens": 564,
+    "cache_creation_tokens": 383831,
+    "cache_read_tokens": 8973478,
+    "output_tokens": 17720,
+    "api_call_count": 24
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_013oUpDepo9CQohLWcmEVsLD",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b545c0c8fcbb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 792,
+        "end": 793,
+        "entry_ids": [
+          "1c900cdb-12f2-4ac3-a0da-f8cf3458bc21"
+        ],
+        "tool_use_id": "toolu_013oUpDepo9CQohLWcmEVsLD"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013oUpDepo9CQohLWcmEVsLD"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Mark phase 46 and 47 todos as complete after verifying delivery, capture a follow-up todo for shared folder writes, and record a successful Linux UAT for phase 46's stale-mount recovery requirement.",
+    "outcome": "All 10 todos moved to completed/ (pending count 19→9), ROADMAP scope boxes checked, STATE.md updated, a new shared-write todo captured, and phase 46 UAT confirmed and recorded in 46-VERIFICATION.md. All commits pushed to PR #494.",
+    "learnings": {
+      "repo": [
+        "Planning system lives in .planning/ with subdirs: todos/pending/, todos/completed/, phases/, STATE.md, and ROADMAP.",
+        "ROADMAP has two distinct checkbox types: 'Scope (captured todos)' boxes and plan checkboxes — only scope boxes should be checked when marking todos done.",
+        "Phase verification docs (.planning/phases/<phase>/46-VERIFICATION.md) carry a human_needed flag for items requiring manual UAT that can't be unit-verified.",
+        "The project uses lint-staged with Touch ID-gated GPG signing on commits.",
+        "Merging origin/main into the feature branch was required before verifying phase 46 todos because the phase's directory and code were only present after merge."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/46-desktop-fuse-data-loss-bugs-replay-hardening/46-VERIFICATION.md",
+          "finding": "REQ-3 (stale-mount recovery after SIGKILL) had a human_needed flag requiring Linux remount UAT; code and unit tests landed but runtime path needed a real Linux machine to confirm."
+        },
+        {
+          "path": ".planning/STATE.md",
+          "finding": "Tracks pending todo count and phase UAT status; updated to reflect 19→9 pending todos and phase 46 UAT pass."
+        }
+      ],
+      "workflow": [
+        "git mv is the correct tool for moving todos to completed/ so renames are staged automatically.",
+        "Background commits with task notifications allow async Touch ID approval without blocking the session.",
+        "A transient 'could not write index' git error from lint-staged resolved cleanly on retry — no manual recovery needed beyond confirming no lock file remained.",
+        "lint-staged creates a backup stash on failure; stash cleanup happens automatically so manual stash pop is not needed after a transient error."
+      ]
+    },
+    "friction": [
+      "lint-staged threw a transient 'could not write index' error on the UAT commit, causing it to fail with exit code 1 and requiring a diagnostic pass before retrying.",
+      "The phase 46 merge was a prerequisite for local verification that wasn't initially in scope — merging origin/main mid-session added an unplanned step."
+    ],
+    "open_items": [
+      "New todo captured: route useSharedWriteOps mutations through the SDK client (.planning/todos/pending/2026-06-15-route-shared-folder-writes-through-the-sdk-client.md), area: shares, priority: medium, multi-PR.",
+      "9 remaining pending todos unrelated to phases 46/47 (auth, CI, architecture, shared-write follow-up, etc.) are still open.",
+      "PR #494 is pushed but not yet merged — contains 3 review-fix commits, the merge, the capture, and the todo-completions."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T21:06:31.808294Z",
+    "agent_lines": 6,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 6,
+    "total_lines_changed": 10,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 11,
+      "agent_lines_removed": 3,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
