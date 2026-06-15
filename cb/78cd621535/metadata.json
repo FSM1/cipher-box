@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "cb78cd621535",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-47-sdk-folder-state-publish-consolidation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useFileVersions.ts",
+    "packages/sdk-core/src/__tests__/cas.test.ts",
+    "packages/sdk/src/__tests__/client-file-ops.test.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cb/78cd621535/0/metadata.json",
+      "transcript": "/cb/78cd621535/0/full.jsonl",
+      "content_hash": "/cb/78cd621535/0/content_hash.txt",
+      "prompt": "/cb/78cd621535/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1018,
+    "cache_creation_tokens": 68322,
+    "cache_read_tokens": 8632451,
+    "output_tokens": 46064,
+    "api_call_count": 43
+  }
+}

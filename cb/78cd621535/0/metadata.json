@@ -1,0 +1,132 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "cb78cd621535",
+  "session_id": "e88312bf-d442-45c1-b751-dc3a82edfd9e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T19:23:00.7203Z",
+  "branch": "feat/phase-47-sdk-folder-state-publish-consolidation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useFileVersions.ts",
+    "packages/sdk-core/src/__tests__/cas.test.ts",
+    "packages/sdk/src/__tests__/client-file-ops.test.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "89416031c461",
+  "checkpoint_transcript_start": 416,
+  "transcript_lines_at_start": 416,
+  "token_usage": {
+    "input_tokens": 1018,
+    "cache_creation_tokens": 68322,
+    "cache_read_tokens": 8632451,
+    "output_tokens": 46064,
+    "api_call_count": 43
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Run a CodeRabbit CLI review on the phase-47 branch (user was rate-limited on web reviews), then fix all confirmed findings before committing.",
+    "outcome": "All 3 CodeRabbit CLI findings were verified as real and fixed: major pin leak in deleteFileVersion (SDK + web layer), plus 2 missing cas test cases. Adversarial workflow confirmed correctness; 204 sdk-core tests and 9 client-file-ops tests pass, full root typecheck exits 0. Commit staged and running in background at transcript end.",
+    "learnings": {
+      "repo": [
+        "deleteFileVersion was asymmetric with its sibling methods: replaceFile (lines 1172, 1224) and restoreFileVersion (lines 1283, 1313) both capture and return prunedCids from updateFileMetadata, but deleteFileVersion did a bare await and dropped them.",
+        "apps/web typechecks against the built sdk dist — must rebuild sdk before running web tsc -b or cross-package type errors will be stale.",
+        "Root `pnpm typecheck` is the authoritative cross-package check: it builds the full dep chain (crypto→core→api-client→sdk-core→sdk) then runs tsc -b for web.",
+        "sdk integration tests are skipped in CI via `process.env.CI ? describe.skip : describe` (line 26 of client-file-ops.test.ts) and require a live server at localhost:3000 — pre-existing, not a signal of test failures.",
+        "publishWithCas engine had no test coverage for: (1) null re-resolve after 409 (should throw ConflictError without calling decodeRemote/merge) and (2) multi-round prunedCids accumulation and dedup.",
+        "Phase-47 merge-base with main is commit 4b539b445; the branch spans 13 commits across sdk-core/sdk/web."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1365,
+          "end_line": 1365,
+          "finding": "deleteFileVersion did a bare await on updateFileMetadata, silently dropping prunedCids returned from conflict-merge rounds — orphaned pins on quota."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1172,
+          "end_line": 1224,
+          "finding": "replaceFile correctly captures prunedCids from updateFileMetadata and returns them as Promise<{ prunedCids }> — the reference pattern for the deleteFileVersion fix."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1283,
+          "end_line": 1313,
+          "finding": "restoreFileVersion correctly captures prunedCids from updateFileMetadata and returns them — second reference pattern confirming the asymmetry."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileVersions.ts",
+          "line": 216,
+          "end_line": 216,
+          "finding": "handleDeleteVersion unpinned only deletedCid; prunedCids from conflict-merge rounds were never unpinned."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileVersions.ts",
+          "line": 102,
+          "end_line": 109,
+          "finding": "restoreVersion hook ignores SDK-returned prunedCids and uses only web-computed prunedCids from computeRestoreVersionUpdate — same latent conflict-merge pin leak, confirmed out-of-scope but flagged for follow-up."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/cas.test.ts",
+          "line": 185,
+          "end_line": 193,
+          "finding": "Test 4c originally re-invoked publishWithCas a second time inside a try/catch to assert error properties, causing mock bleed; tidied to single invocation based on adversarial review finding."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit CLI review scoped with `--base-commit <merge-base>` produces a clean per-phase diff review without touching unrelated history.",
+        "Three-lens adversarial workflow (pin-leak correctness, test validity, scope/regression) before committing caught a redundant second publishWithCas call in a new test and surfaced the out-of-scope restoreFileVersion latent leak.",
+        "1Password git signer is unreliable mid-session; background + unsandboxed commit (TaskCreate) is the proven workaround after an app restart recovers the signer.",
+        "Edit tool requires unique string anchors — when two code blocks share the same structure (restore vs delete), anchor on surrounding unique context or the block end to avoid ambiguous match errors."
+      ]
+    },
+    "friction": [
+      "Rate-limited on CodeRabbit web/PR reviews; had to fall back to the CLI tool.",
+      "1Password signer failed mid-session, requiring an app restart before the prior commit (78e5f3d59) could land.",
+      "Edit tool collisions when two structurally identical blocks (restoreFileVersion and deleteFileVersion test blocks) shared the same match string — required multiple retries with different anchors."
+    ],
+    "open_items": [
+      "restoreFileVersion web hook (useFileVersions.ts:102-109) has the same conflict-merge pin leak: it discards SDK-returned prunedCids and only unpins web-computed ones from computeRestoreVersionUpdate. Confirmed out-of-scope for this PR; needs a dedicated follow-up.",
+      "Commit for the phase-47 review fixes was still running in the background (Task b33lwmkfm) at transcript end — push and PR thread resolution not yet confirmed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T19:22:14.407496Z",
+    "agent_lines": 97,
+    "agent_removed": 13,
+    "human_added": 0,
+    "human_modified": 6,
+    "human_removed": 4,
+    "total_committed": 103,
+    "total_lines_changed": 120,
+    "agent_percentage": 91.66666666666666,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 113,
+      "agent_lines_removed": 13,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
