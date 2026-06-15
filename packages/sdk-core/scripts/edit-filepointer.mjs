@@ -21,7 +21,6 @@ import {
   loadFolderMetadata,
   resolveFileMetadata,
   updateFileMetadata,
-  replaceFileInFolder,
   updateFolderMetadataAndPublish,
 } from '../dist/index.mjs';
 import {
@@ -185,10 +184,13 @@ async function main() {
     clearBytes(fileKey);
   }
 
-  // 9. Update file metadata IPNS record
-  let ipnsRecord;
+  // 9. Update file metadata — publishes the file IPNS record internally with CAS.
+  // Contract change (#488): updateFileMetadata now publishes the record itself and
+  // returns { ipnsName, metadataCid, newSequenceNumber, prunedCids } — there is no
+  // separate replaceFileInFolder step anymore (it would re-publish with undefined
+  // fields and be rejected by the API DTO). Mirrors apps/web useFileOperations.ts.
   try {
-    ({ ipnsRecord } = await updateFileMetadata({
+    await updateFileMetadata({
       fileIpnsPrivateKey,
       fileMetaIpnsName: filePointer.fileMetaIpnsName,
       folderKey: vaultKeyBlob.rootFolderKey,
@@ -202,20 +204,12 @@ async function main() {
       },
       createVersion: true,
       ctx,
-    }));
+    });
   } finally {
     fileIpnsPrivateKey.fill(0);
   }
 
-  // 10. Publish only the file IPNS record
-  await replaceFileInFolder({
-    children: folder.metadata.children,
-    fileId: filePointer.id,
-    fileIpnsRecord: ipnsRecord,
-    ctx,
-  });
-
-  // 11. Republish folder metadata with updated modified_at so other clients
+  // 10. Republish folder metadata with updated modified_at so other clients
   // (e.g. FUSE mount) detect the change via the FilePointer timestamp.
   const updatedChildren = folder.metadata.children.map((child) => {
     if (child.type === 'file' && child.id === filePointer.id) {
@@ -229,6 +223,9 @@ async function main() {
 
   const { newSequenceNumber } = await updateFolderMetadataAndPublish({
     children: updatedChildren,
+    // Pre-mutation snapshot is the three-way merge base (folder.metadata.children
+    // is the original set; updatedChildren is the post-mutation set).
+    baseChildren: folder.metadata.children,
     folderKey: vaultKeyBlob.rootFolderKey,
     ipnsPrivateKey: rootIpnsKeypair.privateKey,
     ipnsName: rootIpnsName,
