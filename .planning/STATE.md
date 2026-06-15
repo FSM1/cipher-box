@@ -253,7 +253,7 @@ Recent for v1.1:
 
 ### Pending Todos
 
-18 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. The desktop (6) and SDK (4) groups are now scoped into Phases 46 and 47 respectively.
+19 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. The desktop (6) and SDK (4) groups are now scoped into Phases 46 and 47 respectively. Added 2026-06-15: route shared-folder writes (`useSharedWriteOps`) through the SDK client — the lone folder-state mutation not consolidated by Phase 47 / PR #494.
 
 ### Resolved
 
