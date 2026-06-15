@@ -6,6 +6,8 @@ files:
   - apps/api/.env:23
   - apps/api/src/ipns/delegated-routing.client.ts
   - tests/sdk-e2e/src/fixtures/test-harness.ts
+closed: 2026-06-15
+closed_reason: "Won't do — closed during todo triage as not being addressed. Mock-ipns-routing layer left in place; revisit only if dev-stack simplification is prioritized."
 ---
 
 ## Problem

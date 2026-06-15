@@ -701,8 +701,38 @@ Plans:
 
 - [x] 45-06-PLAN.md — Consolidate fuser/winfsp journal write paths into journal_helpers (#11)
 
+### Phase 46: Desktop FUSE data-loss bugs + replay hardening
+
+**Goal:** Close the desktop FUSE write-durability work that Phase 45 explicitly deferred — the three known data-loss bugs (mkdir orphan on parent-publish conflict, release() false-durability ack, stale-mount recovery on crash), the two replay-path hardening follow-ups from PR #491, and the remaining read_ops/write_ops + journal_helpers test coverage (Phase 45 Tier 2). Behavior-changing: these are correctness/durability fixes, not hygiene.
+**Requirements:** (1) mkdir must durably retry the parent publish on conflict instead of warn-only, so the new child folder is never orphaned remotely; (2) release()/flush must not ack the OS or zeroize+delete the local temp file until the remote commit is durably confirmed or the write is journaled for replay; (3) Linux startup must auto-recover a stale/disconnected FUSE mount (EEXIST/ENOTCONN) instead of failing and notifying; (4) park legacy empty `file_meta_ipns_name` replay entries instead of publishing an empty FilePointer; (5) use a strict (cache-bypassing) IPNS resolve in replay classification so transient failures retain the entry; (6) add the read_ops/write_ops handler test harness (unblock the fuser `ReplySender` limitation) plus the `journal_helpers` builder tests. Preserve all existing crash-recovery semantics.
+**Depends on:** Phase 45
+**Plans:** 0 plans (not yet planned)
+
+Scope (captured todos):
+
+- [ ] FUSE mkdir orphans the new folder when parent publish conflicts (bug, high) — `2026-06-11-fuse-mkdir-parent-publish-orphan.md`
+- [ ] FUSE release() reports success then can silently lose data (bug, high) — `2026-06-11-fuse-release-data-loss-before-remote-commit.md`
+- [ ] Recover stale FUSE mount after crash on Linux startup (bug) — `2026-06-14-recover-stale-fuse-mount-after-crash-on-linux-startup.md`
+- [ ] Park legacy empty `file_meta_ipns_name` replay entries instead of empty FilePointer (PR #491 follow-up) — `2026-06-15-replay-empty-file-meta-ipns-name-publishes-empty-filepointer.md`
+- [ ] Use a strict (cache-bypassing) IPNS resolve in replay classification (PR #491 follow-up) — `2026-06-15-replay-resolve-ipns-strict-resolve-path-no-cache-fallback.md`
+- [ ] Improve Phase-43 rust write-durability test coverage — Tier 2 read_ops/write_ops harness + journal_helpers builders (Tier 1 landed in Phase 45) — `2026-06-14-improve-phase-43-rust-test-coverage.md`
+
+### Phase 47: SDK folder-state and publish-path consolidation
+
+**Goal:** Pay down the Phase-44 SDK structural debt surfaced by `/simplify` and `/code-review` — one owner for folder state, one CAS-retry engine shared by file and folder publishes, encapsulated child bookkeeping, and the `prunedCids` pin-leak fix on the shared-file path. Mostly refactor, plus one correctness fix (pin leak).
+**Requirements:** (1) Unify folder-state ownership so the web Zustand `useFolderStore` and the SDK client `folderTree` can no longer drift — make the SDK client the single source of truth: route the two leaking web file hooks (`useFileOperations.updateFile`, `useFileVersions` restore/delete) through new SDK client methods that own publish + sequence bookkeeping + `folder:updated` emission, make `useFolderStore` a projection whose `children`/`sequenceNumber` are written only via `folder:updated` events (never from web mutation code), and delete the `reconcileFolderState` band-aid (dead by construction, closing the residual race). Scope is folder-state-*mutating* paths only — non-mutating sdk-core usage in the web app (crypto, uploads, metadata fetch/decrypt) stays. (2) unify the duplicated file/folder 409-CAS-retry loops into one `publishWithCas` helper in sdk-core so retry/backoff/sequence handling lives in one place; (3) encapsulate the `baseChildren`/`publishedChildren` snapshot-and-adopt ceremony inside `updateFolderMetadataAndPublish` so the ~14 call sites can't forget the base snapshot and resurrect deletes; (4) consume `prunedCids` in `updateSharedFile` and unpin them to stop the shared-file storage pin leak.
+**Depends on:** Phase 44
+**Plans:** 0 plans (not yet planned)
+
+Scope (captured todos):
+
+- [ ] Unify folder-state ownership in the SDK client (medium) — `2026-06-14-unify-folder-state-ownership-in-sdk-client.md`
+- [ ] Unify file and folder IPNS CAS-retry into one publishWithCas helper (sdk-core) — `2026-06-14-unify-file-and-folder-ipns-cas-retry-into-one-publishwithcas.md`
+- [ ] Folder writes leak baseChildren/publishedChildren bookkeeping to call sites — `2026-06-14-folder-writes-leak-basechildren-and-publishedchildren-bookke.md`
+- [ ] updateSharedFile discards prunedCids from updateFileMetadata causing pin leak (medium) — `2026-06-14-updatesharedfile-discards-prunedcids-from-updatefilemetadata.md`
+
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-06-13 — milestone v1.1 complete (phases 42-44 UAT gap closure done)_
+_Last updated: 2026-06-15 — added post-milestone phases 46 (desktop FUSE data-loss bugs + replay hardening) and 47 (SDK folder-state + publish consolidation)_
 _Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 5 phases (36-40) | Gap closure: 3 phases (42-44)_
