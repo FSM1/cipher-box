@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 
 Phase: 46 (desktop-fuse-data-loss-bugs-replay-hardening) — SECURED + VERIFIED
 Plan: 4 of 4 (committed); simplify + secure (SECURED 12/12) + verify (GOAL MET 6/6) complete
-Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. Phase 46 pending Linux remount-after-SIGKILL UAT.
+Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. Phase 46 Linux remount-after-SIGKILL UAT passed 2026-06-15 — fully verified, no open items.
 
 ## Performance Metrics
 
@@ -253,7 +253,7 @@ Recent for v1.1:
 
 ### Pending Todos
 
-18 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. The desktop (6) and SDK (4) groups are now scoped into Phases 46 and 47 respectively.
+9 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. The desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. Remaining pending includes the new route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47.
 
 ### Resolved
 

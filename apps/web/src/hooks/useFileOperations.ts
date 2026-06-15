@@ -4,26 +4,17 @@ import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
-import {
-  addFileToFolder,
-  addFilesToFolder,
-  updateFolderMetadataAndPublish,
-  updateFileMetadata,
-  isConflictExhausted,
-} from '@cipherbox/sdk-core';
 import { getSdkClient } from '../lib/sdk-provider';
 import { reWrapForRecipients } from '../services/share.service';
 import {
-  createFileMetadata,
   resolveFileMetadata,
   shouldCreateVersion,
   getFileIpnsPrivateKey,
 } from '../services/file-metadata.service';
-import type { FolderChild, FilePointer } from '@cipherbox/core';
+import type { FilePointer } from '@cipherbox/core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
-import { getRootFolderState, resyncFolder, withConflictRetry } from './folder-helpers';
+import { getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
-import { useNotificationStore } from '../stores/notification.store';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { logger } from '../lib/logger';
 
@@ -37,307 +28,6 @@ export function useFileOperations() {
     isLoading: false,
     error: null,
   });
-
-  /**
-   * Add a file to a folder after upload (v2).
-   *
-   * Creates per-file IPNS metadata, then registers FilePointer in folder.
-   *
-   * @param parentId - Parent folder ID ('root' or folder UUID)
-   * @param fileData - Uploaded file data from upload service
-   * @returns Created file pointer
-   */
-  const handleAddFile = useCallback(
-    async (
-      parentId: string,
-      fileData: {
-        cid: string;
-        wrappedKey: string;
-        iv: string;
-        originalName: string;
-        originalSize: number;
-        mimeType?: string;
-        encryptionMode?: 'GCM' | 'CTR';
-      }
-    ): Promise<FilePointer> => {
-      setState({ isLoading: true, error: null });
-      try {
-        const folders = useFolderStore.getState().folders;
-        const vault = useVaultStore.getState();
-        const auth = useAuthStore.getState();
-
-        if (!auth.vaultKeypair) {
-          throw new Error('No ECIES keypair available - please log in again');
-        }
-
-        // Get parent folder state
-        const parentFolder =
-          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
-
-        if (!parentFolder) {
-          throw new Error('Parent folder not found or vault not initialized');
-        }
-
-        // 1. Generate fileId and create per-file IPNS metadata
-        const fileId = crypto.randomUUID();
-        const { ipnsRecord, ipnsPrivateKeyEncrypted } = await createFileMetadata({
-          fileId,
-          cid: fileData.cid,
-          fileKeyEncrypted: fileData.wrappedKey,
-          fileIv: fileData.iv,
-          size: fileData.originalSize,
-          mimeType: fileData.mimeType ?? 'application/octet-stream',
-          folderKey: parentFolder.folderKey,
-          userPublicKey: auth.vaultKeypair.publicKey,
-          encryptionMode: fileData.encryptionMode,
-        });
-
-        // 2. Register FilePointer in folder (batch publishes file + folder IPNS)
-        //    On 409 conflict, re-sync the parent folder and retry once.
-        const performAddFile = async (): Promise<{
-          filePointer: FilePointer;
-          newSequenceNumber: bigint;
-        }> => {
-          const freshFolders = useFolderStore.getState().folders;
-          const freshVault = useVaultStore.getState();
-          const freshParent =
-            parentId === 'root'
-              ? getRootFolderState(freshVault, freshFolders)
-              : freshFolders[parentId];
-          if (!freshParent) throw new Error('Parent folder not found');
-
-          return addFileToFolder({
-            children: freshParent.children,
-            folderKey: freshParent.folderKey,
-            ipnsPrivateKey: freshParent.ipnsPrivateKey,
-            ipnsName: freshParent.ipnsName,
-            sequenceNumber: freshParent.sequenceNumber,
-            fileId,
-            name: fileData.originalName,
-            fileIpnsRecord: ipnsRecord,
-            ipnsPrivateKeyEncrypted,
-            ctx: getSdkClient().getContext(),
-          });
-        };
-
-        const { filePointer, newSequenceNumber } = await withConflictRetry(performAddFile, () =>
-          resyncFolder(parentFolder.ipnsName, parentFolder.id)
-        );
-
-        // 3. Update local state with new child and sequence number
-        const freshFolders2 = useFolderStore.getState().folders;
-        const freshVault2 = useVaultStore.getState();
-        const freshParent2 =
-          parentId === 'root'
-            ? getRootFolderState(freshVault2, freshFolders2)
-            : freshFolders2[parentId];
-        const updatedChildren: FolderChild[] = [...(freshParent2?.children ?? []), filePointer];
-        const store = useFolderStore.getState();
-        store.updateFolderChildren(parentId, updatedChildren);
-        store.updateFolderSequence(parentId, newSequenceNumber);
-
-        // 4. Post-upload: re-wrap file key for share recipients (fire-and-forget)
-        // Unwrap the fileKey from the owner-wrapped key, then delegate to reWrapForRecipients
-        (async () => {
-          try {
-            const authState = useAuthStore.getState();
-            if (!authState.vaultKeypair) return;
-            const fileKey = await unwrapKey(
-              hexToBytes(fileData.wrappedKey),
-              authState.vaultKeypair.privateKey
-            );
-            try {
-              const { failedRecipients } = await reWrapForRecipients({
-                folderIpnsName: parentFolder.ipnsName,
-                folders: useFolderStore.getState().folders,
-                currentFolderId: parentFolder.id,
-                newItems: [{ keyType: 'file', itemId: fileId, plaintextKey: fileKey }],
-              });
-              if (failedRecipients.length > 0) {
-                useNotificationStore
-                  .getState()
-                  .addNotification(
-                    'warning',
-                    `Failed to update share keys for ${failedRecipients.length} recipient(s). They may not be able to access the new file until you re-share.`
-                  );
-              }
-            } finally {
-              fileKey.fill(0);
-            }
-          } catch (err) {
-            logger.warn('[share] Post-upload file re-wrapping failed:', err);
-          }
-        })();
-
-        setState({ isLoading: false, error: null });
-        return filePointer;
-      } catch (err) {
-        const error = err instanceof Error ? err.message : 'Failed to add file';
-        setState({ isLoading: false, error });
-        throw err;
-      }
-    },
-    []
-  );
-
-  /**
-   * Add multiple files to a folder after upload (v2 batch).
-   *
-   * Creates per-file IPNS metadata for each file, then registers all
-   * FilePointers via a single batch IPNS publish.
-   *
-   * @param parentId - Parent folder ID ('root' or folder UUID)
-   * @param filesData - Array of uploaded file data from upload service
-   * @returns Created file pointers
-   */
-  const handleAddFiles = useCallback(
-    async (
-      parentId: string,
-      filesData: Array<{
-        cid: string;
-        wrappedKey: string;
-        iv: string;
-        originalName: string;
-        originalSize: number;
-        mimeType?: string;
-        encryptionMode?: 'GCM' | 'CTR';
-      }>
-    ): Promise<FilePointer[]> => {
-      setState({ isLoading: true, error: null });
-      try {
-        const folders = useFolderStore.getState().folders;
-        const vault = useVaultStore.getState();
-        const auth = useAuthStore.getState();
-
-        if (!auth.vaultKeypair) {
-          throw new Error('No ECIES keypair available - please log in again');
-        }
-
-        // Get parent folder state
-        const parentFolder =
-          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
-
-        if (!parentFolder) {
-          throw new Error('Parent folder not found or vault not initialized');
-        }
-
-        // 1. Create per-file IPNS metadata for each file
-        const userPublicKey = auth.vaultKeypair.publicKey;
-        const filesWithRecords = await Promise.all(
-          filesData.map(async (f) => {
-            const fileId = crypto.randomUUID();
-            const { ipnsRecord, ipnsPrivateKeyEncrypted } = await createFileMetadata({
-              fileId,
-              cid: f.cid,
-              fileKeyEncrypted: f.wrappedKey,
-              fileIv: f.iv,
-              size: f.originalSize,
-              mimeType: f.mimeType ?? 'application/octet-stream',
-              folderKey: parentFolder.folderKey,
-              userPublicKey,
-              encryptionMode: f.encryptionMode,
-            });
-            return {
-              fileId,
-              name: f.originalName,
-              fileIpnsRecord: ipnsRecord,
-              ipnsPrivateKeyEncrypted,
-            };
-          })
-        );
-
-        // 2. Register FilePointers in folder (batch publishes all IPNS records)
-        //    On 409 conflict, re-sync the parent folder and retry once.
-        const performAddFiles = async (): Promise<{
-          filePointers: FilePointer[];
-          newSequenceNumber: bigint;
-        }> => {
-          const freshFolders = useFolderStore.getState().folders;
-          const freshVault = useVaultStore.getState();
-          const freshParent =
-            parentId === 'root'
-              ? getRootFolderState(freshVault, freshFolders)
-              : freshFolders[parentId];
-          if (!freshParent) throw new Error('Parent folder not found');
-
-          return addFilesToFolder({
-            children: freshParent.children,
-            folderKey: freshParent.folderKey,
-            ipnsPrivateKey: freshParent.ipnsPrivateKey,
-            ipnsName: freshParent.ipnsName,
-            sequenceNumber: freshParent.sequenceNumber,
-            files: filesWithRecords,
-            ctx: getSdkClient().getContext(),
-          });
-        };
-
-        const { filePointers, newSequenceNumber } = await withConflictRetry(performAddFiles, () =>
-          resyncFolder(parentFolder.ipnsName, parentFolder.id)
-        );
-
-        // 3. Update local state with new children and sequence number
-        const store = useFolderStore.getState();
-        const freshFolders2 = store.folders;
-        const freshVault2 = useVaultStore.getState();
-        const freshParent2 =
-          parentId === 'root'
-            ? getRootFolderState(freshVault2, freshFolders2)
-            : freshFolders2[parentId];
-        store.updateFolderChildren(parentId, [...(freshParent2?.children ?? []), ...filePointers]);
-        store.updateFolderSequence(parentId, newSequenceNumber);
-
-        // 4. Post-upload: re-wrap file keys for share recipients (fire-and-forget)
-        (async () => {
-          const newItems: Array<{
-            keyType: 'file' | 'folder';
-            itemId: string;
-            plaintextKey: Uint8Array;
-          }> = [];
-          try {
-            const authState = useAuthStore.getState();
-            if (!authState.vaultKeypair) return;
-            const privateKey = authState.vaultKeypair.privateKey;
-            for (let i = 0; i < filesData.length; i++) {
-              const fileKey = await unwrapKey(hexToBytes(filesData[i].wrappedKey), privateKey);
-              newItems.push({
-                keyType: 'file',
-                itemId: filesWithRecords[i].fileId,
-                plaintextKey: fileKey,
-              });
-            }
-            const { failedRecipients } = await reWrapForRecipients({
-              folderIpnsName: parentFolder.ipnsName,
-              folders: useFolderStore.getState().folders,
-              currentFolderId: parentFolder.id,
-              newItems,
-            });
-            if (failedRecipients.length > 0) {
-              useNotificationStore
-                .getState()
-                .addNotification(
-                  'warning',
-                  `Failed to update share keys for ${failedRecipients.length} recipient(s). They may not be able to access the new files until you re-share.`
-                );
-            }
-          } catch (err) {
-            logger.warn('[share] Post-upload batch file re-wrapping failed:', err);
-          } finally {
-            for (const item of newItems) {
-              item.plaintextKey.fill(0);
-            }
-          }
-        })();
-
-        setState({ isLoading: false, error: null });
-        return filePointers;
-      } catch (err) {
-        const error = err instanceof Error ? err.message : 'Failed to add files';
-        setState({ isLoading: false, error });
-        throw err;
-      }
-    },
-    []
-  );
 
   /**
    * Update a file's content in-place (v2: re-encrypt, update file IPNS, folder untouched).
@@ -411,73 +101,37 @@ export function useFileOperations() {
 
         let prunedCids: string[];
         try {
-          // 5. Update file metadata — publishes internally with CAS (Plan 03 new contract).
-          // Returns { ipnsName, metadataCid, newSequenceNumber, prunedCids }; publish is done.
-          ({ prunedCids } = await updateFileMetadata({
-            fileIpnsPrivateKey,
-            fileMetaIpnsName: filePointer.fileMetaIpnsName,
-            folderKey: parentFolder.folderKey,
-            currentMetadata,
-            updates: {
-              cid: fileData.newCid,
-              fileKeyEncrypted: fileData.newFileKeyEncrypted,
-              fileIv: fileData.newFileIv,
-              size: fileData.newSize,
-              ...(fileData.newEncryptionMode ? { encryptionMode: fileData.newEncryptionMode } : {}),
-            },
-            createVersion,
-            maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
-            ctx: getSdkClient().getContext(),
-          }));
+          // 5/6. Route the file replace through the SDK client. client.replaceFile owns
+          //    the file IPNS publish (via sdk-core updateFileMetadata, CAS internally),
+          //    the folder touch (bump modifiedAt on the FilePointer + persist any migrated
+          //    IPNS key), folderTree bookkeeping, and the folder:updated emission. The
+          //    store's children/sequenceNumber are written ONLY by the folder:updated
+          //    subscription — no direct store writes here (PR #489 desync closed).
+          //    fileIpnsPrivateKey is resolved above and zeroed in this finally (T-47-01);
+          //    sdk-core updateFileMetadata also zeroes its own copy.
+          ({ prunedCids } = await getSdkClient().replaceFile(
+            parentFolder.ipnsName,
+            fileData.fileId,
+            {
+              fileIpnsPrivateKey,
+              currentMetadata,
+              updates: {
+                cid: fileData.newCid,
+                fileKeyEncrypted: fileData.newFileKeyEncrypted,
+                fileIv: fileData.newFileIv,
+                size: fileData.newSize,
+                ...(fileData.newEncryptionMode
+                  ? { encryptionMode: fileData.newEncryptionMode }
+                  : {}),
+              },
+              createVersion,
+              maxVersionsPerFile: useVaultSettingsStore.getState().settings.maxVersionsPerFile,
+              ...(migratedIpnsPrivateKeyEncrypted ? { migratedIpnsPrivateKeyEncrypted } : {}),
+            }
+          ));
         } finally {
           fileIpnsPrivateKey.fill(0);
         }
-
-        // 6. (File IPNS record is already published inside updateFileMetadata above.)
-        //    Update local state -- touch modifiedAt and persist migrated IPNS key if applicable.
-        const updatedChildren = parentFolder.children.map((child) => {
-          if (child.type === 'file' && child.id === fileData.fileId) {
-            return {
-              ...child,
-              modifiedAt: Date.now(),
-              ...(migratedIpnsPrivateKeyEncrypted
-                ? { ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted }
-                : {}),
-            };
-          }
-          return child;
-        });
-
-        const store = useFolderStore.getState();
-        store.updateFolderChildren(parentId, updatedChildren);
-
-        // 6b. Republish folder metadata so other clients (e.g. FUSE desktop mount)
-        // see the updated modifiedAt on the FilePointer and re-resolve the file.
-        // Pre-mutation parentFolder.children is the correct baseChildren snapshot
-        // (updatedChildren is the post-mutation set, so the base is the original children).
-        updateFolderMetadataAndPublish({
-          children: updatedChildren,
-          baseChildren: parentFolder.children,
-          folderKey: parentFolder.folderKey,
-          ipnsPrivateKey: parentFolder.ipnsPrivateKey,
-          ipnsName: parentFolder.ipnsName,
-          sequenceNumber: parentFolder.sequenceNumber,
-          ctx: getSdkClient().getContext(),
-        })
-          .then(({ newSequenceNumber, publishedChildren }) => {
-            useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
-            useFolderStore.getState().updateFolderChildren(parentId, publishedChildren);
-          })
-          .catch((err) => {
-            if (isConflictExhausted(err)) {
-              logger.warn(
-                '[FileOps] Folder metadata re-publish after file edit: conflict exhausted after retries:',
-                err
-              );
-            } else {
-              logger.warn('[FileOps] Folder metadata re-publish after file edit failed:', err);
-            }
-          });
 
         // 8. Re-wrap new file key for share recipients (fire-and-forget)
         (async () => {
@@ -526,8 +180,6 @@ export function useFileOperations() {
 
   return {
     ...state,
-    addFile: handleAddFile,
-    addFiles: handleAddFiles,
     updateFile: handleUpdateFile,
   };
 }

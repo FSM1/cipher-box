@@ -354,44 +354,53 @@ export async function updateFileMetadata(params: {
   };
 }
 
+/** Content fields applied as `updates` when routing a file metadata write through the SDK client. */
+export type FileContentUpdates = Partial<
+  Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size' | 'encryptionMode'>
+>;
+
 /**
- * Restore a previous version of a file.
- * The current content becomes a new version entry, and the restored version's
- * data becomes the current content. Non-destructive: version chain grows.
+ * Compute the metadata transform for restoring a previous version (pure, no publish).
  *
- * @param params.fileIpnsPrivateKey - Decrypted Ed25519 IPNS private key for this file
- * @param params.fileMetaIpnsName - IPNS name for this file's metadata record
- * @param params.folderKey - Parent folder's decrypted AES-256 key
- * @param params.currentMetadata - Current file metadata
- * @param params.versionIndex - Index of version to restore (0 = newest past version)
- * @returns Updated IPNS record payload and any pruned CIDs
+ * The current content becomes a new version entry, the restored version's data
+ * becomes the current content, the restored version is removed from history, and
+ * the history is capped at the configured maximum.
+ *
+ * The result is shaped for the SDK client's `restoreFileVersion` contract:
+ *   - `currentMetadata`: the original metadata with its `versions` array already
+ *     transformed to the post-restore retained set (the client passes this through
+ *     `sdkCore.updateFileMetadata` with `createVersion: false`, which preserves
+ *     these versions and applies `updates` as the new current content).
+ *   - `updates`: the restored content fields to set as the new current content.
+ *   - `prunedCids`: version CIDs evicted beyond the cap, for the caller to unpin.
+ *
+ * @param currentMetadata - Current file metadata (must contain `versions`)
+ * @param versionIndex - Index of version to restore (0 = newest past version)
+ * @returns Transformed currentMetadata, content updates, and pruned CIDs
  */
-export async function restoreVersion(params: {
-  fileIpnsPrivateKey: Uint8Array;
-  fileMetaIpnsName: string;
-  folderKey: Uint8Array;
-  currentMetadata: FileMetadata;
-  versionIndex: number;
-}): Promise<{ ipnsRecord: FileIpnsRecordPayload; prunedCids: string[] }> {
-  const versions = params.currentMetadata.versions;
-  if (!versions || params.versionIndex < 0 || params.versionIndex >= versions.length) {
+export function computeRestoreVersionUpdate(
+  currentMetadata: FileMetadata,
+  versionIndex: number
+): { currentMetadata: FileMetadata; updates: FileContentUpdates; prunedCids: string[] } {
+  const versions = currentMetadata.versions;
+  if (!versions || versionIndex < 0 || versionIndex >= versions.length) {
     throw new Error('Invalid version index');
   }
 
-  const versionToRestore = versions[params.versionIndex];
+  const versionToRestore = versions[versionIndex];
 
   // Build a version entry from CURRENT metadata (it becomes a past version)
   const currentAsVersion: VersionEntry = {
-    cid: params.currentMetadata.cid,
-    fileKeyEncrypted: params.currentMetadata.fileKeyEncrypted,
-    fileIv: params.currentMetadata.fileIv,
-    size: params.currentMetadata.size,
+    cid: currentMetadata.cid,
+    fileKeyEncrypted: currentMetadata.fileKeyEncrypted,
+    fileIv: currentMetadata.fileIv,
+    size: currentMetadata.size,
     timestamp: Date.now(),
-    encryptionMode: params.currentMetadata.encryptionMode ?? 'GCM',
+    encryptionMode: currentMetadata.encryptionMode ?? 'GCM',
   };
 
   // Remove restored version from array, prepend current as new version entry
-  const remainingVersions = versions.filter((_, i) => i !== params.versionIndex);
+  const remainingVersions = versions.filter((_, i) => i !== versionIndex);
   const newVersions = [currentAsVersion, ...remainingVersions];
 
   // Prune if exceeds max
@@ -399,120 +408,53 @@ export async function restoreVersion(params: {
   const retainedVersions = newVersions.slice(0, maxVer);
   const prunedCids = newVersions.slice(maxVer).map((v) => v.cid);
 
-  // Build updated metadata with restored version's data as current
-  const updatedMetadata: FileMetadata = {
-    ...params.currentMetadata,
-    cid: versionToRestore.cid,
-    fileKeyEncrypted: versionToRestore.fileKeyEncrypted,
-    fileIv: versionToRestore.fileIv,
-    size: versionToRestore.size,
-    encryptionMode: versionToRestore.encryptionMode,
-    versions: retainedVersions.length > 0 ? retainedVersions : undefined,
-    modifiedAt: Date.now(),
-  };
-
-  // Resolve current IPNS to get sequence number
-  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName);
-  if (!resolved) {
-    throw new Error(
-      `Cannot restore version: existing IPNS record not found for ${params.fileMetaIpnsName}`
-    );
-  }
-  const newSeq = resolved.sequenceNumber + 1n;
-
-  // Encrypt updated metadata with folderKey
-  const encrypted = await encryptFileMetadata(updatedMetadata, params.folderKey);
-
-  // Upload to IPFS
-  const blob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
-  const { cid: metadataCid } = await addToIpfs(blob);
-
-  // Create new IPNS record with incremented sequence number
-  const record = await createIpnsRecord(
-    params.fileIpnsPrivateKey,
-    `/ipfs/${metadataCid}`,
-    newSeq,
-    IPNS_LIFETIME_MS
-  );
-
-  const recordBytes = marshalIpnsRecord(record);
-  const recordBase64 = uint8ToBase64(recordBytes);
-
+  // currentMetadata carries the transformed versions; the client's updateFileMetadata
+  // (createVersion: false) preserves these and overwrites the content fields via updates.
   return {
-    ipnsRecord: {
-      ipnsName: params.fileMetaIpnsName,
-      recordBase64,
-      metadataCid,
+    currentMetadata: {
+      ...currentMetadata,
+      versions: retainedVersions.length > 0 ? retainedVersions : undefined,
+    },
+    updates: {
+      cid: versionToRestore.cid,
+      fileKeyEncrypted: versionToRestore.fileKeyEncrypted,
+      fileIv: versionToRestore.fileIv,
+      size: versionToRestore.size,
+      encryptionMode: versionToRestore.encryptionMode,
     },
     prunedCids,
   };
 }
 
 /**
- * Delete a specific past version from a file's version history.
- * Updates the file's IPNS metadata without the deleted version.
+ * Compute the metadata transform for deleting a past version (pure, no publish).
  *
- * @param params.fileIpnsPrivateKey - Decrypted Ed25519 IPNS private key for this file
- * @param params.fileMetaIpnsName - IPNS name for this file's metadata record
- * @param params.folderKey - Parent folder's decrypted AES-256 key
- * @param params.currentMetadata - Current file metadata
- * @param params.versionIndex - Index of version to delete
- * @returns Updated IPNS record and CID to unpin
+ * Removes the version at `versionIndex` from the history. The current content is
+ * untouched (no `updates`), so the client publishes the same content with a pruned
+ * version list.
+ *
+ * @param currentMetadata - Current file metadata (must contain `versions`)
+ * @param versionIndex - Index of version to delete
+ * @returns Transformed currentMetadata, empty content updates, and the deleted CID
  */
-export async function deleteVersion(params: {
-  fileIpnsPrivateKey: Uint8Array;
-  fileMetaIpnsName: string;
-  folderKey: Uint8Array;
-  currentMetadata: FileMetadata;
-  versionIndex: number;
-}): Promise<{ ipnsRecord: FileIpnsRecordPayload; deletedCid: string }> {
-  const versions = params.currentMetadata.versions;
-  if (!versions || params.versionIndex < 0 || params.versionIndex >= versions.length) {
+export function computeDeleteVersionUpdate(
+  currentMetadata: FileMetadata,
+  versionIndex: number
+): { currentMetadata: FileMetadata; updates: FileContentUpdates; deletedCid: string } {
+  const versions = currentMetadata.versions;
+  if (!versions || versionIndex < 0 || versionIndex >= versions.length) {
     throw new Error('Invalid version index');
   }
 
-  const deletedCid = versions[params.versionIndex].cid;
-  const newVersions = versions.filter((_, i) => i !== params.versionIndex);
-
-  // Build updated metadata with filtered versions
-  const updatedMetadata: FileMetadata = {
-    ...params.currentMetadata,
-    versions: newVersions.length > 0 ? newVersions : undefined,
-  };
-
-  // Resolve current IPNS to get sequence number
-  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName);
-  if (!resolved) {
-    throw new Error(
-      `Cannot delete version: existing IPNS record not found for ${params.fileMetaIpnsName}`
-    );
-  }
-  const newSeq = resolved.sequenceNumber + 1n;
-
-  // Encrypt updated metadata with folderKey
-  const encrypted = await encryptFileMetadata(updatedMetadata, params.folderKey);
-
-  // Upload to IPFS
-  const blob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
-  const { cid: metadataCid } = await addToIpfs(blob);
-
-  // Create new IPNS record with incremented sequence number
-  const record = await createIpnsRecord(
-    params.fileIpnsPrivateKey,
-    `/ipfs/${metadataCid}`,
-    newSeq,
-    IPNS_LIFETIME_MS
-  );
-
-  const recordBytes = marshalIpnsRecord(record);
-  const recordBase64 = uint8ToBase64(recordBytes);
+  const deletedCid = versions[versionIndex].cid;
+  const newVersions = versions.filter((_, i) => i !== versionIndex);
 
   return {
-    ipnsRecord: {
-      ipnsName: params.fileMetaIpnsName,
-      recordBase64,
-      metadataCid,
+    currentMetadata: {
+      ...currentMetadata,
+      versions: newVersions.length > 0 ? newVersions : undefined,
     },
+    updates: {},
     deletedCid,
   };
 }
