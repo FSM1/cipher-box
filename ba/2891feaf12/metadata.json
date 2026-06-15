@@ -3,9 +3,10 @@
   "checkpoint_id": "ba2891feaf12",
   "strategy": "manual-commit",
   "branch": "feat/phase-47-sdk-folder-state-publish-consolidation",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
-    ".planning/phases/46-desktop-fuse-data-loss-bugs-replay-hardening/46-RESEARCH.md"
+    ".planning/phases/46-desktop-fuse-data-loss-bugs-replay-hardening/46-RESEARCH.md",
+    "packages/sdk-core/scripts/edit-filepointer.mjs"
   ],
   "sessions": [
     {
@@ -13,13 +14,19 @@
       "transcript": "/ba/2891feaf12/0/full.jsonl",
       "content_hash": "/ba/2891feaf12/0/content_hash.txt",
       "prompt": "/ba/2891feaf12/0/prompt.txt"
+    },
+    {
+      "metadata": "/ba/2891feaf12/1/metadata.json",
+      "transcript": "/ba/2891feaf12/1/full.jsonl",
+      "content_hash": "/ba/2891feaf12/1/content_hash.txt",
+      "prompt": "/ba/2891feaf12/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 23038,
-    "cache_creation_tokens": 505482,
-    "cache_read_tokens": 18231369,
-    "output_tokens": 236079,
-    "api_call_count": 85
+    "input_tokens": 43648,
+    "cache_creation_tokens": 1143873,
+    "cache_read_tokens": 48637826,
+    "output_tokens": 408361,
+    "api_call_count": 257
   }
 }
