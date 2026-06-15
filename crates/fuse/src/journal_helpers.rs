@@ -11,8 +11,10 @@
 //!
 //! ## Security invariants
 //!
-//! - `UploadJournalResult` carries `ciphertext` only; plaintext is never
-//!   stored in the result struct.
+//! - The built `JournalEntry` references `ciphertext` only — plaintext is
+//!   never written to the journal or to disk.  `UploadJournalResult` carries
+//!   the plaintext transiently in memory (for the `pending_content`
+//!   read-after-write cache); it is never persisted.
 //! - Each key is ECIES-wrapped exactly once.  The caller must not re-wrap.
 //! - `is_first_publish` is threaded through to the caller so the per-file
 //!   IPNS sequence number is computed correctly (§Pitfall 4 in 45-RESEARCH.md).
@@ -24,7 +26,9 @@ use crate::inode::{InodeKind, ROOT_INO};
 ///
 /// Carries the built [`cipherbox_sdk::JournalEntry`] and every field the
 /// caller's inode-mutation and spawn block needs.  The `ciphertext` field
-/// holds the AES-256-GCM encrypted file content; plaintext is never stored.
+/// holds the AES-256-GCM encrypted file content; the `plaintext` field is
+/// transient in-memory data for the read-after-write cache and is never
+/// written to the journal or disk.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct UploadJournalResult {
     /// The fully-built journal entry ready for `journal.put`.
@@ -211,10 +215,7 @@ impl crate::CipherBoxFS {
             .unwrap_or_default();
         let mime_type = crate::helpers::mime_from_extension(&file_name);
 
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let now_ms = current_unix_ms();
 
         let (new_versions, pruned_cids) = crate::helpers::apply_versioning(
             existing_versions,
@@ -231,17 +232,11 @@ impl crate::CipherBoxFS {
 
         let versions_for_meta = new_versions.as_ref().filter(|v| !v.is_empty()).cloned();
 
-        let write_gen = self
+        let (write_gen, parent_ino) = self
             .inodes
             .get(ino)
-            .map(|i| i.write_generation)
-            .unwrap_or(0);
-
-        let parent_ino = self
-            .inodes
-            .get(ino)
-            .map(|i| i.parent_ino)
-            .unwrap_or(ROOT_INO);
+            .map(|i| (i.write_generation, i.parent_ino))
+            .unwrap_or((0, ROOT_INO));
 
         let folder_key_for_file_meta = self.get_folder_key(parent_ino);
 
@@ -270,34 +265,21 @@ impl crate::CipherBoxFS {
                 } => ipns_private_key.as_deref(),
                 _ => None,
             })
-            .and_then(|raw_key| {
-                cipherbox_crypto::wrap_key(raw_key, &self.public_key)
-                    .map(|w| hex::encode(&w))
-                    .map_err(|e| {
-                        log::warn!("Failed to wrap parent IPNS key for journal: {}", e);
-                        e
-                    })
-                    .ok()
-            })
+            .map(|raw_key| wrap_key_to_hex(raw_key, &self.public_key, "parent IPNS key"))
             .unwrap_or_default();
 
         // Build journal entry referencing ciphertext only — no plaintext (D-05).
         use base64::Engine;
         let ciphertext_b64 = base64::engine::general_purpose::STANDARD.encode(&ciphertext);
-        let wrapped_key_hex = encrypted_file_key_hex.clone();
 
         // ECIES-wrap the per-file IPNS key exactly once (CR-01, no double-wrap).
-        let file_ipns_key_hex = file_meta_ipns_name.as_ref().and_then(|_| {
+        // Only journalled when there's an IPNS name to publish.
+        let file_ipns_key_hex = if file_meta_ipns_name.is_none() {
+            None
+        } else {
             file_ipns_private_key
                 .as_ref()
-                .map(|k| {
-                    cipherbox_crypto::ecies::wrap_key(k, &self.public_key)
-                        .map(|w| hex::encode(&w))
-                        .unwrap_or_else(|e| {
-                            log::warn!("Failed to wrap file IPNS key for journal: {}", e);
-                            String::new()
-                        })
-                })
+                .map(|k| wrap_key_to_hex(k, &self.public_key, "file IPNS key"))
                 .or_else(|| {
                     self.inodes.get(ino).and_then(|i| match &i.kind {
                         InodeKind::File {
@@ -307,14 +289,14 @@ impl crate::CipherBoxFS {
                         _ => None,
                     })
                 })
-        });
+        };
 
         let entry = cipherbox_sdk::JournalEntry {
-            id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
+            id: generate_entry_id(),
             vault_root_ipns: self.root_ipns_name.clone(),
             op: cipherbox_sdk::JournalOp::UploadFile {
                 ciphertext_b64,
-                wrapped_key_hex,
+                wrapped_key_hex: encrypted_file_key_hex.clone(),
                 iv_hex: iv_hex.clone(),
                 file_meta_ipns_name: file_meta_ipns_name.clone(),
                 file_ipns_key_hex,
@@ -410,37 +392,23 @@ impl crate::CipherBoxFS {
         let (parent_metadata, parent_folder_key, parent_ipns_key, parent_ipns_name, parent_old_cid) =
             self.build_folder_metadata(parent_ino)?;
 
-        let mkdir_created_at_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let mkdir_created_at_ms = current_unix_ms();
 
         // CR-01: journal the user-ECIES-wrapped parent IPNS key for replay signing.
+        // An empty string (on wrap failure) parks the entry on replay rather than
+        // persisting a degraded key silently.
         let parent_ipns_key_hex_for_journal =
-            cipherbox_crypto::wrap_key(&parent_ipns_key, &self.public_key)
-                .map(|w| hex::encode(&w))
-                .unwrap_or_else(|e| {
-                    // An empty string parks the entry on replay rather than
-                    // persisting a degraded key silently.
-                    log::warn!("Failed to wrap parent IPNS key for journal: {}", e);
-                    String::new()
-                });
+            wrap_key_to_hex(&parent_ipns_key, &self.public_key, "parent IPNS key");
 
-        // CR-03: journal the user-ECIES-wrapped child IPNS key (not TEE-wrapped).
+        // CR-03: journal the user-ECIES-wrapped child IPNS key (NOT TEE-wrapped) —
+        // replay writes this into FolderEntry.ipns_private_key_encrypted, which must
+        // be user-ECIES-wrapped.  An empty string parks the entry rather than
+        // bricking the folder with an unusable key.
         let child_ipns_key_hex_user_wrapped =
-            cipherbox_crypto::wrap_key(&ipns_private_key, &self.public_key)
-                .map(|w| hex::encode(&w))
-                .unwrap_or_else(|e| {
-                    // CR-03: never fall back to the TEE-wrapped key here — replay
-                    // writes this into FolderEntry.ipns_private_key_encrypted which
-                    // must be user-ECIES-wrapped.  An empty string makes replay park
-                    // the entry rather than brick the folder with an unusable key.
-                    log::warn!("Failed to wrap child IPNS key for journal: {}", e);
-                    String::new()
-                });
+            wrap_key_to_hex(&ipns_private_key, &self.public_key, "child IPNS key");
 
         let entry = cipherbox_sdk::JournalEntry {
-            id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
+            id: generate_entry_id(),
             vault_root_ipns: self.root_ipns_name.clone(),
             op: cipherbox_sdk::JournalOp::MkdirPublish {
                 child_ipns_name: ipns_name.to_string(),
@@ -470,6 +438,36 @@ impl crate::CipherBoxFS {
             ino: child_ino,
         })
     }
+}
+
+/// Current Unix time in milliseconds (saturating to 0 if the clock predates the epoch).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+fn current_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Generate a fresh journal-entry id: hex-encoded 16 random bytes.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+fn generate_entry_id() -> String {
+    hex::encode(cipherbox_crypto::utils::generate_random_bytes(16))
+}
+
+/// ECIES-wrap `raw_key` for `public_key` and hex-encode it for journalling.
+///
+/// On wrap failure, logs a warning and returns an empty string — an empty key
+/// field makes replay park the entry rather than persist a degraded key
+/// (CR-01 / CR-03).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+fn wrap_key_to_hex(raw_key: &[u8], public_key: &[u8], label: &str) -> String {
+    cipherbox_crypto::wrap_key(raw_key, public_key)
+        .map(|w| hex::encode(&w))
+        .unwrap_or_else(|e| {
+            log::warn!("Failed to wrap {} for journal: {}", label, e);
+            String::new()
+        })
 }
 
 #[cfg(test)]
