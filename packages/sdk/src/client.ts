@@ -21,7 +21,13 @@ import { selectEncryptionMode } from '@cipherbox/sdk-core';
 import { createAxiosInstance, ipnsControllerUnenrollBatch } from '@cipherbox/api-client';
 import { clearBytes } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
-import type { FolderChild, FolderEntry, FilePointer, BinEntry } from '@cipherbox/core';
+import type {
+  FolderChild,
+  FolderEntry,
+  FilePointer,
+  BinEntry,
+  FileMetadata,
+} from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
@@ -299,41 +305,6 @@ export class CipherBoxClient {
       metadata: null,
       lastLoadedAt: Date.now(),
     });
-  }
-
-  /**
-   * Reconcile an already-registered folder's children + sequence with a newer
-   * snapshot observed outside this client.
-   *
-   * The web app publishes folder metadata directly via sdk-core for some
-   * operations (notably file replace / version edits, which bump `modifiedAt`
-   * and the IPNS sequence in the Zustand store without routing through this
-   * client). That advances the store past the SDK's `folderTree`, which
-   * `registerFolder` otherwise treats as authoritative. A later SDK-routed
-   * mutation (delete, move) would then publish with a stale sequence number
-   * (→ 409) against a stale base snapshot; the 409 merge resolves that by
-   * *resurrecting* the just-deleted child, because edit-beats-delete sees
-   * `remote.modifiedAt > staleBase.modifiedAt`.
-   *
-   * Adopt the snapshot only when it is strictly newer (higher IPNS sequence)
-   * than what the SDK holds, so SDK-routed mutations that have already advanced
-   * the folderTree remain authoritative. Keys, folderKey and metadata are
-   * preserved — only children and sequence move forward. No-op when the folder
-   * is not tracked.
-   *
-   * @param ipnsName - Folder's IPNS name
-   * @param children - Current folder children observed by the caller
-   * @param sequenceNumber - IPNS sequence the caller has observed
-   */
-  reconcileFolderState(ipnsName: string, children: FolderChild[], sequenceNumber: bigint): void {
-    const existing = this.folderTree.get(ipnsName);
-    if (!existing) return;
-    if (sequenceNumber <= existing.sequenceNumber) return;
-
-    existing.children = [...children];
-    existing.sequenceNumber = sequenceNumber;
-    existing.lastLoadedAt = Date.now();
-    this.folderTree.set(ipnsName, existing);
   }
 
   // ---- Internal state access (for bin/share modules) ----
@@ -1143,6 +1114,329 @@ export class CipherBoxClient {
         }
       }
     });
+  }
+
+  /**
+   * Replace a file's content, owning the full publish + folderTree bookkeeping.
+   *
+   * Routes the web "file replace" path (formerly the `useFileOperations`
+   * fire-and-forget "6b" block) through the client so the SDK `folderTree`
+   * stays authoritative. Steps:
+   *   1. Read the parent folder + sequence from `folderTree.get()` (authoritative
+   *      SDK state) — throws 'Folder not loaded' if absent.
+   *   2. Publish the file's per-IPNS metadata via sdk-core `updateFileMetadata`
+   *      (CAS-published internally). Capture `prunedCids` for the caller to unpin.
+   *   3. Touch the folder: snapshot `baseChildren`, bump the matching FilePointer's
+   *      `modifiedAt` (and persist a migrated IPNS key if provided), then publish
+   *      via `updateFolderMetadataAndPublish`.
+   *   4. Adopt `publishedChildren` + `newSequenceNumber` into `folderTree`.
+   *   5. Emit `folder:updated`.
+   *
+   * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey` and
+   * `currentMetadata` (web tier owns key resolution). This method does NOT zero
+   * `fileIpnsPrivateKey` — sdk-core `updateFileMetadata` zeroes it in its own
+   * finally on every exit path (T-47-01); the caller owns any additional lifecycle.
+   *
+   * @param parentIpnsName - IPNS name of the folder containing the file
+   * @param fileId - ID of the file (FilePointer) to replace
+   * @param fileData - Pre-resolved key + metadata + content updates
+   * @returns Pruned version CIDs the caller should unpin
+   */
+  async replaceFile(
+    parentIpnsName: string,
+    fileId: string,
+    fileData: {
+      fileIpnsPrivateKey: Uint8Array;
+      currentMetadata: FileMetadata;
+      updates: Partial<
+        Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size' | 'encryptionMode'>
+      >;
+      createVersion: boolean;
+      maxVersionsPerFile?: number;
+      /** Hex-encoded re-wrapped IPNS key to persist on the FilePointer (lazy migration). */
+      migratedIpnsPrivateKeyEncrypted?: string;
+    }
+  ): Promise<{ prunedCids: string[] }> {
+    return this.withOperation('replaceFile', async () => {
+      const folder = this.folderTree.get(parentIpnsName);
+      if (!folder) throw new Error('Folder not loaded');
+
+      // 1. Find the FilePointer's metadata IPNS name from authoritative state.
+      const filePointer = folder.children.find(
+        (c): c is FilePointer => c.type === 'file' && c.id === fileId
+      );
+      if (!filePointer) throw new Error('File not found');
+
+      // 2. Publish file metadata (CAS internally). updateFileMetadata zeroes the
+      //    fileIpnsPrivateKey in its own finally (T-47-01) — do NOT zero it here.
+      const { prunedCids } = await sdkCore.updateFileMetadata({
+        fileIpnsPrivateKey: fileData.fileIpnsPrivateKey,
+        fileMetaIpnsName: filePointer.fileMetaIpnsName,
+        folderKey: folder.folderKey,
+        currentMetadata: fileData.currentMetadata,
+        updates: fileData.updates,
+        createVersion: fileData.createVersion,
+        maxVersionsPerFile: fileData.maxVersionsPerFile,
+        ctx: this.ctx,
+      });
+
+      // 3. Touch the folder so other clients (e.g. FUSE mount) re-resolve the file.
+      const baseChildren = [...folder.children];
+      const nextChildren = folder.children.map((child) =>
+        child.type === 'file' && child.id === fileId
+          ? {
+              ...child,
+              modifiedAt: Date.now(),
+              ...(fileData.migratedIpnsPrivateKeyEncrypted
+                ? { ipnsPrivateKeyEncrypted: fileData.migratedIpnsPrivateKeyEncrypted }
+                : {}),
+            }
+          : child
+      );
+
+      const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
+        {
+          children: nextChildren,
+          baseChildren,
+          folderKey: folder.folderKey,
+          ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+          ipnsName: parentIpnsName,
+          sequenceNumber: folder.sequenceNumber,
+          ctx: this.ctx,
+        }
+      );
+
+      // 4. Adopt the merged published set (CR-01).
+      folder.children = publishedChildren;
+      folder.sequenceNumber = newSequenceNumber;
+      folder.lastLoadedAt = Date.now();
+      this.folderTree.set(parentIpnsName, folder);
+
+      // 5. Emit folder:updated.
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: parentIpnsName,
+        ipnsName: parentIpnsName,
+        children: publishedChildren,
+        sequenceNumber: newSequenceNumber,
+      });
+
+      return { prunedCids };
+    });
+  }
+
+  /**
+   * Restore a previous version of a file, owning publish + folderTree bookkeeping.
+   *
+   * Mirrors the web `useFileVersions.handleRestoreVersion` control flow, routed
+   * through the client so `folderTree` stays authoritative:
+   *   1. Read the parent folder from `folderTree.get()` — throws if absent.
+   *   2. Publish the file's per-IPNS metadata via `updateFileMetadata` using the
+   *      pre-resolved restored metadata (`updates`). Capture `prunedCids`.
+   *   3. CONDITIONAL folder publish — only when `migratedIpnsPrivateKeyEncrypted`
+   *      is provided (lazy IPNS-key migration): bump the FilePointer's
+   *      `modifiedAt` + `ipnsPrivateKeyEncrypted`, publish, and adopt the result.
+   *      Otherwise leave folder children + sequence unchanged (the file-only
+   *      publish does not advance the folder sequence).
+   *   4. Emit `folder:updated` reading back from `folderTree` so both branches
+   *      emit a consistent snapshot.
+   *
+   * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey`,
+   * `currentMetadata`, and the restored `updates` (web tier owns the restore
+   * service logic). This method does NOT zero `fileIpnsPrivateKey` —
+   * `updateFileMetadata` owns zeroing (T-47-01).
+   *
+   * @param parentIpnsName - IPNS name of the folder containing the file
+   * @param fileId - ID of the file (FilePointer) to restore
+   * @param versionIndex - Index of the version being restored (caller-resolved)
+   * @param params - Pre-resolved key + metadata + restored content updates
+   * @returns Pruned version CIDs the caller should unpin
+   */
+  async restoreFileVersion(
+    parentIpnsName: string,
+    fileId: string,
+    versionIndex: number,
+    params: {
+      fileIpnsPrivateKey: Uint8Array;
+      currentMetadata: FileMetadata;
+      updates: Partial<
+        Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size' | 'encryptionMode'>
+      >;
+      createVersion?: boolean;
+      maxVersionsPerFile?: number;
+      /** Hex-encoded re-wrapped IPNS key to persist on the FilePointer (lazy migration). */
+      migratedIpnsPrivateKeyEncrypted?: string;
+    }
+  ): Promise<{ prunedCids: string[] }> {
+    void versionIndex;
+    return this.withOperation('restoreFileVersion', async () => {
+      const folder = this.folderTree.get(parentIpnsName);
+      if (!folder) throw new Error('Folder not loaded');
+
+      const filePointer = folder.children.find(
+        (c): c is FilePointer => c.type === 'file' && c.id === fileId
+      );
+      if (!filePointer) throw new Error('File not found');
+
+      // 1. Publish file metadata (CAS internally). updateFileMetadata zeroes the
+      //    fileIpnsPrivateKey in its own finally (T-47-01) — do NOT zero it here.
+      const { prunedCids } = await sdkCore.updateFileMetadata({
+        fileIpnsPrivateKey: params.fileIpnsPrivateKey,
+        fileMetaIpnsName: filePointer.fileMetaIpnsName,
+        folderKey: folder.folderKey,
+        currentMetadata: params.currentMetadata,
+        updates: params.updates,
+        createVersion: params.createVersion ?? false,
+        maxVersionsPerFile: params.maxVersionsPerFile,
+        ctx: this.ctx,
+      });
+
+      // 2. Conditional folder publish for lazy IPNS-key migration only.
+      await this.maybePublishKeyMigration(
+        folder,
+        parentIpnsName,
+        fileId,
+        params.migratedIpnsPrivateKeyEncrypted
+      );
+
+      // 3. Emit folder:updated from the (possibly advanced) folderTree snapshot.
+      folder.lastLoadedAt = Date.now();
+      this.folderTree.set(parentIpnsName, folder);
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: parentIpnsName,
+        ipnsName: parentIpnsName,
+        children: folder.children,
+        sequenceNumber: folder.sequenceNumber,
+      });
+
+      return { prunedCids };
+    });
+  }
+
+  /**
+   * Delete a specific past version from a file's history, owning publish +
+   * folderTree bookkeeping.
+   *
+   * Mirrors the web `useFileVersions.handleDeleteVersion` control flow. Same
+   * five-step shape as {@link restoreFileVersion}: publish file metadata via
+   * `updateFileMetadata`, conditional folder publish only on lazy IPNS-key
+   * migration, then emit `folder:updated` from the folderTree snapshot.
+   *
+   * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey`,
+   * `currentMetadata`, the version-pruned `updates`, and the `deletedCid` (web
+   * tier owns the delete service logic). This method does NOT zero
+   * `fileIpnsPrivateKey` — `updateFileMetadata` owns zeroing (T-47-01).
+   *
+   * @param parentIpnsName - IPNS name of the folder containing the file
+   * @param fileId - ID of the file (FilePointer) whose version is deleted
+   * @param versionIndex - Index of the version being deleted (caller-resolved)
+   * @param params - Pre-resolved key + metadata + version-pruned updates + deletedCid
+   * @returns The deleted version's CID the caller should unpin
+   */
+  async deleteFileVersion(
+    parentIpnsName: string,
+    fileId: string,
+    versionIndex: number,
+    params: {
+      fileIpnsPrivateKey: Uint8Array;
+      currentMetadata: FileMetadata;
+      updates: Partial<
+        Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size' | 'encryptionMode'>
+      >;
+      deletedCid?: string;
+      maxVersionsPerFile?: number;
+      /** Hex-encoded re-wrapped IPNS key to persist on the FilePointer (lazy migration). */
+      migratedIpnsPrivateKeyEncrypted?: string;
+    }
+  ): Promise<{ deletedCid?: string }> {
+    void versionIndex;
+    return this.withOperation('deleteFileVersion', async () => {
+      const folder = this.folderTree.get(parentIpnsName);
+      if (!folder) throw new Error('Folder not loaded');
+
+      const filePointer = folder.children.find(
+        (c): c is FilePointer => c.type === 'file' && c.id === fileId
+      );
+      if (!filePointer) throw new Error('File not found');
+
+      // 1. Publish file metadata (CAS internally). updateFileMetadata zeroes the
+      //    fileIpnsPrivateKey in its own finally (T-47-01) — do NOT zero it here.
+      await sdkCore.updateFileMetadata({
+        fileIpnsPrivateKey: params.fileIpnsPrivateKey,
+        fileMetaIpnsName: filePointer.fileMetaIpnsName,
+        folderKey: folder.folderKey,
+        currentMetadata: params.currentMetadata,
+        updates: params.updates,
+        createVersion: false,
+        maxVersionsPerFile: params.maxVersionsPerFile,
+        ctx: this.ctx,
+      });
+
+      // 2. Conditional folder publish for lazy IPNS-key migration only.
+      await this.maybePublishKeyMigration(
+        folder,
+        parentIpnsName,
+        fileId,
+        params.migratedIpnsPrivateKeyEncrypted
+      );
+
+      // 3. Emit folder:updated from the (possibly advanced) folderTree snapshot.
+      folder.lastLoadedAt = Date.now();
+      this.folderTree.set(parentIpnsName, folder);
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: parentIpnsName,
+        ipnsName: parentIpnsName,
+        children: folder.children,
+        sequenceNumber: folder.sequenceNumber,
+      });
+
+      return { deletedCid: params.deletedCid };
+    });
+  }
+
+  /**
+   * Conditional folder re-publish for lazy IPNS-key migration.
+   *
+   * When `migratedIpnsPrivateKeyEncrypted` is provided, snapshot baseChildren,
+   * bump the matching FilePointer's `modifiedAt` + `ipnsPrivateKeyEncrypted`,
+   * publish via `updateFolderMetadataAndPublish`, and adopt the merged result
+   * into the folder state. No-op (folder children + sequence unchanged) when
+   * no migration is needed — the file-only publish does not advance the folder
+   * sequence. Mutates `folder` in place; callers persist it via folderTree.set.
+   */
+  private async maybePublishKeyMigration(
+    folder: FolderState,
+    parentIpnsName: string,
+    fileId: string,
+    migratedIpnsPrivateKeyEncrypted?: string
+  ): Promise<void> {
+    if (!migratedIpnsPrivateKeyEncrypted) return;
+
+    const baseChildren = [...folder.children];
+    const nextChildren = folder.children.map((child) =>
+      child.type === 'file' && child.id === fileId
+        ? {
+            ...child,
+            modifiedAt: Date.now(),
+            ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted,
+          }
+        : child
+    );
+
+    const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
+      children: nextChildren,
+      baseChildren,
+      folderKey: folder.folderKey,
+      ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+      ipnsName: parentIpnsName,
+      sequenceNumber: folder.sequenceNumber,
+      ctx: this.ctx,
+    });
+
+    folder.children = publishedChildren;
+    folder.sequenceNumber = newSequenceNumber;
   }
 
   /**

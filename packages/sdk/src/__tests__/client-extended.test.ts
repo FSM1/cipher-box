@@ -785,65 +785,6 @@ describe('CipherBoxClient - extended', () => {
       expect(client.hasFolder('new-ipns')).toBe(true);
     });
 
-    describe('reconcileFolderState', () => {
-      const childV1 = {
-        type: 'file' as const,
-        id: 'file1',
-        name: 'f.txt',
-        fileMetaIpnsName: 'k51file',
-        ipnsPrivateKeyEncrypted: 'abc',
-        createdAt: 0,
-        modifiedAt: 100,
-      };
-      const childV2 = { ...childV1, modifiedAt: 200 };
-
-      function registerAt(seq: bigint) {
-        client.registerFolder(
-          'rec-ipns',
-          new Uint8Array(32).fill(0xaa),
-          { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64).fill(0xbb) },
-          [childV1],
-          seq
-        );
-      }
-
-      it('adopts children + sequence when the snapshot is strictly newer', () => {
-        registerAt(5n);
-        // Simulates a direct file-replace publish having advanced the store to seq 6.
-        client.reconcileFolderState('rec-ipns', [childV2], 6n);
-
-        const folder = client.getFolderTree().get('rec-ipns');
-        expect(folder?.sequenceNumber).toBe(6n);
-        expect(folder?.children).toEqual([childV2]);
-        // Keys are preserved across reconciliation.
-        expect(folder?.ipnsKeypair.privateKey.every((b) => b === 0xbb)).toBe(true);
-      });
-
-      it('ignores a snapshot at an equal or older sequence (SDK state stays authoritative)', () => {
-        registerAt(5n);
-        client.reconcileFolderState('rec-ipns', [childV2], 5n); // equal
-        client.reconcileFolderState('rec-ipns', [childV2], 4n); // older
-
-        const folder = client.getFolderTree().get('rec-ipns');
-        expect(folder?.sequenceNumber).toBe(5n);
-        expect(folder?.children).toEqual([childV1]);
-      });
-
-      it('no-ops when the folder is not registered', () => {
-        expect(() => client.reconcileFolderState('absent-ipns', [childV2], 9n)).not.toThrow();
-        expect(client.hasFolder('absent-ipns')).toBe(false);
-      });
-
-      it('copies the children array so later caller mutation does not leak in', () => {
-        registerAt(1n);
-        const live = [childV2];
-        client.reconcileFolderState('rec-ipns', live, 2n);
-        live.push({ ...childV1, id: 'file2' });
-
-        expect(client.getFolderTree().get('rec-ipns')?.children).toEqual([childV2]);
-      });
-    });
-
     it('destroy zeros internal key copies without mutating caller buffers', () => {
       const config = createTestConfig();
       const originalPrivKey = new Uint8Array(config.vaultKeypair.privateKey);
