@@ -2985,18 +2985,28 @@ mod durability_characterization_tests {
         );
 
         // The detached upload to 127.0.0.1:1 fails and calls record_failure, which
-        // RETAINS the entry (never silently dropped). Drain briefly and re-check.
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        fs.drain_upload_completions();
-        let after = fs
-            .journal
-            .load_all_for_vault(&vault)
-            .expect("journal load after drain must succeed");
+        // RETAINS the entry (never silently dropped) and increments `retries`.
+        // Poll-drain until that failure is actually recorded rather than relying on
+        // a fixed sleep -- the detached upload's failure timing is nondeterministic
+        // on a busy CI runner.
+        fn is_retained_failure(e: &cipherbox_sdk::JournalEntry) -> bool {
+            matches!(e.op, cipherbox_sdk::JournalOp::UploadFile { .. }) && e.retries >= 1
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let after = loop {
+            fs.drain_upload_completions();
+            let entries = fs
+                .journal
+                .load_all_for_vault(&vault)
+                .expect("journal load after drain must succeed");
+            if entries.iter().any(is_retained_failure) || std::time::Instant::now() >= deadline {
+                break entries;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
         assert!(
-            after
-                .iter()
-                .any(|e| matches!(e.op, cipherbox_sdk::JournalOp::UploadFile { .. })),
-            "the UploadFile entry must be retained after the upload failure (record_failure)"
+            after.iter().any(is_retained_failure),
+            "the UploadFile entry must be retained with a recorded failure (retries >= 1) after record_failure"
         );
     }
 
