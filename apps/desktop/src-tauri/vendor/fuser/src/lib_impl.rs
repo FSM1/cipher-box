@@ -26,6 +26,7 @@ pub use reply::ReplyPoll;
 pub use reply::ReplyXTimes;
 pub use reply::ReplyXattr;
 pub use reply::{Reply, ReplyAttr, ReplyData, ReplyEmpty, ReplyEntry, ReplyOpen};
+pub use reply::ReplySender;
 pub use reply::{
     ReplyBmap, ReplyCreate, ReplyDirectory, ReplyDirectoryPlus, ReplyIoctl, ReplyLock, ReplyLseek,
     ReplyStatfs, ReplyWrite,
