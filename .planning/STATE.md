@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Milestone complete
-last_updated: "2026-06-14T23:43:53.097Z"
-last_activity: 2026-06-14
+status: In progress
+last_updated: "2026-06-15T00:00:00.000Z"
+last_activity: 2026-06-15
 progress:
-  total_phases: 30
+  total_phases: 32
   completed_phases: 30
   total_plans: 130
   completed_plans: 130
-  percent: 100
+  percent: 94
 ---
 
 # Project State
@@ -20,13 +20,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 45 — desktop-fuse-write-durability-cleanup
+**Current focus:** Phases 46-47 — desktop FUSE data-loss bugs + SDK folder-state/publish consolidation (planned, not started)
 
 ## Current Position
 
-Phase: 45
+Phase: 46 (next)
 Plan: Not started
-Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
+Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos (not yet planned)
 
 ## Performance Metrics
 
@@ -243,6 +243,8 @@ Recent for v1.1:
 - Phase 43 added: FUSE write durability — persisted upload journal, mkdir orphan fix (audit gap closure, todos 2026-06-11)
 - Phase 44 added: IPNS conflict handling — merge-on-409, file CAS (audit gap closure, todo 2026-06-11)
 - Phase 45 added: Desktop FUSE write-durability cleanup — Rust hygiene refactors + test coverage for phase 43/44 journal+replay (todos #11, #12, #14, #15, #18, #19, #20); excludes data-loss bugs #7/#8/#17
+- Phase 46 added 2026-06-15: Desktop FUSE data-loss bugs + replay hardening — the #7/#8/#17 bugs Phase 45 deferred, the two PR #491 replay follow-ups, and the deferred read_ops/write_ops + journal_helpers test coverage (grouped desktop todos)
+- Phase 47 added 2026-06-15: SDK folder-state and publish-path consolidation — unify folderTree/Zustand ownership, one publishWithCas CAS-retry, encapsulate baseChildren bookkeeping, fix updateSharedFile prunedCids pin leak (grouped SDK todos)
 
 ### Open Concerns
 
@@ -251,7 +253,7 @@ Recent for v1.1:
 
 ### Pending Todos
 
-12 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
+18 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. The desktop (6) and SDK (4) groups are now scoped into Phases 46 and 47 respectively.
 
 ### Resolved
 
@@ -267,7 +269,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-06-14
+Last activity: 2026-06-15
 
 ## Decisions
 
