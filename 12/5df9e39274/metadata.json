@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "125df9e39274",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-47-sdk-folder-state-publish-consolidation",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/sdk-core/src/cas.ts",
+    "packages/sdk-core/src/file/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/12/5df9e39274/0/metadata.json",
+      "transcript": "/12/5df9e39274/0/full.jsonl",
+      "content_hash": "/12/5df9e39274/0/content_hash.txt",
+      "prompt": "/12/5df9e39274/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1075,
+    "cache_creation_tokens": 39575,
+    "cache_read_tokens": 4434787,
+    "output_tokens": 24207,
+    "api_call_count": 30
+  }
+}
