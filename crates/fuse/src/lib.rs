@@ -1254,6 +1254,8 @@ pub async fn replay_for_vault(
                     parent_ipns_key_hex,
                     name,
                     *created_at_ms,
+                    tee_public_key,
+                    tee_key_epoch,
                 )
                 .await;
                 match result {
@@ -1600,8 +1602,90 @@ async fn fetch_merge_publish_parent(
     }
 }
 
+/// Publish a child folder's initial empty `FolderMetadata` (seq 0) during replay.
+///
+/// Mirrors the live mkdir background publish (`write_ops.rs`) and
+/// [`publish_file_metadata`]: encrypt the empty `{ version: "v2", children: [] }`
+/// metadata with the child folder key, upload, create a seq-0 IPNS record signed by the
+/// child IPNS key, enroll the child key with the TEE on first publish, then publish.
+/// Closes the crash window where `MkdirPublish` was fsynced but the child's own IPNS
+/// record was never created — which would otherwise leave the merged parent pointing at
+/// an unresolvable child IPNS name.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+async fn publish_child_folder_metadata(
+    api: &ApiClient,
+    child_folder_key: &[u8],
+    child_ipns_private_key: &zeroize::Zeroizing<Vec<u8>>,
+    child_ipns_name: &str,
+    coordinator: &PublishCoordinator,
+    tee_public_key: Option<&[u8]>,
+    tee_key_epoch: Option<u32>,
+) -> Result<(), String> {
+    use base64::Engine;
+
+    let metadata = cipherbox_core::folder::FolderMetadata {
+        version: "v2".to_string(),
+        children: vec![],
+    };
+    let json_bytes = encrypt_metadata_to_json(&metadata, child_folder_key)?;
+    let initial_cid = cipherbox_api_client::ipfs::upload_content(api, &json_bytes)
+        .await
+        .map_err(|e| format!("upload child folder metadata: {}", e))?;
+
+    let ipns_key_arr: [u8; 32] = child_ipns_private_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Invalid child IPNS key length".to_string())?;
+    let value = format!("/ipfs/{}", initial_cid);
+    let record = cipherbox_core::ipns::create_ipns_record(&ipns_key_arr, &value, 0, 86_400_000)
+        .map_err(|e| format!("child IPNS record creation failed: {}", e))?;
+    let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
+        .map_err(|e| format!("child IPNS marshal failed: {}", e))?;
+    let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
+
+    // TEE enrollment on first publish (same pattern as publish_file_metadata).
+    let (encrypted_ipns_for_tee, tee_epoch) = match (tee_public_key, tee_key_epoch) {
+        (Some(tee_key), Some(epoch)) => {
+            let wrapped = cipherbox_crypto::wrap_key(child_ipns_private_key.as_slice(), tee_key)
+                .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
+            (Some(hex::encode(&wrapped)), Some(epoch))
+        }
+        (Some(_), None) => return Err("TEE public key present but key_epoch missing".to_string()),
+        _ => (None, None),
+    };
+
+    let req = cipherbox_api_client::IpnsPublishRequest {
+        ipns_name: child_ipns_name.to_string(),
+        record: record_b64,
+        metadata_cid: initial_cid,
+        encrypted_ipns_private_key: encrypted_ipns_for_tee,
+        key_epoch: tee_epoch,
+        expected_sequence_number: None,
+    };
+    match cipherbox_api_client::ipns::publish_ipns(api, &req)
+        .await
+        .map_err(|e| format!("{}", e))?
+    {
+        cipherbox_api_client::PublishResult::Success => {}
+        cipherbox_api_client::PublishResult::Conflict { .. } => {
+            // Seq 0 should never conflict — log and continue (matches the live mkdir path).
+            log::warn!(
+                "replay: unexpected conflict on child folder IPNS publish for {}",
+                child_ipns_name
+            );
+        }
+    }
+    coordinator.record_publish(child_ipns_name, 0);
+    log::info!(
+        "replay: child folder IPNS published (seq 0) for {}",
+        child_ipns_name
+    );
+    Ok(())
+}
+
 /// Replay a single `MkdirPublish` journal entry.
-/// Fetches current parent metadata, merges child folder entry, CAS-publishes.
+/// Re-publishes the child folder's seq-0 IPNS record (idempotent), then fetches current
+/// parent metadata, merges the child folder entry, and CAS-publishes the parent.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 #[allow(clippy::too_many_arguments)]
 async fn replay_mkdir_entry(
@@ -1621,6 +1705,10 @@ async fn replay_mkdir_entry(
     parent_ipns_key_hex: &str,
     name: &str,
     created_at_ms: u64,
+    // TEE key/epoch for child-folder first-publish enrollment when the child's seq-0 IPNS
+    // record was never created in the original (failed) session.
+    tee_public_key: Option<&[u8]>,
+    tee_key_epoch: Option<u32>,
 ) -> Result<(), String> {
     let parent_folder_key = resolve_folder_key_cached(
         folder_key_cache,
@@ -1644,6 +1732,67 @@ async fn replay_mkdir_entry(
         cipherbox_crypto::ecies::unwrap_key(&wrapped_bytes, private_key)
             .map_err(|e| format!("ecies unwrap parent IPNS key: {} — retaining entry", e))?
     };
+
+    // CR-491: re-publish the child folder's own initial (empty) FolderMetadata before
+    // merging it into the parent. A crash after the MkdirPublish journal fsync but before
+    // the live background thread created the child's seq-0 IPNS record would otherwise leave
+    // the parent pointing at a child IPNS name that resolves to nothing. Idempotent: if the
+    // child record already exists (publish completed pre-crash), skip; a transient resolve
+    // error retains the entry for retry.
+    if child_ipns_key_hex.is_empty() {
+        return Err(
+            "child_ipns_key_hex is empty in MkdirPublish entry — retaining for retry".to_string(),
+        );
+    }
+    {
+        use crate::error::IpnsResolveOutcome;
+        match resolve_ipns_for_replay(coordinator.as_ref(), api, child_ipns_name).await {
+            IpnsResolveOutcome::Found(_) => {
+                log::info!(
+                    "replay: child folder IPNS '{}' already published — skipping seq-0 publish",
+                    child_ipns_name
+                );
+            }
+            IpnsResolveOutcome::NotFound => {
+                // Unwrap the user-ECIES-wrapped child IPNS key and folder key to sign and
+                // encrypt the child's own metadata record. Both are zeroized on drop.
+                let child_ipns_key_wrapped = hex::decode(child_ipns_key_hex).map_err(|e| {
+                    format!("hex decode child_ipns_key_hex: {} — retaining entry", e)
+                })?;
+                let child_ipns_key_raw = zeroize::Zeroizing::new(
+                    cipherbox_crypto::ecies::unwrap_key(&child_ipns_key_wrapped, private_key)
+                        .map_err(|e| {
+                            format!("ecies unwrap child IPNS key: {} — retaining entry", e)
+                        })?,
+                );
+                let child_folder_key_wrapped = hex::decode(child_folder_key_hex).map_err(|e| {
+                    format!("hex decode child_folder_key_hex: {} — retaining entry", e)
+                })?;
+                let child_folder_key_raw = zeroize::Zeroizing::new(
+                    cipherbox_crypto::ecies::unwrap_key(&child_folder_key_wrapped, private_key)
+                        .map_err(|e| {
+                            format!("ecies unwrap child folder key: {} — retaining entry", e)
+                        })?,
+                );
+                publish_child_folder_metadata(
+                    api,
+                    &child_folder_key_raw,
+                    &child_ipns_key_raw,
+                    child_ipns_name,
+                    coordinator.as_ref(),
+                    tee_public_key,
+                    tee_key_epoch,
+                )
+                .await?;
+            }
+            IpnsResolveOutcome::Error(e) => {
+                return Err(format!(
+                    "resolve child folder IPNS sequence: {} — retaining entry",
+                    e
+                ));
+            }
+        }
+    }
 
     // CR-03: write the user-ECIES-wrapped child IPNS key as-is into FolderEntry.
     // The journal already stores the user-wrapped form (populated by 43-06 write side fix).

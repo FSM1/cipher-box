@@ -136,7 +136,12 @@ pub mod implementation {
                 // The helper handles: initial metadata encryption, TEE-wrap,
                 // build_folder_metadata, ECIES-wrap of parent + child IPNS keys,
                 // and JournalOp::MkdirPublish construction.
-                let mkdir_result = fs.build_mkdir_journal_entry(
+                // Roll back the in-memory inode insert + parent children/mtime update if the
+                // journal entry can't be built or fsynced. Otherwise a failed mkdir returns an
+                // error to WinFsp but leaves a ghost directory in the inode table with no
+                // durable replay record. InodeTable::remove cleans the inode, name index, and
+                // parent's children entry.
+                let mkdir_result = match fs.build_mkdir_journal_entry(
                     parent_ino,
                     ino,
                     name,
@@ -144,13 +149,22 @@ pub mod implementation {
                     &ipns_name,
                     ipns_private_key.clone(),
                     &encrypted_folder_key_hex_for_journal,
-                )?;
+                ) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        fs.inodes.remove(ino);
+                        return Err(e);
+                    }
+                };
 
                 let mkdir_journal_entry_id = mkdir_result.entry.id.clone();
 
                 // D-04: fsync journal entry to disk BEFORE the directory entry is
                 // reported back to WinFsp (D-11b).
-                fs.journal.put(&mkdir_result.entry)?;
+                if let Err(e) = fs.journal.put(&mkdir_result.entry) {
+                    fs.inodes.remove(ino);
+                    return Err(e);
+                }
 
                 let crate::journal_helpers::MkdirJournalResult {
                     json_bytes,
