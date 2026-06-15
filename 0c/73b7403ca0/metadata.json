@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "0c73b7403ca0",
+  "strategy": "manual-commit",
+  "branch": "fix/owner-edit-folder-not-loaded",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-06-16-sdk-client-self-bootstrap-folder-tree-from-root-ipns-key.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0c/73b7403ca0/0/metadata.json",
+      "transcript": "/0c/73b7403ca0/0/full.jsonl",
+      "content_hash": "/0c/73b7403ca0/0/content_hash.txt",
+      "prompt": "/0c/73b7403ca0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1027,
+    "cache_creation_tokens": 116797,
+    "cache_read_tokens": 7254598,
+    "output_tokens": 59827,
+    "api_call_count": 28
+  }
+}
