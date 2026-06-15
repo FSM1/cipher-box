@@ -706,7 +706,14 @@ Plans:
 **Goal:** Close the desktop FUSE write-durability work that Phase 45 explicitly deferred — the three known data-loss bugs (mkdir orphan on parent-publish conflict, release() false-durability ack, stale-mount recovery on crash), the two replay-path hardening follow-ups from PR #491, and the remaining read_ops/write_ops + journal_helpers test coverage (Phase 45 Tier 2). Behavior-changing: these are correctness/durability fixes, not hygiene.
 **Requirements:** (1) mkdir must durably retry the parent publish on conflict instead of warn-only, so the new child folder is never orphaned remotely; (2) release()/flush must not ack the OS or zeroize+delete the local temp file until the remote commit is durably confirmed or the write is journaled for replay; (3) Linux startup must auto-recover a stale/disconnected FUSE mount (EEXIST/ENOTCONN) instead of failing and notifying; (4) park legacy empty `file_meta_ipns_name` replay entries instead of publishing an empty FilePointer; (5) use a strict (cache-bypassing) IPNS resolve in replay classification so transient failures retain the entry; (6) add the read_ops/write_ops handler test harness (unblock the fuser `ReplySender` limitation) plus the `journal_helpers` builder tests. Preserve all existing crash-recovery semantics.
 **Depends on:** Phase 45
-**Plans:** 0 plans (not yet planned)
+**Plans:** 4 plans
+
+Plans:
+
+- [ ] 46-01-PLAN.md — REQ-6 test harness: vendored `ReplySender` export + `make_test_fs` + `CaptureSender` + journal_helpers builder tests (Wave 1, lands first)
+- [ ] 46-02-PLAN.md — REQ-3 Linux stale-mount recovery: `recover_stale_mount` + mountinfo parser + EEXIST retry (Wave 2)
+- [ ] 46-03-PLAN.md — REQ-4 park legacy empty-name replay entries + REQ-5 strict cache-bypassing replay resolve (Wave 2)
+- [ ] 46-04-PLAN.md — REQ-1/REQ-2 mkdir + release durability characterization tests + Open Question A2 verification (Wave 3, tests-only)
 
 Scope (captured todos):
 
