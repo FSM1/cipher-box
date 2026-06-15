@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "099be3f795be",
+  "session_id": "ddff1841-6b38-4472-9268-91a6c1263314",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T02:09:31.78205Z",
+  "branch": "docs/roadmap-phases-46-47-desktop-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "e3536ee620f3",
+  "checkpoint_transcript_start": 550,
+  "transcript_lines_at_start": 550,
+  "token_usage": {
+    "input_tokens": 141,
+    "cache_creation_tokens": 6916,
+    "cache_read_tokens": 1788063,
+    "output_tokens": 5512,
+    "api_call_count": 6
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Clarify the scope of the 'Unify folder-state ownership in SDK client' todo (whether it includes web-app changes), then correct a stale/misleading ROADMAP description of Phase 47 requirement (1).",
+    "outcome": "Confirmed the todo does include web-app changes targeting two leaking file hooks; clarified the goal is single-writer folder state (not zero sdk-core imports); corrected ROADMAP Phase 47 requirement (1) to describe the real cure (eliminating bypasses + deleting reconcileFolderState) rather than the band-aid it previously described. Change committed and pushed on the docs/roadmap-phases-46-47-desktop-sdk branch.",
+    "learnings": {
+      "repo": [
+        "The todo 'unify-folder-state-ownership-in-sdk-client' explicitly targets three bypass paths in the web app where sdk-core folder-publish functions are called directly, bypassing the SDK client's sequence bookkeeping and event emission.",
+        "The 'good' pattern already exists in useFolderMutations: routes create/delete/move/rename through getSdkClient() + ensureFolderRegistered, and folder.store.ts:209 projects folder:updated events into Zustand.",
+        "client.reconcileFolderState at sdk-provider.ts:108 is a known band-aid that will become dead code once the bypass paths are eliminated — its deletion is an explicit deliverable of this todo.",
+        "sdk-core remains a legitimate web dependency for non-folder-state operations (crypto, raw uploads, file-metadata fetch/decrypt); the restriction is only on functions that mutate folder children/sequence."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useFileVersions.ts",
+          "line": 106,
+          "end_line": 264,
+          "finding": "Directly imports and calls replaceFileInFolder and updateFolderMetadataAndPublish from @cipherbox/sdk-core — a bypass path that must be replaced with new SDK client methods (client.replaceFile(), client.updateFileMetadata())."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "line": 416,
+          "end_line": 458,
+          "finding": "Directly calls updateFolderMetadataAndPublish and updateFileMetadata from sdk-core — another bypass path requiring migration to SDK client methods."
+        },
+        {
+          "path": "apps/web/src/sdk-provider.ts",
+          "line": 108,
+          "end_line": 108,
+          "finding": "client.reconcileFolderState is wired here as a band-aid; will become dead code and should be deleted once bypass paths in useFileVersions and useFileOperations are eliminated."
+        },
+        {
+          "path": "apps/web/src/store/folder.store.ts",
+          "line": 209,
+          "end_line": 209,
+          "finding": "Projects folder:updated events into Zustand — this is the correct/canonical pattern that the todo aims to make the sole writer of folder children/sequence state."
+        }
+      ],
+      "workflow": [
+        "Shell glob patterns can be silently eaten by zsh expansion; using ripgrep directly avoids this class of silent failure when inventorying file references.",
+        "ROADMAP descriptions can drift from intent over time (describing a band-aid rather than the intended cure); validating against the source todo and current code caught the discrepancy."
+      ]
+    },
+    "friction": [
+      "Initial bash glob for inventorying sdk-core usage was eaten by zsh and returned no results, requiring a retry with ripgrep."
+    ],
+    "open_items": [
+      "Implement new SDK client methods (client.replaceFile(), client.updateFileMetadata()) that own publish + sequence bookkeeping + folder:updated emission internally.",
+      "Migrate useFileVersions.ts to use the new client methods instead of calling sdk-core folder-publish functions directly.",
+      "Migrate useFileOperations.ts to use the new client methods instead of calling sdk-core folder-publish functions directly.",
+      "Make useFolderStore a pure projection: children/sequenceNumber written only via folder:updated events, never from web mutation code.",
+      "Delete client.reconcileFolderState once the bypass paths are eliminated (it will be dead code by construction)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T02:09:13.262558Z",
+    "agent_lines": 1,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 2,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}

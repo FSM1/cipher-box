@@ -1,0 +1,5 @@
+I did want to confirm, Unify folder-state ownership in the SDK client - does this include changes to the web app to ensure the sdk store is used everywhere, and no direct usage of sdk-core is present
+
+---
+
+please apply the correction, and completely agreed on the caveat you mentioned - I was specifically referring to mutating functions.
