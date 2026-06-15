@@ -715,22 +715,18 @@ No external dependencies. This phase is purely TypeScript source edits with exis
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All three open questions were resolved at planning time and baked into the plans.
 
 1. **publishWithCas: unified attempt count?**
-   - What we know: folder uses 4 attempts + backoff; file uses 2 + no backoff; both are "accidental" per the todo
-   - What's unclear: the correct unified values for production
-   - Recommendation: Planner should decide before coding. Proposal: 4 attempts + backoff for both (file conflicts are uncommon but expensive to fail)
+   - RESOLVED: 4 attempts + exponential backoff (base 100ms, cap 1500ms, ±50% jitter) for BOTH file and folder paths. The 2-attempt/no-backoff file divergence was accidental; the todo says "reconcile the divergence intentionally" — reconcile UP to the more robust folder values. Baked into Plan 47-01 (locked decision 1).
 
 2. **New client methods: where does restoreVersion/deleteVersion logic live?**
-   - What we know: these service functions currently live in `apps/web/src/services/file-metadata.service.ts` with no web dependencies
-   - What's unclear: move them to sdk-core, or pass pre-resolved params to client methods
-   - Recommendation: Pass pre-resolved `fileIpnsPrivateKey` + `currentMetadata` to client methods; keep web service functions in web. Avoids adding restore/delete logic to sdk-core where it doesn't belong.
+   - RESOLVED: Keep restore/delete service logic in the web tier. The new client methods (`replaceFile` / `restoreFileVersion` / `deleteFileVersion`) accept PRE-RESOLVED params (`fileIpnsPrivateKey`, `currentMetadata`) from the web hook and own ONLY publish + sequence bookkeeping + `folder:updated` emission. The caller owns key zeroing. Baked into Plan 47-03 (locked decision 2).
 
 3. **Drop updatedChildren from shared-write returns: breaking change for callers?**
-   - What we know: `useSharedWriteOps.ts` correctly uses `publishedChildren` today; `updatedChildren` is not consumed
-   - What's unclear: any other consumers outside the searched scope
-   - Recommendation: Safe to drop — verify with TypeScript compile errors after removal
+   - RESOLVED: Safe to drop. `useSharedWriteOps.ts` already consumes `publishedChildren`; `updatedChildren` is unused. Verified by sdk + web TypeScript compile after removal. Baked into Plan 47-02 (locked decision 3).
 
 ---
 
