@@ -38,10 +38,11 @@ vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
   return {
     ...actual,
-    updateFolderMetadataAndPublish: vi.fn().mockResolvedValue({
+    updateFolderMetadataAndPublish: vi.fn().mockImplementation(async (params) => ({
       cid: 'QmUpdated',
       newSequenceNumber: 2n,
-    }),
+      publishedChildren: params.children,
+    })),
     addToIpfs: vi.fn().mockResolvedValue({ cid: 'QmUploaded', size: 100, recorded: true }),
     batchPublishIpnsRecords: vi.fn().mockResolvedValue({ totalSucceeded: 1, totalFailed: 0 }),
     createAndPublishIpnsRecord: vi.fn().mockResolvedValue({ success: true, sequenceNumber: 1n }),
@@ -60,13 +61,12 @@ vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
       metadataCid: 'QmOldMeta',
     }),
     updateFileMetadata: vi.fn().mockResolvedValue({
-      ipnsRecord: {
-        ipnsName: 'k51fileipns',
-        recordBase64: 'mockbase64',
-        metadataCid: 'QmNewMeta',
-      },
+      ipnsName: 'k51fileipns',
+      metadataCid: 'QmNewMeta',
+      newSequenceNumber: 2n,
       prunedCids: [],
     }),
+    unpinFromIpfs: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -87,6 +87,8 @@ import {
   addToIpfs,
   batchPublishIpnsRecords,
   createAndPublishIpnsRecord,
+  updateFileMetadata,
+  unpinFromIpfs,
 } from '@cipherbox/sdk-core';
 import { wrapKey, encryptAesGcm } from '@cipherbox/crypto';
 
@@ -145,7 +147,7 @@ describe('shared-write operations', () => {
       expect(result.filePointer).toBeDefined();
       expect(result.filePointer.type).toBe('file');
       expect(result.filePointer.name).toBe('test.txt');
-      expect(result.updatedChildren).toHaveLength(1);
+      expect(result.publishedChildren).toHaveLength(1);
       expect(result.newSequenceNumber).toBe(2n);
     });
 
@@ -213,7 +215,7 @@ describe('shared-write operations', () => {
       expect(result.folderEntry).toBeDefined();
       expect(result.folderEntry.type).toBe('folder');
       expect(result.folderEntry.name).toBe('New Folder');
-      expect(result.updatedChildren).toHaveLength(1);
+      expect(result.publishedChildren).toHaveLength(1);
       expect(result.newSequenceNumber).toBe(2n);
     });
 
@@ -274,7 +276,7 @@ describe('shared-write operations', () => {
       expect(updated.name).toBe('new.txt');
       expect(updated.modifiedAt).toBeGreaterThan(1000);
 
-      expect(result.updatedChildren).toHaveLength(1);
+      expect(result.publishedChildren).toHaveLength(1);
       expect(result.newSequenceNumber).toBe(2n);
     });
   });
@@ -301,7 +303,7 @@ describe('shared-write operations', () => {
       const call = (updateFolderMetadataAndPublish as Mock).mock.calls[0][0];
       expect(call.children).toHaveLength(0);
 
-      expect(result.updatedChildren).toHaveLength(0);
+      expect(result.publishedChildren).toHaveLength(0);
       expect(result.newSequenceNumber).toBe(2n);
     });
   });
@@ -408,6 +410,92 @@ describe('shared-write operations', () => {
           getFileIpnsKeyFn,
         })
       ).rejects.toThrow(/IPNS key/i);
+    });
+
+    // ---- prunedCids unpin (Plan 47-02 / REQ-4) ----
+
+    function makeUpdateParams() {
+      return {
+        ctx: {
+          apiUrl: 'http://localhost:3000',
+          getAccessToken: async () => 'token',
+        },
+        folderKey: new Uint8Array(32).fill(1),
+        ownerPublicKey: new Uint8Array(33).fill(3),
+        recipientPublicKey: new Uint8Array(33).fill(4),
+        shareId: 'share-123',
+        addShareKeysFn: vi.fn().mockResolvedValue(undefined),
+        filePointer: {
+          type: 'file' as const,
+          id: 'f1',
+          name: 'test.txt',
+          fileMetaIpnsName: 'k51fileipns',
+          ipnsPrivateKeyEncrypted: 'enc',
+          createdAt: 1000,
+          modifiedAt: 1000,
+        },
+        newContent: new Uint8Array([10, 20, 30]),
+        getFileIpnsKeyFn: vi.fn().mockResolvedValue(new Uint8Array(64).fill(0x88)),
+      };
+    }
+
+    it('unpins each pruned CID returned by updateFileMetadata', async () => {
+      (updateFileMetadata as Mock).mockResolvedValueOnce({
+        ipnsName: 'k51fileipns',
+        metadataCid: 'QmNewMeta',
+        newSequenceNumber: 2n,
+        prunedCids: ['cidX', 'cidY'],
+      });
+
+      const params = makeUpdateParams();
+      await updateSharedFile(params);
+
+      // Flush the fire-and-forget unpin microtasks
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(unpinFromIpfs).toHaveBeenCalledTimes(2);
+      expect(unpinFromIpfs).toHaveBeenCalledWith(params.ctx, 'cidX');
+      expect(unpinFromIpfs).toHaveBeenCalledWith(params.ctx, 'cidY');
+    });
+
+    it('does not throw when an unpin fails (e.g. Phase-42 server 403 for a non-owned CID)', async () => {
+      (updateFileMetadata as Mock).mockResolvedValueOnce({
+        ipnsName: 'k51fileipns',
+        metadataCid: 'QmNewMeta',
+        newSequenceNumber: 2n,
+        prunedCids: ['cidX'],
+      });
+      (unpinFromIpfs as Mock).mockRejectedValueOnce(new Error('403 Forbidden'));
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const params = makeUpdateParams();
+
+      // Must resolve (not reject) even though the unpin rejects
+      await expect(updateSharedFile(params)).resolves.toBeUndefined();
+
+      // Flush the fire-and-forget .catch so its rejection is handled (no unhandled rejection)
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(unpinFromIpfs).toHaveBeenCalledWith(params.ctx, 'cidX');
+      expect(consoleWarn).toHaveBeenCalled();
+      consoleWarn.mockRestore();
+    });
+
+    it('does not unpin when there are no pruned CIDs', async () => {
+      (updateFileMetadata as Mock).mockResolvedValueOnce({
+        ipnsName: 'k51fileipns',
+        metadataCid: 'QmNewMeta',
+        newSequenceNumber: 2n,
+        prunedCids: [],
+      });
+
+      await updateSharedFile(makeUpdateParams());
+
+      await Promise.resolve();
+
+      expect(unpinFromIpfs).not.toHaveBeenCalled();
     });
   });
 
