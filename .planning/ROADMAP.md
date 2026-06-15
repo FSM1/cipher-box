@@ -722,7 +722,22 @@ Scope (captured todos):
 **Goal:** Pay down the Phase-44 SDK structural debt surfaced by `/simplify` and `/code-review` — one owner for folder state, one CAS-retry engine shared by file and folder publishes, encapsulated child bookkeeping, and the `prunedCids` pin-leak fix on the shared-file path. Mostly refactor, plus one correctness fix (pin leak).
 **Requirements:** (1) Unify folder-state ownership so the web Zustand `useFolderStore` and the SDK client `folderTree` can no longer drift — make the SDK client the single source of truth: route the two leaking web file hooks (`useFileOperations.updateFile`, `useFileVersions` restore/delete) through new SDK client methods that own publish + sequence bookkeeping + `folder:updated` emission, make `useFolderStore` a projection whose `children`/`sequenceNumber` are written only via `folder:updated` events (never from web mutation code), and delete the `reconcileFolderState` band-aid (dead by construction, closing the residual race). Scope is folder-state-*mutating* paths only — non-mutating sdk-core usage in the web app (crypto, uploads, metadata fetch/decrypt) stays. (2) unify the duplicated file/folder 409-CAS-retry loops into one `publishWithCas` helper in sdk-core so retry/backoff/sequence handling lives in one place; (3) encapsulate the `baseChildren`/`publishedChildren` snapshot-and-adopt ceremony inside `updateFolderMetadataAndPublish` so the ~14 call sites can't forget the base snapshot and resurrect deletes; (4) consume `prunedCids` in `updateSharedFile` and unpin them to stop the shared-file storage pin leak.
 **Depends on:** Phase 44
-**Plans:** 0 plans (not yet planned)
+**Plans:** 5 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 47-01-PLAN.md -- publishWithCas generic CAS helper in sdk-core; delegate folder/file publishes + encapsulate baseChildren (REQ-2, REQ-3)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 47-02-PLAN.md -- Drop updatedChildren from shared-write returns + unpin prunedCids in updateSharedFile (REQ-3, REQ-4)
+- [ ] 47-03-PLAN.md -- New client replaceFile/restoreFileVersion/deleteFileVersion methods + delete reconcileFolderState (REQ-1)
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 47-04-PLAN.md -- Route web file hooks through client methods + remove reconcileFolderState call (REQ-1)
+- [ ] 47-05-PLAN.md -- folder.store projection-only tests + full-suite green gate (REQ-1)
 
 Scope (captured todos):
 
