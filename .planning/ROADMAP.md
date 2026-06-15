@@ -665,13 +665,13 @@ Plans:
 
 Scope (captured todos):
 
-- [ ] #11 — Consolidate `fuser` and `winfsp` journal write paths
-- [ ] #12 — Extract a shared journal-dir and max-retries helper
-- [ ] #15 — Memoize `resolve_folder_key` during replay
-- [ ] #18 — Replace empty-string journal key sentinel with `Option<String>`
-- [ ] #19 — Replace not-found string match with a typed error in replay
-- [ ] #20 — Reuse `publish_file_metadata` and a cas-publish helper in replay
-- [ ] #14 — Improve Phase-43 rust write-durability test coverage
+- [x] #11 — Consolidate `fuser` and `winfsp` journal write paths
+- [x] #12 — Extract a shared journal-dir and max-retries helper
+- [x] #15 — Memoize `resolve_folder_key` during replay
+- [x] #18 — Replace empty-string journal key sentinel with `Option<String>`
+- [x] #19 — Replace not-found string match with a typed error in replay
+- [x] #20 — Reuse `publish_file_metadata` and a cas-publish helper in replay
+- [ ] #14 — Improve Phase-43 rust write-durability test coverage (Tier 1 durability/replay tests landed in Phase 45; Tier 2 read_ops/write_ops harness still open — left in pending)
 
 Out of scope (tracked as separate bug work):
 
