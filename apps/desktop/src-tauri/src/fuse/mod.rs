@@ -118,15 +118,19 @@ pub async fn mount_filesystem(
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&mount_path, std::fs::Permissions::from_mode(0o700));
         }
-    } else {
-        if let Ok(entries) = std::fs::read_dir(&mount_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() { let _ = std::fs::remove_dir_all(&path); }
-                else { let _ = std::fs::remove_file(&path); }
-            }
-            log::info!("Cleaned stale mount point: {}", mount_path.display());
+    }
+
+    // Clean crash residue regardless of which branch created/recovered the mount
+    // point: the Linux recovery path (stale mount -> exists() lies ->
+    // create_mount_point_dir EEXIST retry) lands in the create branch above, not
+    // only the plain-exists case. On a freshly created empty dir this is a no-op.
+    if let Ok(entries) = std::fs::read_dir(&mount_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() { let _ = std::fs::remove_dir_all(&path); }
+            else { let _ = std::fs::remove_file(&path); }
         }
+        log::info!("Cleaned stale mount point: {}", mount_path.display());
     }
 
     #[cfg(target_os = "macos")]
