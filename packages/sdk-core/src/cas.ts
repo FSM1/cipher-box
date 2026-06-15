@@ -48,8 +48,18 @@ export async function publishWithCas<TData>(params: {
   encodeAndUpload: (local: TData) => Promise<string>;
   /** Decode remote data from IPFS using the given CID. */
   decodeRemote: (cid: string) => Promise<TData>;
-  /** Three-way merge returning merged data and optional pruned CIDs. */
-  merge: (base: TData, local: TData, remote: TData) => { merged: TData; prunedCids?: string[] };
+  /**
+   * Three-way merge returning merged data and optional pruned CIDs.
+   *
+   * `base` is `undefined` when the caller omits `baseData` (e.g. the latest-wins
+   * file path, which ignores `base`); merge implementations that read `base`
+   * must defend against `undefined`.
+   */
+  merge: (
+    base: TData | undefined,
+    local: TData,
+    remote: TData
+  ) => { merged: TData; prunedCids?: string[] };
   /** Initial local data for the first publish attempt. */
   localData: TData;
   /** Base snapshot for three-way merge. */
@@ -100,7 +110,7 @@ export async function publishWithCas<TData>(params: {
 
       // 5. Three-way merge (domain-specific, injected)
       const { merged, prunedCids: extraPruned } = params.merge(
-        params.baseData as TData,
+        params.baseData,
         localData,
         remoteData
       );
