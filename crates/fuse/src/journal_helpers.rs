@@ -136,13 +136,26 @@ impl crate::CipherBoxFS {
         let mut file_key = cipherbox_crypto::utils::generate_file_key();
         let iv = cipherbox_crypto::utils::generate_iv();
 
-        let ciphertext = cipherbox_crypto::aes::encrypt_aes_gcm(&plaintext, &file_key, &iv)
-            .map_err(|e| format!("File encryption failed: {}", e))?;
+        // Zeroize the raw file key on every fallible path — `generate_file_key`
+        // returns a plain `[u8; 32]` with no zeroize-on-drop, so an early `?`
+        // return here would otherwise leave the key in memory.
+        let ciphertext = match cipherbox_crypto::aes::encrypt_aes_gcm(&plaintext, &file_key, &iv) {
+            Ok(ct) => ct,
+            Err(e) => {
+                cipherbox_crypto::utils::clear_bytes(&mut file_key);
+                return Err(format!("File encryption failed: {}", e));
+            }
+        };
 
-        let wrapped_key = cipherbox_crypto::ecies::wrap_key(&file_key, &self.public_key)
-            .map_err(|e| format!("Key wrapping failed: {}", e))?;
+        let wrapped_key = match cipherbox_crypto::ecies::wrap_key(&file_key, &self.public_key) {
+            Ok(wk) => wk,
+            Err(e) => {
+                cipherbox_crypto::utils::clear_bytes(&mut file_key);
+                return Err(format!("Key wrapping failed: {}", e));
+            }
+        };
 
-        // Zeroize raw file key before any fallible path can return.
+        // Zeroize raw file key on the success path.
         cipherbox_crypto::utils::clear_bytes(&mut file_key);
 
         let (
