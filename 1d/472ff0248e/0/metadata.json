@@ -1,0 +1,132 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1d472ff0248e",
+  "session_id": "d2d5197a-fafc-43e2-b0c9-7b63f690e863",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T21:03:02.791791Z",
+  "branch": "feat/phase-47-sdk-folder-state-publish-consolidation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-14-unify-folder-state-ownership-in-sdk-client.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "23a655526b58",
+  "checkpoint_transcript_start": 658,
+  "transcript_lines_at_start": 658,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 4499,
+    "cache_read_tokens": 922268,
+    "output_tokens": 2187,
+    "api_call_count": 3
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_013khpaHe5mr1yRcicWYhcdE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "23a655526b58",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 612,
+        "end": 613,
+        "entry_ids": [
+          "3f6ba602-6119-413d-95f6-b0f0846fbdc3"
+        ],
+        "tool_use_id": "toolu_013khpaHe5mr1yRcicWYhcdE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013khpaHe5mr1yRcicWYhcdE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Capture a discovered design issue (folder-state ownership split between web store and SDK client) as a tracked todo and open a PR to preserve it durably, separate from the active bugfix PR #489.",
+    "outcome": "Todo file created at `.planning/todos/pending/2026-06-14-unify-folder-state-ownership-in-sdk-client.md`, committed on an isolated branch, PR #490 opened, and the branch merged into main (fast-forward, 188 lines added across 4 files).",
+    "learnings": {
+      "repo": [
+        "The project uses `.planning/todos/pending/` as a structured todo store with markdown files named by date and slug.",
+        "Todos are cross-linked when related but kept separate when scopes differ — CAS retry-loop dedup and folder state ownership are distinct concerns despite both touching the SDK.",
+        "The repo has a `release-please` automation branch (`release-please--branches--main`) that receives forced updates alongside normal main merges.",
+        "PRs are opened for todo/planning captures (not just code changes) to make them durable and tracked in GitHub."
+      ],
+      "code": [
+        {
+          "path": ".planning/todos/pending/2026-06-14-unify-folder-state-ownership-in-sdk-client.md",
+          "line": 1,
+          "end_line": 77,
+          "finding": "New todo capturing design: SDK client should be single source of truth for folder state; web store becomes a projection fed by `folder:updated` events; exit criterion is deletion of `reconcileFolderState`."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 1,
+          "finding": "Modified as part of the folder-state ownership capture — 23 lines changed (+6 net), likely annotating the bypass paths or adding TODOs inline."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-extended.test.ts",
+          "line": 1,
+          "end_line": 59,
+          "finding": "59 new lines of tests added alongside the capture, suggesting test scaffolding or failing tests were committed to document the expected future behavior."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1,
+          "end_line": 35,
+          "finding": "35 new lines added — likely stubs or inline TODO markers for the SDK client becoming the authoritative folder-state owner."
+        }
+      ],
+      "workflow": [
+        "Isolating captures/todos on their own branch and opening a PR keeps planning artifacts out of active bugfix PRs and ensures they survive in git history.",
+        "The `/gsd:capture` command produces structured todo files with metadata (area, severity, referenced files) and handles branch/PR creation automatically.",
+        "Cross-linking related todos requires a manual check to confirm scopes are truly distinct before keeping them separate."
+      ]
+    },
+    "friction": [
+      "1Password was locked during the session, leaving commit `09491e693` unsigned — requires a re-sign pass later."
+    ],
+    "open_items": [
+      "PR #490 todo work: unify folder-state ownership so SDK client is the single source of truth — delete `reconcileFolderState` as the exit criterion.",
+      "Re-sign commit `09491e693` once 1Password is unlocked.",
+      "Related but separate todo: dedup CAS retry-loop code in sdk-core (`…unify-file-and-folder-ipns-cas-retry-into-one-publishwithcas.md`)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T21:02:45.75416Z",
+    "agent_lines": 0,
+    "agent_removed": 77,
+    "human_added": 551,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 551,
+    "total_lines_changed": 1102,
+    "agent_percentage": 6.987295825771326,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

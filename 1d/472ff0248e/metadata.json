@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1d472ff0248e",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-47-sdk-folder-state-publish-consolidation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-14-unify-folder-state-ownership-in-sdk-client.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1d/472ff0248e/0/metadata.json",
+      "transcript": "/1d/472ff0248e/0/full.jsonl",
+      "content_hash": "/1d/472ff0248e/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 4499,
+    "cache_read_tokens": 922268,
+    "output_tokens": 2187,
+    "api_call_count": 3
+  }
+}
