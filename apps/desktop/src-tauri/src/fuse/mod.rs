@@ -99,21 +99,14 @@ pub async fn mount_filesystem(
     cipherbox_fuse::platform::linux::recover_stale_mount(&mount_path);
 
     if !mount_path.exists() {
-        if let Err(e) = std::fs::create_dir_all(&mount_path) {
-            // Belt-and-suspenders for the Linux stale-mount case: a disconnected
-            // FUSE mount whose dirent still exists surfaces as EEXIST even though
-            // `exists()` returned false. Recover once and retry before erroring.
-            #[cfg(target_os = "linux")]
-            if cipherbox_fuse::platform::linux::should_recover_then_retry(e.kind()) {
-                cipherbox_fuse::platform::linux::recover_stale_mount(&mount_path);
-                std::fs::create_dir_all(&mount_path)
-                    .map_err(|e| format!("Failed to create mount point: {}", e))?;
-            } else {
-                return Err(format!("Failed to create mount point: {}", e));
-            }
-            #[cfg(not(target_os = "linux"))]
-            return Err(format!("Failed to create mount point: {}", e));
-        }
+        // On Linux this recovers once from a stale FUSE mount whose dirent still
+        // exists (surfaces as EEXIST even though `exists()` returned false); on
+        // other platforms it is a plain `create_dir_all`.
+        #[cfg(target_os = "linux")]
+        let create_result = cipherbox_fuse::platform::linux::create_mount_point_dir(&mount_path);
+        #[cfg(not(target_os = "linux"))]
+        let create_result = std::fs::create_dir_all(&mount_path);
+        create_result.map_err(|e| format!("Failed to create mount point: {}", e))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

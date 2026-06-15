@@ -161,47 +161,41 @@ pub fn recover_stale_mount(mount_path: &Path) {
     );
 
     // Try a normal unmount first.
-    let status = std::process::Command::new("fusermount3")
-        .arg("-u")
-        .arg(mount_path)
-        .status();
-    match status {
-        Ok(s) if s.success() => {
-            log::info!(
-                "recover_stale_mount: unmounted stale mount via fusermount3 -u at {}",
-                mount_path.display()
-            );
-            return;
-        }
-        _ => {
-            log::info!(
-                "recover_stale_mount: fusermount3 -u failed; trying lazy fusermount3 -z -u"
-            );
-        }
+    if try_fusermount3_unmount(mount_path, &["-u"]) {
+        log::info!(
+            "recover_stale_mount: unmounted stale mount via fusermount3 -u at {}",
+            mount_path.display()
+        );
+        return;
     }
+    log::info!("recover_stale_mount: fusermount3 -u failed; trying lazy fusermount3 -z -u");
 
     // Lazy unmount fallback for the disconnected case. -z detaches the mount
     // now and cleans up references as they are released; acceptable since we
     // immediately mount a fresh session at the same path.
-    let status = std::process::Command::new("fusermount3")
-        .arg("-z")
-        .arg("-u")
-        .arg(mount_path)
-        .status();
-    match status {
-        Ok(s) if s.success() => {
-            log::info!(
-                "recover_stale_mount: lazily unmounted stale mount via fusermount3 -z -u at {}",
-                mount_path.display()
-            );
-        }
-        _ => {
-            log::info!(
-                "recover_stale_mount: lazy fusermount3 -z -u also failed at {}; proceeding anyway",
-                mount_path.display()
-            );
-        }
+    if try_fusermount3_unmount(mount_path, &["-z", "-u"]) {
+        log::info!(
+            "recover_stale_mount: lazily unmounted stale mount via fusermount3 -z -u at {}",
+            mount_path.display()
+        );
+    } else {
+        log::info!(
+            "recover_stale_mount: lazy fusermount3 -z -u also failed at {}; proceeding anyway",
+            mount_path.display()
+        );
     }
+}
+
+/// Run `fusermount3 <args> <mount_path>` and report whether it exited
+/// successfully. Spawn/exec failures count as not-successful.
+fn try_fusermount3_unmount(mount_path: &Path, args: &[&str]) -> bool {
+    matches!(
+        std::process::Command::new("fusermount3")
+            .args(args)
+            .arg(mount_path)
+            .status(),
+        Ok(s) if s.success()
+    )
 }
 
 /// Pure decision helper: should a `create_dir_all` error trigger
@@ -212,6 +206,23 @@ pub fn recover_stale_mount(mount_path: &Path) {
 /// error kind propagates to the caller unchanged.
 pub(crate) fn should_recover_then_retry(err_kind: std::io::ErrorKind) -> bool {
     err_kind == std::io::ErrorKind::AlreadyExists
+}
+
+/// Create the mount-point directory, recovering once from a stale FUSE mount.
+///
+/// Belt-and-suspenders for the Linux stale-mount case: a disconnected FUSE
+/// mount whose dirent still exists surfaces as EEXIST from `create_dir_all`
+/// even though `Path::exists()` returned false. On that specific error we
+/// recover the stale mount and retry once; any other error propagates.
+pub fn create_mount_point_dir(mount_path: &Path) -> std::io::Result<()> {
+    match std::fs::create_dir_all(mount_path) {
+        Ok(()) => Ok(()),
+        Err(e) if should_recover_then_retry(e.kind()) => {
+            recover_stale_mount(mount_path);
+            std::fs::create_dir_all(mount_path)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
