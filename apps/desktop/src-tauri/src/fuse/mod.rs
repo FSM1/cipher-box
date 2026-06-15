@@ -90,13 +90,19 @@ pub async fn mount_filesystem(
         return Err("Mount point is a symlink -- refusing to proceed".to_string());
     }
 
-    // Linux-only: a crash can leave the mount path as a disconnected/stale FUSE
-    // mount where stat() returns ENOTCONN, so `exists()` lies (returns false)
-    // and `create_dir_all` then fails with EEXIST. Authoritatively detect the
-    // stale mount via /proc/self/mountinfo and unmount it before the create /
-    // clean-stale decision below. Best-effort; never blocks the mount.
+    // A crash can leave the mount path as a stale FUSE mount backed by a dead
+    // in-process server, blocking remount before the create / clean-stale
+    // decision below. We authoritatively detect and clear it per platform:
+    //   - Linux: stat() returns ENOTCONN so `exists()` lies (returns false) and
+    //     `create_dir_all` then fails with EEXIST; detect via
+    //     /proc/self/mountinfo and unmount via `fusermount3 -u`.
+    //   - macOS (FUSE-T/SMB): mount lingers as a stale `smbfs` mount; detect via
+    //     `mount(8)` and clear via `umount`, then `diskutil unmount force`.
+    // Both are best-effort and never block the mount.
     #[cfg(target_os = "linux")]
     cipherbox_fuse::platform::linux::recover_stale_mount(&mount_path);
+    #[cfg(target_os = "macos")]
+    cipherbox_fuse::platform::macos::recover_stale_mount(&mount_path);
 
     if !mount_path.exists() {
         // On Linux this recovers once from a stale FUSE mount whose dirent still
