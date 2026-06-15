@@ -217,7 +217,7 @@ async fn resolve_ipns_for_replay(
     api: &cipherbox_api_client::ApiClient,
     ipns_name: &str,
 ) -> crate::error::IpnsResolveOutcome {
-    classify_resolve_outcome(coordinator.resolve_sequence(api, ipns_name).await)
+    classify_resolve_outcome(coordinator.resolve_sequence_strict(api, ipns_name).await)
 }
 
 /// Pure classification of a `resolve_sequence` result into an [`crate::error::IpnsResolveOutcome`].
@@ -300,6 +300,24 @@ impl PublishCoordinator {
                 )),
             },
         }
+    }
+
+    /// Strict resolve for replay classification: returns Err on ANY resolve failure,
+    /// never falling back to the cache. A genuine success still updates+returns the
+    /// max(resolved, cached) sequence so a subsequent confirmed publish advances correctly.
+    pub async fn resolve_sequence_strict(
+        &self,
+        api: &cipherbox_api_client::ApiClient,
+        ipns_name: &str,
+    ) -> Result<u64, String> {
+        let resp = cipherbox_api_client::ipns::resolve_ipns(api, ipns_name)
+            .await
+            .map_err(|e| format!("IPNS resolve failed for {}: {}", ipns_name, e))?;
+        let resolved = resp.sequence_number.parse::<u64>().unwrap_or(0);
+        let cached = self.get_cached(ipns_name).unwrap_or(0);
+        let seq = std::cmp::max(resolved, cached);
+        self.update_cache(ipns_name, seq);
+        Ok(seq)
     }
 
     pub fn record_publish(&self, ipns_name: &str, published_seq: u64) {
@@ -1855,6 +1873,18 @@ async fn replay_upload_entry(
     tee_key_epoch: Option<u32>,
 ) -> Result<(), String> {
     use base64::Engine;
+
+    // REQ-4: park legacy entries with no per-file IPNS name rather than publishing an
+    // empty, unresolvable FilePointer (id "replay-", file_meta_ipns_name ""). Returning
+    // Err routes through record_failure → retained on disk; never marks the entry replayed.
+    // No fresh-IPNS minting — lowest risk, no new key material. Placed above Step 1 (the
+    // ciphertext upload/pin) so legacy entries don't re-pin content on every mount.
+    if file_meta_ipns_name.is_none() {
+        return Err(
+            "legacy UploadFile entry has no per-file IPNS name -- parking (no empty FilePointer)"
+                .to_string(),
+        );
+    }
 
     // CR-01: hex-decode and ecies-unwrap the journaled parent IPNS key.
     // Returns Err if the key is absent/malformed so the entry is retained (T-43-20).
