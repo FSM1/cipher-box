@@ -6,29 +6,35 @@
 #[cfg(feature = "fuse")]
 pub(crate) mod implementation {
     use fuser::{
-        ReplyAttr, ReplyData, ReplyEmpty, ReplyEntry,
-        ReplyOpen, ReplyXattr,
-        consts::FOPEN_DIRECT_IO,
+        consts::FOPEN_DIRECT_IO, ReplyAttr, ReplyData, ReplyEmpty, ReplyEntry, ReplyOpen,
+        ReplyXattr,
     };
     use std::ffi::OsStr;
     use std::sync::atomic::Ordering;
     use std::time::{Duration, SystemTime};
 
-    use crate::CipherBoxFS;
     use crate::constants::CONTENT_DOWNLOAD_TIMEOUT;
+    use crate::CipherBoxFS;
 
     const FILEPOINTER_POLL_TIMEOUT: Duration = Duration::from_secs(5);
     const FILEPOINTER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
     /// Poll for an in-flight async FilePointer resolution to complete.
     /// Poll result: why did we stop waiting?
-    enum PollResult { Resolved, TimedOut, NotInFlight }
+    enum PollResult {
+        Resolved,
+        TimedOut,
+        NotInFlight,
+    }
 
     /// Poll for an in-flight async FilePointer resolution to complete.
     /// Only blocks if an async resolution task is actually in-flight for this inode.
     fn poll_filepointer_resolution(fs: &mut CipherBoxFS, ino: u64) -> PollResult {
         if !fs.resolving_file_pointers.contains(&ino) {
-            log::debug!("poll_filepointer_resolution: ino={} has no in-flight resolution", ino);
+            log::debug!(
+                "poll_filepointer_resolution: ino={} has no in-flight resolution",
+                ino
+            );
             return PollResult::NotInFlight;
         }
         let deadline = std::time::Instant::now() + FILEPOINTER_POLL_TIMEOUT;
@@ -38,18 +44,31 @@ pub(crate) mod implementation {
             // Break early if async task completed with Failure (ino removed from set)
             if !fs.resolving_file_pointers.contains(&ino) {
                 if let Some(inode) = fs.inodes.get(ino) {
-                    if let crate::inode::InodeKind::File { file_meta_resolved: true, cid, .. } = &inode.kind {
+                    if let crate::inode::InodeKind::File {
+                        file_meta_resolved: true,
+                        cid,
+                        ..
+                    } = &inode.kind
+                    {
                         if !cid.is_empty() {
                             return PollResult::Resolved;
                         }
                     }
                 }
-                log::debug!("poll_filepointer_resolution: ino={} async task finished but resolution failed", ino);
+                log::debug!(
+                    "poll_filepointer_resolution: ino={} async task finished but resolution failed",
+                    ino
+                );
                 return PollResult::NotInFlight;
             }
             // Still in-flight — check if resolved yet
             if let Some(inode) = fs.inodes.get(ino) {
-                if let crate::inode::InodeKind::File { cid, file_meta_resolved: true, .. } = &inode.kind {
+                if let crate::inode::InodeKind::File {
+                    cid,
+                    file_meta_resolved: true,
+                    ..
+                } = &inode.kind
+                {
                     if !cid.is_empty() {
                         return PollResult::Resolved;
                     }
@@ -59,12 +78,11 @@ pub(crate) mod implementation {
         PollResult::TimedOut
     }
     use crate::file_handle::OpenFileHandle;
-    use crate::helpers::{is_platform_special, mime_from_extension};
-    use crate::inode::{InodeKind, ROOT_INO};
+    use crate::helpers::is_platform_special;
+    use crate::inode::InodeKind;
     use crate::operations::implementation::{
-        ttl_for_is_dir, current_uid, current_gid,
-        fetch_and_decrypt_file_content, fetch_and_decrypt_content_async,
-        publish_file_metadata,
+        current_gid, current_uid, fetch_and_decrypt_content_async, fetch_and_decrypt_file_content,
+        publish_file_metadata, ttl_for_is_dir,
     };
 
     /// Initialize the filesystem.
@@ -101,12 +119,7 @@ pub(crate) mod implementation {
     }
 
     /// Look up a child by name within a parent directory.
-    pub fn handle_lookup(
-        fs: &mut CipherBoxFS,
-        parent: u64,
-        name: &OsStr,
-        reply: ReplyEntry,
-    ) {
+    pub fn handle_lookup(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: ReplyEntry) {
         fs.drain_upload_completions();
         fs.drain_refresh_completions();
         fs.drain_filepointer_completions();
@@ -122,16 +135,22 @@ pub(crate) mod implementation {
         // Handle "." and ".." -- NFS clients rely on these working.
         if name_str == "." {
             if let Some(inode) = fs.inodes.get(parent) {
-                reply.entry(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()), 0);
+                reply.entry(
+                    &ttl_for_is_dir(inode.attr.is_dir),
+                    &inode.attr.to_fuse_attr(current_uid(), current_gid()),
+                    0,
+                );
                 return;
             }
         }
         if name_str == ".." {
-            let parent_ino = fs.inodes.get(parent)
-                .map(|i| i.parent_ino)
-                .unwrap_or(1);
+            let parent_ino = fs.inodes.get(parent).map(|i| i.parent_ino).unwrap_or(1);
             if let Some(inode) = fs.inodes.get(parent_ino) {
-                reply.entry(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()), 0);
+                reply.entry(
+                    &ttl_for_is_dir(inode.attr.is_dir),
+                    &inode.attr.to_fuse_attr(current_uid(), current_gid()),
+                    0,
+                );
                 return;
             }
         }
@@ -181,22 +200,44 @@ pub(crate) mod implementation {
         };
 
         // Non-blocking stale metadata refresh (same as readdir's staleness check)
-        if let Some((ipns_name, folder_key)) = needs_refresh.filter(|(n, _)| !fs.refreshing_metadata.contains(n)) {
+        if let Some((ipns_name, folder_key)) =
+            needs_refresh.filter(|(n, _)| !fs.refreshing_metadata.contains(n))
+        {
             fs.refreshing_metadata.insert(ipns_name.clone());
-            crate::spawn_metadata_refresh(&fs.rt, fs.api.clone(), fs.refresh_tx.clone(), parent, ipns_name, folder_key);
+            crate::spawn_metadata_refresh(
+                &fs.rt,
+                fs.api.clone(),
+                fs.refresh_tx.clone(),
+                parent,
+                ipns_name,
+                folder_key,
+            );
         }
 
         // Non-blocking lazy load: fire background fetch
-        if let Some((ipns_name, folder_key)) = needs_load.filter(|(n, _)| !fs.refreshing_metadata.contains(n)) {
+        if let Some((ipns_name, folder_key)) =
+            needs_load.filter(|(n, _)| !fs.refreshing_metadata.contains(n))
+        {
             fs.refreshing_metadata.insert(ipns_name.clone());
-            crate::spawn_metadata_refresh(&fs.rt, fs.api.clone(), fs.refresh_tx.clone(), parent, ipns_name, folder_key);
+            crate::spawn_metadata_refresh(
+                &fs.rt,
+                fs.api.clone(),
+                fs.refresh_tx.clone(),
+                parent,
+                ipns_name,
+                folder_key,
+            );
             reply.error(libc::ENOENT);
             return;
         }
 
         if let Some(child_ino) = fs.inodes.find_child(parent, name_str) {
             if let Some(inode) = fs.inodes.get(child_ino) {
-                reply.entry(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()), 0);
+                reply.entry(
+                    &ttl_for_is_dir(inode.attr.is_dir),
+                    &inode.attr.to_fuse_attr(current_uid(), current_gid()),
+                    0,
+                );
                 return;
             }
         }
@@ -205,33 +246,36 @@ pub(crate) mod implementation {
     }
 
     /// Return file attributes for an inode.
-    pub fn handle_getattr(
-        fs: &mut CipherBoxFS,
-        ino: u64,
-        reply: ReplyAttr,
-    ) {
+    pub fn handle_getattr(fs: &mut CipherBoxFS, ino: u64, reply: ReplyAttr) {
         fs.drain_upload_completions();
         fs.drain_filepointer_completions();
 
         if let Some(inode) = fs.inodes.get(ino) {
-            reply.attr(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()));
+            reply.attr(
+                &ttl_for_is_dir(inode.attr.is_dir),
+                &inode.attr.to_fuse_attr(current_uid(), current_gid()),
+            );
         } else {
             reply.error(libc::ENOENT);
         }
     }
 
     /// Open a file for reading or writing.
-    pub fn handle_open(
-        fs: &mut CipherBoxFS,
-        ino: u64,
-        flags: i32,
-        reply: ReplyOpen,
-    ) {
+    pub fn handle_open(fs: &mut CipherBoxFS, ino: u64, flags: i32, reply: ReplyOpen) {
         let file_info = match fs.inodes.get(ino) {
             Some(inode) => match &inode.kind {
-                InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } => {
-                    Some((cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone()))
-                }
+                InodeKind::File {
+                    cid,
+                    encrypted_file_key,
+                    iv,
+                    encryption_mode,
+                    ..
+                } => Some((
+                    cid.clone(),
+                    encrypted_file_key.clone(),
+                    iv.clone(),
+                    encryption_mode.clone(),
+                )),
                 _ => {
                     reply.error(libc::EISDIR);
                     return;
@@ -246,8 +290,18 @@ pub(crate) mod implementation {
         let (cid, encrypted_file_key, iv, encryption_mode) = {
             let mut info = file_info.unwrap();
             if info.0.is_empty() {
-                let is_unresolved = fs.inodes.get(ino)
-                    .map(|i| matches!(&i.kind, InodeKind::File { file_meta_resolved: false, .. }))
+                let is_unresolved = fs
+                    .inodes
+                    .get(ino)
+                    .map(|i| {
+                        matches!(
+                            &i.kind,
+                            InodeKind::File {
+                                file_meta_resolved: false,
+                                ..
+                            }
+                        )
+                    })
                     .unwrap_or(false);
 
                 if is_unresolved {
@@ -255,13 +309,29 @@ pub(crate) mod implementation {
                     match poll_filepointer_resolution(fs, ino) {
                         PollResult::Resolved => {
                             if let Some(inode) = fs.inodes.get(ino) {
-                                if let InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } = &inode.kind {
-                                    info = (cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone());
+                                if let InodeKind::File {
+                                    cid,
+                                    encrypted_file_key,
+                                    iv,
+                                    encryption_mode,
+                                    ..
+                                } = &inode.kind
+                                {
+                                    info = (
+                                        cid.clone(),
+                                        encrypted_file_key.clone(),
+                                        iv.clone(),
+                                        encryption_mode.clone(),
+                                    );
                                 }
                             }
                         }
                         PollResult::TimedOut => {
-                            log::warn!("open: ino={} timed out after {}s poll-wait, returning EIO", ino, FILEPOINTER_POLL_TIMEOUT.as_secs());
+                            log::warn!(
+                                "open: ino={} timed out after {}s poll-wait, returning EIO",
+                                ino,
+                                FILEPOINTER_POLL_TIMEOUT.as_secs()
+                            );
                         }
                         PollResult::NotInFlight => {
                             log::warn!("open: ino={} no in-flight resolution (previously failed?), returning EIO", ino);
@@ -279,15 +349,17 @@ pub(crate) mod implementation {
 
         log::debug!(
             "open: ino={} flags=0x{:x} access_mode=0x{:x} O_TRUNC={} cid={}",
-            ino, flags, access_mode, (flags & libc::O_TRUNC) != 0, &cid
+            ino,
+            flags,
+            access_mode,
+            (flags & libc::O_TRUNC) != 0,
+            &cid
         );
 
         if access_mode == libc::O_WRONLY || access_mode == libc::O_RDWR {
             let is_trunc = (flags & libc::O_TRUNC) != 0;
 
-            let inode_size = fs.inodes.get(ino)
-                .map(|i| i.attr.size)
-                .unwrap_or(0);
+            let inode_size = fs.inodes.get(ino).map(|i| i.attr.size).unwrap_or(0);
 
             let existing_content = if is_trunc || inode_size == 0 {
                 if let Some(inode) = fs.inodes.get_mut(ino) {
@@ -295,7 +367,12 @@ pub(crate) mod implementation {
                     inode.attr.blocks = 0;
                     inode.attr.mtime = SystemTime::now();
                     inode.write_generation += 1;
-                    if let InodeKind::File { size: ref mut s, cid: ref mut c, .. } = inode.kind {
+                    if let InodeKind::File {
+                        size: ref mut s,
+                        cid: ref mut c,
+                        ..
+                    } = inode.kind
+                    {
                         *s = 0;
                         *c = String::new();
                     }
@@ -306,7 +383,13 @@ pub(crate) mod implementation {
                 if let Some(cached) = fs.content_cache.get(&cid) {
                     Some(cached.to_vec())
                 } else {
-                    match fetch_and_decrypt_file_content(fs, &cid, &encrypted_file_key, &iv, &encryption_mode) {
+                    match fetch_and_decrypt_file_content(
+                        fs,
+                        &cid,
+                        &encrypted_file_key,
+                        &iv,
+                        &encryption_mode,
+                    ) {
                         Ok(content) => Some(content),
                         Err(e) => {
                             log::error!("Failed to fetch content for write-open: {}", e);
@@ -402,13 +485,19 @@ pub(crate) mod implementation {
     ) {
         fs.drain_content_prefetches();
 
-        let has_temp = fs.open_files.get(&fh)
+        let has_temp = fs
+            .open_files
+            .get(&fh)
             .map(|h| h.temp_path.is_some())
             .unwrap_or(false);
 
         log::debug!(
             "read: ino={} fh={} offset={} size={} has_temp={}",
-            ino, fh, offset, size, has_temp
+            ino,
+            fh,
+            offset,
+            size,
+            has_temp
         );
 
         if has_temp {
@@ -435,8 +524,17 @@ pub(crate) mod implementation {
             match fs.inodes.get(ino) {
                 Some(inode) => match &inode.kind {
                     InodeKind::File {
-                        cid, encrypted_file_key, iv, encryption_mode, ..
-                    } => (cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone()),
+                        cid,
+                        encrypted_file_key,
+                        iv,
+                        encryption_mode,
+                        ..
+                    } => (
+                        cid.clone(),
+                        encrypted_file_key.clone(),
+                        iv.clone(),
+                        encryption_mode.clone(),
+                    ),
                     _ => {
                         reply.error(libc::EISDIR);
                         return;
@@ -450,8 +548,18 @@ pub(crate) mod implementation {
         };
 
         if cid.is_empty() {
-            let is_unresolved = fs.inodes.get(ino)
-                .map(|i| matches!(&i.kind, InodeKind::File { file_meta_resolved: false, .. }))
+            let is_unresolved = fs
+                .inodes
+                .get(ino)
+                .map(|i| {
+                    matches!(
+                        &i.kind,
+                        InodeKind::File {
+                            file_meta_resolved: false,
+                            ..
+                        }
+                    )
+                })
                 .unwrap_or(false);
 
             if is_unresolved {
@@ -459,7 +567,15 @@ pub(crate) mod implementation {
                 let poll_result = poll_filepointer_resolution(fs, ino);
                 if matches!(poll_result, PollResult::Resolved) {
                     if let Some(inode) = fs.inodes.get(ino) {
-                        if let InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, file_meta_resolved: true, .. } = &inode.kind {
+                        if let InodeKind::File {
+                            cid,
+                            encrypted_file_key,
+                            iv,
+                            encryption_mode,
+                            file_meta_resolved: true,
+                            ..
+                        } = &inode.kind
+                        {
                             if !cid.is_empty() {
                                 // Re-extract file info for the normal read path
                                 let new_cid = cid.clone();
@@ -522,8 +638,15 @@ pub(crate) mod implementation {
                     }
                 }
                 match poll_result {
-                    PollResult::TimedOut => log::warn!("read: ino={} timed out after {}s poll-wait, returning EIO", ino, FILEPOINTER_POLL_TIMEOUT.as_secs()),
-                    PollResult::NotInFlight => log::warn!("read: ino={} no in-flight resolution (previously failed?), returning EIO", ino),
+                    PollResult::TimedOut => log::warn!(
+                        "read: ino={} timed out after {}s poll-wait, returning EIO",
+                        ino,
+                        FILEPOINTER_POLL_TIMEOUT.as_secs()
+                    ),
+                    PollResult::NotInFlight => log::warn!(
+                        "read: ino={} no in-flight resolution (previously failed?), returning EIO",
+                        ino
+                    ),
                     PollResult::Resolved => {} // handled above
                 }
                 reply.error(libc::EIO);
@@ -647,285 +770,114 @@ pub(crate) mod implementation {
     }
 
     /// Release (close) a file handle.
-    pub fn handle_release(
-        fs: &mut CipherBoxFS,
-        ino: u64,
-        fh: u64,
-        reply: ReplyEmpty,
-    ) {
+    pub fn handle_release(fs: &mut CipherBoxFS, ino: u64, fh: u64, reply: ReplyEmpty) {
         fs.drain_upload_completions();
 
         let handle = fs.open_files.remove(&fh);
 
         if let Some(handle) = handle {
             let is_new_file = handle.temp_path.is_some() && {
-                fs.inodes.get(ino).map(|i| match &i.kind {
-                    InodeKind::File { cid, .. } => cid.is_empty(),
-                    _ => false,
-                }).unwrap_or(false)
+                fs.inodes
+                    .get(ino)
+                    .map(|i| match &i.kind {
+                        InodeKind::File { cid, .. } => cid.is_empty(),
+                        _ => false,
+                    })
+                    .unwrap_or(false)
             };
             let needs_upload = handle.temp_path.is_some() && (handle.dirty || is_new_file);
             if needs_upload {
-                log::debug!("release: uploading ino {} (dirty={}, new={})", ino, handle.dirty, is_new_file);
+                log::debug!(
+                    "release: uploading ino {} (dirty={}, new={})",
+                    ino,
+                    handle.dirty,
+                    is_new_file
+                );
 
-                // Capture spawn parameters from the prepare closure, without spawning yet.
-                // Journal fsync and handle.cleanup() run before reply.ok() (D-04, D-05).
-                struct UploadSpawnParams {
-                    api: std::sync::Arc<cipherbox_api_client::ApiClient>,
-                    rt: tokio::runtime::Handle,
-                    upload_tx: std::sync::mpsc::Sender<crate::FsEvent>,
-                    coordinator: std::sync::Arc<crate::PublishCoordinator>,
-                    tee_public_key: Option<Vec<u8>>,
-                    tee_key_epoch: Option<u32>,
-                    ciphertext: Vec<u8>,
-                    file_meta: cipherbox_core::folder::FileMetadata,
-                    file_ipns_private_key: Option<zeroize::Zeroizing<Vec<u8>>>,
-                    file_meta_ipns_name: Option<String>,
-                    folder_key_for_file_meta: Option<Vec<u8>>,
-                    ino: u64,
-                    parent_ino: u64,
-                    old_file_cid: Option<String>,
-                    pruned_cids: Vec<String>,
-                    write_gen: u64,
-                    journal: cipherbox_sdk::WriteQueue,
-                    // CR-07: snapshot carried into spawn closure for record_failure on failure.
-                    journal_entry_snapshot: cipherbox_sdk::JournalEntry,
-                }
+                // Build the journal entry via the shared helper (journal_helpers.rs),
+                // then fsync + apply in-memory mutations.
+                //
+                // CR-04: all in-memory mutations (inode kind/attr, pending_content,
+                // queued publish) are deferred until AFTER the journal entry is fsynced.
+                // If the helper or journal.put fails, the Err arm replies EIO having
+                // mutated nothing, so the debounced publisher never emits metadata for a
+                // write the OS was told failed.
+                let build_result =
+                    (|| -> Result<crate::journal_helpers::UploadJournalResult, String> {
+                        // Steps 1-7: encrypt, wrap, resolve parent IPNS, build JournalEntry.
+                        let result = fs.build_upload_journal_entry(ino, &handle, is_new_file)?;
 
-                let prepare_result = (|| -> Result<UploadSpawnParams, String> {
-                    let plaintext = handle.read_all()?;
+                        // CR-07: clone the entry before put() so the snapshot can be carried
+                        // into the spawn closure for record_failure on upload failure.
+                        let entry_snapshot = result.entry.clone();
 
-                    let mut file_key = cipherbox_crypto::utils::generate_file_key();
-                    let iv = cipherbox_crypto::utils::generate_iv();
+                        // D-04: fsync journal entry to disk BEFORE acking the OS.
+                        fs.journal.put(&result.entry)?;
 
-                    let ciphertext = cipherbox_crypto::aes::encrypt_aes_gcm(
-                        &plaintext, &file_key, &iv,
-                    )
-                    .map_err(|e| format!("File encryption failed: {}", e))?;
-
-                    let wrapped_key = cipherbox_crypto::ecies::wrap_key(
-                        &file_key, &fs.public_key,
-                    )
-                    .map_err(|e| format!("Key wrapping failed: {}", e))?;
-
-                    cipherbox_crypto::utils::clear_bytes(&mut file_key);
-
-                    let (old_file_cid, old_encrypted_key, old_iv, old_size, old_mode,
-                         existing_versions, file_ipns_private_key, file_meta_ipns_name) =
-                        fs.inodes.get(ino).map(|inode| {
-                            match &inode.kind {
+                        // CR-04: journal is durably committed — now apply the in-memory write.
+                        if let Some(inode) = fs.inodes.get_mut(ino) {
+                            let cached_hex = match &inode.kind {
                                 InodeKind::File {
-                                    cid, encrypted_file_key, iv, size, encryption_mode,
-                                    versions, file_ipns_private_key, file_meta_ipns_name, ..
-                                } => (
-                                    if cid.is_empty() { None } else { Some(cid.clone()) },
-                                    encrypted_file_key.clone(), iv.clone(), *size,
-                                    encryption_mode.clone(), versions.clone(),
-                                    file_ipns_private_key.clone(), file_meta_ipns_name.clone(),
-                                ),
-                                _ => (None, String::new(), String::new(), 0, "GCM".to_string(), None, None, None),
-                            }
-                        }).unwrap_or((None, String::new(), String::new(), 0, "GCM".to_string(), None, None, None));
+                                    file_ipns_key_encrypted_hex,
+                                    ..
+                                } => file_ipns_key_encrypted_hex.clone(),
+                                _ => None,
+                            };
+                            inode.kind = InodeKind::File {
+                                cid: String::new(),
+                                encrypted_file_key: result.encrypted_file_key_hex.clone(),
+                                iv: result.iv_hex.clone(),
+                                size: result.file_size,
+                                encryption_mode: "GCM".to_string(),
+                                file_meta_ipns_name: result.file_meta_ipns_name.clone(),
+                                file_meta_resolved: true,
+                                file_ipns_private_key: result.file_ipns_private_key.clone(),
+                                file_ipns_key_encrypted_hex: cached_hex,
+                                versions: result.versions_for_meta.clone(),
+                            };
+                            inode.attr.size = result.file_size;
+                            inode.attr.blocks = (result.file_size + 511) / 512;
+                            inode.attr.mtime = SystemTime::now();
+                        }
 
-                    let encrypted_file_key_hex = hex::encode(&wrapped_key);
-                    let iv_hex = hex::encode(&iv);
-                    let file_size = plaintext.len() as u64;
+                        fs.pending_content.insert(ino, result.plaintext.clone());
 
-                    let file_name = fs.inodes.get(ino).map(|i| i.name.clone()).unwrap_or_default();
-                    let mime_type = mime_from_extension(&file_name);
+                        fs.queue_publish(result.parent_ino, true);
 
-                    let now_ms = SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
+                        // Return the full result + snapshot for the spawn block.
+                        // We smuggle the snapshot by storing it in a wrapper; the
+                        // spawn block will destructure it from there.
+                        let _ = entry_snapshot; // consumed above via .clone(); held in result.entry
+                        Ok(result)
+                    })();
 
-                    let (new_versions, pruned_cids) = crate::helpers::apply_versioning(
-                        existing_versions,
-                        &old_file_cid,
-                        &old_encrypted_key,
-                        &old_iv,
-                        old_size,
-                        &old_mode,
-                        now_ms,
-                        fs.max_versions_per_file,
-                        fs.version_cooldown_ms,
-                        ino,
-                    );
+                match build_result {
+                    Ok(result) => {
+                        // CR-07: snapshot the entry (already put to disk) for record_failure.
+                        let journal_entry_snapshot = result.entry.clone();
 
-                    let versions_for_meta = new_versions.as_ref()
-                        .filter(|v| !v.is_empty())
-                        .cloned();
+                        let crate::journal_helpers::UploadJournalResult {
+                            ciphertext,
+                            file_meta,
+                            file_ipns_private_key,
+                            file_meta_ipns_name,
+                            folder_key_for_file_meta,
+                            parent_ino,
+                            old_file_cid,
+                            pruned_cids,
+                            write_gen,
+                            ..
+                        } = result;
+                        let spawn_ino = ino;
 
-                    // CR-04: all in-memory mutations (inode kind/attr, pending_content,
-                    // queued publish) are deferred until AFTER the journal entry is fsynced
-                    // (below). If any prepare step fails — including journal.put — the closure
-                    // returns Err having mutated nothing, so the Err arm replies EIO with no
-                    // rollback and the debounced publisher can never emit metadata for a write
-                    // the OS was told failed.
+                        let api = fs.api.clone();
+                        let rt = fs.rt.clone();
+                        let upload_tx = fs.upload_tx.clone();
+                        let coordinator = fs.publish_coordinator.clone();
+                        let tee_public_key = fs.tee_public_key.clone();
+                        let tee_key_epoch = fs.tee_key_epoch;
+                        let spawn_journal = fs.journal.clone();
 
-                    let write_gen = fs.inodes.get(ino)
-                        .map(|i| i.write_generation)
-                        .unwrap_or(0);
-
-                    let parent_ino = fs.inodes.get(ino)
-                        .map(|i| i.parent_ino)
-                        .unwrap_or(ROOT_INO);
-
-                    let folder_key_for_file_meta = fs.get_folder_key(parent_ino);
-
-                    // Resolve parent IPNS name for stable journal entry (D-02).
-                    let parent_folder_ipns_name = fs.inodes.get(parent_ino)
-                        .and_then(|inode| match &inode.kind {
-                            InodeKind::Root { ipns_name, .. } => ipns_name.clone(),
-                            InodeKind::Folder { ipns_name, .. } => Some(ipns_name.clone()),
-                            _ => None,
-                        })
-                        .unwrap_or_else(|| fs.root_ipns_name.clone());
-
-                    // CR-01: journal the user-ECIES-wrapped parent IPNS key so replay can
-                    // sign and publish the parent IPNS record at crash-recovery time.
-                    // Wrap the raw parent IPNS private key (from the inode) with the user's
-                    // EC public key — same form as FolderEntry.ipns_private_key_encrypted.
-                    let parent_ipns_key_hex_for_journal = fs.inodes.get(parent_ino)
-                        .and_then(|inode| match &inode.kind {
-                            InodeKind::Root { ipns_private_key, .. } => ipns_private_key.as_deref(),
-                            InodeKind::Folder { ipns_private_key, .. } => ipns_private_key.as_deref(),
-                            _ => None,
-                        })
-                        .and_then(|raw_key| {
-                            cipherbox_crypto::wrap_key(raw_key, &fs.public_key)
-                                .map(|w| hex::encode(&w))
-                                .map_err(|e| {
-                                    log::warn!("Failed to wrap parent IPNS key for journal: {}", e);
-                                    e
-                                })
-                                .ok()
-                        })
-                        .unwrap_or_default();
-
-                    let file_meta_ipns_name_str = file_meta_ipns_name
-                        .clone()
-                        .unwrap_or_default();
-
-                    // Build journal entry referencing ciphertext only — no plaintext (D-05).
-                    use base64::Engine;
-                    let ciphertext_b64 = base64::engine::general_purpose::STANDARD.encode(&ciphertext);
-                    let wrapped_key_hex = encrypted_file_key_hex.clone();
-                    let journal_entry = cipherbox_sdk::JournalEntry {
-                        id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
-                        vault_root_ipns: fs.root_ipns_name.clone(),
-                        op: cipherbox_sdk::JournalOp::UploadFile {
-                            ciphertext_b64,
-                            wrapped_key_hex,
-                            iv_hex: iv_hex.clone(),
-                            file_meta_ipns_name: file_meta_ipns_name_str,
-                            file_ipns_key_hex: file_meta_ipns_name.as_ref().and_then(|_| {
-                                file_ipns_private_key.as_ref()
-                                    .map(|k| {
-                                        cipherbox_crypto::ecies::wrap_key(k, &fs.public_key)
-                                            .map(|w| hex::encode(&w))
-                                            .unwrap_or_else(|e| {
-                                                log::warn!("Failed to wrap file IPNS key for journal: {}", e);
-                                                String::new()
-                                            })
-                                    })
-                                    .or_else(|| {
-                                        fs.inodes.get(ino).and_then(|i| match &i.kind {
-                                            InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
-                                            _ => None,
-                                        })
-                                    })
-                            }),
-                            parent_folder_ipns_name,
-                            parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
-                            filename: file_name,
-                            size: file_size,
-                            created_at_ms: now_ms,
-                        },
-                        retries: 0,
-                        status: cipherbox_sdk::JournalEntryStatus::Pending,
-                    };
-                    // CR-07: clone the entry before put() moves it; snapshot is carried
-                    // into the spawn closure so record_failure can transition the entry.
-                    let journal_entry_snapshot = journal_entry.clone();
-
-                    // D-04: fsync journal entry to disk BEFORE acking the OS.
-                    fs.journal.put(&journal_entry)?;
-
-                    // CR-04: journal is durably committed — now apply the in-memory write.
-                    // Deferred from above so a prepare/journal failure leaves no partial state
-                    // (no inode mutation, no pending_content, no queued parent publish).
-                    if let Some(inode) = fs.inodes.get_mut(ino) {
-                        let cached_hex = match &inode.kind {
-                            InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
-                            _ => None,
-                        };
-                        inode.kind = InodeKind::File {
-                            cid: String::new(),
-                            encrypted_file_key: encrypted_file_key_hex.clone(),
-                            iv: iv_hex.clone(),
-                            size: file_size,
-                            encryption_mode: "GCM".to_string(),
-                            file_meta_ipns_name: file_meta_ipns_name.clone(),
-                            file_meta_resolved: true,
-                            file_ipns_private_key: file_ipns_private_key.clone(),
-                            file_ipns_key_encrypted_hex: cached_hex,
-                            versions: versions_for_meta.clone(),
-                        };
-                        inode.attr.size = file_size;
-                        inode.attr.blocks = (file_size + 511) / 512;
-                        inode.attr.mtime = SystemTime::now();
-                    }
-
-                    fs.pending_content.insert(ino, plaintext);
-
-                    fs.queue_publish(parent_ino, true);
-
-                    let api = fs.api.clone();
-                    let rt = fs.rt.clone();
-                    let upload_tx = fs.upload_tx.clone();
-                    let coordinator = fs.publish_coordinator.clone();
-                    let tee_public_key = fs.tee_public_key.clone();
-                    let tee_key_epoch = fs.tee_key_epoch;
-                    let journal_clone = fs.journal.clone();
-
-                    let file_meta = cipherbox_core::folder::FileMetadata {
-                        version: "v1".to_string(),
-                        cid: String::new(),
-                        file_key_encrypted: encrypted_file_key_hex.clone(),
-                        file_iv: iv_hex.clone(),
-                        size: file_size,
-                        mime_type,
-                        encryption_mode: "GCM".to_string(),
-                        created_at: now_ms,
-                        modified_at: now_ms,
-                        versions: versions_for_meta,
-                    };
-
-                    Ok(UploadSpawnParams {
-                        api,
-                        rt,
-                        upload_tx,
-                        coordinator,
-                        tee_public_key,
-                        tee_key_epoch,
-                        ciphertext,
-                        file_meta,
-                        file_ipns_private_key,
-                        file_meta_ipns_name,
-                        folder_key_for_file_meta,
-                        ino,
-                        parent_ino,
-                        old_file_cid,
-                        pruned_cids,
-                        write_gen,
-                        journal: journal_clone,
-                        journal_entry_snapshot,
-                    })
-                })();
-
-                match prepare_result {
-                    Ok(params) => {
                         // D-05: zeroize and delete plaintext temp file BEFORE acking OS.
                         handle.cleanup();
                         // D-04: ack OS only after local journal fsync is confirmed above.
@@ -933,13 +885,6 @@ pub(crate) mod implementation {
 
                         // Spawn background upload AFTER ack; entry stays in journal until
                         // success, preserving the write_generation stale-drain guard.
-                        let UploadSpawnParams {
-                            api, rt, upload_tx, coordinator, tee_public_key, tee_key_epoch,
-                            ciphertext, file_meta, file_ipns_private_key, file_meta_ipns_name,
-                            folder_key_for_file_meta, ino: spawn_ino, parent_ino, old_file_cid,
-                            pruned_cids, write_gen, journal: spawn_journal,
-                            journal_entry_snapshot,
-                        } = params;
                         std::thread::spawn(move || {
                             let result = rt.block_on(async {
                                 let file_cid = cipherbox_api_client::ipfs::upload_content(
@@ -993,13 +938,20 @@ pub(crate) mod implementation {
                             if let Err(e) = result {
                                 // CR-07: call record_failure so retries increment and the entry
                                 // parks as Failed after max_retries (D-09). Never silently drop.
-                                if let Err(re) = spawn_journal.record_failure(&journal_entry_snapshot, &e) {
+                                if let Err(re) =
+                                    spawn_journal.record_failure(&journal_entry_snapshot, &e)
+                                {
                                     log::warn!(
                                         "record_failure failed for ino {}: {}",
-                                        spawn_ino, re
+                                        spawn_ino,
+                                        re
                                     );
                                 }
-                                log::error!("Background upload failed for ino {}: {}", spawn_ino, e);
+                                log::error!(
+                                    "Background upload failed for ino {}: {}",
+                                    spawn_ino,
+                                    e
+                                );
                             }
                         });
                         return; // reply already sent
@@ -1028,12 +980,7 @@ pub(crate) mod implementation {
     }
 
     /// Check file access permissions.
-    pub fn handle_access(
-        fs: &CipherBoxFS,
-        ino: u64,
-        mask: i32,
-        reply: ReplyEmpty,
-    ) {
+    pub fn handle_access(fs: &CipherBoxFS, ino: u64, mask: i32, reply: ReplyEmpty) {
         if fs.inodes.get(ino).is_none() {
             reply.error(libc::ENOENT);
             return;
@@ -1045,9 +992,13 @@ pub(crate) mod implementation {
     /// Get extended attribute value.
     pub fn handle_getxattr(reply: ReplyXattr) {
         #[cfg(target_os = "macos")]
-        { reply.error(libc::ENOATTR); }
+        {
+            reply.error(libc::ENOATTR);
+        }
         #[cfg(not(target_os = "macos"))]
-        { reply.error(libc::ENODATA); }
+        {
+            reply.error(libc::ENODATA);
+        }
     }
 
     /// List extended attribute names.

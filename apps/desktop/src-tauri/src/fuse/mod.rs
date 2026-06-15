@@ -45,6 +45,30 @@ use std::collections::HashMap;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 use crate::state::AppState;
 
+/// Maximum retry count for journal entries before they are parked as `Failed`.
+///
+/// Both the FUSE mount path and the sync daemon pass this value to `WriteQueue::new`.
+/// Defined once here so the two call sites cannot silently drift.
+pub const JOURNAL_MAX_RETRIES: u32 = 5;
+
+/// Return the canonical on-disk journal directory for this installation.
+///
+/// Resolves to `<data_local_dir>/cipherbox/cb-journal` with a `temp_dir` fallback
+/// when `data_local_dir` is unavailable. The resolved path is identical to the
+/// inline chain previously duplicated in `fuse/mod.rs` and `commands/sync.rs`.
+///
+/// **Note:** This function only constructs the `PathBuf`; callers are responsible
+/// for calling `std::fs::create_dir_all` and applying `0o700` permissions.
+pub fn default_journal_dir() -> std::path::PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| {
+            log::warn!("data_local_dir unavailable; journal will use temp_dir (may not survive reboot)");
+            std::env::temp_dir()
+        })
+        .join("cipherbox")
+        .join("cb-journal")
+}
+
 /// Mount the FUSE filesystem after successful authentication (macOS/Linux).
 #[cfg(feature = "fuse")]
 pub async fn mount_filesystem(
@@ -100,13 +124,7 @@ pub async fn mount_filesystem(
     }
 
     // Stable journal dir: persists across remounts so entries survive crash/restart.
-    let journal_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| {
-            log::warn!("data_local_dir unavailable; journal will use temp_dir (may not survive reboot)");
-            std::env::temp_dir()
-        })
-        .join("cipherbox")
-        .join("cb-journal");
+    let journal_dir = default_journal_dir();
     std::fs::create_dir_all(&journal_dir)
         .map_err(|e| format!("Failed to create journal directory: {}", e))?;
     #[cfg(unix)]
@@ -114,7 +132,7 @@ pub async fn mount_filesystem(
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&journal_dir, std::fs::Permissions::from_mode(0o700));
     }
-    let journal = cipherbox_sdk::WriteQueue::new(journal_dir, 5);
+    let journal = cipherbox_sdk::WriteQueue::new(journal_dir, JOURNAL_MAX_RETRIES);
 
     let mut inodes = cipherbox_fuse::inode::InodeTable::new();
     if let Some(root) = inodes.get_mut(cipherbox_fuse::inode::ROOT_INO) {
@@ -354,5 +372,25 @@ mod tests {
         let merged = merge_folder_children(&metadata(vec![make_file("a", "local.jpg")]), metadata(vec![make_file("a", "remote.jpg")]));
         assert_eq!(merged.children.len(), 1);
         assert_eq!(child_name(&merged.children[0]), "local.jpg");
+    }
+
+    #[test]
+    fn default_journal_dir_ends_with_cipherbox_cb_journal() {
+        use super::default_journal_dir;
+        let dir = default_journal_dir();
+        // Last component must be "cb-journal"
+        assert_eq!(
+            dir.file_name().and_then(|n| n.to_str()),
+            Some("cb-journal"),
+            "expected last component to be cb-journal, got {:?}",
+            dir
+        );
+        // Parent component must be "cipherbox"
+        assert_eq!(
+            dir.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()),
+            Some("cipherbox"),
+            "expected parent to be cipherbox, got {:?}",
+            dir.parent()
+        );
     }
 }

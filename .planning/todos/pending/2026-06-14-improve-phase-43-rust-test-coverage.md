@@ -6,10 +6,35 @@ files:
   - crates/sdk/src/sync.rs
   - crates/sdk/src/queue.rs
   - crates/fuse/src/lib.rs
+  - crates/fuse/src/journal_helpers.rs
   - crates/fuse/src/read_ops.rs
   - crates/fuse/src/write_ops.rs
   - apps/desktop/src-tauri/src/sync/mod.rs
 ---
+
+## Status (updated 2026-06-15)
+
+Partially addressed by **Phase 45 / PR #491**, which is why this todo is kept in
+`pending` rather than moved to `done` — the bulk (Tier 2) is still open.
+
+- **Tier 1 — partial.** Phase 45 added the write-durability/replay safety-net tests:
+  `crash_mid_write_entry_survives_reload`, `partial_journal_write_is_skipped_not_panicked`,
+  `retry_exhaustion_keeps_failed_entry_on_disk` (queue.rs), and
+  `replay_for_vault_does_not_touch_failed_entries`,
+  `resolve_folder_key_cache_resolves_shared_parent_once`,
+  `merge_folder_children_unions_new_and_existing`,
+  `classify_resolve_outcome_maps_resolve_results` (lib.rs). The `crates/sdk/src/sync.rs`
+  redaction functions (`sanitize_error`, `regex_replace_paths`, `regex_replace_tokens`,
+  `is_network_error`) and the residual `queue.rs`/`sync/mod.rs` branches are still untested.
+- **Tier 2 — open, blocked.** See the read_ops/write_ops blocker recorded under Tier 2
+  below (folded in from the standalone 2026-06-15 testability investigation).
+- **`journal_helpers.rs` — unit-testable now, not yet done.** Pure synchronous builders
+  (`build_upload_journal_entry`, `build_mkdir_journal_entry`) + free helpers
+  (`wrap_key_to_hex`, `generate_entry_id`, `current_unix_ms`). Needs a `make_test_fs()`
+  helper (CipherBoxFS has ~30 fields incl. a `tokio::runtime::Handle`, mpsc channels,
+  `ApiClient::new("http://127.0.0.1:1")`, `WriteQueue::new(dir, 5)`,
+  `PublishCoordinator::new()`; the root inode must have `ipns_private_key`/`ipns_name` set
+  via `get_mut(ROOT_INO)` for `build_folder_metadata`). Treat as a Tier-1 win.
 
 ## Problem
 
@@ -67,6 +92,28 @@ deps, it is mockable in one place instead of two:
   - [[2026-06-14-consolidate-fuser-and-winfsp-journal-write-paths]]
   - [[2026-06-14-reuse-publish-file-metadata-and-cas-publish-in-replay]]
   Sequence Tier 2 *after* those land.
+
+**Tier 2 blocker — `fuser` reply objects can't be constructed in tests (folded in from
+the 2026-06-15 testability investigation).** Every `read_ops.rs`/`write_ops.rs` handler
+consumes a concrete `fuser::Reply*` value. The only constructor is
+`Reply::new(unique, sender)` where `sender: impl ReplySender` — and in our vendored fuser
+(`apps/desktop/src-tauri/vendor/fuser`, wired via the workspace
+`[patch.crates-io] fuser = { path = ... }`) `mod reply;` is private and the crate root
+re-exports only the `Reply` trait + concrete reply types; **`ReplySender` is not exported**
+(`lib_impl.rs:28`). So `cipherbox-fuse` cannot implement a capturing sender, and the reply
+objects can't be built in a unit test. Three ways forward:
+
+- **Option A (lowest-touch real coverage):** add one line to the vendored fuser
+  (`pub use reply::ReplySender;`), write a channel-backed capture sender in cipherbox-fuse
+  test support, and unit-test the metadata-only handlers (getattr, access, lookup incl.
+  "."/"..", setattr truncate, create, unlink, rmdir, rename, flush, xattr, mkdir
+  happy-path). Reply wire format: out-header is `len:u32 LE | error:i32 LE | unique:u64 LE`,
+  `error == 0` success / `-errno` on error. Leave the blocking-network `handle_read`/
+  `handle_open` paths to E2E.
+- **Option B:** the trait-seam refactor described above (decouple handlers from reply
+  emission), then unit-test the pure cores.
+- **Option C:** cover via a real mounted FUSE mount (headless desktop FUSE UAT recipe) —
+  integration coverage, not unit patch-coverage.
 
 **Tier 3 — realistically UAT-covered, do NOT chase with unit tests (~65 lines).** The
 Tauri glue (`apps/desktop/src-tauri/src/fuse/mod.rs`, `commands/sync.rs`,

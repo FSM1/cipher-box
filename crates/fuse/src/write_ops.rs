@@ -4,20 +4,18 @@
 
 #[cfg(feature = "fuse")]
 pub(crate) mod implementation {
-    use fuser::{
-        ReplyAttr, ReplyCreate, ReplyEmpty, ReplyEntry, ReplyWrite,
-    };
+    use fuser::{ReplyAttr, ReplyCreate, ReplyEmpty, ReplyEntry, ReplyWrite};
     use std::ffi::OsStr;
     use std::sync::atomic::Ordering;
     use std::time::SystemTime;
 
-    use crate::CipherBoxFS;
     use crate::file_handle::OpenFileHandle;
     use crate::helpers::is_platform_special;
     use crate::inode::{FileAttrs, InodeData, InodeKind};
     use crate::operations::implementation::{
-        ttl_for_is_dir, current_uid, current_gid, FILE_TTL, DIR_TTL,
+        current_gid, current_uid, ttl_for_is_dir, DIR_TTL, FILE_TTL,
     };
+    use crate::CipherBoxFS;
 
     /// Set file attributes (handles truncate via size parameter).
     pub fn handle_setattr(
@@ -42,7 +40,9 @@ pub(crate) mod implementation {
                 }
             } else {
                 // No explicit fh -- find open writable handle for this inode
-                let matching_fh: Option<u64> = fs.open_files.iter()
+                let matching_fh: Option<u64> = fs
+                    .open_files
+                    .iter()
                     .find(|(_, h)| h.ino == ino && h.temp_path.is_some())
                     .map(|(id, _)| *id);
                 if let Some(fh_id) = matching_fh {
@@ -64,23 +64,37 @@ pub(crate) mod implementation {
 
                 if new_size == 0 {
                     inode.write_generation += 1;
-                    if let InodeKind::File { size: ref mut s, cid: ref mut c, .. } = inode.kind {
+                    if let InodeKind::File {
+                        size: ref mut s,
+                        cid: ref mut c,
+                        ..
+                    } = inode.kind
+                    {
                         *s = 0;
                         *c = String::new();
                     }
                 } else {
-                    if let InodeKind::File { size: ref mut s, .. } = inode.kind {
+                    if let InodeKind::File {
+                        size: ref mut s, ..
+                    } = inode.kind
+                    {
                         *s = new_size;
                     }
                 }
 
-                reply.attr(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()));
+                reply.attr(
+                    &ttl_for_is_dir(inode.attr.is_dir),
+                    &inode.attr.to_fuse_attr(current_uid(), current_gid()),
+                );
                 return;
             }
         }
 
         if let Some(inode) = fs.inodes.get(ino) {
-            reply.attr(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()));
+            reply.attr(
+                &ttl_for_is_dir(inode.attr.is_dir),
+                &inode.attr.to_fuse_attr(current_uid(), current_gid()),
+            );
         } else {
             reply.error(libc::ENOENT);
         }
@@ -144,7 +158,10 @@ pub(crate) mod implementation {
         }
 
         let parent_exists = fs.inodes.get(parent).map(|inode| {
-            matches!(inode.kind, InodeKind::Root { .. } | InodeKind::Folder { .. })
+            matches!(
+                inode.kind,
+                InodeKind::Root { .. } | InodeKind::Folder { .. }
+            )
         });
         if parent_exists != Some(true) {
             reply.error(libc::ENOENT);
@@ -173,16 +190,23 @@ pub(crate) mod implementation {
         let verifying_key = signing_key.verifying_key();
         let file_ipns_private_key = signing_key.to_bytes().to_vec();
         let file_ipns_public_key_bytes: [u8; 32] = verifying_key.to_bytes();
-        let file_ipns_name = match cipherbox_core::ipns::derive_ipns_name(&file_ipns_public_key_bytes) {
-            Ok(name) => name,
-            Err(e) => {
-                log::error!("create: IPNS name derivation from random keypair failed: {}", e);
-                reply.error(libc::EIO);
-                return;
-            }
-        };
+        let file_ipns_name =
+            match cipherbox_core::ipns::derive_ipns_name(&file_ipns_public_key_bytes) {
+                Ok(name) => name,
+                Err(e) => {
+                    log::error!(
+                        "create: IPNS name derivation from random keypair failed: {}",
+                        e
+                    );
+                    reply.error(libc::EIO);
+                    return;
+                }
+            };
 
-        let ipns_key_encrypted_hex = match cipherbox_crypto::wrap_key(&file_ipns_private_key, &fs.public_key) {
+        let ipns_key_encrypted_hex = match cipherbox_crypto::wrap_key(
+            &file_ipns_private_key,
+            &fs.public_key,
+        ) {
             Ok(wrapped) => Some(hex::encode(&wrapped)),
             Err(e) => {
                 log::error!("create: failed to ECIES-wrap IPNS key: {}. Cannot proceed without wrapped key.", e);
@@ -242,17 +266,18 @@ pub(crate) mod implementation {
 
         fs.mutated_folders.insert(parent, std::time::Instant::now());
 
-        log::debug!("create: {} in parent {} -> ino {} fh {}", name_str, parent, ino, fh);
+        log::debug!(
+            "create: {} in parent {} -> ino {} fh {}",
+            name_str,
+            parent,
+            ino,
+            fh
+        );
         reply.created(&FILE_TTL, &fuse_attr, 0, fh, 0);
     }
 
     /// Delete a file from a directory.
-    pub fn handle_unlink(
-        fs: &mut CipherBoxFS,
-        parent: u64,
-        name: &OsStr,
-        reply: ReplyEmpty,
-    ) {
+    pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         let name_str = match name.to_str() {
             Some(n) => n,
             None => {
@@ -284,7 +309,9 @@ pub(crate) mod implementation {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_millis() as u64;
-                    let created_ms = inode.attr.crtime
+                    let created_ms = inode
+                        .attr
+                        .crtime
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_millis() as u64;
@@ -315,7 +342,13 @@ pub(crate) mod implementation {
                         };
 
                         let ver_cids = crate::helpers::versions_to_bin_entries(versions);
-                        Some((inode.name.clone(), *size, file_pointer, cid.clone(), ver_cids))
+                        Some((
+                            inode.name.clone(),
+                            *size,
+                            file_pointer,
+                            cid.clone(),
+                            ver_cids,
+                        ))
                     } else {
                         None
                     }
@@ -348,7 +381,9 @@ pub(crate) mod implementation {
 
         // Create bin entry and publish to bin IPNS (fire-and-forget)
         if let Some((item_name, file_size, file_pointer, content_cid, ver_cids)) = bin_entry_data {
-            let parent_ipns_name = fs.inodes.get(parent)
+            let parent_ipns_name = fs
+                .inodes
+                .get(parent)
                 .map(|p| match &p.kind {
                     InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
                     InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
@@ -376,7 +411,11 @@ pub(crate) mod implementation {
                         .as_millis() as u64,
                     size: file_size,
                     mime_type: cipherbox_crypto::utils::mime_from_extension(&item_name).to_string(),
-                    content_cid: if content_cid.is_empty() { None } else { Some(content_cid) },
+                    content_cid: if content_cid.is_empty() {
+                        None
+                    } else {
+                        Some(content_cid)
+                    },
                     content_size: Some(file_size),
                     version_cids: ver_cids,
                     file_pointer: Some(file_pointer),
@@ -398,12 +437,7 @@ pub(crate) mod implementation {
     }
 
     /// Create a new directory.
-    pub fn handle_mkdir(
-        fs: &mut CipherBoxFS,
-        parent: u64,
-        name: &OsStr,
-        reply: ReplyEntry,
-    ) {
+    pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let name_str = match name.to_str() {
             Some(n) => n,
             None => {
@@ -418,7 +452,10 @@ pub(crate) mod implementation {
         }
 
         let parent_exists = fs.inodes.get(parent).map(|inode| {
-            matches!(inode.kind, InodeKind::Root { .. } | InodeKind::Folder { .. })
+            matches!(
+                inode.kind,
+                InodeKind::Root { .. } | InodeKind::Folder { .. }
+            )
         });
         if parent_exists != Some(true) {
             reply.error(libc::ENOENT);
@@ -430,18 +467,17 @@ pub(crate) mod implementation {
         let result = (|| -> Result<fuser::FileAttr, String> {
             let folder_key = cipherbox_crypto::utils::generate_file_key();
 
-            let (ipns_public_key, ipns_private_key) =
-                cipherbox_crypto::generate_ed25519_keypair();
+            let (ipns_public_key, ipns_private_key) = cipherbox_crypto::generate_ed25519_keypair();
 
-            let ipns_pub_arr: [u8; 32] = ipns_public_key.clone().try_into()
+            let ipns_pub_arr: [u8; 32] = ipns_public_key
+                .clone()
+                .try_into()
                 .map_err(|_| "Invalid IPNS public key length".to_string())?;
             let ipns_name = cipherbox_core::ipns::derive_ipns_name(&ipns_pub_arr)
                 .map_err(|e| format!("Failed to derive IPNS name: {}", e))?;
 
-            let wrapped_folder_key = cipherbox_crypto::wrap_key(
-                &folder_key, &fs.public_key,
-            )
-            .map_err(|e| format!("Folder key wrapping failed: {}", e))?;
+            let wrapped_folder_key = cipherbox_crypto::wrap_key(&folder_key, &fs.public_key)
+                .map_err(|e| format!("Folder key wrapping failed: {}", e))?;
             let encrypted_folder_key_hex = hex::encode(&wrapped_folder_key);
             // Clone for use in the journal entry (original is moved into the inode below).
             let encrypted_folder_key_hex_for_journal = encrypted_folder_key_hex.clone();
@@ -489,80 +525,56 @@ pub(crate) mod implementation {
                 parent_inode.attr.ctime = SystemTime::now();
             }
 
-            let metadata = cipherbox_core::folder::FolderMetadata {
-                version: "v2".to_string(),
-                children: vec![],
+            // Build the JournalEntry via the shared helper (journal_helpers.rs).
+            // The helper handles: initial metadata encryption, TEE-wrap, build_folder_metadata,
+            // ECIES-wrap of parent + child IPNS keys, and JournalOp::MkdirPublish construction.
+            // D-04: the helper does NOT call journal.put — we do that here for the fsync barrier.
+            // Roll back the in-memory inode insert + parent children/mtime update if the
+            // journal entry can't be built or fsynced. Otherwise a failed mkdir returns an
+            // error to the OS but leaves a ghost directory in the inode table with no durable
+            // replay record. InodeTable::remove cleans the inode, name index, and parent's
+            // children entry.
+            let mkdir_result = match fs.build_mkdir_journal_entry(
+                parent,
+                ino,
+                name_str,
+                &folder_key,
+                &ipns_name,
+                ipns_private_key.clone(),
+                &encrypted_folder_key_hex_for_journal,
+            ) {
+                Ok(result) => result,
+                Err(e) => {
+                    fs.inodes.remove(ino);
+                    return Err(e);
+                }
             };
 
-            let json_bytes = crate::encrypt_metadata_to_json(
-                &metadata, &folder_key,
-            )?;
+            let mkdir_journal_entry_id = mkdir_result.entry.id.clone();
 
-            let encrypted_ipns_for_tee = if let Some(ref tee_key) = fs.tee_public_key {
-                let wrapped = cipherbox_crypto::wrap_key(&ipns_private_key, tee_key)
-                    .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
-                Some(hex::encode(&wrapped))
-            } else {
-                None
-            };
-            let tee_key_epoch = fs.tee_key_epoch;
-
-            let (parent_metadata, parent_folder_key, parent_ipns_key, parent_ipns_name, parent_old_cid) =
-                fs.build_folder_metadata(parent)?;
-
-            // D-04: journal the MkdirPublish entry with an fsync barrier before reply.entry().
+            // D-04: fsync journal entry to disk BEFORE reply.entry().
             // This closes the crash-before-thread-runs window (T-43-07 / D-11b).
-            let mkdir_created_at_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            // Journal the user-ECIES-wrapped parent IPNS key so replay can sign and publish
-            // the parent IPNS record (CR-01). The parent_ipns_key bytes come from
-            // build_folder_metadata (raw Ed25519 private key from inode). We wrap with the
-            // user's EC public key — the same form stored everywhere in FolderEntry.
-            let parent_ipns_key_hex_for_journal = cipherbox_crypto::wrap_key(&parent_ipns_key, &fs.public_key)
-                .map(|w| hex::encode(&w))
-                .unwrap_or_else(|e| {
-                    // Same posture as the child key (CR-03): an empty string parks the entry on
-                    // replay rather than persisting a degraded key silently. Surface it in logs.
-                    log::warn!("Failed to wrap parent IPNS key for journal: {}", e);
-                    String::new()
-                });
+            if let Err(e) = fs.journal.put(&mkdir_result.entry) {
+                fs.inodes.remove(ino);
+                return Err(e);
+            }
 
-            // CR-03 (write-side fix): journal the user-ECIES-wrapped child IPNS key so replay
-            // writes the correct form into FolderEntry.ipns_private_key_encrypted.
-            let child_ipns_key_hex_user_wrapped = cipherbox_crypto::wrap_key(&ipns_private_key, &fs.public_key)
-                .map(|w| hex::encode(&w))
-                .unwrap_or_else(|e| {
-                    // CR-03: never fall back to the TEE-wrapped key here — replay writes this
-                    // value into FolderEntry.ipns_private_key_encrypted, which must be
-                    // user-ECIES-wrapped. An empty string makes replay park the entry rather
-                    // than brick the folder with an unusable key.
-                    log::warn!("Failed to wrap child IPNS key for journal: {}", e);
-                    String::new()
-                });
-
-            let mkdir_journal_entry = cipherbox_sdk::JournalEntry {
-                id: hex::encode(cipherbox_crypto::utils::generate_random_bytes(16)),
-                vault_root_ipns: fs.root_ipns_name.clone(),
-                op: cipherbox_sdk::JournalOp::MkdirPublish {
-                    child_ipns_name: ipns_name.clone(),
-                    child_folder_key_hex: encrypted_folder_key_hex_for_journal,
-                    child_ipns_key_hex: child_ipns_key_hex_user_wrapped,
-                    parent_folder_ipns_name: parent_ipns_name.clone(),
-                    parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
-                    name: name_str.to_string(),
-                    created_at_ms: mkdir_created_at_ms,
-                },
-                retries: 0,
-                status: cipherbox_sdk::JournalEntryStatus::Pending,
-            };
-            let mkdir_journal_entry_id = mkdir_journal_entry.id.clone();
-            fs.journal.put(&mkdir_journal_entry)?;
+            let crate::journal_helpers::MkdirJournalResult {
+                json_bytes,
+                ipns_private_key: ipns_private_key_zeroized,
+                encrypted_ipns_for_tee,
+                tee_key_epoch,
+                ipns_name: ipns_name_clone,
+                parent_metadata,
+                parent_folder_key,
+                parent_ipns_key,
+                parent_ipns_name,
+                parent_old_cid,
+                ..
+            } = mkdir_result;
 
             let api = fs.api.clone();
             let rt = fs.rt.clone();
-            let ipns_name_clone = ipns_name.clone();
             let coordinator = fs.publish_coordinator.clone();
             let upload_tx = fs.upload_tx.clone();
             let journal_for_mkdir = fs.journal.clone();
@@ -574,7 +586,7 @@ pub(crate) mod implementation {
                         &api, &json_bytes,
                     ).await.map_err(|e| format!("{}", e))?;
 
-                    let ipns_key_arr: [u8; 32] = (*ipns_private_key).clone().try_into()
+                    let ipns_key_arr: [u8; 32] = (*ipns_private_key_zeroized).clone().try_into()
                         .map_err(|_| "Invalid IPNS key length".to_string())?;
                     let value = format!("/ipfs/{}", initial_cid);
                     let record = cipherbox_core::ipns::create_ipns_record(
@@ -689,12 +701,7 @@ pub(crate) mod implementation {
     }
 
     /// Remove an empty directory.
-    pub fn handle_rmdir(
-        fs: &mut CipherBoxFS,
-        parent: u64,
-        name: &OsStr,
-        reply: ReplyEmpty,
-    ) {
+    pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         let name_str = match name.to_str() {
             Some(n) => n,
             None => {
@@ -733,7 +740,9 @@ pub(crate) mod implementation {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_millis() as u64;
-                        let created_ms = inode.attr.crtime
+                        let created_ms = inode
+                            .attr
+                            .crtime
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_millis() as u64;
@@ -743,13 +752,19 @@ pub(crate) mod implementation {
                             Some(key) => match cipherbox_crypto::wrap_key(key, &fs.public_key) {
                                 Ok(wrapped) => hex::encode(&wrapped),
                                 Err(e) => {
-                                    log::error!("rmdir: failed to wrap IPNS key for bin entry: {}", e);
+                                    log::error!(
+                                        "rmdir: failed to wrap IPNS key for bin entry: {}",
+                                        e
+                                    );
                                     reply.error(libc::EIO);
                                     return;
                                 }
                             },
                             None => {
-                                log::error!("rmdir: missing folder IPNS private key for ino {}", child_ino);
+                                log::error!(
+                                    "rmdir: missing folder IPNS private key for ino {}",
+                                    child_ino
+                                );
                                 reply.error(libc::EIO);
                                 return;
                             }
@@ -799,7 +814,9 @@ pub(crate) mod implementation {
 
         // Create bin entry and publish to bin IPNS (fire-and-forget)
         if let Some((item_name, folder_entry)) = bin_entry_data {
-            let parent_ipns_name = fs.inodes.get(parent)
+            let parent_ipns_name = fs
+                .inodes
+                .get(parent)
                 .map(|p| match &p.kind {
                     InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
                     InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
@@ -859,7 +876,10 @@ pub(crate) mod implementation {
     ) {
         log::debug!(
             "rename: {:?} (parent {}) -> {:?} (parent {})",
-            name, parent, newname, newparent,
+            name,
+            parent,
+            newname,
+            newparent,
         );
         let name_str = match name.to_str() {
             Some(n) => n,
@@ -902,13 +922,15 @@ pub(crate) mod implementation {
                 if matches.len() == 1 {
                     log::debug!(
                         "rename suffix-match: truncated {:?} matched full name {:?}",
-                        name_str, matches[0].1
+                        name_str,
+                        matches[0].1
                     );
                     (matches[0].0, matches[0].1.clone())
                 } else {
                     log::debug!(
                         "rename failed: {:?} not found (suffix matches: {})",
-                        name_str, matches.len()
+                        name_str,
+                        matches.len()
                     );
                     reply.error(libc::ENOENT);
                     return;
@@ -920,7 +942,11 @@ pub(crate) mod implementation {
 
         log::debug!(
             "rename: {} (ino {}) in parent {} -> {} in parent {}",
-            name_str, source_ino, parent, newname_str, newparent,
+            name_str,
+            source_ino,
+            parent,
+            newname_str,
+            newparent,
         );
 
         // If destination exists, handle replacement
@@ -933,7 +959,9 @@ pub(crate) mod implementation {
 
             if let Some(dest_inode) = fs.inodes.get(dest_ino) {
                 // Validate kind compatibility (POSIX: can't replace file with dir or vice versa)
-                let source_is_dir = fs.inodes.get(source_ino)
+                let source_is_dir = fs
+                    .inodes
+                    .get(source_ino)
                     .map(|i| matches!(i.kind, InodeKind::Root { .. } | InodeKind::Folder { .. }))
                     .unwrap_or(false);
                 let dest_is_dir = matches!(
@@ -963,9 +991,8 @@ pub(crate) mod implementation {
                             let cid_clone = cid.clone();
                             let api = fs.api.clone();
                             fs.rt.spawn(async move {
-                                let _ = cipherbox_api_client::ipfs::unpin_content(
-                                    &api, &cid_clone,
-                                ).await;
+                                let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid_clone)
+                                    .await;
                             });
                         }
                     }
@@ -994,10 +1021,9 @@ pub(crate) mod implementation {
         {
             use unicode_normalization::UnicodeNormalization;
             let nfc_key: String = newname_str.nfc().collect();
-            fs.inodes.name_to_ino.insert(
-                (newparent, nfc_key),
-                source_ino,
-            );
+            fs.inodes
+                .name_to_ino
+                .insert((newparent, nfc_key), source_ino);
         }
 
         if parent != newparent {
@@ -1034,5 +1060,4 @@ pub(crate) mod implementation {
 
         reply.ok();
     }
-
 }

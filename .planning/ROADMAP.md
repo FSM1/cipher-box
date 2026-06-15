@@ -656,6 +656,51 @@ Plans:
 - [x] 44-06-PLAN.md — Return publishedChildren from updateFolderMetadataAndPublish + adopt at all 14 caller sites so the next write composes from the merged set (CR-01, WR-08 folder test)
 - [x] 44-07-PLAN.md — Filter prunedCids against published mergedMetadata references before return so live version CIDs are never unpinned (CR-02, WR-08 file test)
 
+### Phase 45: Desktop FUSE write-durability cleanup
+
+**Goal:** Rust-only hygiene refactors and added test coverage for the Phase 43/44 FUSE write journal and crash-recovery replay code. No behavior change — pay down the structural debt that accumulated while shipping durable writes, and harden the replay path with tests. Explicitly excludes the desktop-fuse data-loss bugs (mkdir-orphan, release() silent loss, stale-mount recovery), which are tracked separately as bug work.
+**Requirements:** Consolidate the duplicated `fuser`/`winfsp` journal write paths; extract a shared journal-dir + max-retries helper; replace stringly-typed code in replay (empty-string journal-key sentinel → `Option<String>`, not-found string match → typed error); reduce repeated work in replay (memoize `resolve_folder_key`, reuse `publish_file_metadata` + a cas-publish helper); raise Phase-43 rust write-durability test coverage. All changes must preserve current behavior and keep crash-recovery semantics intact.
+**Depends on:** Phase 44
+**Plans:** 6/6 plans complete
+
+Scope (captured todos):
+
+- [x] #11 — Consolidate `fuser` and `winfsp` journal write paths
+- [x] #12 — Extract a shared journal-dir and max-retries helper
+- [x] #15 — Memoize `resolve_folder_key` during replay
+- [x] #18 — Replace empty-string journal key sentinel with `Option<String>`
+- [x] #19 — Replace not-found string match with a typed error in replay
+- [x] #20 — Reuse `publish_file_metadata` and a cas-publish helper in replay
+- [ ] #14 — Improve Phase-43 rust write-durability test coverage (Tier 1 durability/replay tests landed in Phase 45; Tier 2 read_ops/write_ops harness still open — left in pending)
+
+Out of scope (tracked as separate bug work):
+
+- #7 FUSE mkdir orphans the new folder when parent publish conflicts
+- #8 FUSE release() reports success then can silently lose data
+- #17 Recover stale FUSE mount after crash on Linux startup
+
+Plans:
+**Wave 1**
+
+- [x] 45-01-PLAN.md — Write-durability + replay test safety net (#14)
+- [x] 45-02-PLAN.md — Shared journal-dir + max-retries helper (#12)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 45-03-PLAN.md — Option<String> file-meta-ipns sentinel + serde compat (#18)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 45-04-PLAN.md — Typed IpnsResolveOutcome in replay (#19)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 45-05-PLAN.md — Reuse publish_file_metadata + memoize resolve_folder_key in replay (#20, #15)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 45-06-PLAN.md — Consolidate fuser/winfsp journal write paths into journal_helpers (#11)
+
 ---
 
 _Roadmap created: 2026-03-07_

@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Milestone complete
-last_updated: "2026-06-14T15:38:15.838Z"
+last_updated: "2026-06-14T23:43:53.097Z"
 last_activity: 2026-06-14
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 7
-  completed_plans: 7
+  total_phases: 30
+  completed_phases: 30
+  total_plans: 130
+  completed_plans: 130
   percent: 100
 ---
 
@@ -20,11 +20,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 44 — ipns-conflict-handling
+**Current focus:** Phase 45 — desktop-fuse-write-durability-cleanup
 
 ## Current Position
 
-Phase: 44
+Phase: 45
 Plan: Not started
 Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 
@@ -32,7 +32,7 @@ Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 
 **Velocity:**
 
-- Total plans completed: 176 (72 M1 + 83 M2 + 6 M3)
+- Total plans completed: 182 (72 M1 + 83 M2 + 6 M3)
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
@@ -135,6 +135,12 @@ Phases 18-41 complete; 42-44 added 2026-06-12 from audit-gap todos
 | Phase 41 P03    | 3min     | 2 tasks | 2 files   |
 | Phase 41 P04    | 2min     | 2 tasks | 2 files   |
 | Phase 41 P05    | 3min     | 2 tasks | 3 files   |
+| Phase 45 P01    | 8min     | 2 tasks | 2 files   |
+| Phase 45-desktop-fuse-write-durability-cleanup P45-02 | 8min | 1 tasks | 3 files |
+| Phase 45 P03 | 7min | 2 tasks | 4 files |
+| Phase 45 P04 | 8min | 1 tasks | 2 files |
+| Phase 45 P05 | 12 | 2 tasks | 1 files |
+| Phase 45 P06 | 90 | - tasks | - files |
 
 ## Accumulated Context
 
@@ -144,6 +150,9 @@ See PROJECT.md Key Decisions table for full list with outcomes.
 
 Recent for v1.1:
 
+- make_temp_queue in crates/sdk/src/queue.rs uses pid+counter (not tid+counter) to prevent inter-run temp dir collisions (Phase 45 P01 Rule-1 fix)
+- T-45-07 uses root-shortcut path (folder_ipns_name==root_ipns_name) for deterministic resolve_folder_key test without network; marked for #15 extension
+- T-45-08 placed in crates/fuse/src/lib.rs (not apps/desktop) to keep characterization tests co-located with merge_folder_children under test
 - Network-first with self-hosted Someguy + DB fallback adopted as IPNS resolution strategy (revised from DB-first during Phase 19 context -- see 19-SCOPING_RATIONALE.md #1)
 - rootFolderKey DB copy kept as permanent fallback (never drop column, IPFS copy for recovery independence)
 - BYO-IPFS affects pinning only, all IPNS publishes still route through CipherBox API
@@ -233,6 +242,7 @@ Recent for v1.1:
 - Phase 42 added: API unpin integrity — ownership check, cross-user refcount, quota decrement (audit gap closure, todos 2026-06-11)
 - Phase 43 added: FUSE write durability — persisted upload journal, mkdir orphan fix (audit gap closure, todos 2026-06-11)
 - Phase 44 added: IPNS conflict handling — merge-on-409, file CAS (audit gap closure, todo 2026-06-11)
+- Phase 45 added: Desktop FUSE write-durability cleanup — Rust hygiene refactors + test coverage for phase 43/44 journal+replay (todos #11, #12, #14, #15, #18, #19, #20); excludes data-loss bugs #7/#8/#17
 
 ### Open Concerns
 
@@ -258,3 +268,14 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 ---
 
 Last activity: 2026-06-14
+
+## Decisions
+
+- [Phase ?]: deser_opt_string maps legacy empty-string file_meta_ipns_name to None; serde compat shim mandatory for pre-Phase-45 journal replay
+- [Phase 45-04]: IpnsResolveOutcome lives in error.rs with #[derive(Debug)] only — not thiserror, it is an outcome not an error
+- [Phase 45-04]: resolve_ipns_for_replay preserves both contains(not found) and contains(404) predicates to avoid classification regression
+- [Phase ?]: Conditional use imports route replay to fuse->operations::implementation and winfsp->platform::windows::operations::implementation for publish_file_metadata
+- [Phase ?]: folder_key_cache seeded with root key in replay_for_vault; resolve_folder_key_cached wrapper memoizes per replay call, never persisted or shared
+- [Phase ?]: journal_helpers: helper takes &OpenFileHandle directly (open_files entry removed before call)
+- [Phase ?]: journal_helpers: WinFsp write_gen read after write_generation bump; fuser uses result field captured before mutation
+- [Phase ?]: journal_helpers: build_mkdir_journal_entry called after child inode inserted so build_folder_metadata sees new child
