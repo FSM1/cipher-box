@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "69f9e9ef1862",
+  "session_id": "48039f0b-b140-4dc7-88ce-69ca4480055d",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T23:25:07.063491Z",
+  "branch": "chore/node24-actions-audit-todo",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-03-30-check-remaining-github-actions-for-node-24-updates-before-june-deadline.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fd7f5e4ced61",
+  "token_usage": {
+    "input_tokens": 37497,
+    "cache_creation_tokens": 77448,
+    "cache_read_tokens": 914221,
+    "output_tokens": 17935,
+    "api_call_count": 13
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Review and close out a deadline-sensitive todo: audit all GitHub Actions in the cipher-box repo for Node 24 runtime compatibility before the June 2026 deadline.",
+    "outcome": "Confirmed all 16 GitHub Actions are already node24-native or composite (unaffected by the runtime migration); deadline passed without breakage. Todo moved to completed on a new branch.",
+    "learnings": {
+      "repo": [
+        "All 16 GitHub Actions in the repo are already node24-compatible: 11 declare `runs.using: node24` natively, 5 are composite actions unaffected by the runtime migration. No FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 workaround was ever needed.",
+        "Repo convention: completed todos are committed inside feature PRs, never as standalone commits directly to main. Direct commits to main are blocked by a repo rule.",
+        "Actions use floating major tags (v4, v5, v6, etc.) rather than pinned SHAs — these tags already resolve to the latest stable within each major, so the fleet was self-updating.",
+        "CI on main was green post-deadline (Release Please, Codecov, E2E all passing), which was early confirmation the migration hadn't broken anything before the full audit ran.",
+        "The todo flagged 5 specific actions (tauri-apps/tauri-action, ikalnytskyi/action-setup-postgres, release-please-action, scp-action, ssh-action); all had been addressed before the todo was tackled — tauri became node24-native at v0.6.2, the others are composite."
+      ],
+      "code": [
+        {
+          "path": ".planning/todos/pending/2026-03-30-check-remaining-github-actions-for-node-24-updates-before-june-deadline.md",
+          "finding": "Todo written in March 2026 flagging 5 actions; by June 16 all were resolved. File was annotated with audit results and moved to .planning/todos/completed/."
+        }
+      ],
+      "workflow": [
+        "Parallel agent fan-out (16 researchers, one per action) audited the entire action fleet in ~60 seconds and 344k tokens — significantly faster than sequential investigation.",
+        "Checking CI health on the target branch before starting an overdue audit is a useful shortcut: green CI means the deadline passed safely, narrowing the work to documentation/closure rather than urgent fixes.",
+        "The `--lsit` typo was silently corrected to `--list` by the routing layer — fuzzy flag matching prevents user friction on minor typos."
+      ]
+    },
+    "friction": [
+      "The todo's June 2 deadline had already passed by 14 days when it was tackled; no process caught the overdue state proactively (the list display did add a warning, but only inline).",
+      "Command typo `--lsit` instead of `--list` — minor, but indicates the command name is easy to mistype."
+    ],
+    "open_items": [
+      "Branch with the todo-completion commit has not been PR'd or merged; needs a PR (or squash into the next feature branch) to land on main.",
+      "9 other todos remain pending, including 3 with active deadlines or recent security findings: #6 (encrypt share itemName at rest), #7 (IPNS signature storage review S1–S3), and #8 (pin GitHub Actions to immutable SHAs — ironically, the audit confirmed floating major tags are used, not pinned SHAs).",
+      "#8 (pin GitHub Actions to immutable SHAs for supply-chain hardening) was not addressed by this session — the Node 24 audit confirmed versions are current but the actions are still on floating major tags, not pinned commit SHAs."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T23:24:35.24157Z",
+    "agent_lines": 0,
+    "agent_removed": 33,
+    "human_added": 33,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 33,
+    "total_lines_changed": 66,
+    "agent_percentage": 50,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
