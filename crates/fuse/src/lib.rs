@@ -2362,6 +2362,218 @@ mod tests {
         );
     }
 
+    // REQ-4 motivation: two distinct FilePointers that both carry an EMPTY
+    // file_meta_ipns_name collapse to a single entry under merge_folder_children
+    // (they key on the empty string ""). This pins WHY legacy None-name replay
+    // entries must be parked rather than published as empty FilePointers — an
+    // empty locator is not a unique key and silently clobbers siblings. Pure, no network.
+    #[test]
+    fn empty_name_merge_collision() {
+        use cipherbox_core::folder::{FilePointer, FolderChild, FolderMetadata};
+
+        let empty_a = FolderChild::File(FilePointer {
+            id: "replay-".to_string(),
+            name: "file_a.txt".to_string(),
+            file_meta_ipns_name: String::new(), // empty locator
+            ipns_private_key_encrypted: None,
+            created_at: 1000,
+            modified_at: 2000,
+        });
+        let empty_b = FolderChild::File(FilePointer {
+            id: "replay-".to_string(),
+            name: "file_b.txt".to_string(), // distinct name/timestamps...
+            file_meta_ipns_name: String::new(), // ...but the SAME empty locator
+            ipns_private_key_encrypted: None,
+            created_at: 1001,
+            modified_at: 2001,
+        });
+
+        // One empty-name pointer is local, the other remote. They are distinct files but
+        // share the "" locator key, so merge cannot keep both: the remote loop looks up
+        // local_by_ipns[""], finds the local version, pushes it, and marks "" seen; the
+        // local loop then skips it. Two distinct empty-name files collapse to one.
+        let local_meta = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![empty_a],
+        };
+        let remote_meta = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![empty_b],
+        };
+
+        let merged = super::merge_folder_children(&local_meta, remote_meta);
+
+        assert_eq!(
+            merged.children.len(),
+            1,
+            "two distinct empty-name FilePointers collapse to one (they collide on the \"\" key)"
+        );
+    }
+
+    // REQ-4: a legacy UploadFile journal entry with file_meta_ipns_name == None is parked
+    // (retained), never published as an empty FilePointer. The early Err in
+    // replay_upload_entry routes through record_failure, so after replay against an
+    // unroutable API the entry count stays at 1. Mirrors
+    // replay_for_vault_does_not_touch_failed_entries harness.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    #[tokio::test]
+    async fn legacy_empty_name_parks() {
+        use cipherbox_sdk::{JournalEntry, JournalEntryStatus, JournalOp, WriteQueue};
+        use std::sync::Arc;
+
+        let dir = std::env::temp_dir()
+            .join("cb-req4-legacy-empty-name-parks")
+            .join(format!("{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = WriteQueue::new(dir.clone(), 5);
+        let vault = "k51vaultreq4";
+
+        // Legacy entry: per-file IPNS name is None → must be parked, not published.
+        let entry = JournalEntry {
+            id: "legacy-none-name".to_string(),
+            vault_root_ipns: vault.to_string(),
+            op: JournalOp::UploadFile {
+                ciphertext_b64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"ct",
+                ),
+                wrapped_key_hex: hex::encode(b"wk"),
+                iv_hex: hex::encode(b"iv"),
+                file_meta_ipns_name: None,
+                file_ipns_key_hex: None,
+                parent_folder_ipns_name: vault.to_string(),
+                parent_ipns_key_hex: hex::encode(b"ecies-parent-key"),
+                filename: "legacy.txt".to_string(),
+                size: 1,
+                created_at_ms: 1_700_000_000_000,
+            },
+            retries: 0,
+            status: JournalEntryStatus::Pending,
+        };
+        journal.put(&entry).unwrap();
+
+        let api = Arc::new(cipherbox_api_client::ApiClient::new("http://127.0.0.1:1"));
+        let coordinator = Arc::new(super::PublishCoordinator::new());
+
+        super::replay_for_vault(
+            &journal,
+            api,
+            &[0u8; 32],
+            &[0u8; 33],
+            &[0u8; 32],
+            vault,
+            coordinator,
+            None,
+            None,
+        )
+        .await;
+
+        let after = journal.load_all_for_vault(vault).unwrap();
+        assert_eq!(
+            after.len(),
+            1,
+            "legacy None-name entry must be retained (parked), not removed as replayed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // REQ-5: resolve_sequence_strict returns Err on ANY resolve failure, NEVER falling
+    // back to the cache. Here the cache is seeded via record_publish(N) but the API is
+    // unroutable, so strict resolve must err (unlike resolve_sequence which would return
+    // Ok(cached)).
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    #[tokio::test]
+    async fn strict_resolve_bypasses_cache() {
+        let api = cipherbox_api_client::ApiClient::new("http://127.0.0.1:1");
+        let coordinator = super::PublishCoordinator::new();
+        let ipns_name = "k51strictbypass";
+
+        // Seed the cache: resolve_sequence would now return Ok(42) on failure.
+        coordinator.record_publish(ipns_name, 42);
+
+        let result = coordinator.resolve_sequence_strict(&api, ipns_name).await;
+        assert!(
+            result.is_err(),
+            "strict resolve must err on resolve failure even with a populated cache (got {:?})",
+            result
+        );
+    }
+
+    // REQ-5: a transient (non-404) resolve failure during replay retains the entry rather
+    // than advancing IPNS off a stale cached sequence. The IPNS name has a cached sequence
+    // seeded, but because resolve_ipns_for_replay now uses the strict resolve, the failure
+    // is classified as Error(_) → entry retained (len stays 1). Mirrors the replay-retain
+    // harness.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    #[tokio::test]
+    async fn transient_failure_retains_entry() {
+        use cipherbox_sdk::{JournalEntry, JournalEntryStatus, JournalOp, WriteQueue};
+        use std::sync::Arc;
+
+        let dir = std::env::temp_dir()
+            .join("cb-req5-transient-failure-retains")
+            .join(format!("{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = WriteQueue::new(dir.clone(), 5);
+        let vault = "k51vaultreq5";
+        let file_meta = "k51filemetareq5";
+
+        // Entry has a per-file IPNS name AND key, so replay reaches the resolve step.
+        let entry = JournalEntry {
+            id: "transient-retain".to_string(),
+            vault_root_ipns: vault.to_string(),
+            op: JournalOp::UploadFile {
+                ciphertext_b64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"ct",
+                ),
+                wrapped_key_hex: hex::encode(b"wk"),
+                iv_hex: hex::encode(b"iv"),
+                file_meta_ipns_name: Some(file_meta.to_string()),
+                file_ipns_key_hex: Some(hex::encode(b"ecies-file-key")),
+                parent_folder_ipns_name: vault.to_string(),
+                parent_ipns_key_hex: hex::encode(b"ecies-parent-key"),
+                filename: "transient.txt".to_string(),
+                size: 1,
+                created_at_ms: 1_700_000_000_000,
+            },
+            retries: 0,
+            status: JournalEntryStatus::Pending,
+        };
+        journal.put(&entry).unwrap();
+
+        let api = Arc::new(cipherbox_api_client::ApiClient::new("http://127.0.0.1:1"));
+        let coordinator = Arc::new(super::PublishCoordinator::new());
+        // Seed a cached sequence for the per-file IPNS name. With the OLD cache-fallback
+        // resolve this would let replay advance off the cache; strict resolve must err.
+        coordinator.record_publish(file_meta, 7);
+
+        super::replay_for_vault(
+            &journal,
+            api,
+            &[0u8; 32],
+            &[0u8; 33],
+            &[0u8; 32],
+            vault,
+            coordinator,
+            None,
+            None,
+        )
+        .await;
+
+        let after = journal.load_all_for_vault(vault).unwrap();
+        assert_eq!(
+            after.len(),
+            1,
+            "transient resolve failure must retain the entry (strict resolve, no cache fallback)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // T-45-05: not_found_outcome_drives_first_publish
     //
     // Pins the #19 branch contract: given each IpnsResolveOutcome variant, the replay
@@ -2555,5 +2767,295 @@ mod handler_harness_tests {
         let reply = <ReplyEmpty as Reply>::new(1, CaptureSender(cap.clone()));
         crate::read_ops::implementation::handle_flush(reply);
         assert_eq!(reply_error_code(&cap), 0, "flush must reply ok");
+    }
+}
+
+/// REQ-1 / REQ-2 durability characterization tests (Plan 46-04).
+///
+/// These lock in behavior that is ALREADY CORRECT in the production tree; they
+/// would FAIL if a future change regressed the D-04 journal-before-ack barrier
+/// (read_ops.rs handle_release: journal.put → handle.cleanup → reply.ok) or the
+/// mkdir conflict re-arm (write_ops.rs MkdirConflict send → drain → re-queue).
+/// They are tests only — no production code is touched.
+#[cfg(all(test, feature = "fuse"))]
+mod durability_characterization_tests {
+    use crate::test_support::{
+        make_test_fs, make_test_fs_with_keypair, reply_error_code, CaptureSender,
+    };
+    use base64::Engine;
+    use fuser::{Reply, ReplyEntry};
+    use std::sync::{Arc, Mutex};
+    use zeroize::Zeroizing;
+
+    /// Generate a real secp256k1 keypair (33-byte compressed pubkey, 32-byte
+    /// secret) via the `ecies` dev-dep. A zero vec is NOT a valid curve point, so
+    /// handlers that ECIES-wrap keys (mkdir, release) need a real one.
+    fn real_keypair() -> (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) {
+        let (sk, pk) = ecies::utils::generate_keypair();
+        (
+            Zeroizing::new(sk.serialize().to_vec()),
+            Zeroizing::new(pk.serialize().to_vec()),
+        )
+    }
+
+    // ---- REQ-1: mkdir ----
+
+    /// REQ-1 / D-04: `handle_mkdir` journals the MkdirPublish entry to disk and
+    /// mutates the parent (root) inode children BEFORE replying. A future reorder
+    /// that put `reply.entry()` ahead of `journal.put` would leave the parent
+    /// without a durable replay record on crash — this test would catch it.
+    ///
+    /// `multi_thread` because mkdir spawns a detached publish thread; it targets
+    /// the unroutable 127.0.0.1:1 host and fails harmlessly, so the journal entry
+    /// is RETAINED (D-11b) — we assert the entry exists, never emptiness.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mkdir_happy_path_puts_journal_entry_then_replies_entry() {
+        let (private_key, public_key) = real_keypair();
+        let mut fs = make_test_fs_with_keypair(private_key, public_key);
+        let vault = fs.root_ipns_name.clone();
+
+        let cap = Arc::new(Mutex::new(Vec::new()));
+        let reply = <ReplyEntry as Reply>::new(1, CaptureSender(cap.clone()));
+
+        crate::write_ops::implementation::handle_mkdir(
+            &mut fs,
+            crate::inode::ROOT_INO,
+            std::ffi::OsStr::new("newdir"),
+            reply,
+        );
+
+        // (3) Reply is success.
+        assert_eq!(reply_error_code(&cap), 0, "mkdir must reply entry (ok)");
+
+        // (1) The parent (root) inode now lists the new child.
+        let root = fs
+            .inodes
+            .get(crate::inode::ROOT_INO)
+            .expect("root inode present");
+        let children = root.children.clone().unwrap_or_default();
+        assert!(
+            !children.is_empty(),
+            "root must have the new child after mkdir"
+        );
+        let child_ino = children[0];
+        let child = fs.inodes.get(child_ino).expect("child inode present");
+        assert_eq!(child.name, "newdir", "child name must match");
+
+        // (2) At least one journal entry was fsynced before the reply.
+        let entries = fs
+            .journal
+            .load_all_for_vault(&vault)
+            .expect("journal load must succeed");
+        assert!(
+            !entries.is_empty(),
+            "mkdir must journal a MkdirPublish entry before replying (D-04)"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| matches!(e.op, cipherbox_sdk::JournalOp::MkdirPublish { .. })),
+            "the journalled entry must be a MkdirPublish op"
+        );
+    }
+
+    /// REQ-1 / D-11a: an `FsEvent::MkdirConflict` drained through
+    /// `drain_upload_completions` re-arms the debounced publisher — the parent ino
+    /// lands in BOTH `mutated_folders` and `publish_queue`. Pure in-memory; no
+    /// network. This locks in the conflict re-arm at lib.rs:949-955.
+    #[tokio::test]
+    async fn mkdir_conflict_rearms() {
+        let mut fs = make_test_fs();
+        let parent_ino = crate::inode::ROOT_INO;
+
+        // Pre-state: neither map references the parent.
+        assert!(!fs.mutated_folders.contains_key(&parent_ino));
+        assert!(!fs.publish_queue.contains_key(&parent_ino));
+
+        // Signal a parent-publish conflict exactly as the background mkdir thread does.
+        fs.upload_tx
+            .send(crate::FsEvent::MkdirConflict { parent_ino })
+            .expect("send MkdirConflict on upload channel");
+
+        fs.drain_upload_completions();
+
+        assert!(
+            fs.mutated_folders.contains_key(&parent_ino),
+            "MkdirConflict must re-arm mutated_folders for the parent"
+        );
+        assert!(
+            fs.publish_queue.contains_key(&parent_ino),
+            "MkdirConflict must enqueue the parent for debounced republish"
+        );
+    }
+
+    // ---- REQ-2: release / replay ----
+
+    /// REQ-2 / D-04: `handle_release` on a dirty new file journals the ciphertext
+    /// into a fsynced entry BEFORE `handle.cleanup()` deletes the temp file and
+    /// BEFORE `reply.ok()`. Asserts:
+    ///   (1) a journal entry exists whose UploadFile.ciphertext_b64 is non-empty,
+    ///   (2) the temp file path no longer exists (cleanup ran),
+    ///   (3) the reply is success,
+    /// and after draining the detached failure (127.0.0.1:1 → record_failure) the
+    /// entry is STILL present (retained, never silently dropped).
+    ///
+    /// A future reorder that acked the OS before `journal.put`, or that deleted the
+    /// temp file before journalling the ciphertext, would fail (1) or (2).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn release_journals_before_cleanup() {
+        let (private_key, public_key) = real_keypair();
+        let mut fs = make_test_fs_with_keypair(private_key, public_key);
+        let vault = fs.root_ipns_name.clone();
+
+        // Create a new file under root via handle_create so the inode + write
+        // handle exist exactly as the OS would have set them up.
+        let cap_create = Arc::new(Mutex::new(Vec::new()));
+        let reply_create =
+            <fuser::ReplyCreate as Reply>::new(1, CaptureSender(cap_create.clone()));
+        crate::write_ops::implementation::handle_create(
+            &mut fs,
+            crate::inode::ROOT_INO,
+            std::ffi::OsStr::new("note.txt"),
+            0,
+            reply_create,
+        );
+        assert_eq!(reply_error_code(&cap_create), 0, "create must reply ok");
+
+        // Locate the freshly created file inode + its open write handle.
+        let ino = fs
+            .inodes
+            .find_child(crate::inode::ROOT_INO, "note.txt")
+            .expect("created file inode present");
+        let (&fh, _) = fs
+            .open_files
+            .iter()
+            .find(|(_, h)| h.ino == ino && h.temp_path.is_some())
+            .expect("write handle present for new file");
+
+        // Write bytes into the temp file and mark dirty (as handle_write would).
+        let plaintext = b"the quick brown fox";
+        {
+            let handle = fs.open_files.get_mut(&fh).expect("handle present");
+            handle.write_at(0, plaintext).expect("write temp file");
+            handle.dirty = true;
+        }
+        let temp_path = fs
+            .open_files
+            .get(&fh)
+            .and_then(|h| h.temp_path.clone())
+            .expect("temp path present");
+        assert!(temp_path.exists(), "temp file must exist before release");
+
+        // Release the handle.
+        let cap = Arc::new(Mutex::new(Vec::new()));
+        let reply = <fuser::ReplyEmpty as Reply>::new(1, CaptureSender(cap.clone()));
+        crate::read_ops::implementation::handle_release(&mut fs, ino, fh, reply);
+
+        // (3) Reply is success.
+        assert_eq!(reply_error_code(&cap), 0, "release must reply ok");
+
+        // (1) A journal entry exists whose ciphertext_b64 is non-empty.
+        let entries = fs
+            .journal
+            .load_all_for_vault(&vault)
+            .expect("journal load must succeed");
+        let upload = entries
+            .iter()
+            .find_map(|e| match &e.op {
+                cipherbox_sdk::JournalOp::UploadFile { ciphertext_b64, .. } => {
+                    Some(ciphertext_b64.clone())
+                }
+                _ => None,
+            })
+            .expect("release must journal an UploadFile entry before cleanup (D-04)");
+        assert!(
+            !upload.is_empty(),
+            "journalled ciphertext_b64 must be non-empty"
+        );
+
+        // (2) The temp file was deleted by handle.cleanup() (read_ops.rs:882).
+        assert!(
+            !temp_path.exists(),
+            "release must delete the temp file via handle.cleanup()"
+        );
+
+        // The detached upload to 127.0.0.1:1 fails and calls record_failure, which
+        // RETAINS the entry (never silently dropped). Drain briefly and re-check.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        fs.drain_upload_completions();
+        let after = fs
+            .journal
+            .load_all_for_vault(&vault)
+            .expect("journal load after drain must succeed");
+        assert!(
+            after
+                .iter()
+                .any(|e| matches!(e.op, cipherbox_sdk::JournalOp::UploadFile { .. })),
+            "the UploadFile entry must be retained after the upload failure (record_failure)"
+        );
+    }
+
+    /// REQ-2 replay: a pure `WriteQueue` round-trip — the journalled ciphertext
+    /// survives independently of any temp file. Build an UploadFile entry with a
+    /// known ciphertext, `put` it, then a FRESH `WriteQueue` over the same dir
+    /// reloads it and the `ciphertext_b64` base64-decodes to the original bytes.
+    /// No network, no spawn (crash simulation: the upload thread never runs).
+    #[tokio::test]
+    async fn replay_reuploads_ciphertext() {
+        // Isolated journal dir owned by this test — `put` here, reload via a fresh
+        // WriteQueue (no fs handle needed; the round-trip is the unit under test).
+        let journal_dir = crate::test_support::make_isolated_journal_dir();
+        let vault = "k51replay-vault".to_string();
+        let put_queue = cipherbox_sdk::WriteQueue::new(journal_dir.clone(), 5);
+
+        let original_ciphertext: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03];
+        let ciphertext_b64 =
+            base64::engine::general_purpose::STANDARD.encode(original_ciphertext);
+
+        let entry = cipherbox_sdk::JournalEntry {
+            id: "replay-test-entry".to_string(),
+            vault_root_ipns: vault.clone(),
+            op: cipherbox_sdk::JournalOp::UploadFile {
+                ciphertext_b64: ciphertext_b64.clone(),
+                wrapped_key_hex: "deadbeef".to_string(),
+                iv_hex: "00112233445566778899aabb".to_string(),
+                file_meta_ipns_name: None,
+                file_ipns_key_hex: None,
+                parent_folder_ipns_name: vault.clone(),
+                parent_ipns_key_hex: String::new(),
+                filename: "replay.bin".to_string(),
+                size: original_ciphertext.len() as u64,
+                created_at_ms: 1_700_000_000_000,
+            },
+            retries: 0,
+            status: cipherbox_sdk::JournalEntryStatus::Pending,
+        };
+
+        put_queue.put(&entry).expect("journal put must succeed");
+
+        // A FRESH WriteQueue over the same dir — simulates next-mount replay load.
+        let reloaded_queue = cipherbox_sdk::WriteQueue::new(journal_dir, 5);
+        let reloaded = reloaded_queue
+            .load_all_for_vault(&vault)
+            .expect("reload must succeed");
+
+        let reloaded_b64 = reloaded
+            .iter()
+            .find_map(|e| match &e.op {
+                cipherbox_sdk::JournalOp::UploadFile { ciphertext_b64, .. } => {
+                    Some(ciphertext_b64.clone())
+                }
+                _ => None,
+            })
+            .expect("reloaded UploadFile entry present");
+
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&reloaded_b64)
+            .expect("reloaded ciphertext_b64 must base64-decode");
+        assert_eq!(
+            decoded.as_slice(),
+            original_ciphertext,
+            "replay must recover the exact journalled ciphertext bytes"
+        );
     }
 }
