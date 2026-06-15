@@ -31,3 +31,17 @@ done
 ```
 
 Update any that have new major versions. If any haven't released Node 24 support by then, set `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` in the workflow env as a workaround and monitor for breakage.
+
+## Resolution (2026-06-16)
+
+Audited all 16 external actions across `.github/workflows/`. **No changes required** — every action is either node24-native or a composite/Docker action unaffected by the runtime migration. CI on `main` is green post-deadline, confirming empirically.
+
+The 5 originally-flagged actions:
+
+- `tauri-apps/tauri-action@v0` — floating `v0` tracks `action-v0.6.2`, `runs.using: node24` (native)
+- `ikalnytskyi/action-setup-postgres@v8` — `runs.using: composite`, unaffected
+- `googleapis/release-please-action` — already bumped to `@v5` (node24-native)
+- `appleboy/scp-action` — already bumped to `@v1.0.0` (composite, unaffected)
+- `appleboy/ssh-action` — already bumped to `@v1.2.5` (composite, unaffected)
+
+No `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` workaround needed — nothing is pinned to node20/node16.
