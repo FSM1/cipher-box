@@ -512,10 +512,15 @@ describe('updateFileMetadata CAS + conflict', () => {
     expect(result.prunedCids).toContain('v-old');
   });
 
-  it('throws ConflictError after second consecutive 409', async () => {
-    vi.mocked(resolveIpnsRecord)
-      .mockResolvedValueOnce({ cid: 'old-meta', sequenceNumber: 5n, signatureVerified: true })
-      .mockResolvedValueOnce({ cid: 'remote-meta', sequenceNumber: 6n, signatureVerified: true });
+  it('throws ConflictError after exhausting all four consecutive 409 attempts', async () => {
+    // File path was reconciled UP to 4 attempts + backoff (plan 47-01 locked decision 1),
+    // unifying it with the folder path. Provide enough authoritative re-resolves to cover
+    // the initial base resolve plus one re-resolve per 409 attempt.
+    vi.mocked(resolveIpnsRecord).mockResolvedValue({
+      cid: 'remote-meta',
+      sequenceNumber: 6n,
+      signatureVerified: true,
+    });
 
     const remoteMeta = {
       ...baseCurrentMetadata,
@@ -541,7 +546,7 @@ describe('updateFileMetadata CAS + conflict', () => {
         createVersion: false,
         ctx: mockCtx,
       })
-    ).rejects.toMatchObject({ name: 'ConflictError', attempts: 2 });
+    ).rejects.toMatchObject({ name: 'ConflictError', attempts: 4 });
   });
 
   it('propagates non-409 errors without wrapping in ConflictError', async () => {

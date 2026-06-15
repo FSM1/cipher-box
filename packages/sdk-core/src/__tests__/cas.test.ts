@@ -157,9 +157,10 @@ describe('publishWithCas', () => {
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
 
     try {
+      const conflictError = { response: { status: 409 } };
+
       // backoff: false — no timeout should be called between attempts
       const paramsNoBackoff = makeParams({ backoff: false });
-      const conflictError = { response: { status: 409 } };
       mockFns.createAndPublishIpnsRecord
         .mockRejectedValueOnce(conflictError)
         .mockResolvedValueOnce({ sequenceNumber: 7n });
@@ -182,8 +183,9 @@ describe('publishWithCas', () => {
       paramsWithBackoff.decodeRemote.mockResolvedValue({ value: 'remote' });
       paramsWithBackoff.encodeAndUpload.mockResolvedValue('bafy-cid');
 
+      // runAllTimersAsync advances fake timers and flushes microtasks in lockstep
       const promise = publishWithCas(paramsWithBackoff);
-      vi.runAllTimers();
+      await vi.runAllTimersAsync();
       await promise;
       const callsWithBackoff = setTimeoutSpy.mock.calls.length;
 

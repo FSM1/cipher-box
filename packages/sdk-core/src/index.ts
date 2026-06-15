@@ -1,6 +1,9 @@
 // Errors
 export { ConflictError, isConflictExhausted, is409 } from './errors';
 
+// CAS publish helper
+export { publishWithCas } from './cas';
+
 // Types
 export type {
   SdkContext,

@@ -19,8 +19,8 @@ import {
 import { wrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
-import { resolveIpnsRecord, createAndPublishIpnsRecord } from '../ipns';
-import { ConflictError, is409 } from '../errors';
+import { resolveIpnsRecord } from '../ipns';
+import { publishWithCas } from '../cas';
 
 /** IPNS record lifetime: 24 hours in milliseconds */
 const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -270,132 +270,104 @@ export async function updateFileMetadata(params: {
     modifiedAt: Date.now(),
   };
 
-  // 3+4. Resolve the current IPNS record (CAS base) and encrypt+upload the updated
-  //      metadata concurrently — they are independent (the uploaded CID does not
-  //      depend on the resolved sequence number), saving one serial round trip.
-  const [resolved, uploadedCid] = await Promise.all([
-    resolveIpnsRecord(params.fileMetaIpnsName, params.ctx),
-    encryptAndUpload(updatedMetadata, params.folderKey, params.ctx),
-  ]);
+  // 3. Resolve the current IPNS record once up front to establish the CAS base
+  //    sequence number (publishWithCas re-resolves authoritatively on each 409).
+  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName, params.ctx);
   if (!resolved) {
     throw new Error(
       `Cannot update file metadata: existing IPNS record not found for ${params.fileMetaIpnsName}`
     );
   }
-  let currentSeq = resolved.sequenceNumber;
-  let currentCid = uploadedCid;
 
-  // 5. Publish with CAS — on 409 apply latest-wins + loser-becomes-version, then retry once
+  // 4. Publish with CAS — on 409 apply latest-wins + loser-becomes-version (D-07).
+  //    The publishWithCas engine owns the resolve→merge→retry skeleton; the
+  //    domain-specific encode/decode/merge are injected as callbacks. The
+  //    fileIpnsPrivateKey is zeroed in the finally on ALL exit paths (T-47-01).
   try {
-    // Attempt 1
-    try {
-      const result = await createAndPublishIpnsRecord({
-        ipnsPrivateKey: params.fileIpnsPrivateKey,
-        ipnsName: params.fileMetaIpnsName,
-        metadataCid: currentCid,
-        sequenceNumber: currentSeq + 1n,
-        expectedSequenceNumber: currentSeq.toString(),
-        ctx: params.ctx,
-      });
-      return {
-        ipnsName: params.fileMetaIpnsName,
-        metadataCid: currentCid,
-        newSequenceNumber: result.sequenceNumber,
-        prunedCids,
-      };
-    } catch (err) {
-      if (!is409(err)) throw err; // Non-409: propagate unchanged
+    const result = await publishWithCas<FileMetadata>({
+      ipnsName: params.fileMetaIpnsName,
+      ipnsPrivateKey: params.fileIpnsPrivateKey,
+      sequenceNumber: resolved.sequenceNumber,
+      ctx: params.ctx,
+      maxAttempts: 4,
+      backoff: true,
+      encodeAndUpload: (metadata) => encryptAndUpload(metadata, params.folderKey, params.ctx),
+      decodeRemote: (cid) => fetchAndDecryptFileMetadata(cid, params.folderKey, params.ctx),
+      // Latest-wins three-way merge. `base` is unused for files (latest-wins, not
+      // structural merge); `local` is the writer's metadata, `remote` is the
+      // conflicting authoritative metadata.
+      merge: (_base, local, remote) => {
+        // Latest-wins by modifiedAt (>= prefers local on tie)
+        const localModifiedAt = local.modifiedAt ?? 0;
+        const remoteModifiedAt = remote.modifiedAt ?? 0;
+        const localWins = localModifiedAt >= remoteModifiedAt;
 
-      // --- Conflict merge ---
-      // Re-resolve authoritatively
-      const reResolved = await resolveIpnsRecord(params.fileMetaIpnsName, params.ctx);
-      if (!reResolved) {
-        throw new ConflictError(params.fileMetaIpnsName, 1, currentSeq);
-      }
-      const lastRemoteSeq = reResolved.sequenceNumber;
-      currentSeq = lastRemoteSeq;
+        const winner = localWins ? local : remote;
+        const loser = localWins ? remote : local;
 
-      // Fetch and decrypt remote FileMetadata
-      const remoteMeta = await fetchAndDecryptFileMetadata(
-        reResolved.cid,
-        params.folderKey,
-        params.ctx
-      );
-
-      // Latest-wins by modifiedAt (>= prefers local on tie)
-      const localModifiedAt = updatedMetadata.modifiedAt ?? 0;
-      const remoteModifiedAt = remoteMeta.modifiedAt ?? 0;
-      const localWins = localModifiedAt >= remoteModifiedAt;
-
-      const winner = localWins ? updatedMetadata : remoteMeta;
-      const loser = localWins ? remoteMeta : updatedMetadata;
-
-      // The loser's current content becomes a VersionEntry
-      const loserAsVersion: VersionEntry = {
-        cid: loser.cid,
-        fileKeyEncrypted: loser.fileKeyEncrypted,
-        fileIv: loser.fileIv,
-        size: loser.size,
-        timestamp: loser.modifiedAt ?? Date.now(),
-        encryptionMode: (loser.encryptionMode as 'GCM' | 'CTR') ?? 'GCM',
-      };
-
-      // Merge: winner's versions + loserAsVersion merged with the loser's version history.
-      // The second arg MUST be loser.versions, not remoteMeta.versions: when the remote wins
-      // (localWins === false) the loser is the LOCAL metadata, so passing remoteMeta.versions
-      // would silently drop the local writer's prior version history.
-      const { versions: mergedVersions, prunedCids: extraPruned } = mergeVersions(
-        [...(winner.versions ?? []), loserAsVersion],
-        loser.versions,
-        maxVersions
-      );
-
-      // Build merged metadata
-      const mergedMetadata: FileMetadata = {
-        ...winner,
-        versions: mergedVersions.length > 0 ? mergedVersions : undefined,
-        modifiedAt: winner.modifiedAt ?? Date.now(),
-      };
-
-      // Filter accumulated prunedCids against the set of CIDs actually referenced by the
-      // published mergedMetadata (CR-02 / D-07): a CID resurrected into mergedMetadata.versions
-      // by the remote merge must NOT be returned for unpinning.  De-dupe the combined set first
-      // to prevent phantom unpin retries from duplicate entries.
-      const referenced = new Set([
-        mergedMetadata.cid,
-        ...(mergedMetadata.versions ?? []).map((v) => v.cid),
-      ]);
-      prunedCids = [...new Set([...prunedCids, ...extraPruned])].filter((c) => !referenced.has(c));
-
-      // Re-encrypt and re-upload merged metadata
-      currentCid = await encryptAndUpload(mergedMetadata, params.folderKey, params.ctx);
-
-      // Attempt 2 (retry)
-      try {
-        const retryResult = await createAndPublishIpnsRecord({
-          ipnsPrivateKey: params.fileIpnsPrivateKey,
-          ipnsName: params.fileMetaIpnsName,
-          metadataCid: currentCid,
-          sequenceNumber: currentSeq + 1n,
-          expectedSequenceNumber: currentSeq.toString(),
-          ctx: params.ctx,
-        });
-        return {
-          ipnsName: params.fileMetaIpnsName,
-          metadataCid: currentCid,
-          newSequenceNumber: retryResult.sequenceNumber,
-          prunedCids,
+        // The loser's current content becomes a VersionEntry
+        const loserAsVersion: VersionEntry = {
+          cid: loser.cid,
+          fileKeyEncrypted: loser.fileKeyEncrypted,
+          fileIv: loser.fileIv,
+          size: loser.size,
+          timestamp: loser.modifiedAt ?? Date.now(),
+          encryptionMode: (loser.encryptionMode as 'GCM' | 'CTR') ?? 'GCM',
         };
-      } catch (retryErr) {
-        if (is409(retryErr)) {
-          throw new ConflictError(params.fileMetaIpnsName, 2, currentSeq);
-        }
-        throw retryErr;
-      }
-    }
+
+        // Merge: winner's versions + loserAsVersion merged with the loser's version
+        // history. The second arg MUST be loser.versions, not remote.versions: when the
+        // remote wins (localWins === false) the loser is the LOCAL metadata, so passing
+        // remote.versions would silently drop the local writer's prior version history.
+        const { versions: mergedVersions, prunedCids: extraPruned } = mergeVersions(
+          [...(winner.versions ?? []), loserAsVersion],
+          loser.versions,
+          maxVersions
+        );
+
+        const mergedMetadata: FileMetadata = {
+          ...winner,
+          versions: mergedVersions.length > 0 ? mergedVersions : undefined,
+          modifiedAt: winner.modifiedAt ?? Date.now(),
+        };
+
+        // CR-02 / D-07: a CID resurrected into mergedMetadata.versions by the remote
+        // merge must NOT be returned for unpinning. Filter extraPruned against the set
+        // of CIDs actually referenced by the published mergedMetadata. publishWithCas
+        // de-dupes the accumulated prunedCids across attempts; this callback only filters
+        // the CIDs it produces this round.
+        const referenced = new Set([
+          mergedMetadata.cid,
+          ...(mergedMetadata.versions ?? []).map((v) => v.cid),
+        ]);
+        const filteredPruned = extraPruned.filter((c) => !referenced.has(c));
+
+        return { merged: mergedMetadata, prunedCids: filteredPruned };
+      },
+      localData: updatedMetadata,
+    });
+
+    // Combine the pre-conflict prunedCids (from the initial version-history cap) with
+    // any pruned during conflict merges, then strip CIDs the final published metadata
+    // still references (CR-02): the initial prune may include a CID that a remote merge
+    // resurrected into versions.
+    const finalReferenced = new Set([
+      result.publishedData.cid,
+      ...(result.publishedData.versions ?? []).map((v) => v.cid),
+    ]);
+    const combinedPruned = [...new Set([...prunedCids, ...result.prunedCids])].filter(
+      (c) => !finalReferenced.has(c)
+    );
+
+    return {
+      ipnsName: params.fileMetaIpnsName,
+      metadataCid: result.cid,
+      newSequenceNumber: result.newSequenceNumber,
+      prunedCids: combinedPruned,
+    };
   } finally {
-    // Zeroize the private key on all exit paths (T-44-12 / PATTERNS shared pattern).
-    // Caller passes the key buffer; fill(0) zeroes it in-place after publish completes.
+    // Zeroize the private key on all exit paths (T-47-01 / T-44-12). publishWithCas
+    // never zeroes keys; the caller (this function) owns zeroing.
     params.fileIpnsPrivateKey.fill(0);
   }
 }
