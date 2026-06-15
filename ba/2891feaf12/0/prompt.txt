@@ -1,0 +1,293 @@
+ok, so I want you to kick off 2 parallel (worktree isolated) agents to handle the planning, execution, /simplify, /gsd:secure-phase, /gsd:verify-phase and coderabbit cli review of phases 46,47
+
+---
+
+can you instruct both agents to pause and then resume at 05:45?
+
+---
+
+Scheduled 05:45 resume of the two paused GSD phase-pipeline agents. Use SendMessage to continue each with its context intact (do NOT launch fresh agents — that loses their plan/context). Run both in the background again.
+- Phase 46 agent id=a92edd36afbdf181d, worktree .claude/worktrees/agent-a92edd36afbdf181d — had finished plan-phase, was starting Wave 1 execution (1 plan dispatched, 0/4 done).
+- Phase 47 agent id=abd7998dde9d74f2c, worktree .claude/worktrees/agent-abd7998dde9d74f2c — had finished plan-phase, was starting Wave 1 execution (0/5 done); it is on branch feat/phase-47-sdk-folder-state-publish-consolidation.
+Instruct each agent to FIRST re-orient (run `git status` + `git log --oneline` to see what landed before the pause and check for any dirty/partial state from the stop), then resume its full pipeline from where it stopped (execute-phase -> /simplify -> secure-phase -> verify-phase -> coderabbit review) per its original instructions.
+
+---
+
+<task-notification>
+<task-id>ae077be355be95812</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/ae077be355be95812.output</output-file>
+<status>completed</status>
+<summary>Agent "Resume Phase 46 pipeline" completed</summary>
+<result>The working tree holds all completed Phase 46 work, uncommitted. The pipeline is blocked at the EXECUTE-commit stage by the wedged 1Password SSH signer. The downstream stages (SIMPLIFY, SECURE, VERIFY, CODERABBIT) all require commits to exist, so they cannot run until the signer is restored.
+
+I've done everything possible without a working signer: all code is implemented, all 57 fuse tests pass, clippy and cargo check are clean, the desktop crate compiles, and all four plan SUMMARYs plus STATE bookkeeping are written and ready to commit. Here is my report.
+
+---
+
+## Phase 46 Pipeline — Status Report
+
+**Branch:** `feat/desktop-fuse-data-loss-bugs-replay-hardening`
+**Worktree:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a92edd36afbdf181d`
+**BASE_SHA:** `4b539b445` (main)
+**Final HEAD:** `a2a2dc9ea` (unchanged from stop time — see blocker)
+
+`git log --oneline 4b539b445..HEAD`:
+```
+a2a2dc9ea test(fuse): add handler harness and journal_helpers builder tests
+adbdd20db test(fuse): add make_test_fs and CaptureSender harness
+e40346000 feat(fuse): re-export ReplySender from vendored fuser
+09c23618c docs(planning): create Phase 46 desktop FUSE data-loss and replay-hardening plans
+ae38550de docs(46): add phase research and validation strategy
+```
+
+### HARD BLOCKER — 1Password SSH signer wedged
+Every commit attempt hangs and is killed; one attempt errored `1Password: failed to fill whole buffer / fatal: failed to write commit object`. Per project memory this needs the **1Password app restarted** to recover. PRs enforce signatures, so `--no-gpg-sign` is not an option. **No commits landed.** All work is complete and staged-ready in the working tree but uncommitted. Once you restart 1Password, the remaining work is mechanical (commit per plan, then run simplify/secure/verify/coderabbit).
+
+### EXECUTE — all 4 plans implemented (uncommitted)
+- **46-01** (test harness, REQ-6): already committed before resume. Its SUMMARY + STATE bookkeeping are written, pending commit.
+- **46-02** (REQ-3 Linux stale-mount recovery): `recover_stale_mount` + `/proc/self/mountinfo` parser + EEXIST recover-then-retry in `crates/fuse/src/platform/linux.rs` and `apps/desktop/src-tauri/src/fuse/mod.rs`. macOS/Windows paths untouched. `platform` was already `pub`.
+- **46-03** (REQ-4 park None-name replay entries, REQ-5 strict resolve): early park-return guard + `resolve_sequence_strict` in `crates/fuse/src/lib.rs`. `resolve_sequence` and live publish path unchanged.
+- **46-04** (REQ-1/REQ-2 characterization tests + A2): tests-only. **A2 RESOLVED** — the debounced parent republish fetch-and-merges remote children via `merge_folder_children` (lib.rs:485), no clobber risk. `write_ops.rs`/`read_ops.rs` unchanged (confirmed empty diff).
+
+**Verification (commands run from worktree root):**
+- `cargo check -p cipherbox-fuse --features fuse` → **PASS** (exit 0)
+- `cargo clippy -p cipherbox-fuse --features fuse --tests` → **PASS** (exit 0, no warnings)
+- `cargo test -p cipherbox-fuse --features fuse` → **PASS** — 57 passed, 0 failed (4.14s), including all 46-01/46-03/46-04 named tests
+- `cargo check -p cipherbox-desktop --features fuse` → **PASS** (clean, run by sub-agent)
+- 46-02's `platform::linux` tests are Linux-gated (don't compile on macOS); logic validated via standalone `rustc --test` (3 passed). They run natively in CI's `cargo-linux` job (ubuntu-22.04 + libfuse3-dev).
+
+**fmt note:** Bare `rustfmt --check` flags drift across many out-of-scope files (cache.rs, operations.rs, windows/*) — this is **pre-existing** and NOT enforced in CI (`ci.yml` runs only `cargo check`/`cargo test --features fuse`, no `fmt --check`/`clippy -D warnings` gate). Per the RUST GOTCHA I left all out-of-scope fmt drift untouched.
+
+### SIMPLIFY / SECURE / VERIFY / CODERABBIT — NOT RUN
+All four require committed code (SECURE/VERIFY produce docs referencing commits; CodeRabbit's `--base-commit 4b539b445` diffs committed work). Blocked behind the signer.
+
+### Manual-verification items
+- **46-02 Task 3 (blocking human-verify):** Linux remount-after-SIGKILL UAT — cannot be unit-tested. On a Linux host: launch desktop, SIGKILL mid-session, relaunch, confirm `~/CipherBox` remounts cleanly with no "Failed to create mount point" notification.
+- No live macOS mount UAT (macFUSE-vs-FUSE-T linking can silently break it) — code + tests + clippy is the bar per the brief.
+
+### Scope intentionally left out
+- No metadata sweep for already-published empty-locator FilePointers (Assumption A5 — documented residue in 46-03 SUMMARY).
+- No production rewrite of mkdir/release (REQ-1/REQ-2 already correct from Phase 43/45; 46-04 only adds regression-locking tests).
+- `config.json` `use_worktrees` kept `false` (prevents GSD from spawning a competing worktree while pinned here).
+
+### Ready-to-commit working tree (8 paths)
+Modified: `.planning/STATE.md`, `.planning/config.json`, `apps/desktop/src-tauri/src/fuse/mod.rs`, `crates/fuse/src/lib.rs`, `crates/fuse/src/platform/linux.rs`. Untracked: SUMMARY files for 46-01, 46-02, 46-03, 46-04.
+
+**Suggested commit sequence once 1Password is restarted** (matching the plans' conventional-commit subjects, no parens):
+1. `feat(fuse): auto-recover stale Linux FUSE mount on startup` → linux.rs + mod.rs
+2. `fix(fuse): park legacy empty file-meta-ipns replay entries and use strict resolve` → lib.rs (REQ-4/REQ-5)
+3. `test(fuse): characterize mkdir and release durability and replay recovery` → lib.rs test module (46-04)
+4. `docs(46): add plan summaries and state bookkeeping` → SUMMARYs + STATE.md + config.json
+
+After committing, run `/simplify`, `/gsd:secure-phase 46`, `/gsd:verify-phase 46`, then `coderabbit review --agent --base-commit 4b539b445`.</result>
+<usage><subagent_tokens>139463</subagent_tokens><tool_uses>65</tool_uses><duration_ms>1297658</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4ice2upb</task-id>
+<tool-use-id>toolu_01WkvVyzeSCkcMuuWpdVsVQe</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/b4ice2upb.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll for 1Password signer recovery" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af9a8d26425c70bc0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/af9a8d26425c70bc0.output</output-file>
+<status>completed</status>
+<summary>Agent "Phase 46 commit + downstream" completed</summary>
+<result>All complete. Both crates build clean on the committed tree, root SECURITY.md untouched, tree clean. The Phase 46 GSD pipeline is finished.
+
+---
+
+## Phase 46 GSD Pipeline — Final Report
+
+**Branch:** `feat/desktop-fuse-data-loss-bugs-replay-hardening`
+**Worktree:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a92edd36afbdf181d` (entered via `git -C` — EnterWorktree rejects switching from repo root; operated in-place, never created a new worktree)
+**Final HEAD:** `8291f3114`
+
+### Commits (`4b539b445..HEAD`, this session added 03404f490 onward)
+
+```
+8291f3114 docs(46): record secure and verify completion in state
+f32b577a3 test(fuse): isolate upload round-trip temp dir to avoid parallel collision
+9f5744349 docs(phase-46): add goal-backward verification report
+434645afc docs(phase-46): add security threat verification
+6e1f303bc refactor(fuse): dedupe Linux unmount and consolidate mount-dir creation
+23102494c docs(46): add plan summaries and state bookkeeping
+3108c12bd test(fuse): characterize mkdir and release durability and replay recovery
+3c514a5fc fix(fuse): park legacy empty file-meta-ipns replay entries and use strict resolve
+03404f490 feat(fuse): auto-recover stale Linux FUSE mount on startup
+```
+Commits 2 and 3 split cleanly via `git add -p` (non-test hunks vs test-module hunks) — no need to combine.
+
+### SIMPLIFY
+4 cleanup agents (reuse/simplify/efficiency/altitude). Applied 2 safe quality fixes (commit 6e1f303bc): deduped the two Linux unmount blocks into `try_fusermount3_unmount`, and collapsed the triple-nested cfg + triplicate error string in mod.rs into a `create_mount_point_dir` helper. Skipped (behavior-change/scope/false-positive): dropping the eager `recover_stale_mount` pre-check (belt-and-suspenders by design), deduping `resolve_sequence_strict` into `resolve_sequence` (distinct error contracts — confirmed correct by altitude agent), octal-decoder rewrite (no win), legacy-entry dead-letter (larger design, out of scope). 57 tests still pass, clippy clean (only pre-existing vendored-fuser/Default warnings).
+
+### SECURE — verdict SECURED
+State B (no prior SECURITY.md; built from 4 PLAN threat models, `register_authored_at_plan_time: true`). 12/12 threats closed: 10 `mitigate` verified in code, 2 `accept` logged (AR-46-05 fixed fusermount3 argv, AR-46-SC no new deps). Auditor wrote to phase path (not repo-root — root untouched); renamed `SECURITY.md`→`46-SECURITY.md` for GSD convention. **No unmitigated threats.**
+
+### VERIFY — verdict GOAL MET (6/6, status human_needed)
+Goal-backward gsd-verifier, `46-VERIFICATION.md`. All 6 requirements delivered. Key finding: REQ-1 (durable mkdir retry) and REQ-2 (release durability) behavior was pre-landed in PR #487/#491 (`write_ops.rs`/`read_ops.rs` = 0 lines changed in this phase); Phase 46 adds characterization tests pinning that behavior — goal "close deferred work" met, not a gap. REQ-3/4/5/6 are genuinely new production code, fully wired. Open Question A2 independently confirmed (merge-not-overwrite on conflict). No gaps.
+
+### CODERABBIT (`--agent --base-commit 4b539b445`) — 2 findings, both minor
+- **Fixed** (f32b577a3): `journal_helpers.rs` upload test used hardcoded `cb-test-upload` temp dir → switched to existing `make_isolated_journal_dir()` (pid+counter, the T-46-04 pattern). Test + full suite green.
+- **Fixed** (8291f3114, bundled with bookkeeping): STATE.md `percent: 95`→`100` (134/134 plans complete). 
+- **Deferred:** STATE.md line-35 velocity metric `182 (72+83+6=161)` — pre-existing mismatch from prior commit 962b1e9f9c, out of this phase's scope.
+No PR created.
+
+### Signer
+No wedge. All 9 commits this session landed first try via `timeout 45` background Bash (1Password signer healthy throughout).
+
+### Manual verification / scope left out
+- **Linux remount-after-SIGKILL UAT** (known, flagged by verifier): `recover_stale_mount` + mountinfo/EEXIST unit tests are `#[cfg(target_os="linux")]` and don't run on the macOS host — the real ENOTCONN/fusermount3 recovery path needs end-to-end UAT on Linux.
+- Intentionally out of scope: legacy-entry dead-letter/termination story (re-fails every mount, retained indefinitely — noted by altitude review as a larger design change); pre-existing STATE.md velocity-counter drift; the `flush` no-op (documented accepted limitation, REQ-2 targets `release()`).
+
+The worktree was entered via `git -C` rather than EnterWorktree (which refused the repo-root→worktree switch); it remains on disk on its branch, not exited.</result>
+<usage><subagent_tokens>148374</subagent_tokens><tool_uses>119</tool_uses><duration_ms>1362288</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aada6d4a5d8c68b08</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/aada6d4a5d8c68b08.output</output-file>
+<status>completed</status>
+<summary>Agent "Phase 47 commit + downstream" completed</summary>
+<result>Phase 47 GSD pipeline complete. Final report below.
+
+---
+
+## Phase 47 — SDK Folder-State &amp; Publish Consolidation: COMPLETE
+
+**Branch:** `feat/phase-47-sdk-folder-state-publish-consolidation`
+**Worktree:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abd7998dde9d74f2c`
+**Final HEAD:** `46cc7c59d` · working tree clean · NO PR created (as instructed)
+
+### Commits `4b539b445..HEAD`
+```
+46cc7c59d refactor(sdk-core): type publishWithCas merge base as TData or undefined   ← CodeRabbit fix
+51472af9e docs(phase-47): add goal-backward verification report
+120d18a12 docs(phase-47): add security threat verification
+ffd726427 test(web): add folder.store projection tests for folder:updated subscription   ← 47-05
+063eab2d9 refactor(web): route file replace and version edits through SDK client methods  ← 47-04
+3f4f05c77 refactor(sdk): make SDK client the single owner of file folder-state via new methods  ← 47-03
+b97f634cb fix(sdk): unpin prunedCids in updateSharedFile and drop redundant updatedChildren  ← 47-02
+ce621d96d refactor(sdk-core): unify file and folder IPNS CAS-retry into publishWithCas  ← 47-01
+bc2a2a452 test(47-01): add failing publishWithCas tests   (pre-existing, committed before I started)
+00c38e5cb / 5bd04f293 / 94b21e10b  docs (pre-existing planning commits)
+```
+Five atomic implementation commits grouped by plan boundary (47-01..47-05), each verified to land via `git log` after each commit. **No `apps/api` changes** → no `pnpm api:generate` needed.
+
+### SIMPLIFY
+4 parallel cleanup agents; net verdict **clean** — the diff is itself a deduplication (removes two CAS loops + the `reconcileFolderState` bandaid). **No fixes applied.** Skipped, with reason: (a) dead `versionIndex` param — documented-contract parameter per the locked plan signature, touches 8 sites; (b) lost resolve+upload concurrency — a *locked* plan decision (47-01 explicitly drops it); (c) shared helper for the 3 client methods — medium-confidence public-API refactor, out of tight scope.
+
+### SECURE — verdict THREAT-SECURE (threats_open: 0)
+`47-SECURITY.md` written to the phase dir (root `SECURITY.md` is a pre-existing tracked policy from #482 — untouched). All 6 STRIDE threats CLOSED with file:line evidence: T-47-01 key zeroing (`file/index.ts:368-372` fill(0) finally), T-47-02 CAS sequence re-resolve, T-47-04 fire-and-forget shared-file unpin, T-47-05 `updatedChildren` removal, T-47-06 folder-state drift. **Unmitigated threats: none** — T-47-SC (supply chain) accepted+logged (no new deps).
+
+### VERIFY — verdict human_needed (5/5 must-haves, zero blockers)
+`47-VERIFICATION.md` written. Explicit confirmations: **`reconcileFolderState` is DELETED** (`grep -rn` across `packages/sdk/src apps/web/src` = 0 matches); **SDK client `folderTree` is the single source of truth** (replaceFile/restoreFileVersion/deleteFileVersion each `folderTree.set()` + emit `folder:updated`; 3 web hooks no longer publish folder metadata or write store folder-state directly; `folder.store.ts` writes children/seq only in the subscription handler). publishWithCas wired in both folder+file; fill(0) intact; no `updatedChildren` in shared-write returns; updateSharedFile unpins prunedCids. **No real gaps.**
+
+### CODERABBIT (`--base-commit 4b539b445`)
+**1 finding, MAJOR** — `cas.ts:103` unsafe `params.baseData as TData` cast on optional `baseData`. **FIXED** (committed `46cc7c59d`): widened merge callback to `base: TData | undefined`, removed the cast. Validated: not a runtime bug (file path ignores `base`, folder path defends `base ?? []`) but a real type hole; both callers compile. **Deferred: none.**
+
+### Tests / builds (re-run post-fix)
+sdk-core build+sdk build clean · web `tsc -b` clean · sdk-core 202/202 · sdk 171/174 unit (the **3 failures are environmental** — `integration.test.ts` "SDK Integration (live API)" tests need a running API server; `describe.skip` under CI) · `client-file-ops.test.ts` 8/8 + `shared-write.test.ts` pass · web 31/31 incl. `folder.store.test.ts`.
+
+### Manual-verification item (handoff)
+**TC08 recycle-bin resurrection:** on a live stack with IPNS polling — delete a file, replace a sibling file's content, wait ~30s, confirm the deleted file does NOT reappear. Not statically verifiable.
+
+### Scope intentionally left out
+The 3 SIMPLIFY skips above (dead `versionIndex` param, dropped concurrency, 3-method helper extraction). No SUMMARY.md files exist for this phase (executors never wrote them); SECURE/VERIFY sourced the threat register and must-haves from the 5 PLAN files instead.
+
+### Signer
+No wedge. All 7 commits this session went through clean (timeout 45, each verified via `git log` after); the concurrent Phase-46 agent did not collide.</result>
+<usage><subagent_tokens>174473</subagent_tokens><tool_uses>132</tool_uses><duration_ms>1558279</duration_ms></usage>
+</task-notification>
+
+---
+
+ok please revert the config.json worktree flag change, push this to remote and create a PR
+
+---
+
+ok please revert the config.json worktree flag change on phase 46, push this to remote and create a PR for these changes
+
+---
+
+ok, for phase 46, the auto-recover stale mount is only implemented on linux. what about macos and windows paths for the same failure?
+
+---
+
+I think that handling the macos case now is the right approach to take
+
+---
+
+<task-notification>
+<task-id>a52a50a8caae8f1d1</task-id>
+<tool-use-id>toolu_01LWKA29Nwe7i9u4KbWKTWcv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/a52a50a8caae8f1d1.output</output-file>
+<status>completed</status>
+<summary>Agent "Add macOS stale-mount recovery" completed</summary>
+<result>Push succeeded fast-forward. Done.
+
+## Final Report
+
+**New HEAD:** `b30abcdd3` — `feat(fuse): auto-recover stale FUSE-T mount on macOS startup`
+
+**Diff stat:**
+```
+apps/desktop/src-tauri/src/fuse/mod.rs |  16 +++--
+crates/fuse/src/platform/macos.rs      | 120 +++++++++++++++++++++++++++++++++
+2 files changed, 131 insertions(+), 5 deletions(-)
+```
+
+**Verification (all on this macOS host):**
+- `cargo test -p cipherbox-fuse --features fuse` → **60 passed, 0 failed**, including all 3 new tests: `platform::macos::tests::mount_output_detects_stale_smbfs`, `mount_output_detects_stale_with_spaced_path`, `mount_output_ignores_substring_paths`.
+- `cargo clippy -p cipherbox-fuse --features fuse --tests` → **clean for the new code** (grep for `macos`/`recover_stale`/`mount_output`/`try_unmount` returned nothing). The 22 warnings present are all pre-existing in `crates/fuse/src/lib.rs` (`type_complexity`, `too_many_arguments` on `replay_for_vault` etc.) — none introduced here.
+- `cargo check -p cipherbox-desktop --features fuse` → **clean**; the mod.rs wiring compiles. Remaining warnings are in the vendored `fuser` crate only.
+
+**Rebase / bot commit:** STEP 0 fetch+rebase reported "up to date" — no `chore(release)` bot commit was pulled. Push was a clean fast-forward (`363e392a1..b30abcdd3`), no second rebase needed.
+
+**Deviations from spec:** None. Implemented `mount_output_contains_mountpoint`, `recover_stale_mount`, `try_unmount`, and the 3 tests verbatim; added `use std::path::Path;` (was absent); kept `unmount_filesystem`/`cleanup_temp_dir` untouched; added the macOS recover call after the Linux one and rewrote the preceding comment to describe both platforms; left `create_mount_point_dir` (Linux EEXIST retry) and the `not(target_os = "linux")` plain `create_dir_all` branch as-is. No live mount/UAT run.
+
+**Push result:** Success — PR #493 updated automatically, no new PR created.</result>
+<usage><subagent_tokens>46132</subagent_tokens><tool_uses>15</tool_uses><duration_ms>124414</duration_ms></usage>
+</task-notification>
+
+---
+
+please update the doc to ensure that it is accurate. 
+
+regarding testing of the change on a live environment, surely you are able to reproduce the process crash programatically yourself, and do so more reliably than me.
+
+---
+
+given the successful test on macos, do you think it is valuable to perform the same test on a linux host?
+
+---
+
+I can just as easily pull the latest code down on an already set up linux machine on which the linux dev work happened
+
+---
+
+ok, can you run a /resolve-pr-reviews on the phase 46 worktree
+
+---
+
+yeah please update the pr description
+
+---
+
+there is an outside of diff range commen on the phase 46 PR https://github.com/FSM1/cipher-box/pull/493#pullrequestreview-4497736085
+
+---
+
+yeah apply the poll based fix
