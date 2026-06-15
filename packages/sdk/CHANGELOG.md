@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.34.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.33.0...@cipherbox/sdk-v0.34.0) (2026-06-15)
+
+
+### Features
+
+* **sdk-core:** handle IPNS write conflicts via 409 merge and file CAS publish ([#488](https://github.com/FSM1/cipher-box/issues/488)) ([1abceb4](https://github.com/FSM1/cipher-box/commit/1abceb4b88a6245509db44794e56f687695d2b30))
+
+
+### Bug Fixes
+
+* **web:** reconcile SDK folderTree sequence to stop deleted-file resurrection ([#489](https://github.com/FSM1/cipher-box/issues/489)) ([e7ea982](https://github.com/FSM1/cipher-box/commit/e7ea98235b25cdfabb6b6341d34dc79f93d58517))
+
 ## [0.33.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.32.0...@cipherbox/sdk-v0.33.0) (2026-03-30)
 
 

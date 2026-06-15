@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.37.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.36.2...@cipherbox/sdk-core-v0.37.0) (2026-06-15)
+
+
+### Features
+
+* **sdk-core:** handle IPNS write conflicts via 409 merge and file CAS publish ([#488](https://github.com/FSM1/cipher-box/issues/488)) ([1abceb4](https://github.com/FSM1/cipher-box/commit/1abceb4b88a6245509db44794e56f687695d2b30))
+
+
+### Bug Fixes
+
+* **test:** align edit-filepointer helper with updateFileMetadata internal-publish contract ([#495](https://github.com/FSM1/cipher-box/issues/495)) ([0c2422c](https://github.com/FSM1/cipher-box/commit/0c2422c8c0deda7d13317eaef22c11332a5ff091))
+
 ## [0.36.2](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.36.1...@cipherbox/sdk-core-v0.36.2) (2026-06-10)
 
 

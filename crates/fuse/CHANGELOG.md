@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.5.3...cipherbox-fuse-v0.6.0) (2026-06-15)
+
+
+### Features
+
+* desktop FUSE data-loss bugs and replay hardening ([#493](https://github.com/FSM1/cipher-box/issues/493)) ([79de97b](https://github.com/FSM1/cipher-box/commit/79de97bc5cfe5213cc2d6747305a914265b12430))
+* **fuse:** durable write journal with crash-recovery replay ([#487](https://github.com/FSM1/cipher-box/issues/487)) ([dcd1bec](https://github.com/FSM1/cipher-box/commit/dcd1becb6f6dad1b8d44d70544b0a6b1248458dc))
+
 ## [0.5.3](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.5.2...cipherbox-fuse-v0.5.3) (2026-05-26)
 
 
