@@ -108,7 +108,7 @@ File mutations (create, write, delete, rename) trigger IPNS metadata publish via
 - **Keychain prompts in debug builds** — each rebuild changes binary signature. Debug builds skip Keychain entirely (`#[cfg(debug_assertions)]`), using ephemeral UUIDs for device ID.
 - **`opendir` must return non-zero file handles** — SMB treats `fh=0` as invalid.
 - **No FSEvents on FUSE mounts** — Finder won't auto-refresh. CLI-created files appear in `ls` but not Finder until a new window is opened.
-- **Stale mount after crash** — `~/CipherBox` may contain `.DS_Store`. App cleans stale contents before mount. Use `diskutil unmount force ~/CipherBox` if mount is stuck.
+- **Stale mount after crash** — a crashed session can leave `~/CipherBox` as a stale `smbfs` mount and/or stray contents (e.g. `.DS_Store`). On startup the app now auto-recovers: `recover_stale_mount` detects a lingering mount via `mount(8)` and clears it (`umount`, then `diskutil unmount force`); stale contents are also cleaned before remount. If a mount is ever still stuck, the manual remedy remains `diskutil unmount force ~/CipherBox`.
 
 ### FUSE-T Debugging
 
