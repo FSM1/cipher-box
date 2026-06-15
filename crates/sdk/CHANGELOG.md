@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/FSM1/cipher-box/compare/cipherbox-sdk-v0.5.0...cipherbox-sdk-v0.6.0) (2026-06-15)
+
+
+### Features
+
+* **fuse:** durable write journal with crash-recovery replay ([#487](https://github.com/FSM1/cipher-box/issues/487)) ([dcd1bec](https://github.com/FSM1/cipher-box/commit/dcd1becb6f6dad1b8d44d70544b0a6b1248458dc))
+
 ## [0.5.0](https://github.com/FSM1/cipher-box/compare/cipherbox-sdk-v0.4.0...cipherbox-sdk-v0.5.0) (2026-03-31)
 
 

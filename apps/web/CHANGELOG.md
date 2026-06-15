@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.42.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.41.0...@cipherbox/web-v0.42.0) (2026-06-15)
+
+
+### Features
+
+* **api:** guard unpin with ownership check and reference-counted quota decrement ([#485](https://github.com/FSM1/cipher-box/issues/485)) ([158addc](https://github.com/FSM1/cipher-box/commit/158addccac4f182b2bd7221f1ee80cdece393928))
+* **sdk-core:** handle IPNS write conflicts via 409 merge and file CAS publish ([#488](https://github.com/FSM1/cipher-box/issues/488)) ([1abceb4](https://github.com/FSM1/cipher-box/commit/1abceb4b88a6245509db44794e56f687695d2b30))
+
+
+### Bug Fixes
+
+* resolve UAT audit findings in BYO pinning and migration flows ([#479](https://github.com/FSM1/cipher-box/issues/479)) ([9f3136a](https://github.com/FSM1/cipher-box/commit/9f3136a9440bb16e31c8073f90c0fee827074da1))
+* **web:** reconcile SDK folderTree sequence to stop deleted-file resurrection ([#489](https://github.com/FSM1/cipher-box/issues/489)) ([e7ea982](https://github.com/FSM1/cipher-box/commit/e7ea98235b25cdfabb6b6341d34dc79f93d58517))
+* **web:** register folder in SDK folderTree before file edit and version writes ([#496](https://github.com/FSM1/cipher-box/issues/496)) ([b24e78e](https://github.com/FSM1/cipher-box/commit/b24e78e90fd000026e030dbb0c090b8fb7182667))
+
 ## [0.41.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.40.0...@cipherbox/web-v0.41.0) (2026-05-26)
 
 

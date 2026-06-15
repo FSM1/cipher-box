@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.38.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-v0.37.1...@cipherbox/api-v0.38.0) (2026-06-15)
+
+
+### Features
+
+* **api:** guard unpin with ownership check and reference-counted quota decrement ([#485](https://github.com/FSM1/cipher-box/issues/485)) ([158addc](https://github.com/FSM1/cipher-box/commit/158addccac4f182b2bd7221f1ee80cdece393928))
+* **fuse:** durable write journal with crash-recovery replay ([#487](https://github.com/FSM1/cipher-box/issues/487)) ([dcd1bec](https://github.com/FSM1/cipher-box/commit/dcd1becb6f6dad1b8d44d70544b0a6b1248458dc))
+
+
+### Bug Fixes
+
+* resolve UAT audit findings in BYO pinning and migration flows ([#479](https://github.com/FSM1/cipher-box/issues/479)) ([9f3136a](https://github.com/FSM1/cipher-box/commit/9f3136a9440bb16e31c8073f90c0fee827074da1))
+
 ## [0.37.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-v0.37.0...@cipherbox/api-v0.37.1) (2026-04-06)
 
 
