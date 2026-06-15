@@ -19,7 +19,8 @@ const BACKOFF_CAP_MS = 1500;
 
 /** Exponential backoff with ±50% jitter. */
 function retryDelayMs(attempt: number): number {
-  return Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_CAP_MS) * (0.5 + Math.random() * 0.5);
+  const base = Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_CAP_MS);
+  return base * (0.5 + Math.random()); // ±50% jitter => [0.5x, 1.5x)
 }
 
 /**

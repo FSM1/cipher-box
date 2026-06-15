@@ -270,20 +270,21 @@ export async function updateFileMetadata(params: {
     modifiedAt: Date.now(),
   };
 
-  // 3. Resolve the current IPNS record once up front to establish the CAS base
-  //    sequence number (publishWithCas re-resolves authoritatively on each 409).
-  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName, params.ctx);
-  if (!resolved) {
-    throw new Error(
-      `Cannot update file metadata: existing IPNS record not found for ${params.fileMetaIpnsName}`
-    );
-  }
-
-  // 4. Publish with CAS — on 409 apply latest-wins + loser-becomes-version (D-07).
-  //    The publishWithCas engine owns the resolve→merge→retry skeleton; the
-  //    domain-specific encode/decode/merge are injected as callbacks. The
-  //    fileIpnsPrivateKey is zeroed in the finally on ALL exit paths (T-47-01).
+  // 3+4. Resolve the current IPNS record to establish the CAS base sequence number,
+  //       then publish with CAS — on 409 apply latest-wins + loser-becomes-version (D-07).
+  //       The publishWithCas engine owns the resolve→merge→retry skeleton; the
+  //       domain-specific encode/decode/merge are injected as callbacks.
+  //       The resolve and "not found" check run INSIDE the try so the fileIpnsPrivateKey
+  //       is zeroed in the finally on ALL exit paths — including a resolve failure or the
+  //       early throw (T-47-01 requires caller-owned zeroing on every exit path).
   try {
+    const resolved = await resolveIpnsRecord(params.fileMetaIpnsName, params.ctx);
+    if (!resolved) {
+      throw new Error(
+        `Cannot update file metadata: existing IPNS record not found for ${params.fileMetaIpnsName}`
+      );
+    }
+
     const result = await publishWithCas<FileMetadata>({
       ipnsName: params.fileMetaIpnsName,
       ipnsPrivateKey: params.fileIpnsPrivateKey,
