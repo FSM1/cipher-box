@@ -52,3 +52,7 @@ ok once that is done, please run a coderabbit cli review
 ---
 
 honestly think that the review can be left out - it adds no value. please create the PR
+
+---
+
+please create a todo for the follow ups noted using /gsd:capture
