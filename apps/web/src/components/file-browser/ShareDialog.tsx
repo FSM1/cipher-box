@@ -329,26 +329,38 @@ export function ShareDialog({
       const effectivePermission =
         permission === 'write' && !encryptedIpnsKeyHex ? 'read' : permission;
 
+      // REQ-4: ECIES-wrap the display name for the recipient (mirrors the
+      // encryptedKey wrap above). Only ciphertext leaves the browser — the
+      // plaintext itemName is NOT sent for new shares (server stores '' + bytea).
+      const itemNameEncrypted = bytesToHex(
+        await wrapKey(new TextEncoder().encode(item.name), recipientPubKeyBytes)
+      );
+
       // Create the share via API
       const itemType: CreateShareDtoItemType = item.type === 'folder' ? 'folder' : 'file';
       const result = await sharesControllerCreateShare({
         recipientPublicKey: key,
         itemType,
         ipnsName,
-        itemName: item.name,
+        itemName: '',
+        itemNameEncrypted,
         encryptedKey,
         permission: effectivePermission,
         encryptedIpnsKey: encryptedIpnsKeyHex,
         childKeys: childKeys && childKeys.length > 0 ? childKeys : undefined,
       });
 
-      // Update local recipients list and global store (for re-wrapping cache)
+      // Update local recipients list and global store (for re-wrapping cache).
+      // The owner keeps the plaintext display name in-memory only (it never
+      // leaves the browser); itemNameEncrypted marks the row as already wrapped
+      // so the lazy backfill never re-fires on it.
       const newShare = {
         shareId: result.shareId,
         recipientPublicKey: key,
         itemType: item.type as 'folder' | 'file',
         ipnsName,
         itemName: item.name,
+        itemNameEncrypted,
         permission: effectivePermission,
         createdAt: new Date().toISOString(),
       };

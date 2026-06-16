@@ -17,7 +17,8 @@ import { wrapKey, bytesToHex } from '@cipherbox/crypto';
 import { decryptItemName, shouldBackfill } from '../share.service';
 
 function generateTestKeypair(): { publicKey: Uint8Array; privateKey: Uint8Array } {
-  const privateKey = secp256k1.utils.randomPrivateKey();
+  // @noble/secp256k1 v3: randomSecretKey() (v1 randomPrivateKey() was renamed)
+  const privateKey = secp256k1.utils.randomSecretKey();
   const publicKey = secp256k1.getPublicKey(privateKey, false); // uncompressed
   return { publicKey, privateKey };
 }

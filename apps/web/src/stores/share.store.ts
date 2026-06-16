@@ -9,7 +9,10 @@ export type ReceivedShare = {
   sharerPublicKey: string;
   itemType: 'folder' | 'file';
   ipnsName: string;
+  /** Decrypted display name (plaintext projection; never persisted in this form) */
   itemName: string;
+  /** Hex-encoded ECIES ciphertext of the display name (wrapped for this recipient) */
+  itemNameEncrypted?: string | null;
   /** Hex-encoded ECIES ciphertext of the item key */
   encryptedKey: string;
   /** Permission level: read-only or read-write */
@@ -28,7 +31,10 @@ export type SentShare = {
   recipientPublicKey: string;
   itemType: 'folder' | 'file';
   ipnsName: string;
+  /** Display name (plaintext projection for the owner's own list) */
   itemName: string;
+  /** Hex-encoded ECIES ciphertext of the display name (wrapped for the recipient) */
+  itemNameEncrypted?: string | null;
   /** Permission level: read-only or read-write */
   permission: 'read' | 'write';
   createdAt: string;
