@@ -73,7 +73,7 @@ export class CreateInviteDto {
   @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
     message: 'itemNameEncrypted must be an even-length hex string',
   })
-  @MaxLength(1024)
+  @MaxLength(2500)
   @IsOptional()
   itemNameEncrypted?: string;
 
