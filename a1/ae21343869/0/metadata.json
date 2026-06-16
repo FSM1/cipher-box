@@ -1,0 +1,135 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "a1ae21343869",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T02:04:59.594955Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "c944e8ed2d72",
+  "token_usage": {
+    "input_tokens": 38546,
+    "cache_creation_tokens": 348825,
+    "cache_read_tokens": 5332509,
+    "output_tokens": 80132,
+    "api_call_count": 40
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c944e8ed2d72",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c944e8ed2d72",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Bundle three pending todos (#5 encrypt share itemName, #8 route shared-folder writes through SDK, #9 remove redundant web folder-seeding) into a single GSD phase, incorporating a newly discovered #498 regression as the P0 prerequisite, and advance to planning.",
+    "outcome": "Phase 48 ('SDK self-bootstrap regression fix and shared-folder/metadata consolidation') created on branch `feat/phase-48-sdk-self-bootstrap-fix-and-shares`, committed with enriched ROADMAP.md and STATE.md, web-e2e dispatch gate documented, and planning advanced through research completion and CONTEXT.md/VALIDATION.md artifacts committed.",
+    "learnings": {
+      "repo": [
+        "web-e2e only auto-triggers on push to `main` via `ci-e2e.yml` (paths-filter → workflow_call) — PRs and feature branches get no automatic web-e2e run, which is the gap that let PR #498 land with a regression.",
+        "PR #498 introduced a regression: `loadFolder` does an unconditional `folderTree.set()` that clobbers fresher in-memory state with a stale IPNS snapshot — same desync class as PR #489.",
+        "Phase 47 covered owned-folder SDK consolidation (PR #494); Phase 48 is the shared-folder and share-metadata layer.",
+        "The server is zero-knowledge and cannot re-encrypt existing plaintext `itemName` values server-side — legacy data migration must be a lazy client-side backfill.",
+        "REQ-3 (shared-folder writes) resolved to a sibling `sharedFolderTree` keyed by `shareId` rather than extending `folderTree`, because shared folders carry a distinct `SharedWriteContext` and can collide on `ipnsName`.",
+        "TypeORM migration command for this project: `pnpm --filter @cipherbox/api migration:run`.",
+        "CRDT-IPNS inbox todo (#2) would subsume the itemName encryption fix (#5) if it ever shipped, but is explicitly deferred as long-horizon research."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 385,
+          "end_line": 385,
+          "finding": "`loadFolder` calls `folderTree.set()` unconditionally, clobbering fresher in-memory state with a stale IPNS snapshot. Fix: add a sequence-guard (`if existing.sequenceNumber >= resolved → keep existing`) before the set call."
+        },
+        {
+          "path": ".github/workflows/web-e2e.yml",
+          "finding": "Directly `workflow_dispatch`-enabled with `ref: ${{ inputs.ref || github.sha }}` — allows triggering against any pushed branch pre-merge via `env -u GITHUB_TOKEN gh workflow run web-e2e.yml --ref <branch>`."
+        },
+        {
+          "path": ".github/workflows/ci-e2e.yml",
+          "finding": "Auto-trigger is `push: branches: [main]` only — this is the gap that allowed #498's regression to land undetected."
+        }
+      ],
+      "workflow": [
+        "Pre-merge web-e2e dispatch: `env -u GITHUB_TOKEN gh workflow run web-e2e.yml --ref <fix-branch>` runs the identical job against a feature branch's HEAD without merging. Direct dispatch resolves repo secrets independently (no `secrets: inherit` parent needed).",
+        "When a todo's premise depends on a prior PR 'proving out in staging/prod,' verify that PR's CI status before treating the todo as unblocked — #9's deletion of safety-net seeders was gated on #498 which was actively regressing main.",
+        "CRDT/serverless architectural todos that would supersede open security findings should be cross-linked but never used to defer the security fix — the security item must be evaluated on its own merits."
+      ]
+    },
+    "friction": [
+      "API stream idle timeout mid-session lost a partial response (the parallel fan-out to map SDK folder-ownership, shared-write hooks, and shares-table crypto) — had to restart and absorb the research into the subagent instead.",
+      "web-e2e runs only on main push, making it impossible to catch regressions like #498 pre-merge without a manual dispatch — a structural gap that requires a procedural gate in every phase that touches folderTree."
+    ],
+    "open_items": [
+      "Phase 48 planning not yet complete at transcript end — CONTEXT.md and VALIDATION.md committed but the planner subagent had not yet been spawned.",
+      "Main branch is red (two failing web-e2e specs from #498 regression) — REQ-1 is P0 and must ship before staging can be tagged.",
+      "Todo #2 (CRDT-IPNS inbox for serverless share discovery) explicitly deferred — would subsume the itemName encryption fix if it ever shipped; cross-link preserved in phase scope notes.",
+      "`Cargo.lock` and `.planning/intel/` have uncommitted changes unrelated to Phase 48 — intentionally left unstaged.",
+      "Invite flow itemName encryption (included in REQ-4 scope per user decision) needs to be detailed in Wave planning — research noted the path but didn't map exact invite-creation entry points."
+    ]
+  }
+}
