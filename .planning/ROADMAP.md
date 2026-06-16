@@ -758,11 +758,24 @@ Scope (captured todos):
 **Goal:** Restore a green `main` and finish the SDK-as-single-owner work that PR #494 (Phase 47) and PR #498 left open for the share/folder paths. PR #498 (`feat: self-bootstrap folder tree from root IPNS key`) regressed main's web-e2e: `loadFolder` unconditionally overwrites in-memory `folderTree` state with a stale IPNS-resolved snapshot, breaking bin-restore-after-reload and version-restore. Fix that clobber first (P0 — main is red, which blocks the staging E2E gate), then remove the now-redundant web folder-seeding the self-bootstrap was meant to replace, extend the same single-ownership model to shared-folder writes, and close the last Phase-14 share-metadata leak (plaintext `itemName`). Behavior-changing correctness + security work, plus the dead-code cleanup #498 deferred.
 **Requirements:** (1) **[P0 regression]** Make self-bootstrap non-clobbering: `loadFolder`/`ensureFolderLoaded` (`packages/sdk/src/client.ts` ~361-470, `requireFolder` chokepoint ~500) must reconcile on IPNS `sequenceNumber` (keep the fresher state, never blindly `folderTree.set()` over a newer in-memory entry) and skip re-resolving folders already loaded, so `deleteToBin`/`restoreFromBin` (~1670-1718) and version-restore publish on top of the freshest local snapshot — both failing web-e2e specs (`bin-restore-after-reload.spec.ts`, `full-workflow.spec.ts:6.6.2 Restore a past version`) green; same sequenceNumber-as-version-clock pattern as PR #489. **Verification gate:** validate REQ-1 PRE-MERGE by dispatching web-e2e against the pushed fix branch — `gh workflow run web-e2e.yml --ref <fix-branch>` (web-e2e.yml is `workflow_dispatch`-enabled and checks out `inputs.ref || github.sha` = branch HEAD) — instead of relying on the post-merge `ci-e2e.yml` main-push run that let #498's regression land. (2) **[#9 — gated on REQ-1 + proven green]** Delete the ~16 web `ensureFolderRegistered` seed call sites (`apps/web/src/lib/sdk-provider.ts:96` + callers in `useFolderMutations`/`useFileOperations`/`useFileVersions`/`useDropUpload`) and the duplicate web-side key-unwrap in `useFolderNavigation.ts:233-240`, relying solely on the SDK chokepoint; verify each former call site works cold (reload → mutate into a never-navigated subfolder). (3) **[#8]** Teach the SDK client to own shared-folder state (a `sharedFolderTree` keyed by share, or extend `folderTree`) with client methods that own publish + sequence bookkeeping + a `folder:updated`-style emission, then route `useSharedWriteOps` (`uploadToSharedFolder`/`createSharedSubfolder`/`renameInSharedFolder`/`updateSharedFile`/`deleteFromSharedFolder`) through them so `useSharedNavigation`'s `folderChildrenRef`/`sequenceNumberRef` become event-fed projections never written from the write hook. (4) **[#5 / Phase-14 M1]** Encrypt share `itemName` at rest — ECIES-wrap with the recipient pubkey mirroring the existing `encryptedKey` flow, migrate the plaintext `shares.itemName` column (`share.entity.ts:45-50`) to ciphertext, store only ciphertext server-side (`shares.service.ts:96`), decrypt client-side for display. Out of scope: the CRDT-IPNS-inbox share-discovery research (`#2`) — it would subsume REQ-4 but is long-horizon and stays deferred.
 **Depends on:** Phase 47
-**Plans:** 0 plans (run /gsd-plan-phase 48 to break down — expect REQ-1 as Wave 1, gating the rest)
+**Plans:** 6 plans (3 waves)
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 48 to break down)
+**Wave 1**
+
+- [ ] 48-01-PLAN.md — REQ-1 P0: sequence-guarded loadFolder reconcile + PRE-MERGE web-e2e dispatch gate (TDD)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 48-02-PLAN.md — REQ-2: delete 14 ensureFolderRegistered web seeders + useFolderNavigation pre-seed (gated on REQ-1 green)
+- [ ] 48-03-PLAN.md — REQ-3: sibling sharedFolderTree + sharedFolder:updated event + 5 client shared methods (TDD)
+- [ ] 48-05-PLAN.md — REQ-4 API: item_name_encrypted migration + entity/DTO/service ciphertext + invite path + [BLOCKING] migration run + api:generate (TDD)
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 48-04-PLAN.md — REQ-3: route useSharedWriteOps through client methods + event-fed useSharedNavigation projection (depends 48-03)
+- [ ] 48-06-PLAN.md — REQ-4 web: ShareDialog ECIES wrap + decrypt-for-display + lazy backfill (depends 48-05, TDD)
 
 Scope (captured todos):
 
@@ -775,5 +788,5 @@ Scope (captured todos):
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-06-16 — added post-milestone phase 48 (SDK self-bootstrap regression fix + shared-folder/metadata consolidation; bundles todos #5/#8/#9 + the PR #498 web-e2e regression, defers CRDT-inbox #2)_
+_Last updated: 2026-06-16 — planned phase 48 (6 plans, 3 waves: REQ-1 P0 reconcile gates REQ-2; REQ-3 shared-folder ownership + REQ-4 itemName encryption parallel after REQ-1)_
 _Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 5 phases (36-40) | Gap closure: 3 phases (42-44)_
