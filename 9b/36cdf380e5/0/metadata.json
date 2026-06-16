@@ -1,0 +1,204 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9b36cdf380e5",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T02:20:00.677073Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "0dac37780eae",
+  "token_usage": {
+    "input_tokens": 38879,
+    "cache_creation_tokens": 594890,
+    "cache_read_tokens": 6597509,
+    "output_tokens": 95401,
+    "api_call_count": 46
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0dac37780eae",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0dac37780eae",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Group related pending todos (#5, #8, #9 — shared-folder SDK ownership, redundant seeding cleanup, and itemName encryption) onto a single GSD phase, then drive it through full planning including research, design decisions, and pattern mapping.",
+    "outcome": "Phase 48 ('SDK self-bootstrap regression fix and shared-folder/metadata consolidation') was created, branched, and fully planned through the pattern-mapping stage; ROADMAP.md, STATE.md, RESEARCH.md, CONTEXT.md, VALIDATION.md, and PATTERNS.md were all committed; the planner subagent was spawned and running at session end.",
+    "learnings": {
+      "repo": [
+        "web-e2e only auto-triggers on push to main (via ci-e2e.yml paths-filter → workflow_call), never on PRs — this is the gap that let PR #498's regression land undetected.",
+        "web-e2e.yml is directly workflow_dispatch-enabled with `ref: ${{ inputs.ref || github.sha }}`, so `env -u GITHUB_TOKEN gh workflow run web-e2e.yml --ref <branch>` runs the identical job against a feature branch pre-merge; direct dispatch resolves repo secrets without a secrets:inherit parent.",
+        "The server is zero-knowledge and cannot re-encrypt existing plaintext share.itemName rows; legacy data must be handled via lazy client backfill on next access, not a server-side UPDATE migration.",
+        "sharedFolderTree must be a sibling Map keyed by shareId (not an extension of folderTree) because shared folders carry a distinct SharedWriteContext and can collide on ipnsName.",
+        "TypeORM migration command for this repo: `pnpm --filter @cipherbox/api migration:run`; REQ-4 migration must be additive (nullable bytea column, no data UPDATE) to satisfy the zero-knowledge constraint.",
+        "Pre-commit hook runs markdownlint (skips .planning/) and prettier; .planning/ markdown docs are normalized on commit but never blocked.",
+        "CRDT-IPNS-inbox research todo (#2) would subsume the itemName plaintext leak (REQ-4) if it ever ships, because all inbox content would be ECIES-wrapped to the recipient — cross-linked in ROADMAP but explicitly deferred as long-horizon.",
+        "gh pr create triggers a bot release commit; any subsequent push to the branch must fetch+rebase before pushing to avoid a non-fast-forward conflict."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 385,
+          "end_line": 385,
+          "finding": "loadFolder does an unconditional folderTree.set() — root cause of #498 regression; fix is a sequenceNumber guard (if existing.sequenceNumber >= resolved, keep existing) before this line."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 422,
+          "end_line": 422,
+          "finding": "ensureFolderLoaded short-circuit — must be kept intact when applying the REQ-1 reconcile guard to avoid re-regressing #498."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 454,
+          "end_line": 454,
+          "finding": "DFS child-check in ensureFolderLoaded — must be kept intact alongside the REQ-1 fix."
+        },
+        {
+          "path": "packages/sdk/src/share/shared-write.ts",
+          "finding": "Already returns {publishedChildren, newSequenceNumber} via publishWithCas — REQ-3 client methods can delegate directly to this, no new publish logic needed."
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "line": 29,
+          "end_line": 35,
+          "finding": "folder:updated event definition — exact analog for the new sharedFolder:updated event that REQ-3's event-fed projection will consume."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedWriteOps.ts",
+          "line": 143,
+          "end_line": 146,
+          "finding": "Write-back logic that becomes an event-fed projection in REQ-3; withConflictRetry is dropped here because CAS moves into the SDK client."
+        },
+        {
+          "path": "apps/web/src/components/ShareDialog.tsx",
+          "line": 338,
+          "end_line": 351,
+          "finding": "ECIES wrap points for itemName encryption (REQ-4); mirrors the existing encryptedKey flow."
+        },
+        {
+          "path": "apps/api/src/migrations/1743000000000-AddWritableShares.ts",
+          "finding": "Template for the REQ-4 migration — clone this structure for the nullable item_name_encrypted bytea column; analog field is encryptedIpnsKey at share.entity.ts:72."
+        }
+      ],
+      "workflow": [
+        "When a pending todo's premise depends on a recent PR 'proving out in staging', check CI before treating it as ready — #498 was the unproven PR and was actively regressing main at session start.",
+        "For security todos with an open M-severity finding, do not defer them to a long-horizon research track even if that track would subsume them; cross-link and decide the finding on its own merits.",
+        "The GSD pattern-mapper step (spawned before the planner) produces analog file-by-file line references that let the planner skip re-deriving conventions — worth the extra subagent cost on phases touching multiple subsystems.",
+        "For unattended AFK execution runs, pre-decide the signing fallback policy (try signed; if 1Password hangs, fall back to unsigned and flag for re-sign) and the hard-stop condition (red e2e = park, don't open PR) to avoid the pipeline wedging."
+      ]
+    },
+    "friction": [
+      "Stream idle timeout mid-response during the initial parallel-reader fan-out ('API Error: Stream idle timeout - partial response received'), requiring the user to redirect to the GSD phase workflow instead.",
+      "web-e2e.yml's main-only auto-trigger (the structural gap) caused PR #498 to regress main undetected and inverted the premise of todo #9 — discovered only by investigating the failing e2e run mid-session.",
+      "1Password SSH signing is a latent wedge risk for unattended AFK commit chains; required a pre-emptive fallback policy decision before the user left."
+    ],
+    "open_items": [
+      "Planner subagent (gsd-planner / opus) was still running at session end — PLAN.md files not yet produced.",
+      "Full execution pipeline not yet started: REQ-1 reconcile fix, REQ-2 seed-site deletion (gated on REQ-1 + green e2e), REQ-3 sharedFolderTree, REQ-4 itemName ECIES + migration + lazy backfill + invite flow.",
+      "web-e2e dispatch gate (REQ-1 pre-merge acceptance): `gh workflow run web-e2e.yml --ref feat/phase-48-...` not yet run — main is currently red.",
+      "Post-green pipeline deferred: /simplify, /gsd:validate-phase 48, CodeRabbit CLI review, /security:review, gh pr create.",
+      "Cargo.lock and .planning/intel/ have uncommitted changes (unrelated to Phase 48, intentionally left unstaged).",
+      "CRDT-IPNS-inbox (#2) explicitly deferred — revisit when/if serverless share discovery becomes a priority; if it ships, REQ-4's itemName encryption becomes redundant.",
+      "ERC-1271 contract wallet auth (#1) and alternative MFA factors (#4) remain in pending todos with no planned phase yet."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T02:18:53.127908Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 1086,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 1086,
+    "total_lines_changed": 1089,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 229,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
