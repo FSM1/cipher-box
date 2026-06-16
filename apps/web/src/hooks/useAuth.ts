@@ -305,6 +305,10 @@ export function useAuth() {
           },
           rootIpnsName: vaultState.rootIpnsName,
           rootFolderKey: vaultState.rootFolderKey,
+          // Pass the root IPNS signing keypair so the client can self-bootstrap
+          // and lazy-load folderTree from root (dissolves "Folder not loaded";
+          // fixes bin restore after reload). Guaranteed non-null by the guard above.
+          rootIpnsKeypair: vaultState.rootIpnsKeypair,
           teeKeys: authState.teeKeys ?? undefined,
           pinningConfig,
           shareCallbacks: {

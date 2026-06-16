@@ -52,6 +52,20 @@ export type CipherBoxClientConfig = {
   rootIpnsName: string;
   /** Root folder key (AES-256, decrypted on login) */
   rootFolderKey: Uint8Array;
+  /**
+   * Root folder IPNS signing keypair (Ed25519).
+   *
+   * When provided, the client can self-bootstrap and lazy-load the folder tree
+   * from root on its own (see `CipherBoxClient.ensureFolderLoaded`): it resolves
+   * the root folder, then walks down to any target by unwrapping each subfolder's
+   * keys with the vault keypair. This dissolves the "Folder not loaded" failure
+   * class — consumers no longer need to pre-seed `folderTree` before every
+   * folderTree-dependent operation (e.g. bin restore after a reload).
+   *
+   * Optional for backward compatibility: when absent, folders must be registered
+   * externally via `registerFolder()` / `loadFolder()` before use.
+   */
+  rootIpnsKeypair?: { publicKey: Uint8Array; privateKey: Uint8Array };
   /** TEE keys for IPNS key wrapping */
   teeKeys?: TeeKeys;
   /**
