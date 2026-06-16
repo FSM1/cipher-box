@@ -42,3 +42,21 @@ The bounce originates in the **web-side subfolder load** path after a reload int
 - Branch is pushed; web-e2e is dispatched manually via `gh workflow run web-e2e.yml --ref <branch>` (workflow_dispatch, checks out branch HEAD).
 - Stale local branch `feat/phase-48-sdk-self-bootstrap-fix-and-shares` (points at the first planning commit) can be deleted.
 - Pipeline steps NOT run (all gated on green): `/simplify`, `/gsd:validate-phase 48`, CodeRabbit, `/security:review`, PR.
+
+## UPDATE 2026-06-16 — Playwright trace pulled; root cause CORRECTED (option 1 is wrong)
+
+Extracted the trace from the failing run (27592393665). Decisive evidence — **the bug is bin IPNS durability, NOT navigation**:
+
+- Console: `[CipherBox] Bin IPNS record not found — auto-repairing with empty bin` STILL fires. Network: the bin's IPNS name resolves ~17× with intermittent **404s** (22 across the run, plus 2× 409). So after the item is deleted to the bin (step 4) and the page reloads (step 5), `loadBin`'s `resolveIpnsRecord` 404s (IPNS propagation lag on the just-written bin record), and the **auto-repair republishes an EMPTY bin**, overwriting the real record server-side → the item is gone → `waitForBinItem` (step 6) times out.
+- **No `[Nav] Failed to load subfolder` anywhere** — the `useFolderNavigation` catch redirect I guarded in `f6b13db2b` NEVER fires. That fix (and the whole nav-bounce theory) is irrelevant; the `/files` page snapshot is a secondary effect, not the cause.
+- `fe646fd5f` (re-resolve before auto-repair) is INSUFFICIENT: when the 404 persists, it still publishes empty.
+
+### Real fix direction (do NOT do blind — risky)
+
+`loadBin` must NEVER destructively republish an empty bin to "repair" a transient 404. A 404 must be distinguished:
+- **bin genuinely never created** (first-ever load, no bin IPNS registered) → safe to initialize empty.
+- **bin exists but is momentarily unresolvable** (we just published it; propagation lag / network-first miss) → must NOT clobber; keep current state, retry/back off, or read the DB-cached record.
+
+This likely needs the resolve API to disambiguate "never existed" vs "not resolvable now" (a server/DB signal), which would pull in `pnpm api:generate`. It is an IPNS-consistency change with real blast radius — should be reproduced LOCALLY (fast iteration; CI is ~12 min/cycle) rather than guessed via CI.
+
+**Recommended next step:** run the single spec locally against the e2e stack (`tests/web-e2e`, services per `.github/workflows/web-e2e.yml`: postgres + kubo + redis + mock-ipns-routing) to iterate on the `loadBin` no-clobber-on-transient-404 fix, then re-dispatch. REQ-2 (option 1) is NOT the fix — leave it for its own gated plan.
