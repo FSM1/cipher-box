@@ -20,6 +20,7 @@ describe('InvitesController', () => {
   const userId = '550e8400-e29b-41d4-a716-446655440000';
   const testToken = 'abc123-url-safe-token';
   const testEncryptedKey = 'cc'.repeat(64);
+  const testEncryptedNameHex = 'ab'.repeat(40);
 
   const mockReq: { user: { id: string } } = { user: { id: userId } };
 
@@ -31,6 +32,7 @@ describe('InvitesController', () => {
     itemType: 'folder',
     ipnsName: 'k51qzi5uqu5dg12345',
     itemName: 'My Folder',
+    itemNameEncrypted: null,
     encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
     encryptedChildKeys: [{ keyType: 'file', itemId: 'f1', encryptedKey: 'dd'.repeat(32) }],
     status: 'active',
@@ -126,7 +128,19 @@ describe('InvitesController', () => {
       expect(result.itemType).toBe('folder');
       expect(result.ipnsName).toBe('k51qzi5uqu5dg12345');
       expect(result.itemName).toBe('My Folder');
+      expect(result.itemNameEncrypted).toBeNull();
       expect(mockSharesService.getInviteForClaim).toHaveBeenCalledWith(testToken);
+    });
+
+    it('should return hex-encoded itemNameEncrypted when present', async () => {
+      mockSharesService.getInviteForClaim.mockResolvedValue({
+        ...mockInvite,
+        itemNameEncrypted: Buffer.from(testEncryptedNameHex, 'hex'),
+      });
+
+      const result = await controller.getInviteData(testToken);
+
+      expect(result.itemNameEncrypted).toBe(testEncryptedNameHex);
     });
 
     it('should throw NotFoundException when service returns null', async () => {

@@ -20,6 +20,7 @@ describe('ShareInvitesController', () => {
   const inviteId = '770e8400-e29b-41d4-a716-446655440002';
   const testToken = 'abc123-url-safe-token';
   const testEncryptedKey = 'cc'.repeat(64);
+  const testEncryptedNameHex = 'ab'.repeat(40);
 
   const mockReq: { user: { id: string } } = { user: { id: userId } };
 
@@ -31,6 +32,7 @@ describe('ShareInvitesController', () => {
     itemType: 'folder',
     ipnsName: 'k51qzi5uqu5dg12345',
     itemName: 'My Folder',
+    itemNameEncrypted: null,
     encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
     encryptedChildKeys: null,
     status: 'active',
@@ -89,6 +91,42 @@ describe('ShareInvitesController', () => {
       expect(mockSharesService.createInvite).toHaveBeenCalledWith(userId, dto);
     });
 
+    it('should map itemNameEncrypted to a hex string when present', async () => {
+      mockSharesService.createInvite.mockResolvedValue({
+        ...mockInvite,
+        itemNameEncrypted: Buffer.from(testEncryptedNameHex, 'hex'),
+      });
+
+      const dto = {
+        itemType: 'folder' as const,
+        ipnsName: 'k51qzi5uqu5dg12345',
+        itemName: 'My Folder',
+        encryptedKey: testEncryptedKey,
+      };
+
+      const result = await controller.createInvite(mockReq as RequestWithUser, dto);
+
+      expect(result.itemNameEncrypted).toBe(testEncryptedNameHex);
+    });
+
+    it('should map itemNameEncrypted to null when absent', async () => {
+      mockSharesService.createInvite.mockResolvedValue({
+        ...mockInvite,
+        itemNameEncrypted: null,
+      });
+
+      const dto = {
+        itemType: 'folder' as const,
+        ipnsName: 'k51qzi5uqu5dg12345',
+        itemName: 'My Folder',
+        encryptedKey: testEncryptedKey,
+      };
+
+      const result = await controller.createInvite(mockReq as RequestWithUser, dto);
+
+      expect(result.itemNameEncrypted).toBeNull();
+    });
+
     it('should not expose internal fields like encryptedKey or sharerId', async () => {
       mockSharesService.createInvite.mockResolvedValue(mockInvite);
 
@@ -129,6 +167,24 @@ describe('ShareInvitesController', () => {
         userId,
         'k51qzi5uqu5dg12345'
       );
+    });
+
+    it('should map itemNameEncrypted to hex or null per invite', async () => {
+      const inviteWithName: ShareInvite = {
+        ...mockInvite,
+        itemNameEncrypted: Buffer.from(testEncryptedNameHex, 'hex'),
+      };
+      const inviteWithoutName: ShareInvite = {
+        ...mockInvite,
+        id: '880e8400-e29b-41d4-a716-446655440003',
+        itemNameEncrypted: null,
+      };
+      mockSharesService.getInvitesForItem.mockResolvedValue([inviteWithName, inviteWithoutName]);
+
+      const result = await controller.listInvites(mockReq as RequestWithUser, 'k51qzi5uqu5dg12345');
+
+      expect(result[0].itemNameEncrypted).toBe(testEncryptedNameHex);
+      expect(result[1].itemNameEncrypted).toBeNull();
     });
 
     it('should return empty array when no invites exist', async () => {
