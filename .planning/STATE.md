@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 48 (sdk-self-bootstrap-regression-fix-and-shared-folder-metadata) — EXECUTING
-Plan: 48-03 (REQ-3 SDK) + 48-05 (REQ-4 API) complete; 48-02 (REQ-2) and 48-04/48-06 (REQ-3 web / REQ-4 web) remain
+Plan: 48-03 (REQ-3 SDK) + 48-04 (REQ-3 web) + 48-05 (REQ-4 API) complete; 48-02 (REQ-2) and 48-06 (REQ-4 web) remain. 48-04 Task 4 (shared-write UAT) deferred to end-of-phase web-e2e.
 Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. Phase 46 Linux remount-after-SIGKILL UAT passed 2026-06-15 — fully verified, no open items.
 
 ## Performance Metrics
@@ -278,7 +278,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-16
 
-Last session: 2026-06-16T16:28:00Z — Completed 48-05-PLAN.md (REQ-4 API). Stopped At: 48-05 complete. Resume File: None.
+Last session: 2026-06-16T16:40:00Z — Completed 48-04-PLAN.md (REQ-3 web; Task 4 UAT deferred to web-e2e). Stopped At: 48-04 code complete, awaiting shared-write UAT. Resume File: None.
 
 ## Decisions
 

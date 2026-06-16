@@ -774,7 +774,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 48-04-PLAN.md — REQ-3: route useSharedWriteOps through client methods + event-fed useSharedNavigation projection (depends 48-03)
+- [x] 48-04-PLAN.md — REQ-3: route useSharedWriteOps through client methods + event-fed useSharedNavigation projection (depends 48-03; Task 4 shared-write UAT deferred to end-of-phase web-e2e)
 - [ ] 48-06-PLAN.md — REQ-4 web: ShareDialog ECIES wrap + decrypt-for-display + lazy backfill (depends 48-05, TDD)
 
 Scope (captured todos):
