@@ -777,6 +777,10 @@ Plans:
 - [x] 48-04-PLAN.md — REQ-3: route useSharedWriteOps through client methods + event-fed useSharedNavigation projection (depends 48-03; Task 4 shared-write UAT deferred to end-of-phase web-e2e)
 - [ ] 48-06-PLAN.md — REQ-4 web: ShareDialog ECIES wrap + decrypt-for-display + lazy backfill (depends 48-05, TDD)
 
+**Wave 4** *(follow-up consolidation)*
+
+- [ ] 48-07-PLAN.md — REQ-3: client.refreshSharedFolder (SDK-owned shared refresh, #489 sequence-guard) + route web 30s poller through it, delete inline IPNS/IPFS/decrypt (depends 48-03, 48-04, TDD) — closes the 48-04 poll-then-write desync note
+
 Scope (captured todos):
 
 - [ ] **[P0]** Self-bootstrap clobbers fresher folderTree state — regresses web-e2e (PR #498 follow-up; surfaced by run 27587113911, new this phase)
