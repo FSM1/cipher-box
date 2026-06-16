@@ -1,0 +1,237 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "86e784543056",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T11:23:13.941753Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "e23ed8de4359",
+  "token_usage": {
+    "input_tokens": 51738,
+    "cache_creation_tokens": 1254500,
+    "cache_read_tokens": 28235588,
+    "output_tokens": 219646,
+    "api_call_count": 103
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e23ed8de4359",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e23ed8de4359",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e23ed8de4359",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Bundle three pending todos (#5 share itemName encryption, #8 shared-folder SDK writes, #9 remove redundant web folder-seeding) into a new GSD Phase 48, plan it, and execute Wave 1 (the P0 self-bootstrap regression fix from PR #498) autonomously while AFK — including dispatching the web-e2e acceptance gate against the feature branch.",
+    "outcome": "Phase 48 was created, researched, and planned (6 plans / 3 waves). Wave 1's `loadFolder` sequence-guard was implemented and greened the version-restore regression (`full-workflow 6.6.2`), but `bin-restore-after-reload.spec.ts` remained red after 3 dispatch cycles. The session was parked at the REQ-1 gate per the agreed rule; all prior fixes and a corrected root-cause diagnosis were committed and pushed.",
+    "learnings": {
+      "repo": [
+        "web-e2e only auto-triggers via ci-e2e.yml on `push: branches: [main]` — PRs and feature branches never get it automatically, which is how #498's regression shipped undetected.",
+        "web-e2e.yml is independently `workflow_dispatch`-enabled with `ref: ${{ inputs.ref || github.sha }}` — running `gh workflow run web-e2e.yml --ref <branch>` is the pre-merge acceptance gate and requires no CI plumbing changes.",
+        "Phase 47 covered owned-folder SDK consolidation; Phase 48 is the logical successor for shared-folder state, itemName crypto, and the #498 regression.",
+        "The recurring `UQ_folder_ipns_user_ipns` duplicate-key server error appears in passing tests and is background noise, not a cause of the bin-restore failure.",
+        "CRDT/IPNS inbox research todo (#2) would subsume the itemName ECIES fix (#5) if it shipped, but is explicitly long-horizon and was deferred out of Phase 48 scope.",
+        "GSD branching_strategy 'phase' silently creates a new branch off HEAD during `execute-phase` init — it created `feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata` alongside the manually-created `feat/phase-48-...`, leaving a stale branch pointer.",
+        "The 1Password SSH signer can wedge mid-run with 'failed to fill whole buffer' — disable with `git config commit.gpgsign false` to avoid blocking unattended runs; re-enable and rebase-resign before merge.",
+        "CI logs for web-e2e do not capture browser console output; Playwright failure artifacts (error-context.md, trace, screenshot) must be downloaded from the Actions artifact store to diagnose test failures reliably.",
+        "TypeORM migrations for this repo run via `pnpm --filter @cipherbox/api migration:run`; REQ-4 (itemName ECIES) requires a new additive migration cloned from `1743000000000-AddWritableShares.ts`."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 385,
+          "end_line": 385,
+          "finding": "loadFolder calls `folderTree.set()` unconditionally — self-bootstrap (PR #498) clobbers fresher in-memory state with a stale IPNS snapshot. Fix: insert a sequenceNumber guard before this call."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 422,
+          "end_line": 454,
+          "finding": "ensureFolderLoaded has a short-circuit at :422 and a DFS child-check at :454 that must remain intact when adding the sequenceNumber guard to avoid re-regressing #498."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "loadBin treats a null return from resolveIpnsRecord as 'bin is empty' and eagerly publishes an empty bin record with no expectedSequenceNumber. On transient post-reload 404s (IPNS propagation lag), this unconditionally clobbers the real bin record server-side — the true root cause of bin-restore-after-reload failing."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "line": 297,
+          "end_line": 307,
+          "finding": "Catch block calls navigate('/files') guarded only by latestNavTarget, which a sidebar click to /bin does not update — can bounce /bin → /files when a stale subfolder resolve fails. Guarded with a latestPathname ref, but the bounce persisted, indicating a second redirect source."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "line": 167,
+          "end_line": 167,
+          "finding": "Additional navigate('/files') call in useFolderNavigation; both :167 and :307 are candidates for the /bin → /files bounce."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 658,
+          "end_line": 700,
+          "finding": "Session restore effect — ruled out as the bounce source; :465 is the MFA REQUIRED_SHARE path only."
+        },
+        {
+          "path": ".github/workflows/ci-e2e.yml",
+          "finding": "push: branches: [main] auto-trigger calls web-e2e via workflow_call. This is the only automatic path — no PR trigger exists."
+        },
+        {
+          "path": ".github/workflows/web-e2e.yml",
+          "finding": "Directly workflow_dispatch-enabled with `ref: ${{ inputs.ref || github.sha }}`. Direct dispatch resolves repo secrets without a secrets: inherit parent, faithfully reproducing the main-push job."
+        }
+      ],
+      "workflow": [
+        "Playwright trace files (not just error-context.md) contain console logs and network events — greping them for console output and HTTP status codes is the fastest way to identify test failures without a browser. Three incorrect hypotheses were ruled out only after inspecting the trace.",
+        "For unattended multi-hour runs, use sequential execution on the feature branch rather than parallel worktrees — fewer failure modes and all commits land predictably.",
+        "When a spec never passed on main, check whether it was introduced by the same PR being fixed — the precondition for the fix may not hold yet.",
+        "Distinguish 'do together' (same branch, same lift) from 'one supersedes the other' (cross-link and decide independently) when grouping related todos — conflating them leads to holding a live security finding hostage to a quarters-out research idea.",
+        "A Playwright failure screenshot showing the wrong page (Files instead of Bin) is a faster signal than code inspection — the presence/absence of the target route tells you immediately whether the fix is at the data or navigation layer."
+      ]
+    },
+    "friction": [
+      "1Password SSH signer wedged mid-run ('failed to fill whole buffer'), forcing unsigned commits from fe646fd5f onward and requiring manual re-signing/admin-merge before the branch can land.",
+      "Three web-e2e dispatch cycles (~12-15 min each) were burned on incorrect root-cause hypotheses (SDK clobber, bin auto-repair re-resolve, nav-redirect guard) before the Playwright trace gave definitive ground truth.",
+      "CI logs do not capture browser console output, so the bin auto-repair log line ('Bin IPNS record not found — auto-repairing with empty bin') was invisible until the trace artifact was downloaded and grepped — the first two fix attempts were made blind.",
+      "GSD branching_strategy 'phase' silently switched the working branch during execute-phase init, creating confusion about which branch was canonical.",
+      "A stream idle timeout killed one agent response mid-execution, requiring the user to re-invoke the phase skill from scratch.",
+      "Option 1 (REQ-2 web-nav removal) was proposed and agreed to, but Playwright trace evidence gathered immediately after showed it would have been wrong — the trace should have been inspected before proposing options."
+    ],
+    "open_items": [
+      "bin-restore-after-reload.spec.ts root cause is IPNS durability in loadBin: null-as-empty-bin causes a destructive publish on transient 404s even after the re-resolve fix. Needs a robust guard (e.g., retry with exponential backoff before publishing empty, or require at least N consecutive 404s).",
+      "REQ-1 web-e2e gate is still red — the branch is parked with diagnosis in 48-REQ1-BLOCKED-HANDOFF.md. The corrected root cause (bin IPNS clobber on transient 404) needs a new targeted fix and re-dispatch.",
+      "Waves 2-3 not executed: REQ-2 (remove ~16 web ensureFolderRegistered seeders, gated on REQ-1 green), REQ-3 (sharedFolderTree SDK client), REQ-4 (itemName ECIES ECIES column + migration + lazy backfill + invite flow).",
+      "Unsigned commits from fe646fd5f onward need re-signing (git rebase --exec 'git commit --amend --no-edit -S') or admin-merge before the branch lands. Re-enable signing with `git config commit.gpgsign true` after restarting 1Password.",
+      "Post-green review pipeline not run: /simplify, /gsd:validate-phase 48, CodeRabbit CLI, /security:review (ECIES itemName wrap, IPNS sequence reconcile, shared-folder state).",
+      "PR to main not opened — gated on web-e2e green.",
+      "Stale branch `feat/phase-48-sdk-self-bootstrap-fix-and-shares` left as a pointer to the first planning commit — should be deleted once the canonical GSD branch name is confirmed.",
+      "Cargo.lock and .planning/intel/ left uncommitted as unrelated changes.",
+      "CRDT/IPNS inbox research todo (#2) explicitly deferred — recorded in Phase 48 ROADMAP as out of scope, but cross-linked as eventually subsuming REQ-4 (itemName encryption)."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
