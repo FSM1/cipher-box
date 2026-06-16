@@ -1,0 +1,202 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ebe50165e85d",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T02:30:35.557354Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "0dac37780eae",
+  "token_usage": {
+    "input_tokens": 47252,
+    "cache_creation_tokens": 662275,
+    "cache_read_tokens": 8894035,
+    "output_tokens": 117850,
+    "api_call_count": 54
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0dac37780eae",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0dac37780eae",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0dac37780eae",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Group related pending todos (#5, #8, #9) into a GSD phase for SDK folder-state consolidation and share metadata hardening, then plan and begin executing it autonomously while the user is AFK.",
+    "outcome": "Phase 48 was created with an enriched goal (PR #498 regression promoted to P0 REQ-1), fully researched and planned (6 plans across 3 waves), and Wave 1 execution was initiated. A critical regression in PR #498 was discovered and became the blocking prerequisite gating all other work.",
+    "learnings": {
+      "repo": [
+        "web-e2e only auto-triggers via ci-e2e.yml on push to main — not on PRs or feature branches. Pre-merge validation requires manual dispatch: `env -u GITHUB_TOKEN gh workflow run web-e2e.yml --ref <branch>`.",
+        "web-e2e.yml already supports workflow_dispatch with `ref: ${{ inputs.ref || github.sha }}`, so no CI changes are needed to run it against a feature branch.",
+        "PR #498 introduced a regression: loadFolder calls folderTree.set() unconditionally, clobbering fresher in-memory state with a stale IPNS snapshot. Two specs fail: bin-restore-after-reload.spec.ts (added by #498) and full-workflow.spec.ts 6.6.2.",
+        "Phase 47 (PR #494) covered owned-folder consolidation. Phase 48 is the shared-folder layer — sharedFolderTree must be a sibling keyed by shareId, not an extension of folderTree, due to SharedWriteContext distinction and potential ipnsName collisions.",
+        "The API server is zero-knowledge, so it cannot re-encrypt existing plaintext itemName values — legacy rows require lazy client-side backfill, not a server-side data migration UPDATE.",
+        "GSD branching_strategy 'phase' creates a new branch off HEAD rather than reusing the branch already established for the phase, producing a confusingly named second branch.",
+        "TypeORM migration command for this repo: `pnpm --filter @cipherbox/api migration:run`; `pnpm api:generate` is required after any API schema changes."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 385,
+          "end_line": 385,
+          "finding": "loadFolder calls folderTree.set() unconditionally here — fix is a sequenceNumber guard (if existing.sequenceNumber >= resolved, keep existing) before this line."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 422,
+          "end_line": 422,
+          "finding": "ensureFolderLoaded short-circuit — must remain intact to avoid re-regressing #498."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 454,
+          "end_line": 454,
+          "finding": "DFS child-check — must remain intact to avoid re-regressing #498."
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "line": 29,
+          "end_line": 35,
+          "finding": "folder:updated event pattern — new sharedFolder:updated event for REQ-3 should mirror this shape."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedWriteOps.ts",
+          "line": 143,
+          "end_line": 146,
+          "finding": "Write-back currently done inline here — REQ-3 converts this to an event-fed projection from the SDK; withConflictRetry is dropped (CAS moves into the client)."
+        },
+        {
+          "path": "apps/api/src/migrations/1743000000000-AddWritableShares.ts",
+          "finding": "Clone this migration for the REQ-4 itemName encryption column — additive nullable bytea column, no data UPDATE (zero-knowledge constraint)."
+        },
+        {
+          "path": "apps/api/src/modules/share/share.entity.ts",
+          "line": 72,
+          "end_line": 72,
+          "finding": "encryptedIpnsKey field is the analog pattern for the new item_name_encrypted bytea column in REQ-4."
+        },
+        {
+          "path": "apps/web/src/components/ShareDialog.tsx",
+          "line": 338,
+          "end_line": 351,
+          "finding": "ECIES wrap for itemName should be added here, mirroring the existing encryptedKey flow."
+        }
+      ],
+      "workflow": [
+        "When grouping todos, distinguish 'do together' (same branch, sequential dependency) from 'supersedes' (one makes the other obsolete) — they require different handling: co-execution vs. cross-linking with independent disposition.",
+        "A security finding should not be held open waiting for a long-horizon research idea that would subsume it — cross-link and close on its own merits.",
+        "GSD pattern mapper produces analog-based line-number references that the planner uses directly; running it as a separate pre-planning step prevents the planner from needing to re-derive file locations.",
+        "For unattended AFK execution: prefer sequential plan execution on the established branch over parallel worktrees to reduce failure modes; keep signing on but have a fallback plan for 1Password hanging."
+      ]
+    },
+    "friction": [
+      "API stream idle timeout killed the initial fan-out research agent mid-response, requiring the user to restart the flow via a different GSD command.",
+      "GSD branching_strategy 'phase' created a second branch (feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata) instead of staying on the already-established feat/phase-48-... branch, requiring manual history verification before proceeding.",
+      "1Password SSH signing requires interactive keychain access, which is a latent risk for unattended AFK commit runs.",
+      "web-e2e running only on main push meant PR #498's regression couldn't be caught pre-merge — the gap that motivates the new dispatch gate procedure."
+    ],
+    "open_items": [
+      "Todo #2 (CRDT-based IPNS inbox for serverless share discovery) explicitly deferred — would subsume REQ-4 itemName encryption but is long-horizon research; cross-linked in Phase 48 ROADMAP entry.",
+      "Wave 1 (48-01, P0 sequenceNumber guard) was spawned but not yet completed — transcript ends during execution.",
+      "VALIDATION.md per-task table is TBD — to be back-filled by /gsd:validate-phase after execution.",
+      "UAT steps (cold-reload behavior, shared-write round-trip, itemName display) flagged as not fully automatable AFK — need manual verification or Puppeteer smoke checks.",
+      "Old branch feat/phase-48-sdk-self-bootstrap-fix-and-shares is a leftover pointer to clean up after phase completion.",
+      "Todos #1 (ERC-1271 wallet auth), #3 (async search index), #4 (alternative MFA), #6 (IPNS signature storage review), #7 (pin GH Actions to immutable SHAs) remain pending and unaddressed this session."
+    ]
+  }
+}
