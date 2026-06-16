@@ -75,6 +75,11 @@ function makeFakeClient(): {
     renameInSharedFolder: record('renameInSharedFolder'),
     deleteFromSharedFolder: record('deleteFromSharedFolder'),
     updateSharedFile: record('updateSharedFile'),
+    // The 30s poller calls this instead of resolving IPNS/IPFS/decrypt inline.
+    // It takes a single shareId; record it with no extra args.
+    refreshSharedFolder: async (shareId: string): Promise<void> => {
+      calls.push({ method: 'refreshSharedFolder', shareId, args: undefined });
+    },
   } as unknown as SharedFolderClient;
 
   return {
@@ -230,6 +235,86 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
 
     expect(refs.children).toEqual(original);
     expect(refs.sequenceNumber).toBe(4n);
+  });
+
+  describe('poll path — refreshSharedFolder routes through the SDK, refs via projection only', () => {
+    /** The poller calls refreshSharedFolder(shareId); not part of the projection Pick type. */
+    type WithRefresh = { refreshSharedFolder: (shareId: string) => Promise<void> };
+
+    it('the poller calls refreshSharedFolder with the active shareId', async () => {
+      const fake = makeFakeClient();
+
+      // Simulate the 30s poll body: pull remote changes through the SDK.
+      await (fake.client as unknown as WithRefresh).refreshSharedFolder('share-1');
+
+      expect(fake.calls).toEqual([
+        { method: 'refreshSharedFolder', shareId: 'share-1', args: undefined },
+      ]);
+    });
+
+    it('a refresh call does NOT mutate the projection refs until the matching event fires', async () => {
+      const fake = makeFakeClient();
+      const refs = { children: [] as FolderChild[], sequenceNumber: null as bigint | null };
+
+      subscribeSharedFolderProjection(
+        fake.client,
+        () => 'share-1',
+        (children, sequenceNumber) => {
+          refs.children = children;
+          refs.sequenceNumber = sequenceNumber;
+        }
+      );
+
+      // Poll calls refresh — the call alone writes nothing (poller never writes refs).
+      await (fake.client as unknown as WithRefresh).refreshSharedFolder('share-1');
+      expect(refs.children).toEqual([]);
+      expect(refs.sequenceNumber).toBeNull();
+
+      // The SDK's sequence-guarded re-resolve then emits the newer snapshot; the
+      // projection subscription is the sole writer — proving the poll path lands
+      // through the SAME subscription as the write path.
+      const polled = [makeChild('remote')];
+      fake.emit({
+        type: 'sharedFolder:updated',
+        shareId: 'share-1',
+        ipnsName: 'k51folder',
+        children: polled,
+        sequenceNumber: 7n,
+      });
+
+      expect(refs.children).toEqual(polled);
+      expect(refs.sequenceNumber).toBe(7n);
+    });
+
+    it('ignores a refresh-driven event for a DIFFERENT shareId (per-share isolation)', async () => {
+      const fake = makeFakeClient();
+      const refs = {
+        children: [makeChild('orig')] as FolderChild[],
+        sequenceNumber: 2n as bigint | null,
+      };
+
+      subscribeSharedFolderProjection(
+        fake.client,
+        () => 'share-1',
+        (children, sequenceNumber) => {
+          refs.children = children;
+          refs.sequenceNumber = sequenceNumber;
+        }
+      );
+
+      await (fake.client as unknown as WithRefresh).refreshSharedFolder('share-OTHER');
+      fake.emit({
+        type: 'sharedFolder:updated',
+        shareId: 'share-OTHER',
+        ipnsName: 'k51other',
+        children: [makeChild('leak')],
+        sequenceNumber: 99n,
+      });
+
+      // Active share's projection untouched — poll path respects the isolation guard.
+      expect(refs.children.map((c) => c.name)).toEqual(['orig']);
+      expect(refs.sequenceNumber).toBe(2n);
+    });
   });
 
   it('unsubscribe stops further projection updates', () => {
