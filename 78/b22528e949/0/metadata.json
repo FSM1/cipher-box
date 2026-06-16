@@ -1,0 +1,137 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "78b22528e949",
+  "session_id": "dcb71a14-5478-4d28-988e-5f0c056637a9",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T00:32:32.860906Z",
+  "branch": "feat/sdk-client-self-bootstrap-folder-tree",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/hooks/useAuth.ts",
+    "packages/sdk/src/__tests__/ensure-folder-loaded.test.ts",
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/types.ts",
+    "tests/web-e2e/tests/bin-restore-after-reload.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "adf0fa221be2",
+  "token_usage": {
+    "input_tokens": 43764,
+    "cache_creation_tokens": 278120,
+    "cache_read_tokens": 10482663,
+    "output_tokens": 76935,
+    "api_call_count": 71
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Implement SDK client self-bootstrap of folder tree from root IPNS key, eliminating the web layer's responsibility to manually seed folderTree before every folder-dependent SDK operation.",
+    "outcome": "Added `rootIpnsKeypair` to `CipherBoxClientConfig`, implemented `ensureFolderLoaded` DFS-walk method in the SDK client, wired it into all 10+ folder-dependent method throwers, updated `useAuth.ts` to pass the keypair, and shipped unit tests + an E2E reload-restore spec — all passing typecheck, lint, and 179 SDK unit tests.",
+    "learnings": {
+      "repo": [
+        "`CipherBoxClientConfig` carried `rootIpnsName` (string) and `rootFolderKey` (AES-256) but no root IPNS Ed25519 signing keypair — the gap that prevented any self-bootstrap. The web `vaultStore.rootIpnsKeypair` held it, guarded at `useAuth.ts:281`, but was never forwarded to the SDK.",
+        "`FolderState` (not `FolderEntry`) is the folderTree value type; it holds the per-folder Ed25519 `ipnsKeypair` needed for IPNS publishing — non-root folders already received this at registration but root never had an entry.",
+        "Child folder entries carry `folderKeyEncrypted` (hex) and `ipnsPrivateKeyEncrypted` (hex) — must be unwrapped via `unwrapKey` (ECIES) using the parent's `folderKey` to get each child's AES key + signing key for DFS traversal.",
+        "`withOperation` is reentrant-safe (pure event emission, no lock) — safe to call `ensureFolderLoaded` (which calls `loadFolder` wrapped in `withOperation`) from inside another `withOperation` call.",
+        "`integration.test.ts` is `describe.skip` under `CI=1` — requires a live backend at localhost:3000. Running with `CI=1` cleanly separates the 178 offline unit tests from the live-API suite.",
+        "Root `typecheck` script rebuilds the full monorepo dependency chain (`tsc -b`) before running `web` typecheck against built dist — this is the correct typecheck command after any public SDK API change.",
+        "The `createFolder` method publishes the new subfolder to IPNS but does NOT insert it into `folderTree` — the caller must subsequently register it if it wants to call folder-dependent methods on the new folder."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/types.ts",
+          "line": 44,
+          "end_line": 88,
+          "finding": "CipherBoxClientConfig shape — originally no root IPNS keypair field; added `rootIpnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array }`"
+        },
+        {
+          "path": "packages/sdk/src/types.ts",
+          "line": 96,
+          "end_line": 111,
+          "finding": "FolderState type — holds ipnsKeypair (Ed25519) per folder, children as FolderChild[] union of FilePointer + FolderEntry, no parent pointer"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 52,
+          "end_line": 63,
+          "finding": "Private fields: vaultKeypair/rootFolderKey stored as internalVaultKeypair/internalRootFolderKey (defensive copies); folderTree is FolderTree class wrapping Map<string, FolderState>"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 288,
+          "end_line": 308,
+          "finding": "registerFolder — sync entry point that builds FolderState with metadata:null; requires caller to supply ipnsKeypair"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 345,
+          "end_line": 381,
+          "finding": "loadFolder — async load primitive, returns FolderState | null (not undefined); callers must handle null"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1589,
+          "end_line": 1589,
+          "finding": "restoreFromBin delegates to binOps passing this.folderTree — was the concrete 'Target folder not loaded' bug site after reload because useBin never re-seeded the target folder"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 281,
+          "end_line": 281,
+          "finding": "Guard ensures rootIpnsKeypair is non-null before SDK init — safe to pass directly into CipherBoxClientConfig without additional null check"
+        }
+      ],
+      "workflow": [
+        "Fan out 5 parallel agents to map codebase subsystems before writing a single line of implementation — the complete upfront map prevents mid-implementation rework.",
+        "Complete GSD bookkeeping (todo → completed, STATE.md, git commit) before starting implementation so the planning state stays consistent even if implementation is interrupted.",
+        "Spawn a separate adversarial security-review agent after implementation but before the final commit — caught the corrupt-sibling abort path (per-child try/catch hardening) at zero cost.",
+        "Use `CI=1` environment variable to isolate offline unit tests from live-API integration suites when verifying regressions."
+      ]
+    },
+    "friction": [
+      "Type errors on first typecheck pass: `loadFolder` returns `FolderState | null` but local vars in `ensureFolderLoaded` initialized via `.get()` typed as `| undefined` — TS didn't unify them, requiring explicit `let root: FolderState | null = null` declarations.",
+      "Prettier auto-formatted the client.ts edits differently than the hand-written style, causing lint to fail and requiring a second `--write` pass before the lint gate cleared.",
+      "Integration test failures (live-API suite) initially looked like SDK regressions until confirmed to be environment-only (`describe.skip` under `CI=1`)."
+    ],
+    "open_items": [
+      "Web-side `ensureFolderRegistered` calls can now be deleted since the SDK self-bootstraps — not cleaned up in this session to keep scope contained.",
+      "E2E spec `bin-restore-after-reload.spec.ts` was written and type-checked but not executed against a live browser/backend — needs a Playwright run to confirm the fix end-to-end.",
+      "`recycle-bin.spec.ts` still doesn't cover the reload scenario — it was identified as a gap but left in place; the new spec supplements rather than fixes it.",
+      "`createFolder` still doesn't insert the newly created subfolder into `folderTree` — a caller using the new subfolder immediately after creation will hit `ensureFolderLoaded` which will reload from IPNS (correct but an extra round-trip); could be optimized to register in-place."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T00:31:36.699365Z",
+    "agent_lines": 422,
+    "agent_removed": 12,
+    "human_added": 26,
+    "human_modified": 18,
+    "human_removed": 0,
+    "total_committed": 466,
+    "total_lines_changed": 478,
+    "agent_percentage": 90.7949790794979,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
