@@ -8,7 +8,7 @@
 import type { TeeKeys, PinningMode, ExternalProviderConfig } from '@cipherbox/sdk-core';
 import type { AxiosInstance } from '@cipherbox/api-client';
 import type { FolderChild, FolderMetadata } from '@cipherbox/core';
-import type { SentShareInfo } from './share';
+import type { SentShareInfo, ShareKeyType } from './share';
 
 /**
  * Pinning configuration for BYO-IPFS support.
@@ -122,4 +122,39 @@ export type FolderState = {
   metadata: FolderMetadata | null;
   /** Timestamp (ms) of last successful load from IPNS */
   lastLoadedAt: number;
+};
+
+/**
+ * Internal state for a loaded SHARED folder, keyed by `shareId`.
+ *
+ * Unlike {@link FolderState}, a shared folder carries the full
+ * `SharedWriteContext` surface: distinct owner + recipient secp256k1 public
+ * keys, the share's IPNS private key, the `shareId`, and the `addShareKeysFn`
+ * callback. Shared folders are tracked in a SIBLING `SharedFolderTree` (NOT in
+ * `folderTree`) because two shares can collide on `ipnsName` and each carries a
+ * distinct write context — keying by `shareId` keeps them isolated (D REQ-3,
+ * decision A4; research Pattern 2).
+ */
+export type SharedFolderState = {
+  /** Share ID — the key under which this state lives in SharedFolderTree */
+  shareId: string;
+  /** IPNS name of the shared folder */
+  ipnsName: string;
+  /** Decrypted AES-256 folder key for the shared folder */
+  folderKey: Uint8Array;
+  /** Ed25519 IPNS private key for signing publishes of this shared folder */
+  ipnsPrivateKey: Uint8Array;
+  /** Current IPNS sequence number (monotonically increasing) */
+  sequenceNumber: bigint;
+  /** Current folder children (files and subfolders) */
+  children: FolderChild[];
+  /** Sharer's secp256k1 public key (FolderEntry/FilePointer keys wrap for owner) */
+  ownerPublicKey: Uint8Array;
+  /** Current user's secp256k1 public key (share_keys entries wrap for recipient) */
+  recipientPublicKey: Uint8Array;
+  /** Callback to add share keys for the recipient (same signature as SharedWriteContext) */
+  addShareKeysFn: (
+    shareId: string,
+    keys: Array<{ keyType: ShareKeyType; itemId: string; encryptedKey: string }>
+  ) => Promise<void>;
 };
