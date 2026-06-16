@@ -1,0 +1,186 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "66a841737a7a",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T02:24:23.01097Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata/48-PATTERNS.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "0dac37780eae",
+  "token_usage": {
+    "input_tokens": 42550,
+    "cache_creation_tokens": 612446,
+    "cache_read_tokens": 7121205,
+    "output_tokens": 100959,
+    "api_call_count": 48
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0dac37780eae",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0dac37780eae",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "The user reviewed pending todos, identified two groupings (#8+#9 as a batch and #2 as superseding #5), then created and fully planned GSD Phase 48 to consolidate folder-state ownership in the SDK and harden share metadata across three bundled todos.",
+    "outcome": "Phase 48 was created, researched, pattern-mapped, planned (6 plans across 3 waves), and independently verified with zero blockers. A 9-step autonomous pipeline was launched to execute the phase, push the branch, run web-e2e pre-merge, and open a PR.",
+    "learnings": {
+      "repo": [
+        "web-e2e runs exclusively on push to main via ci-e2e.yml (paths-filtered); this is the structural gap that let PR #498's regression land unverified",
+        "web-e2e.yml has a direct workflow_dispatch trigger with `ref: ${{ inputs.ref || github.sha }}`, so `env -u GITHUB_TOKEN gh workflow run web-e2e.yml --ref <branch>` runs the identical job against any pushed branch pre-merge without needing secrets:inherit",
+        "PR #498 introduced self-bootstrap for folderTree but regressed main: loadFolder does an unconditional folderTree.set() that clobbers fresher in-memory state with a stale IPNS snapshot — same desync class as PR #489",
+        "For shared-folder ownership (REQ-3), the right shape is a sibling sharedFolderTree keyed by shareId (not extending folderTree) because shared folders carry a distinct SharedWriteContext and can collide on ipnsName",
+        "The API server is zero-knowledge so cannot re-encrypt legacy plaintext itemName values; the chosen policy is lazy client-side backfill (client wraps and re-saves on next legitimate write)",
+        "TypeORM migration run command for this repo: `pnpm --filter @cipherbox/api migration:run`; `pnpm api:generate` is required after any API entity/DTO changes",
+        "CRDT-IPNS inbox research (#2) would subsume the itemName encryption fix (#5) by making all inbox content ECIES-wrapped by design, but it is long-horizon research and cannot hold an open MEDIUM security finding hostage",
+        "The GSD planner's VALIDATION.md per-task table is intentionally left TBD at plan time and back-filled by /gsd:validate-phase — the plan-checker warning about this is expected and non-blocking",
+        "Phase 47 (PR #494) covered owned-folder consolidation; Phase 48 is the shared-folder and metadata-crypto layer that follows it"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 385,
+          "end_line": 385,
+          "finding": "Unconditional folderTree.set() in loadFolder — the root cause of the #498 regression. Fix: insert a sequenceNumber guard (if existing.sequenceNumber >= resolved, keep existing) before this call"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 422,
+          "end_line": 422,
+          "finding": "ensureFolderLoaded short-circuit — must be left intact when applying the REQ-1 guard to avoid re-regressing #498"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 454,
+          "end_line": 454,
+          "finding": "DFS child-check in ensureFolderLoaded — must be preserved alongside the REQ-1 fix"
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "line": 29,
+          "end_line": 35,
+          "finding": "folder:updated event definition — direct analog for the new sharedFolder:updated event to be added for REQ-3"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedWriteOps.ts",
+          "line": 143,
+          "end_line": 146,
+          "finding": "Write-back logic that becomes an event-fed projection in REQ-3; withConflictRetry is dropped because CAS moves into the SDK client"
+        },
+        {
+          "path": "apps/web/src/components/ShareDialog.tsx",
+          "line": 338,
+          "end_line": 351,
+          "finding": "Wrap points for ECIES encryption of itemName (REQ-4); mirrors the encryptedKey flow already present"
+        },
+        {
+          "path": "apps/api/src/migrations/1743000000000-AddWritableShares.ts",
+          "finding": "Migration to clone for REQ-4's nullable item_name_encrypted bytea column — additive only, no data UPDATE, zero-knowledge compliant"
+        },
+        {
+          "path": "packages/sdk/src/share/shared-write.ts",
+          "finding": "Already returns {publishedChildren, newSequenceNumber} via publishWithCas — the REQ-3 SDK client methods delegate to this existing function"
+        }
+      ],
+      "workflow": [
+        "When a pending todo is 'gated on X proving out in staging/prod,' always verify that X has actually cleared staging before treating the gate as satisfied — #498 was filed as proven-out but was actively regressing main",
+        "Grouping related todos into a phase works best when the relationship is made explicit: #8+#9 are 'do together on one branch,' while #2+#5 are 'supersession' (one would make the other redundant) and must be handled separately",
+        "The GSD pattern-mapper verifies all research line numbers against current source before handing off to the planner — ensures the planner's analog references don't point at stale locations",
+        "CONTEXT.md written before spawning the planner captures design decisions (tree-shape fork, legacy-data policy, invite-path scope) so the planner uses them as constraints rather than re-opening them",
+        "For AFK autonomous runs with signed commits, the pragmatic policy is: keep signing on, but fall back to unsigned if 1Password hangs to avoid wedging the pipeline, and flag the unsigned commits for re-sign before merge",
+        "Direct workflow_dispatch against a feature branch is faster than dispatching ci-e2e.yml because it skips the desktop-e2e job that ci-e2e.yml also triggers"
+      ]
+    },
+    "friction": [
+      "Stream idle timeout during the initial parallel reader fan-out (the agent investigation of the failing e2e run) — lost partial response and had to redirect to a phase-based approach",
+      "web-e2e only runs on push to main with no PR trigger — structural gap that allowed #498's regression to land; the dispatch workaround exists but is manual",
+      "1Password SSH signing is a potential AFK wedge point for unattended commit pipelines"
+    ],
+    "open_items": [
+      "Phase 48 execution is in-flight (autonomous pipeline): REQ-1 regression fix → REQ-2 seed-site deletion (gated on REQ-1) → REQ-3 sharedFolderTree → REQ-4 itemName ECIES + migration + lazy backfill + invite flow",
+      "web-e2e is currently red on main due to the #498 regression — REQ-1 fix must green it before the branch can be merged",
+      "web-e2e dispatch gate: `gh workflow run web-e2e.yml --ref feat/phase-48-sdk-self-bootstrap-fix-and-shares` must pass as REQ-1's pre-merge acceptance check",
+      "Cargo.lock and .planning/intel/ left uncommitted (unrelated to Phase 48 — intentionally excluded from the planning commit)",
+      "CRDT-IPNS inbox research (#2) explicitly deferred — it would subsume the itemName fix but is long-horizon; cross-linked in the phase for future milestone planning",
+      "Remaining pipeline steps pending: /simplify, /gsd:validate-phase 48 (fill VALIDATION.md per-task table), CodeRabbit review, security/crypto review of ECIES and IPNS sequence changes, PR open to main"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T02:23:14.126312Z",
+    "agent_lines": 227,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 227,
+    "total_lines_changed": 227,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
