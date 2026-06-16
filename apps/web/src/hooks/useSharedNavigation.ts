@@ -10,17 +10,10 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import {
-  decryptFolderMetadata,
-  type FolderChild,
-  type FilePointer,
-  type EncryptedFolderMetadata,
-} from '@cipherbox/core';
+import { type FolderChild, type FilePointer } from '@cipherbox/core';
 import { ShareKeyCache } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
 import { fetchReceivedShares, fetchShareKeys, addShareKeys } from '../services/share.service';
-import { resolveIpnsRecord } from '../services/ipns.service';
-import { fetchFromIpfs } from '../lib/api/ipfs';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
 import { useSharedNavigationActions } from './useSharedNavigationActions';
@@ -170,31 +163,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       }
     },
     [zeroIpnsKey]
-  );
-
-  const refreshFolderContents = useCallback(
-    async (folderIpnsName: string, currentFolderKey: Uint8Array): Promise<FolderChild[] | null> => {
-      try {
-        const resolved = await resolveIpnsRecord(folderIpnsName);
-        if (!resolved) return null;
-
-        const encryptedBytes = await fetchFromIpfs(resolved.cid);
-        const encryptedJson = new TextDecoder().decode(encryptedBytes);
-        const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
-        const metadata = await decryptFolderMetadata(encrypted, currentFolderKey);
-
-        const children = metadata.children ?? [];
-        const seqNum = BigInt(resolved.sequenceNumber);
-        setFolderChildren(children);
-        folderChildrenRef.current = children;
-        setCurrentSequenceNumber(seqNum);
-        sequenceNumberRef.current = seqNum;
-        return children;
-      } catch {
-        return null;
-      }
-    },
-    []
   );
 
   const getShareKeys = useCallback(async (shareId: string) => {
@@ -369,9 +337,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       return;
     }
 
-    const currentIpnsName = ipnsName;
-    const currentFolderKey = folderKey;
-
     pollIntervalRef.current = setInterval(async () => {
       try {
         const freshShares = await fetchReceivedShares(100, 0);
@@ -384,7 +349,13 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           return;
         }
 
-        await refreshFolderContents(currentIpnsName, currentFolderKey);
+        // Pull remote shared changes through the SDK. refreshSharedFolder
+        // re-resolves the seeded depth's IPNS, applies the #489 sequence-guard,
+        // and emits sharedFolder:updated — the projection subscription is the
+        // sole writer of folderChildrenRef/sequenceNumberRef (write AND poll).
+        if (currentShareId && hasSdkClient()) {
+          await getSdkClient().refreshSharedFolder(currentShareId);
+        }
       } catch {
         // Silent failure during polling
       }
@@ -401,7 +372,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     currentShareId,
     clearPolling,
     handleRevocation,
-    refreshFolderContents,
   ]);
 
   // ---------------------------------------------------------------------------
