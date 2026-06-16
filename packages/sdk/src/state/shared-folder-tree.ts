@@ -32,6 +32,16 @@ export class SharedFolderTree {
 
   /** Set or update a shared folder's state, cloning key material to avoid zeroing caller buffers */
   set(shareId: string, state: SharedFolderState): void {
+    // Zero the previous entry's key material before overwriting so stale keys
+    // don't linger in memory across re-seeds. Guard on reference identity: the
+    // adopt path spreads the LIVE entry, so its folderKey/ipnsPrivateKey are the
+    // same buffers we're about to clone — zeroing them would corrupt the clone.
+    const prev = this.shares.get(shareId);
+    if (prev) {
+      if (prev.folderKey && prev.folderKey !== state.folderKey) prev.folderKey.fill(0);
+      if (prev.ipnsPrivateKey && prev.ipnsPrivateKey !== state.ipnsPrivateKey)
+        prev.ipnsPrivateKey.fill(0);
+    }
     this.shares.set(shareId, {
       ...state,
       folderKey: new Uint8Array(state.folderKey),

@@ -2028,19 +2028,24 @@ export class CipherBoxClient {
    * methods stay consistent.
    */
   private adoptSharedFolderResult(
-    state: SharedFolderState,
+    shareId: string,
     result: { publishedChildren: FolderChild[]; newSequenceNumber: bigint }
   ): void {
+    // Re-read live state: the share may have been unloaded (e.g. unmount →
+    // unloadSharedFolder) while the async write/refresh was in-flight. Never
+    // resurrect an explicitly-unloaded share from a pre-await snapshot.
+    const live = this.sharedFolderTree.get(shareId);
+    if (!live) return;
     const next: SharedFolderState = {
-      ...state,
+      ...live,
       children: result.publishedChildren,
       sequenceNumber: result.newSequenceNumber,
     };
-    this.sharedFolderTree.set(state.shareId, next);
+    this.sharedFolderTree.set(shareId, next);
     this.emitter.emit({
       type: 'sharedFolder:updated',
-      shareId: state.shareId,
-      ipnsName: state.ipnsName,
+      shareId,
+      ipnsName: live.ipnsName,
       children: result.publishedChildren,
       sequenceNumber: result.newSequenceNumber,
     });
@@ -2064,7 +2069,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(state, result);
+      this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -2078,7 +2083,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(state, result);
+      this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -2095,7 +2100,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(state, result);
+      this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -2109,7 +2114,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(state, result);
+      this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -2148,14 +2153,17 @@ export class CipherBoxClient {
         newContent: args.newContent,
         getFileIpnsKeyFn: args.getFileIpnsKeyFn,
       });
-      // File-only publish: folder children/sequence unchanged. Emit so
-      // consumers re-resolve the file metadata.
+      // File-only publish: folder children/sequence unchanged. Emit so consumers
+      // re-resolve the file metadata — but only if the share is still loaded (it
+      // may have been unloaded during the in-flight publish).
+      const live = this.sharedFolderTree.get(shareId);
+      if (!live) return;
       this.emitter.emit({
         type: 'sharedFolder:updated',
-        shareId: state.shareId,
-        ipnsName: state.ipnsName,
-        children: state.children,
-        sequenceNumber: state.sequenceNumber,
+        shareId,
+        ipnsName: live.ipnsName,
+        children: live.children,
+        sequenceNumber: live.sequenceNumber,
       });
     });
   }
@@ -2196,17 +2204,22 @@ export class CipherBoxClient {
       // Never overwrite a fresher in-memory entry with a stale IPNS snapshot —
       // re-emit the existing snapshot so consumers stay consistent.
       if (state.sequenceNumber >= result.sequenceNumber) {
+        // Re-read live state after the await: no-op if unloaded mid-flight, and
+        // re-emit the freshest in-memory snapshot (a concurrent write may have
+        // advanced it past the pre-await `state`).
+        const live = this.sharedFolderTree.get(shareId);
+        if (!live) return;
         this.emitter.emit({
           type: 'sharedFolder:updated',
-          shareId: state.shareId,
-          ipnsName: state.ipnsName,
-          children: state.children,
-          sequenceNumber: state.sequenceNumber,
+          shareId,
+          ipnsName: live.ipnsName,
+          children: live.children,
+          sequenceNumber: live.sequenceNumber,
         });
         return;
       }
 
-      this.adoptSharedFolderResult(state, {
+      this.adoptSharedFolderResult(shareId, {
         publishedChildren: result.metadata.children,
         newSequenceNumber: result.sequenceNumber,
       });
