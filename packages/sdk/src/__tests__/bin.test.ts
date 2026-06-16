@@ -51,65 +51,48 @@ describe('bin operations', () => {
   });
 
   describe('loadBin', () => {
-    it('auto-repairs when no IPNS record exists (publishes empty bin with sequenceNumber 1)', async () => {
-      // loadBin re-resolves before auto-repairing to avoid clobbering a real
-      // record on a transient (cold-cache) null:
-      //   1) initial load attempt           -> null
-      //   2) recheck before auto-repair      -> null (still genuinely absent)
-      //   3) verify inside saveBinMetadata   -> valid (publish landed)
-      //   4) re-resolve after publish        -> empty seq-1 (no real record surfaced)
-      vi.mocked(sdkCore.resolveIpnsRecord)
-        .mockResolvedValueOnce(null) // initial load attempt
-        .mockResolvedValueOnce(null) // recheck before auto-repair
-        .mockResolvedValueOnce({ cid: 'bafyempty', sequenceNumber: 1n, signatureVerified: true }) // verify after publish
-        .mockResolvedValueOnce({ cid: 'bafyempty', sequenceNumber: 1n, signatureVerified: true }); // re-resolve after publish
-      vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(new Uint8Array([1]));
-      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafyempty', size: 3, recorded: true });
-      vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
-        success: true,
-        sequenceNumber: 1n,
-      });
+    it('returns in-memory empty state WITHOUT publishing when no IPNS record exists', async () => {
+      // A null resolve is NOT a reliable "bin is empty" signal — publishing an
+      // empty record here is destructive (the bin publish path carries no
+      // expectedSequenceNumber, so the API blindly increments and overwrites the
+      // real record's CID, wiping every entry). loadBin must therefore return an
+      // in-memory empty state and NEVER publish on a null resolve. The bounded
+      // retry resolves null on every attempt here (genuinely-new bin).
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue(null);
 
       const result = await loadBin({ binCtx });
 
+      // Empty in-memory state with seq 0 so the first addToBin publishes at
+      // 0 + 1 = 1, matching the API create-path.
       expect(result.entries).toEqual([]);
-      expect(result.sequenceNumber).toBe(1);
+      expect(result.sequenceNumber).toBe(0);
       expect(result.ipnsName).toBe('k51bin');
-      // Auto-repair should have published
-      expect(sdkCore.createAndPublishIpnsRecord).toHaveBeenCalled();
-      expect(sdkCore.addToIpfs).toHaveBeenCalled();
+      // Critically: NO publish happened — no empty bin was written.
+      expect(sdkCore.createAndPublishIpnsRecord).not.toHaveBeenCalled();
+      expect(sdkCore.addToIpfs).not.toHaveBeenCalled();
     });
 
-    it('auto-repair calls saveBinMetadata which uses publishWithVerify', async () => {
-      // resolveIpnsRecord: null initial load + null recheck (trigger repair),
-      // then valid on the verify call and the post-publish re-resolve.
-      vi.mocked(sdkCore.resolveIpnsRecord)
-        .mockResolvedValueOnce(null) // initial load attempt
-        .mockResolvedValueOnce(null) // recheck before auto-repair
-        .mockResolvedValueOnce({ cid: 'bafyempty', sequenceNumber: 1n, signatureVerified: true }) // verify after publish
-        .mockResolvedValueOnce({ cid: 'bafyempty', sequenceNumber: 1n, signatureVerified: true }); // re-resolve after publish
-      vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(new Uint8Array([1]));
-      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafyempty', size: 3, recorded: true });
-      vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
-        success: true,
-        sequenceNumber: 1n,
-      });
+    it('retries the resolve before falling back to empty state, without publishing', async () => {
+      // Bounded retry on a persistent null: still falls back to the empty
+      // in-memory state, and still never publishes.
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue(null);
 
-      await loadBin({ binCtx });
+      const result = await loadBin({ binCtx });
 
-      // createAndPublishIpnsRecord called once (publish)
-      expect(sdkCore.createAndPublishIpnsRecord).toHaveBeenCalledTimes(1);
-      // resolveIpnsRecord: initial load + recheck + verify + post-publish re-resolve
-      expect(sdkCore.resolveIpnsRecord).toHaveBeenCalledTimes(4);
+      // resolveIpnsRecord retried up to the bounded maximum (6 attempts).
+      expect(sdkCore.resolveIpnsRecord).toHaveBeenCalledTimes(6);
+      expect(result.sequenceNumber).toBe(0);
+      // No publish on any attempt.
+      expect(sdkCore.createAndPublishIpnsRecord).not.toHaveBeenCalled();
     });
 
     it('does NOT clobber a real record when the first resolve is a transient (cold-cache) null', async () => {
       // The first resolve misses (e.g. cold resolve cache right after a reload),
-      // but the bin actually holds a deleted entry at sequenceNumber 2. The recheck
-      // must surface it WITHOUT publishing the destructive empty-bin record.
+      // but the bin actually holds a deleted entry at sequenceNumber 2. The bounded
+      // retry must surface it WITHOUT publishing the destructive empty-bin record.
       vi.mocked(sdkCore.resolveIpnsRecord)
         .mockResolvedValueOnce(null) // transient miss on initial load
-        .mockResolvedValueOnce({ cid: 'bafyreal', sequenceNumber: 2n, signatureVerified: true }); // recheck finds the real record
+        .mockResolvedValueOnce({ cid: 'bafyreal', sequenceNumber: 2n, signatureVerified: true }); // retry finds the real record
       vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(new Uint8Array([9]));
       const { decryptBinMetadata } = await import('@cipherbox/core');
       vi.mocked(decryptBinMetadata).mockResolvedValue({

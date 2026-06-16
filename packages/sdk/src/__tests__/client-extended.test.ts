@@ -505,11 +505,67 @@ describe('CipherBoxClient - extended', () => {
       expect(events.some((e) => e.type === 'bin:updated')).toBe(true);
     });
 
-    it('deleteToBin throws BinNotLoadedError when bin not loaded', async () => {
+    it('loadBin does not clobber a loaded bin when a later load misses (empty fallback)', async () => {
+      // First load resolves the real bin (1 entry, seq 2).
+      vi.mocked(binOps.loadBin).mockResolvedValueOnce({
+        entries: [
+          {
+            id: '1',
+            itemType: 'file',
+            name: 'deleted.txt',
+            originalParentIpnsName: 'k51',
+            originalPath: '/',
+            deletedAt: 0,
+            size: 0,
+            mimeType: '',
+          },
+        ],
+        sequenceNumber: 2,
+        ipnsName: 'k51bin',
+      });
+      await client.loadBin();
+
+      // A racing second load transiently misses and returns the in-memory empty
+      // fallback (entries=[], sequenceNumber=0). It must NOT wipe the loaded bin.
+      vi.mocked(binOps.loadBin).mockResolvedValueOnce({
+        entries: [],
+        sequenceNumber: 0,
+        ipnsName: 'k51bin',
+      });
+      const second = await client.loadBin();
+
+      expect(second.entries).toHaveLength(1);
+      expect(second.sequenceNumber).toBe(2);
+    });
+
+    it('deleteToBin self-heals by loading the bin when binState is null', async () => {
+      // binState starts null (loadBin is fire-and-forget on login). deleteToBin
+      // must lazily load the bin and proceed with the soft-delete rather than
+      // throwing — otherwise the web falls back to a hard delete and the item is
+      // lost instead of moved to the bin.
+      const child = setupFolder(client);
+      vi.mocked(binOps.loadBin).mockResolvedValue({
+        entries: [],
+        sequenceNumber: 0,
+        ipnsName: 'k51bin',
+      });
+      vi.mocked(binOps.addToBin).mockResolvedValue({
+        removedItem: child,
+        updatedBinState: { entries: [], sequenceNumber: 1, ipnsName: 'k51bin' },
+      });
+
+      await client.deleteToBin('folder-ipns', 'file1', 'My Vault');
+
+      expect(binOps.loadBin).toHaveBeenCalled();
+      expect(binOps.addToBin).toHaveBeenCalled();
+    });
+
+    it('deleteToBin throws BinNotLoadedError when the bin cannot be loaded', async () => {
+      // If the self-heal load fails (e.g. network error) binState stays null and
+      // deleteToBin throws rather than silently hard-deleting.
       setupFolder(client);
-      await expect(client.deleteToBin('folder-ipns', 'file1', 'My Vault')).rejects.toThrow(
-        BinNotLoadedError
-      );
+      vi.mocked(binOps.loadBin).mockRejectedValue(new Error('network down'));
+      await expect(client.deleteToBin('folder-ipns', 'file1', 'My Vault')).rejects.toThrow();
     });
 
     it('deleteToBin removes item and emits events', async () => {

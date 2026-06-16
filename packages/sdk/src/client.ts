@@ -1663,6 +1663,28 @@ export class CipherBoxClient {
         binCtx: this.getBinContext(),
       });
 
+      // Anti-clobber guard. loadBin returns an in-memory empty fallback
+      // (entries=[], sequenceNumber=0) when the bin record can't be resolved —
+      // e.g. a transient cold-cache/404 right after a reload. Bin init is
+      // fire-and-forget on login (useAuth) AND BinBrowser calls loadBin on
+      // mount, so two loads race. If one resolves the real bin (entries present)
+      // and the other transiently misses, the miss must NOT wipe the already
+      // loaded state.
+      const existing = this.binState;
+      const isEmptyFallback = result.sequenceNumber === 0 && result.entries.length === 0;
+      if (isEmptyFallback) {
+        // The empty fallback is "couldn't resolve a record", not an authoritative
+        // empty bin. If we already hold loaded state, keep it untouched. Otherwise
+        // adopt the empty state so deleteToBin can create the first record, but do
+        // NOT broadcast bin:updated — there is nothing to show and emitting an
+        // empty event would clobber a concurrently-loaded bin in subscribers.
+        if (existing !== null) {
+          return existing;
+        }
+        this.binState = result;
+        return result;
+      }
+
       this.binState = result;
       this.emitter.emit({ type: 'bin:updated', entries: result.entries });
 
@@ -1682,6 +1704,14 @@ export class CipherBoxClient {
    */
   async deleteToBin(folderIpnsName: string, childId: string, parentPath: string): Promise<void> {
     return this.withOperation('deleteToBin', async () => {
+      // Self-heal: bin init is fire-and-forget on login (useAuth), so binState may
+      // still be null when a delete fires (e.g. delete soon after login, or right
+      // after a reload). Without this, deleteToBin throws BinNotLoadedError and the
+      // web falls back to a HARD delete — the item vanishes and never reaches the
+      // bin. Lazily load the bin here so soft-delete always works.
+      if (!this.binState) {
+        await this.loadBin();
+      }
       if (!this.binState) throw new BinNotLoadedError();
 
       // Self-bootstrap the folder if it isn't loaded (e.g. after a reload), so
