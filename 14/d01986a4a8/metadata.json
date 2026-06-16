@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "14d01986a4a8",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-client-self-bootstrap-folder-tree",
+  "checkpoints_count": 6,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/14/d01986a4a8/0/metadata.json",
+      "transcript": "/14/d01986a4a8/0/full.jsonl",
+      "content_hash": "/14/d01986a4a8/0/content_hash.txt",
+      "prompt": "/14/d01986a4a8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 47722,
+    "cache_creation_tokens": 369429,
+    "cache_read_tokens": 22524667,
+    "output_tokens": 134056,
+    "api_call_count": 114
+  }
+}

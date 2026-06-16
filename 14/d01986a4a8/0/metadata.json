@@ -1,0 +1,215 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "14d01986a4a8",
+  "session_id": "dcb71a14-5478-4d28-988e-5f0c056637a9",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T01:10:01.943111Z",
+  "branch": "feat/sdk-client-self-bootstrap-folder-tree",
+  "checkpoints_count": 6,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d137c428a37d",
+  "token_usage": {
+    "input_tokens": 47722,
+    "cache_creation_tokens": 369429,
+    "cache_read_tokens": 22524667,
+    "output_tokens": 134056,
+    "api_call_count": 114
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K31VDB8FGMpiwchcuCA2oM",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d137c428a37d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 365,
+        "end": 366,
+        "entry_ids": [
+          "683e758c-b0a7-4b56-9776-24830af07903"
+        ],
+        "tool_use_id": "toolu_01K31VDB8FGMpiwchcuCA2oM"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K31VDB8FGMpiwchcuCA2oM"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Work on GSD todo #9: implement SDK client self-bootstrap of the folder tree from the root IPNS key, eliminating the 'Folder not loaded' bug class where the web had to pre-seed folder state before every SDK call.",
+    "outcome": "Implemented `ensureFolderLoaded` DFS walk + `requireFolder` chokepoint in the SDK, passed `rootIpnsKeypair` from web `vaultStore`, verified with typecheck/179 tests/CodeRabbit/security review, and opened PR #498. Two follow-up cleanup items captured as a new GSD todo.",
+    "learnings": {
+      "repo": [
+        "`CipherBoxClientConfig` (types.ts:44-88) held `rootIpnsName` + `rootFolderKey` but never the root IPNS Ed25519 signing keypair — that lived only in web `vaultStore.rootIpnsKeypair`, already guarded non-null at useAuth.ts:281 but never forwarded to the SDK.",
+        "`FolderState` (not `FolderEntry`) is the folderTree value type; it carries the per-folder IPNS signing keypair (`ipnsKeypair`) at types.ts:102 — child FolderEntry records carry it as hex-encrypted blobs that must be ECIES-unwrapped.",
+        "`loadFolder(ipnsName, folderKey, ipnsKeypair)` at client.ts:345 is the only async load primitive; caller must supply all three — no auto/lazy load existed before this change.",
+        "`withOperation` is reentrant-safe (emits telemetry events only, no lock), so `ensureFolderLoaded` calling `loadFolder` inside a `withOperation`-wrapped method is fine.",
+        "`integration.test.ts` requires a live backend at localhost:3000 and is implicitly skipped via `CI=1`; running without it causes 3 false failures.",
+        "`pnpm typecheck` rebuilds the full dep chain (sdk-core → sdk → web tsc -b) — must be run after any public-API change to the SDK.",
+        "The `.planning/security/` directory already contained prior review files; the command creates a new timestamped file there.",
+        "GSD STATE.md pending todo count must be manually updated when todos are added/completed — it is not auto-derived from the filesystem."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/types.ts",
+          "line": 44,
+          "end_line": 88,
+          "finding": "CipherBoxClientConfig — no rootIpnsKeypair field; only rootIpnsName (string) and rootFolderKey (AES-256). The Ed25519 IPNS signing key for the root folder was the missing piece."
+        },
+        {
+          "path": "packages/sdk/src/types.ts",
+          "line": 96,
+          "end_line": 111,
+          "finding": "FolderState type: holds ipnsKeypair (Ed25519, line 102) per-folder. Tree linkage is implicit via children array; no parent pointer."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 52,
+          "end_line": 63,
+          "finding": "Client private fields: internalVaultKeypair (line 61) and internalRootFolderKey (line 62) are defensive copies of config values; originals are also re-pointed. No rootIpnsKeypair field existed."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 288,
+          "end_line": 308,
+          "finding": "registerFolder: bridge method that writes a FolderState with metadata:null into folderTree.set. Caller must supply ipnsKeypair — no crypto happens here."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 345,
+          "end_line": 381,
+          "finding": "loadFolder: only true async load primitive. Calls sdkCore.loadFolderMetadata, sets full FolderState including metadata. Every mutation method requires the folder to already be in folderTree before this change."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 400,
+          "end_line": 400,
+          "finding": "11 distinct 'Folder not loaded' / 'Parent folder not loaded' throw sites across createFolder, renameItem, moveItem (x2), deleteItem, uploadFile, uploadFiles, replaceFile, restoreFileVersion, deleteFileVersion, shareFolder — all collapsed into requireFolder() after /simplify."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 281,
+          "end_line": 281,
+          "finding": "vaultStore.rootIpnsKeypair is already guarded non-null here before initSdkClient is called — safe to pass directly to CipherBoxClientConfig without additional null-checking."
+        }
+      ],
+      "workflow": [
+        "5-agent parallel code-mapping workflow before implementation is highly effective for understanding a complex stateful class before editing it.",
+        "/simplify's 4-angle review (reuse/simplification/efficiency/altitude) converged independently on the same `requireFolder` chokepoint — high-confidence signal that a repeated pattern is the right extraction target.",
+        "Corrupt-sibling resilience (try/catch + continue inside a DFS walk) is worth adding proactively when a bad subtree could deny access to a valid sibling.",
+        "Security review files added no value when the same diff was already adversarially reviewed by a dedicated security agent + CodeRabbit — skip the formal report artifact for in-session reviews.",
+        "CodeRabbit CLI `--agent` mode with `--base-commit` scopes the review precisely to the branch diff; exit 0 + findings:0 in the JSON payload = clean.",
+        "Pre-commit lint-staged will auto-fix prettier nits on commit, but you still need to run prettier manually before the final lint check to avoid a wasted CI cycle."
+      ]
+    },
+    "friction": [
+      "TypeErrors in ensureFolderLoaded after initial implementation: `FolderState | undefined` (from Map.get) vs `| null` (from loadFolder return) mismatch required a second edit pass.",
+      "integration.test.ts produces 3 misleading failures without a live backend — needed `CI=1` to surface the real unit-test result.",
+      "Prettier line-wrap nit surfaced after ESLint pass, requiring a second auto-fix loop before committing.",
+      "PR creation warning about '2 uncommitted changes' (Cargo.lock + .planning/intel/) — pre-existing untracked files that weren't part of this work but create visual noise."
+    ],
+    "open_items": [
+      "Remove ~16 web-side `ensureFolderRegistered` calls and the web `useFolderNavigation` unwrap path — now redundant no-ops since the SDK self-heals; deferred until self-bootstrap proves out in production. Captured as GSD todo (.planning/todos/pending/2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md).",
+      "Add negative-cache to `ensureFolderLoaded` so an unreachable/withheld target doesn't re-walk the full tree on every call — availability concern, not correctness. Also captured in same todo.",
+      "New web-e2e `bin-restore-after-reload.spec.ts` only runs on main-push, not on PRs — the reload-restore regression gap won't be caught by PR CI until then.",
+      "The web `useFolderNavigation` unwrap path is now a duplicate of the SDK's DFS logic — consolidation is the right long-term shape but requires deleting the web-side seeding callers first."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T01:09:04.978286Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 61,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 61,
+    "total_lines_changed": 62,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 172,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
