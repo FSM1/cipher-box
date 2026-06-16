@@ -1,0 +1,150 @@
+/gsd:capture --list
+
+---
+
+#8,9 can be taken care of easily together. #2 & 5 are also related as the CRDT inbox was specifically for share discovery.
+
+---
+
+Please use a gsd phase for this
+
+---
+
+one thing to ensure is that once the fix for the regression is ready, a webe2e run can be kicked off against the code as soon as the branch has been pushed to remote.
+
+---
+
+ok switch to a phase 48 branch, commit this, and jump in to either discussion (if necessary) or go directly to planning
+
+---
+
+<task-notification>
+<task-id>a6e6bc1f391928a0b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/a6e6bc1f391928a0b.output</output-file>
+<status>completed</status>
+<summary>Agent "Map patterns for Phase 48" completed</summary>
+<result>## PATTERN MAPPING COMPLETE
+
+**Phase:** 48 - sdk-self-bootstrap-regression-fix-and-shared-folder-metadata
+**Files classified:** 16
+**Analogs found:** 16 / 16
+
+### Coverage
+
+- Files with exact analog: 12
+- Files with role-match analog: 4
+- Files with no analog: 0
+
+### Key Patterns Identified
+
+- REQ-1 reconcile is a 1-analog in-place fix: insert a `sequenceNumber` (bigint) guard before the unconditional `folderTree.set` at `client.ts:385`; keep `ensureFolderLoaded`'s short-circuit (:422) and DFS child-check (:454) intact to avoid re-regressing #498.
+- REQ-3 mirrors Phase 47 single-ownership: new client methods read `sharedFolderTree.get(shareId)`, delegate to existing `share/shared-write.ts` (which already returns `{publishedChildren, newSequenceNumber}` via `publishWithCas`), write back, and emit a new `sharedFolder:updated` event modeled on `folder:updated` (events.ts:29-35). Web `useSharedWriteOps.ts:143-146` write-back becomes event-fed projection; `withConflictRetry` is dropped (CAS lives in the client).
+- REQ-4 mirrors the existing `encryptedKey` ECIES flow: nullable `item_name_encrypted bytea` column (analog `encryptedIpnsKey` :72), migration cloned from `1743000000000-AddWritableShares.ts` (additive, no data UPDATE — zero-knowledge), wrap at `ShareDialog.tsx:338,351`, hex `@Matches` DTO field, lazy client backfill (A2), invite path included (A3). Requires `pnpm api:generate`.
+
+### File Created
+
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata/48-PATTERNS.md`
+
+### Ready for Planning
+
+All research line numbers verified against current source (client.ts loadFolder/ensureFolderLoaded, share/context.ts, AddWritableShares migration, share.entity.ts, useSharedWriteOps.ts, events.ts). Planner can reference analog patterns directly.</result>
+<usage><subagent_tokens>62342</subagent_tokens><tool_uses>27</tool_uses><duration_ms>148579</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b1zs0wngm</task-id>
+<tool-use-id>toolu_01TvBmLYgLm1h4xWKHzr6zzz</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/b1zs0wngm.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch web-e2e run to completion (background)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bt6bsxfy4</task-id>
+<tool-use-id>toolu_01FcUNyyyVsqpwwSFxQ3YJfs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/bt6bsxfy4.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit bin fix unsigned and disable repo signing" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0u93zd52</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/b0u93zd52.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch re-dispatched web-e2e run (background)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bp73e0wtr</task-id>
+<tool-use-id>toolu_018M6cBhmvtrrXvrtkdpZq4v</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/bp73e0wtr.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch 3rd web-e2e run (background)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b3ktk1cu9</task-id>
+<tool-use-id>toolu_01WFsdFnnFoNA1eTEHsGYvbg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/b3ktk1cu9.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push REQ-1 blocked handoff" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok lets go with the above proposed option 1
+
+---
+
+<task-notification>
+<task-id>b1c655bgo</task-id>
+<tool-use-id>toolu_01TJEatewvb4uozZAZC4ERPo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/b1c655bgo.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push corrected root-cause handoff" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+sounds like a plan - bring up the full stack locally and make sure the fix works
+
+---
+
+you can kill all the irl network processes - I will restart these later
+
+---
+
+<task-notification>
+<task-id>wmhoezq72</task-id>
+<tool-use-id>toolu_018218g9KAJW9vFJckkhvHB8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/wmhoezq72.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Map the local web-e2e bring-up, loadBin/resolve-404 semantics, and bin publish durability before fixing the bin-restore-after-reload regression" completed</summary>
+<result>[{"area":"stack-bringup","summary":"The web-e2e suite runs from tests/web-e2e via Playwright, whose webServer config auto-starts three local processes (mock-ipns-routing, the NestJS API on :3000, and the Vite web app on :5173) so you do NOT start those manually. You DO need to start three Docker services yourself first (postgres:16-alpine :5432, ipfs/kubo:v0.40.0 :5001/:8080, redis:7-alpine :6379), build the mock-ipns-routing dist and the workspace packages, and write apps/api/.env + apps/web/.env. The repo's docker/docker-compose.yml provides all three services (plus extras you can ignore) at the CI ports. Critically, bin-restore-after-reload.spec.ts uses the REAL Web3Auth Core Kit DEVNET flow via loginViaWallet (not the test-login bypass), so it needs the real VITE_WEB3AUTH_CLIENT_ID and outbound network to Web3Auth DEVNET; TEST_LOGIN_SECRET/SDK_E2E_SECRET are NOT exercised by this spec, and IDENTITY_JWT_PRIVATE_KEY is optional locally (API generates an ephemeral keypair when NODE_ENV!=production). Docker is available locally (Docker Desktop 4.75 confirmed).","details":"AUTHORITATIVE SOURCES\n- CI workflow: /Users/myankelev/Code/random/cipher-box/.github/workflows/web-e2e.yml — services block (lines 18-53), package builds (100-108), .env creation (113-134), run + env (136-167).\n- Playwright config: /Users/myankelev/Code/random/cipher-box/tests/web-e2e/playwright.config.ts — webServer array (lines 62-94).\n- Dev compose (matches CI service images/ports): /Users/myankelev/Code/random/cipher-box/docker/docker-compose.yml.\n- Mock service: /Users/myankelev/Code/random/cipher-box/tools/mock-ipns-routing/ (package.json build=\"tsc\", src/index.ts listens on PORT||3001, host HOST||... ).\n- Target spec: /Users/myankelev/Code/random/cipher-box/tests/web-e2e/tests/bin-restore-after-reload.spec.ts.\n- Login helper: /Users/myankelev/Code/random/cipher-box/tests/web-e2e/utils/wallet-login-helpers.ts.\n\nDOCKER SERVICES (exact images/ports/env from web-e2e.yml lines 18-53):\n- postgres: image postgres:16-alpine; port 5432:5432; env POSTGRES_USER=postgres, POSTGRES_PASSWORD=REDACTED, POSTGRES_DB=cipherbox_test.\n- ipfs (kubo): image ipfs/kubo:v0.40.0; ports 5001:5001 (API) and 8080:8080 (gateway).\n- redis: image redis:7-alpine; port 6379:6379.\nNOTE on CORS: web-e2e.yml lines 73-89 configure Kubo CORS (Access-Control-Allow-Origin \"*\", methods GET/POST/OPTIONS on both API.HTTPHeaders and Gateway.HTTPHeaders) then restarts Kubo. This is only required by the recovery test (recovery.html browser-&gt;Kubo cross-origin). bin-restore-after-reload does NOT need it, but harmless to apply.\nNOTE on compose: docker/docker-compose.yml uses the SAME images/ports but POSTGRES_DB defaults to \"cipherbox\" (not cipherbox_test) and adds someguy + a built mock-ipns-routing container. For an exact CI match, override DB_DATABASE=cipherbox_test and bring up only postgres/ipfs/redis, OR just use plain docker run (commands provided). Redis in compose maps host 6380 by default — CI uses 6379, so use docker run or set REDIS_PORT=6379.\n\nMIGRATIONS: No manual DB migration step. apps/api/src/app.module.ts (line 105) sets migrationsRun: true and synchronize: false — the API runs TypeORM migrations automatically on boot against cipherbox_test.\n\nMOCK-IPNS-ROUTING (web-e2e.yml lines 94-98): built with `cd tools/mock-ipns-routing &amp;&amp; npm install &amp;&amp; npm run build` (tsc -&gt; dist/index.js). Playwright then runs `node tools/mock-ipns-routing/dist/index.js` from workspace root, health-checked at http://localhost:3001/health (config line 70). Port 3001. dist is currently MISSING locally, so you must build it before running. (npm is used in CI; package.json also supports `pnpm build` / `npm run dev` via tsx.)\n\nWORKSPACE BUILDS (web-e2e.yml lines 100-108), in order: crypto, core, api-client, sdk-core, sdk, api, web. The web build runs with VITE_WEB3AUTH_CLIENT_ID and VITE_API_URL=http://localhost:3000. For the Playwright webServer the api/web are run in DEV mode (`pnpm --filter @cipherbox/api dev` = nest start --watch; `pnpm --filter @cipherbox/web dev` = vite), so the api/web \"build\" steps are not strictly required for dev-mode webServer, but the LIBRARY builds (crypto/core/api-client/sdk-core/sdk) ARE required because web/api consume their dist. Safest: run all 7 to match CI.\n\nPLAYWRIGHT WEBSERVER — AUTO-STARTS (config lines 62-94): yes, all three are auto-started from workspace root (cwd two levels up):\n  1) `node tools/mock-ipns-routing/dist/index.js` — url http://localhost:3001/health, reuseExistingServer:true always.\n  2) `pnpm --filter @cipherbox/api dev` — url http://localhost:3000/health, timeout 120s, reuseExistingServer:!CI.\n  3) `pnpm --filter @cipherbox/web dev` — url http://localhost:5173, timeout 120s, reuseExistingServer:!CI.\nSo you only manually start the 3 Docker services + build mock dist + build packages + write .env. The API health endpoint is GET /health (apps/api/src/health/health.controller.ts, @Controller('health')); web dev binds :5173 (apps/web/vite.config.ts line 45) and proxies /api -&gt; :3000. Because reuseExistingServer is true (when CI is unset), if you already have api/web/mock running Playwright reuses them.\n\n.ENV CONTENTS (verbatim from web-e2e.yml lines 116-134):\napps/web/.env:\n  VITE_WEB3AUTH_CLIENT_ID=&lt;real DEVNET client id&gt;\n  VITE_API_URL=http://localhost:3000\napps/api/.env:\n  NODE_ENV=test\n  DB_HOST=localhost\n  DB_PORT=5432\n  DB_USERNAME=postgres\n  DB_PASSWORD=REDACTED  DB_DATABASE=cipherbox_test\n  JWT_SECRET=e2e-test-jwt-secret-key-for-ci\n  CORS_ALLOWED_ORIGINS=http://localhost:5173\n  IPFS_PROVIDER=local\n  IPFS_LOCAL_API_URL=http://localhost:5001\n  IPFS_LOCAL_GATEWAY_URL=http://localhost:8080\n  DELEGATED_ROUTING_URL=http://localhost:3001\n  REDIS_HOST=localhost\n  REDIS_PORT=6379\n  TEST_LOGIN_SECRET=e2e-test-secret-ci-only\n  (IDENTITY_JWT_PRIVATE_KEY — OMIT locally; optional)\nThe actual VITE_WEB3AUTH_CLIENT_ID repo variable value (gh variable get, non-secret): REDACTED\n\nSECRETS — REQUIRED vs OPTIONAL:\n- VITE_WEB3AUTH_CLIENT_ID: REQUIRED (it's a repo *variable*, not secret; value above). Needed because this spec drives real Core Kit DEVNET (getCoreKit in apps/web/src/lib/web3auth/core-kit.ts uses WEB3AUTH_NETWORK.DEVNET for local/ci). Implies the machine needs outbound internet to Web3Auth DEVNET.\n- IDENTITY_JWT_PRIVATE_KEY: OPTIONAL locally. jwt-issuer.service.ts lines 31-45: only throws when NODE_ENV=production; otherwise generates an ephemeral RS256 keypair. With NODE_ENV=test it's fine to omit.\n- TEST_LOGIN_SECRET / SDK_E2E_SECRET (=e2e-test-secret-ci-only): NOT used by bin-restore-after-reload. loginViaWallet (wallet-login-helpers.ts) clicks the real WALLET button -&gt; mock EIP-6963 wallet -&gt; SIWE -&gt; Core Kit; it never calls POST /auth/test-login. The test-login secret path is only consumed by the SDK integration test (packages/sdk/src/__tests__/integration.test.ts). Setting it is harmless. Keeping it in apps/api/.env is fine.\n- WEB3AUTH_TEST_EMAIL / WEB3AUTH_TEST_OTP: NOT needed for this spec (email-OTP fallback path, unused by wallet login).\n\nKEY RISK FOR YOUR BLOCKED TEST: Since this spec uses the real Web3Auth DEVNET Core Kit (not the deterministic test-login bypass), local flakiness/failures can stem from Web3Auth DEVNET reachability/latency, not your code. The 90s test timeout (spec line 45) and Core Kit init polling (helper lines 124-132) are the slow points.","commands_or_code":"PREREQS: Docker Desktop running (confirmed: 4.75.0). Run all from repo root /Users/myankelev/Code/random/cipher-box.\n\n1) START DOCKER SERVICES (plain docker run, exact CI images/ports — does NOT touch your dev compose volumes):\ndocker run -d --name cb-e2e-postgres -p 5432:5432 -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=REDACTED -e POSTGRES_DB=cipherbox_test postgres:16-alpine\ndocker run -d --name cb-e2e-ipfs -p
+... (truncated 26844 chars, full result in /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/wmhoezq72.output)</result>
+<usage><agent_count>3</agent_count><subagent_tokens>221653</subagent_tokens><tool_uses>86</tool_uses><duration_ms>202700</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1eaf3b7d3872be94</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/a1eaf3b7d3872be94.output</output-file>
+<status>completed</status>
+<summary>Agent "Local repro and fix loadBin clobber" completed</summary>
+<result>API Error: Stream idle timeout - partial response received</result>
+<usage><subagent_tokens>5507</subagent_tokens><tool_uses>392</tool_uses><duration_ms>4317984</duration_ms></usage>
+</task-notification>
