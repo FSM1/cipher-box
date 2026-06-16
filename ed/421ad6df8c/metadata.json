@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ed421ad6df8c",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ed/421ad6df8c/0/metadata.json",
+      "transcript": "/ed/421ad6df8c/0/full.jsonl",
+      "content_hash": "/ed/421ad6df8c/0/content_hash.txt",
+      "prompt": "/ed/421ad6df8c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 429,
+    "cache_creation_tokens": 35111,
+    "cache_read_tokens": 884641,
+    "output_tokens": 10427,
+    "api_call_count": 5
+  }
+}

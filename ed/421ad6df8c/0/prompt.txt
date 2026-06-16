@@ -1,0 +1,17 @@
+/gsd:capture --list
+
+---
+
+#8,9 can be taken care of easily together. #2 & 5 are also related as the CRDT inbox was specifically for share discovery.
+
+---
+
+Please use a gsd phase for this
+
+---
+
+one thing to ensure is that once the fix for the regression is ready, a webe2e run can be kicked off against the code as soon as the branch has been pushed to remote.
+
+---
+
+ok switch to a phase 48 branch, commit this, and jump in to either discussion (if necessary) or go directly to planning
