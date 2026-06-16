@@ -2161,6 +2161,59 @@ export class CipherBoxClient {
     });
   }
 
+  /**
+   * Re-resolve a shared folder's IPNS record and adopt remote changes (REQ-3).
+   *
+   * The shared analog of {@link loadFolder}/`ensureFolderLoaded` for the owned
+   * path: the SDK — not the consumer — owns shared-folder REFRESH. The web 30s
+   * poller calls this instead of resolving IPNS / fetching IPFS / decrypting
+   * inline, so `sharedFolder:updated` is the sole ref writer on BOTH the write
+   * and poll paths.
+   *
+   * Re-resolves via `sdkCore.loadFolderMetadata` using the stored `ipnsName` +
+   * `folderKey`, then applies the #489 sequence-as-clock guard: when the
+   * resolved sequence is stale/equal (`state.sequenceNumber >=
+   * result.sequenceNumber`) it re-emits the EXISTING (fresher) snapshot instead
+   * of clobbering it — a background poll never regresses just-written in-memory
+   * state. A newer sequence is adopted into `sharedFolderTree` via
+   * `adoptSharedFolderResult` (identical emission shape to the write path). A
+   * null result (unresolvable IPNS) is a no-op.
+   *
+   * @throws if the share is not loaded (same contract as the write methods).
+   */
+  async refreshSharedFolder(shareId: string): Promise<void> {
+    return this.withOperation('refreshSharedFolder', async () => {
+      const state = this.requireSharedFolder(shareId);
+
+      const result = await sdkCore.loadFolderMetadata({
+        ipnsName: state.ipnsName,
+        folderKey: state.folderKey,
+        ctx: this.ctx,
+      });
+
+      if (!result) return;
+
+      // IPNS reads lag a just-written sequence (#489 sequence-as-clock invariant).
+      // Never overwrite a fresher in-memory entry with a stale IPNS snapshot —
+      // re-emit the existing snapshot so consumers stay consistent.
+      if (state.sequenceNumber >= result.sequenceNumber) {
+        this.emitter.emit({
+          type: 'sharedFolder:updated',
+          shareId: state.shareId,
+          ipnsName: state.ipnsName,
+          children: state.children,
+          sequenceNumber: state.sequenceNumber,
+        });
+        return;
+      }
+
+      this.adoptSharedFolderResult(state, {
+        publishedChildren: result.metadata.children,
+        newSequenceNumber: result.sequenceNumber,
+      });
+    });
+  }
+
   // ---- BYO-IPFS pinning ----
 
   /**

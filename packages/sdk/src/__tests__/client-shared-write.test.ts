@@ -23,6 +23,16 @@ vi.mock('@cipherbox/crypto', () => ({
   hexToBytes: vi.fn(),
 }));
 
+// Mock sdk-core: keep everything real except loadFolderMetadata, which we drive
+// to return canned IPNS-resolved state for refreshSharedFolder.
+vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
+  return {
+    ...actual,
+    loadFolderMetadata: vi.fn(),
+  };
+});
+
 // Mock the share module — stub the shared-write delegate while keeping
 // buildSharedWriteContext real so the context wiring is exercised.
 vi.mock('../share', async (importOriginal) => {
@@ -34,6 +44,7 @@ vi.mock('../share', async (importOriginal) => {
 });
 
 import * as shareOps from '../share';
+import * as sdkCore from '@cipherbox/sdk-core';
 
 const PUBLISHED_CHILDREN: FolderChild[] = [
   {
@@ -124,6 +135,102 @@ describe('CipherBoxClient - shared write', () => {
           fileName: 'x.txt',
         })
       ).rejects.toThrow('Shared folder not loaded');
+    });
+  });
+
+  describe('refreshSharedFolder', () => {
+    const REFRESHED_CHILDREN: FolderChild[] = [
+      {
+        type: 'file',
+        id: 'remotefile',
+        name: 'remote.txt',
+        fileMetaIpnsName: 'k51remote',
+        ipnsPrivateKeyEncrypted: 'enc-remote',
+        createdAt: 2,
+        modifiedAt: 2,
+      },
+    ];
+
+    it('adopts a newer resolved sequence into sharedFolderTree and emits sharedFolder:updated', async () => {
+      const events: SdkEvent[] = [];
+      client.on((e) => events.push(e));
+      seedSharedFolder(client); // seeded at sequenceNumber 3n, children []
+
+      vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue({
+        metadata: { children: REFRESHED_CHILDREN } as never,
+        sequenceNumber: 5n,
+        cid: 'bafyremote',
+      });
+
+      await client.refreshSharedFolder('share-1');
+
+      // Re-resolved via loadFolderMetadata with the stored ipnsName + folderKey.
+      expect(sdkCore.loadFolderMetadata).toHaveBeenCalledTimes(1);
+      const [args] = vi.mocked(sdkCore.loadFolderMetadata).mock.calls[0];
+      expect(args).toMatchObject({ ipnsName: 'k51shared' });
+
+      // Adopted the newer snapshot.
+      const state = client.getSharedFolderState('share-1');
+      expect(state?.sequenceNumber).toBe(5n);
+      expect(state?.children).toEqual(REFRESHED_CHILDREN);
+
+      // Emitted the newer snapshot exactly once.
+      const updates = events.filter((e) => e.type === 'sharedFolder:updated');
+      expect(updates).toHaveLength(1);
+      const updated = updates[0] as Extract<SdkEvent, { type: 'sharedFolder:updated' }>;
+      expect(updated.shareId).toBe('share-1');
+      expect(updated.ipnsName).toBe('k51shared');
+      expect(updated.sequenceNumber).toBe(5n);
+      expect(updated.children).toEqual(REFRESHED_CHILDREN);
+    });
+
+    it('does NOT clobber when the resolved sequence is stale/equal — re-emits existing state', async () => {
+      const events: SdkEvent[] = [];
+      client.on((e) => events.push(e));
+      // Seed with concrete in-memory children at sequence 3n.
+      seedSharedFolder(client, { children: PUBLISHED_CHILDREN, sequenceNumber: 3n });
+
+      // Resolved IPNS lags (stale): equal sequence, different (older) children.
+      vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue({
+        metadata: { children: REFRESHED_CHILDREN } as never,
+        sequenceNumber: 3n,
+        cid: 'bafystale',
+      });
+
+      await client.refreshSharedFolder('share-1');
+
+      // In-memory state is unchanged (not clobbered by the stale snapshot).
+      const state = client.getSharedFolderState('share-1');
+      expect(state?.sequenceNumber).toBe(3n);
+      expect(state?.children).toEqual(PUBLISHED_CHILDREN);
+
+      // Re-emitted the EXISTING (fresher) snapshot so consumers stay consistent.
+      const updates = events.filter((e) => e.type === 'sharedFolder:updated');
+      expect(updates).toHaveLength(1);
+      const updated = updates[0] as Extract<SdkEvent, { type: 'sharedFolder:updated' }>;
+      expect(updated.sequenceNumber).toBe(3n);
+      expect(updated.children).toEqual(PUBLISHED_CHILDREN);
+    });
+
+    it('is a no-op when loadFolderMetadata returns null (unresolvable)', async () => {
+      const events: SdkEvent[] = [];
+      client.on((e) => events.push(e));
+      seedSharedFolder(client, { children: PUBLISHED_CHILDREN, sequenceNumber: 3n });
+
+      vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
+
+      await client.refreshSharedFolder('share-1');
+
+      const state = client.getSharedFolderState('share-1');
+      expect(state?.sequenceNumber).toBe(3n);
+      expect(state?.children).toEqual(PUBLISHED_CHILDREN);
+      expect(events.filter((e) => e.type === 'sharedFolder:updated')).toHaveLength(0);
+    });
+
+    it('throws "Shared folder not loaded" when the share is not loaded', async () => {
+      await expect(client.refreshSharedFolder('absent-share')).rejects.toThrow(
+        'Shared folder not loaded'
+      );
     });
   });
 });
