@@ -14,7 +14,7 @@
   },
   "scripts": {
     "dev": "tsup --watch",
-    "build": "tsup",
+    "build": "tsup && tsc -p tsconfig.build.json",
     "generate": "orval",
     "lint": "eslint src/**/*.ts",
     "test": "vitest run",
