@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "489e091e0cc7",
+  "session_id": "dcb71a14-5478-4d28-988e-5f0c056637a9",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T00:12:44.534468Z",
+  "branch": "feat/sdk-client-self-bootstrap-folder-tree",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "b83f68fa31a2",
+  "token_usage": {
+    "input_tokens": 37809,
+    "cache_creation_tokens": 69362,
+    "cache_read_tokens": 883829,
+    "output_tokens": 11462,
+    "api_call_count": 13
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Browse pending GSD todos and start work on the highest-priority item — the user selected todo #9 to make the SDK client self-bootstrap its folder tree from the root IPNS key, eliminating the web-side seeding requirement.",
+    "outcome": "Todo #9 was moved to completed, a feature branch was created, STATE.md was updated, and a parallel code-exploration workflow was launched to map the SDK and web subsystems before implementation begins.",
+    "learnings": {
+      "repo": [
+        "CipherBoxClient owns folderTree state but its config holds rootIpnsName + rootFolderKey + vaultKeypair — not the root IPNS private key, which lives only in the web vaultStore. This forces the web to call ensureFolderRegistered before every folderTree-dependent method.",
+        "The 'Folder not loaded' bug class is a systemic consequence of this asymmetry: the SDK can't resolve or lazy-load folders autonomously.",
+        "Phase 47 (SDK folder-state and publish-path consolidation) exists in the roadmap with 5 plans (47-01..47-05), all unchecked — this todo is a superset of REQ-1 in that phase.",
+        "Todo #8 (route shared-folder writes through the SDK client) is adjacent SDK-ownership cleanup and should be coordinated with this work."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/types.ts",
+          "line": 44,
+          "end_line": 44,
+          "finding": "CipherBoxClientConfig definition — missing rootIpnsKeypair field that needs to be added"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 288,
+          "end_line": 345,
+          "finding": "folderTree-dependent methods that currently require web-side ensureFolderRegistered pre-call"
+        },
+        {
+          "path": "bin/index.ts",
+          "line": 323,
+          "end_line": 323,
+          "finding": "restoreFromBin throws 'Target folder not loaded' after reload — pre-existing bug since PR #296, not caught by recycle-bin.spec.ts"
+        },
+        {
+          "path": "apps/web/src/hooks/useBin.ts",
+          "line": 73,
+          "end_line": 128,
+          "finding": "Web-side hook that seeds folderTree via ensureFolderRegistered before SDK calls — to be removed once client self-bootstraps"
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 96,
+          "end_line": 96,
+          "finding": "SDK provider wiring — relevant to how rootIpnsKeypair will be passed from vaultStore to client config"
+        }
+      ],
+      "workflow": [
+        "GSD check-todos workflow fans out a parallel code-mapping workflow before implementation to avoid blind coding — understanding first, then implementation.",
+        "Todo bookkeeping (move to completed, STATE.md update, commit) is done immediately when 'Work on it now' is selected, before implementation starts."
+      ]
+    },
+    "friction": [
+      "The bin restore bug (restoreFromBin at bin/index.ts:323 throwing 'Target folder not loaded') is a pre-existing regression since PR #296 that recycle-bin.spec.ts doesn't cover — it surfaced as a known open issue during todo analysis but isn't the focus of this work."
+    ],
+    "open_items": [
+      "Implementation not yet started — parallel codebase exploration workflow was still running at transcript end.",
+      "Phase 47 plans 47-01..47-05 are all unchecked and need to be worked through or superseded by this self-bootstrap approach.",
+      "Todo #8 (route shared-folder writes through the SDK client) remains pending and should be coordinated with or sequenced after this work.",
+      "The bin restore 'Target folder not loaded' bug at bin/index.ts:323 needs a dedicated fix and a new test in recycle-bin.spec.ts — deferred from this session.",
+      "ensureFolderRegistered removal from the web side is a follow-on cleanup once the SDK self-bootstrap is in place."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 9,
+      "user_lines_removed": 2,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6,
+        "Cargo.lock": 2
+      },
+      "user_removed_per_file": {
+        "Cargo.lock": 2
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 8,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
