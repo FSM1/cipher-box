@@ -279,7 +279,16 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         setCurrentSequenceNumber(sequenceNumber);
       }
     );
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      // Zero the SDK's cloned shared-folder key material on unmount — the web
+      // never otherwise unloads it (unloadSharedFolder deletes the entry, which
+      // zeroes folderKey + ipnsPrivateKey). Guarded: no-op when no active share.
+      const activeShareId = currentShareIdRef.current;
+      if (activeShareId && hasSdkClient()) {
+        getSdkClient().unloadSharedFolder(activeShareId);
+      }
+    };
   }, []);
 
   // ---------------------------------------------------------------------------

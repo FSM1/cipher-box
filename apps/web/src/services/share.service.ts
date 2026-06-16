@@ -114,7 +114,17 @@ export async function fetchReceivedShares(
 
   const shares = await Promise.all(
     response.shares.map(async (s) => {
-      const displayName = vaultPrivateKey ? await decryptItemName(s, vaultPrivateKey) : s.itemName;
+      // A single corrupt / wrong-key / truncated itemNameEncrypted row must not
+      // reject the whole page (decryptItemName throws on unwrap failure). Degrade
+      // that one row to its legacy plaintext fallback instead of denying the list.
+      let displayName = s.itemName;
+      if (vaultPrivateKey) {
+        try {
+          displayName = await decryptItemName(s, vaultPrivateKey);
+        } catch (err) {
+          logger.warn('[share] itemName decrypt failed; using plaintext fallback', s.shareId, err);
+        }
+      }
       return {
         shareId: s.shareId,
         sharerPublicKey: s.sharerPublicKey,
