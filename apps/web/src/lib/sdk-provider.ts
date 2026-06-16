@@ -11,7 +11,6 @@ import { CipherBoxClient, type CipherBoxClientConfig } from '@cipherbox/sdk';
 import type { PinningConfig } from '@cipherbox/sdk';
 import { apiAxios } from './api-config';
 import { destroyEncryptionWorker } from '../services/encrypt-worker.service';
-import type { FolderNode } from '../stores/folder.store';
 
 let _client: CipherBoxClient | null = null;
 let _lastConfig: CipherBoxClientConfig | null = null;
@@ -79,44 +78,4 @@ export function reconfigurePinning(pinningConfig?: PinningConfig): void {
   _client.destroy();
   _lastConfig = { ..._lastConfig, pinningConfig };
   _client = new CipherBoxClient({ ..._lastConfig, axiosInstance: apiAxios });
-}
-
-/**
- * Ensure a folder from the Zustand store is registered in the SDK's
- * internal FolderTree. This bridges the gap between folder navigation
- * (which loads folders into Zustand) and SDK operations (which require
- * folders in the SDK's internal state).
- *
- * Registers the folder if the SDK doesn't already track it. If it does, the
- * SDK's internal folderTree is authoritative and left untouched: all
- * folder-state mutations (including file replace/version edits) now route
- * through SDK client methods, so the SDK sequence never lags the store and no
- * forward reconciliation is needed (Phase 47 / PR #489 closure).
- */
-export function ensureFolderRegistered(folder: FolderNode): void {
-  const client = getSdkClient();
-
-  // Already tracked: the SDK folderTree is authoritative. No reconciliation —
-  // every folder-state mutation flows through the client, so the store can no
-  // longer advance past the SDK's internal sequence.
-  if (client.hasFolder(folder.ipnsName)) {
-    return;
-  }
-
-  // Guard: don't register placeholder folders with empty key material —
-  // would cause crypto/IPNS errors on subsequent mutations
-  if (folder.folderKey.length === 0 || folder.ipnsPrivateKey.length === 0) {
-    return;
-  }
-
-  client.registerFolder(
-    folder.ipnsName,
-    folder.folderKey,
-    {
-      publicKey: new Uint8Array(0), // Public key derived from private key when needed
-      privateKey: folder.ipnsPrivateKey,
-    },
-    folder.children,
-    folder.sequenceNumber
-  );
 }

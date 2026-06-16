@@ -5,7 +5,7 @@ import { useAuthStore } from '../stores/auth.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
-import { getSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
+import { getSdkClient } from '../lib/sdk-provider';
 import {
   resolveFileMetadata,
   computeRestoreVersionUpdate,
@@ -58,12 +58,6 @@ export function useFileVersions() {
         if (!parentFolder) {
           throw new Error('Parent folder not found or vault not initialized');
         }
-
-        // Seed the SDK folderTree from the store before routing through the client.
-        // Navigation/read populate only the Zustand store; the client version methods
-        // gate on folderTree.get() and throw 'Folder not loaded' otherwise. No-op if
-        // already tracked. (Mirrors useFolderMutations / useDropUpload.)
-        ensureFolderRegistered(parentFolder);
 
         // Find the FilePointer
         const filePointer = parentFolder.children.find(
@@ -173,12 +167,6 @@ export function useFileVersions() {
         if (!parentFolder) {
           throw new Error('Parent folder not found or vault not initialized');
         }
-
-        // Seed the SDK folderTree from the store before routing through the client.
-        // Navigation/read populate only the Zustand store; the client version methods
-        // gate on folderTree.get() and throw 'Folder not loaded' otherwise. No-op if
-        // already tracked. (Mirrors useFolderMutations / useDropUpload.)
-        ensureFolderRegistered(parentFolder);
 
         // Find the FilePointer
         const filePointer = parentFolder.children.find(

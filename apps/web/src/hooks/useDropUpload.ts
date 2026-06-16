@@ -5,7 +5,7 @@ import { useQuotaStore } from '../stores/quota.store';
 import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
-import { getSdkClient, hasSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
+import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { getRootFolderState } from './folder-helpers';
 import { getEncryptionWorker } from '../services/encrypt-worker.service';
 import type { PendingReplacement } from '../stores/upload.store';
@@ -97,7 +97,7 @@ export function useDropUpload() {
 
     const client = getSdkClient();
 
-    // Resolve parent folder and ensure it's registered in the SDK
+    // Resolve parent folder
     const folders = useFolderStore.getState().folders;
     const vault = useVaultStore.getState();
     const parentFolder =
@@ -106,7 +106,6 @@ export function useDropUpload() {
       logger.error('[Upload] Parent folder not found');
       return false;
     }
-    ensureFolderRegistered(parentFolder);
 
     const orphanCids: string[] = []; // Only unregistered CIDs (duplicates staged for replacement)
     let currentDupUploadId: string | undefined; // Tracks current duplicate file for error reporting
