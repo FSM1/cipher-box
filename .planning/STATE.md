@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Executing Phase 48
-last_updated: "2026-06-16T16:15:00.000Z"
+last_updated: "2026-06-16T16:28:00.000Z"
 last_activity: 2026-06-16
 progress:
   total_phases: 33
   completed_phases: 31
   total_plans: 145
-  completed_plans: 135
-  percent: 93
+  completed_plans: 136
+  percent: 94
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 48 (sdk-self-bootstrap-regression-fix-and-shared-folder-metadata) — EXECUTING
-Plan: 48-03 complete (REQ-3 SDK side); 48-04 (REQ-3 web) is the next dependent plan
+Plan: 48-03 (REQ-3 SDK) + 48-05 (REQ-4 API) complete; 48-02 (REQ-2) and 48-04/48-06 (REQ-3 web / REQ-4 web) remain
 Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. Phase 46 Linux remount-after-SIGKILL UAT passed 2026-06-15 — fully verified, no open items.
 
 ## Performance Metrics
@@ -144,6 +144,7 @@ Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. 
 | Phase 48 P01 | 15min | 3 tasks | 4 files |
 | Phase 48 P02 | 2min | 2 tasks | 5 files |
 | Phase 48 P03 | 6min | 3 tasks | 7 files |
+| Phase 48 P05 | 8min | 3 tasks | 145 files |
 
 ## Accumulated Context
 
@@ -232,6 +233,7 @@ Recent for v1.1:
 - Defensive CVM key derivation handles both key (v0.5+) and asUint8Array (legacy) SDK return types
 - TEE worker Prometheus metrics use `cipherbox_tee_*` prefix for Grafana dashboard coexistence with API metrics
 - TEE worker structured JSON logger has zero external dependencies (JSON.stringify to stdout/stderr)
+- [Phase 48-05] Share itemName encrypted at rest via additive nullable item_name_encrypted bytea on BOTH shares and share_invites (decision A3 includes invite flow); migration is additive-only with NO data UPDATE (server zero-knowledge cannot re-encrypt legacy plaintext); itemNameEncrypted optional hex DTO on create-share/create-invite/claim-invite; claim re-wraps ephemeral→recipient ciphertext onto the Share; web encrypt/decrypt/lazy-backfill deferred to 48-06
 
 ### Roadmap Evolution
 
@@ -275,6 +277,8 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 ---
 
 Last activity: 2026-06-16
+
+Last session: 2026-06-16T16:28:00Z — Completed 48-05-PLAN.md (REQ-4 API). Stopped At: 48-05 complete. Resume File: None.
 
 ## Decisions
 
