@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "6c13c23c3e2b",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-client-self-bootstrap-folder-tree",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "packages/sdk/src/__tests__/ensure-folder-loaded.test.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6c/13c23c3e2b/0/metadata.json",
+      "transcript": "/6c/13c23c3e2b/0/full.jsonl",
+      "content_hash": "/6c/13c23c3e2b/0/content_hash.txt",
+      "prompt": "/6c/13c23c3e2b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 47294,
+    "cache_creation_tokens": 338986,
+    "cache_read_tokens": 16194034,
+    "output_tokens": 109257,
+    "api_call_count": 93
+  }
+}
