@@ -1,0 +1,155 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "824b2fefc43c",
+  "session_id": "15b6960a-8c3d-4283-bba6-9f1cf5f0eb4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T19:14:41.421932Z",
+  "branch": "docs/close-resolved-todos",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/seeds/SEED-001-phala-tee-on-demand-cost-reduction.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8ce5dc901ad5",
+  "token_usage": {
+    "input_tokens": 10014,
+    "cache_creation_tokens": 94822,
+    "cache_read_tokens": 798247,
+    "output_tokens": 12213,
+    "api_call_count": 15
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Check which of 9 pending planning todos were resolved by recent commits (primarily PR #500), then clean up the todo tracking by moving resolved ones to completed and rescoping the partial one, committing everything to a docs branch.",
+    "outcome": "A 9-agent parallel workflow verified each todo against live code: 2 fully resolved (both by PR #500), 1 partially resolved, 6 still open. Resolved todos were moved to `.planning/todos/completed/`, the partial todo was rescoped to its remaining item, and all changes were committed to a docs branch.",
+    "learnings": {
+      "repo": [
+        "`.planning/todos/` completion convention is just moving files to `completed/` directory — no resolution frontmatter or status markers are added.",
+        "PR #500 (commit 383e856cb) closed two todos: encrypted itemName at rest (M1 security finding) and consolidated SDK shared-folder write routing.",
+        "The intel directory inside `.planning/` is an auto-generated placeholder ('Do not edit by hand') with no entries — should not be committed.",
+        "Legacy plaintext `item_name` rows in the shares table are intentionally left unbackfilled because the server is zero-knowledge; a future PATCH endpoint is planned."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/entities/share.entity.ts",
+          "line": 58,
+          "end_line": 59,
+          "finding": "New `item_name_encrypted` bytea column added in PR #500 for ECIES-wrapped share name; plaintext column retained only for legacy rows."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/ShareDialog.tsx",
+          "line": 335,
+          "end_line": 355,
+          "finding": "Client-side ECIES wraps item.name with recipient pubkey via `wrapKey()` and sends ciphertext-only; server never sees plaintext for new shares."
+        },
+        {
+          "path": "apps/api/src/auth/services/siwe.service.ts",
+          "line": 71,
+          "end_line": 75,
+          "finding": "Still calls viem's standalone `verifyMessage()` with no `publicClient` — EOA-only, no ERC-1271 contract-wallet support."
+        },
+        {
+          "path": "apps/web/src/services/search-index.service.ts",
+          "line": 111,
+          "end_line": 164,
+          "finding": "`buildFromFolderTree()` is fully synchronous: `removeAll()` then blocking `addAll()` with no chunking, batching, or Web Worker offload."
+        },
+        {
+          "path": "apps/web/src/hooks/useSearch.ts",
+          "line": 116,
+          "end_line": 135,
+          "finding": "Calls full `buildFromFolderTree()` on every palette open; no incremental update path exists."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "line": 242,
+          "end_line": 249,
+          "finding": "Still manually unwraps `folderKeyEncrypted`/`ipnsPrivateKeyEncrypted`, duplicating the SDK's unwrap — remaining open item from the partial todo after item 1 landed."
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 400,
+          "end_line": 407,
+          "finding": "Documented deferral comment for a future PATCH endpoint to lazily backfill legacy plaintext itemName rows."
+        },
+        {
+          "path": "apps/api/src/migrations/1749200000000-EncryptShareItemName.ts",
+          "line": 19,
+          "end_line": 22,
+          "finding": "Migration adds nullable bytea column to both `shares` and `share_invites` — additive and idempotent."
+        }
+      ],
+      "workflow": [
+        "Fan-out workflow with one verifier agent per todo is highly effective for batch todo triage — 9 agents ran in parallel, each opening live files to confirm presence/absence of the described problem rather than guessing from commit titles.",
+        "Task notification output can be truncated; always check the full output file path returned in the notification when result size may exceed the inline limit.",
+        "Checking `git log -S '<symbol>'` per todo is a reliable way to distinguish genuine implementation commits from session-checkpoint commits that merely contain todo text."
+      ]
+    },
+    "friction": [
+      "Workflow result was truncated in the task-notification inline `result` field; required a separate `Read` of the `.output` file to get all 9 verdicts.",
+      "The auto-generated intel directory appeared as untracked noise in git status during the commit step, requiring care not to accidentally stage it."
+    ],
+    "open_items": [
+      "`useFolderNavigation.ts:242-249` still manually unwraps `folderKeyEncrypted`/`ipnsPrivateKeyEncrypted`, duplicating SDK logic — the remaining item from the rescoped partial todo.",
+      "ERC-1271 contract-wallet authentication: SIWE service is EOA-only, no `createPublicClient` or `eth_getCode` detection.",
+      "CRDT-based IPNS inbox for serverless share discovery: entirely unstarted research item; PR #500 moved in the opposite direction.",
+      "Async/incremental search index: `buildFromFolderTree()` is still a synchronous full-rebuild called on every palette open.",
+      "Alternative MFA factor types (passkey/PRF, password-derived, secondary OAuth): only device-share + mnemonic exist.",
+      "IPNS signature storage review (S1/S2/S3 findings): all three still present in live code.",
+      "Pin GitHub Actions workflow refs to immutable SHAs: 0 of 116 refs pinned.",
+      "Lazy backfill of legacy plaintext `item_name` rows in shares table: deferred pending a future PATCH endpoint (`shares.service.ts:400-407`)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T19:13:57.139458Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 106,
+    "human_modified": 14,
+    "human_removed": 0,
+    "total_committed": 106,
+    "total_lines_changed": 242,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 93,
+      "user_lines_removed": 14,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6,
+        ".planning/seeds/SEED-001-phala-tee-on-demand-cost-reduction.md": 86
+      },
+      "user_removed_per_file": {
+        ".planning/seeds/SEED-001-phala-tee-on-demand-cost-reduction.md": 14
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 92,
+      "agent_lines_removed": 14,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 92,
+      "agent_lines_removed": 14,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
