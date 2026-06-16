@@ -26,3 +26,7 @@
 <status>completed</status>
 <summary>Background command "Commit the implementation" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+push it and run a /simplify
