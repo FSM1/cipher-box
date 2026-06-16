@@ -19,7 +19,7 @@ import type { UploadResult } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
 import { selectEncryptionMode } from '@cipherbox/sdk-core';
 import { createAxiosInstance, ipnsControllerUnenrollBatch } from '@cipherbox/api-client';
-import { clearBytes } from '@cipherbox/crypto';
+import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
 import type {
   FolderChild,
@@ -60,6 +60,11 @@ export class CipherBoxClient {
   /** Internal copies of key material — zeroed on destroy() without affecting caller buffers */
   private internalVaultKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
   private internalRootFolderKey: Uint8Array;
+  /**
+   * Internal copy of the root IPNS signing keypair, or null when not configured.
+   * Enables self-bootstrapping the folder tree from root (see ensureFolderLoaded).
+   */
+  private internalRootIpnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array } | null = null;
 
   constructor(config: CipherBoxClientConfig) {
     // Defensive copy of key material so destroy() only zeroes our copies
@@ -68,10 +73,17 @@ export class CipherBoxClient {
       privateKey: new Uint8Array(config.vaultKeypair.privateKey),
     };
     this.internalRootFolderKey = new Uint8Array(config.rootFolderKey);
+    if (config.rootIpnsKeypair) {
+      this.internalRootIpnsKeypair = {
+        publicKey: new Uint8Array(config.rootIpnsKeypair.publicKey),
+        privateKey: new Uint8Array(config.rootIpnsKeypair.privateKey),
+      };
+    }
     this.config = {
       ...config,
       vaultKeypair: this.internalVaultKeypair,
       rootFolderKey: this.internalRootFolderKey,
+      ...(this.internalRootIpnsKeypair ? { rootIpnsKeypair: this.internalRootIpnsKeypair } : {}),
     };
     const axiosInstance =
       config.axiosInstance ??
@@ -234,6 +246,10 @@ export class CipherBoxClient {
     this.internalVaultKeypair.privateKey.fill(0);
     this.internalVaultKeypair.publicKey.fill(0);
     this.internalRootFolderKey.fill(0);
+    if (this.internalRootIpnsKeypair) {
+      this.internalRootIpnsKeypair.privateKey.fill(0);
+      this.internalRootIpnsKeypair.publicKey.fill(0);
+    }
     this.binState = null;
   }
 
@@ -381,6 +397,101 @@ export class CipherBoxClient {
   }
 
   /**
+   * Ensure a folder is present in the internal folderTree, self-bootstrapping
+   * from root if necessary.
+   *
+   * If the target is already loaded, returns it immediately. Otherwise — when a
+   * root IPNS keypair was configured — walks the folder tree from root (DFS with
+   * early exit), resolving each folder's metadata and unwrapping each subfolder's
+   * `folderKeyEncrypted` / `ipnsPrivateKeyEncrypted` with the vault keypair, until
+   * the target is registered. Every folder visited along the way is cached, so
+   * later calls are cheap.
+   *
+   * Returns null when the client cannot self-bootstrap (no `rootIpnsKeypair`
+   * configured) or the target is not reachable from root. Callers fall back to
+   * their existing 'Folder not loaded' error on null, so behavior is unchanged
+   * when self-bootstrap is unavailable. This dissolves the "Folder not loaded"
+   * failure class that previously required consumers to pre-seed folderTree
+   * before every folderTree-dependent operation.
+   *
+   * @param targetIpnsName - IPNS name of the folder to ensure is loaded
+   * @returns The loaded FolderState, or null if it cannot be bootstrapped
+   * @internal
+   */
+  async ensureFolderLoaded(targetIpnsName: string): Promise<FolderState | null> {
+    const existing = this.folderTree.get(targetIpnsName);
+    if (existing) return existing;
+
+    // Cannot self-bootstrap without the root IPNS signing key.
+    if (!this.internalRootIpnsKeypair) return null;
+
+    // 1. Ensure root is loaded. Root is special: it has no parent to unwrap its
+    //    keys from, so they come from config (rootFolderKey + rootIpnsKeypair).
+    const rootIpnsName = this.config.rootIpnsName;
+    let root = this.folderTree.get(rootIpnsName) ?? null;
+    if (!root) {
+      root = await this.loadFolder(
+        rootIpnsName,
+        this.internalRootFolderKey,
+        this.internalRootIpnsKeypair
+      );
+      if (!root) return null;
+    }
+    if (rootIpnsName === targetIpnsName) return root;
+
+    // 2. DFS from root, unwrapping child keys and loading metadata until the
+    //    target is found. `visited` guards against repeats and pathological
+    //    cycles in folder metadata.
+    const visited = new Set<string>([rootIpnsName]);
+    const stack: FolderState[] = [root];
+    while (stack.length > 0) {
+      const current = stack.pop() as FolderState;
+      for (const child of current.children) {
+        if (child.type !== 'folder') continue;
+        const entry = child as FolderEntry;
+        if (visited.has(entry.ipnsName)) continue;
+        visited.add(entry.ipnsName);
+
+        let childState = this.folderTree.get(entry.ipnsName) ?? null;
+        if (!childState) {
+          try {
+            // Unwrap this subfolder's keys with the vault keypair (ECIES), then
+            // load its metadata. loadFolder adopts independent clones into the
+            // folderTree (zeroed on destroy()); the transient unwrapped buffers
+            // are left to GC, matching the existing loadFolder/registerFolder
+            // paths which likewise don't eagerly zero their unwrapped inputs.
+            const folderKey = await unwrapKey(
+              hexToBytes(entry.folderKeyEncrypted),
+              this.internalVaultKeypair.privateKey
+            );
+            const ipnsPrivateKey = await unwrapKey(
+              hexToBytes(entry.ipnsPrivateKeyEncrypted),
+              this.internalVaultKeypair.privateKey
+            );
+            childState = await this.loadFolder(entry.ipnsName, folderKey, {
+              // Public key is derived from the private key at signing time.
+              publicKey: new Uint8Array(0),
+              privateKey: ipnsPrivateKey,
+            });
+          } catch {
+            // A single corrupt/undecryptable sibling entry must not abort the
+            // whole bootstrap — skip it so unrelated targets stay reachable.
+            // (Generic catch: unwrapKey/hexToBytes throw key-free errors.)
+            continue;
+          }
+        }
+        // Could not resolve this subfolder (no IPNS record) — skip it.
+        if (!childState) continue;
+        if (entry.ipnsName === targetIpnsName) return childState;
+        stack.push(childState);
+      }
+    }
+
+    // Target not found anywhere under root.
+    return null;
+  }
+
+  /**
    * Create a new subfolder inside an existing folder.
    *
    * Generates IPNS keypair and folder key, wraps with user's public key,
@@ -396,7 +507,8 @@ export class CipherBoxClient {
     name: string
   ): Promise<{ id: string; ipnsName: string; folderKey: Uint8Array; ipnsPrivateKey: Uint8Array }> {
     return this.withOperation('createFolder', async () => {
-      const parent = this.folderTree.get(parentIpnsName);
+      const parent =
+        this.folderTree.get(parentIpnsName) ?? (await this.ensureFolderLoaded(parentIpnsName));
       if (!parent) throw new Error('Parent folder not loaded');
 
       // 1. Check for duplicate name before allocating keys
@@ -495,7 +607,8 @@ export class CipherBoxClient {
    */
   async renameItem(folderIpnsName: string, childId: string, newName: string): Promise<void> {
     return this.withOperation('renameItem', async () => {
-      const folder = this.folderTree.get(folderIpnsName);
+      const folder =
+        this.folderTree.get(folderIpnsName) ?? (await this.ensureFolderLoaded(folderIpnsName));
       if (!folder) throw new Error('Folder not loaded');
 
       // 1. Rename in metadata (pure operation)
@@ -548,8 +661,10 @@ export class CipherBoxClient {
    */
   async moveItem(sourceIpnsName: string, destIpnsName: string, childId: string): Promise<void> {
     return this.withOperation('moveItem', async () => {
-      const source = this.folderTree.get(sourceIpnsName);
-      const dest = this.folderTree.get(destIpnsName);
+      const source =
+        this.folderTree.get(sourceIpnsName) ?? (await this.ensureFolderLoaded(sourceIpnsName));
+      const dest =
+        this.folderTree.get(destIpnsName) ?? (await this.ensureFolderLoaded(destIpnsName));
       if (!source) throw new Error('Source folder not loaded');
       if (!dest) throw new Error('Destination folder not loaded');
 
@@ -622,7 +737,8 @@ export class CipherBoxClient {
    */
   async deleteItem(folderIpnsName: string, childId: string): Promise<{ removedItem: FolderChild }> {
     return this.withOperation('deleteItem', async () => {
-      const folder = this.folderTree.get(folderIpnsName);
+      const folder =
+        this.folderTree.get(folderIpnsName) ?? (await this.ensureFolderLoaded(folderIpnsName));
       if (!folder) throw new Error('Folder not loaded');
 
       // 1. Remove from metadata (pure operation)
@@ -690,7 +806,8 @@ export class CipherBoxClient {
     onProgress?: ProgressCallback
   ): Promise<{ cid: string }> {
     return this.withOperation('uploadFile', async () => {
-      const folder = this.folderTree.get(folderIpnsName);
+      const folder =
+        this.folderTree.get(folderIpnsName) ?? (await this.ensureFolderLoaded(folderIpnsName));
       if (!folder) throw new Error('Folder not loaded');
 
       if (folder.children.some((child) => child.name === fileName)) {
@@ -884,7 +1001,8 @@ export class CipherBoxClient {
     failures: Array<{ fileName: string; error: string }>;
   }> {
     return this.withOperation('uploadFiles', async () => {
-      const folder = this.folderTree.get(folderIpnsName);
+      const folder =
+        this.folderTree.get(folderIpnsName) ?? (await this.ensureFolderLoaded(folderIpnsName));
       if (!folder) throw new Error('Folder not loaded');
 
       // Build BYO-IPFS pinFn override (same pattern as uploadFile)
@@ -1158,7 +1276,8 @@ export class CipherBoxClient {
     }
   ): Promise<{ prunedCids: string[] }> {
     return this.withOperation('replaceFile', async () => {
-      const folder = this.folderTree.get(parentIpnsName);
+      const folder =
+        this.folderTree.get(parentIpnsName) ?? (await this.ensureFolderLoaded(parentIpnsName));
       if (!folder) throw new Error('Folder not loaded');
 
       // 1. Find the FilePointer's metadata IPNS name from authoritative state.
@@ -1270,7 +1389,8 @@ export class CipherBoxClient {
   ): Promise<{ prunedCids: string[] }> {
     void versionIndex;
     return this.withOperation('restoreFileVersion', async () => {
-      const folder = this.folderTree.get(parentIpnsName);
+      const folder =
+        this.folderTree.get(parentIpnsName) ?? (await this.ensureFolderLoaded(parentIpnsName));
       if (!folder) throw new Error('Folder not loaded');
 
       const filePointer = folder.children.find(
@@ -1353,7 +1473,8 @@ export class CipherBoxClient {
   ): Promise<{ deletedCid?: string; prunedCids: string[] }> {
     void versionIndex;
     return this.withOperation('deleteFileVersion', async () => {
-      const folder = this.folderTree.get(parentIpnsName);
+      const folder =
+        this.folderTree.get(parentIpnsName) ?? (await this.ensureFolderLoaded(parentIpnsName));
       if (!folder) throw new Error('Folder not loaded');
 
       const filePointer = folder.children.find(
@@ -1553,6 +1674,10 @@ export class CipherBoxClient {
     return this.withOperation('deleteToBin', async () => {
       if (!this.binState) throw new BinNotLoadedError();
 
+      // Self-bootstrap the folder if it isn't loaded (e.g. after a reload), so
+      // addToBin can read its keys to republish the parent.
+      await this.ensureFolderLoaded(folderIpnsName);
+
       const { updatedBinState } = await binOps.addToBin({
         folderIpnsName,
         childId,
@@ -1589,6 +1714,12 @@ export class CipherBoxClient {
   async restoreFromBin(entryId: string, targetFolderIpnsName: string): Promise<void> {
     return this.withOperation('restoreFromBin', async () => {
       if (!this.binState) throw new BinNotLoadedError();
+
+      // Self-bootstrap the target folder if it isn't loaded. After a reload the
+      // user may restore into a folder they never navigated to this session;
+      // ensureFolderLoaded walks from root and unwraps its keys so restoreFromBin
+      // can republish the parent (fixes 'Target folder not loaded').
+      await this.ensureFolderLoaded(targetFolderIpnsName);
 
       const { updatedBinState } = await binOps.restoreFromBin({
         entryId,
@@ -1719,7 +1850,8 @@ export class CipherBoxClient {
     recipientPublicKey: Uint8Array
   ): Promise<{ encryptedKey: string }> {
     return this.withOperation('shareFolder', async () => {
-      const folder = this.folderTree.get(folderIpnsName);
+      const folder =
+        this.folderTree.get(folderIpnsName) ?? (await this.ensureFolderLoaded(folderIpnsName));
       if (!folder) throw new Error('Folder not loaded');
 
       return shareOps.createShareKey({
