@@ -1,0 +1,356 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "824b2fefc43c",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T19:17:18.663377Z",
+  "branch": "docs/close-resolved-todos",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/seeds/SEED-001-phala-tee-on-demand-cost-reduction.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "baf4a3f005ef",
+  "token_usage": {
+    "input_tokens": 133272,
+    "cache_creation_tokens": 2882317,
+    "cache_read_tokens": 120234434,
+    "output_tokens": 667678,
+    "api_call_count": 336
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "baf4a3f005ef",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "baf4a3f005ef",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "baf4a3f005ef",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015XThEKcoBvkig6wUSTW2K4",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "baf4a3f005ef",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1644,
+        "end": 1645,
+        "entry_ids": [
+          "68494931-d690-4797-a380-57a4605a5e21"
+        ],
+        "tool_use_id": "toolu_015XThEKcoBvkig6wUSTW2K4"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015XThEKcoBvkig6wUSTW2K4"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01CZJwVQnyF8sbUDnS72ij4g",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "baf4a3f005ef",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1719,
+        "end": 1720,
+        "entry_ids": [
+          "6f2f5fc2-42e7-4fcd-b9e5-2bd79ca12614"
+        ],
+        "tool_use_id": "toolu_01CZJwVQnyF8sbUDnS72ij4g"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01CZJwVQnyF8sbUDnS72ij4g"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:validate-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01UfuW3fzfMm8bcV63yZ411v",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security:review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "baf4a3f005ef",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1785,
+        "end": 1786,
+        "entry_ids": [
+          "bb0eaeab-3434-4761-9e6c-59b0880e8632"
+        ],
+        "tool_use_id": "toolu_01UfuW3fzfMm8bcV63yZ411v"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01UfuW3fzfMm8bcV63yZ411v"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security:review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 35
+  },
+  "summary": {
+    "intent": "Group related pending todos (#5, #8, #9) onto a single branch and defer #2, managing the work as GSD Phase 48 while also fixing a web-e2e regression introduced by PR #498. The user wanted fully autonomous execution (planning → execute → review → PR) while AFK.",
+    "outcome": "Phase 48 fully executed and PR #500 opened with all CI green: fixed the #498 web-e2e regression (3-layer bug), removed redundant web folder-seeding (REQ-2), added SDK-owned shared-folder state with event-fed projection (REQ-3/48-07), and encrypted share itemName at rest via ECIES (REQ-4). All review steps run (simplify, Nyquist validation, CodeRabbit, security review) and 4 CodeRabbit findings resolved before merge.",
+    "learnings": {
+      "repo": [
+        "web-e2e only auto-triggers on push to main (ci-e2e.yml); manual dispatch via `env -u GITHUB_TOKEN gh workflow run web-e2e.yml --ref <branch>` can validate a feature branch pre-merge — no CI changes needed",
+        "NODE_ENV=test relaxes ThrottlerModule limits (app.module.ts:56,61); running e2e locally with NODE_ENV=development causes 429 storms that don't occur in CI, making local repro misleading unless NODE_ENV=test is set",
+        "check-api-client.sh (scripts/check-api-client.sh:40) is a co-staging hook: it only fails if openapi.json has unstaged working-tree changes while a DTO is staged — reverting non-semantic ordering churn before committing is correct and passes the hook",
+        "api:generate produces non-deterministic openapi.json ordering churn unrelated to actual schema changes; @MaxLength and @MinLength are NOT emitted to the OpenAPI spec by the Nest swagger plugin, so those DTO-only changes need no api:generate",
+        "TypeORM runs migrations automatically on boot (app.module.ts:105: migrationsRun: true, synchronize: false) — no manual migration step needed for tests",
+        "pnpm typecheck does not include apps/api; CI type-checks the API via `nest build` which excludes *.spec.ts — spec-file type errors that exist on main don't block CI",
+        "The bin-restore-after-reload e2e spec uses real Web3Auth Core Kit DEVNET (not test-login bypass); it requires VITE_WEB3AUTH_CLIENT_ID + outbound internet and has inherent ~50% login flakiness from DEVNET latency",
+        "1Password SSH signing can wedge mid-session (agent timeout: 'failed to fill whole buffer'); re-enabling requires restarting 1Password, and `commit.gpgsign=false` is the escape hatch for unattended runs",
+        "The release-please bot pushes a chore(release) commit to feature branches after PR creation; `Verify E2E Passed` check has a 'Skip (not a release PR)' guard gated on head_ref starting with 'release-please--' — web-e2e is NOT a PR-level gate",
+        "CodeRabbit auto-resolves threads after detecting fixes in a push — no manual GraphQL resolve needed if the fix is pushed before resolving"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 94,
+          "end_line": 95,
+          "finding": "isLoading formula must include `(coreKitLoggedIn && !isAuthenticated)` to cover the post-reload restore window gap; without it, BinPage's auth guard fires in the transient period after coreKitInitialized flips true but before restoreSession sets isAuthenticated, causing /bin→/login→/files bounce"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 378,
+          "end_line": 380,
+          "finding": "loadFolder unconditionally called folderTree.set() (the #498 regression); fix is a sequence guard: if existing state has sequenceNumber >= resolved, keep existing — prevents self-bootstrap from clobbering fresher in-memory state with a stale IPNS snapshot"
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 188,
+          "end_line": 241,
+          "finding": "loadBin's auto-repair published an empty bin record (no expectedSequenceNumber) on null resolve, clobbering the real bin server-side. Fix: bounded retry (6×500ms), return in-memory empty {entries:[], sequenceNumber:0, ipnsName} on persistent null — never publish on read"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2000,
+          "end_line": 2002,
+          "finding": "requireSharedFolder(shareId) throws 'Shared folder not loaded' if shareId is absent from sharedFolderTree; the standalone file-share open branch in useSharedNavigationActions never seeded the tree, so recipient saves always threw"
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-invite.dto.ts",
+          "finding": "@MinLength(1) on itemName caused HTTP 400 on invite-link creation after REQ-4 moved name into itemNameEncrypted (sending empty string); create-share.dto.ts was correctly relaxed but create-invite.dto.ts was missed"
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "finding": "@MaxLength(1024) on itemNameEncrypted is too small — a 255-char CJK/emoji name produces ECIES ciphertext up to ~1724 hex chars; bumped to 2500 across all three share DTOs"
+        },
+        {
+          "path": "packages/sdk/src/state/shared-folder-tree.ts",
+          "line": 40,
+          "end_line": 45,
+          "finding": "set() must zero prior key buffers before overwriting, but only when buffers differ (!==); zeroing same-buffer-reference first corrupts the adopt path which spreads the same buffer before cloning"
+        },
+        {
+          "path": ".github/workflows/web-e2e.yml",
+          "finding": "workflow_dispatch enabled with `ref: ${{ inputs.ref || github.sha }}`; dispatching directly against a feature branch (`gh workflow run web-e2e.yml --ref <branch>`) faithfully reproduces the main-push run because direct dispatch resolves repo secrets without needing a `secrets: inherit` parent"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 270,
+          "end_line": 283,
+          "finding": "Projection-subscription cleanup effect must call unloadSharedFolder(shareId) to zero the SDK's cloned shared-folder keys on unmount; otherwise key material lingers indefinitely (unloadSharedFolder was never called from web production code)"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2047,
+          "end_line": 2060,
+          "finding": "adoptSharedFolderResult and emit paths must re-read live state (via getSharedFolderState) after any await rather than closing over a pre-await snapshot; otherwise unloadSharedFolder on concurrent unmount makes the snapshot a dangling reference"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 56,
+          "end_line": 61,
+          "finding": "ThrottlerModule limits are relaxed when NODE_ENV === 'test'; running web-e2e locally with NODE_ENV=development enforces strict limits causing 429 storms that don't occur in CI — always set NODE_ENV=test for local e2e reproduction"
+        },
+        {
+          "path": "scripts/check-api-client.sh",
+          "line": 40,
+          "end_line": 40,
+          "finding": "Co-staging check: fails only if openapi.json has unstaged changes while a DTO file is staged; reverting non-semantic ordering churn from api:generate before committing passes the hook cleanly"
+        }
+      ],
+      "workflow": [
+        "Running multiple executor agents concurrently on the same branch causes git conflicts and lost work (the 72-min agent's post-completion process wiped concurrent edits); sequential execution per plan is more reliable for unattended runs",
+        "Pulling Playwright failure artifacts (screenshots + error-context.md) before hypothesizing root cause avoids multiple wrong fixes; the page-state screenshot definitively showed /files not /bin, ruling out bin-data bugs and pointing to auth/navigation",
+        "A 3-way parallel 'understand' workflow (stack bring-up recipe + loadBin semantics + durability root cause) ran in ~3 min and provided the complete local-repro recipe plus the fix direction — much faster than sequential investigation",
+        "The GSD pattern-mapper subagent verifying all line numbers against current source before planning eliminates stale-reference errors in PLAN.md that would cause executor failures",
+        "Re-signing via `git rebase --exec 'git commit --amend --no-edit -S' <base>` cleanly re-signs a contiguous range of unsigned commits without changing content (verified via `git diff <old-head> HEAD` being empty)",
+        "CodeRabbit auto-resolves threads when it detects fixes in a subsequent push; posting explanatory replies before checking resolved status avoids duplicate resolver calls",
+        "Using git worktrees for unrelated commits (the SEED-001 capture) keeps the phase branch clean and prevents scope creep in the PR while still landing the work"
+      ]
+    },
+    "friction": [
+      "1Password SSH signing wedged mid-run ('failed to fill whole buffer') causing all commits from that point to be unsigned; required disabling commit.gpgsign and later a rebase to re-sign 6 commits",
+      "Bash tool hard-blocked from all .env file paths by a security guard — required giving user a manual `!` command to restore .env backups; the agent couldn't restore them programmatically even with user authorization",
+      "72-min executor agent died on stream idle timeout with uncommitted work, then its lingering process woke up and committed (overwriting the main loop's concurrent edits to useAuth.ts and the spec instrumentation)",
+      "Three sequential incorrect root-cause hypotheses for the bin-restore failure (SDK clobber → loadBin auto-repair → nav-redirect catch) before pulling the Playwright trace, which immediately showed the real cause (page was on /files, not /bin at all)",
+      "Non-deterministic openapi.json ordering changes on every api:generate run (714 lines of net-zero churn) for a DTO change that had zero semantic spec impact — had to revert churn before every commit",
+      "Port 3000 occupied by a separate project (irl-network) blocking the local web-e2e stack; required user authorization and explicit process/container kill to free it",
+      "Network connectivity drops during CI polling caused false 'run complete' signals (exit 0 from watcher despite run still in_progress); required building a retry-tolerant polling loop",
+      "The dead agent's 72-min run had 392 tool calls but ended in a partial-response timeout with no clean result — had to git diff to assess what it actually changed before deciding what to keep",
+      "Web3Auth DEVNET login flakiness (~50% failure rate locally) added significant noise to local e2e debugging; distinguishing login flakes from real assertion failures required multiple runs",
+      "The release-please bot pushed a chore(release) commit immediately after PR creation, invalidating the pre-push e2e green and forcing a re-run of all CI checks on the new HEAD"
+    ],
+    "open_items": [
+      "PATCH /shares/:id { itemNameEncrypted } endpoint needed to make the REQ-4 legacy-row backfill actually persist — REQ-4 at-rest encryption is currently forward-only for new shares",
+      "Convert tests/sdk-e2e .mjs helper scripts to typechecked TypeScript — the bin-contract drift (BinNotLoadedError vs self-heal) would have been caught at compile time rather than requiring a CI fix cycle",
+      "ci.yml SDK-E2E step references mock-ipns-routing/dist/server.js which has never existed in the repo (pre-existing, non-fatal, same on main) — worth a one-line fix",
+      "PR #501 (SEED-001: Phala TEE on-demand cost reduction via programmatic CVM start/stop on workload presence) — standalone seed doc, awaiting review/merge",
+      "Shared ensureFolderLoaded analog so the web stops re-seeding per nav depth (current sharedFolderTree is shareId-keyed but each nav depth has a distinct ipnsName/folderKey/sequence requiring a separate loadSharedFolder call)",
+      "The 30s poller's refreshFolderContents updates display refs but does not re-seed the SDK — a poll-then-write without intervening navigation relies on publishWithCas self-correcting the sequence rather than a fresh seed; the shared-folder e2e spec should exercise this path explicitly",
+      "spec-file type errors in apps/api (mock objects missing itemNameEncrypted field added in 48-05) — not CI-blocking since nest build excludes *.spec.ts, but represents latent test-mock type drift",
+      "invite.service.ts backfillSentShareItemNames is disabled until a PATCH endpoint exists; the function is structured for one-line wiring once the endpoint ships"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T19:15:36.119714Z",
+    "agent_lines": 26,
+    "agent_removed": 0,
+    "human_added": 192,
+    "human_modified": 14,
+    "human_removed": 0,
+    "total_committed": 232,
+    "total_lines_changed": 354,
+    "agent_percentage": 7.344632768361582,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
