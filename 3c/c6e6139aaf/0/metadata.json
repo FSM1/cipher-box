@@ -1,0 +1,258 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3cc6e6139aaf",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T14:08:01.847373Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "53f8473941af",
+  "token_usage": {
+    "input_tokens": 64738,
+    "cache_creation_tokens": 2000746,
+    "cache_read_tokens": 68174814,
+    "output_tokens": 379293,
+    "api_call_count": 170
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "53f8473941af",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "53f8473941af",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "53f8473941af",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Triage pending todos, consolidate three related ones (REQ-2 seeding cleanup, REQ-3 shared-folder SDK ownership, REQ-4 share itemName encryption) into Phase 48, and fix the web-e2e regression introduced by PR #498 (SDK self-bootstrap clobbering folderTree state) as a P0 prerequisite.",
+    "outcome": "Phase 48 was created, fully planned (6 plans, 3 waves, checker passed), and Wave 1 (REQ-1 P0 fix) was executed and verified green in CI on the 4th dispatch. The regression had three layered root causes, all fixed. Waves 2–3 (REQ-2/3/4) began executing but are not yet complete.",
+    "learnings": {
+      "repo": [
+        "web-e2e only auto-triggers on push to main (ci-e2e.yml); can be manually dispatched against any branch via `env -u GITHUB_TOKEN gh workflow run web-e2e.yml --ref <branch>` without needing `secrets: inherit`",
+        "NODE_ENV=test relaxes the IPNS resolve rate limit in app.module.ts — running local e2e under NODE_ENV=development causes 429 storms that don't occur in CI, causing false-negative local reproductions",
+        "The bin-restore-after-reload spec uses the real Web3Auth DEVNET Core Kit flow (loginViaWallet, not test-login bypass), causing ~60–90s login times and external DEVNET flakiness orthogonal to code changes",
+        "BinPage and FilesPage have identical auth guards but BinPage is uniquely vulnerable to the post-reload restore-window race because it mounts fresh on navigation (after FilesPage already survived the loading window)",
+        "loadBin's auto-repair path blind-published an empty bin with no expectedSequenceNumber — the API's upsertFolderIpns unconditionally increments and overwrites latestCid, making this destructive on any transient 404",
+        "The phase/branching_strategy in gsd-tools creates a new branch off origin/main even when on a diverged feature branch, which can orphan planning commits if not caught",
+        "CRDT-IPNS-inbox research (#2) deferred as long-horizon but noted to subsume the itemName plaintext leak (REQ-4/M1) — cross-linked in ROADMAP",
+        "pnpm --filter @cipherbox/api migration:run is the TypeORM migration command; new migrations trigger a [BLOCKING] gate in plan-phase"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 385,
+          "end_line": 385,
+          "finding": "Unconditional folderTree.set() in loadFolder — the REQ-1 self-bootstrap clobber point; fixed with a sequenceNumber guard"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 422,
+          "end_line": 454,
+          "finding": "ensureFolderLoaded short-circuit and DFS child-check — must be preserved when adding the REQ-1 guard to avoid re-regressing #498"
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 188,
+          "end_line": 241,
+          "finding": "Auto-repair block that blind-published empty bin state (no expectedSequenceNumber) on a double-null resolve — destructively clobbers real bin records on transient IPNS 404s after reload"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 103,
+          "end_line": 103,
+          "finding": "isLoading needs to include `|| (coreKitInitialized && coreKitLoggedIn && !isAuthenticated)` to close the post-reload restore-window gap where BinPage mounts while isLoading=false but isAuthenticated is transiently false"
+        },
+        {
+          "path": "apps/web/src/routes/BinPage.tsx",
+          "line": 29,
+          "end_line": 29,
+          "finding": "navigate('/') auth guard fires during post-reload restore window — the bounce that prevents the bin from ever rendering (root cause of the bin-restore-after-reload regression)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "line": 304,
+          "end_line": 307,
+          "finding": "Catch-block navigate('/files') was incorrectly hypothesized as the bounce source — Playwright trace confirmed it never fires; the real bounce is BinPage.tsx:29"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 56,
+          "end_line": 61,
+          "finding": "IPNS resolve throttle limits are relaxed when NODE_ENV=test for browser E2E — local reproduction must use NODE_ENV=test to match CI behavior"
+        },
+        {
+          "path": "tests/web-e2e/tests/bin-restore-after-reload.spec.ts",
+          "line": 45,
+          "end_line": 45,
+          "finding": "90s test timeout with Web3Auth DEVNET login inside beforeAll (~60–90s) leaves only ~30s for the actual assertions — external DEVNET flakiness causes login-phase failures that look like test failures"
+        }
+      ],
+      "workflow": [
+        "Always examine the Playwright failure artifact (trace + screenshot) before forming a root-cause hypothesis — the trace reveals the navigation timeline, browser console, and network calls; skipping this caused three wrong CI dispatches (~36 min wasted)",
+        "When a subagent dies mid-run, verify git state immediately before doing concurrent work — a zombie process can commit its own changes and wipe concurrent working-tree edits",
+        "When 1Password SSH signing wedges (failed to fill whole buffer), commit with --no-gpg-sign to avoid blocking, then re-enable and batch-resign all unsigned commits via interactive rebase before opening the PR",
+        "Local e2e reproduction requires exact CI env parity (NODE_ENV, DB name, ports) — even a single env difference (NODE_ENV=development vs test) can produce rate-limit failures that don't exist in CI",
+        "For CI-gated autonomous runs, the Playwright trace artifact is more diagnostic than log grep — it contains structured events with timestamps vs raw log lines",
+        "Decompose suspected root causes before each CI re-dispatch; three aimed hypotheses all failed because they were not grounded in trace evidence first"
+      ]
+    },
+    "friction": [
+      "1Password SSH signer wedged mid-autonomous-run (`failed to fill whole buffer`) requiring fallback to unsigned commits for 6 commits (fe646fd5f through aea3856de)",
+      "Three CI dispatches (each ~12–15 min) consumed before examining the Playwright trace — the trace was the definitive diagnostic and should have been the first step",
+      "Bash tool hard-blocks all .env file access (security guard), making it impossible to programmatically restore apps/api/.env after switching to CI-matching env for local reproduction",
+      "A dead subagent (a1eaf3b7d3872be94) ran 72 minutes / 392 tool calls, hit a stream-idle timeout, then its background process continued running and committed its own work (73c9f037a), overwriting the main agent's concurrent instrumentation and useAuth.ts fix",
+      "Two stream-idle timeout errors hit during the session, interrupting work mid-execution and losing partial responses",
+      "The bin-restore-after-reload spec used real Web3Auth DEVNET (not deterministic test-login), making local reproduction inherently flaky on the login step (~50% login success rate observed)",
+      "Local e2e false-negatives due to NODE_ENV=development rate limiting (429 storms) vs CI's NODE_ENV=test — caused one additional failed local run before the env mismatch was identified",
+      "GSD branching_strategy `phase` created a second branch off origin/main (feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata) alongside the already-established feat/phase-48-... branch, requiring investigation to confirm no commits were orphaned"
+    ],
+    "open_items": [
+      "Waves 2–3 (48-02 REQ-2 seeding deletion, 48-03 REQ-3 sharedFolderTree SDK, 48-04 REQ-3 web routing, 48-05 REQ-4 API migration + entity/DTO, 48-06 REQ-4 web ECIES wrap + lazy backfill) not yet executed — 48-02 was started at session end",
+      "6 unsigned commits (fe646fd5f through aea3856de) need re-signing via interactive rebase before merge — planned as one batch rebase after all review steps complete",
+      "apps/api/.env and apps/web/.env need manual restoration from backups (apps/api/.env.dev-backup, apps/web/.env.bak.e2e) — Bash tool cannot touch .env files",
+      "Post-Wave-2-3 pipeline not yet run: /simplify, /gsd:validate-phase 48 (VALIDATION.md per-task table TBD), CodeRabbit review, /security:review (especially ECIES itemName wrap + IPNS sequence reconcile), PR creation",
+      "Stale branch ref `feat/phase-48-sdk-self-bootstrap-fix-and-shares` pointing at first planning commit — harmless but should be deleted before PR",
+      "CRDT-IPNS-inbox research todo (#2) deferred as long-horizon — explicitly cross-linked as subsuming REQ-4/M1 once ready; recorded in ROADMAP as out of scope for Phase 48",
+      "REQ-4 lazy client backfill (A2) for legacy plaintext itemName rows needs monitoring after deploy — no server-side migration possible (zero-knowledge), relies on client encounters to encrypt over time",
+      "The web-e2e trigger gap (main-only auto-run) that let #498 land unverified is documented but not structurally fixed — a PR-level web-e2e trigger would prevent recurrence"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T14:06:37.376162Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 120,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 120,
+    "total_lines_changed": 122,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 18,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 18,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
