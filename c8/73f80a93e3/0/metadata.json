@@ -1,0 +1,199 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "c873f80a93e3",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T14:31:04.73024Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "44fb96526d56",
+  "checkpoint_transcript_start": 1277,
+  "transcript_lines_at_start": 1277,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 6732,
+    "cache_read_tokens": 1441647,
+    "output_tokens": 5071,
+    "api_call_count": 2
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "44fb96526d56",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "44fb96526d56",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "44fb96526d56",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Execute plan 48-03 (REQ-3 SDK side) to implement shared-folder state management in the cipher-box SDK, then kick off 48-05 (REQ-4 API) for the M1 security fix.",
+    "outcome": "48-03 completed successfully: SharedFolderTree, 5 client shared-write methods, and sharedFolder:updated event landed with 23 passing tests and a clean sdk suite. 48-05 was queued and running at transcript end.",
+    "learnings": {
+      "repo": [
+        "SharedFolderTree is keyed by shareId (NOT ipnsName) — two shares with the same ipnsName remain isolated (T-48-07)",
+        "The sdk package has no 'typecheck' npm script; tsc --noEmit -p tsconfig.json is the correct equivalent",
+        "integration.test.ts failures (ECONNREFUSED:3000) are pre-existing and require a running server — not a regression indicator",
+        "The pre-commit hook enforces that the regenerated API client (pnpm api:generate output) must be committed alongside migration changes",
+        "updateSharedFile emits sharedFolder:updated with unchanged children/sequence because the stateless function returns void and only publishes file IPNS metadata"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/state/shared-folder-tree.ts",
+          "finding": "SharedFolderTree: sibling map keyed by shareId with get/set/has/delete/clear/getAll; set() clones folderKey/ipnsPrivateKey; delete()/clear() zero key material (T-48-06)"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "New shared-folder client methods all follow (shareId, args) signature: loadSharedFolder, hasSharedFolder, getSharedFolderState, unloadSharedFolder, uploadToSharedFolder, createSharedSubfolder, renameInSharedFolder, deleteFromSharedFolder, updateSharedFile — each reads state, builds SharedWriteContext, delegates to stateless share/shared-write.ts (no second retry loop, T-48-08), writes back, emits event"
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "finding": "sharedFolder:updated event shape: { type: 'sharedFolder:updated'; shareId; ipnsName; children; sequenceNumber }"
+        }
+      ],
+      "workflow": [
+        "Plan execution used Opus model for crypto/migration-sensitive work (48-05) and standard model for SDK state work (48-03)",
+        "Wave sequencing: 48-02 → 48-03 → 48-05 → 48-04 → 48-06 → full web-e2e + reviews + re-sign + PR",
+        "TDD RED/GREEN gate pattern enforced across tasks: Task 2 lands failing tests, Task 3 makes them pass",
+        "Signed commits used throughout; each task gets its own commit for traceability"
+      ]
+    },
+    "friction": [
+      "pnpm --filter @cipherbox/sdk typecheck does not exist — plan verification commands were incorrect, required using tsc --noEmit directly",
+      "3 integration test failures (ECONNREFUSED:3000) appear in every sdk suite run, creating noise that must be mentally filtered"
+    ],
+    "open_items": [
+      "48-04 (REQ-3 web hooks: useSharedWriteOps/useSharedNavigation) — intentionally deferred, left untouched",
+      "48-05 (REQ-4 API: item_name_encrypted column, additive migration, invite-flow path) — in progress at transcript end",
+      "48-06 (REQ-4 web) — queued after 48-05",
+      "Full web e2e + reviews + re-sign + PR — final wave step not yet started",
+      "Key zeroing on delete()/clear() documented as T-48-06 — should be verified in 48-06 or a dedicated security review pass",
+      "updateSharedFile emitting stale children/sequence documented in SUMMARY for 48-04 to address if needed"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T14:30:43.408351Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 168,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 168,
+    "total_lines_changed": 173,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 25,
+      "user_lines_removed": 2,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6,
+        "Cargo.lock": 2,
+        "apps/api/.env.dev-backup": 16
+      },
+      "user_removed_per_file": {
+        "Cargo.lock": 2
+      }
+    }
+  ]
+}
