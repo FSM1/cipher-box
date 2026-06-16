@@ -14,7 +14,7 @@
   },
   "scripts": {
     "dev": "tsup --watch",
-    "build": "tsup",
+    "build": "tsup && tsc -p tsconfig.build.json",
     "lint": "eslint src/**/*.ts",
     "test": "vitest run",
     "test:watch": "vitest",
