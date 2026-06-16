@@ -101,3 +101,7 @@ All research line numbers verified against current source (client.ts loadFolder/
 <status>completed</status>
 <summary>Background command "Commit and push REQ-1 blocked handoff" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+ok lets go with the above proposed option 1
