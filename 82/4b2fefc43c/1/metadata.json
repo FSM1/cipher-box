@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "824b2fefc43c",
+  "session_id": "88fc6e19-e89f-4b11-a4f7-d2f4ca34d073",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T19:15:33.880261Z",
+  "branch": "docs/close-resolved-todos",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/seeds/SEED-001-phala-tee-on-demand-cost-reduction.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d01ef1c049cc",
+  "token_usage": {
+    "input_tokens": 10000,
+    "cache_creation_tokens": 60813,
+    "cache_read_tokens": 342362,
+    "output_tokens": 13661,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Evaluate and flesh out SEED-001: whether the production Phala TEE CVM can be power-cycled on-demand (stop/start between cron runs) to eliminate always-on compute costs given its <1% duty cycle.",
+    "outcome": "A 5-agent parallel workflow produced a full feasibility brief. SEED-001 was enriched with architecture options, cost model, key-continuity analysis, and a sequenced recommendation. The file is modified but uncommitted, status set to dormant with clear next spikes defined.",
+    "learnings": {
+      "repo": [
+        "The TEE worker is a persistent Express server with no internal scheduler — it is woken exclusively by the API's BullMQ cron POSTing /republish on a `0 */6 * * *` schedule (4 runs/day).",
+        "IPNS records carry a 48h EOL but are republished every 6h, giving an 8× safety margin — even a 25-min cold-start is trivially safe against the freshness deadline.",
+        "TEE keys are deterministically derived per epoch via `DstackClient.getKey('cipherbox/ipns-republish', 'epoch-${N}')` bound to the CVM app_id — no private key is persisted in the worker.",
+        "stop/start preserves app_id and therefore re-derives identical epoch keys (safe); destroy/recreate that yields a new app_id permanently bricks all ECIES-wrapped IPNS keys — documented as a CRITICAL rule in docker-compose.phala.yml and 35-RESEARCH.md.",
+        "There is zero attestation/quote verification anywhere in the codebase (repo-wide grep for getQuote|attestation|dcap|RA-TLS returns zero hits) — clients trust teePublicKey as served by the API, so quote instability across boots is a non-issue today.",
+        "The production CVM identity is ambiguous: the compose is named `cipherbox-tee-staging` with CIPHERBOX_ENVIRONMENT=staging, so it is unclear whether this is truly prod or a separate prod CVM exists.",
+        "Phala GPU TEE CVMs have a 24h billing minimum per launch — on-demand cycling is only economical for CPU/TDX CVMs, which our worker uses."
+      ],
+      "code": [
+        {
+          "path": "docker-compose.phala.yml",
+          "finding": "Contains an inline CRITICAL rule: never destroy+recreate into a new app_id, as this bricks all ECIES-wrapped IPNS keys permanently."
+        },
+        {
+          "path": ".planning/phases/48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata/48-RESEARCH.md",
+          "finding": "Also documents the key-bricking warning for destroy/recreate of the TEE CVM."
+        },
+        {
+          "path": ".planning/seeds/SEED-001-phala-tee-on-demand-cost-reduction.md",
+          "finding": "Enriched with full decision-ready brief: key-continuity analysis, cost model (~85-95% compute reduction but likely single-digit $/mo absolute), 4 architecture options, recommendation sequence, and 6 open spikes."
+        }
+      ],
+      "workflow": [
+        "Used a 5-agent parallel workflow (fan-out over 4 subsystems + synthesis) to simultaneously investigate republish cadence, TEE key lifecycle, deployment topology, and Phala lifecycle API before synthesizing a decision brief.",
+        "Phala bills per-second with no monthly minimum for CPU/TDX CVMs; a stopped CVM halts compute charges but still bills storage (~$0.10/GB/mo); only DELETE eliminates storage cost entirely.",
+        "Cold-start duration is image-size-dominated: small image ~1-2 min, large image (e.g. 1.4GB) ~20-25 min — this determines the savings ceiling more than execution time.",
+        "The zero-risk first step before any orchestration work is to downsize the always-on CVM (e.g. from medium to small), which captures a large fraction of savings with no key risk and no new failure modes."
+      ]
+    },
+    "friction": [
+      "Key continuity across stop/start is theoretically sound from dstack KMS docs but has not been empirically verified against the actual production app — it remains an unconfirmed assumption.",
+      "Exact CVM size, disk footprint, and image tag are not pinned in the repo (image tag may be `latest`), making the cost model estimates rather than hard numbers.",
+      "Cold-start time is unknown without measurement — determines whether savings are meaningful or eroded by long boot windows.",
+      "Production vs staging CVM identity is unresolved: cannot safely orchestrate stop/start without first confirming which CVM is actually production."
+    ],
+    "open_items": [
+      "Key-continuity spike (blocking): on a throwaway TDX CVM, derive getKey() for an epoch → phala cvms stop → start → re-derive → assert identical teePublicKey (~30 min).",
+      "Cold-start measurement: time `phala cvms start` → /health ready for the actual image; confirm whether start re-pulls layers (~30 min).",
+      "Resolve prod-vs-staging CVM identity via `phala cvms list` to know which CVM would actually be cycled.",
+      "Pull `phala cvms get <app_id>` for prod to get real size/disk GB/image tag and convert cost estimates to actual numbers (~10 min).",
+      "Downsize always-on CVM to `small` if not already — zero-risk first step to capture savings before any orchestration work.",
+      "If spikes pass, implement Option A (stop/start same CVM): extend API cron to start → poll /health → republish → stop, and provision Phala API creds (none exist in CI today).",
+      "SEED-001 file is a working-tree change (uncommitted) — needs to be folded into the next planning commit."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T19:14:41.773992Z",
+    "agent_lines": 86,
+    "agent_removed": 14,
+    "human_added": 120,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 206,
+    "total_lines_changed": 342,
+    "agent_percentage": 29.239766081871345,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}

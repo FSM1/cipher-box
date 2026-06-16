@@ -3,7 +3,7 @@
   "checkpoint_id": "824b2fefc43c",
   "strategy": "manual-commit",
   "branch": "docs/close-resolved-todos",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     ".planning/seeds/SEED-001-phala-tee-on-demand-cost-reduction.md"
   ],
@@ -13,13 +13,19 @@
       "transcript": "/82/4b2fefc43c/0/full.jsonl",
       "content_hash": "/82/4b2fefc43c/0/content_hash.txt",
       "prompt": "/82/4b2fefc43c/0/prompt.txt"
+    },
+    {
+      "metadata": "/82/4b2fefc43c/1/metadata.json",
+      "transcript": "/82/4b2fefc43c/1/full.jsonl",
+      "content_hash": "/82/4b2fefc43c/1/content_hash.txt",
+      "prompt": "/82/4b2fefc43c/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 10014,
-    "cache_creation_tokens": 94822,
-    "cache_read_tokens": 798247,
-    "output_tokens": 12213,
-    "api_call_count": 15
+    "input_tokens": 20014,
+    "cache_creation_tokens": 155635,
+    "cache_read_tokens": 1140609,
+    "output_tokens": 25874,
+    "api_call_count": 22
   }
 }
