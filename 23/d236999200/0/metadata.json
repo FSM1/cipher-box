@@ -1,0 +1,233 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "23d236999200",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T03:11:50.611538Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/sdk/src/__tests__/bin.test.ts",
+    "packages/sdk/src/bin/index.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "c5aba8e5a8aa",
+  "token_usage": {
+    "input_tokens": 47664,
+    "cache_creation_tokens": 705684,
+    "cache_read_tokens": 12666559,
+    "output_tokens": 144626,
+    "api_call_count": 65
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c5aba8e5a8aa",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c5aba8e5a8aa",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c5aba8e5a8aa",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Consolidate four related pending todos into a single GSD phase: fix a self-bootstrap regression (#498 clobbering fresher folderTree state), remove redundant web folder-seeding (gated on that fix), route shared-folder writes through the SDK, and encrypt share itemName at rest (Phase 14 M1 security finding).",
+    "outcome": "Phase 48 was created, planned (6 plans across 3 waves), and Wave 1 was partially executed: the sequenceNumber guard fix landed and fixed one of two failing web-e2e specs, but a second root cause (loadBin treating a cold-cache null as 'empty' and destructively publishing an empty bin record) was diagnosed and fixed. The bin fix was staged and committed unsigned after 1Password SSH signing wedged; web-e2e re-dispatch is pending. Waves 2–3 have not yet run.",
+    "learnings": {
+      "repo": [
+        "web-e2e CI only auto-triggers on push to main (via ci-e2e.yml paths-filter), not on PRs — this is the structural gap that let the #498 regression land unverified.",
+        "web-e2e.yml supports workflow_dispatch with a ref input (ref: ${{ inputs.ref || github.sha }}), enabling pre-merge isolated gate: `env -u GITHUB_TOKEN gh workflow run web-e2e.yml --ref <branch>`. No CI change needed.",
+        "The GSD branching_strategy: phase mode creates a new branch off origin/main from the current HEAD, not from a remote base — so it preserves local planning commits in the branch history.",
+        "markdownlint pre-commit hook skips .planning/ (prettier still normalizes those docs).",
+        "TypeORM migrations live in apps/api/src/migrations/; schema-push command is `pnpm --filter @cipherbox/api migration:run`; API types regenerated with `pnpm api:generate`.",
+        "1Password SSH signing can wedge in unattended/AFK runs with 'failed to fill whole buffer' — disabling repo-local signing (git config commit.gpgsign false) is the recovery path.",
+        "The UQ_folder_ipns_user_ipns duplicate-key server error appears in passing tests too and is background noise, not from the self-bootstrap path."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 378,
+          "end_line": 385,
+          "finding": "loadFolder had an unconditional folderTree.set() at ~385; the sequenceNumber guard was inserted at 378 (if existing.sequenceNumber >= resolved → keep existing) to prevent self-bootstrap from clobbering fresher in-memory state with a stale IPNS snapshot."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 422,
+          "end_line": 422,
+          "finding": "ensureFolderLoaded short-circuit at :422 — must be kept intact; the guard in loadFolder must not re-trigger this path."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 454,
+          "end_line": 454,
+          "finding": "DFS child-check at :454 — must be preserved alongside the reconcile guard to avoid re-regressing #498."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "loadBin treated a null from resolveIpnsRecord as 'bin is empty' and eagerly published an empty bin record. Null also occurs on a transient cold-cache miss right after page.reload(). Two concurrent loadBin calls (login fire-and-forget + BinBrowser mount) with no expectedSequenceNumber caused the API to unconditionally bump sequence and overwrite latestCid, destroying the real bin record so deleted items vanished after reload."
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "line": 29,
+          "end_line": 35,
+          "finding": "folder:updated event pattern — REQ-3's new sharedFolder:updated event should be modeled on this."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedWriteOps.ts",
+          "line": 143,
+          "end_line": 146,
+          "finding": "Write-back in useSharedWriteOps that becomes an event-fed projection in REQ-3; withConflictRetry is dropped because CAS moves into the SDK client."
+        },
+        {
+          "path": "apps/api/src/migrations/1743000000000-AddWritableShares.ts",
+          "finding": "Migration to clone for REQ-4 (itemName ECIES column). Pattern: additive nullable bytea column, no data UPDATE (zero-knowledge server)."
+        }
+      ],
+      "workflow": [
+        "GSD todo-grouping analysis: 'do together' (same branch, dependency-ordered) vs 'supersession' (one todo subsumes another but on different horizons) are distinct relationships requiring different handling.",
+        "Pattern mapper + planner (Opus) + checker (Sonnet) pipeline catches design forks before execution; the checker's VALIDATION.md per-task table gap is intentionally TBD and back-filled by gsd:validate-phase.",
+        "Sequential plan execution (no worktree isolation) is preferred over parallel worktrees for unattended/AFK runs — fewer failure modes, all commits land directly on the shared branch.",
+        "For AFK pipeline runs: sign commits when the signer is healthy, but pre-authorize unsigned fallback so the pipeline doesn't wedge. Flag unsigned commits in PR description for admin review.",
+        "Hard gate protocol: if web-e2e returns red, attempt one root-cause fix + re-dispatch before stopping; do not open a PR on a failing gate. Advance to simplify/validate/review/PR only after green."
+      ]
+    },
+    "friction": [
+      "1Password SSH signing wedged mid-run ('failed to fill whole buffer') during unattended executor commits, requiring unsigned fallback and mid-session signing config change.",
+      "web-e2e.yml only auto-triggers on main push, so #498's regression wasn't caught pre-merge — the structural CI gap that motivated adding the dispatch gate to REQ-1.",
+      "Stream idle timeout mid-session cut off an earlier parallel research fan-out (the initial 'fan out four parallel readers' attempt failed silently).",
+      "The #498 self-bootstrap fix introduced a second, distinct regression (bin-restore-after-reload) that was masked: the sequenceNumber guard fixed version-restore but loadBin's null-handling bug required separate diagnosis.",
+      "Two concurrent loadBin calls after reload (login fire-and-forget + BinBrowser mount) with no CAS guard caused a race that destroyed the bin record — hard to detect without faithful IPNS/IPFS fakes in tests."
+    ],
+    "open_items": [
+      "Wave 2 not yet run: REQ-2 (delete ~16 web ensureFolderRegistered seeders + duplicate useFolderNavigation unwrap, gated on web-e2e green) and REQ-3 (sharedFolderTree SDK + sharedFolder:updated event + web hook refactor).",
+      "Wave 3 not yet run: REQ-4 (itemName ECIES column migration, DTO, ShareDialog wrap, lazy client backfill A2, invite path A3, pnpm api:generate).",
+      "web-e2e re-dispatch pending after bin fix commit — gate must go green before PR can open.",
+      "Post-execution pipeline not yet run: /simplify, /gsd:validate-phase 48 (including VALIDATION.md per-task back-fill), CodeRabbit CLI review, /security:review, gh pr create.",
+      "Unsigned commits (bin fix + any remaining executor commits) may need re-signing or admin merge before landing — flagged for PR description.",
+      "Stale branch name feat/phase-48-sdk-self-bootstrap-fix-and-shares pointing at first planning commit — harmless leftover to delete.",
+      "CRDT-IPNS inbox research (#2) explicitly deferred; cross-link added in ROADMAP noting it would subsume REQ-4/M1 if it lands.",
+      "ci-e2e.yml push trigger remains main-only — the structural gap was not fixed in this session, only worked around via documented dispatch procedure."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T03:10:37.229063Z",
+    "agent_lines": 91,
+    "agent_removed": 11,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 91,
+    "total_lines_changed": 102,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
