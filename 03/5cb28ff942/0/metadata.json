@@ -1,0 +1,207 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "035cb28ff942",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T02:34:15.625173Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "0dac37780eae",
+  "token_usage": {
+    "input_tokens": 47252,
+    "cache_creation_tokens": 662275,
+    "cache_read_tokens": 8894035,
+    "output_tokens": 117850,
+    "api_call_count": 54
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0dac37780eae",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0dac37780eae",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0dac37780eae",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Bundle three pending todos (#5 encrypt share itemName, #8 route shared-folder writes through SDK, #9 remove redundant web folder-seeding) into a single GSD phase, then drive that phase through full automated planning and begin execution while the user is AFK.",
+    "outcome": "Phase 48 was created with an additional P0 requirement (REQ-1: fix the #498 self-bootstrap regression that is actively redding main's web-e2e), 6 plans across 3 waves were researched, mapped, and verified (0 blockers), all planning artifacts committed to branch `feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata`, and Wave 1 execution (48-01, the regression fix) was in flight as the transcript ended.",
+    "learnings": {
+      "repo": [
+        "web-e2e only auto-triggers on push to `main` via `ci-e2e.yml`'s `push: branches: [main]` path — PRs and feature branches get no automatic web-e2e coverage, which is how PR #498's regression slipped through to main.",
+        "`web-e2e.yml` already has `workflow_dispatch` with a `ref` input (`ref: ${{ inputs.ref || github.sha }}`), enabling pre-merge branch testing via `env -u GITHUB_TOKEN gh workflow run web-e2e.yml --ref <branch>` with no CI changes required.",
+        "PR #498's self-bootstrap clobbers fresher in-memory folderTree state: `loadFolder` calls unconditional `folderTree.set()` regardless of sequenceNumber, causing the same desync class as PR #489.",
+        "The server is zero-knowledge and cannot re-encrypt existing plaintext `itemName` values — legacy rows require lazy client backfill (not a server-side migration UPDATE).",
+        "CRDT-IPNS inbox research (#2) would subsume the itemName plaintext leak (#5/M1) but is long-horizon; #5 must be treated as an independent live security finding and not held hostage to #2.",
+        "GSD `branching_strategy: phase` creates a new branch off the current HEAD (not origin/main), which can silently rename/replace the user-created branch — requires explicit verification that planning commits were not orphaned.",
+        "TypeORM migrations for zero-knowledge schema changes must be additive only (new nullable column, no data UPDATE) to preserve the zero-knowledge invariant.",
+        "Shared folders carry a distinct `SharedWriteContext` and can collide on `ipnsName` if merged into `folderTree` — a sibling `sharedFolderTree` keyed by `shareId` is the correct isolation boundary."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 385,
+          "end_line": 385,
+          "finding": "Unconditional `folderTree.set()` in `loadFolder` — the REQ-1 fix target; needs a sequenceNumber guard before this call so self-bootstrap never clobbers fresher in-memory state with a stale IPNS snapshot."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 422,
+          "end_line": 422,
+          "finding": "`ensureFolderLoaded` short-circuit — must be preserved intact when applying the REQ-1 guard to avoid re-regressing #498."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 454,
+          "end_line": 454,
+          "finding": "DFS child-check in `ensureFolderLoaded` — must also be preserved intact alongside the sequenceNumber guard."
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "line": 29,
+          "end_line": 35,
+          "finding": "`folder:updated` event definition — canonical model for the new `sharedFolder:updated` event required by REQ-3's sharedFolderTree projection."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedWriteOps.ts",
+          "line": 143,
+          "end_line": 146,
+          "finding": "Write-back logic that REQ-3 replaces: becomes an event-fed projection (listening to `sharedFolder:updated`) instead of direct state mutation; `withConflictRetry` dropped because CAS moves into the SDK client."
+        },
+        {
+          "path": "apps/api/src/entities/share.entity.ts",
+          "line": 72,
+          "end_line": 72,
+          "finding": "`encryptedIpnsKey` field — the direct analog for the new `item_name_encrypted bytea` column added by REQ-4; ECIES wrap/unwrap pattern mirrors this field exactly."
+        },
+        {
+          "path": "apps/api/src/migrations/1743000000000-AddWritableShares.ts",
+          "finding": "Migration to clone for REQ-4's `item_name_encrypted` column — additive structure (no data UPDATE), the correct zero-knowledge migration pattern."
+        },
+        {
+          "path": "apps/web/src/components/ShareDialog.tsx",
+          "line": 338,
+          "end_line": 351,
+          "finding": "ECIES wrap site for REQ-4 — itemName is encrypted here at share-creation time; also the invite flow entry point that must be included per user decision (A3)."
+        }
+      ],
+      "workflow": [
+        "Pre-merge e2e gate for fixes to e2e-detected regressions: dispatch `gh workflow run web-e2e.yml --ref <fix-branch>` immediately after push — direct dispatch resolves repo secrets without a `secrets: inherit` parent, faithfully reproducing the main-push run.",
+        "When a pending todo's premise depends on a PR 'proving out in staging/prod,' verify the PR's e2e status before treating that todo as unblocked — #9 was filed as gated on #498 proving out, but #498 was actively regressing main.",
+        "GSD pattern mapper (run before the planner) classifies all target files against existing analogs and verifies research line numbers against current source — catching stale references before planner consumes them.",
+        "Sequential executor execution (no worktree isolation) is safer than parallel worktrees for unattended AFK runs; reliability > speed when there is no human to recover from a parallel conflict.",
+        "When grouping todos, distinguish 'do together on one branch' (same through-line, complementary scope) from 'one supersedes the other' (the superseding work is long-horizon, so the superseded item must be resolved independently now)."
+      ]
+    },
+    "friction": [
+      "API stream idle timeout mid-response during the initial parallel fan-out research, requiring the user to redirect to a GSD phase instead of an ad-hoc research + plan.",
+      "GSD `branching_strategy: phase` silently created `feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata` off HEAD during execute-phase init, potentially orphaning the 5 planning commits already on `feat/phase-48-...` — required explicit git log verification before spawning any executor.",
+      "1Password SSH signing requires keychain access and can hang during unattended execution — flagged as a potential wedge point for the AFK commit chain.",
+      "UAT steps (cold-reload verification, shared-write round-trip, itemName display) are not fully automatable via web-e2e alone — must be noted as partially unverified during AFK execution."
+    ],
+    "open_items": [
+      "Phase 48 Wave 1 (48-01, REQ-1 regression fix) was executing as the transcript ended — outcome unknown.",
+      "Waves 2 and 3 (REQ-2 gated on REQ-1 green; REQ-3 sharedFolderTree; REQ-4 ECIES itemName + migration + lazy backfill + invite path) not yet started.",
+      "web-e2e pre-merge dispatch gate for REQ-1 not yet run — main is red and this is the hard acceptance check before REQ-2 can proceed.",
+      "Todo #2 (CRDT-IPNS inbox research for serverless share discovery) explicitly deferred; cross-linked as long-horizon superseder of REQ-4/M1.",
+      "VALIDATION.md per-task table is TBD — to be back-filled by `/gsd:validate-phase 48` after execution.",
+      "CodeRabbit review, `/simplify`, security review of ECIES/IPNS/shared-folder changes, and PR creation all pending execution completion.",
+      "Stale branch `feat/phase-48-sdk-self-bootstrap-fix-and-shares` (points at first planning commit) to be deleted after the canonical GSD branch is confirmed stable.",
+      "`Cargo.lock` and `.planning/intel/` uncommitted changes intentionally left on the working tree as unrelated to Phase 48.",
+      "CI structural gap: web-e2e has no PR-triggered path — the pre-merge dispatch workaround is procedural, not enforced; a `pull_request` trigger (or required status check) would make it structural."
+    ]
+  }
+}
