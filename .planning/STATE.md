@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Phase 46 secured and verified
-last_updated: "2026-06-15T13:00:00.000Z"
-last_activity: 2026-06-15
+status: Executing Phase 48
+last_updated: "2026-06-16T02:35:00.000Z"
+last_activity: 2026-06-16
 progress:
-  total_phases: 32
-  completed_phases: 30
-  total_plans: 134
+  total_phases: 33
+  completed_phases: 31
+  total_plans: 145
   completed_plans: 134
-  percent: 100
+  percent: 92
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 46 — desktop-fuse-data-loss-bugs-replay-hardening
+**Current focus:** Phase 48 — sdk-self-bootstrap-regression-fix-and-shared-folder-metadata
 
 ## Current Position
 
-Phase: 46 (desktop-fuse-data-loss-bugs-replay-hardening) — SECURED + VERIFIED
-Plan: 4 of 4 (committed); simplify + secure (SECURED 12/12) + verify (GOAL MET 6/6) complete
+Phase: 48 (sdk-self-bootstrap-regression-fix-and-shared-folder-metadata) — EXECUTING
+Plan: 1 of 6
 Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. Phase 46 Linux remount-after-SIGKILL UAT passed 2026-06-15 — fully verified, no open items.
 
 ## Performance Metrics
@@ -271,7 +271,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-06-15
+Last activity: 2026-06-16
 
 ## Decisions
 
