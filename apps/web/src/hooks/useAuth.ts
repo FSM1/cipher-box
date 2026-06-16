@@ -91,7 +91,16 @@ export function useAuth() {
   const pendingAuthMethod = useAuthStore((s) => s.pendingAuthMethod);
   const setPendingAuth = useAuthStore((s) => s.setPendingAuth);
 
-  const isLoading = !coreKitInitialized || isLoggingIn || isLoggingOut;
+  // `coreKitLoggedIn && !isAuthenticated` covers the session-restore window: after
+  // a reload CoreKit re-initializes (coreKitInitialized flips true) a beat before
+  // the restoreSession effect sets isLoggingIn/isAuthenticated. Without this term
+  // there is a transient where !isLoading && !isAuthenticated are both true, so a
+  // protected route mounting in that gap (e.g. opening /bin right after a reload)
+  // wrongly redirects to /login. Keeping isLoading true until restore resolves
+  // closes the gap; a genuinely logged-out user has coreKitLoggedIn false, so the
+  // login redirect still fires.
+  const isLoading =
+    !coreKitInitialized || isLoggingIn || isLoggingOut || (coreKitLoggedIn && !isAuthenticated);
 
   // Get vault store actions
   const setVaultKeys = useVaultStore((state) => state.setVaultKeys);
