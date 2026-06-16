@@ -175,6 +175,37 @@
         "label": "Skill: gsd:validate-phase",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01UfuW3fzfMm8bcV63yZ411v",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security:review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5c8a5d86153",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1785,
+        "end": 1786,
+        "entry_ids": [
+          "bb0eaeab-3434-4761-9e6c-59b0880e8632"
+        ],
+        "tool_use_id": "toolu_01UfuW3fzfMm8bcV63yZ411v"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01UfuW3fzfMm8bcV63yZ411v"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security:review",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
