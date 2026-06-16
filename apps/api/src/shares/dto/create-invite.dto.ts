@@ -60,7 +60,6 @@ export class CreateInviteDto {
     description: 'Display name of the shared item',
   })
   @IsString()
-  @MinLength(1)
   @MaxLength(255)
   itemName!: string;
 
