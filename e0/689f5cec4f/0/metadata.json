@@ -1,0 +1,161 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e0689f5cec4f",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T16:29:48.967042Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/shares/dto/create-invite.dto.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "e5ec791ec47e",
+  "checkpoint_transcript_start": 1590,
+  "transcript_lines_at_start": 1590,
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 6307,
+    "cache_read_tokens": 186193,
+    "output_tokens": 719,
+    "api_call_count": 1
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5ec791ec47e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5ec791ec47e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5ec791ec47e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 26
+  },
+  "summary": {
+    "intent": "Fix a MinLength validation issue in the create-invite DTO and commit it as part of a multi-feature branch (F1), following an earlier F2 commit.",
+    "outcome": "F2 was successfully committed (288d0670a) with lint-staged passing clean. F1 (the API DTO fix to create-invite.dto.ts) was being prepared for commit with the openapi.json pre-commit hook expected to pass.",
+    "learnings": {
+      "repo": [
+        "The repo uses lint-staged as a pre-commit hook, which must pass before commits land.",
+        "openapi.json is validated or checked by a pre-commit hook — changes to DTOs must keep it clean.",
+        "Features are being developed and committed incrementally as named units (F1, F2) within a session."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/dto/create-invite.dto.ts",
+          "finding": "Required a MinLength decorator fix — likely a missing or incorrect validation constraint on an invite creation field."
+        }
+      ],
+      "workflow": [
+        "Commits are being made feature-by-feature (F2 before F1) rather than all at once, suggesting deliberate atomic commit strategy.",
+        "Pre-commit hooks (lint-staged, openapi.json check) gate every commit — verifying hook state before committing avoids failed attempts."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "F1 commit (create-invite DTO MinLength fix) was in progress at transcript end — may not yet be finalized.",
+      "Any remaining features beyond F1 and F2 in the branch are not captured in this transcript."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T16:29:38.250749Z",
+    "agent_lines": 0,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 1,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

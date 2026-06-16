@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e0689f5cec4f",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/shares/dto/create-invite.dto.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e0/689f5cec4f/0/metadata.json",
+      "transcript": "/e0/689f5cec4f/0/full.jsonl",
+      "content_hash": "/e0/689f5cec4f/0/content_hash.txt",
+      "prompt": "/e0/689f5cec4f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 6307,
+    "cache_read_tokens": 186193,
+    "output_tokens": 719,
+    "api_call_count": 1
+  }
+}
