@@ -1,0 +1,9 @@
+when you're done with that - I have noticed a number of times where the windows desktop e2e fails during the build step: https://github.com/FSM1/cipher-box/actions/runs/27639042592/job/81734019337
+
+this seems to be flakey behavior as rerunning the test usually resolves the issue.
+
+And yes open a PR for the docs update.
+
+---
+
+yeah the docs pr has already been merged - happy with the proposed recommendation
