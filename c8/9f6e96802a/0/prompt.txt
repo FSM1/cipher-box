@@ -1,0 +1,466 @@
+/gsd:capture --list
+
+---
+
+#8,9 can be taken care of easily together. #2 & 5 are also related as the CRDT inbox was specifically for share discovery.
+
+---
+
+Please use a gsd phase for this
+
+---
+
+one thing to ensure is that once the fix for the regression is ready, a webe2e run can be kicked off against the code as soon as the branch has been pushed to remote.
+
+---
+
+ok switch to a phase 48 branch, commit this, and jump in to either discussion (if necessary) or go directly to planning
+
+---
+
+<task-notification>
+<task-id>a6e6bc1f391928a0b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/a6e6bc1f391928a0b.output</output-file>
+<status>completed</status>
+<summary>Agent "Map patterns for Phase 48" completed</summary>
+<result>## PATTERN MAPPING COMPLETE
+
+**Phase:** 48 - sdk-self-bootstrap-regression-fix-and-shared-folder-metadata
+**Files classified:** 16
+**Analogs found:** 16 / 16
+
+### Coverage
+
+- Files with exact analog: 12
+- Files with role-match analog: 4
+- Files with no analog: 0
+
+### Key Patterns Identified
+
+- REQ-1 reconcile is a 1-analog in-place fix: insert a `sequenceNumber` (bigint) guard before the unconditional `folderTree.set` at `client.ts:385`; keep `ensureFolderLoaded`'s short-circuit (:422) and DFS child-check (:454) intact to avoid re-regressing #498.
+- REQ-3 mirrors Phase 47 single-ownership: new client methods read `sharedFolderTree.get(shareId)`, delegate to existing `share/shared-write.ts` (which already returns `{publishedChildren, newSequenceNumber}` via `publishWithCas`), write back, and emit a new `sharedFolder:updated` event modeled on `folder:updated` (events.ts:29-35). Web `useSharedWriteOps.ts:143-146` write-back becomes event-fed projection; `withConflictRetry` is dropped (CAS lives in the client).
+- REQ-4 mirrors the existing `encryptedKey` ECIES flow: nullable `item_name_encrypted bytea` column (analog `encryptedIpnsKey` :72), migration cloned from `1743000000000-AddWritableShares.ts` (additive, no data UPDATE — zero-knowledge), wrap at `ShareDialog.tsx:338,351`, hex `@Matches` DTO field, lazy client backfill (A2), invite path included (A3). Requires `pnpm api:generate`.
+
+### File Created
+
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata/48-PATTERNS.md`
+
+### Ready for Planning
+
+All research line numbers verified against current source (client.ts loadFolder/ensureFolderLoaded, share/context.ts, AddWritableShares migration, share.entity.ts, useSharedWriteOps.ts, events.ts). Planner can reference analog patterns directly.</result>
+<usage><subagent_tokens>62342</subagent_tokens><tool_uses>27</tool_uses><duration_ms>148579</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b1zs0wngm</task-id>
+<tool-use-id>toolu_01TvBmLYgLm1h4xWKHzr6zzz</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/b1zs0wngm.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch web-e2e run to completion (background)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bt6bsxfy4</task-id>
+<tool-use-id>toolu_01FcUNyyyVsqpwwSFxQ3YJfs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/bt6bsxfy4.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit bin fix unsigned and disable repo signing" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0u93zd52</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/b0u93zd52.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch re-dispatched web-e2e run (background)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bp73e0wtr</task-id>
+<tool-use-id>toolu_018M6cBhmvtrrXvrtkdpZq4v</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/bp73e0wtr.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch 3rd web-e2e run (background)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b3ktk1cu9</task-id>
+<tool-use-id>toolu_01WFsdFnnFoNA1eTEHsGYvbg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/b3ktk1cu9.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push REQ-1 blocked handoff" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok lets go with the above proposed option 1
+
+---
+
+<task-notification>
+<task-id>b1c655bgo</task-id>
+<tool-use-id>toolu_01TJEatewvb4uozZAZC4ERPo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/b1c655bgo.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit and push corrected root-cause handoff" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+sounds like a plan - bring up the full stack locally and make sure the fix works
+
+---
+
+you can kill all the irl network processes - I will restart these later
+
+---
+
+<task-notification>
+<task-id>wmhoezq72</task-id>
+<tool-use-id>toolu_018218g9KAJW9vFJckkhvHB8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/wmhoezq72.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Map the local web-e2e bring-up, loadBin/resolve-404 semantics, and bin publish durability before fixing the bin-restore-after-reload regression" completed</summary>
+<result>[{"area":"stack-bringup","summary":"The web-e2e suite runs from tests/web-e2e via Playwright, whose webServer config auto-starts three local processes (mock-ipns-routing, the NestJS API on :3000, and the Vite web app on :5173) so you do NOT start those manually. You DO need to start three Docker services yourself first (postgres:16-alpine :5432, ipfs/kubo:v0.40.0 :5001/:8080, redis:7-alpine :6379), build the mock-ipns-routing dist and the workspace packages, and write apps/api/.env + apps/web/.env. The repo's docker/docker-compose.yml provides all three services (plus extras you can ignore) at the CI ports. Critically, bin-restore-after-reload.spec.ts uses the REAL Web3Auth Core Kit DEVNET flow via loginViaWallet (not the test-login bypass), so it needs the real VITE_WEB3AUTH_CLIENT_ID and outbound network to Web3Auth DEVNET; TEST_LOGIN_SECRET/SDK_E2E_SECRET are NOT exercised by this spec, and IDENTITY_JWT_PRIVATE_KEY is optional locally (API generates an ephemeral keypair when NODE_ENV!=production). Docker is available locally (Docker Desktop 4.75 confirmed).","details":"AUTHORITATIVE SOURCES\n- CI workflow: /Users/myankelev/Code/random/cipher-box/.github/workflows/web-e2e.yml — services block (lines 18-53), package builds (100-108), .env creation (113-134), run + env (136-167).\n- Playwright config: /Users/myankelev/Code/random/cipher-box/tests/web-e2e/playwright.config.ts — webServer array (lines 62-94).\n- Dev compose (matches CI service images/ports): /Users/myankelev/Code/random/cipher-box/docker/docker-compose.yml.\n- Mock service: /Users/myankelev/Code/random/cipher-box/tools/mock-ipns-routing/ (package.json build=\"tsc\", src/index.ts listens on PORT||3001, host HOST||... ).\n- Target spec: /Users/myankelev/Code/random/cipher-box/tests/web-e2e/tests/bin-restore-after-reload.spec.ts.\n- Login helper: /Users/myankelev/Code/random/cipher-box/tests/web-e2e/utils/wallet-login-helpers.ts.\n\nDOCKER SERVICES (exact images/ports/env from web-e2e.yml lines 18-53):\n- postgres: image postgres:16-alpine; port 5432:5432; env POSTGRES_USER=postgres, POSTGRES_PASSWORD=REDACTED, POSTGRES_DB=cipherbox_test.\n- ipfs (kubo): image ipfs/kubo:v0.40.0; ports 5001:5001 (API) and 8080:8080 (gateway).\n- redis: image redis:7-alpine; port 6379:6379.\nNOTE on CORS: web-e2e.yml lines 73-89 configure Kubo CORS (Access-Control-Allow-Origin \"*\", methods GET/POST/OPTIONS on both API.HTTPHeaders and Gateway.HTTPHeaders) then restarts Kubo. This is only required by the recovery test (recovery.html browser-&gt;Kubo cross-origin). bin-restore-after-reload does NOT need it, but harmless to apply.\nNOTE on compose: docker/docker-compose.yml uses the SAME images/ports but POSTGRES_DB defaults to \"cipherbox\" (not cipherbox_test) and adds someguy + a built mock-ipns-routing container. For an exact CI match, override DB_DATABASE=cipherbox_test and bring up only postgres/ipfs/redis, OR just use plain docker run (commands provided). Redis in compose maps host 6380 by default — CI uses 6379, so use docker run or set REDIS_PORT=6379.\n\nMIGRATIONS: No manual DB migration step. apps/api/src/app.module.ts (line 105) sets migrationsRun: true and synchronize: false — the API runs TypeORM migrations automatically on boot against cipherbox_test.\n\nMOCK-IPNS-ROUTING (web-e2e.yml lines 94-98): built with `cd tools/mock-ipns-routing &amp;&amp; npm install &amp;&amp; npm run build` (tsc -&gt; dist/index.js). Playwright then runs `node tools/mock-ipns-routing/dist/index.js` from workspace root, health-checked at http://localhost:3001/health (config line 70). Port 3001. dist is currently MISSING locally, so you must build it before running. (npm is used in CI; package.json also supports `pnpm build` / `npm run dev` via tsx.)\n\nWORKSPACE BUILDS (web-e2e.yml lines 100-108), in order: crypto, core, api-client, sdk-core, sdk, api, web. The web build runs with VITE_WEB3AUTH_CLIENT_ID and VITE_API_URL=http://localhost:3000. For the Playwright webServer the api/web are run in DEV mode (`pnpm --filter @cipherbox/api dev` = nest start --watch; `pnpm --filter @cipherbox/web dev` = vite), so the api/web \"build\" steps are not strictly required for dev-mode webServer, but the LIBRARY builds (crypto/core/api-client/sdk-core/sdk) ARE required because web/api consume their dist. Safest: run all 7 to match CI.\n\nPLAYWRIGHT WEBSERVER — AUTO-STARTS (config lines 62-94): yes, all three are auto-started from workspace root (cwd two levels up):\n  1) `node tools/mock-ipns-routing/dist/index.js` — url http://localhost:3001/health, reuseExistingServer:true always.\n  2) `pnpm --filter @cipherbox/api dev` — url http://localhost:3000/health, timeout 120s, reuseExistingServer:!CI.\n  3) `pnpm --filter @cipherbox/web dev` — url http://localhost:5173, timeout 120s, reuseExistingServer:!CI.\nSo you only manually start the 3 Docker services + build mock dist + build packages + write .env. The API health endpoint is GET /health (apps/api/src/health/health.controller.ts, @Controller('health')); web dev binds :5173 (apps/web/vite.config.ts line 45) and proxies /api -&gt; :3000. Because reuseExistingServer is true (when CI is unset), if you already have api/web/mock running Playwright reuses them.\n\n.ENV CONTENTS (verbatim from web-e2e.yml lines 116-134):\napps/web/.env:\n  VITE_WEB3AUTH_CLIENT_ID=&lt;real DEVNET client id&gt;\n  VITE_API_URL=http://localhost:3000\napps/api/.env:\n  NODE_ENV=test\n  DB_HOST=localhost\n  DB_PORT=5432\n  DB_USERNAME=postgres\n  DB_PASSWORD=REDACTED  DB_DATABASE=cipherbox_test\n  JWT_SECRET=e2e-test-jwt-secret-key-for-ci\n  CORS_ALLOWED_ORIGINS=http://localhost:5173\n  IPFS_PROVIDER=local\n  IPFS_LOCAL_API_URL=http://localhost:5001\n  IPFS_LOCAL_GATEWAY_URL=http://localhost:8080\n  DELEGATED_ROUTING_URL=http://localhost:3001\n  REDIS_HOST=localhost\n  REDIS_PORT=6379\n  TEST_LOGIN_SECRET=e2e-test-secret-ci-only\n  (IDENTITY_JWT_PRIVATE_KEY — OMIT locally; optional)\nThe actual VITE_WEB3AUTH_CLIENT_ID repo variable value (gh variable get, non-secret): REDACTED\n\nSECRETS — REQUIRED vs OPTIONAL:\n- VITE_WEB3AUTH_CLIENT_ID: REQUIRED (it's a repo *variable*, not secret; value above). Needed because this spec drives real Core Kit DEVNET (getCoreKit in apps/web/src/lib/web3auth/core-kit.ts uses WEB3AUTH_NETWORK.DEVNET for local/ci). Implies the machine needs outbound internet to Web3Auth DEVNET.\n- IDENTITY_JWT_PRIVATE_KEY: OPTIONAL locally. jwt-issuer.service.ts lines 31-45: only throws when NODE_ENV=production; otherwise generates an ephemeral RS256 keypair. With NODE_ENV=test it's fine to omit.\n- TEST_LOGIN_SECRET / SDK_E2E_SECRET (=e2e-test-secret-ci-only): NOT used by bin-restore-after-reload. loginViaWallet (wallet-login-helpers.ts) clicks the real WALLET button -&gt; mock EIP-6963 wallet -&gt; SIWE -&gt; Core Kit; it never calls POST /auth/test-login. The test-login secret path is only consumed by the SDK integration test (packages/sdk/src/__tests__/integration.test.ts). Setting it is harmless. Keeping it in apps/api/.env is fine.\n- WEB3AUTH_TEST_EMAIL / WEB3AUTH_TEST_OTP: NOT needed for this spec (email-OTP fallback path, unused by wallet login).\n\nKEY RISK FOR YOUR BLOCKED TEST: Since this spec uses the real Web3Auth DEVNET Core Kit (not the deterministic test-login bypass), local flakiness/failures can stem from Web3Auth DEVNET reachability/latency, not your code. The 90s test timeout (spec line 45) and Core Kit init polling (helper lines 124-132) are the slow points.","commands_or_code":"PREREQS: Docker Desktop running (confirmed: 4.75.0). Run all from repo root /Users/myankelev/Code/random/cipher-box.\n\n1) START DOCKER SERVICES (plain docker run, exact CI images/ports — does NOT touch your dev compose volumes):\ndocker run -d --name cb-e2e-postgres -p 5432:5432 -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=REDACTED -e POSTGRES_DB=cipherbox_test postgres:16-alpine\ndocker run -d --name cb-e2e-ipfs -p
+... (truncated 26844 chars, full result in /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/wmhoezq72.output)</result>
+<usage><agent_count>3</agent_count><subagent_tokens>221653</subagent_tokens><tool_uses>86</tool_uses><duration_ms>202700</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1eaf3b7d3872be94</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/a1eaf3b7d3872be94.output</output-file>
+<status>completed</status>
+<summary>Agent "Local repro and fix loadBin clobber" completed</summary>
+<result>API Error: Stream idle timeout - partial response received</result>
+<usage><subagent_tokens>5507</subagent_tokens><tool_uses>392</tool_uses><duration_ms>4317984</duration_ms></usage>
+</task-notification>
+
+---
+
+yeah please restore .env to the state it was in before
+
+---
+
+<task-notification>
+<task-id>bm5l0mrgq</task-id>
+<tool-use-id>toolu_01Sm8Z2UsyU715boHpjJYmgb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/bm5l0mrgq.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch 4th web-e2e CI run" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a413a7627822a90d9</task-id>
+<tool-use-id>toolu_017m7yJK7vde72ywwQXtfU5K</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/a413a7627822a90d9.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 48-02 (REQ-2)" completed</summary>
+<result>Both commits are on the branch. All done.
+
+---
+
+## CHECKPOINT REACHED
+
+**Type:** human-verify
+**Plan:** 48-02
+**Progress:** 2/3 tasks complete (Tasks 1 + 2 merged into one commit; Task 3 is UAT)
+
+### Completed Tasks
+
+| Task | Name | Commit | Files |
+| ---- | ---- | ------ | ----- |
+| 1+2 | Delete ensureFolderRegistered call sites + definition; useFolderNavigation pre-seed (no-op) | df1223bf3 | sdk-provider.ts, useFolderMutations.ts, useFileOperations.ts, useFileVersions.ts, useDropUpload.ts |
+| docs | Planning artifacts | 67aa4a55c | 48-02-SUMMARY.md, STATE.md |
+
+### Current Task
+
+**Task 3:** Cold-reload manual UAT for former seed sites
+**Status:** Awaiting web-e2e dispatch
+**Blocked by:** Requires live stack + browser session
+
+### What Changed
+
+- `ensureFolderRegistered` function and its `FolderNode` import deleted from `sdk-provider.ts`
+- All 14 call sites removed across 4 hooks:
+  - `useFolderMutations.ts`: 10 calls (create/rename/move/move-batch/delete/delete-batch including in-loop re-registration)
+  - `useFileOperations.ts`: 1 call (file replace path)
+  - `useFileVersions.ts`: 2 calls (restore and delete version paths)
+  - `useDropUpload.ts`: 1 call (new file upload path)
+- `useFolderNavigation.ts`: **no change required** — the unwrap in that file serves the IPNS metadata-load/display path (`fetchAndDecryptMetadata` + Zustand store), not SDK seeding. No `registerFolder` call was present.
+- Typecheck (`tsc --noEmit`) and lint (`eslint`) both pass clean.
+
+### Risk Note
+
+Every former seed site now depends exclusively on the SDK `requireFolder` chokepoint (PR #498) to self-bootstrap cold. The UAT must confirm all 5 operation classes work after a cold reload without pre-navigating: upload, file replace, version restore/delete, and folder CRUD. If any operation throws "Folder not loaded", the sequence-guard fix from REQ-1 needs investigation for that specific path.
+
+### Awaiting
+
+Orchestrator should re-dispatch `web-e2e.yml` on the current branch to run `bin-restore-after-reload.spec.ts` and `full-workflow.spec.ts` as the integration gate for cold-reload mutations. Manual UAT against a live stack for each former seed site class is also required before merging.</result>
+<usage><subagent_tokens>76694</subagent_tokens><tool_uses>52</tool_uses><duration_ms>387520</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aba2fb0dfa9156267</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/aba2fb0dfa9156267.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 48-03 (REQ-3 SDK)" completed</summary>
+<result>All commits landed. Plan 48-03 executed completely.
+
+## EXECUTION COMPLETE
+
+**Plan:** 48-03 (REQ-3, SDK side)
+**Tasks:** 3/3
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata/48-03-SUMMARY.md`
+
+**Commits (signed, on `feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata`):**
+- `220bf8f9d` feat: add shared-folder state contracts (Task 1)
+- `a6bc822c1` test: tree isolation (GREEN) + client shared-write (RED) (Task 2 — TDD RED gate)
+- `64e8b8967` feat: SDK client owns shared-folder state and publish (Task 3 — TDD GREEN gate)
+- `5e89374ab` docs: SUMMARY + STATE + ROADMAP
+
+**Duration:** ~6 minutes
+
+### Artifacts produced (the contract plan 48-04 consumes)
+
+**`SharedFolderTree` structure** (`/Users/myankelev/Code/random/cipher-box/packages/sdk/src/state/shared-folder-tree.ts`): a sibling map keyed by `shareId` (NOT `ipnsName`), with `get/set/has/delete/clear/getAll`. `set()` clones `folderKey`/`ipnsPrivateKey`; `delete()`/`clear()` zero key material (T-48-06). Two shares with the same `ipnsName` stay isolated (T-48-07, proven by tests). `SharedFolderState` type added to `types.ts` carrying the full SharedWriteContext surface.
+
+**New client methods** (`/Users/myankelev/Code/random/cipher-box/packages/sdk/src/client.ts`), all `(shareId, args)`:
+- `loadSharedFolder` (+ `hasSharedFolder` / `getSharedFolderState` / `unloadSharedFolder`)
+- `uploadToSharedFolder`, `createSharedSubfolder`, `renameInSharedFolder`, `deleteFromSharedFolder`, `updateSharedFile`
+
+Each reads state → builds `SharedWriteContext` → delegates to the stateless `share/shared-write.ts` function (which routes through `publishWithCas` — **no second retry loop**, T-48-08) → writes back → emits the event.
+
+**`sharedFolder:updated` event** (`/Users/myankelev/Code/random/cipher-box/packages/sdk/src/events.ts`): `{ type: 'sharedFolder:updated'; shareId; ipnsName; children; sequenceNumber }`. `SharedFolderState` + `SharedFolderTree` exported from `index.ts`.
+
+### Verification
+- `vitest run shared`: 23 passed (tree 4, shared-write 17, client-shared-write 2)
+- `tsc --noEmit`: clean; `eslint 'src/**/*.ts'`: clean
+- Full sdk suite: 191 passed; **3 failures isolated to `integration.test.ts`** (live-API suite, ECONNREFUSED:3000 — pre-existing, requires a running server, out of scope)
+
+### Deviations
+- **Verify-command naming only:** the plan's `pnpm --filter @cipherbox/sdk typecheck` does not exist (no `typecheck` script in the sdk package); used the equivalent `tsc --noEmit -p tsconfig.json` directly. No code impact.
+- **One design choice:** `updateSharedFile` emits `sharedFolder:updated` with *unchanged* children/sequence — the stateless `updateSharedFile` returns `void` and only publishes the file's own IPNS metadata (FilePointer unchanged), so there's no folder write-back; the event still fires so consumers re-resolve the file (mirrors the owned `restoreFileVersion` file-only emission). Documented in SUMMARY for 48-04.
+
+No auto-fixes (Rules 1–3) were needed. Web hooks (`useSharedWriteOps`/`useSharedNavigation`) and REQ-4 were left untouched as instructed.</result>
+<usage><subagent_tokens>123613</subagent_tokens><tool_uses>69</tool_uses><duration_ms>541975</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a438f2892f737695c</task-id>
+<tool-use-id>toolu_01SoVKPVs3RjsABKcKVvBmqv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/a438f2892f737695c.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 48-05 (REQ-4 API)" completed</summary>
+<result>Both commits verified. `Cargo.lock` was modified before I started (pre-existing, out of scope per scope boundary) and untracked `.planning/intel/` + `.env.dev-backup` remain untouched as expected.
+
+## EXECUTION COMPLETE
+
+**Plan:** 48-05 (REQ-4, API side — encrypt share `itemName` at rest, Phase-14 finding M1)
+**Tasks:** 3/3 (2 auto/tdd + 1 [BLOCKING] checkpoint resolved in-line)
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata/48-05-SUMMARY.md`
+
+**Artifacts:**
+- **Column name:** `item_name_encrypted` (bytea, nullable) — added to BOTH `shares` and `share_invites`
+- **Migration filename:** `apps/api/src/migrations/1749200000000-EncryptShareItemName.ts` (additive `ADD COLUMN IF NOT EXISTS`, no data UPDATE; applied to live dev DB — TypeORM `migration:show` reports `[X]`)
+- **DTO field:** `itemNameEncrypted?: string` (optional, hex `@Matches(/^(?:[0-9a-fA-F]{2})+$/)`, `@MaxLength(1024)`) on `create-share.dto.ts`, `create-invite.dto.ts`, `claim-invite.dto.ts`; exposed in response DTOs
+
+**Commits:**
+- `b05694532`: feat — encrypt share itemName at rest (source + migration + tests + regenerated api-client, 145 files, single atomic commit per `check-api-client.sh`)
+- `38049516d`: docs — complete 48-05 plan (SUMMARY + STATE + ROADMAP)
+
+**Verification:** crypto ecies (22 passing, incl. UTF-8 itemName round-trip) + api shares (158 passing, incl. ciphertext-persist + no-server-encrypt); `nest build` green; api-client regenerated with `itemNameEncrypted` across 8 models + openapi.json.
+
+**Deviations (2 auto-fixed, both documented in SUMMARY):**
+1. **[Rule 2 - Missing Critical]** Decision A3 (include invite flow) required the column on the separate `share_invites` table and `itemNameEncrypted` on `claim-invite.dto.ts` so the recipient-rewrapped ciphertext lands on the claimed Share — added to the same migration, additive/nullable/zero-knowledge.
+2. **[Rule 3 - Blocking]** Adding the field to response DTOs broke the inline controller response-object typecheck — populated `itemNameEncrypted` (hex/null) in the share + invite controller mappings.
+
+**Note on DB verification:** A manual `docker exec ... psql -U postgres` did not show the columns, but that targets a different DB than the app's `.env`-driven connection (unreadable here by the Bash security guard). TypeORM `migration:show` — which uses the app's actual connection — authoritatively reports the migration applied. SDK and web were not touched; REQ-3 web (48-04) and REQ-4 web encrypt/decrypt/lazy-backfill (48-06) remain.</result>
+<usage><subagent_tokens>146471</subagent_tokens><tool_uses>91</tool_uses><duration_ms>735316</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aee4dcd0d7b516d94</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/aee4dcd0d7b516d94.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 48-04 (REQ-3 web)" completed</summary>
+<result>Both commits landed. Plan 48-04 code is complete; Task 4 is the UAT checkpoint, deferred per the execution directive.
+
+## CHECKPOINT REACHED
+
+**Type:** human-verify (shared-folder write UAT)
+**Plan:** 48-04
+**Progress:** 3/4 tasks complete (Tasks 1-3 code + tests committed; Task 4 UAT delegated to end-of-phase web-e2e)
+
+### Completed Tasks
+
+| Task | Name | Commit | Files |
+| ---- | ---- | ------ | ----- |
+| 1 | Seed SDK on share-enter + sharedFolder:updated subscription | 0949e1f43 | useSharedNavigation.ts, useSharedNavigationActions.ts, shared-folder-projection.ts |
+| 2 | Route useSharedWriteOps through client methods; drop withConflictRetry/write-back | 0949e1f43 | useSharedWriteOps.ts |
+| 3 | Web unit test — projection-only write hook | 0949e1f43 | __tests__/useSharedWriteOps.test.ts |
+| docs | SUMMARY + STATE + ROADMAP | b5b40e7c2 | 48-04-SUMMARY.md, STATE.md, ROADMAP.md |
+
+### What changed
+
+**Write hook re-routing (`useSharedWriteOps.ts`):** All five handlers now call `getSdkClient().&lt;sharedMethod&gt;(currentShareId, args)` (`uploadToSharedFolder`/`createSharedSubfolder`/`renameInSharedFolder`/`updateSharedFile`/`deleteFromSharedFolder`) and read nothing back. Removed `withConflictRetry`/`resyncSharedFolder`/`buildSharedWriteContext`/`freshCtx` and the four write-back lines per handler. `withRevocationGuard` (403 → read-only) retained. Params slimmed (no more refs/setters).
+
+**Event-fed projection (`useSharedNavigation.ts`):** A `sharedFolder:updated` subscription is now the only post-mutation writer of `folderChildrenRef`/`sequenceNumberRef` + setters, filtered on the active shareId (read via `currentShareIdRef` at event time). New framework-agnostic `shared-folder-projection.ts` holds `seedSharedFolder` + `subscribeSharedFolderProjection` (node-testable; `@cipherbox/web` vitest is `node` env).
+
+**Seed at every depth (`useSharedNavigationActions.ts`):** `loadSharedFolder` is re-invoked on share-enter, subfolder-enter, navigateUp, and navigateToBreadcrumb (write shares only) because `sharedFolderTree` is keyed by `shareId` but each depth has a distinct ipnsName/folderKey/IPNS key/sequence.
+
+### Verification (all green)
+
+- SDK dist rebuilt (`sdk-core` → `sdk`) before web checks.
+- `tsc -p tsconfig.json --noEmit` (apps/web): exit 0.
+- `pnpm --filter @cipherbox/web test useSharedWriteOps`: 6 passed (per-share isolation, reads-nothing-back, file-only re-resolve, unsubscribe).
+- eslint on all touched files: exit 0.
+- Acceptance greps pass (no `folderChildrenRef.current =` / `sequenceNumberRef.current =` / `withConflictRetry` in the write hook; `sharedFolder:updated` subscription present in nav).
+
+### Awaiting (Task 4 UAT — delegated)
+
+As a write-share recipient: upload / mkdir / rename / edit-content / delete each reflect immediately and persist after reload, with no console errors and no stale-sequence 409 loop. Validate via the end-of-phase web-e2e desktop cross-client-sync / shared-folder specs.
+
+### Shared-folder desync risk note
+
+Refs are now written by exactly one path (the subscription), eliminating the web/SDK drift class. Residual risk: the 30s poller's `refreshFolderContents` updates the display refs but does **not** re-seed the SDK — a poll-then-write without intervening navigation relies on `publishWithCas` self-correcting the sequence rather than a fresh seed. This is the primary thing the web-e2e shared-folder spec should exercise.</result>
+<usage><subagent_tokens>137660</subagent_tokens><tool_uses>75</tool_uses><duration_ms>794915</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aee4dcd0d7b516d94</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/aee4dcd0d7b516d94.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 48-04 (REQ-3 web)" completed</summary>
+<result>The 48-06 sub-agent (REQ-4 web) completed. Let me note the key outcome and the one item that needs attention.
+
+**48-06 done** (REQ-4 web — encrypt share `itemName` at rest):
+- Commits: `8edc0b0ed` (RED test), `e1589c0d3` (GREEN impl), `b29ec47da` (docs/state).
+- New shares/invites are ciphertext-only (M1 closed for new rows). Display decrypts client-side. All automated verifies green (8/8 helper tests, 45/45 web suite, tsc + eslint clean).
+- Task 3 UAT deferred to end-of-phase web-e2e + DB check.
+- Signing: commits are config-signed (`commit.gpgsign=true`); local `N` is a verification-config gap only, matches 48-04/48-07 — nothing to fix.
+
+**One gap worth surfacing now** — the sub-agent flagged it correctly and did the safe thing (did NOT route backfill through the wrong endpoint):
+
+The 48-05 API only accepts `itemNameEncrypted` on **create** paths. There's no `PATCH /shares/:id { itemNameEncrypted }` endpoint, so **legacy plaintext rows can be detected and re-wrapped but not persisted** — decision A2's lazy-backfill is only half-closed. `backfillSentShareItemNames` is structured for one-line wiring once the endpoint exists.
+
+This is the same pattern as 48-07: an API follow-up plan is needed to fully close M1 for legacy rows.
+
+Phase 48 status now:
+- Done: 48-01, 48-03, 48-04, 48-05, 48-06
+- Remaining: 48-02 (REQ-2), 48-07 (shared-folder refresh consolidation — planned, not executed)
+- Plus two surfaced follow-ups needing plans: **(a)** the `PATCH /shares/:id { itemNameEncrypted }` endpoint to finish A2 legacy backfill, and **(b)** 48-07 execution.
+
+Want me to fold the legacy-backfill API endpoint into a follow-up plan (a 48-08, analogous to how I wrote 48-07), or leave it as the captured-todo the sub-agent already documented in STATE/ROADMAP? My recommendation: write the plan now while the context is fresh — it's a small, well-scoped API addition (one endpoint + DTO + wire the existing `backfillSentShareItemNames`).</result>
+<usage><subagent_tokens>148526</subagent_tokens><tool_uses>85</tool_uses><duration_ms>1537201</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adedb64eb91e4ea5b</task-id>
+<tool-use-id>toolu_01AoL8gYFf9CBzV8LNLWAvJr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/adedb64eb91e4ea5b.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 48-07" completed</summary>
+<result>All four auto/TDD tasks are complete and committed; Task 5 is a blocking human-verify UAT, deferred per instructions.
+
+## CHECKPOINT REACHED
+
+**Type:** human-verify (blocking)
+**Plan:** 48-07
+**Progress:** 4/5 tasks complete (Task 5 UAT deferred to end-of-phase web-e2e)
+
+### Completed Tasks
+
+| Task | Name | Commit | Files |
+| ---- | ---- | ------ | ----- |
+| 1 | SDK client.refreshSharedFolder (TDD RED+GREEN) | `c95dc9840` | packages/sdk/src/client.ts, client-shared-write.test.ts |
+| 2 | Export check + rebuild dist | (no commit — no-op on tracked files; dist gitignored) | packages/sdk/dist/* (built) |
+| 3 | Route web poller through SDK; delete inline resolve | `20413f863` | apps/web/src/hooks/useSharedNavigation.ts |
+| 4 | Web test — poll-through-SDK projection | `cfdadbd6a` | useSharedWriteOps.test.ts |
+| — | SUMMARY | `a88c530f0` | 48-07-SUMMARY.md |
+
+### Current Task
+
+**Task 5:** Shared-folder sync UAT (poll + write, no inline resolve)
+**Status:** deferred (blocking human-verify)
+**Blocked by:** Requires two-account local-stack runtime UAT — per execution instructions this is DEFERRED to the end-of-phase web-e2e run. Not attempted.
+
+### Per-task verify results (all PASS)
+
+- Task 1 `pnpm exec vitest run client-shared-write` → 6 passed (2 existing + 4 new: newer-adopt, stale-no-clobber, null-noop, unloaded-throw). `tsc --noEmit` → exit 0.
+- Task 2 builds → both `@cipherbox/sdk-core` and `@cipherbox/sdk` succeeded. `grep refreshSharedFolder packages/sdk/dist/index.d.ts` → present (line 1227: `refreshSharedFolder(shareId: string): Promise&lt;void&gt;;`).
+- Task 3 `grep resolveIpnsRecord useSharedNavigation.ts` → empty (no inline resolve). `apps/web tsc --noEmit` → exit 0. `eslint useSharedNavigation.ts` → exit 0 (one prettier reformat applied before commit).
+- Task 4 `pnpm --filter @cipherbox/web test useSharedWriteOps` → 9 passed (6 existing + 3 new poll-path cases).
+
+### Dist-rebuild confirmation
+
+`pnpm --filter @cipherbox/sdk-core build &amp;&amp; pnpm --filter @cipherbox/sdk build` ran AFTER the Task 1 change and BEFORE all web checks. Both succeeded; `refreshSharedFolder` confirmed in `packages/sdk/dist/index.d.ts`.
+
+### Notes
+
+- No deviations. No stubs. No new threat surface (T-48-14 accepted — folderKey reused from sharedFolderTree).
+- Left pre-existing dirty `Cargo.lock`, untracked `.planning/intel/` and `apps/api/.env.dev-backup` untouched.
+- `gsd-tools` is not on PATH in this environment; STATE.md/ROADMAP counters were NOT advanced because the plan is not fully complete (Task 5 UAT pending). The orchestrator should finalize state after the deferred web-e2e UAT.
+- Did not push (per instruction).
+
+### Awaiting
+
+Task 5 UAT ("approved" or failure description) — deferred to the end-of-phase web-e2e run. All automatable work for plan 48-07 is complete and committed.
+
+SUMMARY: `/Users/myankelev/Code/random/cipher-box/.planning/phases/48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata/48-07-SUMMARY.md`</result>
+<usage><subagent_tokens>89672</subagent_tokens><tool_uses>43</tool_uses><duration_ms>338570</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bakpx9shy</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/bakpx9shy.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch web-e2e run until completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok session limits should be resolved - please go on. I tried rerunning the web e2e test but got another failure.
+
+---
+
+<task-notification>
+<task-id>wyz3as8j7</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/wyz3as8j7.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Root-cause 2 web-e2e regressions (invite-link + writable-shares) from Phase 48 share changes" completed</summary>
+<result>{"gather":[{"summary":"Both web-e2e failures in run 27627456346 are server/SDK-side errors surfaced in the UI, not timing flakes. (A) The invite-link test fails because the \"create invite link\" API call returns HTTP 400 — the dialog stays open showing a red alert \"&gt; Request failed with status code 400\", the success status (.share-success[role=status]) the page object waits for never renders, and the active-invites list still reads \"no active invite links\". (B) The writable-shares test fails because Bob's Ctrl+S save throws \"Shared folder not loaded\" (red error in the EDIT modal footer); the editor remains visible with status \"1 line | utf-8 | modified\", so waitFor({state:'hidden'}) times out. The \"Shared folder not loaded\" string is thrown by CipherBoxClient.requireSharedFolder() at packages/sdk/src/client.ts:2000 — the shared-write save path requires the share to be registered in the SDK's sharedFolderTree, but it isn't loaded at save time. This is the same \"Folder not loaded\" bug class noted in project memory, now hitting the shared-write path after the 48-07 SDK-owned shared-folder refactor.","findings":[{"claim":"Test A (invite-link 3.1) fails because the create-invite API returns HTTP 400; the share dialog stays open on the INVITE LINK tab with no success message.","evidence":"error-context.md (invite-link folder) lines 96-109 show the dialog still open: 'dialog \"SHARE: invite-file-1781625893488.txt\"', tab 'INVITE LINK [selected]', and `alert [ref=e121]: \"&gt; Request failed with status code 400\"`, with 'no active invite links' below. Screenshot test-failed-1.png renders exactly this: red text '&gt; Request failed with status code 400' under the '--create invite link' button, '// ACTIVE INVITE LINKS' / 'no active invite links'.","file_or_source":"/tmp/wf-e2e-artifacts/playwright-report/test-results/invite-link-workflow-Invit-d3baf-s-an-invite-link-for-a-file-chromium/error-context.md, test-failed-1.png"},{"claim":"The page object waits for a success status element that never appears, causing the line-294/page-object-96 timeout.","evidence":"invite-link-tab.page.ts:96-98 waitForSuccess() calls successMessage().waitFor({state:'visible'}) where successMessage() = `.invite-link-tab .share-success[role=\"status\"]` (line 82-83). Because the request 400s, only `.share-error[role=alert]` ('&gt; Request failed with status code 400') is rendered, so the success locator never becomes visible and the 30s wait at spec line 294 times out.","file_or_source":"/Users/myankelev/Code/random/cipher-box/tests/web-e2e/page-objects/dialogs/invite-link-tab.page.ts:82-99 ; tests/web-e2e/tests/invite-link-workflow.spec.ts:294"},{"claim":"Test B (writable-shares 10.3) fails because Bob's save throws 'Shared folder not loaded'; the text editor stays open in modified state.","evidence":"Screenshot test-failed-2.png (writable-shares folder) shows the 'EDIT: FILE-SHARE-1781626299828.TXT' modal open with textarea content 'Edited file content by Bob', footer status '// 1 line | utf-8 | modified', and a red error line '&gt; Shared folder not loaded'. Because the editor never closes, spec line 873 `await textEditor.waitFor({ state: 'hidden', timeout: 30000 })` times out. (The error-context.md captured at final timeout shows Bob's own Files view because the modal had been dismissed/snapshot taken after, but the failure screenshot captures the save-failure state.)","file_or_source":"/tmp/wf-e2e-artifacts/playwright-report/test-results/writable-shares-Writable-S-c03c8-shared-file-and-can-edit-it-chromium/test-failed-2.png ; tests/web-e2e/tests/writable-shares.spec.ts:872-873"},{"claim":"The 'Shared folder not loaded' error is thrown by the SDK's requireSharedFolder guard on the shared-write save path — the share is not present in sharedFolderTree at save time.","evidence":"packages/sdk/src/client.ts:1998-2002: requireSharedFolder(shareId) does `const state = this.sharedFolderTree.get(shareId); if (!state) throw new Error('Shared folder not loaded');` and the comment at 1994-1996 states 'All shared write methods route through this to enforce the load contract.' This is the only source of that exact string (other hit is the built dist mirror).","file_or_source":"/Users/myankelev/Code/random/cipher-box/packages/sdk/src/client.ts:1994-2002"},{"claim":"This matches the known 'Folder not loaded' bug class and aligns with the recent 48-07 SDK-owned shared-folder refactor.","evidence":"client.ts:2004-2014 buildSharedWriteContextFromState carries 'per-share owner/recipient pubkeys, IPNS key ... (T-48-07)'. The shared-write path now requires the share registered in sharedFolderTree; Bob opened/edited the file but the share was not (re)loaded into the SDK before save. Project memory notes the same class: client methods throw 'Folder not loaded' unless the web seeds the tree first.","file_or_source":"/Users/myankelev/Code/random/cipher-box/packages/sdk/src/client.ts:2004-2014"}],"decisive_evidence":"Two distinct backend/SDK errors are visible on-screen at failure. Test A: the create-invite request returns HTTP 400 (red alert '&gt; Request failed with status code 400' in the still-open share dialog; success status element never renders → waitForSuccess times out). Test B: Bob's Ctrl+S save throws 'Shared folder not loaded' (red error in the EDIT modal footer, editor stuck in 'modified' state → waitFor hidden times out), thrown by requireSharedFolder() at packages/sdk/src/client.ts:2000 because the share is absent from the SDK's sharedFolderTree on the write path."},{"summary":"The \"3.1 Alice creates an invite link for a file\" test times out at line 294 because `aliceInviteTab.waitForSuccess()` waits for the success banner `.invite-link-tab .share-success[role=\"status\"]` to become visible, and that banner never renders. In `InviteLinkTab.tsx` the success `&lt;div className=\"share-success\" role=\"status\"&gt;` only mounts when `handleCreate` resolves (`setSuccess(...)`); if `createInviteLink` throws, `handleCreate`'s catch sets the error state instead (`.share-error[role=\"alert\"]`) and success stays null, so the wait never resolves. The create-LINK flow (`createInviteLink` in invite.service.ts) generates an ephemeral secp256k1 keypair, wraps the item/child keys for that ephemeral pubkey, and POSTs to the \"create-invite\" endpoint `shareInvitesControllerCreateInvite` (`POST /shares/invites`, ShareInvitesController) — this is distinct from a direct user-to-user share, which posts to `sharesControllerCreateShare` (`POST /shares`) with a specific recipient public key. The decisive failure: commit e1589c0d3 (Phase 48-06) changed the web client to send `itemName: ''` on invite create while moving the name into `itemNameEncrypted`, but the invite DTO `CreateInviteDto.itemName` still carries `@MinLength(1)`, so the API rejects the empty string with a 400. The parallel direct-share DTO was correctly relaxed (no `@MinLength`); the invite DTO was missed. The 400 makes `createInviteLink` throw, the success banner never appears, and `waitForSuccess({ timeout: 30000 })` times out.","findings":[{"claim":"waitForSuccess waits for the invite-tab success banner to become visible, with a 30s timeout; that exact element never appears so the call times out at line 294.","evidence":"invite-link-tab.page.ts:82-99 successMessage() = page.locator('.invite-link-tab .share-success[role=\"status\"]'); waitForSuccess() does successMessage().waitFor({ state: 'visible', ...options }). Test line 294: const successText = await aliceInviteTab.waitForSuccess({ timeout: 30000 }); line 295 asserts /link (copied to clipboard|created)/.","file_or_source":"/Users/myankelev/Code/random/cipher-box/tests/web-e2e/page-objects/dialogs/invite-link-tab.page.ts ; /Users/myankelev/Code/random/cipher-box/tests/web-e2e/tests/invite-link-workflow.spec.ts:280-309"},{"claim":"The user action preceding waitForSuccess is clicking the '--create invite link' button (.invite-link-create-btn). The success banner renders onl
+... (truncated 40736 chars, full result in /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/46597cf3-1041-40cf-8a7e-f114f40a1047/tasks/wyz3as8j7.output)</result>
+<usage><agent_count>8</agent_count><subagent_tokens>493869</subagent_tokens><tool_uses>158</tool_uses><duration_ms>272274</duration_ms></usage>
+</task-notification>
