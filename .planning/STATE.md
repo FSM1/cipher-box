@@ -253,7 +253,7 @@ Recent for v1.1:
 
 ### Pending Todos
 
-10 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. The desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. Remaining pending includes the new route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47 — and the new architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; the bin-restore gap surfaced while combing the #494 fix).
+8 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. The desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. The architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; bin-restore gap surfaced while combing the #494 fix) was started 2026-06-16 on branch `feat/sdk-client-self-bootstrap-folder-tree` and moved to `.planning/todos/completed/`. Remaining pending still includes the route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47.
 
 ### Resolved
 
