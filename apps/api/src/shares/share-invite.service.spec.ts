@@ -160,6 +160,28 @@ describe('ShareInviteService', () => {
       const createCall = mockInviteRepo.create.mock.calls[0][0];
       expect(createCall.encryptedChildKeys).toBeNull();
     });
+
+    it('should persist itemNameEncrypted ciphertext as Buffer and never encrypt server-side', async () => {
+      const hexCiphertext = 'ab'.repeat(80);
+      const dtoWithEncryptedName: CreateInviteDto = {
+        ...createDto,
+        itemNameEncrypted: hexCiphertext,
+      };
+
+      await service.createInvite(sharerId, dtoWithEncryptedName);
+
+      const createCall = mockInviteRepo.create.mock.calls[0][0];
+      expect(Buffer.isBuffer(createCall.itemNameEncrypted)).toBe(true);
+      expect(createCall.itemNameEncrypted).toEqual(Buffer.from(hexCiphertext, 'hex'));
+    });
+
+    it('should persist null itemNameEncrypted for legacy plaintext clients', async () => {
+      // createDto has no itemNameEncrypted field
+      await service.createInvite(sharerId, createDto);
+
+      const createCall = mockInviteRepo.create.mock.calls[0][0];
+      expect(createCall.itemNameEncrypted).toBeNull();
+    });
   });
 
   describe('getInviteStatus', () => {
@@ -414,6 +436,23 @@ describe('ShareInviteService', () => {
         ShareKey,
         expect.objectContaining({ keyType: 'folder' })
       );
+    });
+
+    it('should persist itemNameEncrypted from claim DTO onto the created Share as Buffer', async () => {
+      const hexCiphertext = 'ab'.repeat(80);
+      const dtoWithEncryptedName: ClaimInviteDto = {
+        encryptedKey: 'dd'.repeat(130),
+        itemNameEncrypted: hexCiphertext,
+      };
+
+      await service.claimInvite(testToken, claimerId, dtoWithEncryptedName);
+
+      const shareCreateCall =
+        mockManager.create.mock.calls.find((call) => call[0] && call[0].name === 'Share') ??
+        mockManager.create.mock.calls[0];
+      const shareData = shareCreateCall[1] ?? shareCreateCall[0];
+      expect(Buffer.isBuffer(shareData.itemNameEncrypted)).toBe(true);
+      expect(shareData.itemNameEncrypted).toEqual(Buffer.from(hexCiphertext, 'hex'));
     });
 
     it('should not create ShareKey records when childKeys empty', async () => {
