@@ -1,0 +1,171 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f826ffa63025",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T01:47:10.2322Z",
+  "branch": "feat/phase-48-sdk-self-bootstrap-fix-and-shares",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/phases/48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata/.gitkeep"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "c944e8ed2d72",
+  "token_usage": {
+    "input_tokens": 37978,
+    "cache_creation_tokens": 274972,
+    "cache_read_tokens": 3357499,
+    "output_tokens": 51561,
+    "api_call_count": 30
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c944e8ed2d72",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Group three related pending todos (#5 encrypt share itemName, #8 route shared-folder writes through SDK, #9 remove redundant web folder-seeding) into a single GSD phase, deferring the CRDT-IPNS inbox research todo (#2) that would eventually supersede #5.",
+    "outcome": "Phase 48 ('SDK self-bootstrap regression fix and shared-folder/metadata consolidation') was created with a P0 prerequisite not in any of the original todos — PR #498's `loadFolder` unconditionally clobbers in-memory state with stale IPNS snapshots, actively regressing main's web-e2e. Phase was committed to a new `phase-48` branch with four planning artifacts.",
+    "learnings": {
+      "repo": [
+        "Phase 47 (PR #494) covered owned-folder SDK consolidation; Phase 48 is the natural successor covering shared-folder writes and share metadata hardening.",
+        "web-e2e only triggers automatically on push to main via ci-e2e.yml (workflow_call); it is NOT run on PRs or feature branches — this is the CI gap that allowed PR #498's regression to land undetected.",
+        "web-e2e.yml is directly workflow_dispatch-enabled and parameterized by ref (`inputs.ref || github.sha`), so `gh workflow run web-e2e.yml --ref <branch>` provides a pre-merge verification path without any CI changes.",
+        "PR #498 introduced self-bootstrap but its `loadFolder` clobbers fresher in-memory folderTree state with a stale IPNS snapshot — same desync class as PR #489.",
+        "Todo #9 (remove redundant web folder seeders) was explicitly gated on '#498 proving out in staging/prod'; since #498 is regressing main, #9 cannot safely proceed until the regression is fixed.",
+        "The CRDT-IPNS inbox research (#2) would subsume the plaintext share itemName leak (#5/M1) if successful, but cross-linking is the right move — the security finding cannot be held hostage to a long-horizon research prototype."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 385,
+          "end_line": 385,
+          "finding": "loadFolder performs unconditional folderTree.set(), clobbering fresher in-memory state with a stale IPNS snapshot during self-bootstrap. Fix requires reconciling on sequenceNumber rather than blindly overwriting."
+        },
+        {
+          "path": ".github/workflows/web-e2e.yml",
+          "finding": "workflow_dispatch trigger exists with `ref: ${{ inputs.ref || github.sha }}` parameter, enabling pre-merge branch validation via `gh workflow run web-e2e.yml --ref <branch>` without requiring a secrets: inherit parent."
+        },
+        {
+          "path": ".github/workflows/ci-e2e.yml",
+          "finding": "push: branches: [main] with paths-filter calls web-e2e via workflow_call — the main-only auto-trigger that created the CI gap allowing #498 to land without pre-merge e2e validation."
+        }
+      ],
+      "workflow": [
+        "When two todos have a supersession relationship (one long-horizon idea would eliminate the need for a shorter-horizon fix), the right move is cross-linking, not bundling — an open security finding cannot wait on a research prototype.",
+        "Parallel code investigation before enriching a phase goal prevents writing requirements against stale premises (here: #9's premise was inverted by the live regression finding).",
+        "The GSD pre-merge acceptance gate pattern: bake `gh workflow run <workflow>.yml --ref <fix-branch>` as an explicit verification step in the ROADMAP phase requirement, not just as tribal knowledge."
+      ]
+    },
+    "friction": [
+      "Stream idle timeout during the parallel fan-out agent investigation, requiring a retry with a simpler serial approach.",
+      "PR #498 landed on main without pre-merge web-e2e coverage, causing an active regression that reframed the entire phase scope mid-session."
+    ],
+    "open_items": [
+      "REQ-1 (P0): Fix loadFolder unconditional folderTree.set() in client.ts — gates all other Phase 48 work and restores green main.",
+      "REQ-2: Remove ~16 web ensureFolderRegistered seeders and duplicate useFolderNavigation key-unwrap — gated on REQ-1 landing and web-e2e passing on the fix branch.",
+      "REQ-3: Route shared-folder writes through the SDK client (useSharedWriteOps refactor, medium/multi-PR lift).",
+      "REQ-4: Encrypt share itemName at rest with ECIES, mirroring encryptedKey, including column migration.",
+      "Todo #2 (CRDT-IPNS inbox for serverless share discovery) explicitly deferred — would subsume REQ-4 if the prototype succeeds, cross-linked in the phase description.",
+      "Cargo.lock and .planning/intel/ changes left uncommitted as unrelated to Phase 48.",
+      "Phase 48 planning not yet started — next step is `/gsd:plan-phase 48` with REQ-1 as Wave 1."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T01:46:20.855106Z",
+    "agent_lines": 22,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 1,
+    "total_committed": 22,
+    "total_lines_changed": 24,
+    "agent_percentage": 95.83333333333334,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 71,
+      "user_lines_removed": 3,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/STATE.md": 1,
+        ".planning/intel/API-SURFACE.md": 6,
+        ".planning/todos/pending/2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md": 61,
+        "Cargo.lock": 2
+      },
+      "user_removed_per_file": {
+        ".planning/STATE.md": 1,
+        "Cargo.lock": 2
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 70,
+      "agent_lines_removed": 3,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 93,
+      "agent_lines_removed": 4,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 93,
+      "agent_lines_removed": 4,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
