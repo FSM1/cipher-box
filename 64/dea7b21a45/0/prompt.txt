@@ -1,0 +1,5 @@
+I think it makes sense to close and delete that PR - this should be marked as a chore, not a fix to prevent an unnecessary version bump
+
+---
+
+sorry i was afk

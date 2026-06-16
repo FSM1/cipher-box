@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "64dea7b21a45",
+  "session_id": "15b6960a-8c3d-4283-bba6-9f1cf5f0eb4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T20:29:38.599475Z",
+  "branch": "chore/tsup-dts-windows-flake",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/api-client/package.json",
+    "packages/api-client/tsconfig.build.json",
+    "packages/api-client/tsup.config.ts",
+    "packages/core/package.json",
+    "packages/core/tsconfig.build.json",
+    "packages/core/tsup.config.ts",
+    "packages/crypto/package.json",
+    "packages/crypto/tsconfig.build.json",
+    "packages/crypto/tsup.config.ts",
+    "packages/sdk-core/package.json",
+    "packages/sdk-core/tsconfig.build.json",
+    "packages/sdk-core/tsup.config.ts",
+    "packages/sdk/package.json",
+    "packages/sdk/tsconfig.build.json",
+    "packages/sdk/tsup.config.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "72cbf966229c",
+  "checkpoint_transcript_start": 315,
+  "transcript_lines_at_start": 315,
+  "token_usage": {
+    "input_tokens": 847,
+    "cache_creation_tokens": 15310,
+    "cache_read_tokens": 1549014,
+    "output_tokens": 11380,
+    "api_call_count": 11
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T20:28:51.753416Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 0,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "64dea7b21a45",
+  "strategy": "manual-commit",
+  "branch": "chore/tsup-dts-windows-flake",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/api-client/package.json",
+    "packages/api-client/tsconfig.build.json",
+    "packages/api-client/tsup.config.ts",
+    "packages/core/package.json",
+    "packages/core/tsconfig.build.json",
+    "packages/core/tsup.config.ts",
+    "packages/crypto/package.json",
+    "packages/crypto/tsconfig.build.json",
+    "packages/crypto/tsup.config.ts",
+    "packages/sdk-core/package.json",
+    "packages/sdk-core/tsconfig.build.json",
+    "packages/sdk-core/tsup.config.ts",
+    "packages/sdk/package.json",
+    "packages/sdk/tsconfig.build.json",
+    "packages/sdk/tsup.config.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/64/dea7b21a45/0/metadata.json",
+      "transcript": "/64/dea7b21a45/0/full.jsonl",
+      "content_hash": "/64/dea7b21a45/0/content_hash.txt",
+      "prompt": "/64/dea7b21a45/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 847,
+    "cache_creation_tokens": 15310,
+    "cache_read_tokens": 1549014,
+    "output_tokens": 11380,
+    "api_call_count": 11
+  }
+}
