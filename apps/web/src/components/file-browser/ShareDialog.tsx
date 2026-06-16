@@ -332,9 +332,13 @@ export function ShareDialog({
       // REQ-4: ECIES-wrap the display name for the recipient (mirrors the
       // encryptedKey wrap above). Only ciphertext leaves the browser — the
       // plaintext itemName is NOT sent for new shares (server stores '' + bytea).
-      const itemNameEncrypted = bytesToHex(
-        await wrapKey(new TextEncoder().encode(item.name), recipientPubKeyBytes)
-      );
+      const itemNameBytes = new TextEncoder().encode(item.name);
+      let itemNameEncrypted: string;
+      try {
+        itemNameEncrypted = bytesToHex(await wrapKey(itemNameBytes, recipientPubKeyBytes));
+      } finally {
+        itemNameBytes.fill(0);
+      }
 
       // Create the share via API
       const itemType: CreateShareDtoItemType = item.type === 'folder' ? 'folder' : 'file';

@@ -186,9 +186,13 @@ export async function createInviteLink(params: {
     // key (mirrors the encryptedKey wrap). On claim the recipient re-wraps it
     // with their real vault pubkey. Only ciphertext leaves the browser — the
     // plaintext itemName is NOT sent for new invites.
-    const itemNameEncrypted = bytesToHex(
-      await wrapKey(new TextEncoder().encode(item.name), ephemeralKeypair.publicKey)
-    );
+    const itemNameBytes = new TextEncoder().encode(item.name);
+    let itemNameEncrypted: string;
+    try {
+      itemNameEncrypted = bytesToHex(await wrapKey(itemNameBytes, ephemeralKeypair.publicKey));
+    } finally {
+      itemNameBytes.fill(0);
+    }
 
     // Create invite on server
     const result = await shareInvitesControllerCreateInvite({

@@ -397,11 +397,14 @@ async function fetchAllSentShares(): Promise<SentShare[]> {
     if (offset >= total || shares.length === 0) break;
   }
 
-  // Lazy backfill (decision A2): re-wrap legacy plaintext rows on the owner's
-  // share-list load. Best-effort and idempotent — never blocks the load.
-  void backfillSentShareItemNames(allShares).catch((err) =>
-    logger.warn('[share] itemName backfill pass failed', err)
-  );
+  // Lazy backfill (decision A2) is DISABLED until a PATCH endpoint exists to
+  // persist itemNameEncrypted for an existing share (T-48-18). Running it here
+  // re-wraps every legacy row via ECIES on each share-list load with no durable
+  // effect — wasted CPU. Re-enable the call below once the update endpoint lands;
+  // backfillSentShareItemNames is kept ready for one-line wiring.
+  // void backfillSentShareItemNames(allShares).catch((err) =>
+  //   logger.warn('[share] itemName backfill pass failed', err)
+  // );
 
   return allShares;
 }
