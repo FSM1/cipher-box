@@ -1,0 +1,285 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "aa221dedc616",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T17:16:09.240615Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/shares/dto/create-invite.dto.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "e5c8a5d86153",
+  "checkpoint_transcript_start": 1768,
+  "transcript_lines_at_start": 1768,
+  "token_usage": {
+    "input_tokens": 5814,
+    "cache_creation_tokens": 70336,
+    "cache_read_tokens": 6616347,
+    "output_tokens": 45140,
+    "api_call_count": 22
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5c8a5d86153",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5c8a5d86153",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5c8a5d86153",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015XThEKcoBvkig6wUSTW2K4",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5c8a5d86153",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1644,
+        "end": 1645,
+        "entry_ids": [
+          "68494931-d690-4797-a380-57a4605a5e21"
+        ],
+        "tool_use_id": "toolu_015XThEKcoBvkig6wUSTW2K4"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015XThEKcoBvkig6wUSTW2K4"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01CZJwVQnyF8sbUDnS72ij4g",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5c8a5d86153",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1719,
+        "end": 1720,
+        "entry_ids": [
+          "6f2f5fc2-42e7-4fcd-b9e5-2bd79ca12614"
+        ],
+        "tool_use_id": "toolu_01CZJwVQnyF8sbUDnS72ij4g"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01CZJwVQnyF8sbUDnS72ij4g"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:validate-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01UfuW3fzfMm8bcV63yZ411v",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security:review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5c8a5d86153",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1785,
+        "end": 1786,
+        "entry_ids": [
+          "bb0eaeab-3434-4761-9e6c-59b0880e8632"
+        ],
+        "tool_use_id": "toolu_01UfuW3fzfMm8bcV63yZ411v"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01UfuW3fzfMm8bcV63yZ411v"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security:review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 28
+  },
+  "summary": {
+    "intent": "Complete Phase 48 post-implementation validation: run CodeRabbit CLI review and a security review in parallel, then apply all actionable findings before committing the phase.",
+    "outcome": "Security review assessed overall risk as LOW (zero-knowledge invariant holds, crypto correct); CodeRabbit surfaced 5 findings of which 4 were applied (per-row ciphertext guard, 3x DTO MaxLength widening, SDK key-zeroing on unmount) and 1 resolved by deletion (.env.dev-backup). All CI gates pass.",
+    "learnings": {
+      "repo": [
+        "pnpm typecheck does not include apps/api — api typechecking runs via nest build (tsconfig.build.json excludes **/*spec.ts) in a separate CI job, so spec-file type errors never hit the shared typecheck gate",
+        "@MaxLength decorators on NestJS DTOs are NOT emitted to the OpenAPI spec, so bumping them requires no api:generate and won't dirty openapi.json",
+        "unloadSharedFolder(shareId) is never called from any web production code path — the SDK's cloned shared-folder keys are only zeroed at GC time unless explicitly unloaded",
+        "The share store (fetchReceivedShares result) is in-memory only; there is a comment confirming 'never persisted in this form', making plaintext-retention a non-issue",
+        ".env.dev-backup was untracked and not covered by .gitignore — a live secrets file silently present in the working tree",
+        "A pre-existing HttpArgumentsHost type error in http-metrics.interceptor.spec.ts exists on origin/main and CI is green, confirming specs are excluded from the api typecheck gate"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 115,
+          "end_line": 115,
+          "finding": "fetchReceivedShares decrypted itemName inside Promise.all with no per-row guard — a single corrupt or mismatched ciphertext row would reject the entire received-shares list. Fixed with per-row try/catch falling back to s.itemName."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 270,
+          "end_line": 283,
+          "finding": "Projection-subscription effect cleanup only called unsubscribe(); it never called unloadSharedFolder(shareId), so the SDK's cloned shared-folder key material was never explicitly zeroed on unmount."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "finding": "@MaxLength(1024) on itemNameEncrypted was too small — ECIES ciphertext for a 255-char multibyte (CJK/emoji) name can reach ~1724 hex chars, causing a 400 on create. Bumped to 2500."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-invite.dto.ts",
+          "finding": "Same @MaxLength(1024) too-small bug on itemNameEncrypted as create-share.dto.ts. Bumped to 2500."
+        },
+        {
+          "path": "apps/api/src/shares/dto/claim-invite.dto.ts",
+          "finding": "Same @MaxLength(1024) too-small bug on itemNameEncrypted. Bumped to 2500."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit CLI can be run with --agent --base-commit <sha> to produce structured findings scoped to a phase diff; cloud reviews take 5–15 min for large diffs so parallelizing with a security review recovers that wait time",
+        "Capturing exit codes through pipes (e.g. tsc | tail) masks the real exit code — always capture separately or check $PIPESTATUS to avoid false 'exit 0' reads",
+        "Committing with explicit git add <file> (never -A or .) is a safe-by-default guard against accidentally staging .env* files or large binaries"
+      ]
+    },
+    "friction": [
+      ".env.dev-backup was not gitignored and contained real secrets — required surfacing to the user and explicit authorization before deletion; Bash restrictions on .env* files blocked autonomous action",
+      "CodeRabbit's exit code and output piped through tail masked the tsc exit code, causing a false 'all green' read that required a second run to verify",
+      "CodeRabbit cloud review takes 5–15 min, creating a blocking wait window before findings can be batched"
+    ],
+    "open_items": [
+      "T-48-18: backfill no-op already tracked — LOW finding from security review, deferred",
+      "Key-buffer residue in shared-folder tree matching pre-existing FolderTree convention — LOW, documented but not fixed (matches existing pattern)",
+      "By-reference getters on key material with no current abuser — LOW, no fix needed now but a future refactor target",
+      ".gitignore should be updated to cover .env*-backup patterns to prevent recurrence — deferred as out of phase scope",
+      "itemNameEncrypted field missing from api spec-file mock objects (from phase 48-05) — latent test-mock type-incompleteness, not a CI blocker but real test debt"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T17:15:25.028435Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 2,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 2,
+    "total_lines_changed": 5,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
