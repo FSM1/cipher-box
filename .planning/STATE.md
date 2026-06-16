@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Executing Phase 48
-last_updated: "2026-06-16T16:28:00.000Z"
+last_updated: "2026-06-16T14:54:01.839Z"
 last_activity: 2026-06-16
 progress:
   total_phases: 33
   completed_phases: 31
-  total_plans: 145
-  completed_plans: 136
+  total_plans: 146
+  completed_plans: 140
   percent: 94
 ---
 
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 48 (sdk-self-bootstrap-regression-fix-and-shared-folder-metadata) — EXECUTING
-Plan: 48-03 (REQ-3 SDK) + 48-04 (REQ-3 web) + 48-05 (REQ-4 API) complete; 48-02 (REQ-2) and 48-06 (REQ-4 web) remain. 48-04 Task 4 (shared-write UAT) deferred to end-of-phase web-e2e.
+Plan: 48-03 (REQ-3 SDK) + 48-04 (REQ-3 web) + 48-05 (REQ-4 API) + 48-06 (REQ-4 web) complete; 48-02 (REQ-2) remains. UATs deferred to end-of-phase web-e2e: 48-04 Task 4 (shared-write), 48-06 Task 3 (itemName-at-rest ciphertext + display). 48-06 raised an API gap: no update endpoint accepts itemNameEncrypted, so the legacy lazy-backfill persist (A2) is blocked pending a follow-up API plan.
 Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. Phase 46 Linux remount-after-SIGKILL UAT passed 2026-06-15 — fully verified, no open items.
 
 ## Performance Metrics
@@ -145,6 +145,7 @@ Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. 
 | Phase 48 P02 | 2min | 2 tasks | 5 files |
 | Phase 48 P03 | 6min | 3 tasks | 7 files |
 | Phase 48 P05 | 8min | 3 tasks | 145 files |
+| Phase 48 P06 | 18min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -234,6 +235,7 @@ Recent for v1.1:
 - TEE worker Prometheus metrics use `cipherbox_tee_*` prefix for Grafana dashboard coexistence with API metrics
 - TEE worker structured JSON logger has zero external dependencies (JSON.stringify to stdout/stderr)
 - [Phase 48-05] Share itemName encrypted at rest via additive nullable item_name_encrypted bytea on BOTH shares and share_invites (decision A3 includes invite flow); migration is additive-only with NO data UPDATE (server zero-knowledge cannot re-encrypt legacy plaintext); itemNameEncrypted optional hex DTO on create-share/create-invite/claim-invite; claim re-wraps ephemeral→recipient ciphertext onto the Share; web encrypt/decrypt/lazy-backfill deferred to 48-06
+- [Phase 48-06] Web ECIES-wraps itemName on share/invite create (recipient pubkey for direct, ephemeral pubkey for invite) and sends ciphertext-only (itemName: '' + itemNameEncrypted) — no plaintext display name at rest for new rows; recipient decrypts itemNameEncrypted into the store's plaintext projection on received-share load so display sites are unchanged; owner sent-list uses plaintext fallback (zero-knowledge: name wrapped for recipient, owner can't decrypt — T-48-18 accept). API GAP: no update endpoint accepts itemNameEncrypted, so the legacy lazy-backfill (A2) is detect+re-wrap only; persist blocked pending a follow-up API plan (PATCH itemNameEncrypted)
 
 ### Roadmap Evolution
 
