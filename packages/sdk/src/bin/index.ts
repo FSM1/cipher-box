@@ -186,10 +186,27 @@ export async function loadBin(params: { binCtx: BinOperationContext }): Promise<
   });
 
   if (!loaded) {
-    // No bin IPNS record — auto-repair by publishing empty bin.
-    // Safe: resolveIpnsRecord throws on transient errors (500, network),
-    // returns null only for definitive "not found" (API success=false or 404).
-    // IPNS sequence number ordering prevents overwriting a higher-sequence record.
+    // No bin IPNS record resolved. A null is NOT a reliable "bin is empty"
+    // signal: resolveIpnsRecord also returns null on a cold-cache miss right
+    // after a page reload, or while a concurrent loadBin()/delete is mid-flight.
+    // Auto-repairing on a false null is destructive — the bin publish path uses
+    // no expectedSequenceNumber, so the API increments and overwrites the real
+    // record's CID with the empty-bin CID (apps/api ipns.service upsertFolderIpns),
+    // wiping every entry. So re-resolve once before assuming the bin is new.
+    const recheck = await loadBinMetadataInternal({
+      userPrivateKey: params.binCtx.userPrivateKey,
+      ctx: params.binCtx.ctx,
+    });
+    if (recheck) {
+      return {
+        entries: recheck.metadata.entries,
+        sequenceNumber: recheck.metadata.sequenceNumber,
+        ipnsName: recheck.ipnsName,
+      };
+    }
+
+    // Still nothing on the second resolve — treat as a genuinely new bin and
+    // auto-repair by publishing an empty record to establish the IPNS sequence.
     console.warn('[CipherBox] Bin IPNS record not found — auto-repairing with empty bin');
     const binIpns = await deriveBinIpnsKeypair(params.binCtx.userPrivateKey);
     const emptyMetadata: RecycleBinMetadata = {
@@ -199,6 +216,23 @@ export async function loadBin(params: { binCtx: BinOperationContext }): Promise<
     };
     // Publish empty bin to establish the IPNS record (with retry/verify)
     await saveBinMetadata({ metadata: emptyMetadata, binCtx: params.binCtx });
+
+    // Re-resolve after publishing. If a real (non-empty / higher-sequence) record
+    // surfaces now — because a concurrent delete landed, or the empty publish was
+    // rejected/superseded — adopt it instead of returning the empty state we just
+    // wrote, so the bin never appears spuriously empty.
+    const afterPublish = await loadBinMetadataInternal({
+      userPrivateKey: params.binCtx.userPrivateKey,
+      ctx: params.binCtx.ctx,
+    });
+    if (afterPublish && afterPublish.metadata.sequenceNumber > 1) {
+      return {
+        entries: afterPublish.metadata.entries,
+        sequenceNumber: afterPublish.metadata.sequenceNumber,
+        ipnsName: afterPublish.ipnsName,
+      };
+    }
+
     return {
       entries: [],
       sequenceNumber: 1,
