@@ -1,0 +1,203 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9f0cd23de3e3",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T14:51:06.57609Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "20d7e86709d0",
+  "checkpoint_transcript_start": 1307,
+  "transcript_lines_at_start": 1307,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 5480,
+    "cache_read_tokens": 1467659,
+    "output_tokens": 3875,
+    "api_call_count": 2
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "20d7e86709d0",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "20d7e86709d0",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "20d7e86709d0",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "summary": {
+    "intent": "Execute plan 48-04 (REQ-3 web) to re-route shared folder write operations through SDK client methods and feed projection state exclusively from server events, then launch plan 48-06 (REQ-4 web) for ECIES encryption of itemName in ShareDialog.",
+    "outcome": "48-04 completed: write hook re-routed to SDK client methods (reads nothing back), shared folder refs are now single-writer via `sharedFolder:updated` subscription, seeded at every depth. Typecheck, lint, and 6 unit tests all green. 48-06 was launched but had not completed when the transcript ended.",
+    "learnings": {
+      "repo": [
+        "Shared folder projection state (folderChildrenRef, sequenceNumberRef) must be written by exactly one path — the `sharedFolder:updated` event subscription — to eliminate web/SDK drift.",
+        "`sharedFolderTree` is keyed by shareId but each depth has a distinct ipnsName/folderKey/IPNS key/sequence, so `loadSharedFolder` must be re-invoked on share-enter, subfolder-enter, navigateUp, and navigateToBreadcrumb for write shares.",
+        "`@cipherbox/web` vitest runs in `node` environment, so shared projection logic must be framework-agnostic (no React hooks) to be testable.",
+        "The SDK dist (`sdk-core` → `sdk`) must be rebuilt before running web type checks or tests, as web depends on the compiled SDK output.",
+        "The 30s poller's `refreshFolderContents` updates display refs but does NOT re-seed the SDK, leaving a residual desync risk if a poll-then-write occurs without intervening navigation."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedWriteOps.ts",
+          "finding": "All five handlers now call `getSdkClient().<sharedMethod>(currentShareId, args)` with no read-back. Removed withConflictRetry, resyncSharedFolder, buildSharedWriteContext, freshCtx, and four write-back lines per handler. withRevocationGuard (403 → read-only) retained. Params slimmed."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "`sharedFolder:updated` subscription is now the sole writer of folderChildrenRef/sequenceNumberRef + setters, filtered on active shareId read via currentShareIdRef at event time."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "finding": "`loadSharedFolder` is re-invoked on share-enter, subfolder-enter, navigateUp, and navigateToBreadcrumb (write shares only) to seed the SDK at every depth."
+        },
+        {
+          "path": "apps/web/src/shared-folder-projection.ts",
+          "finding": "New framework-agnostic module holding `seedSharedFolder` and `subscribeSharedFolderProjection` — extracted to be node-testable under vitest node env."
+        },
+        {
+          "path": "apps/web/src/__tests__/useSharedWriteOps.test.ts",
+          "finding": "6 tests covering per-share isolation, reads-nothing-back, file-only re-resolve, and unsubscribe behavior."
+        }
+      ],
+      "workflow": [
+        "UAT checkpoints (human-verify tasks) are deferred to the end-of-phase web-e2e run rather than blocking individual plan execution.",
+        "Acceptance greps (asserting absence of old patterns like `folderChildrenRef.current =` and `withConflictRetry`) are used alongside positive presence checks as lightweight CI-equivalent gates.",
+        "Phase execution follows a fixed post-completion pipeline: rebuild dist → full web-e2e dispatch → /simplify → /gsd:validate-phase → CodeRabbit → /security:review → re-sign unsigned commits → open PR."
+      ]
+    },
+    "friction": [
+      "SDK dist must be manually rebuilt before web checks — an ordering dependency that could silently produce false-positive type errors if skipped.",
+      "Task 4 UAT (write-share recipient operations) could not be verified inline and was deferred, leaving the end-to-end correctness of the write path unconfirmed until web-e2e runs."
+    ],
+    "open_items": [
+      "Plan 48-06 (REQ-4 web): ECIES wrap of `itemName` in ShareDialog using recipient pubkey, decrypt-for-display, and A2 lazy backfill of legacy plaintext items.",
+      "Task 4 UAT: upload / mkdir / rename / edit-content / delete in a write-share must reflect immediately and persist after reload with no console errors or stale-sequence 409 loops — delegated to web-e2e shared-folder spec.",
+      "Residual desync risk: 30s poller updates display refs but does not re-seed the SDK; a poll-then-write without intervening navigation relies on publishWithCas self-correcting the sequence — needs explicit coverage in web-e2e.",
+      "Post-phase pipeline pending: rebuild dist, full web-e2e dispatch, /simplify, /gsd:validate-phase 48, CodeRabbit review, /security:review, re-sign all unsigned commits, open PR."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T14:50:36.245078Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 305,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 305,
+    "total_lines_changed": 305,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 25,
+      "user_lines_removed": 2,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6,
+        "Cargo.lock": 2,
+        "apps/api/.env.dev-backup": 16
+      },
+      "user_removed_per_file": {
+        "Cargo.lock": 2
+      }
+    }
+  ]
+}
