@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.40.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.39.0...cipher-box-v0.40.0) (2026-06-16)
+
+
+### Features
+
+* consolidate SDK shared-folder ownership and encrypt share itemName at rest ([#500](https://github.com/FSM1/cipher-box/issues/500)) ([383e856](https://github.com/FSM1/cipher-box/commit/383e856cbfba6a23b60cc116e0b5163c92e6be97))
+* **sdk:** self-bootstrap folder tree from root IPNS key ([#498](https://github.com/FSM1/cipher-box/issues/498)) ([2657740](https://github.com/FSM1/cipher-box/commit/2657740f144203a095f43e8692794fcd71c9e283))
+
 ## [0.39.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.38.6...cipher-box-v0.39.0) (2026-06-15)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.31.0...@cipherbox/crypto-v0.32.0) (2026-06-16)
+
+
+### Features
+
+* consolidate SDK shared-folder ownership and encrypt share itemName at rest ([#500](https://github.com/FSM1/cipher-box/issues/500)) ([383e856](https://github.com/FSM1/cipher-box/commit/383e856cbfba6a23b60cc116e0b5163c92e6be97))
+
 ## [0.31.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.30.0...@cipherbox/crypto-v0.31.0) (2026-04-06)
 
 

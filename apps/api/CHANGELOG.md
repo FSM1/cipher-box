@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.39.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-v0.38.0...@cipherbox/api-v0.39.0) (2026-06-16)
+
+
+### Features
+
+* consolidate SDK shared-folder ownership and encrypt share itemName at rest ([#500](https://github.com/FSM1/cipher-box/issues/500)) ([383e856](https://github.com/FSM1/cipher-box/commit/383e856cbfba6a23b60cc116e0b5163c92e6be97))
+
 ## [0.38.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-v0.37.1...@cipherbox/api-v0.38.0) (2026-06-15)
 
 
