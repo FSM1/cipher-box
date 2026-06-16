@@ -372,6 +372,20 @@ export class CipherBoxClient {
 
       if (!result) return null;
 
+      // IPNS reads lag a just-written sequence (#489 sequence-as-clock invariant).
+      // Never overwrite a fresher in-memory entry with a stale IPNS snapshot.
+      const existing = this.folderTree.get(ipnsName);
+      if (existing && existing.sequenceNumber >= result.sequenceNumber) {
+        this.emitter.emit({
+          type: 'folder:loaded',
+          folderId: ipnsName,
+          ipnsName,
+          children: existing.children,
+          sequenceNumber: existing.sequenceNumber,
+        });
+        return existing;
+      }
+
       const state: FolderState = {
         ipnsName,
         folderKey,
