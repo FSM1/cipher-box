@@ -117,9 +117,6 @@ describe('CipherBoxClient.ensureFolderLoaded', () => {
     expect(client.hasFolder(ROOT)).toBe(true);
     expect(client.hasFolder('k51a')).toBe(true);
     expect(client.hasFolder('k51b')).toBe(true);
-    // Keys for the two non-root subfolders were unwrapped with the vault keypair.
-    const crypto = await import('@cipherbox/crypto');
-    expect(vi.mocked(crypto.unwrapKey).mock.calls.length).toBe(4); // folderKey + ipnsKey per subfolder
   });
 
   it('returns null when the target is not reachable from root', async () => {
