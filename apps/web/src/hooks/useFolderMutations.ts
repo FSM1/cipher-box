@@ -3,7 +3,7 @@ import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { getDepth, isDescendantOf, calculateSubtreeDepth } from '@cipherbox/sdk-core';
 import type { FolderNode } from '../stores/folder.store';
-import { getSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
+import { getSdkClient } from '../lib/sdk-provider';
 import { BinNotLoadedError } from '@cipherbox/sdk';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { MAX_FOLDER_DEPTH, getRootFolderState } from './folder-helpers';
@@ -110,9 +110,6 @@ export function useFolderMutations() {
           throw new Error('Parent folder not found or vault not initialized');
         }
 
-        // Ensure parent is registered in SDK's FolderTree
-        ensureFolderRegistered(parentFolder);
-
         // Create folder via SDK (handles key gen, metadata update, IPNS publish)
         const client = getSdkClient();
         const result = await client.createFolder(parentFolder.ipnsName, name);
@@ -167,9 +164,6 @@ export function useFolderMutations() {
         const parentFolder = getParentFolder(parentId);
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        // Ensure parent is registered in SDK
-        ensureFolderRegistered(parentFolder);
-
         // Rename via SDK (handles metadata update, IPNS publish)
         const client = getSdkClient();
         await client.renameItem(parentFolder.ipnsName, itemId, newName);
@@ -212,10 +206,6 @@ export function useFolderMutations() {
         if (!sourceFolder || !destFolder) {
           throw new Error('Source or destination folder not found');
         }
-
-        // Ensure both folders are registered in SDK
-        ensureFolderRegistered(sourceFolder);
-        ensureFolderRegistered(destFolder);
 
         // Move via SDK (handles add-before-remove, both IPNS publishes)
         const client = getSdkClient();
@@ -297,10 +287,6 @@ export function useFolderMutations() {
           }
         }
 
-        // Ensure both folders are registered in SDK
-        ensureFolderRegistered(sourceFolder);
-        ensureFolderRegistered(destFolder);
-
         // Move each item via SDK
         const client = getSdkClient();
         for (const item of items) {
@@ -341,9 +327,6 @@ export function useFolderMutations() {
       try {
         const parentFolder = getParentFolder(parentId);
         if (!parentFolder) throw new Error('Parent folder not found');
-
-        // Ensure parent is registered in SDK
-        ensureFolderRegistered(parentFolder);
 
         const client = getSdkClient();
         const parentPath = buildFolderPath(parentId);
@@ -392,9 +375,6 @@ export function useFolderMutations() {
         const parentFolder = getParentFolder(parentId);
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        // Ensure parent is registered in SDK
-        ensureFolderRegistered(parentFolder);
-
         // Collect nested folder IDs to remove from store
         const folderIdsToRemove: string[] = [];
         const collectFolderIds = (folderId: string) => {
@@ -420,10 +400,6 @@ export function useFolderMutations() {
         const parentPath = buildFolderPath(parentId);
 
         for (const item of items) {
-          // Re-register parent between deletes since SDK updates its internal state
-          const freshParent = getParentFolder(parentId);
-          if (freshParent) ensureFolderRegistered(freshParent);
-
           await deleteWithBehavior(client, parentFolder.ipnsName, item.id, parentPath);
         }
 

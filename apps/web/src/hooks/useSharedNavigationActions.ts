@@ -24,6 +24,7 @@ import { fetchFromIpfs } from '../lib/api/ipfs';
 import { downloadFile, triggerBrowserDownload } from '../services/download.service';
 import { useDownloadStore } from '../stores/download.store';
 import { logger } from '../lib/logger';
+import { parsePublicKey, type SeedSharedFolderArgs } from './shared-folder-projection';
 import type { SharedListItem, SharedBreadcrumb } from './useSharedNavigation';
 
 type NavStackEntry = {
@@ -71,6 +72,12 @@ export type SharedNavigationActionsParams = {
   getShareKeys: (
     shareId: string
   ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
+  /**
+   * Seed (or re-seed) the SDK's sharedFolderTree for the active depth. Called on
+   * every navigation that changes the active folder context so the SDK stays the
+   * single source of truth for shared write state (REQ-3).
+   */
+  seedActiveSharedFolder: (args: Omit<SeedSharedFolderArgs, 'addShareKeysFn'>) => void;
 };
 
 export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
@@ -137,6 +144,21 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             p.setCurrentSequenceNumber(seqNum);
             p.sequenceNumberRef.current = seqNum;
             p.navStackRef.current = [];
+
+            // Seed the SDK as the single owner of shared write state for this
+            // depth (REQ-3). Only write shares (IPNS key present) can mutate.
+            if (p.ipnsPrivateKeyRef.current && auth.vaultKeypair) {
+              p.seedActiveSharedFolder({
+                shareId,
+                ipnsName: share.ipnsName,
+                folderKey: itemKey,
+                ipnsPrivateKey: p.ipnsPrivateKeyRef.current,
+                sequenceNumber: seqNum,
+                children,
+                ownerPublicKey: parsePublicKey(share.sharerPublicKey),
+                recipientPublicKey: auth.vaultKeypair.publicKey,
+              });
+            }
           } finally {
             if (!folderKeyStored) itemKey.fill(0);
           }
@@ -161,6 +183,25 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             p.setPermission(p.ipnsPrivateKeyRef.current ? share.permission : 'read');
             p.setIpnsName(share.ipnsName);
             p.setBreadcrumbs([{ id: shareId, name: share.itemName }]);
+
+            // Seed the SDK so the standalone-file write path
+            // (client.updateSharedFile -> requireSharedFolder) has state. A file
+            // share carries no folder children/sequence; updateSharedFile is a
+            // file-only publish that reads folderKey + owner/recipient pubkeys +
+            // addShareKeysFn from state and ignores children/sequence. Only write
+            // shares (IPNS key present) seed — read-only file shares cannot mutate.
+            if (p.ipnsPrivateKeyRef.current && auth.vaultKeypair) {
+              p.seedActiveSharedFolder({
+                shareId,
+                ipnsName: share.ipnsName,
+                folderKey: itemKey,
+                ipnsPrivateKey: p.ipnsPrivateKeyRef.current,
+                sequenceNumber: 0n,
+                children: [],
+                ownerPublicKey: parsePublicKey(share.sharerPublicKey),
+                recipientPublicKey: auth.vaultKeypair.publicKey,
+              });
+            }
           } finally {
             if (!folderKeyStored) itemKey.fill(0);
           }
@@ -254,6 +295,26 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
               // Couldn't get subfolder IPNS key
             }
             if (!restored) p.setPermission('read');
+
+            // Re-seed the SDK for this subfolder depth (distinct ipnsName /
+            // folderKey / IPNS key / sequence under the same shareId).
+            if (restored && p.ipnsPrivateKeyRef.current) {
+              const ownerShare = p.sharedItems.find(
+                (s) => s.share.shareId === p.currentShareId
+              )?.share;
+              if (ownerShare) {
+                p.seedActiveSharedFolder({
+                  shareId: p.currentShareId,
+                  ipnsName: folderEntry.ipnsName,
+                  folderKey: subfolderKey,
+                  ipnsPrivateKey: p.ipnsPrivateKeyRef.current,
+                  sequenceNumber: seqNum,
+                  children,
+                  ownerPublicKey: parsePublicKey(ownerShare.sharerPublicKey),
+                  recipientPublicKey: auth.vaultKeypair.publicKey,
+                });
+              }
+            }
           }
         } finally {
           if (!subfolderKeyStored) subfolderKey.fill(0);
@@ -300,6 +361,38 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
     p.navStackRef.current = [];
     p.setError(null);
   }, [p.folderKey, p.zeroIpnsKey, p.clearPolling]);
+
+  /**
+   * Re-seed the SDK's sharedFolderTree for a restored (up / breadcrumb) depth,
+   * once the IPNS key for that depth has been restored. `depth` carries the
+   * folderKey / ipnsName / children / sequence of the level we navigated back
+   * to; the IPNS key + owner/recipient pubkeys come from the active share.
+   */
+  const reseedRestoredDepth = useCallback(
+    (depth: {
+      folderKey: Uint8Array;
+      ipnsName: string;
+      children: FolderChild[];
+      sequenceNumber: bigint | null;
+    }) => {
+      if (!p.currentShareId || !p.ipnsPrivateKeyRef.current) return;
+      const auth = useAuthStore.getState();
+      if (!auth.vaultKeypair) return;
+      const share = p.sharedItems.find((s) => s.share.shareId === p.currentShareId)?.share;
+      if (!share) return;
+      p.seedActiveSharedFolder({
+        shareId: p.currentShareId,
+        ipnsName: depth.ipnsName,
+        folderKey: depth.folderKey,
+        ipnsPrivateKey: p.ipnsPrivateKeyRef.current,
+        sequenceNumber: depth.sequenceNumber ?? 0n,
+        children: depth.children,
+        ownerPublicKey: parsePublicKey(share.sharerPublicKey),
+        recipientPublicKey: auth.vaultKeypair.publicKey,
+      });
+    },
+    [p.currentShareId, p.sharedItems]
+  );
 
   /**
    * Restore the correct IPNS private key for the current depth.
@@ -366,10 +459,11 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       } else {
         await restoreIpnsKeyForDepth(prev.folderId);
       }
+      reseedRestoredDepth(prev);
     } else if (p.currentView === 'folder' || p.currentView === 'file') {
       navigateToRoot();
     }
-  }, [p.currentView, p.folderKey, navigateToRoot, restoreIpnsKeyForDepth]);
+  }, [p.currentView, p.folderKey, navigateToRoot, restoreIpnsKeyForDepth, reseedRestoredDepth]);
 
   /**
    * Navigate directly to a breadcrumb level.
@@ -398,9 +492,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         } else {
           await restoreIpnsKeyForDepth(target.folderId);
         }
+        reseedRestoredDepth(target);
       }
     },
-    [p.breadcrumbs, p.folderKey, restoreIpnsKeyForDepth]
+    [p.breadcrumbs, p.folderKey, restoreIpnsKeyForDepth, reseedRestoredDepth]
   );
 
   /**

@@ -28,9 +28,10 @@ import type {
   BinEntry,
   FileMetadata,
 } from '@cipherbox/core';
-import type { CipherBoxClientConfig, FolderState } from './types';
+import type { CipherBoxClientConfig, FolderState, SharedFolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
+import { SharedFolderTree } from './state/shared-folder-tree';
 import { KeyCache } from './state/key-cache';
 import * as binOps from './bin';
 import type { BinState } from './bin';
@@ -53,6 +54,12 @@ export class CipherBoxClient {
   private ctx: SdkContext;
   private emitter: SdkEventEmitter;
   private folderTree: FolderTree;
+  /**
+   * Sibling tree owning SHARED-folder state, keyed by `shareId` (NOT `ipnsName`).
+   * Shared folders carry a distinct SharedWriteContext and can collide on
+   * `ipnsName`, so they live in their own map (D REQ-3, A4).
+   */
+  private sharedFolderTree: SharedFolderTree;
   private keyCache: KeyCache;
   private binState: BinState | null = null;
   /** BYO-IPFS external pinning provider (null when mode is 'cipherbox') */
@@ -99,6 +106,7 @@ export class CipherBoxClient {
     };
     this.emitter = new SdkEventEmitter();
     this.folderTree = new FolderTree();
+    this.sharedFolderTree = new SharedFolderTree();
     this.keyCache = new KeyCache();
 
     // Initialize BYO pinning provider if configured
@@ -239,6 +247,7 @@ export class CipherBoxClient {
    */
   destroy(): void {
     this.folderTree.clear();
+    this.sharedFolderTree.clear();
     this.keyCache.clear();
     this.emitter.removeAll();
     // Zero internal key copies (defense-in-depth; JS GC may retain copies)
@@ -275,9 +284,8 @@ export class CipherBoxClient {
    * Get the IPNS private key for a folder in the SDK's internal state.
    * Returns undefined if the folder is not registered or has no key.
    *
-   * Used by ensureFolderRegistered to preserve SDK's correct IPNS key
-   * when the store has an empty placeholder (SDK-created folders store
-   * keys internally, not in Zustand).
+   * SDK-created folders store their IPNS keys internally (in folderTree),
+   * not in the Zustand store, so this is their authoritative source.
    */
   getFolderIpnsPrivateKey(ipnsName: string): Uint8Array | undefined {
     const key = this.folderTree.get(ipnsName)?.ipnsKeypair?.privateKey;
@@ -371,6 +379,20 @@ export class CipherBoxClient {
       });
 
       if (!result) return null;
+
+      // IPNS reads lag a just-written sequence (#489 sequence-as-clock invariant).
+      // Never overwrite a fresher in-memory entry with a stale IPNS snapshot.
+      const existing = this.folderTree.get(ipnsName);
+      if (existing && existing.sequenceNumber >= result.sequenceNumber) {
+        this.emitter.emit({
+          type: 'folder:loaded',
+          folderId: ipnsName,
+          ipnsName,
+          children: existing.children,
+          sequenceNumber: existing.sequenceNumber,
+        });
+        return existing;
+      }
 
       const state: FolderState = {
         ipnsName,
@@ -1649,6 +1671,28 @@ export class CipherBoxClient {
         binCtx: this.getBinContext(),
       });
 
+      // Anti-clobber guard. loadBin returns an in-memory empty fallback
+      // (entries=[], sequenceNumber=0) when the bin record can't be resolved —
+      // e.g. a transient cold-cache/404 right after a reload. Bin init is
+      // fire-and-forget on login (useAuth) AND BinBrowser calls loadBin on
+      // mount, so two loads race. If one resolves the real bin (entries present)
+      // and the other transiently misses, the miss must NOT wipe the already
+      // loaded state.
+      const existing = this.binState;
+      const isEmptyFallback = result.sequenceNumber === 0 && result.entries.length === 0;
+      if (isEmptyFallback) {
+        // The empty fallback is "couldn't resolve a record", not an authoritative
+        // empty bin. If we already hold loaded state, keep it untouched. Otherwise
+        // adopt the empty state so deleteToBin can create the first record, but do
+        // NOT broadcast bin:updated — there is nothing to show and emitting an
+        // empty event would clobber a concurrently-loaded bin in subscribers.
+        if (existing !== null) {
+          return existing;
+        }
+        this.binState = result;
+        return result;
+      }
+
       this.binState = result;
       this.emitter.emit({ type: 'bin:updated', entries: result.entries });
 
@@ -1668,6 +1712,14 @@ export class CipherBoxClient {
    */
   async deleteToBin(folderIpnsName: string, childId: string, parentPath: string): Promise<void> {
     return this.withOperation('deleteToBin', async () => {
+      // Self-heal: bin init is fire-and-forget on login (useAuth), so binState may
+      // still be null when a delete fires (e.g. delete soon after login, or right
+      // after a reload). Without this, deleteToBin throws BinNotLoadedError and the
+      // web falls back to a HARD delete — the item vanishes and never reaches the
+      // bin. Lazily load the bin here so soft-delete always works.
+      if (!this.binState) {
+        await this.loadBin();
+      }
       if (!this.binState) throw new BinNotLoadedError();
 
       // Self-bootstrap the folder if it isn't loaded (e.g. after a reload), so
@@ -1892,6 +1944,284 @@ export class CipherBoxClient {
         coveringShares,
         newItems,
         addShareKeysFn,
+      });
+    });
+  }
+
+  // ---- Shared-folder operations (REQ-3) ----
+
+  /**
+   * Register / seed shared-folder state in the SDK's sibling `sharedFolderTree`.
+   *
+   * Mirrors {@link registerFolder} for the SHARED path. The consumer resolves
+   * the share (folder key, IPNS private key, owner + recipient pubkeys,
+   * children, sequence number, addShareKeys callback) and seeds it here keyed by
+   * `shareId`. The five shared write methods below then own publish + sequence
+   * bookkeeping + `sharedFolder:updated` emission, delegating the actual write to
+   * the stateless `share/shared-write.ts` functions.
+   *
+   * `SharedFolderTree.set()` clones the key buffers, so the caller's `folderKey`
+   * / `ipnsPrivateKey` buffers are never zeroed by `destroy()` / `delete()`.
+   *
+   * @param shareId - Share ID — the key under which this state lives
+   * @param state - Initial shared-folder state
+   */
+  loadSharedFolder(shareId: string, state: SharedFolderState): void {
+    this.sharedFolderTree.set(shareId, { ...state, shareId });
+  }
+
+  /**
+   * Check if a shared folder is registered in the SDK's sharedFolderTree.
+   */
+  hasSharedFolder(shareId: string): boolean {
+    return this.sharedFolderTree.has(shareId);
+  }
+
+  /**
+   * Get a snapshot of a shared folder's current state (or undefined).
+   * Returns the internal reference — consumers must not mutate it.
+   */
+  getSharedFolderState(shareId: string): SharedFolderState | undefined {
+    return this.sharedFolderTree.get(shareId);
+  }
+
+  /** Remove a shared folder from the SDK, zeroing its key material. */
+  unloadSharedFolder(shareId: string): void {
+    this.sharedFolderTree.delete(shareId);
+  }
+
+  /**
+   * Read shared-folder state for `shareId`, throwing a uniform error if absent.
+   * All shared write methods route through this to enforce the load contract.
+   */
+  private requireSharedFolder(shareId: string): SharedFolderState {
+    const state = this.sharedFolderTree.get(shareId);
+    if (!state) throw new Error('Shared folder not loaded');
+    return state;
+  }
+
+  /**
+   * Build a SharedWriteContext from the current shared-folder state.
+   * The state's per-share owner/recipient pubkeys, IPNS key, and addShareKeys
+   * callback are carried into the context — no cross-share bleed (T-48-07).
+   */
+  private buildSharedWriteContextFromState(
+    state: SharedFolderState
+  ): ReturnType<typeof shareOps.buildSharedWriteContext> {
+    return shareOps.buildSharedWriteContext({
+      ctx: this.ctx,
+      folderKey: state.folderKey,
+      ipnsPrivateKey: state.ipnsPrivateKey,
+      ipnsName: state.ipnsName,
+      sequenceNumber: state.sequenceNumber,
+      children: state.children,
+      ownerPublicKey: state.ownerPublicKey,
+      recipientPublicKey: state.recipientPublicKey,
+      shareId: state.shareId,
+      addShareKeysFn: state.addShareKeysFn,
+    });
+  }
+
+  /**
+   * Adopt a shared-write result into `sharedFolderTree` and emit
+   * `sharedFolder:updated`. Centralizes the write-back + emission so all five
+   * methods stay consistent.
+   */
+  private adoptSharedFolderResult(
+    shareId: string,
+    result: { publishedChildren: FolderChild[]; newSequenceNumber: bigint }
+  ): void {
+    // Re-read live state: the share may have been unloaded (e.g. unmount →
+    // unloadSharedFolder) while the async write/refresh was in-flight. Never
+    // resurrect an explicitly-unloaded share from a pre-await snapshot.
+    const live = this.sharedFolderTree.get(shareId);
+    if (!live) return;
+    const next: SharedFolderState = {
+      ...live,
+      children: result.publishedChildren,
+      sequenceNumber: result.newSequenceNumber,
+    };
+    this.sharedFolderTree.set(shareId, next);
+    this.emitter.emit({
+      type: 'sharedFolder:updated',
+      shareId,
+      ipnsName: live.ipnsName,
+      children: result.publishedChildren,
+      sequenceNumber: result.newSequenceNumber,
+    });
+  }
+
+  /**
+   * Upload a file to a write-shared folder (REQ-3).
+   *
+   * Reads state from `sharedFolderTree`, delegates to the stateless
+   * `uploadToSharedFolder` (which routes through `publishWithCas` — the one CAS
+   * engine; no second retry loop here), adopts the published children + sequence,
+   * and emits `sharedFolder:updated`.
+   */
+  async uploadToSharedFolder(
+    shareId: string,
+    args: { data: Uint8Array; fileName: string; mimeType?: string }
+  ): Promise<void> {
+    return this.withOperation('uploadToSharedFolder', async () => {
+      const state = this.requireSharedFolder(shareId);
+      const result = await shareOps.uploadToSharedFolder(
+        this.buildSharedWriteContextFromState(state),
+        args
+      );
+      this.adoptSharedFolderResult(shareId, result);
+    });
+  }
+
+  /**
+   * Create a subfolder in a write-shared folder (REQ-3).
+   */
+  async createSharedSubfolder(shareId: string, args: { name: string }): Promise<void> {
+    return this.withOperation('createSharedSubfolder', async () => {
+      const state = this.requireSharedFolder(shareId);
+      const result = await shareOps.createSharedSubfolder(
+        this.buildSharedWriteContextFromState(state),
+        args
+      );
+      this.adoptSharedFolderResult(shareId, result);
+    });
+  }
+
+  /**
+   * Rename an item in a write-shared folder (REQ-3).
+   */
+  async renameInSharedFolder(
+    shareId: string,
+    args: { itemId: string; newName: string }
+  ): Promise<void> {
+    return this.withOperation('renameInSharedFolder', async () => {
+      const state = this.requireSharedFolder(shareId);
+      const result = await shareOps.renameInSharedFolder(
+        this.buildSharedWriteContextFromState(state),
+        args
+      );
+      this.adoptSharedFolderResult(shareId, result);
+    });
+  }
+
+  /**
+   * Delete an item from a write-shared folder (REQ-3).
+   */
+  async deleteFromSharedFolder(shareId: string, args: { itemId: string }): Promise<void> {
+    return this.withOperation('deleteFromSharedFolder', async () => {
+      const state = this.requireSharedFolder(shareId);
+      const result = await shareOps.deleteFromSharedFolder(
+        this.buildSharedWriteContextFromState(state),
+        args
+      );
+      this.adoptSharedFolderResult(shareId, result);
+    });
+  }
+
+  /**
+   * Update a file's content in a write-shared folder (REQ-3).
+   *
+   * This is the FILE path: the stateless `updateSharedFile` publishes the file's
+   * own IPNS metadata via CAS and does NOT advance the parent folder's children
+   * or sequence (the FilePointer is unchanged). It returns void, so no
+   * write-back occurs — but we still emit `sharedFolder:updated` with the
+   * unchanged children/sequence so consumers re-resolve the file (mirrors the
+   * owned `restoreFileVersion` file-only emission).
+   *
+   * The caller pre-resolves `filePointer` and supplies `getFileIpnsKeyFn`
+   * (share-key lookup with FilePointer fallback). `ctx`, `folderKey`,
+   * owner/recipient pubkeys, `shareId`, and `addShareKeysFn` come from state.
+   */
+  async updateSharedFile(
+    shareId: string,
+    args: {
+      filePointer: FilePointer;
+      newContent: Uint8Array;
+      getFileIpnsKeyFn: (itemId: string) => Promise<Uint8Array | null>;
+    }
+  ): Promise<void> {
+    return this.withOperation('updateSharedFile', async () => {
+      const state = this.requireSharedFolder(shareId);
+      await shareOps.updateSharedFile({
+        ctx: this.ctx,
+        folderKey: state.folderKey,
+        ownerPublicKey: state.ownerPublicKey,
+        recipientPublicKey: state.recipientPublicKey,
+        shareId: state.shareId,
+        addShareKeysFn: state.addShareKeysFn,
+        filePointer: args.filePointer,
+        newContent: args.newContent,
+        getFileIpnsKeyFn: args.getFileIpnsKeyFn,
+      });
+      // File-only publish: folder children/sequence unchanged. Emit so consumers
+      // re-resolve the file metadata — but only if the share is still loaded (it
+      // may have been unloaded during the in-flight publish).
+      const live = this.sharedFolderTree.get(shareId);
+      if (!live) return;
+      this.emitter.emit({
+        type: 'sharedFolder:updated',
+        shareId,
+        ipnsName: live.ipnsName,
+        children: live.children,
+        sequenceNumber: live.sequenceNumber,
+      });
+    });
+  }
+
+  /**
+   * Re-resolve a shared folder's IPNS record and adopt remote changes (REQ-3).
+   *
+   * The shared analog of {@link loadFolder}/`ensureFolderLoaded` for the owned
+   * path: the SDK — not the consumer — owns shared-folder REFRESH. The web 30s
+   * poller calls this instead of resolving IPNS / fetching IPFS / decrypting
+   * inline, so `sharedFolder:updated` is the sole ref writer on BOTH the write
+   * and poll paths.
+   *
+   * Re-resolves via `sdkCore.loadFolderMetadata` using the stored `ipnsName` +
+   * `folderKey`, then applies the #489 sequence-as-clock guard: when the
+   * resolved sequence is stale/equal (`state.sequenceNumber >=
+   * result.sequenceNumber`) it re-emits the EXISTING (fresher) snapshot instead
+   * of clobbering it — a background poll never regresses just-written in-memory
+   * state. A newer sequence is adopted into `sharedFolderTree` via
+   * `adoptSharedFolderResult` (identical emission shape to the write path). A
+   * null result (unresolvable IPNS) is a no-op.
+   *
+   * @throws if the share is not loaded (same contract as the write methods).
+   */
+  async refreshSharedFolder(shareId: string): Promise<void> {
+    return this.withOperation('refreshSharedFolder', async () => {
+      const state = this.requireSharedFolder(shareId);
+
+      const result = await sdkCore.loadFolderMetadata({
+        ipnsName: state.ipnsName,
+        folderKey: state.folderKey,
+        ctx: this.ctx,
+      });
+
+      if (!result) return;
+
+      // IPNS reads lag a just-written sequence (#489 sequence-as-clock invariant).
+      // Never overwrite a fresher in-memory entry with a stale IPNS snapshot —
+      // re-emit the existing snapshot so consumers stay consistent.
+      if (state.sequenceNumber >= result.sequenceNumber) {
+        // Re-read live state after the await: no-op if unloaded mid-flight, and
+        // re-emit the freshest in-memory snapshot (a concurrent write may have
+        // advanced it past the pre-await `state`).
+        const live = this.sharedFolderTree.get(shareId);
+        if (!live) return;
+        this.emitter.emit({
+          type: 'sharedFolder:updated',
+          shareId,
+          ipnsName: live.ipnsName,
+          children: live.children,
+          sequenceNumber: live.sequenceNumber,
+        });
+        return;
+      }
+
+      this.adoptSharedFolderResult(shareId, {
+        publishedChildren: result.metadata.children,
+        newSequenceNumber: result.sequenceNumber,
       });
     });
   }

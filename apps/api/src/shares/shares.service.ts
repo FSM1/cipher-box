@@ -94,6 +94,10 @@ export class SharesService {
       itemType: dto.itemType,
       ipnsName: dto.ipnsName,
       itemName: dto.itemName,
+      // Client-supplied ECIES ciphertext only. The server is zero-knowledge:
+      // it never sees the plaintext name and never encrypts it (no recipient
+      // private key). Legacy clients omit this and still send plaintext itemName.
+      itemNameEncrypted: dto.itemNameEncrypted ? Buffer.from(dto.itemNameEncrypted, 'hex') : null,
       encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
       permission,
       encryptedIpnsKey,

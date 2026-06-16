@@ -1,0 +1,90 @@
+/**
+ * SharedFolderTree unit tests — per-share isolation + key-zeroing.
+ *
+ * The shared-folder tree is keyed by `shareId` (NOT `ipnsName`) so two shares
+ * that collide on the same ipnsName stay independent and never bleed key
+ * material or write context into each other (D REQ-3, A4; T-48-06 / T-48-07).
+ */
+import { describe, it, expect, vi } from 'vitest';
+import { SharedFolderTree } from '../state/shared-folder-tree';
+import type { SharedFolderState } from '../types';
+
+function makeState(overrides?: Partial<SharedFolderState>): SharedFolderState {
+  return {
+    shareId: 'share-A',
+    ipnsName: 'k51shared',
+    folderKey: new Uint8Array(32).fill(1),
+    ipnsPrivateKey: new Uint8Array(64).fill(2),
+    sequenceNumber: 1n,
+    children: [],
+    ownerPublicKey: new Uint8Array(33).fill(3),
+    recipientPublicKey: new Uint8Array(33).fill(4),
+    addShareKeysFn: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+describe('SharedFolderTree', () => {
+  it('keys entries by shareId — two shares with the SAME ipnsName coexist', () => {
+    const tree = new SharedFolderTree();
+    tree.set('share-A', makeState({ shareId: 'share-A', ipnsName: 'k51same', sequenceNumber: 5n }));
+    tree.set('share-B', makeState({ shareId: 'share-B', ipnsName: 'k51same', sequenceNumber: 9n }));
+
+    expect(tree.has('share-A')).toBe(true);
+    expect(tree.has('share-B')).toBe(true);
+    expect(tree.get('share-A')?.sequenceNumber).toBe(5n);
+    expect(tree.get('share-B')?.sequenceNumber).toBe(9n);
+    expect(tree.getAll().size).toBe(2);
+  });
+
+  it('set() clones key buffers so caller buffers are not zeroed by delete()', () => {
+    const tree = new SharedFolderTree();
+    const callerFolderKey = new Uint8Array(32).fill(7);
+    const callerIpnsKey = new Uint8Array(64).fill(8);
+    tree.set('share-A', makeState({ folderKey: callerFolderKey, ipnsPrivateKey: callerIpnsKey }));
+
+    tree.delete('share-A');
+
+    // Caller buffers untouched (clone was zeroed, not the originals)
+    expect(callerFolderKey.every((b) => b === 7)).toBe(true);
+    expect(callerIpnsKey.every((b) => b === 8)).toBe(true);
+  });
+
+  it('delete(shareId) zeros that entry key material and leaves the other entry intact', () => {
+    const tree = new SharedFolderTree();
+    tree.set('share-A', makeState({ shareId: 'share-A', ipnsName: 'k51same' }));
+    tree.set('share-B', makeState({ shareId: 'share-B', ipnsName: 'k51same' }));
+
+    // Capture the stored (cloned) buffers for share-A before deletion
+    const storedA = tree.get('share-A')!;
+    const aFolderKey = storedA.folderKey;
+    const aIpnsKey = storedA.ipnsPrivateKey;
+
+    tree.delete('share-A');
+
+    // share-A removed and its key material zeroed
+    expect(tree.has('share-A')).toBe(false);
+    expect(aFolderKey.every((b) => b === 0)).toBe(true);
+    expect(aIpnsKey.every((b) => b === 0)).toBe(true);
+
+    // share-B untouched — no cross-share bleed
+    expect(tree.has('share-B')).toBe(true);
+    const storedB = tree.get('share-B')!;
+    expect(storedB.folderKey.every((b) => b === 0)).toBe(false);
+    expect(storedB.ipnsPrivateKey.every((b) => b === 0)).toBe(false);
+  });
+
+  it('clear() zeros all entries key material', () => {
+    const tree = new SharedFolderTree();
+    tree.set('share-A', makeState({ shareId: 'share-A' }));
+    tree.set('share-B', makeState({ shareId: 'share-B' }));
+    const aFolderKey = tree.get('share-A')!.folderKey;
+    const bFolderKey = tree.get('share-B')!.folderKey;
+
+    tree.clear();
+
+    expect(tree.getAll().size).toBe(0);
+    expect(aFolderKey.every((b) => b === 0)).toBe(true);
+    expect(bFolderKey.every((b) => b === 0)).toBe(true);
+  });
+});

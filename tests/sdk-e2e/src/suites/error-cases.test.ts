@@ -63,7 +63,12 @@ describe('Error Cases', () => {
     });
   });
 
-  describe('Bin operations without loadBin', () => {
+  // The bin self-heals when binState is null instead of throwing
+  // BinNotLoadedError (commit 73c9f037a). loadBin returns an in-memory empty
+  // state without publishing, deleteToBin lazily loads the bin, and the other
+  // operations fail on the missing entry rather than on an unloaded bin. These
+  // tests assert that self-healing contract.
+  describe('Bin operations without an explicit loadBin (self-healing)', () => {
     let freshCtx: TestContext;
 
     beforeAll(async () => {
@@ -75,26 +80,37 @@ describe('Error Cases', () => {
       await deleteTestAccount(freshCtx);
     });
 
-    it('should throw BinNotLoadedError on deleteToBin', async () => {
+    it('deleteToBin self-heals the bin and fails only on the missing item', async () => {
+      // deleteToBin lazily loads the bin (so no BinNotLoadedError) and
+      // self-bootstraps the root folder, then fails because the child 'id' does
+      // not exist in the folder — 'Item not found', not 'Bin not loaded'.
       const err = await freshCtx.client
         .deleteToBin(freshCtx.rootIpnsName, 'id', 'path')
         .catch((e: unknown) => e);
-      expect(err).toBeInstanceOf(BinNotLoadedError);
-      expect((err as Error).message).toBe('Bin not loaded');
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(BinNotLoadedError);
+      expect((err as Error).message).toBe('Item not found');
     });
 
-    it('should throw BinNotLoadedError on restoreFromBin', async () => {
+    it('restoreFromBin fails on the missing bin entry, not an unloaded bin', async () => {
+      // The prior deleteToBin lazily loaded an (empty) bin, so binState is now
+      // non-null. restoreFromBin therefore reaches the entry lookup and fails
+      // with 'Bin entry not found' rather than BinNotLoadedError.
       await expect(
         freshCtx.client.restoreFromBin('entry-id', freshCtx.rootIpnsName)
-      ).rejects.toThrow('Bin not loaded');
+      ).rejects.toThrow('Bin entry not found');
     });
 
-    it('should throw BinNotLoadedError on permanentDelete', async () => {
-      await expect(freshCtx.client.permanentDelete('entry-id')).rejects.toThrow('Bin not loaded');
+    it('permanentDelete fails on the missing bin entry, not an unloaded bin', async () => {
+      await expect(freshCtx.client.permanentDelete('entry-id')).rejects.toThrow(
+        'Bin entry not found'
+      );
     });
 
-    it('should throw BinNotLoadedError on emptyBin', async () => {
-      await expect(freshCtx.client.emptyBin()).rejects.toThrow('Bin not loaded');
+    it('emptyBin succeeds on an already-loaded empty bin', async () => {
+      // binState is the empty in-memory state from the earlier self-heal, so
+      // emptyBin resolves (publishing an empty bin) instead of throwing.
+      await expect(freshCtx.client.emptyBin()).resolves.toBeUndefined();
     });
   });
 

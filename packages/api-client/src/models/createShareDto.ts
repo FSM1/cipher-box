@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.37.1
+ * OpenAPI spec version: 0.38.0
  */
 import type { CreateShareDtoItemType } from './createShareDtoItemType';
 import type { CreateShareDtoPermission } from './createShareDtoPermission';
@@ -18,6 +18,8 @@ export interface CreateShareDto {
   ipnsName: string;
   /** Display name of the shared item */
   itemName: string;
+  /** Hex-encoded ECIES ciphertext of the display name wrapped for recipient. Optional during rollout: legacy clients still send plaintext itemName. */
+  itemNameEncrypted?: string;
   /** Hex-encoded root key wrapped for recipient via ECIES */
   encryptedKey: string;
   /** Permission level for the share */

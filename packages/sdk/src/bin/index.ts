@@ -169,47 +169,63 @@ async function publishWithVerify(params: {
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Number of resolve attempts in loadBin before falling back to empty state. */
+const LOAD_BIN_MAX_ATTEMPTS = 6;
+/** Base backoff (ms) between loadBin resolve retries. */
+const LOAD_BIN_RETRY_DELAY_MS = 500;
+
 /**
  * Load the recycle bin metadata from IPNS.
  *
  * If no bin IPNS record exists yet (first login / never deleted anything),
- * returns an empty BinState so that deleteToBin can create the first record.
- * The old bin service handled this by creating in-memory-only empty state;
- * the SDK must do the same to avoid "Bin not loaded" errors on first delete.
+ * returns an in-memory empty BinState so that deleteToBin can create the first
+ * record. The first addToBin lazily publishes the real record at
+ * sequenceNumber 1 (0 + 1), which matches the API create-path.
  *
- * @returns Current bin state (never null — empty state if no record exists)
+ * Crucially, loadBin NEVER publishes on a null resolve. A null is not a
+ * reliable "bin is empty" signal: resolveIpnsRecord also returns null on a
+ * cold-cache miss right after a page reload, or while a concurrent
+ * loadBin()/delete is mid-flight. Publishing an empty record here is
+ * destructive — the bin publish path carries no expectedSequenceNumber, so the
+ * API blindly increments the sequence and overwrites the real record's CID with
+ * the empty-bin CID (apps/api ipns.service upsertFolderIpns), wiping every
+ * entry. The API's /ipns/resolve already falls back to its synchronously-written
+ * DB cache, so a client-side null means the record is genuinely absent at that
+ * instant; we recover transient nulls with a bounded retry instead of writing.
+ *
+ * @returns Current bin state (never null — in-memory empty state if no record exists)
  */
 export async function loadBin(params: { binCtx: BinOperationContext }): Promise<BinState> {
-  const loaded = await loadBinMetadataInternal({
-    userPrivateKey: params.binCtx.userPrivateKey,
-    ctx: params.binCtx.ctx,
-  });
+  // Bounded retry: convert a transient null (cold resolve cache after reload, or
+  // a concurrent in-flight publish) into a successful load before falling back
+  // to empty state. Never publishes.
+  for (let attempt = 0; attempt < LOAD_BIN_MAX_ATTEMPTS; attempt++) {
+    const loaded = await loadBinMetadataInternal({
+      userPrivateKey: params.binCtx.userPrivateKey,
+      ctx: params.binCtx.ctx,
+    });
 
-  if (!loaded) {
-    // No bin IPNS record — auto-repair by publishing empty bin.
-    // Safe: resolveIpnsRecord throws on transient errors (500, network),
-    // returns null only for definitive "not found" (API success=false or 404).
-    // IPNS sequence number ordering prevents overwriting a higher-sequence record.
-    console.warn('[CipherBox] Bin IPNS record not found — auto-repairing with empty bin');
-    const binIpns = await deriveBinIpnsKeypair(params.binCtx.userPrivateKey);
-    const emptyMetadata: RecycleBinMetadata = {
-      version: BIN_METADATA_VERSION,
-      sequenceNumber: 1,
-      entries: [],
-    };
-    // Publish empty bin to establish the IPNS record (with retry/verify)
-    await saveBinMetadata({ metadata: emptyMetadata, binCtx: params.binCtx });
-    return {
-      entries: [],
-      sequenceNumber: 1,
-      ipnsName: binIpns.ipnsName,
-    };
+    if (loaded) {
+      return {
+        entries: loaded.metadata.entries,
+        sequenceNumber: loaded.metadata.sequenceNumber,
+        ipnsName: loaded.ipnsName,
+      };
+    }
+
+    if (attempt < LOAD_BIN_MAX_ATTEMPTS - 1) {
+      await new Promise((r) => setTimeout(r, LOAD_BIN_RETRY_DELAY_MS));
+    }
   }
 
+  // No bin IPNS record resolved after all retries — treat as a genuinely new
+  // bin. Return in-memory empty state WITHOUT publishing. The first addToBin
+  // publishes at sequenceNumber 0 + 1 = 1, matching the API create-path.
+  const binIpns = await deriveBinIpnsKeypair(params.binCtx.userPrivateKey);
   return {
-    entries: loaded.metadata.entries,
-    sequenceNumber: loaded.metadata.sequenceNumber,
-    ipnsName: loaded.ipnsName,
+    entries: [],
+    sequenceNumber: 0,
+    ipnsName: binIpns.ipnsName,
   };
 }
 

@@ -78,6 +78,20 @@ export class CreateShareDto {
   itemName!: string;
 
   @ApiProperty({
+    description:
+      'Hex-encoded ECIES ciphertext of the display name wrapped for recipient. ' +
+      'Optional during rollout: legacy clients still send plaintext itemName.',
+    required: false,
+  })
+  @IsString()
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'itemNameEncrypted must be an even-length hex string',
+  })
+  @MaxLength(2500)
+  @IsOptional()
+  itemNameEncrypted?: string;
+
+  @ApiProperty({
     description: 'Hex-encoded root key wrapped for recipient via ECIES',
   })
   @IsString()

@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.37.1
+ * OpenAPI spec version: 0.38.0
  */
 import type { SentShareResponseDtoItemType } from './sentShareResponseDtoItemType';
 import type { SentShareResponseDtoPermission } from './sentShareResponseDtoPermission';
@@ -15,6 +15,11 @@ export interface SentShareResponseDto {
   itemType: SentShareResponseDtoItemType;
   ipnsName: string;
   itemName: string;
+  /**
+   * Hex-encoded ECIES ciphertext of the display name, or null for legacy rows
+   * @nullable
+   */
+  itemNameEncrypted: string | null;
   /** Permission level */
   permission: SentShareResponseDtoPermission;
   createdAt: string;

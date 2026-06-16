@@ -61,6 +61,7 @@ export class SharesController {
     itemType: string;
     ipnsName: string;
     itemName: string;
+    itemNameEncrypted: string | null;
     encryptedKey: string;
     permission: string;
     createdAt: Date;
@@ -71,6 +72,7 @@ export class SharesController {
       itemType: share.itemType,
       ipnsName: share.ipnsName,
       itemName: share.itemName,
+      itemNameEncrypted: share.itemNameEncrypted ? share.itemNameEncrypted.toString('hex') : null,
       encryptedKey: share.encryptedKey.toString('hex'),
       permission: share.permission,
       createdAt: share.createdAt,
@@ -104,6 +106,7 @@ export class SharesController {
         itemType: s.itemType,
         ipnsName: s.ipnsName,
         itemName: s.itemName,
+        itemNameEncrypted: s.itemNameEncrypted ? s.itemNameEncrypted.toString('hex') : null,
         encryptedKey: s.encryptedKey.toString('hex'),
         permission: s.permission,
         encryptedIpnsKey: s.encryptedIpnsKey ? s.encryptedIpnsKey.toString('hex') : null,
@@ -140,6 +143,7 @@ export class SharesController {
         itemType: s.itemType,
         ipnsName: s.ipnsName,
         itemName: s.itemName,
+        itemNameEncrypted: s.itemNameEncrypted ? s.itemNameEncrypted.toString('hex') : null,
         permission: s.permission,
         createdAt: s.createdAt,
       })),

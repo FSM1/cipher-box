@@ -10,20 +10,19 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import {
-  decryptFolderMetadata,
-  type FolderChild,
-  type FilePointer,
-  type EncryptedFolderMetadata,
-} from '@cipherbox/core';
+import { type FolderChild, type FilePointer } from '@cipherbox/core';
 import { ShareKeyCache } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
-import { fetchReceivedShares, fetchShareKeys } from '../services/share.service';
-import { resolveIpnsRecord } from '../services/ipns.service';
-import { fetchFromIpfs } from '../lib/api/ipfs';
+import { fetchReceivedShares, fetchShareKeys, addShareKeys } from '../services/share.service';
+import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
 import { useSharedNavigationActions } from './useSharedNavigationActions';
 import { useSharedWriteOps } from './useSharedWriteOps';
+import {
+  seedSharedFolder,
+  subscribeSharedFolderProjection,
+  type SeedSharedFolderArgs,
+} from './shared-folder-projection';
 
 /**
  * Breadcrumb entry for shared navigation.
@@ -132,6 +131,11 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   // Polling interval ref for 30s sync
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Active shareId mirror — read at event time by the sharedFolder:updated
+  // projection so the (stable) subscription stays correct as the share changes.
+  const currentShareIdRef = useRef<string | null>(null);
+  currentShareIdRef.current = currentShareId;
+
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
@@ -161,31 +165,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     [zeroIpnsKey]
   );
 
-  const refreshFolderContents = useCallback(
-    async (folderIpnsName: string, currentFolderKey: Uint8Array): Promise<FolderChild[] | null> => {
-      try {
-        const resolved = await resolveIpnsRecord(folderIpnsName);
-        if (!resolved) return null;
-
-        const encryptedBytes = await fetchFromIpfs(resolved.cid);
-        const encryptedJson = new TextDecoder().decode(encryptedBytes);
-        const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
-        const metadata = await decryptFolderMetadata(encrypted, currentFolderKey);
-
-        const children = metadata.children ?? [];
-        const seqNum = BigInt(resolved.sequenceNumber);
-        setFolderChildren(children);
-        folderChildrenRef.current = children;
-        setCurrentSequenceNumber(seqNum);
-        sequenceNumberRef.current = seqNum;
-        return children;
-      } catch {
-        return null;
-      }
-    },
-    []
-  );
-
   const getShareKeys = useCallback(async (shareId: string) => {
     const cached = shareKeysCacheRef.current.get(shareId);
     if (cached) return cached;
@@ -194,6 +173,29 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     shareKeysCacheRef.current.set(shareId, keys);
     return keys;
   }, []);
+
+  /**
+   * Seed (or re-seed) the SDK's sharedFolderTree for the active shared-folder
+   * depth. Invoked by the navigation actions on share-enter / subfolder-enter /
+   * up / breadcrumb — the only places the active folder context changes.
+   *
+   * The SDK becomes the single source of truth for shared write state (REQ-3);
+   * `seedSharedFolder` clones key buffers internally so the caller's keys stay
+   * owned by the web hook (zeroed on cleanup).
+   */
+  const seedActiveSharedFolder = useCallback(
+    (args: Omit<SeedSharedFolderArgs, 'addShareKeysFn'>) => {
+      if (!hasSdkClient()) return;
+      seedSharedFolder(getSdkClient(), {
+        ...args,
+        addShareKeysFn: async (sid, keys) => {
+          await addShareKeys(sid, keys);
+          shareKeysCacheRef.current.invalidate(sid);
+        },
+      });
+    },
+    []
+  );
 
   // ---------------------------------------------------------------------------
   // Share loading effect
@@ -257,6 +259,39 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   }, [zeroIpnsKey, clearPolling]);
 
   // ---------------------------------------------------------------------------
+  // sharedFolder:updated projection (REQ-3)
+  //
+  // folderChildrenRef/sequenceNumberRef + their setters are written ONLY here
+  // post-mutation: the write hook reads nothing back. The subscription filters
+  // on the active shareId (read via ref) so it stays correct across navigation
+  // and ignores events for other shares (no cross-share state bleed, T-48-10).
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!hasSdkClient()) return;
+    const unsubscribe = subscribeSharedFolderProjection(
+      getSdkClient(),
+      () => currentShareIdRef.current,
+      (children, sequenceNumber) => {
+        folderChildrenRef.current = children;
+        sequenceNumberRef.current = sequenceNumber;
+        setFolderChildren(children);
+        setCurrentSequenceNumber(sequenceNumber);
+      }
+    );
+    return () => {
+      unsubscribe();
+      // Zero the SDK's cloned shared-folder key material on unmount — the web
+      // never otherwise unloads it (unloadSharedFolder deletes the entry, which
+      // zeroes folderKey + ipnsPrivateKey). Guarded: no-op when no active share.
+      const activeShareId = currentShareIdRef.current;
+      if (activeShareId && hasSdkClient()) {
+        getSdkClient().unloadSharedFolder(activeShareId);
+      }
+    };
+  }, []);
+
+  // ---------------------------------------------------------------------------
   // Delegate to sub-hooks
   // ---------------------------------------------------------------------------
 
@@ -289,24 +324,14 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     clearPolling,
     zeroIpnsKey,
     getShareKeys,
+    seedActiveSharedFolder,
   });
 
   const writeOps = useSharedWriteOps({
     currentShareId,
-    folderKey,
-    ipnsName,
-    currentSequenceNumber,
     sharedItems,
-    folderChildrenRef,
-    sequenceNumberRef,
-    ipnsPrivateKeyRef,
-    shareKeysCacheRef,
-    setFolderChildren,
-    setCurrentSequenceNumber,
-    setPermission,
     setIsLoading,
     setError,
-    refreshFolderContents,
     handleRevocation,
   });
 
@@ -320,9 +345,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       return;
     }
 
-    const currentIpnsName = ipnsName;
-    const currentFolderKey = folderKey;
-
     pollIntervalRef.current = setInterval(async () => {
       try {
         const freshShares = await fetchReceivedShares(100, 0);
@@ -335,7 +357,13 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           return;
         }
 
-        await refreshFolderContents(currentIpnsName, currentFolderKey);
+        // Pull remote shared changes through the SDK. refreshSharedFolder
+        // re-resolves the seeded depth's IPNS, applies the #489 sequence-guard,
+        // and emits sharedFolder:updated — the projection subscription is the
+        // sole writer of folderChildrenRef/sequenceNumberRef (write AND poll).
+        if (currentShareId && hasSdkClient()) {
+          await getSdkClient().refreshSharedFolder(currentShareId);
+        }
       } catch {
         // Silent failure during polling
       }
@@ -352,7 +380,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     currentShareId,
     clearPolling,
     handleRevocation,
-    refreshFolderContents,
   ]);
 
   // ---------------------------------------------------------------------------

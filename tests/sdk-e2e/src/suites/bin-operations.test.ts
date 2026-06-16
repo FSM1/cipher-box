@@ -35,8 +35,11 @@ describe('Bin Operations', () => {
 
     expect(binState).toBeTruthy();
     expect(binState.entries).toEqual([]);
-    // Auto-repair publishes an empty bin on first load, so sequenceNumber starts at 1
-    expect(binState.sequenceNumber).toBe(1);
+    // loadBin NEVER publishes on a null resolve (publishing an empty record is
+    // destructive — it would clobber a real record's CID). On a fresh account
+    // it returns an in-memory empty state at sequenceNumber 0; the first
+    // addToBin then publishes the real record at 0 + 1 = 1.
+    expect(binState.sequenceNumber).toBe(0);
   });
 
   it('should deleteToBin a file', async () => {
@@ -129,13 +132,19 @@ describe('Bin Operations', () => {
     expect(binAfter.entries.length).toBe(0);
   });
 
-  it('should throw BinNotLoadedError when bin not loaded', async () => {
-    // Create a fresh client that hasn't called loadBin()
+  it('should self-heal the bin (no BinNotLoadedError) when bin not loaded', async () => {
+    // Create a fresh client that hasn't called loadBin(). deleteToBin now
+    // lazily loads the bin instead of throwing BinNotLoadedError (bin init is
+    // fire-and-forget on login, so a delete soon after login/reload must still
+    // soft-delete rather than hard-delete). The bin self-heals to an empty
+    // state and the root folder self-bootstraps; the call then fails only
+    // because the target child does not exist — 'Item not found', NOT
+    // 'Bin not loaded'.
     const freshCtx = await createTestContext('bin-not-loaded');
     try {
       await expect(
         freshCtx.client.deleteToBin(freshCtx.rootIpnsName, 'some-id', 'My Vault')
-      ).rejects.toThrow('Bin not loaded');
+      ).rejects.toThrow('Item not found');
     } finally {
       freshCtx.cleanup();
       await deleteTestAccount(freshCtx);

@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.37.1
+ * OpenAPI spec version: 0.38.0
  */
 import type { InviteResponseDtoItemType } from './inviteResponseDtoItemType';
 import type { InviteResponseDtoStatus } from './inviteResponseDtoStatus';
@@ -18,6 +18,11 @@ export interface InviteResponseDto {
   ipnsName: string;
   /** Display name of the shared item */
   itemName: string;
+  /**
+   * Hex-encoded ECIES ciphertext of the display name, or null for legacy invites
+   * @nullable
+   */
+  itemNameEncrypted: string | null;
   status: InviteResponseDtoStatus;
   /** When the invite expires */
   expiresAt: string;

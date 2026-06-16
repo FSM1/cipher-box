@@ -37,7 +37,16 @@
 export { CipherBoxClient, BinNotLoadedError } from './client';
 
 // Types
-export type { CipherBoxClientConfig, FolderState, ShareCallbacks, PinningConfig } from './types';
+export type {
+  CipherBoxClientConfig,
+  FolderState,
+  SharedFolderState,
+  ShareCallbacks,
+  PinningConfig,
+} from './types';
+
+// Shared-folder state (sibling tree keyed by shareId)
+export { SharedFolderTree } from './state/shared-folder-tree';
 
 // Events
 export type { SdkEvent, SdkEventHandler } from './events';

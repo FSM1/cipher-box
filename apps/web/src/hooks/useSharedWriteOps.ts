@@ -1,107 +1,39 @@
 /**
  * useSharedWriteOps -- Write operation handlers for shared folders.
  *
- * Handles upload, create folder, rename, and delete within shared folders.
+ * Handles upload, create folder, rename, update, and delete within shared
+ * folders. Every handler routes through the SDK client's shared-folder methods
+ * (`getSdkClient().<method>(currentShareId, args)`) and reads NOTHING back
+ * (REQ-3, phase 48): the SDK owns publish + sequence + CAS retry. The
+ * `folderChildrenRef`/`sequenceNumberRef` projections are fed solely by the
+ * `sharedFolder:updated` subscription in `useSharedNavigation` — never written
+ * here. This mirrors the Phase-47 owned-path consolidation
+ * (useFileOperations/useFileVersions).
  */
 
-import { useCallback, type MutableRefObject } from 'react';
+import { useCallback } from 'react';
 import type { FolderChild, FilePointer } from '@cipherbox/core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
-import {
-  uploadToSharedFolder,
-  createSharedSubfolder,
-  renameInSharedFolder,
-  deleteFromSharedFolder,
-  updateSharedFile,
-  type SharedWriteContext,
-  withRevocationGuard as sdkWithRevocationGuard,
-  ShareKeyCache,
-  buildSharedWriteContext,
-} from '@cipherbox/sdk';
-import { withConflictRetry } from './folder-helpers';
+import { withRevocationGuard as sdkWithRevocationGuard } from '@cipherbox/sdk';
 import { useAuthStore } from '../stores/auth.store';
-import { fetchShareKeys, addShareKeys } from '../services/share.service';
-import { apiAxios, apiUrl } from '../lib/api-config';
+import { fetchShareKeys } from '../services/share.service';
+import { getSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
 import type { SharedListItem } from './useSharedNavigation';
 
-/** Parse a 0x-prefixed or bare hex public key string into bytes. */
-function parsePublicKey(keyHex: string): Uint8Array {
-  const hex = keyHex.startsWith('0x') ? keyHex.slice(2) : keyHex;
-  return hexToBytes(hex);
-}
-
 export type SharedWriteOpsParams = {
   currentShareId: string | null;
-  folderKey: Uint8Array | null;
-  ipnsName: string | null;
-  currentSequenceNumber: bigint | null;
   sharedItems: SharedListItem[];
-  folderChildrenRef: MutableRefObject<FolderChild[]>;
-  sequenceNumberRef: MutableRefObject<bigint | null>;
-  ipnsPrivateKeyRef: MutableRefObject<Uint8Array | null>;
-  shareKeysCacheRef: MutableRefObject<ShareKeyCache>;
-  setFolderChildren: (children: FolderChild[]) => void;
-  setCurrentSequenceNumber: (seq: bigint | null) => void;
-  setPermission: (perm: 'read' | 'write' | null) => void;
   setIsLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
-  refreshFolderContents: (ipnsName: string, folderKey: Uint8Array) => Promise<FolderChild[] | null>;
   handleRevocation: (silent: boolean) => void;
 };
 
 export function useSharedWriteOps(p: SharedWriteOpsParams) {
   /**
-   * Re-sync the current shared folder for conflict retry.
-   */
-  const resyncSharedFolder = useCallback(async () => {
-    if (!p.ipnsName || !p.folderKey) return;
-    await p.refreshFolderContents(p.ipnsName, p.folderKey);
-  }, [p.ipnsName, p.folderKey, p.refreshFolderContents]);
-
-  /**
-   * Build SharedWriteContext for SDK shared-write operations.
-   * Returns null if any required state is missing.
-   */
-  const buildSharedWriteCtx = useCallback((): SharedWriteContext | null => {
-    const currentIpnsKey = p.ipnsPrivateKeyRef.current;
-    const auth = useAuthStore.getState();
-    if (
-      !currentIpnsKey ||
-      !p.folderKey ||
-      !p.ipnsName ||
-      p.currentSequenceNumber === null ||
-      !auth.vaultKeypair
-    )
-      return null;
-
-    const shareItem = p.sharedItems.find((s) => s.share.shareId === p.currentShareId);
-    if (!shareItem) return null;
-    const ownerPubKey = parsePublicKey(shareItem.share.sharerPublicKey);
-
-    return buildSharedWriteContext({
-      ctx: {
-        apiUrl,
-        getAccessToken: async () => useAuthStore.getState().accessToken || '',
-        axiosInstance: apiAxios,
-      },
-      folderKey: p.folderKey,
-      ipnsPrivateKey: currentIpnsKey,
-      ipnsName: p.ipnsName,
-      sequenceNumber: p.currentSequenceNumber,
-      children: p.folderChildrenRef.current,
-      ownerPublicKey: ownerPubKey,
-      recipientPublicKey: auth.vaultKeypair.publicKey,
-      shareId: p.currentShareId!,
-      addShareKeysFn: async (sid, keys) => {
-        await addShareKeys(sid, keys);
-        p.shareKeysCacheRef.current.invalidate(sid);
-      },
-    });
-  }, [p.folderKey, p.ipnsName, p.currentSequenceNumber, p.currentShareId, p.sharedItems]);
-
-  /**
    * Wrap a write operation with 403 revocation detection.
+   * Orthogonal to CAS (which the SDK owns) — kept on the web side because the
+   * revocation UX (zero key, flip to read-only) is web state.
    */
   const withRevocationGuard = useCallback(
     async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -111,56 +43,49 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
   );
 
   /**
-   * Upload a file to the currently-viewed write-shared folder.
+   * Run a folder write op through the SDK client. State updates (children /
+   * sequence) arrive via the sharedFolder:updated subscription — nothing is read
+   * back here.
    */
-  const uploadFileHandler = useCallback(
-    async (file: File) => {
-      const swCtx = buildSharedWriteCtx();
-      if (!swCtx) {
+  const runWrite = useCallback(
+    async (op: (shareId: string) => Promise<void>, failMessage: string): Promise<void> => {
+      const shareId = p.currentShareId;
+      if (!shareId) {
         p.setError('Write access not available');
         return;
       }
-
       p.setIsLoading(true);
       p.setError(null);
-
       try {
-        await withRevocationGuard(async () => {
-          const data = new Uint8Array(await file.arrayBuffer());
-
-          await withConflictRetry(
-            async () => {
-              const freshCtx = {
-                ...swCtx,
-                children: p.folderChildrenRef.current,
-                sequenceNumber: p.sequenceNumberRef.current ?? 0n,
-              };
-              const result = await uploadToSharedFolder(freshCtx, {
-                data,
-                fileName: file.name,
-                mimeType: file.type || undefined,
-              });
-              p.sequenceNumberRef.current = result.newSequenceNumber;
-              p.folderChildrenRef.current = result.publishedChildren;
-              p.setCurrentSequenceNumber(result.newSequenceNumber);
-              p.setFolderChildren(result.publishedChildren);
-            },
-            async () => {
-              await resyncSharedFolder();
-            }
-          );
-        });
+        await withRevocationGuard(() => op(shareId));
       } catch (err) {
-        const message = (err as Error).message || 'Upload failed';
+        const message = (err as Error).message || failMessage;
         if (!message.includes('write access revoked')) {
           p.setError(message);
         }
-        logger.error('[SharedNav] Shared folder upload failed:', err);
+        logger.error(`[SharedNav] ${failMessage}:`, err);
       } finally {
         p.setIsLoading(false);
       }
     },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
+    [p.currentShareId, p.setError, p.setIsLoading, withRevocationGuard]
+  );
+
+  /**
+   * Upload a file to the currently-viewed write-shared folder.
+   */
+  const uploadFileHandler = useCallback(
+    async (file: File) => {
+      await runWrite(async (shareId) => {
+        const data = new Uint8Array(await file.arrayBuffer());
+        await getSdkClient().uploadToSharedFolder(shareId, {
+          data,
+          fileName: file.name,
+          mimeType: file.type || undefined,
+        });
+      }, 'Shared folder upload failed');
+    },
+    [runWrite]
   );
 
   /**
@@ -168,46 +93,11 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    */
   const createFolderHandler = useCallback(
     async (name: string) => {
-      const swCtx = buildSharedWriteCtx();
-      if (!swCtx) {
-        p.setError('Write access not available');
-        return;
-      }
-
-      p.setIsLoading(true);
-      p.setError(null);
-
-      try {
-        await withRevocationGuard(async () => {
-          await withConflictRetry(
-            async () => {
-              const freshCtx = {
-                ...swCtx,
-                children: p.folderChildrenRef.current,
-                sequenceNumber: p.sequenceNumberRef.current ?? 0n,
-              };
-              const result = await createSharedSubfolder(freshCtx, { name });
-              p.sequenceNumberRef.current = result.newSequenceNumber;
-              p.folderChildrenRef.current = result.publishedChildren;
-              p.setCurrentSequenceNumber(result.newSequenceNumber);
-              p.setFolderChildren(result.publishedChildren);
-            },
-            async () => {
-              await resyncSharedFolder();
-            }
-          );
-        });
-      } catch (err) {
-        const message = (err as Error).message || 'Failed to create folder';
-        if (!message.includes('write access revoked')) {
-          p.setError(message);
-        }
-        logger.error('[SharedNav] Shared folder create failed:', err);
-      } finally {
-        p.setIsLoading(false);
-      }
+      await runWrite(async (shareId) => {
+        await getSdkClient().createSharedSubfolder(shareId, { name });
+      }, 'Shared folder create failed');
     },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
+    [runWrite]
   );
 
   /**
@@ -215,81 +105,38 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    */
   const renameItemHandler = useCallback(
     async (item: FolderChild, newName: string) => {
-      const swCtx = buildSharedWriteCtx();
-      if (!swCtx) {
-        p.setError('Write access not available');
-        return;
-      }
-
-      p.setIsLoading(true);
-      p.setError(null);
-
-      try {
-        await withRevocationGuard(async () => {
-          await withConflictRetry(
-            async () => {
-              const freshCtx = {
-                ...swCtx,
-                children: p.folderChildrenRef.current,
-                sequenceNumber: p.sequenceNumberRef.current ?? 0n,
-              };
-              const result = await renameInSharedFolder(freshCtx, { itemId: item.id, newName });
-              p.sequenceNumberRef.current = result.newSequenceNumber;
-              p.folderChildrenRef.current = result.publishedChildren;
-              p.setCurrentSequenceNumber(result.newSequenceNumber);
-              p.setFolderChildren(result.publishedChildren);
-            },
-            async () => {
-              await resyncSharedFolder();
-            }
-          );
-        });
-      } catch (err) {
-        const message = (err as Error).message || 'Failed to rename';
-        if (!message.includes('write access revoked')) {
-          p.setError(message);
-        }
-        logger.error('[SharedNav] Shared folder rename failed:', err);
-      } finally {
-        p.setIsLoading(false);
-      }
+      await runWrite(async (shareId) => {
+        await getSdkClient().renameInSharedFolder(shareId, { itemId: item.id, newName });
+      }, 'Shared folder rename failed');
     },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
+    [runWrite]
   );
 
   /**
    * Update a file's content in the currently-viewed write-shared folder.
+   *
+   * File-only publish: the SDK publishes the file's own IPNS metadata (folder
+   * children/sequence unchanged) and emits sharedFolder:updated so the
+   * projection re-resolves the file. Throws on error (no setError shell) to
+   * match the prior contract used by the file editor caller.
    */
   const updateSharedFileHandler = useCallback(
     async (item: FilePointer, newContent: Uint8Array): Promise<void> => {
-      if (!p.folderKey) throw new Error('Folder key not available');
+      const shareId = p.currentShareId;
+      if (!shareId) throw new Error('Write access not available');
 
       const auth = useAuthStore.getState();
       if (!auth.vaultKeypair) throw new Error('No keypair available');
 
-      const shareItem = p.sharedItems.find((s) => s.share.shareId === p.currentShareId);
+      const shareItem = p.sharedItems.find((s) => s.share.shareId === shareId);
       if (!shareItem) throw new Error('Share not found');
-      const ownerPublicKey = parsePublicKey(shareItem.share.sharerPublicKey);
 
       await withRevocationGuard(async () => {
-        await updateSharedFile({
-          ctx: {
-            apiUrl,
-            getAccessToken: async () => useAuthStore.getState().accessToken || '',
-            axiosInstance: apiAxios,
-          },
-          folderKey: p.folderKey!,
-          ownerPublicKey,
-          recipientPublicKey: auth.vaultKeypair!.publicKey,
-          shareId: p.currentShareId!,
-          addShareKeysFn: async (sid, keys) => {
-            await addShareKeys(sid, keys);
-            p.shareKeysCacheRef.current.invalidate(sid);
-          },
+        await getSdkClient().updateSharedFile(shareId, {
           filePointer: item,
           newContent,
           getFileIpnsKeyFn: async (itemId: string) => {
-            const keys = await fetchShareKeys(p.currentShareId!);
+            const keys = await fetchShareKeys(shareId);
             const exactMatch = keys.find((k) => k.keyType === 'file-ipns' && k.itemId === itemId);
             const ipnsKeyRecord =
               exactMatch ??
@@ -317,7 +164,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         });
       });
     },
-    [p.folderKey, p.currentShareId, p.sharedItems, withRevocationGuard]
+    [p.currentShareId, p.sharedItems, withRevocationGuard]
   );
 
   /**
@@ -325,46 +172,11 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    */
   const deleteItemHandler = useCallback(
     async (item: FolderChild) => {
-      const swCtx = buildSharedWriteCtx();
-      if (!swCtx) {
-        p.setError('Write access not available');
-        return;
-      }
-
-      p.setIsLoading(true);
-      p.setError(null);
-
-      try {
-        await withRevocationGuard(async () => {
-          await withConflictRetry(
-            async () => {
-              const freshCtx = {
-                ...swCtx,
-                children: p.folderChildrenRef.current,
-                sequenceNumber: p.sequenceNumberRef.current ?? 0n,
-              };
-              const result = await deleteFromSharedFolder(freshCtx, { itemId: item.id });
-              p.sequenceNumberRef.current = result.newSequenceNumber;
-              p.folderChildrenRef.current = result.publishedChildren;
-              p.setCurrentSequenceNumber(result.newSequenceNumber);
-              p.setFolderChildren(result.publishedChildren);
-            },
-            async () => {
-              await resyncSharedFolder();
-            }
-          );
-        });
-      } catch (err) {
-        const message = (err as Error).message || 'Failed to delete';
-        if (!message.includes('write access revoked')) {
-          p.setError(message);
-        }
-        logger.error('[SharedNav] Shared folder delete failed:', err);
-      } finally {
-        p.setIsLoading(false);
-      }
+      await runWrite(async (shareId) => {
+        await getSdkClient().deleteFromSharedFolder(shareId, { itemId: item.id });
+      }, 'Shared folder delete failed');
     },
-    [buildSharedWriteCtx, resyncSharedFolder, withRevocationGuard]
+    [runWrite]
   );
 
   return {

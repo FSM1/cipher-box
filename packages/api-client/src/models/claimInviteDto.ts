@@ -3,13 +3,15 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.37.1
+ * OpenAPI spec version: 0.38.0
  */
 import type { ClaimChildKeyDto } from './claimChildKeyDto';
 
 export interface ClaimInviteDto {
   /** Hex-encoded item key re-wrapped for the recipient via ECIES */
   encryptedKey: string;
+  /** Hex-encoded ECIES ciphertext of the display name re-wrapped for the recipient. Optional during rollout: legacy clients carry plaintext itemName from the invite. */
+  itemNameEncrypted?: string;
   /** Re-wrapped child keys for subfolders/files */
   childKeys?: ClaimChildKeyDto[];
 }

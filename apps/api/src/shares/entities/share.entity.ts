@@ -50,6 +50,15 @@ export class Share {
   itemName!: string;
 
   /**
+   * ECIES-wrapped display name (itemName) for the recipient's secp256k1 pubkey.
+   * Nullable: legacy rows hold plaintext in item_name until a key-holding
+   * client lazily backfills this (decision A2, plan 48-06). The server never
+   * sees plaintext and never encrypts it (zero-knowledge, CLAUDE.md rule 6).
+   */
+  @Column({ type: 'bytea', name: 'item_name_encrypted', nullable: true })
+  itemNameEncrypted!: Buffer | null;
+
+  /**
    * The shared item's key (folderKey or parent folderKey) wrapped
    * with the recipient's secp256k1 public key via ECIES.
    * Server never sees the plaintext key.

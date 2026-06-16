@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Phase 46 secured and verified
-last_updated: "2026-06-15T13:00:00.000Z"
-last_activity: 2026-06-15
+status: Executing Phase 48
+last_updated: "2026-06-16T14:54:01.839Z"
+last_activity: 2026-06-16
 progress:
-  total_phases: 32
-  completed_phases: 30
-  total_plans: 134
-  completed_plans: 134
-  percent: 100
+  total_phases: 33
+  completed_phases: 31
+  total_plans: 146
+  completed_plans: 140
+  percent: 94
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 46 — desktop-fuse-data-loss-bugs-replay-hardening
+**Current focus:** Phase 48 — sdk-self-bootstrap-regression-fix-and-shared-folder-metadata
 
 ## Current Position
 
-Phase: 46 (desktop-fuse-data-loss-bugs-replay-hardening) — SECURED + VERIFIED
-Plan: 4 of 4 (committed); simplify + secure (SECURED 12/12) + verify (GOAL MET 6/6) complete
+Phase: 48 (sdk-self-bootstrap-regression-fix-and-shared-folder-metadata) — EXECUTING
+Plan: 48-03 (REQ-3 SDK) + 48-04 (REQ-3 web) + 48-05 (REQ-4 API) + 48-06 (REQ-4 web) complete; 48-02 (REQ-2) remains. UATs deferred to end-of-phase web-e2e: 48-04 Task 4 (shared-write), 48-06 Task 3 (itemName-at-rest ciphertext + display). 48-06 raised an API gap: no update endpoint accepts itemNameEncrypted, so the legacy lazy-backfill persist (A2) is blocked pending a follow-up API plan.
 Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. Phase 46 Linux remount-after-SIGKILL UAT passed 2026-06-15 — fully verified, no open items.
 
 ## Performance Metrics
@@ -141,6 +141,11 @@ Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. 
 | Phase 45 P04 | 8min | 1 tasks | 2 files |
 | Phase 45 P05 | 12 | 2 tasks | 1 files |
 | Phase 45 P06 | 90 | - tasks | - files |
+| Phase 48 P01 | 15min | 3 tasks | 4 files |
+| Phase 48 P02 | 2min | 2 tasks | 5 files |
+| Phase 48 P03 | 6min | 3 tasks | 7 files |
+| Phase 48 P05 | 8min | 3 tasks | 145 files |
+| Phase 48 P06 | 18min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -229,6 +234,8 @@ Recent for v1.1:
 - Defensive CVM key derivation handles both key (v0.5+) and asUint8Array (legacy) SDK return types
 - TEE worker Prometheus metrics use `cipherbox_tee_*` prefix for Grafana dashboard coexistence with API metrics
 - TEE worker structured JSON logger has zero external dependencies (JSON.stringify to stdout/stderr)
+- [Phase 48-05] Share itemName encrypted at rest via additive nullable item_name_encrypted bytea on BOTH shares and share_invites (decision A3 includes invite flow); migration is additive-only with NO data UPDATE (server zero-knowledge cannot re-encrypt legacy plaintext); itemNameEncrypted optional hex DTO on create-share/create-invite/claim-invite; claim re-wraps ephemeral→recipient ciphertext onto the Share; web encrypt/decrypt/lazy-backfill deferred to 48-06
+- [Phase 48-06] Web ECIES-wraps itemName on share/invite create (recipient pubkey for direct, ephemeral pubkey for invite) and sends ciphertext-only (itemName: '' + itemNameEncrypted) — no plaintext display name at rest for new rows; recipient decrypts itemNameEncrypted into the store's plaintext projection on received-share load so display sites are unchanged; owner sent-list uses plaintext fallback (zero-knowledge: name wrapped for recipient, owner can't decrypt — T-48-18 accept). API GAP: no update endpoint accepts itemNameEncrypted, so the legacy lazy-backfill (A2) is detect+re-wrap only; persist blocked pending a follow-up API plan (PATCH itemNameEncrypted)
 
 ### Roadmap Evolution
 
@@ -245,15 +252,17 @@ Recent for v1.1:
 - Phase 45 added: Desktop FUSE write-durability cleanup — Rust hygiene refactors + test coverage for phase 43/44 journal+replay (todos #11, #12, #14, #15, #18, #19, #20); excludes data-loss bugs #7/#8/#17
 - Phase 46 added 2026-06-15: Desktop FUSE data-loss bugs + replay hardening — the #7/#8/#17 bugs Phase 45 deferred, the two PR #491 replay follow-ups, and the deferred read_ops/write_ops + journal_helpers test coverage (grouped desktop todos)
 - Phase 47 added 2026-06-15: SDK folder-state and publish-path consolidation — unify folderTree/Zustand ownership, one publishWithCas CAS-retry, encapsulate baseChildren bookkeeping, fix updateSharedFile prunedCids pin leak (grouped SDK todos)
+- Phase 48 added 2026-06-16: SDK self-bootstrap regression fix + shared-folder/metadata consolidation — P0 fix for the PR #498 self-bootstrap clobber regressing main web-e2e (run 27587113911), then remove redundant web folder-seeding (#9, gated on the fix), route shared-folder writes through the SDK client (#8), encrypt share itemName at rest (#5 / Phase-14 M1); defers CRDT-inbox research (#2)
 
 ### Open Concerns
 
+- **main web-e2e is RED** (run 27587113911) since PR #498 merged — self-bootstrap `loadFolder` clobbers fresher folderTree state with a stale IPNS snapshot, failing `bin-restore-after-reload.spec.ts` + `full-workflow.spec.ts:6.6.2`. Blocks the staging E2E gate. Tracked as Phase 48 REQ-1 (P0).
 - 6 LOW-priority tech debt items remain from M2 audit: Settings URL param parsing, OCC coverage, addManyFiles atomicity, conflict telemetry, lazy rotation, desktop E2E (see `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`)
 - Recovery tool subfolder recovery limited by IPNS DHT propagation (root-level fully operational; per-file IPNS records may not be resolvable if not propagated — architectural limitation, not a bug)
 
 ### Pending Todos
 
-8 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. The desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. The architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; bin-restore gap surfaced while combing the #494 fix) was started 2026-06-16 on branch `feat/sdk-client-self-bootstrap-folder-tree` and moved to `.planning/todos/completed/`. Remaining pending still includes the route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47.
+9 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. The desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. The architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; bin-restore gap surfaced while combing the #494 fix) was completed 2026-06-16 in PR #498 (branch `feat/sdk-client-self-bootstrap-folder-tree`) and moved to `.planning/todos/completed/`; its follow-ups (delete the now-redundant web `ensureFolderRegistered`/`useFolderNavigation` unwrap paths once self-heal proves out; optional negative-cache) were captured as a new pending todo. Remaining pending still includes the route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47.
 
 ### Resolved
 
@@ -269,7 +278,9 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-06-15
+Last activity: 2026-06-16
+
+Last session: 2026-06-16T16:40:00Z — Completed 48-04-PLAN.md (REQ-3 web; Task 4 UAT deferred to web-e2e). Stopped At: 48-04 code complete, awaiting shared-write UAT. Resume File: None.
 
 ## Decisions
 

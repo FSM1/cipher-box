@@ -182,11 +182,24 @@ export async function createInviteLink(params: {
       }
     }
 
+    // REQ-4 / decision A3: ECIES-wrap the display name with the ephemeral public
+    // key (mirrors the encryptedKey wrap). On claim the recipient re-wraps it
+    // with their real vault pubkey. Only ciphertext leaves the browser — the
+    // plaintext itemName is NOT sent for new invites.
+    const itemNameBytes = new TextEncoder().encode(item.name);
+    let itemNameEncrypted: string;
+    try {
+      itemNameEncrypted = bytesToHex(await wrapKey(itemNameBytes, ephemeralKeypair.publicKey));
+    } finally {
+      itemNameBytes.fill(0);
+    }
+
     // Create invite on server
     const result = await shareInvitesControllerCreateInvite({
       itemType: item.type === 'folder' ? 'folder' : 'file',
       ipnsName,
-      itemName: item.name,
+      itemName: '',
+      itemNameEncrypted,
       encryptedKey,
       encryptedChildKeys,
     });
@@ -245,6 +258,20 @@ export async function claimInvite(
       plaintextKey.fill(0);
     }
 
+    // REQ-4 / decision A3: re-wrap the display name from the ephemeral-wrapped
+    // form to the recipient's vault pubkey so the resulting Share row carries
+    // recipient-decryptable ciphertext. Legacy invites without ciphertext skip
+    // this and rely on the plaintext fallback.
+    let reWrappedItemNameEncrypted: string | undefined;
+    if (inviteData.itemNameEncrypted) {
+      const plainName = await unwrapKey(hexToBytes(inviteData.itemNameEncrypted), ephemeralPrivKey);
+      try {
+        reWrappedItemNameEncrypted = bytesToHex(await wrapKey(plainName, vaultKeypair.publicKey));
+      } finally {
+        plainName.fill(0);
+      }
+    }
+
     // Re-wrap child keys
     const childKeys: Array<{
       keyType: ChildKeyDtoKeyType;
@@ -273,6 +300,7 @@ export async function claimInvite(
     // POST claim with re-wrapped keys
     const result = await invitesControllerClaimInvite(token, {
       encryptedKey: reWrappedKey,
+      itemNameEncrypted: reWrappedItemNameEncrypted,
       childKeys,
     });
 

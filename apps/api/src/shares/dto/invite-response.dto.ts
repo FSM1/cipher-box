@@ -21,6 +21,13 @@ export class InviteResponseDto {
   @ApiProperty({ description: 'Display name of the shared item' })
   itemName!: string;
 
+  @ApiProperty({
+    description: 'Hex-encoded ECIES ciphertext of the display name, or null for legacy invites',
+    type: String,
+    nullable: true,
+  })
+  itemNameEncrypted!: string | null;
+
   @ApiProperty({ enum: ['active', 'claimed', 'revoked'] })
   status!: string;
 
@@ -80,6 +87,13 @@ export class InviteDataResponseDto {
 
   @ApiProperty({ description: 'Display name of the shared item' })
   itemName!: string;
+
+  @ApiProperty({
+    description: 'Hex-encoded ECIES ciphertext of the display name, or null for legacy invites',
+    type: String,
+    nullable: true,
+  })
+  itemNameEncrypted!: string | null;
 }
 
 /**

@@ -34,6 +34,13 @@ export type SdkEvent =
       sequenceNumber: bigint;
     }
   | { type: 'folder:deleted'; folderId: string }
+  | {
+      type: 'sharedFolder:updated';
+      shareId: string;
+      ipnsName: string;
+      children: FolderChild[];
+      sequenceNumber: bigint;
+    }
   | { type: 'file:uploaded'; folderId: string; fileName: string; cid: string }
   | {
       type: 'files:batchUploaded';

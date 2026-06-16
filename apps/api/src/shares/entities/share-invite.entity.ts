@@ -36,6 +36,15 @@ export class ShareInvite {
   itemName!: string;
 
   /**
+   * ECIES-wrapped display name (itemName) for the invite's EPHEMERAL public key.
+   * Nullable: legacy/plaintext-client invites hold plaintext in item_name until
+   * the web ships the encrypt path (plan 48-06). Server never sees plaintext
+   * and never encrypts it (zero-knowledge, CLAUDE.md rule 6).
+   */
+  @Column({ type: 'bytea', name: 'item_name_encrypted', nullable: true })
+  itemNameEncrypted!: Buffer | null;
+
+  /**
    * The item key wrapped with the EPHEMERAL public key (not recipient's key).
    * Server never sees the ephemeral private key -- it lives only in the URL fragment.
    */
