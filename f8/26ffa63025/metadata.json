@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f826ffa63025",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-48-sdk-self-bootstrap-fix-and-shares",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f8/26ffa63025/0/metadata.json",
+      "transcript": "/f8/26ffa63025/0/full.jsonl",
+      "content_hash": "/f8/26ffa63025/0/content_hash.txt",
+      "prompt": "/f8/26ffa63025/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48000,
+    "cache_creation_tokens": 389387,
+    "cache_read_tokens": 25814300,
+    "output_tokens": 152723,
+    "api_call_count": 124
+  }
+}

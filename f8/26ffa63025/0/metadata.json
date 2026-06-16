@@ -1,0 +1,184 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f826ffa63025",
+  "session_id": "dcb71a14-5478-4d28-988e-5f0c056637a9",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T01:46:17.299487Z",
+  "branch": "feat/phase-48-sdk-self-bootstrap-fix-and-shares",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ea811422231b",
+  "token_usage": {
+    "input_tokens": 48000,
+    "cache_creation_tokens": 389387,
+    "cache_read_tokens": 25814300,
+    "output_tokens": 152723,
+    "api_call_count": 124
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K31VDB8FGMpiwchcuCA2oM",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ea811422231b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 365,
+        "end": 366,
+        "entry_ids": [
+          "683e758c-b0a7-4b56-9776-24830af07903"
+        ],
+        "tool_use_id": "toolu_01K31VDB8FGMpiwchcuCA2oM"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K31VDB8FGMpiwchcuCA2oM"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Select and implement GSD todo #9 — make CipherBoxClient self-bootstrap its folderTree from the root IPNS key so every folderTree-dependent method can lazy-load without the web layer pre-seeding it.",
+    "outcome": "Implemented `ensureFolderLoaded` + `requireFolder` chokepoint, added `rootIpnsKeypair` to the SDK config, wired the web to pass the key, ran /simplify + CodeRabbit + security reviews (all clean), merged PR #498, and captured follow-up todos on main.",
+    "learnings": {
+      "repo": [
+        "CipherBoxClientConfig had `rootIpnsName` + `rootFolderKey` but NO root IPNS Ed25519 signing keypair — the web's `vaultStore.rootIpnsKeypair` existed and was guarded non-null but was never passed to the SDK constructor.",
+        "`registerFolder` (client.ts:288) and `loadFolder` (client.ts:345) are the ONLY two folderTree entry points; every other writer requires the folder to already be present — no lazy-load existed before this change.",
+        "`withOperation` is reentrant-safe (emits events only, no lock) — calling it from inside `ensureFolderLoaded` which is itself called from within another `withOperation` body is safe.",
+        "`unwrapKey` and `hexToBytes` are already exported from `@cipherbox/crypto`; client.ts already imports `clearBytes` from the same package.",
+        "`integration.test.ts` is `describe.skip` when `CI=1` (needs live backend at localhost:3000); run with `CI=1 pnpm test` to get a true unit-only pass count.",
+        "GitHub Actions bot pushes a `chore(release)` commit to a branch immediately after a PR is created, causing 1-ahead/1-behind divergence that requires a rebase before pushing again.",
+        "`gsd_run query commit` reliably reports a false-negative `commit_failed` — `git log` is the authoritative confirmation that the commit actually landed.",
+        "The `pnpm typecheck` root script rebuilds the full dependency chain and then runs web `tsc -b` — the correct command to validate any public SDK API change.",
+        "`.planning/security/` already had a substantial collection of prior security review reports before this session."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/types.ts",
+          "line": 44,
+          "end_line": 88,
+          "finding": "CipherBoxClientConfig: has `rootIpnsName` (string) and `rootFolderKey` (Uint8Array) but no root IPNS Ed25519 keypair — the gap that prevented self-bootstrap. `rootIpnsKeypair` was added here."
+        },
+        {
+          "path": "packages/sdk/src/types.ts",
+          "line": 96,
+          "end_line": 111,
+          "finding": "FolderState holds the per-folder Ed25519 `ipnsKeypair` — non-root folders already had their signing key stored here; root folder had no entry until something registered it."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 52,
+          "end_line": 63,
+          "finding": "CipherBoxClient private fields: `folderTree` is `FolderTree` (Map<string,FolderState>), `internalVaultKeypair`/`internalRootFolderKey` are defensive copies from config — NOT named `vaultKeypair`/`rootFolderKey` as fields."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 288,
+          "end_line": 308,
+          "finding": "`registerFolder` — the synchronous entry point for writing folderTree; caller must supply `ipnsKeypair`. No path here reads `config.rootIpnsName` into folderTree."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 345,
+          "end_line": 381,
+          "finding": "`loadFolder(ipnsName, folderKey, ipnsKeypair)` — the async IPNS-backed load primitive. New `ensureFolderLoaded` DFS calls this for each subfolder in the walk path."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 209,
+          "end_line": 222,
+          "finding": "`collectSubtreeIpnsNames` — pre-existing DFS helper; confirmed the child `FolderEntry` shape (has `ipnsName`, `folderKeyEncrypted`, `ipnsPrivateKeyEncrypted`) used in the new `ensureFolderLoaded` walk."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 281,
+          "end_line": 281,
+          "finding": "Guard that ensures `vaultStore.rootIpnsKeypair` is non-null before initializing the SDK client — already existed, so passing it into the new config field required only a one-line addition."
+        },
+        {
+          "path": "apps/web/src/hooks/useBin.ts",
+          "line": 73,
+          "end_line": 128,
+          "finding": "Bin restore calls with no folder seeding — the concrete pre-existing bug that `ensureFolderLoaded` fixes. `recycle-bin.spec.ts` missed this because it never reloads."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/full-workflow.spec.ts",
+          "line": 536,
+          "end_line": 575,
+          "finding": "The reload model used in the existing E2E suite — referenced as the pattern to follow when writing the new `bin-restore-after-reload.spec.ts`."
+        }
+      ],
+      "workflow": [
+        "Running 4 parallel /simplify review agents (reuse/simplification/efficiency/altitude) converged on the `requireFolder` chokepoint as the #1 fix with 3-of-4 independent agreement — the parallelism was key to catching it.",
+        "CodeRabbit CLI `--agent` mode streams JSON to stdout; exit code 0 + `findings: 0` in the completion payload is the clean-bill signal.",
+        "After PR merge, applying skipped commits to main requires: `git reset HEAD~1` (uncommit), `git stash push -- <specific files>`, `git checkout main`, `git pull`, `git stash pop`. Pre-existing unstaged files (Cargo.lock) must be stashed separately first.",
+        "Security review report files in `.planning/security/` add ceremony without signal when the diff introduces no new crypto primitives — the project-level security reviewer agent + CodeRabbit coverage is sufficient."
+      ]
+    },
+    "friction": [
+      "`gsd_run query commit` reports `commit_failed` as a false-negative — requires a manual `git log` verification after every GSD commit call.",
+      "GitHub Actions bot pushes a `chore(release)` commit immediately after PR creation, forcing a rebase before any subsequent push to the branch.",
+      "Pre-existing unstaged `Cargo.lock` blocked the rebase step, requiring a double-stash dance (stash Cargo.lock, rebase, then stash pop + restore).",
+      "The todo commit was pushed to the feature branch after the PR was already merged, requiring a full stash/checkout-main/pop recovery workflow.",
+      "TypeScript errors in the new `ensureFolderLoaded` method (`FolderState | undefined` vs `| null` from `.get()`) required a second typecheck round after the initial implementation."
+    ],
+    "open_items": [
+      "Delete ~16 redundant web `ensureFolderRegistered` calls and the duplicate `useFolderNavigation` ECIES unwrap path — safe once self-bootstrap proves out in production (captured as todo #9 on main).",
+      "Optional negative-cache in `ensureFolderLoaded` for unresolvable targets — only worth adding if upstream code introduces retry loops on bad targets.",
+      "New `bin-restore-after-reload.spec.ts` E2E test is committed but web-e2e runs only on main-push (not PRs) — first live validation is deferred to the next main push.",
+      "Todo + STATE.md changes are uncommitted on local main (direct push to main is blocked) — needs a small `docs/` branch + PR to persist, or a local commit."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T01:45:07.248809Z",
+    "agent_lines": 2,
+    "agent_removed": 0,
+    "human_added": 1,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "total_lines_changed": 3,
+    "agent_percentage": 66.66666666666666,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
