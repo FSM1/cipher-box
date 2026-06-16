@@ -3,7 +3,7 @@
   "checkpoint_id": "78b22528e949",
   "strategy": "manual-commit",
   "branch": "feat/sdk-client-self-bootstrap-folder-tree",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "apps/web/src/hooks/useAuth.ts",
     "packages/sdk/src/__tests__/ensure-folder-loaded.test.ts",
@@ -17,13 +17,19 @@
       "transcript": "/78/b22528e949/0/full.jsonl",
       "content_hash": "/78/b22528e949/0/content_hash.txt",
       "prompt": "/78/b22528e949/0/prompt.txt"
+    },
+    {
+      "metadata": "/78/b22528e949/1/metadata.json",
+      "transcript": "/78/b22528e949/1/full.jsonl",
+      "content_hash": "/78/b22528e949/1/content_hash.txt",
+      "prompt": "/78/b22528e949/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 43764,
-    "cache_creation_tokens": 278120,
-    "cache_read_tokens": 10482663,
-    "output_tokens": 76935,
-    "api_call_count": 71
+    "input_tokens": 64944,
+    "cache_creation_tokens": 1301444,
+    "cache_read_tokens": 51065905,
+    "output_tokens": 267749,
+    "api_call_count": 270
   }
 }
