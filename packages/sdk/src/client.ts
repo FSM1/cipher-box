@@ -284,9 +284,8 @@ export class CipherBoxClient {
    * Get the IPNS private key for a folder in the SDK's internal state.
    * Returns undefined if the folder is not registered or has no key.
    *
-   * Used by ensureFolderRegistered to preserve SDK's correct IPNS key
-   * when the store has an empty placeholder (SDK-created folders store
-   * keys internally, not in Zustand).
+   * SDK-created folders store their IPNS keys internally (in folderTree),
+   * not in the Zustand store, so this is their authoritative source.
    */
   getFolderIpnsPrivateKey(ipnsName: string): Uint8Array | undefined {
     const key = this.folderTree.get(ipnsName)?.ipnsKeypair?.privateKey;

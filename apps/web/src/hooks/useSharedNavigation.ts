@@ -320,7 +320,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
 
   const writeOps = useSharedWriteOps({
     currentShareId,
-    folderKey,
     sharedItems,
     setIsLoading,
     setError,

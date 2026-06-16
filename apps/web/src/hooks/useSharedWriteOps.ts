@@ -23,7 +23,6 @@ import type { SharedListItem } from './useSharedNavigation';
 
 export type SharedWriteOpsParams = {
   currentShareId: string | null;
-  folderKey: Uint8Array | null;
   sharedItems: SharedListItem[];
   setIsLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;

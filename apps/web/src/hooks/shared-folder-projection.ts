@@ -20,8 +20,8 @@ import type { CipherBoxClient, SharedFolderState, ShareKeyType } from '@cipherbo
 
 /** Parse a 0x-prefixed or bare hex public key string into bytes. */
 export function parsePublicKey(keyHex: string): Uint8Array {
-  const hex = keyHex.startsWith('0x') ? keyHex.slice(2) : keyHex;
-  return hexToBytes(hex);
+  // hexToBytes already strips an optional 0x prefix.
+  return hexToBytes(keyHex);
 }
 
 /** The minimal client surface these helpers depend on (eases mocking in tests). */
