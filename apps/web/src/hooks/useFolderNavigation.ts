@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { FolderEntry } from '@cipherbox/core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { useFolderStore, type FolderNode } from '../stores/folder.store';
@@ -108,11 +108,20 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
   // Get folder ID from URL params - defaults to 'root' when not present
   const { folderId } = useParams<{ folderId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const currentFolderId = folderId ?? 'root';
 
   const [isLoading, setIsLoading] = useState(false);
   // Track latest navigation target to prevent stale completions from race conditions
   const latestNavTarget = useRef<string | null>(null);
+  // Track the live route pathname so async completions can detect that the user
+  // has navigated away (e.g. to /bin) since the folder resolve began. The ref is
+  // kept current via the effect below; navigateTo's closure captures `navigate`
+  // only, so reading `location` directly would be stale by the time async runs.
+  const latestPathname = useRef(location.pathname);
+  useEffect(() => {
+    latestPathname.current = location.pathname;
+  }, [location.pathname]);
 
   // Subscribe to stores
   const folders = useFolderStore((state) => state.folders);
@@ -300,6 +309,11 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         // folder in the store, rendering a broken empty ~/root fallback.
         useFolderStore.getState().removeFolder(targetFolderId);
         setIsLoading(false);
+        // Only redirect if the user is still viewing this folder's route. If
+        // they navigated away during the resolve (e.g. to /bin, /shared,
+        // /settings) the broken-empty-fallback we're guarding against no longer
+        // applies, and force-navigating to /files would bounce them off-route.
+        if (latestPathname.current !== `/files/${targetFolderId}`) return;
         latestNavTarget.current = parentId ?? 'root';
         if (parentId) {
           navigate(`/files/${parentId}`);
