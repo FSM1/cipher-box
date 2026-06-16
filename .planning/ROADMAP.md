@@ -769,7 +769,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1)*
 
 - [ ] 48-02-PLAN.md — REQ-2: delete 14 ensureFolderRegistered web seeders + useFolderNavigation pre-seed (gated on REQ-1 green)
-- [ ] 48-03-PLAN.md — REQ-3: sibling sharedFolderTree + sharedFolder:updated event + 5 client shared methods (TDD)
+- [x] 48-03-PLAN.md — REQ-3: sibling sharedFolderTree + sharedFolder:updated event + 5 client shared methods (TDD)
 - [ ] 48-05-PLAN.md — REQ-4 API: item_name_encrypted migration + entity/DTO/service ciphertext + invite path + [BLOCKING] migration run + api:generate (TDD)
 
 **Wave 3** *(blocked on Wave 2)*
