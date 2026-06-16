@@ -1,0 +1,289 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "5869de8fb5a5",
+  "session_id": "dd2792ba-fd29-42c7-8669-bd22dd66dd98",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T13:11:52.557037Z",
+  "branch": "feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata",
+  "checkpoints_count": 6,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8edabfb25420",
+  "token_usage": {
+    "input_tokens": 60850,
+    "cache_creation_tokens": 1904459,
+    "cache_read_tokens": 46873855,
+    "output_tokens": 301780,
+    "api_call_count": 138
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014Tyr8ckgXnWqcHHGWgsmYs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "8edabfb25420",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "960a1495-9cdb-4012-afce-4f9137c535ff"
+        ],
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Tyr8ckgXnWqcHHGWgsmYs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P4db71nR8it7Le9pRztdmS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "8edabfb25420",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "1275c2e7-2e4a-4607-bea9-b0a8510d66d0"
+        ],
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P4db71nR8it7Le9pRztdmS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Qhdbzswk9my2YotJPV2FYP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "8edabfb25420",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 340,
+        "end": 341,
+        "entry_ids": [
+          "a20a4b5e-8a38-4e03-bb9f-9888c7821f36"
+        ],
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Qhdbzswk9my2YotJPV2FYP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Review pending GSD todos, consolidate related items into Phase 48 (SDK self-bootstrap regression fix + shared-folder/metadata consolidation), plan the phase, and execute Wave 1 (the P0 fix for a web-e2e regression introduced by PR #498) — with the user AFK for most of execution.",
+    "outcome": "Phase 48 was created, researched, planned (6 plans across 3 waves), and Wave 1 execution began. The `loadFolder` sequence guard was implemented and greened one of two failing specs. The `bin-restore-after-reload.spec.ts` spec remained red through 3 CI dispatches and multiple mis-aimed fixes; the session ended mid-investigation with the real root cause identified (BinPage auth-guard race in the CoreKit restore window) but the fix not yet verified.",
+    "learnings": {
+      "repo": [
+        "web-e2e only triggers on push to main (ci-e2e.yml), not on PRs — the gap that let PR #498 regress main undetected",
+        "web-e2e.yml has workflow_dispatch with a `ref` input; manual dispatch against any branch: `env -u GITHUB_TOKEN gh workflow run web-e2e.yml --ref <branch>` — no CI change needed, resolves repo secrets directly",
+        "`bin-restore-after-reload.spec.ts` uses real Web3Auth Core Kit DEVNET (loginViaWallet), not the TEST_LOGIN_SECRET bypass — requires outbound internet and VITE_WEB3AUTH_CLIENT_ID; login takes ~90s",
+        "TypeORM is configured with `migrationsRun: true, synchronize: false` in app.module.ts — the API runs migrations automatically on boot against cipherbox_test; no manual migration step during e2e bring-up",
+        "Playwright webServer auto-starts mock-ipns (3001), API (3000), and web (5173); only the 3 Docker services + package builds + .env files need manual setup",
+        "Phase 47 covered owned-folder SDK consolidation (PR #494); Phase 48 is the shared-folder/metadata counterpart",
+        "The `sharedFolderTree` design decision: use a sibling Map keyed by shareId (not extend folderTree) because shared folders carry a distinct SharedWriteContext and can collide on ipnsName",
+        "The BinPage auth-guard race: `isLoading = !coreKitInitialized || isLoggingIn || isLoggingOut` has a window after coreKitInitialized flips true but before restoreSession sets isLoggingIn=true, where `!isLoading && !isAuthenticated` is briefly true — causing protected-route guards to redirect to '/'"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 385,
+          "end_line": 385,
+          "finding": "loadFolder did unconditional folderTree.set() — self-bootstrap clobbered fresher in-memory state with stale IPNS snapshot; fixed with sequenceNumber guard (keep existing if existing.sequenceNumber >= resolved)"
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 188,
+          "end_line": 241,
+          "finding": "loadBin auto-repair blind-published an empty bin record with no expectedSequenceNumber on transient IPNS 404, clobbering real bin data; API's upsertFolderIpns unconditionally increments+overwrites latestCid; fix: return in-memory empty BinState with seq 0 after bounded retry, never publish on read"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 94,
+          "end_line": 94,
+          "finding": "isLoading definition missing coverage for the CoreKit restore window — after coreKitInitialized=true but before restoreSession sets isLoggingIn=true, all protected routes briefly see !isLoading && !isAuthenticated and redirect to '/'"
+        },
+        {
+          "path": "apps/web/src/routes/BinPage.tsx",
+          "line": 29,
+          "end_line": 29,
+          "finding": "Auth guard fires navigate('/') during the restore window gap; FilesPage survives because it mounts during loading, but BinPage mounts fresh on navigation after reload, landing in the gap"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "line": 304,
+          "end_line": 307,
+          "finding": "Catch block navigates to '/files' when a subfolder resolve fails — initially hypothesized as the bounce source, but [Nav] Failed to load subfolder never appeared in traces; this path was not the actual cause"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 422,
+          "end_line": 454,
+          "finding": "ensureFolderLoaded short-circuit (:422) and DFS child-check (:454) must be kept intact when adding the sequenceNumber guard to avoid re-regressing #498"
+        },
+        {
+          "path": "apps/web/src/main.tsx",
+          "line": 1,
+          "finding": "StrictMode is enabled — double-invokes effects in dev; CI also runs vite dev, so StrictMode races are real in the e2e environment"
+        }
+      ],
+      "workflow": [
+        "Pull Playwright failure artifacts (error-context.md + screenshot) as the first diagnostic for e2e failures, not after multiple fix attempts — the page snapshot immediately showed '/files' not '/bin', which would have redirected all investigation earlier",
+        "The Playwright trace (network + console timeline) is the highest-signal diagnostic: shows IPNS resolve counts, console logs order, and exact navigation sequence — pulled too late in this session",
+        "For the bin-restore spec: the trace showed 22 IPNS 404s, the auto-repair log firing, and the navigation sequence push('#/bin') → push('#/') → push('#/files') — sufficient to identify all root causes without code reading",
+        "When a long-running agent dies on stream timeout with uncommitted work: snapshot to patch immediately, review the diff before committing rather than blindly trusting 72 min of unverified changes",
+        "1Password SSH signing can wedge mid-unattended-run; have an explicit contingency (unsigned commits + flag for re-sign/admin-merge before landing) agreed in advance",
+        "The GSD branching strategy (phase mode) creates its own canonical branch name; when already on a feature branch, the strategy forks a new branch from HEAD — all prior commits are preserved but the branch name changes",
+        "Dispatching CI 3 times on hypothesis-driven fixes before pulling ground-truth artifacts is expensive; the Playwright trace was available after the first red dispatch"
+      ]
+    },
+    "friction": [
+      "1Password SSH signing wedged mid-run (`failed to fill whole buffer`) during unattended execution, forcing unsigned commits from fe646fd5f onward",
+      "Three CI dispatches consumed on wrong hypotheses before the Playwright trace was pulled — trace should have been the first diagnostic",
+      "The 72-min local-repro agent died on stream idle timeout with all work uncommitted and uncommitted scope expansion beyond the planned fix",
+      "`bin-restore-after-reload.spec.ts` had three incorrect root-cause hypotheses in sequence: (1) loadFolder clobber, (2) bin auto-repair on transient 404, (3) useFolderNavigation catch-block bounce — the real cause was the BinPage auth-guard race",
+      "Port 3000 conflict with an unrelated project (IRL Network) blocked local stack bring-up until the user authorized killing those processes",
+      "web-e2e uses real Web3Auth DEVNET (not test-login bypass), making each local spec run ~4–5 min with network dependency — slow iteration loop for debugging",
+      "The GSD branching strategy created `feat/sdk-self-bootstrap-regression-fix-and-shared-folder-metadata` mid-session alongside the manually-created `feat/phase-48-sdk-self-bootstrap-fix-and-shares`, briefly creating ambiguity about the canonical branch"
+    ],
+    "open_items": [
+      "BinPage auth-guard race fix: extend `isLoading` in useAuth.ts to cover the CoreKit restore window — applied but not yet verified locally or in CI",
+      "Remove debug instrumentation added to main.tsx (NAVDBG navigate override) and bin-restore-after-reload.spec.ts (console capture) before merging",
+      "loadBin no-clobber fix (return in-memory BinState instead of publishing empty) and client.ts anti-clobber guard — committed by the local-repro agent, reviewed and confirmed correct, but REQ-1 gate not yet green",
+      "REQ-2: Remove ~16 web ensureFolderRegistered seeders + duplicate useFolderNavigation key-unwrap (gated on REQ-1 web-e2e green)",
+      "REQ-3: Route shared-folder writes through SDK client via new sharedFolderTree keyed by shareId, with sharedFolder:updated event",
+      "REQ-4: Encrypt share itemName at rest — ECIES wrap (mirroring encryptedKey), new nullable item_name_encrypted bytea column, lazy client backfill, invite path included",
+      "Unsigned commits from fe646fd5f onward need re-signing (restart 1Password, rebase-resign) or admin-merge before landing to main",
+      "CRDT-IPNS inbox research todo (#2) deferred — it would subsume REQ-4 itemName encryption but is long-horizon; cross-link recorded in Phase 48 ROADMAP",
+      "Stale branch pointer `feat/phase-48-sdk-self-bootstrap-fix-and-shares` (leftover from manual branch creation before GSD renamed it) — safe to delete",
+      "Phase 48 Waves 2–3 not started: all gated on REQ-1 web-e2e green",
+      "Post-wave pipeline not run: /simplify, /gsd:validate-phase 48, CodeRabbit CLI review, security review, PR creation"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 197,
+      "user_lines_removed": 110,
+      "agent_lines_added": 2,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6,
+        "apps/api/.env.bak.e2e": 16,
+        "apps/web/.env.bak.e2e": 3,
+        "apps/web/src/hooks/useAuth.ts": 10,
+        "apps/web/src/hooks/useBin.ts": 10,
+        "packages/sdk-core/src/ipns/index.ts": 4,
+        "packages/sdk/src/__tests__/bin.test.ts": 27,
+        "packages/sdk/src/__tests__/client-extended.test.ts": 60,
+        "packages/sdk/src/bin/index.ts": 39,
+        "packages/sdk/src/client.ts": 21
+      },
+      "user_removed_per_file": {
+        "apps/web/src/hooks/useAuth.ts": 2,
+        "apps/web/src/hooks/useBin.ts": 3,
+        "packages/sdk/src/__tests__/bin.test.ts": 44,
+        "packages/sdk/src/__tests__/client-extended.test.ts": 4,
+        "packages/sdk/src/bin/index.ts": 57
+      }
+    }
+  ]
+}
