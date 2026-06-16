@@ -13,6 +13,13 @@ export class CreateShareResponseDto {
   @ApiProperty({ description: 'Display name of the shared item' })
   itemName!: string;
 
+  @ApiProperty({
+    description: 'Hex-encoded ECIES ciphertext of the display name, or null for legacy rows',
+    type: String,
+    nullable: true,
+  })
+  itemNameEncrypted!: string | null;
+
   @ApiProperty({ description: 'Hex-encoded ECIES-wrapped key for recipient' })
   encryptedKey!: string;
 
@@ -38,6 +45,13 @@ export class ReceivedShareResponseDto {
 
   @ApiProperty()
   itemName!: string;
+
+  @ApiProperty({
+    description: 'Hex-encoded ECIES ciphertext of the display name, or null for legacy rows',
+    type: String,
+    nullable: true,
+  })
+  itemNameEncrypted!: string | null;
 
   @ApiProperty({ description: 'Hex-encoded ECIES-wrapped key for recipient' })
   encryptedKey!: string;
@@ -71,6 +85,13 @@ export class SentShareResponseDto {
 
   @ApiProperty()
   itemName!: string;
+
+  @ApiProperty({
+    description: 'Hex-encoded ECIES ciphertext of the display name, or null for legacy rows',
+    type: String,
+    nullable: true,
+  })
+  itemNameEncrypted!: string | null;
 
   @ApiProperty({ description: 'Permission level', enum: ['read', 'write'] })
   permission!: string;

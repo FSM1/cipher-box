@@ -50,6 +50,20 @@ export class ClaimInviteDto {
   encryptedKey!: string;
 
   @ApiProperty({
+    description:
+      'Hex-encoded ECIES ciphertext of the display name re-wrapped for the recipient. ' +
+      'Optional during rollout: legacy clients carry plaintext itemName from the invite.',
+    required: false,
+  })
+  @IsString()
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'itemNameEncrypted must be an even-length hex string',
+  })
+  @MaxLength(1024)
+  @IsOptional()
+  itemNameEncrypted?: string;
+
+  @ApiProperty({
     description: 'Re-wrapped child keys for subfolders/files',
     required: false,
     type: [ClaimChildKeyDto],

@@ -57,6 +57,7 @@ export class ShareInvitesController {
     itemType: string;
     ipnsName: string;
     itemName: string;
+    itemNameEncrypted: string | null;
     status: string;
     expiresAt: Date;
     createdAt: Date;
@@ -68,6 +69,7 @@ export class ShareInvitesController {
       itemType: invite.itemType,
       ipnsName: invite.ipnsName,
       itemName: invite.itemName,
+      itemNameEncrypted: invite.itemNameEncrypted ? invite.itemNameEncrypted.toString('hex') : null,
       status: invite.status,
       expiresAt: invite.expiresAt,
       createdAt: invite.createdAt,
@@ -106,6 +108,7 @@ export class ShareInvitesController {
       itemType: string;
       ipnsName: string;
       itemName: string;
+      itemNameEncrypted: string | null;
       status: string;
       expiresAt: Date;
       createdAt: Date;
@@ -118,6 +121,7 @@ export class ShareInvitesController {
       itemType: inv.itemType,
       ipnsName: inv.ipnsName,
       itemName: inv.itemName,
+      itemNameEncrypted: inv.itemNameEncrypted ? inv.itemNameEncrypted.toString('hex') : null,
       status: inv.status,
       expiresAt: inv.expiresAt,
       createdAt: inv.createdAt,

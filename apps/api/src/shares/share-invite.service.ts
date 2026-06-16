@@ -41,6 +41,10 @@ export class ShareInviteService {
       itemType: dto.itemType,
       ipnsName: dto.ipnsName,
       itemName: dto.itemName,
+      // Client-supplied ECIES ciphertext (wrapped with the ephemeral pubkey)
+      // only. Server never encrypts plaintext (zero-knowledge). Legacy clients
+      // omit this and still send plaintext itemName.
+      itemNameEncrypted: dto.itemNameEncrypted ? Buffer.from(dto.itemNameEncrypted, 'hex') : null,
       encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
       encryptedChildKeys: dto.encryptedChildKeys ?? null,
       status: 'active',
@@ -183,13 +187,17 @@ export class ShareInviteService {
         await manager.remove(revoked);
       }
 
-      // Create Share record with re-wrapped keys from the claim DTO
+      // Create Share record with re-wrapped keys from the claim DTO.
+      // itemNameEncrypted is re-wrapped client-side for the recipient's real
+      // secp256k1 key (the invite held it wrapped with the ephemeral key).
+      // Server never sees plaintext and never encrypts (zero-knowledge).
       const share = manager.create(Share, {
         sharerId: invite.sharerId,
         recipientId: claimerId,
         itemType: invite.itemType,
         ipnsName: invite.ipnsName,
         itemName: invite.itemName,
+        itemNameEncrypted: dto.itemNameEncrypted ? Buffer.from(dto.itemNameEncrypted, 'hex') : null,
         encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
         hiddenByRecipient: false,
         revokedAt: null,

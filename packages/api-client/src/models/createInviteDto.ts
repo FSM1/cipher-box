@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.37.1
+ * OpenAPI spec version: 0.38.0
  */
 import type { CreateInviteDtoItemType } from './createInviteDtoItemType';
 import type { InviteChildKeyDto } from './inviteChildKeyDto';
@@ -15,6 +15,8 @@ export interface CreateInviteDto {
   ipnsName: string;
   /** Display name of the shared item */
   itemName: string;
+  /** Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral public key. Optional during rollout: legacy clients still send plaintext itemName. */
+  itemNameEncrypted?: string;
   /** Hex-encoded item key wrapped with ephemeral public key via ECIES */
   encryptedKey: string;
   /** Re-wrapped descendant keys (subfolder/file keys) with ephemeral public key */

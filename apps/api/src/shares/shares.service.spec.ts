@@ -52,6 +52,7 @@ describe('SharesService', () => {
     itemType: 'folder',
     ipnsName: testIpnsName,
     itemName: 'My Folder',
+    itemNameEncrypted: null,
     encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
     permission: 'read',
     encryptedIpnsKey: null,
@@ -145,6 +146,44 @@ describe('SharesService', () => {
       const createCall = mockShareRepo.create.mock.calls[0][0];
       expect(Buffer.isBuffer(createCall.encryptedKey)).toBe(true);
       expect(createCall.encryptedKey.toString('hex')).toBe(testEncryptedKey);
+    });
+
+    it('should persist itemNameEncrypted ciphertext as Buffer and never encrypt server-side', async () => {
+      // REQ-4 / T-48-12: the server stores client-supplied ciphertext only and
+      // never re-encrypts plaintext (it has no recipient private key).
+      const itemNameEncrypted = 'ab'.repeat(80); // 160 hex chars, even-length
+      const dtoWithEncrypted: CreateShareDto = { ...testCreateDto, itemNameEncrypted };
+
+      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
+      mockShareRepo.findOne.mockResolvedValue(null);
+      mockShareRepo.find.mockResolvedValue([]);
+      mockShareRepo.create.mockReturnValue(mockShare);
+      mockShareRepo.save.mockResolvedValue(mockShare);
+
+      await service.createShare(sharerId, dtoWithEncrypted);
+
+      const createCall = mockShareRepo.create.mock.calls[0][0];
+      expect(Buffer.isBuffer(createCall.itemNameEncrypted)).toBe(true);
+      expect(createCall.itemNameEncrypted.toString('hex')).toBe(itemNameEncrypted);
+      // The persisted ciphertext is exactly the client-supplied bytes — no
+      // server-side encryption (the only crypto path is Buffer.from on the
+      // already-ciphertext hex).
+      expect(createCall.itemNameEncrypted).toEqual(Buffer.from(itemNameEncrypted, 'hex'));
+    });
+
+    it('should persist null itemNameEncrypted for legacy plaintext clients', async () => {
+      // Backward compatibility: clients that omit itemNameEncrypted still
+      // succeed (plaintext itemName remains during rollout, decision A2).
+      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
+      mockShareRepo.findOne.mockResolvedValue(null);
+      mockShareRepo.find.mockResolvedValue([]);
+      mockShareRepo.create.mockReturnValue(mockShare);
+      mockShareRepo.save.mockResolvedValue(mockShare);
+
+      await service.createShare(sharerId, testCreateDto);
+
+      const createCall = mockShareRepo.create.mock.calls[0][0];
+      expect(createCall.itemNameEncrypted).toBeNull();
     });
 
     it('should create child keys when provided', async () => {

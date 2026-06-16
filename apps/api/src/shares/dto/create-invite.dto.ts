@@ -65,6 +65,20 @@ export class CreateInviteDto {
   itemName!: string;
 
   @ApiProperty({
+    description:
+      'Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral ' +
+      'public key. Optional during rollout: legacy clients still send plaintext itemName.',
+    required: false,
+  })
+  @IsString()
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'itemNameEncrypted must be an even-length hex string',
+  })
+  @MaxLength(1024)
+  @IsOptional()
+  itemNameEncrypted?: string;
+
+  @ApiProperty({
     description: 'Hex-encoded item key wrapped with ephemeral public key via ECIES',
   })
   @IsString()

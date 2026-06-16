@@ -94,6 +94,7 @@ export class InvitesController {
     itemType: string;
     ipnsName: string;
     itemName: string;
+    itemNameEncrypted: string | null;
   }> {
     const invite = await this.shareInviteService.getInviteForClaim(token);
 
@@ -108,6 +109,7 @@ export class InvitesController {
       itemType: invite.itemType,
       ipnsName: invite.ipnsName,
       itemName: invite.itemName,
+      itemNameEncrypted: invite.itemNameEncrypted ? invite.itemNameEncrypted.toString('hex') : null,
     };
   }
 

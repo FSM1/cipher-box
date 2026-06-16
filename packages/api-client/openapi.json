@@ -2161,7 +2161,7 @@
   "info": {
     "title": "CipherBox API",
     "description": "Zero-knowledge encrypted cloud storage API",
-    "version": "0.37.1",
+    "version": "0.38.0",
     "contact": {}
   },
   "tags": [
@@ -3086,6 +3086,10 @@
             "type": "string",
             "description": "Display name of the shared item"
           },
+          "itemNameEncrypted": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the display name wrapped for recipient. Optional during rollout: legacy clients still send plaintext itemName."
+          },
           "encryptedKey": {
             "type": "string",
             "description": "Hex-encoded root key wrapped for recipient via ECIES"
@@ -3129,6 +3133,11 @@
             "type": "string",
             "description": "Display name of the shared item"
           },
+          "itemNameEncrypted": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the display name, or null for legacy rows",
+            "nullable": true
+          },
           "encryptedKey": {
             "type": "string",
             "description": "Hex-encoded ECIES-wrapped key for recipient"
@@ -3149,6 +3158,7 @@
           "itemType",
           "ipnsName",
           "itemName",
+          "itemNameEncrypted",
           "encryptedKey",
           "permission",
           "createdAt"
@@ -3173,6 +3183,11 @@
           },
           "itemName": {
             "type": "string"
+          },
+          "itemNameEncrypted": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the display name, or null for legacy rows",
+            "nullable": true
           },
           "encryptedKey": {
             "type": "string",
@@ -3199,6 +3214,7 @@
           "itemType",
           "ipnsName",
           "itemName",
+          "itemNameEncrypted",
           "encryptedKey",
           "permission",
           "encryptedIpnsKey",
@@ -3242,6 +3258,11 @@
           "itemName": {
             "type": "string"
           },
+          "itemNameEncrypted": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the display name, or null for legacy rows",
+            "nullable": true
+          },
           "permission": {
             "type": "string",
             "description": "Permission level",
@@ -3258,6 +3279,7 @@
           "itemType",
           "ipnsName",
           "itemName",
+          "itemNameEncrypted",
           "permission",
           "createdAt"
         ]
@@ -3459,6 +3481,11 @@
           "itemName": {
             "type": "string",
             "description": "Display name of the shared item"
+          },
+          "itemNameEncrypted": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the display name, or null for legacy invites",
+            "nullable": true
           }
         },
         "required": [
@@ -3467,7 +3494,8 @@
           "encryptedChildKeys",
           "itemType",
           "ipnsName",
-          "itemName"
+          "itemName",
+          "itemNameEncrypted"
         ]
       },
       "ClaimChildKeyDto": {
@@ -3495,6 +3523,10 @@
           "encryptedKey": {
             "type": "string",
             "description": "Hex-encoded item key re-wrapped for the recipient via ECIES"
+          },
+          "itemNameEncrypted": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the display name re-wrapped for the recipient. Optional during rollout: legacy clients carry plaintext itemName from the invite."
           },
           "childKeys": {
             "description": "Re-wrapped child keys for subfolders/files",
@@ -3531,6 +3563,10 @@
           "itemName": {
             "type": "string",
             "description": "Display name of the shared item"
+          },
+          "itemNameEncrypted": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral public key. Optional during rollout: legacy clients still send plaintext itemName."
           },
           "encryptedKey": {
             "type": "string",
@@ -3569,6 +3605,11 @@
             "type": "string",
             "description": "Display name of the shared item"
           },
+          "itemNameEncrypted": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the display name, or null for legacy invites",
+            "nullable": true
+          },
           "status": {
             "type": "string",
             "enum": ["active", "claimed", "revoked"]
@@ -3590,6 +3631,7 @@
           "itemType",
           "ipnsName",
           "itemName",
+          "itemNameEncrypted",
           "status",
           "expiresAt",
           "createdAt"

@@ -55,6 +55,22 @@ describe('ECIES Key Wrapping', () => {
       expect(new TextDecoder().decode(unwrapped)).toBe('This is some arbitrary data for testing');
     });
 
+    it('should round-trip a UTF-8 itemName (ASCII and multibyte)', async () => {
+      // REQ-4: prove ECIES wrapKey/unwrapKey covers an encrypted share display
+      // name (itemName). No crypto change needed -- the primitive already wraps
+      // arbitrary bytes; this asserts it works for UTF-8 display names.
+      const keypair = generateTestKeypair();
+
+      for (const itemName of ['My Folder', '文件夹 \u{1f4c1} café']) {
+        const plaintext = new TextEncoder().encode(itemName);
+
+        const wrapped = await wrapKey(plaintext, keypair.publicKey);
+        const unwrapped = await unwrapKey(wrapped, keypair.privateKey);
+
+        expect(new TextDecoder().decode(unwrapped)).toBe(itemName);
+      }
+    });
+
     it('should produce wrapped output larger than input (includes ephemeral key)', async () => {
       const keypair = generateTestKeypair();
       const originalKey = generateFileKey(); // 32 bytes
