@@ -183,6 +183,25 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             p.setPermission(p.ipnsPrivateKeyRef.current ? share.permission : 'read');
             p.setIpnsName(share.ipnsName);
             p.setBreadcrumbs([{ id: shareId, name: share.itemName }]);
+
+            // Seed the SDK so the standalone-file write path
+            // (client.updateSharedFile -> requireSharedFolder) has state. A file
+            // share carries no folder children/sequence; updateSharedFile is a
+            // file-only publish that reads folderKey + owner/recipient pubkeys +
+            // addShareKeysFn from state and ignores children/sequence. Only write
+            // shares (IPNS key present) seed — read-only file shares cannot mutate.
+            if (p.ipnsPrivateKeyRef.current && auth.vaultKeypair) {
+              p.seedActiveSharedFolder({
+                shareId,
+                ipnsName: share.ipnsName,
+                folderKey: itemKey,
+                ipnsPrivateKey: p.ipnsPrivateKeyRef.current,
+                sequenceNumber: 0n,
+                children: [],
+                ownerPublicKey: parsePublicKey(share.sharerPublicKey),
+                recipientPublicKey: auth.vaultKeypair.publicKey,
+              });
+            }
           } finally {
             if (!folderKeyStored) itemKey.fill(0);
           }
