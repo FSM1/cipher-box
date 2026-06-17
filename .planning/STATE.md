@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Phase 48 complete — milestone v1.1 ready to complete
+status: Phase 48 shipped — PR #505; milestone v1.1 ready to complete
 last_updated: "2026-06-17T13:20:10.000Z"
 last_activity: 2026-06-17
 progress:
