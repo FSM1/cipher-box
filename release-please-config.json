@@ -73,7 +73,7 @@
       "component": "@cipherbox/web",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.44.0"
+      "release-as": "0.45.0"
     },
     "apps/desktop": {
       "release-type": "node",
@@ -98,7 +98,7 @@
       "component": "@cipherbox/core",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.30.1"
+      "release-as": "0.31.0"
     },
     "packages/crypto": {
       "release-type": "node",
@@ -126,7 +126,7 @@
       "component": "@cipherbox/sdk",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.35.1"
+      "release-as": "0.36.0"
     },
     "crates/crypto": {
       "release-type": "rust",
