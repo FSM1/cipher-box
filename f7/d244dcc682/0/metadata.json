@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f7d244dcc682",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T13:26:56.028672Z",
+  "branch": "feat/share-itemname-lazy-backfill",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "557a966e9095",
+  "token_usage": {
+    "input_tokens": 65143,
+    "cache_creation_tokens": 459040,
+    "cache_read_tokens": 11190865,
+    "output_tokens": 58706,
+    "api_call_count": 90
+  },
+  "session_metrics": {
+    "turn_count": 3
+  }
+}
