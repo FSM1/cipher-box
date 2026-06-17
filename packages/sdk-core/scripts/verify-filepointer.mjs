@@ -127,10 +127,7 @@ async function main() {
     if (!subEntry) {
       throw new Error(`Subfolder not found at root: ${args.folderName}`);
     }
-    const subFolderKey = await unwrapKey(
-      hexToBytes(subEntry.folderKeyEncrypted),
-      userPrivateKey
-    );
+    const subFolderKey = await unwrapKey(hexToBytes(subEntry.folderKeyEncrypted), userPrivateKey);
     const subFolder = await loadFolderMetadata({
       ipnsName: subEntry.ipnsName,
       folderKey: subFolderKey,
