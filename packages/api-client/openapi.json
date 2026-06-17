@@ -1769,6 +1769,53 @@
         "tags": ["shares"]
       }
     },
+    "/shares/{shareId}/item-name": {
+      "patch": {
+        "description": "Persist the at-rest itemNameEncrypted ciphertext on a legacy share that predates at-rest encryption. Only the sharer can update it; the server never encrypts and stores the client-supplied ciphertext as-is.",
+        "operationId": "SharesController_updateShareItemName",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateItemNameDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Item name updated"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Only the sharer can update"
+          },
+          "404": {
+            "description": "Share not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Backfill share encrypted item name",
+        "tags": ["shares"]
+      }
+    },
     "/shares/{shareId}/complete-rotation": {
       "delete": {
         "description": "Hard-delete a revoked share after the sharer has rotated the folder key. Called after the client performs lazy key rotation.",
@@ -2161,7 +2208,7 @@
   "info": {
     "title": "CipherBox API",
     "description": "Zero-knowledge encrypted cloud storage API",
-    "version": "0.38.0",
+    "version": "0.39.0",
     "contact": {}
   },
   "tags": [
@@ -3419,6 +3466,16 @@
           }
         },
         "required": ["encryptedKey"]
+      },
+      "UpdateItemNameDto": {
+        "type": "object",
+        "properties": {
+          "itemNameEncrypted": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the display name wrapped for the recipient. Used to lazily backfill itemNameEncrypted on legacy shares created before at-rest encryption (decision A2)."
+          }
+        },
+        "required": ["itemNameEncrypted"]
       },
       "InviteStatusResponseDto": {
         "type": "object",

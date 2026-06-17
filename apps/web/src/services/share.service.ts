@@ -22,6 +22,7 @@ import {
   sharesControllerHideShare,
   sharesControllerGetPendingRotations,
   sharesControllerUpdateShareEncryptedKey,
+  sharesControllerUpdateShareItemName,
   sharesControllerCompleteRotation,
   sharesControllerUpdatePermission,
   type ShareKeyEntryDtoKeyType,
@@ -179,16 +180,10 @@ export async function fetchSentShares(
  * shouldBackfill, so a backfilled row is never re-wrapped. Failures are logged
  * (never throwing) so the share-list load is never blocked.
  *
- * NOTE (API GAP — see SUMMARY deviation): the 48-05 API only accepts
- * itemNameEncrypted on CREATE paths (createShare / createInvite / claim-invite).
- * There is no update/patch endpoint that accepts itemNameEncrypted for an
- * existing share, so the re-persist step cannot land server-side yet. This
- * function computes the re-wrapped ciphertext and is structured so wiring a
- * future `PATCH /shares/:id { itemNameEncrypted }` endpoint is a one-line change
- * at the persist call. Until that endpoint exists, legacy rows display via the
- * plaintext fallback (transitional state T-48-18: accept).
+ * Persists via `PATCH /shares/:id/item-name`, which only the sharer may call
+ * and which stores the client-supplied ciphertext as-is (server never encrypts).
  *
- * @returns Count of rows that are eligible for backfill (re-wrap computed).
+ * @returns Count of rows successfully backfilled (re-wrapped and persisted).
  */
 export async function backfillSentShareItemNames(shares: SentShare[]): Promise<number> {
   const vaultKeypair = useAuthStore.getState().vaultKeypair;
@@ -209,13 +204,9 @@ export async function backfillSentShareItemNames(shares: SentShare[]): Promise<n
       const wrapped = await wrapKey(new TextEncoder().encode(share.itemName), recipientPubKey);
       const itemNameEncrypted = bytesToHex(wrapped);
 
-      // Persist the re-wrapped ciphertext for this legacy row.
-      // Blocked on a server endpoint that accepts itemNameEncrypted on update
-      // (see NOTE above). When available, call it here with `itemNameEncrypted`.
-      void itemNameEncrypted;
-      logger.debug('[share] itemName backfill pending API update endpoint', {
-        shareId: share.shareId,
-      });
+      // Persist the re-wrapped ciphertext for this legacy row. Only the sharer
+      // may update it; the server stores the ciphertext as-is.
+      await sharesControllerUpdateShareItemName(share.shareId, { itemNameEncrypted });
       backfilled += 1;
     } catch (err) {
       // Never log the plaintext/ciphertext name; only the failure marker.
@@ -397,14 +388,12 @@ async function fetchAllSentShares(): Promise<SentShare[]> {
     if (offset >= total || shares.length === 0) break;
   }
 
-  // Lazy backfill (decision A2) is DISABLED until a PATCH endpoint exists to
-  // persist itemNameEncrypted for an existing share (T-48-18). Running it here
-  // re-wraps every legacy row via ECIES on each share-list load with no durable
-  // effect — wasted CPU. Re-enable the call below once the update endpoint lands;
-  // backfillSentShareItemNames is kept ready for one-line wiring.
-  // void backfillSentShareItemNames(allShares).catch((err) =>
-  //   logger.warn('[share] itemName backfill pass failed', err)
-  // );
+  // Lazy backfill (decision A2): re-wrap and persist itemNameEncrypted for any
+  // legacy plaintext rows. Best-effort and idempotent (shouldBackfill skips rows
+  // already carrying ciphertext), fire-and-forget so the list load never blocks.
+  void backfillSentShareItemNames(allShares).catch((err) =>
+    logger.warn('[share] itemName backfill pass failed', err)
+  );
 
   return allShares;
 }

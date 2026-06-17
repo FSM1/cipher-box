@@ -21,6 +21,7 @@ import { SharesService } from './shares.service';
 import { CreateShareDto } from './dto/create-share.dto';
 import { AddShareKeysDto } from './dto/share-key.dto';
 import { UpdateEncryptedKeyDto } from './dto/update-encrypted-key.dto';
+import { UpdateItemNameDto } from './dto/update-item-name.dto';
 import { UpdatePermissionDto } from './dto/update-permission.dto';
 import {
   PaginationQueryDto,
@@ -335,6 +336,27 @@ export class SharesController {
     @Body() dto: UpdateEncryptedKeyDto
   ): Promise<void> {
     await this.sharesService.updateShareEncryptedKey(shareId, req.user.id, dto.encryptedKey);
+  }
+
+  @Patch(':shareId/item-name')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Backfill share encrypted item name',
+    description:
+      'Persist the at-rest itemNameEncrypted ciphertext on a legacy share that ' +
+      'predates at-rest encryption. Only the sharer can update it; the server ' +
+      'never encrypts and stores the client-supplied ciphertext as-is.',
+  })
+  @ApiResponse({ status: 204, description: 'Item name updated' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Only the sharer can update' })
+  @ApiResponse({ status: 404, description: 'Share not found' })
+  async updateShareItemName(
+    @Request() req: RequestWithUser,
+    @Param('shareId', ParseUUIDPipe) shareId: string,
+    @Body() dto: UpdateItemNameDto
+  ): Promise<void> {
+    await this.sharesService.updateShareItemName(shareId, req.user.id, dto.itemNameEncrypted);
   }
 
   @Delete(':shareId/complete-rotation')
