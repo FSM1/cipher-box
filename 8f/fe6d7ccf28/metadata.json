@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "8ffe6d7ccf28",
+  "strategy": "manual-commit",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/__tests__/bin.test.ts",
+    "packages/sdk/src/bin/index.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8f/fe6d7ccf28/0/metadata.json",
+      "transcript": "/8f/fe6d7ccf28/0/full.jsonl",
+      "content_hash": "/8f/fe6d7ccf28/0/content_hash.txt",
+      "prompt": "/8f/fe6d7ccf28/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 125748,
+    "cache_creation_tokens": 1425508,
+    "cache_read_tokens": 103087658,
+    "output_tokens": 419759,
+    "api_call_count": 380
+  }
+}

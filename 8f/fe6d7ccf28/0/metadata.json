@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "8ffe6d7ccf28",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T21:26:48.667216Z",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/__tests__/bin.test.ts",
+    "packages/sdk/src/bin/index.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "3270d0d81aa4",
+  "token_usage": {
+    "input_tokens": 125748,
+    "cache_creation_tokens": 1425508,
+    "cache_read_tokens": 103087658,
+    "output_tokens": 419759,
+    "api_call_count": 380
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T21:25:55.164918Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 23,
+    "human_modified": 62,
+    "human_removed": 0,
+    "total_committed": 23,
+    "total_lines_changed": 85,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
