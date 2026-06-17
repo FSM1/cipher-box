@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e0c3a8080f74",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T13:14:03.727916Z",
+  "branch": "feat/share-itemname-lazy-backfill",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/47-sdk-folder-state-publish-consolidation/47-01-SUMMARY.md",
+    ".planning/phases/47-sdk-folder-state-publish-consolidation/47-02-SUMMARY.md",
+    ".planning/phases/47-sdk-folder-state-publish-consolidation/47-03-SUMMARY.md",
+    ".planning/phases/47-sdk-folder-state-publish-consolidation/47-04-SUMMARY.md",
+    ".planning/phases/47-sdk-folder-state-publish-consolidation/47-05-SUMMARY.md",
+    ".planning/phases/48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata/48-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "aa32ca671488",
+  "token_usage": {
+    "input_tokens": 48164,
+    "cache_creation_tokens": 264994,
+    "cache_read_tokens": 7297675,
+    "output_tokens": 29967,
+    "api_call_count": 68
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Backfill missing Phase 47 SUMMARY.md files and Phase 48 VERIFICATION.md to fix false-positive GSD routing, then implement the missing PATCH /:shareId/item-name API endpoint so the already-built web backfill for legacy share itemName encryption can be enabled.",
+    "outcome": "All five Phase 47 summaries and Phase 48 VERIFICATION.md were written; a new PATCH endpoint with DTO, service method, controller handler, and specs was added to the API; the web backfillSentShareItemNames function was re-enabled and wired to the new endpoint; 171 API shares tests pass, web typechecks clean, committed to a feature branch in two logical commits.",
+    "learnings": {
+      "repo": [
+        "The GSD resume-incomplete-phase invariant checks SUMMARY.md file presence on disk, not git history — a phase can fully ship via PR and still trip the gate if summaries were never written, producing a false positive that would re-execute already-merged work.",
+        "Phase 47 shipped via PR #494 (commit d17d42e5f) and has a completed VERIFICATION.md, but its SUMMARY.md files were never written — a recurring bookkeeping gap pattern in this project.",
+        "backfillSentShareItemNames in the web share service was fully implemented but commented out pending a PATCH endpoint, waiting in apps/web/src/services/share.service.ts.",
+        "PATCH :shareId/encrypted-key in the shares controller is the canonical analog pattern for new per-field update endpoints — same ownership guard, same DTO structure, same service delegation.",
+        "pnpm api:generate must run after any new API endpoint to regenerate the typed client in packages/api-client/src/generated/; it bumps the OpenAPI spec version header on every generated file, producing many trivial 2+- diffs that are expected noise.",
+        "The web app has no dedicated typecheck script; tsc must be run directly against the tsconfig."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 214,
+          "end_line": 214,
+          "finding": "The backfillSentShareItemNames call site had a void itemNameEncrypted — the value was computed but not persisted because the PATCH endpoint didn't exist yet."
+        },
+        {
+          "path": "apps/api/src/shares/shares.controller.ts",
+          "finding": "New @Patch(':shareId/item-name') endpoint added, mirroring the encrypted-key handler pattern with ownership guard and DTO binding."
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "updateShareItemName method added directly after updateShareEncryptedKey; uses same ownership-check + prisma.share.update pattern."
+        },
+        {
+          "path": "apps/api/src/shares/dto/update-item-name.dto.ts",
+          "finding": "New DTO mirroring UpdateEncryptedKeyDto; itemNameEncrypted field validation pattern taken from CreateShareDto."
+        },
+        {
+          "path": "packages/api-client/src/generated/shares/shares.ts",
+          "finding": "Generated client gains new typed function for the item-name endpoint after api:generate; version header bumps from 0.38.0 to 0.39.0 across all generated files."
+        }
+      ],
+      "workflow": [
+        "When the GSD resume-incomplete invariant fires, cross-check git log for a merged PR and existence of VERIFICATION.md before routing — a missing SUMMARY.md is not sufficient evidence that a phase is incomplete.",
+        "gsd_run query roadmap.analyze can return empty plan counts even when phases have content; fall back to direct directory listing (ls *-PLAN.md, *-SUMMARY.md) for reliable counts.",
+        "Committing in two logical units (feature vs. planning bookkeeping) keeps the feature diff reviewable and separates cosmetic documentation from code changes.",
+        "Excluding pre-existing untracked directories (.planning/intel/) from commits avoids accidentally capturing AI-generated research artifacts not owned by this session."
+      ]
+    },
+    "friction": [
+      "GSD resume-incomplete-phase gate fired a false positive on Phase 47, nearly routing to re-execute already-merged refactors — required manual git log verification to override.",
+      "gsd_run query roadmap.analyze returned empty plan counts, forcing a fallback to raw directory listing to determine phase completeness.",
+      "Web app lacks a pnpm typecheck script; tsc had to be invoked directly, requiring manual tsconfig path lookup.",
+      "api:generate produces version-bumped headers on every generated file, making the diff noisy and requiring an extra inspection step to confirm the real change landed."
+    ],
+    "open_items": [
+      "Milestone v1.1 is at 97% with Phase 48 now verified — /gsd-complete-milestone or a formal /gsd-verify-work 48 run still needed to close the milestone.",
+      "Phase 48 BLOCKED-HANDOFF (bin-restore e2e red) predated PRs #500/#504 — worth confirming the e2e suite is fully green post-merge before milestone close.",
+      "The underlying process gap (Phase 47 summaries never written at execution time) is unaddressed — future phases could hit the same false-positive resume gate.",
+      "The .planning/intel/ directory was untracked and excluded; its contents and ownership should be clarified.",
+      "Legacy shares that existed before this change still need their itemName encrypted on next access — the backfill only runs for the current user's sent shares on fetchAllSentShares, so any shares not loaded post-deploy will remain with plaintext itemName until accessed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T13:13:16.612701Z",
+    "agent_lines": 418,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 418,
+    "total_lines_changed": 418,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
