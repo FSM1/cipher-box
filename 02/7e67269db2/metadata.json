@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "027e67269db2",
+  "strategy": "manual-commit",
+  "branch": "feat/share-itemname-lazy-backfill",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/02/7e67269db2/0/metadata.json",
+      "transcript": "/02/7e67269db2/0/full.jsonl",
+      "content_hash": "/02/7e67269db2/0/content_hash.txt",
+      "prompt": "/02/7e67269db2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5647,
+    "cache_creation_tokens": 165654,
+    "cache_read_tokens": 1363543,
+    "output_tokens": 14259,
+    "api_call_count": 9
+  }
+}
