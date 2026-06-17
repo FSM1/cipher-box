@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "d0c14b0318f6",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T21:42:11.649472Z",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "ba102433ba73",
+  "checkpoint_transcript_start": 2152,
+  "transcript_lines_at_start": 2152,
+  "token_usage": {
+    "input_tokens": 703,
+    "cache_creation_tokens": 39973,
+    "cache_read_tokens": 4780503,
+    "output_tokens": 31346,
+    "api_call_count": 16
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Resolve CodeRabbit PR review threads on cipher-box SDK (key zeroization and operation ordering fixes), then run a local CodeRabbit CLI review after the user exhausted their PR quota.",
+    "outcome": "All 3 original CodeRabbit threads resolved and fixed in signed commit fca0e6eff; CI E2E went fully green across all 3 desktop platforms; CLI review produced one finding (atomicity gap + missing failure-path tests) which was addressed by adding 4 new tests plus a deferred follow-up todo.",
+    "learnings": {
+      "repo": [
+        "cipher-box uses a release-bot that can rebase the branch between pushes; pushes must handle a rejected push by rebasing over the bot's commit.",
+        "The SDK has a clearBytes utility for zeroing key material in memory; it must be called in try/finally blocks, and never on shared folderTree references.",
+        "moveItem has a genuine atomicity gap: re-encrypt → publish dest → publish source means a dest-publish failure leaves metadata re-keyed to dest but pointer still in source, and neither ordering eliminates the unrecoverable-via-UI partial-failure window.",
+        "A full recovery/idempotency mechanism (making moveItem retry-safe, e.g. resolveFileMetadata falling back to dest key) is the correct fix for the atomicity gap and needs to cover restoreFromBin and the desktop path as well.",
+        "CodeRabbit CLI v0.6.0 is available locally; it accepts --agent for structured findings and can be scoped to a branch diff."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "addToBin: originalFolderKeyEncrypted (wrapKey) must be computed before updateFolderMetadataAndPublish to avoid split state on failure."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "restoreFromBin: unwrapped key material (folderKey + file IPNS key) must be cleared in a try/finally with clearBytes; never clear the shared folderTree reference."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "moveItem: fileIpnsPrivateKey must be cleared in a try/finally to cover the throw-before-updateFileMetadata path."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-move-reencrypt.test.ts",
+          "finding": "Suite extended with 4 failure-path tests pinning current behavior for re-encrypt failure, dest-publish failure, source-publish failure, and resolveFileMetadata failure; unwrapKey mock import required."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/bin.test.ts",
+          "finding": "clearBytes must be added to the crypto mock to support the zeroization fixes in addToBin/restoreFromBin."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit CLI review (coderabbit review --agent) is a viable fallback when PR-quota is exhausted; takes a few minutes and returns structured findings.",
+        "When a real atomicity gap cannot be closed safely within the current PR scope, the correct response is: add failure-path tests that pin current behavior, document the gap explicitly, and file a scoped follow-up rather than shipping a half-fix.",
+        "Validating TS-internal changes (zeroization, ordering) with tsc --noEmit + affected unit suites is sufficient when the change has no E2E-observable behavior."
+      ]
+    },
+    "friction": [
+      "User ran out of CodeRabbit PR review quota mid-session, requiring a fallback to the local CLI.",
+      "Release-bot rebase races on push require handling rejected pushes with a rebase loop."
+    ],
+    "open_items": [
+      "Implement a recovery/idempotency mechanism for moveItem (and restoreFromBin + desktop) so partial failures are recoverable via UI retry — tracked in .planning/todos/pending/2026-06-17-move-restore-reencrypt-partial-failure-recovery.md.",
+      "Re-dispatch full CI E2E on the latest commit (fca0e6eff) was left as an open question — unit tests were deemed sufficient for the review-only changes, but not explicitly confirmed by the user."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
