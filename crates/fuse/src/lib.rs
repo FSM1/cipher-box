@@ -687,6 +687,206 @@ pub fn spawn_bin_entry_publish(
     });
 }
 
+/// Bounded retry budget for the fire-and-forget re-encrypt on cross-folder move.
+/// Mirrors the durable journal's bounded-retry-then-park bound (D-09).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+const REENCRYPT_MAX_ATTEMPTS: u32 = 5;
+
+/// Outcome of a single re-encrypt attempt, used to decide whether to retry.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+enum ReencryptOutcome {
+    /// Re-keyed to the destination on this attempt.
+    Done,
+    /// A prior attempt already re-keyed the record; nothing left to do.
+    AlreadyDone,
+    /// Transient failure (resolve/fetch/publish) — worth retrying.
+    Retry(String),
+    /// Deterministic failure (undecryptable under BOTH keys) — retrying can't help.
+    Terminal(String),
+}
+
+/// Resolve a file's IPNS record and fetch its current encrypted metadata bytes.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+async fn resolve_and_fetch_file_meta(
+    api: &ApiClient,
+    file_meta_ipns_name: &str,
+) -> Result<Vec<u8>, String> {
+    let resp = cipherbox_api_client::ipns::resolve_ipns(api, file_meta_ipns_name)
+        .await
+        .map_err(|e| format!("resolve file IPNS: {}", e))?;
+    let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resp.cid)
+        .await
+        .map_err(|e| format!("fetch file metadata: {}", e))?;
+    Ok(enc_bytes)
+}
+
+/// Re-encrypt a file's `FileMetadata` IPNS record from `source_folder_key` to
+/// `dest_folder_key` after a cross-folder move (fire-and-forget).
+///
+/// A file's `FileMetadata` is sealed with its PARENT folder's AES key. The rename
+/// handlers only republish the old/new *folder* metadata; the per-file record
+/// stays sealed under the source key. Without this, any fresh resolve under the
+/// destination folder's key — a remount, another device, or the web client —
+/// fails with a decryption error. This resolves the current record under the
+/// source key and republishes the SAME metadata sealed under the destination key
+/// (no version bump). Mirrors the SDK `moveItem` re-encrypt step.
+///
+/// Bounded in-memory retry: a transient resolve/fetch/publish failure is retried
+/// with exponential backoff up to `REENCRYPT_MAX_ATTEMPTS`. Idempotent — if a
+/// prior attempt already re-keyed the record (it decrypts under the destination
+/// but not the source key), the work is treated as complete. A record that
+/// decrypts under NEITHER key is a terminal failure and is not retried.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_file_meta_reencrypt(
+    api: Arc<ApiClient>,
+    rt: tokio::runtime::Handle,
+    file_meta_ipns_name: String,
+    file_ipns_private_key: Zeroizing<Vec<u8>>,
+    source_folder_key: Vec<u8>,
+    dest_folder_key: Vec<u8>,
+    coordinator: Arc<PublishCoordinator>,
+    tee_public_key: Option<Vec<u8>>,
+    tee_key_epoch: Option<u32>,
+) {
+    // Distinct folders always carry distinct keys; this guard is purely defensive
+    // and skips a needless resolve+publish (and sequence bump) if they ever match.
+    if source_folder_key == dest_folder_key {
+        return;
+    }
+    std::thread::spawn(move || {
+        // Fixed-size keys; a bad length is a terminal misconfiguration, not retryable.
+        let source_key_arr: [u8; 32] = match source_folder_key.as_slice().try_into() {
+            Ok(arr) => arr,
+            Err(_) => {
+                log::error!(
+                    "File metadata re-encrypt on move failed: invalid source folder key length"
+                );
+                return;
+            }
+        };
+        let dest_key_arr: [u8; 32] = match dest_folder_key.as_slice().try_into() {
+            Ok(arr) => arr,
+            Err(_) => {
+                log::error!(
+                    "File metadata re-encrypt on move failed: invalid destination folder key length"
+                );
+                return;
+            }
+        };
+
+        let result: Result<(), String> = rt.block_on(async {
+            let mut last_error = String::new();
+            for attempt in 1..=REENCRYPT_MAX_ATTEMPTS {
+                // Serialize against concurrent publishes to the same file IPNS record.
+                // Re-acquired each attempt so backoff sleeps never hold the lock.
+                let outcome = {
+                    let lock = coordinator.get_lock(&file_meta_ipns_name);
+                    let _guard = lock.lock().await;
+
+                    match resolve_and_fetch_file_meta(&api, &file_meta_ipns_name).await {
+                        Err(e) => ReencryptOutcome::Retry(e),
+                        Ok(enc_bytes) => {
+                            // Decrypt the CURRENT record under the SOURCE folder key.
+                            match cipherbox_core::decrypt_file_metadata_from_ipfs_public(
+                                &enc_bytes,
+                                &source_key_arr,
+                            ) {
+                                Ok(file_meta) => {
+                                    // Republish the SAME metadata sealed under the
+                                    // DESTINATION key. The record already exists, so this
+                                    // is an update (seq + 1), no TEE enroll.
+                                    match publish_file_metadata(
+                                        &api,
+                                        &file_meta,
+                                        &dest_folder_key,
+                                        &file_ipns_private_key,
+                                        &file_meta_ipns_name,
+                                        coordinator.as_ref(),
+                                        tee_public_key.as_deref(),
+                                        tee_key_epoch,
+                                        false,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => ReencryptOutcome::Done,
+                                        Err(e) => ReencryptOutcome::Retry(format!(
+                                            "re-publish file metadata under dest key: {}",
+                                            e
+                                        )),
+                                    }
+                                }
+                                Err(source_err) => {
+                                    // Source-key decrypt failed. A prior attempt may have
+                                    // already re-keyed the record to the destination —
+                                    // confirm under the dest key (idempotent). If THAT also
+                                    // fails the record is genuinely undecryptable: terminal,
+                                    // retrying can't recover it.
+                                    if cipherbox_core::decrypt_file_metadata_from_ipfs_public(
+                                        &enc_bytes,
+                                        &dest_key_arr,
+                                    )
+                                    .is_ok()
+                                    {
+                                        ReencryptOutcome::AlreadyDone
+                                    } else {
+                                        ReencryptOutcome::Terminal(format!(
+                                            "decrypt file metadata under source key: {}",
+                                            source_err
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }; // lock released here, before any backoff sleep
+
+                match outcome {
+                    ReencryptOutcome::Done => {
+                        log::info!(
+                            "Re-encrypted file metadata for {} after cross-folder move",
+                            file_meta_ipns_name
+                        );
+                        return Ok(());
+                    }
+                    ReencryptOutcome::AlreadyDone => {
+                        log::info!(
+                            "File metadata for {} already re-encrypted to destination key",
+                            file_meta_ipns_name
+                        );
+                        return Ok(());
+                    }
+                    ReencryptOutcome::Terminal(e) => return Err(e),
+                    ReencryptOutcome::Retry(e) => {
+                        last_error = e;
+                        if attempt < REENCRYPT_MAX_ATTEMPTS {
+                            // Exponential backoff (0.5s, 1s, 2s, 4s) + jitter, matching the
+                            // publish-conflict backoff idiom elsewhere in this file.
+                            let base_ms = 500u64 << (attempt - 1);
+                            let jitter_ms = (std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .subsec_nanos()
+                                % 400) as u64;
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                base_ms + jitter_ms,
+                            ))
+                            .await;
+                        }
+                    }
+                }
+            }
+            Err(format!(
+                "exhausted {} attempts: {}",
+                REENCRYPT_MAX_ATTEMPTS, last_error
+            ))
+        });
+        if let Err(e) = result {
+            log::error!("File metadata re-encrypt on move failed: {}", e);
+        }
+    });
+}
+
 /// The main filesystem struct.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct CipherBoxFS {

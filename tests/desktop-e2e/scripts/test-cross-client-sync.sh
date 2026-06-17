@@ -290,6 +290,9 @@ fi
 rm -rf "$MP/$RENAMED_DIR" 2>/dev/null || true
 rm -rf "$MP/$RENAME_DIR" 2>/dev/null || true
 
+# Note: cross-folder move content is exercised by the cross-platform
+# test-move-content.mjs (run as its own suite step), not here.
+
 # ---- Cleanup ----
 echo "--- Cleanup ---"
 rm -f "$MP/$TEST_FILE" 2>/dev/null || true

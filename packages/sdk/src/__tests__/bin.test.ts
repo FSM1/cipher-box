@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { loadBin, addToBin, restoreFromBin, permanentDeleteFromBin, emptyBin } from '../bin';
 import type { BinOperationContext, BinState } from '../bin';
 import { FolderTree } from '../state/folder-tree';
+import type { FolderChild } from '@cipherbox/core';
 
 // Mock sdk-core
 vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
@@ -15,6 +16,8 @@ vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
     createAndPublishIpnsRecord: vi.fn(),
     resolveIpnsRecord: vi.fn(),
     fetchFromIpfs: vi.fn(),
+    resolveFileMetadata: vi.fn(),
+    updateFileMetadata: vi.fn(),
   };
 });
 
@@ -34,9 +37,12 @@ vi.mock('@cipherbox/crypto', () => ({
   bytesToHex: vi.fn().mockReturnValue('aabb'),
   hexToBytes: vi.fn().mockReturnValue(new Uint8Array(32)),
   wrapKey: vi.fn().mockResolvedValue(new Uint8Array([0xaa])),
+  unwrapKey: vi.fn().mockResolvedValue(new Uint8Array(64).fill(7)),
+  clearBytes: vi.fn((arr: Uint8Array) => arr.fill(0)),
 }));
 
 import * as sdkCore from '@cipherbox/sdk-core';
+import { unwrapKey } from '@cipherbox/crypto';
 
 const binCtx: BinOperationContext = {
   ctx: { apiUrl: 'http://localhost:3000', getAccessToken: async () => 'token' },
@@ -299,6 +305,582 @@ describe('bin operations', () => {
 
       expect(result.restoredItem.name).toBe('doc.txt');
       expect(result.updatedBinState.entries).toHaveLength(0);
+    });
+
+    it('skips file-metadata re-encryption when restoring in place (target === original parent)', async () => {
+      const folderTree = new FolderTree();
+      folderTree.set('target-ipns', {
+        ipnsName: 'target-ipns',
+        folderKey: new Uint8Array(32).fill(1),
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+      vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
+        newSequenceNumber: 2n,
+        publishedChildren: [],
+      });
+
+      const binState: BinState = {
+        entries: [
+          {
+            id: 'e1',
+            itemType: 'file',
+            name: 'doc.txt',
+            originalParentIpnsName: 'target-ipns',
+            originalPath: '/',
+            deletedAt: 0,
+            size: 0,
+            mimeType: '',
+            filePointer: {
+              type: 'file',
+              id: 'f1',
+              name: 'doc.txt',
+              fileMetaIpnsName: 'k51f',
+              ipnsPrivateKeyEncrypted: 'abc',
+              createdAt: 0,
+              modifiedAt: 0,
+            },
+          },
+        ],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      };
+
+      await restoreFromBin({
+        entryId: 'e1',
+        targetFolderIpnsName: 'target-ipns',
+        folderTree,
+        binState,
+        binCtx,
+      });
+
+      expect(sdkCore.resolveFileMetadata).not.toHaveBeenCalled();
+      expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
+    });
+
+    it('re-encrypts file metadata from the original parent key to the target key when restoring to a different folder', async () => {
+      const sourceKey = new Uint8Array(32).fill(0x11);
+      const targetKey = new Uint8Array(32).fill(0x22);
+      const folderTree = new FolderTree();
+      folderTree.set('source-ipns', {
+        ipnsName: 'source-ipns',
+        folderKey: sourceKey,
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+      folderTree.set('target-ipns', {
+        ipnsName: 'target-ipns',
+        folderKey: targetKey,
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+
+      const currentMetadata = { version: 'v1', name: 'doc.txt' } as never;
+      vi.mocked(sdkCore.resolveFileMetadata).mockResolvedValue({
+        metadata: currentMetadata,
+      } as never);
+      vi.mocked(sdkCore.updateFileMetadata).mockResolvedValue({} as never);
+      vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
+        newSequenceNumber: 2n,
+        publishedChildren: [],
+      });
+
+      const binState: BinState = {
+        entries: [
+          {
+            id: 'e1',
+            itemType: 'file',
+            name: 'doc.txt',
+            originalParentIpnsName: 'source-ipns',
+            originalPath: '/old',
+            deletedAt: 0,
+            size: 0,
+            mimeType: '',
+            filePointer: {
+              type: 'file',
+              id: 'f1',
+              name: 'doc.txt',
+              fileMetaIpnsName: 'k51f',
+              ipnsPrivateKeyEncrypted: 'abc',
+              createdAt: 0,
+              modifiedAt: 0,
+            },
+          },
+        ],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      };
+
+      await restoreFromBin({
+        entryId: 'e1',
+        targetFolderIpnsName: 'target-ipns',
+        folderTree,
+        binState,
+        binCtx,
+      });
+
+      // Decrypt the existing record with the ORIGINAL parent's key...
+      expect(sdkCore.resolveFileMetadata).toHaveBeenCalledWith('k51f', sourceKey, binCtx.ctx);
+      // ...and re-publish it under the DESTINATION folder's key, without versioning.
+      expect(sdkCore.updateFileMetadata).toHaveBeenCalledTimes(1);
+      const arg = vi.mocked(sdkCore.updateFileMetadata).mock.calls[0][0];
+      expect(arg.folderKey).toEqual(targetKey);
+      expect(arg.fileMetaIpnsName).toBe('k51f');
+      expect(arg.createVersion).toBe(false);
+    });
+
+    it('re-encrypts using the captured original folder key when the original parent is gone (delete file, delete parent, restore elsewhere)', async () => {
+      // User scenario: delete ~/a/b/c.txt, then delete ~/a/b/, then restore
+      // c.txt to a different existing folder. The original parent (b) is no
+      // longer in the folder tree, but its folderKey was captured on the entry
+      // at delete time, so re-encryption still succeeds.
+      const targetKey = new Uint8Array(32).fill(0x22);
+      const folderTree = new FolderTree();
+      // Only the target is loaded — the original parent 'b' is NOT in the tree.
+      folderTree.set('target-ipns', {
+        ipnsName: 'target-ipns',
+        folderKey: targetKey,
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+
+      vi.mocked(sdkCore.resolveFileMetadata).mockResolvedValue({
+        metadata: { version: 'v1', name: 'c.txt' },
+      } as never);
+      vi.mocked(sdkCore.updateFileMetadata).mockResolvedValue({} as never);
+      vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
+        newSequenceNumber: 2n,
+        publishedChildren: [],
+      });
+
+      const binState: BinState = {
+        entries: [
+          {
+            id: 'e1',
+            itemType: 'file',
+            name: 'c.txt',
+            originalParentIpnsName: 'b-ipns-deleted',
+            originalPath: '/a/b',
+            deletedAt: 0,
+            size: 0,
+            mimeType: '',
+            originalFolderKeyEncrypted: 'cafe'.repeat(16),
+            filePointer: {
+              type: 'file',
+              id: 'f1',
+              name: 'c.txt',
+              fileMetaIpnsName: 'k51f',
+              ipnsPrivateKeyEncrypted: 'abc',
+              createdAt: 0,
+              modifiedAt: 0,
+            },
+          },
+        ],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      };
+
+      // Must NOT throw despite the original parent being absent from the tree.
+      await restoreFromBin({
+        entryId: 'e1',
+        targetFolderIpnsName: 'target-ipns',
+        folderTree,
+        binState,
+        binCtx,
+      });
+
+      // Re-encryption ran: read the existing record, re-publish under the target key.
+      expect(sdkCore.resolveFileMetadata).toHaveBeenCalledTimes(1);
+      expect(sdkCore.updateFileMetadata).toHaveBeenCalledTimes(1);
+      const arg = vi.mocked(sdkCore.updateFileMetadata).mock.calls[0][0];
+      expect(arg.folderKey).toEqual(targetKey);
+      expect(arg.createVersion).toBe(false);
+      // The captured key was unwrapped (folder key + file IPNS key = 2 unwraps).
+      expect(unwrapKey).toHaveBeenCalledTimes(2);
+    });
+
+    it('publishes the target folder before re-encrypting the file metadata (reorder)', async () => {
+      // The target listing must be durable BEFORE the metadata is re-keyed, so a
+      // re-key failure leaves the file readable from the bin (source key) and listed
+      // in the target — never stranded under the dest key with no folder pointing at it.
+      const sourceKey = new Uint8Array(32).fill(0x11);
+      const targetKey = new Uint8Array(32).fill(0x22);
+      const folderTree = new FolderTree();
+      folderTree.set('source-ipns', {
+        ipnsName: 'source-ipns',
+        folderKey: sourceKey,
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+      folderTree.set('target-ipns', {
+        ipnsName: 'target-ipns',
+        folderKey: targetKey,
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+
+      const order: string[] = [];
+      vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async () => {
+        order.push('publish');
+        return { cid: 'bafynew', newSequenceNumber: 2n, publishedChildren: [] };
+      });
+      vi.mocked(sdkCore.resolveFileMetadata).mockImplementation(async () => {
+        order.push('reencrypt');
+        return { metadata: { version: 'v1', name: 'doc.txt' } } as never;
+      });
+      vi.mocked(sdkCore.updateFileMetadata).mockResolvedValue({} as never);
+      // bin publish (saveBinMetadata)
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin', size: 3, recorded: true });
+      vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
+        success: true,
+        sequenceNumber: 2n,
+      });
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafybin',
+        sequenceNumber: 2n,
+        signatureVerified: true,
+      });
+
+      const binState: BinState = {
+        entries: [
+          {
+            id: 'e1',
+            itemType: 'file',
+            name: 'doc.txt',
+            originalParentIpnsName: 'source-ipns',
+            originalPath: '/old',
+            deletedAt: 0,
+            size: 0,
+            mimeType: '',
+            filePointer: {
+              type: 'file',
+              id: 'f1',
+              name: 'doc.txt',
+              fileMetaIpnsName: 'k51f',
+              ipnsPrivateKeyEncrypted: 'abc',
+              createdAt: 0,
+              modifiedAt: 0,
+            },
+          },
+        ],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      };
+
+      await restoreFromBin({
+        entryId: 'e1',
+        targetFolderIpnsName: 'target-ipns',
+        folderTree,
+        binState,
+        binCtx,
+      });
+
+      expect(order).toEqual(['publish', 'reencrypt']);
+    });
+
+    it('completes idempotently when the metadata was already re-keyed (retry after a partial restore)', async () => {
+      // A prior partial restore already re-keyed the record to the target. The
+      // source-key resolve now fails; the helper confirms the record under the
+      // target key and treats the re-encryption as done — restore still completes.
+      const sourceKey = new Uint8Array(32).fill(0x11);
+      const targetKey = new Uint8Array(32).fill(0x22);
+      const folderTree = new FolderTree();
+      folderTree.set('source-ipns', {
+        ipnsName: 'source-ipns',
+        folderKey: sourceKey,
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+      folderTree.set('target-ipns', {
+        ipnsName: 'target-ipns',
+        folderKey: targetKey,
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+
+      vi.mocked(sdkCore.resolveFileMetadata)
+        .mockRejectedValueOnce(
+          Object.assign(new Error('Decryption failed'), { code: 'DECRYPTION_FAILED' })
+        )
+        .mockResolvedValueOnce({ metadata: { version: 'v1' } } as never);
+      vi.mocked(sdkCore.updateFileMetadata).mockResolvedValue({} as never);
+      vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
+        newSequenceNumber: 2n,
+        publishedChildren: [],
+      });
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin', size: 3, recorded: true });
+      vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
+        success: true,
+        sequenceNumber: 2n,
+      });
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafybin',
+        sequenceNumber: 2n,
+        signatureVerified: true,
+      });
+
+      const binState: BinState = {
+        entries: [
+          {
+            id: 'e1',
+            itemType: 'file',
+            name: 'doc.txt',
+            originalParentIpnsName: 'source-ipns',
+            originalPath: '/old',
+            deletedAt: 0,
+            size: 0,
+            mimeType: '',
+            filePointer: {
+              type: 'file',
+              id: 'f1',
+              name: 'doc.txt',
+              fileMetaIpnsName: 'k51f',
+              ipnsPrivateKeyEncrypted: 'abc',
+              createdAt: 0,
+              modifiedAt: 0,
+            },
+          },
+        ],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      };
+
+      const result = await restoreFromBin({
+        entryId: 'e1',
+        targetFolderIpnsName: 'target-ipns',
+        folderTree,
+        binState,
+        binCtx,
+      });
+
+      // Restore completed (entry removed) without re-publishing the file metadata.
+      expect(result.updatedBinState.entries).toHaveLength(0);
+      expect(sdkCore.resolveFileMetadata).toHaveBeenCalledTimes(2); // source then target
+      expect(vi.mocked(sdkCore.resolveFileMetadata).mock.calls[0][1]).toEqual(sourceKey);
+      expect(vi.mocked(sdkCore.resolveFileMetadata).mock.calls[1][1]).toEqual(targetKey);
+      expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
+    });
+
+    it('does not duplicate the listing when the target already contains the child (retry after a partial restore)', async () => {
+      // A prior attempt published the child into the target, then failed at the
+      // re-key (step 5b) or bin removal (step 6) — the bin entry survives, so the UI
+      // retries. The retry must REPLACE the existing listing, not append a second
+      // entry with the same id (the no-conflict publish path does not dedup by id).
+      const sourceKey = new Uint8Array(32).fill(0x11);
+      const targetKey = new Uint8Array(32).fill(0x22);
+      const existingChild = {
+        type: 'file' as const,
+        id: 'f1',
+        name: 'doc.txt',
+        fileMetaIpnsName: 'k51f',
+        ipnsPrivateKeyEncrypted: 'abc',
+        createdAt: 0,
+        modifiedAt: 0,
+      };
+      const folderTree = new FolderTree();
+      folderTree.set('source-ipns', {
+        ipnsName: 'source-ipns',
+        folderKey: sourceKey,
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+      folderTree.set('target-ipns', {
+        ipnsName: 'target-ipns',
+        folderKey: targetKey,
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [existingChild], // already published by attempt 1
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+
+      let publishedChildren: FolderChild[] | undefined;
+      vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async (p) => {
+        publishedChildren = p.children;
+        return { cid: 'bafynew', newSequenceNumber: 2n, publishedChildren: p.children };
+      });
+      vi.mocked(sdkCore.resolveFileMetadata).mockResolvedValue({
+        metadata: { version: 'v1' },
+      } as never);
+      vi.mocked(sdkCore.updateFileMetadata).mockResolvedValue({} as never);
+      vi.mocked(sdkCore.addToIpfs).mockResolvedValue({ cid: 'bafybin', size: 3, recorded: true });
+      vi.mocked(sdkCore.createAndPublishIpnsRecord).mockResolvedValue({
+        success: true,
+        sequenceNumber: 2n,
+      });
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafybin',
+        sequenceNumber: 2n,
+        signatureVerified: true,
+      });
+
+      const binState: BinState = {
+        entries: [
+          {
+            id: 'e1',
+            itemType: 'file',
+            name: 'doc.txt',
+            originalParentIpnsName: 'source-ipns',
+            originalPath: '/old',
+            deletedAt: 0,
+            size: 0,
+            mimeType: '',
+            filePointer: existingChild,
+          },
+        ],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      };
+
+      await restoreFromBin({
+        entryId: 'e1',
+        targetFolderIpnsName: 'target-ipns',
+        folderTree,
+        binState,
+        binCtx,
+      });
+
+      // Exactly one listing for f1 — the prior copy was replaced, not duplicated,
+      // and it kept its original name (no spurious "(restored)" rename against itself).
+      const f1Entries = (publishedChildren ?? []).filter((c) => c.id === 'f1');
+      expect(f1Entries).toHaveLength(1);
+      expect(f1Entries[0].name).toBe('doc.txt');
+    });
+
+    it('aborts before publishing the target folder when the file IPNS key is missing', async () => {
+      // Re-encrypt is required (different folder) but impossible (no file IPNS key);
+      // the precondition aborts BEFORE the publish so no undecryptable listing is
+      // left behind in the target.
+      const folderTree = new FolderTree();
+      folderTree.set('target-ipns', {
+        ipnsName: 'target-ipns',
+        folderKey: new Uint8Array(32).fill(0x22),
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+
+      const binState: BinState = {
+        entries: [
+          {
+            id: 'e1',
+            itemType: 'file',
+            name: 'doc.txt',
+            originalParentIpnsName: 'source-ipns',
+            originalPath: '/old',
+            deletedAt: 0,
+            size: 0,
+            mimeType: '',
+            originalFolderKeyEncrypted: 'cafe'.repeat(16),
+            filePointer: {
+              type: 'file',
+              id: 'f1',
+              name: 'doc.txt',
+              fileMetaIpnsName: 'k51f',
+              ipnsPrivateKeyEncrypted: '',
+              createdAt: 0,
+              modifiedAt: 0,
+            },
+          },
+        ],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      };
+
+      await expect(
+        restoreFromBin({
+          entryId: 'e1',
+          targetFolderIpnsName: 'target-ipns',
+          folderTree,
+          binState,
+          binCtx,
+        })
+      ).rejects.toThrow('missing file IPNS key');
+
+      expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
+    });
+
+    it('throws when restoring a legacy entry (no captured key) to a different folder while the original parent is not loaded', async () => {
+      const folderTree = new FolderTree();
+      folderTree.set('target-ipns', {
+        ipnsName: 'target-ipns',
+        folderKey: new Uint8Array(32).fill(0x22),
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+
+      const binState: BinState = {
+        entries: [
+          {
+            id: 'e1',
+            itemType: 'file',
+            name: 'doc.txt',
+            originalParentIpnsName: 'gone-ipns',
+            originalPath: '/old',
+            deletedAt: 0,
+            size: 0,
+            mimeType: '',
+            filePointer: {
+              type: 'file',
+              id: 'f1',
+              name: 'doc.txt',
+              fileMetaIpnsName: 'k51f',
+              ipnsPrivateKeyEncrypted: 'abc',
+              createdAt: 0,
+              modifiedAt: 0,
+            },
+          },
+        ],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      };
+
+      await expect(
+        restoreFromBin({
+          entryId: 'e1',
+          targetFolderIpnsName: 'target-ipns',
+          folderTree,
+          binState,
+          binCtx,
+        })
+      ).rejects.toThrow('Original parent folder must be loaded');
+      expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
     });
 
     it('throws when bin entry not found', async () => {

@@ -26,8 +26,9 @@ import {
   type FilePointer,
   type FolderEntry,
 } from '@cipherbox/core';
-import { bytesToHex, hexToBytes, wrapKey } from '@cipherbox/crypto';
+import { bytesToHex, clearBytes, hexToBytes, unwrapKey, wrapKey } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
+import { reencryptFileMetadataForFolderChange } from '../reencrypt';
 
 /** Current bin metadata version. */
 const BIN_METADATA_VERSION = 'v1' as const;
@@ -255,6 +256,18 @@ export async function addToBin(params: {
     childId: params.childId,
   });
 
+  // Capture the source folder's folderKey (the key the file's FileMetadata is
+  // encrypted under) wrapped for the vault, so restore can re-encrypt to any
+  // destination later even if this parent folder is gone by then. Files only —
+  // a restored folder carries its own folderKey in its FolderEntry. Computed
+  // BEFORE the publish so a wrapKey failure aborts before any folder/bin
+  // mutation, avoiding a split state where the file is removed from the folder
+  // but never recorded in the bin.
+  const isFile = removedItem.type === 'file';
+  const originalFolderKeyEncrypted = isFile
+    ? bytesToHex(await wrapKey(folder.folderKey, params.binCtx.userPublicKey))
+    : undefined;
+
   // 2. Publish updated folder metadata
   const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedChildren,
@@ -272,8 +285,8 @@ export async function addToBin(params: {
   folder.lastLoadedAt = Date.now();
   params.folderTree.set(params.folderIpnsName, folder);
 
-  // 4. Build bin entry
-  const isFile = removedItem.type === 'file';
+  // 4. Build bin entry (isFile / originalFolderKeyEncrypted computed above,
+  //    before the publish).
   const entry: BinEntry = {
     id: crypto.randomUUID(),
     itemType: isFile ? 'file' : 'folder',
@@ -285,6 +298,7 @@ export async function addToBin(params: {
     mimeType: '',
     filePointer: isFile ? (removedItem as FilePointer) : undefined,
     folderEntry: !isFile ? (removedItem as FolderEntry) : undefined,
+    originalFolderKeyEncrypted,
   };
 
   // 5. Update bin metadata and publish
@@ -339,8 +353,17 @@ export async function restoreFromBin(params: {
   const targetFolder = params.folderTree.get(params.targetFolderIpnsName);
   if (!targetFolder) throw new Error('Target folder not loaded');
 
-  // Handle name collisions
-  const existingNames = new Set(targetFolder.children.map((c) => c.name));
+  // A retry of a partially-applied restore (the bin entry survives a step-5b /
+  // step-6 failure) can find this child already listed in the target from the prior
+  // attempt's publish. Drop any prior copy by id so the restore is idempotent —
+  // re-running REPLACES rather than duplicates the listing — and exclude it from the
+  // name-collision check so the file isn't spuriously renamed against itself. The
+  // no-conflict publish path doesn't dedup by id (only the 409 merge does), so a
+  // same-id duplicate appended here would otherwise persist.
+  const targetChildrenSansChild = targetFolder.children.filter((c) => c.id !== child.id);
+
+  // Handle name collisions (against other entries only)
+  const existingNames = new Set(targetChildrenSansChild.map((c) => c.name));
   if (existingNames.has(child.name)) {
     let newName = `${child.name} (restored)`;
     let counter = 2;
@@ -351,10 +374,48 @@ export async function restoreFromBin(params: {
     child = { ...child, name: newName };
   }
 
-  const baseChildren = [...targetFolder.children];
-  const updatedFolderChildren = [...targetFolder.children, child];
+  // 3b. Decide whether this restore must re-encrypt the file's FileMetadata to
+  // the target folderKey: only for a FILE restored to a DIFFERENT folder than its
+  // original parent. The record is AES-256-GCM sealed with the parent folderKey,
+  // and addToBin stores the FilePointer verbatim without re-keying; restoring to a
+  // folder with a different folderKey without re-encrypting would make the file
+  // undecryptable (CryptoError: Decryption failed) — the same class of bug as
+  // moveItem. Restoring in place (target === original parent, the default UI flow)
+  // leaves the key unchanged, so no re-encrypt is needed.
+  //
+  // Validate the preconditions NOW, before publishing, so a restore that is
+  // guaranteed to fail (missing file IPNS key, or a legacy entry whose source key
+  // can't be recovered) aborts cleanly without leaving an undecryptable listing in
+  // the target. The actual re-key — unwrap + network resolve/publish — runs AFTER
+  // the target folder is durably published (step 5b), mirroring moveItem: the
+  // metadata is only re-keyed once the target listing is durable, so at every
+  // intermediate failure the file stays readable from somewhere that lists it under
+  // the matching key (the bin, by the source key, before the re-key; the target, by
+  // the target key, after it) — never readable from neither.
+  const mustReencrypt =
+    entry.itemType === 'file' &&
+    !!entry.filePointer &&
+    params.targetFolderIpnsName !== entry.originalParentIpnsName;
+  if (mustReencrypt) {
+    if (!entry.filePointer!.ipnsPrivateKeyEncrypted) {
+      throw new Error('Cannot re-encrypt file metadata on restore: missing file IPNS key');
+    }
+    // Source key = the folderKey the FileMetadata is currently sealed under.
+    // Recoverable from the key captured at delete time (works even if the original
+    // parent is gone), or — for legacy entries created before that capture — from
+    // the still-loaded original parent folder.
+    if (!entry.originalFolderKeyEncrypted && !params.folderTree.get(entry.originalParentIpnsName)) {
+      throw new Error(
+        'Original parent folder must be loaded to restore a legacy file to a different folder'
+      );
+    }
+  }
 
-  // 4. Publish updated folder metadata
+  const baseChildren = [...targetFolder.children];
+  const updatedFolderChildren = [...targetChildrenSansChild, child];
+
+  // 4. Publish target folder first (add-before-remove): the file is listed in the
+  //    target while still recorded in the bin, so it is never lost mid-restore.
   const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedFolderChildren,
     baseChildren,
@@ -370,6 +431,58 @@ export async function restoreFromBin(params: {
   targetFolder.sequenceNumber = newSequenceNumber;
   targetFolder.lastLoadedAt = Date.now();
   params.folderTree.set(params.targetFolderIpnsName, targetFolder);
+
+  // 5b. Re-key the FileMetadata to the target folderKey, now that the target
+  //     listing is durable (see step 3b). Idempotent via
+  //     reencryptFileMetadataForFolderChange: a retry after a partial failure that
+  //     already re-keyed the record completes cleanly instead of throwing.
+  if (mustReencrypt) {
+    // Only freshly-unwrapped key material is cleared in `finally` — never the
+    // shared folderTree key from the legacy fallback, which the tree still owns.
+    let unwrappedSourceFolderKey: Uint8Array | undefined;
+    let fileIpnsPrivateKey: Uint8Array | undefined;
+    try {
+      // Both guaranteed by the precondition check above; re-narrowed here for the
+      // type-checker and as defense in depth.
+      const filePointer = entry.filePointer;
+      const ipnsPrivateKeyEncrypted = filePointer?.ipnsPrivateKeyEncrypted;
+      if (!filePointer || !ipnsPrivateKeyEncrypted) {
+        throw new Error('Cannot re-encrypt file metadata on restore: missing file IPNS key');
+      }
+
+      let sourceFolderKey: Uint8Array;
+      if (entry.originalFolderKeyEncrypted) {
+        unwrappedSourceFolderKey = await unwrapKey(
+          hexToBytes(entry.originalFolderKeyEncrypted),
+          params.binCtx.userPrivateKey
+        );
+        sourceFolderKey = unwrappedSourceFolderKey;
+      } else {
+        const sourceFolder = params.folderTree.get(entry.originalParentIpnsName);
+        if (!sourceFolder) {
+          throw new Error(
+            'Original parent folder must be loaded to restore a legacy file to a different folder'
+          );
+        }
+        sourceFolderKey = sourceFolder.folderKey;
+      }
+
+      fileIpnsPrivateKey = await unwrapKey(
+        hexToBytes(ipnsPrivateKeyEncrypted),
+        params.binCtx.userPrivateKey
+      );
+      await reencryptFileMetadataForFolderChange({
+        fileMetaIpnsName: filePointer.fileMetaIpnsName,
+        fileIpnsPrivateKey,
+        sourceFolderKey,
+        destFolderKey: targetFolder.folderKey,
+        ctx: params.binCtx.ctx,
+      });
+    } finally {
+      if (unwrappedSourceFolderKey) clearBytes(unwrappedSourceFolderKey);
+      if (fileIpnsPrivateKey) clearBytes(fileIpnsPrivateKey);
+    }
+  }
 
   // 6. Remove entry from bin and publish
   const remainingEntries = params.binState.entries.filter((e) => e.id !== params.entryId);

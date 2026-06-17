@@ -43,6 +43,16 @@ pub struct BinEntry {
     pub name: String,
     pub original_parent_ipns_name: String,
     pub original_path: String,
+    /// ECIES-wrapped (to the user's secp256k1 public key) AES folder key of the
+    /// file's ORIGINAL parent folder, captured at delete time. A file's
+    /// `FileMetadata` is sealed with its parent folder's key, so restoring to a
+    /// folder with a different key — or whose original parent no longer exists —
+    /// requires this to re-encrypt the record. Files only; `None` for folders and
+    /// legacy entries written before this field existed. Serialized as
+    /// `originalFolderKeyEncrypted`, matching the TypeScript `BinEntry`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub original_folder_key_encrypted: Option<String>,
     pub deleted_at: u64,
     pub size: u64,
     pub mime_type: String,
@@ -135,6 +145,7 @@ mod tests {
             name: "deleted-photo.jpg".to_string(),
             original_parent_ipns_name: "k51parent".to_string(),
             original_path: "/Documents/deleted-photo.jpg".to_string(),
+            original_folder_key_encrypted: Some("aabbccdd".to_string()),
             deleted_at: 1700000000000,
             size: 4096,
             mime_type: "image/jpeg".to_string(),
@@ -181,6 +192,7 @@ mod tests {
                     name: "old-folder".to_string(),
                     original_parent_ipns_name: "k51root".to_string(),
                     original_path: "/old-folder".to_string(),
+                    original_folder_key_encrypted: None,
                     deleted_at: 1700000001000,
                     size: 0,
                     mime_type: "".to_string(),
@@ -209,8 +221,37 @@ mod tests {
         assert_eq!(decrypted.entries.len(), 2);
         assert_eq!(decrypted.entries[0].id, "entry-1");
         assert_eq!(decrypted.entries[0].name, "deleted-photo.jpg");
+        assert_eq!(
+            decrypted.entries[0].original_folder_key_encrypted.as_deref(),
+            Some("aabbccdd"),
+            "captured original folder key must survive the encrypt/decrypt round trip"
+        );
         assert_eq!(decrypted.entries[1].id, "entry-2");
         assert!(decrypted.entries[1].folder_entry.is_some());
+        assert!(
+            decrypted.entries[1].original_folder_key_encrypted.is_none(),
+            "folder entries carry no original folder key"
+        );
+    }
+
+    #[test]
+    fn original_folder_key_serializes_camel_case_and_skips_when_none() {
+        let with_key = serde_json::to_string(&sample_bin_entry()).unwrap();
+        assert!(with_key.contains("\"originalFolderKeyEncrypted\":\"aabbccdd\""));
+        assert!(!with_key.contains("original_folder_key_encrypted"));
+
+        let mut without = sample_bin_entry();
+        without.original_folder_key_encrypted = None;
+        let json = serde_json::to_string(&without).unwrap();
+        assert!(
+            !json.contains("originalFolderKeyEncrypted"),
+            "None must be skipped so folder/legacy entries stay clean"
+        );
+
+        // Legacy entries (no field at all) deserialize to None via serde(default).
+        let legacy = r#"{"id":"x","itemType":"file","name":"a.txt","originalParentIpnsName":"k51","originalPath":"/a.txt","deletedAt":1,"size":1,"mimeType":"text/plain"}"#;
+        let parsed: BinEntry = serde_json::from_str(legacy).unwrap();
+        assert!(parsed.original_folder_key_encrypted.is_none());
     }
 
     #[test]

@@ -399,12 +399,24 @@ pub(crate) mod implementation {
             } else {
                 let parent_path = crate::helpers::build_folder_path(fs, parent);
 
+                // Capture the file's parent folderKey (ECIES-wrapped to the user)
+                // so a later restore can re-encrypt the FileMetadata to a different
+                // destination folder — including when the original parent folder no
+                // longer exists. Mirrors the SDK `addToBin` capture.
+                let original_folder_key_encrypted = fs
+                    .get_folder_key(parent)
+                    .and_then(|fk| {
+                        cipherbox_crypto::ecies::wrap_key(&fk, fs.public_key.as_slice()).ok()
+                    })
+                    .map(hex::encode);
+
                 let bin_entry = cipherbox_core::bin::BinEntry {
                     id: cipherbox_crypto::utils::generate_uuid_v4(),
                     item_type: cipherbox_core::bin::BinItemType::File,
                     name: item_name.clone(),
                     original_parent_ipns_name: parent_ipns_name,
                     original_path: parent_path,
+                    original_folder_key_encrypted,
                     deleted_at: now
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
@@ -838,6 +850,8 @@ pub(crate) mod implementation {
                     name: item_name,
                     original_parent_ipns_name: parent_ipns_name,
                     original_path: parent_path,
+                    // Folders keep their own key on restore; nothing to capture.
+                    original_folder_key_encrypted: None,
                     deleted_at: now
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
@@ -949,6 +963,44 @@ pub(crate) mod implementation {
             newparent,
         );
 
+        // Cross-folder FILE moves must re-encrypt the per-file FileMetadata to the
+        // destination folderKey (it is sealed with the parent folderKey). Capture
+        // the inputs now, before any inode mutation. Folder moves need nothing — a
+        // folder keeps its own key, as do the files inside it.
+        let reencrypt_inputs: Option<(String, zeroize::Zeroizing<Vec<u8>>, Vec<u8>, Vec<u8>)> =
+            if parent != newparent {
+                match fs.inodes.get(source_ino).map(|i| &i.kind) {
+                    Some(InodeKind::File {
+                        file_meta_ipns_name: Some(meta_ipns),
+                        file_ipns_private_key: Some(key),
+                        ..
+                    }) if !meta_ipns.is_empty() => {
+                        match (fs.get_folder_key(parent), fs.get_folder_key(newparent)) {
+                            (Some(src_key), Some(dst_key)) => {
+                                Some((meta_ipns.clone(), key.clone(), src_key, dst_key))
+                            }
+                            _ => {
+                                log::warn!(
+                                    "rename: cross-folder move missing folder key(s) for ino {}; skipping metadata re-encrypt",
+                                    source_ino
+                                );
+                                None
+                            }
+                        }
+                    }
+                    Some(InodeKind::File { .. }) => {
+                        log::warn!(
+                            "rename: cross-folder file move for ino {} missing IPNS name/key; skipping metadata re-encrypt",
+                            source_ino
+                        );
+                        None
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
         // If destination exists, handle replacement
         if let Some(dest_ino) = fs.inodes.find_child(newparent, newname_str) {
             // Self-replace (rename "a" to "a" in same dir): no-op
@@ -1056,6 +1108,23 @@ pub(crate) mod implementation {
             if let Err(e) = fs.update_folder_metadata(parent) {
                 log::error!("Failed to update parent metadata after rename: {}", e);
             }
+        }
+
+        // Re-encrypt the moved file's metadata to the destination folderKey
+        // (fire-and-forget). Without this, every fresh resolve under the new
+        // folder's key fails to decrypt.
+        if let Some((meta_ipns, file_ipns_key, src_key, dst_key)) = reencrypt_inputs {
+            crate::spawn_file_meta_reencrypt(
+                fs.api.clone(),
+                fs.rt.clone(),
+                meta_ipns,
+                file_ipns_key,
+                src_key,
+                dst_key,
+                fs.publish_coordinator.clone(),
+                fs.tee_public_key.clone(),
+                fs.tee_key_epoch,
+            );
         }
 
         reply.ok();

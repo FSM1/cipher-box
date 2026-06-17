@@ -7,9 +7,11 @@ import { CipherBoxClient, BinNotLoadedError } from '../client';
 import type { SdkEvent } from '../events';
 import { createTestConfig, setupFolder } from './helpers';
 
-// Mock crypto (clearBytes used in uploadFile for key cleanup)
+// Mock crypto (clearBytes used in uploadFile; unwrapKey/hexToBytes used in moveItem re-encryption)
 vi.mock('@cipherbox/crypto', () => ({
   clearBytes: vi.fn((arr: Uint8Array) => arr.fill(0)),
+  unwrapKey: vi.fn().mockResolvedValue(new Uint8Array(64).fill(0x55)),
+  hexToBytes: vi.fn((hex: string) => new Uint8Array(hex.length / 2)),
 }));
 
 // Mock sdk-core
@@ -26,7 +28,26 @@ vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
     addFilePointerToFolder: vi.fn(),
     uploadFile: vi.fn(),
     downloadAndDecrypt: vi.fn(),
-    resolveFileMetadata: vi.fn(),
+    resolveFileMetadata: vi.fn().mockResolvedValue({
+      metadata: {
+        version: 'v1',
+        cid: 'bafyfile',
+        fileKeyEncrypted: 'aabb',
+        fileIv: '1122',
+        size: 1,
+        mimeType: 'text/plain',
+        encryptionMode: 'GCM',
+        createdAt: 0,
+        modifiedAt: 0,
+      },
+      metadataCid: 'bafymeta',
+    }),
+    updateFileMetadata: vi.fn().mockResolvedValue({
+      ipnsName: 'k51file',
+      metadataCid: 'bafymeta2',
+      newSequenceNumber: 2n,
+      prunedCids: [],
+    }),
     batchPublishIpnsRecords: vi.fn(),
     createAndPublishIpnsRecord: vi.fn(),
     addToIpfs: vi.fn(),

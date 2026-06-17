@@ -55,6 +55,7 @@ vi.mock('../errors', () => ({
 import { mergeVersions, updateFileMetadata } from '../file';
 import { resolveIpnsRecord, createAndPublishIpnsRecord } from '../ipns';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
+import type { SdkContext, IpfsAddResult } from '../types';
 
 // @cipherbox/core functions accessed via vi.mocked after the vi.mock factory above.
 // We do NOT import from '@cipherbox/core' directly here because its dist is not
@@ -74,6 +75,26 @@ type VersionEntry = {
   size: number;
   timestamp: number;
   encryptionMode: 'GCM' | 'CTR';
+};
+
+// Local FileMetadata / EncryptedFileMetadata shapes (mirror @cipherbox/core types;
+// avoids dist resolution — see note above).
+type FileMetadata = {
+  version: 'v1';
+  cid: string;
+  fileKeyEncrypted: string;
+  fileIv: string;
+  size: number;
+  mimeType: string;
+  encryptionMode?: 'GCM' | 'CTR';
+  createdAt: number;
+  modifiedAt: number;
+  versions?: VersionEntry[];
+};
+
+type EncryptedFileMetadata = {
+  iv: string;
+  data: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -153,7 +174,7 @@ describe('mergeVersions', () => {
 // ---------------------------------------------------------------------------
 
 describe('updateFileMetadata CAS + conflict', () => {
-  const mockCtx = { axiosInstance: null } as any;
+  const mockCtx = { axiosInstance: null } as unknown as SdkContext;
   const mockFolderKey = new Uint8Array(32).fill(1);
   // Reinitialized per test in beforeEach: updateFileMetadata zeroizes
   // fileIpnsPrivateKey in-place, so a shared buffer would be all-zero after test 1.
@@ -180,8 +201,11 @@ describe('updateFileMetadata CAS + conflict', () => {
     encryptFileMetadata = vi.mocked(coreMocks.encryptFileMetadata);
     decryptFileMetadata = vi.mocked(coreMocks.decryptFileMetadata);
 
-    encryptFileMetadata.mockResolvedValue({ iv: 'test-iv', data: 'encrypted-data' } as any);
-    vi.mocked(addToIpfs).mockResolvedValue({ cid: 'new-meta-cid' } as any);
+    encryptFileMetadata.mockResolvedValue({
+      iv: 'test-iv',
+      data: 'encrypted-data',
+    } satisfies EncryptedFileMetadata);
+    vi.mocked(addToIpfs).mockResolvedValue({ cid: 'new-meta-cid' } as unknown as IpfsAddResult);
 
     vi.mocked(resolveIpnsRecord).mockResolvedValue({
       cid: 'old-meta-cid',
@@ -268,7 +292,7 @@ describe('updateFileMetadata CAS + conflict', () => {
     vi.mocked(fetchFromIpfs).mockResolvedValue(
       new TextEncoder().encode(JSON.stringify({ iv: 'r-iv', data: 'r-data' }))
     );
-    decryptFileMetadata.mockResolvedValue(remoteMeta as any);
+    decryptFileMetadata.mockResolvedValue(remoteMeta satisfies FileMetadata);
 
     const result = await updateFileMetadata({
       fileIpnsPrivateKey: mockPrivateKey,
@@ -331,7 +355,7 @@ describe('updateFileMetadata CAS + conflict', () => {
     vi.mocked(fetchFromIpfs).mockResolvedValue(
       new TextEncoder().encode(JSON.stringify({ iv: 'r-iv', data: 'r-data' }))
     );
-    decryptFileMetadata.mockResolvedValue(remoteMeta as any);
+    decryptFileMetadata.mockResolvedValue(remoteMeta satisfies FileMetadata);
 
     await updateFileMetadata({
       fileIpnsPrivateKey: mockPrivateKey,
@@ -387,7 +411,7 @@ describe('updateFileMetadata CAS + conflict', () => {
     vi.mocked(fetchFromIpfs).mockResolvedValue(
       new TextEncoder().encode(JSON.stringify({ iv: 'r-iv', data: 'r-data' }))
     );
-    decryptFileMetadata.mockResolvedValue(remoteMeta as any);
+    decryptFileMetadata.mockResolvedValue(remoteMeta satisfies FileMetadata);
 
     const result = await updateFileMetadata({
       fileIpnsPrivateKey: mockPrivateKey,
@@ -471,11 +495,11 @@ describe('updateFileMetadata CAS + conflict', () => {
     vi.mocked(fetchFromIpfs).mockResolvedValue(
       new TextEncoder().encode(JSON.stringify({ iv: 'r-iv', data: 'r-data' }))
     );
-    decryptFileMetadata.mockResolvedValue(remoteMeta as any);
+    decryptFileMetadata.mockResolvedValue(remoteMeta satisfies FileMetadata);
 
     vi.mocked(addToIpfs)
-      .mockResolvedValueOnce({ cid: 'initial-upload-cid' } as any)
-      .mockResolvedValueOnce({ cid: 'merged-upload-cid' } as any);
+      .mockResolvedValueOnce({ cid: 'initial-upload-cid' } as unknown as IpfsAddResult)
+      .mockResolvedValueOnce({ cid: 'merged-upload-cid' } as unknown as IpfsAddResult);
 
     const result = await updateFileMetadata({
       fileIpnsPrivateKey: mockPrivateKey,
@@ -531,7 +555,7 @@ describe('updateFileMetadata CAS + conflict', () => {
     vi.mocked(fetchFromIpfs).mockResolvedValue(
       new TextEncoder().encode(JSON.stringify({ iv: 'r-iv', data: 'r-data' }))
     );
-    decryptFileMetadata.mockResolvedValue(remoteMeta as any);
+    decryptFileMetadata.mockResolvedValue(remoteMeta satisfies FileMetadata);
 
     const conflict409 = Object.assign(new Error('Conflict'), { status: 409 });
     vi.mocked(createAndPublishIpnsRecord).mockRejectedValue(conflict409);

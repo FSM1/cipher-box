@@ -161,4 +161,14 @@ function validateBinEntry(data: unknown): void {
   ) {
     throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
   }
+
+  // Validate optional originalFolderKeyEncrypted (even-length hex string if present)
+  if (entry.originalFolderKeyEncrypted !== undefined) {
+    if (
+      typeof entry.originalFolderKeyEncrypted !== 'string' ||
+      !/^(?:[0-9a-fA-F]{2})+$/.test(entry.originalFolderKeyEncrypted)
+    ) {
+      throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
+    }
+  }
 }

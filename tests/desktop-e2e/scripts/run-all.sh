@@ -113,6 +113,23 @@ else
 fi
 echo ""
 
+# ---- Step 7: Move content re-encryption (cross-platform) ----
+# Shares one implementation with Windows (test-move-content.mjs); runs after
+# cross-client-sync so the SDK dist it shells out to is already built.
+echo "--- Step 7: Move content re-encryption ---"
+set +e
+TEST_SECRET="$TEST_SECRET" node "$SCRIPT_DIR/test-move-content.mjs" --mount "$MOUNT_POINT" --api-url "$API_URL"
+MOVE_FAILURES=$?
+set -e
+
+if [ "$MOVE_FAILURES" -eq 0 ]; then
+  echo "Move content: PASSED"
+else
+  echo "Move content: FAILED"
+  TOTAL_FAIL=$((TOTAL_FAIL + MOVE_FAILURES))
+fi
+echo ""
+
 # ---- Summary ----
 echo "============================================"
 echo "  Summary"
