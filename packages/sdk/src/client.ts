@@ -37,6 +37,7 @@ import * as binOps from './bin';
 import type { BinState } from './bin';
 import * as shareOps from './share';
 import type { SentShareInfo } from './share';
+import { reencryptFileMetadataForFolderChange } from './reencrypt';
 
 /** Maximum concurrent encrypt+pin operations for batch uploads. */
 const UPLOAD_CONCURRENCY = 3;
@@ -738,8 +739,10 @@ export class CipherBoxClient {
       //    destination key while only the source still pointed at it.)
       //
       //    A finally guards the key: updateFileMetadata (sdk-core) zeroes it on
-      //    its own path (T-47-01), but resolveFileMetadata could throw first and
-      //    leave the unwrapped key in memory.
+      //    its own path (T-47-01), but the resolve could throw first and leave
+      //    the unwrapped key in memory. The re-key is idempotent (see
+      //    reencryptFileMetadataForFolderChange): a retry after a partial failure
+      //    that already re-keyed the record completes instead of throwing.
       if (movedItem.type === 'file') {
         const filePointer = movedItem as FilePointer;
         if (!filePointer.ipnsPrivateKeyEncrypted) {
@@ -750,18 +753,11 @@ export class CipherBoxClient {
           this.config.vaultKeypair.privateKey
         );
         try {
-          const { metadata: currentMetadata } = await sdkCore.resolveFileMetadata(
-            filePointer.fileMetaIpnsName,
-            source.folderKey,
-            this.ctx
-          );
-          await sdkCore.updateFileMetadata({
-            fileIpnsPrivateKey,
+          await reencryptFileMetadataForFolderChange({
             fileMetaIpnsName: filePointer.fileMetaIpnsName,
-            folderKey: dest.folderKey,
-            currentMetadata,
-            updates: {},
-            createVersion: false,
+            fileIpnsPrivateKey,
+            sourceFolderKey: source.folderKey,
+            destFolderKey: dest.folderKey,
             ctx: this.ctx,
           });
         } finally {

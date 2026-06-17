@@ -328,4 +328,59 @@ describe('CipherBoxClient.moveItem — file metadata re-encryption', () => {
     // Internal state not advanced (move did not fully complete).
     expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
   });
+
+  // ── idempotent retry ─────────────────────────────────────────────────────
+  // After a partial failure that already re-keyed the record, a retry must
+  // COMPLETE the move rather than throw: the source-key resolve fails, so the
+  // re-key falls back to confirming the record under the destination key and
+  // treats the re-encryption as done.
+
+  const decryptionFailed = () =>
+    Object.assign(new Error('Decryption failed'), { code: 'DECRYPTION_FAILED' });
+
+  it('completes idempotently when the metadata was already re-keyed (retry after a partial move)', async () => {
+    // Source-key resolve fails (already re-keyed by a prior attempt); the
+    // dest-key resolve then succeeds → treat as already re-encrypted.
+    vi.mocked(sdkCore.resolveFileMetadata)
+      .mockRejectedValueOnce(decryptionFailed())
+      .mockResolvedValueOnce({ metadata: mockFileMeta, metadataCid: 'bafymeta1' });
+
+    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).resolves.toBeUndefined();
+
+    // Resolve tried the source key, then fell back to the destination key.
+    expect(sdkCore.resolveFileMetadata).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(sdkCore.resolveFileMetadata).mock.calls[0][1]).toEqual(SRC_FOLDER_KEY);
+    expect(vi.mocked(sdkCore.resolveFileMetadata).mock.calls[1][1]).toEqual(DEST_FOLDER_KEY);
+    // Already re-keyed → no re-publish of the file metadata...
+    expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
+    // ...but the move still completes: dest add + source remove both published.
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects when the metadata is undecryptable under both the source and destination keys', async () => {
+    vi.mocked(sdkCore.resolveFileMetadata)
+      .mockRejectedValueOnce(decryptionFailed())
+      .mockRejectedValueOnce(decryptionFailed());
+
+    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
+
+    expect(sdkCore.resolveFileMetadata).toHaveBeenCalledTimes(2);
+    expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
+    // Dest published (step 2); source publish (step 4) never reached.
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a non-decrypt resolve error without attempting the dest-key fallback', async () => {
+    vi.mocked(sdkCore.resolveFileMetadata).mockRejectedValueOnce(
+      new Error('File metadata IPNS not found')
+    );
+
+    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow(
+      'File metadata IPNS not found'
+    );
+
+    // Only the source-key resolve was attempted — no fallback for a non-decrypt error.
+    expect(sdkCore.resolveFileMetadata).toHaveBeenCalledTimes(1);
+    expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
+  });
 });
