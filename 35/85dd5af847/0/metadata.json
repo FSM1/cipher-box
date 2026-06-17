@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3585dd5af847",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T21:59:28.433422Z",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "8994d370d7a5",
+  "token_usage": {
+    "input_tokens": 126820,
+    "cache_creation_tokens": 1495424,
+    "cache_read_tokens": 112987652,
+    "output_tokens": 472935,
+    "api_call_count": 411
+  },
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
