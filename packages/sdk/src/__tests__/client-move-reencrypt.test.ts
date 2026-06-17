@@ -63,6 +63,7 @@ vi.mock('../share', () => ({
 }));
 
 import * as sdkCore from '@cipherbox/sdk-core';
+import { unwrapKey } from '@cipherbox/crypto';
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -240,5 +241,64 @@ describe('CipherBoxClient.moveItem — file metadata re-encryption', () => {
 
     expect(sdkCore.resolveFileMetadata).not.toHaveBeenCalled();
     expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
+  });
+
+  // ── failure paths ──────────────────────────────────────────────────────────
+  // The re-encryption runs BEFORE either folder publish, so a failure in it
+  // aborts the move cleanly with no folder mutation. These pin that behavior.
+
+  it('rejects with no folder publish when unwrapKey fails (corrupted file IPNS key)', async () => {
+    vi.mocked(unwrapKey).mockRejectedValueOnce(new Error('bad key'));
+
+    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
+
+    expect(sdkCore.resolveFileMetadata).not.toHaveBeenCalled();
+    expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
+    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
+    // Folder state untouched: pointer still in source, dest still empty.
+    expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
+    expect(client.getFolderTree().get(DEST_IPNS)!.children).toHaveLength(0);
+  });
+
+  it('rejects with no folder publish when resolveFileMetadata fails (source key cannot decrypt)', async () => {
+    vi.mocked(sdkCore.resolveFileMetadata).mockRejectedValueOnce(new Error('Decryption failed'));
+
+    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
+
+    expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
+    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
+    expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
+  });
+
+  it('rejects with no folder publish when updateFileMetadata fails (IPNS publish error)', async () => {
+    vi.mocked(sdkCore.updateFileMetadata).mockRejectedValueOnce(new Error('publish failed'));
+
+    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
+
+    // Re-encrypt failed → no folder mutation, fully recoverable by retry.
+    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
+    expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
+    expect(client.getFolderTree().get(DEST_IPNS)!.children).toHaveLength(0);
+  });
+
+  it('pins the re-encrypt/publish atomicity gap when the destination publish fails after re-encryption', async () => {
+    // updateFileMetadata succeeds (metadata is now sealed under the DEST key) but
+    // the destination folder publish then throws. The move rejects, yet the file's
+    // FileMetadata has ALREADY been re-keyed to the destination while its
+    // FilePointer is still only in the source folder — a known non-atomic window
+    // across two independent IPNS records. This test documents current behavior; it
+    // does not assert recovery (none exists yet).
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockRejectedValueOnce(
+      new Error('dest publish failed')
+    );
+
+    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
+
+    expect(sdkCore.updateFileMetadata).toHaveBeenCalledTimes(1); // re-encryption happened
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1); // dest attempted, failed
+    // Source still holds the pointer: the move did not complete and internal
+    // state was not advanced.
+    expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
+    expect(client.getFolderTree().get(DEST_IPNS)!.children).toHaveLength(0);
   });
 });
