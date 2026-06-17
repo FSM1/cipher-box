@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b886f47dabf9",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T13:13:02.358885Z",
+  "branch": "feat/share-itemname-lazy-backfill",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "aa32ca671488",
+  "token_usage": {
+    "input_tokens": 48162,
+    "cache_creation_tokens": 263883,
+    "cache_read_tokens": 7148686,
+    "output_tokens": 29470,
+    "api_call_count": 67
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Backfill missing Phase 47 SUMMARY.md files, run Phase 48 verification, and implement the missing API endpoint needed to persist encrypted share itemName during lazy backfill.",
+    "outcome": "All three tasks completed: Phase 47 summaries backfilled via agent, Phase 48 VERIFICATION.md written via agent, and a new PATCH /shares/:shareId/item-name endpoint was built (DTO, service method, controller, specs, client regeneration, web wiring re-enabled) with 171 tests passing and web typechecks clean.",
+    "learnings": {
+      "repo": [
+        "The GSD resume-incomplete invariant checks SUMMARY.md count vs PLAN.md count on disk — it trips as a false positive when code shipped via PR but summaries were never written to disk (Phase 47 shipped via PR #494 / commit d17d42e5f with a complete VERIFICATION.md but zero SUMMARY.md files).",
+        "Phase 48 had a BLOCKED-HANDOFF for bin-restore e2e failures (REQ-1) that predated PRs #500 and #504 which resolved it — handoff files can be stale after subsequent PRs land.",
+        "The web-side backfillSentShareItemNames was fully implemented but commented out inside fetchAllSentShares, waiting on a PATCH endpoint that never existed in the API.",
+        "@Patch(':shareId/encrypted-key') served as the exact structural analog for the new @Patch(':shareId/item-name') endpoint — same auth guard, same service delegation pattern, same DTO shape.",
+        "pnpm api:generate bumps the OpenAPI spec version (0.38.0 → 0.39.0) in every generated file header on each run — this is expected regeneration noise, not meaningful changes.",
+        ".planning/intel/ is untracked by git and should be excluded from commits.",
+        "The shares domain has 171 tests covering the controller and service layers."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 214,
+          "end_line": 214,
+          "finding": "itemNameEncrypted was computed and then voided (not persisted) at this site — the missing persist call was the root cause of the lazy backfill gap."
+        },
+        {
+          "path": "apps/api/src/shares/dto/update-item-name.dto.ts",
+          "line": 1,
+          "finding": "New DTO file created; mirrors UpdateEncryptedKeyDto structure with itemNameEncrypted field and matching validation."
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "New updateShareItemName method added immediately after updateShareEncryptedKey — follow this placement convention for future share mutation methods."
+        },
+        {
+          "path": "apps/api/src/shares/shares.controller.ts",
+          "finding": "New @Patch(':shareId/item-name') endpoint added adjacent to @Patch(':shareId/encrypted-key') — both follow the same guard/auth/delegation pattern."
+        },
+        {
+          "path": "apps/api/src/shares/dto/index.ts",
+          "finding": "Barrel export file must be updated manually when adding new DTOs — not auto-discovered."
+        },
+        {
+          "path": "packages/api-client/src/generated/shares/shares.ts",
+          "finding": "Generated client function for the new endpoint lands here after pnpm api:generate — verify presence before wiring web imports."
+        }
+      ],
+      "workflow": [
+        "When GSD --next would mechanically route to a destructive action (re-execute a phase that already shipped), verify via git log before acting — git history and VERIFICATION.md are more authoritative than SUMMARY.md presence.",
+        "Running pnpm api:generate is required after any API endpoint addition; without it the web TypeScript imports will reference non-existent generated functions.",
+        "The web app has no dedicated typecheck npm script — run tsc directly against the tsconfig or use the build command to validate types.",
+        "Dispatching bookkeeping tasks (summary backfill, verification write) to parallel agents while doing substantive implementation work in the main thread is an effective parallelization pattern for this GSD workflow.",
+        "Committing in two logical commits (feature vs. planning bookkeeping) keeps the git history clean when a session mixes implementation with documentation work."
+      ]
+    },
+    "friction": [
+      "gsd_run query roadmap.analyze returned empty plan counts, forcing a manual directory scan to detect incomplete phases.",
+      "The GSD resume-incomplete invariant produced a false positive that would have re-executed already-merged work — the mechanical --next route had to be overridden based on git history investigation.",
+      "The web app lacks a typecheck npm script, requiring direct tsc invocation to validate types.",
+      "api:generate produces pre-existing warnings on every run, making it harder to spot real new issues in the output."
+    ],
+    "open_items": [
+      "Legacy shares already in production will only get their itemName backfilled on next fetchAllSentShares call — no bulk backfill mechanism exists for existing shares.",
+      "Phase 47 SUMMARY.md files are now backfilled (cosmetic) but the root cause — sessions completing execution without writing summaries — is not addressed upstream.",
+      "Phase 48 VERIFICATION.md was written but the original BLOCKED-HANDOFF for bin-restore e2e (REQ-1) should be reviewed to confirm the handoff file was cleaned up.",
+      "The feature branch commit was staged at end of transcript but final confirmation of push/PR creation was not shown — may need a PR opened.",
+      "No integration or e2e test covers the full lazy-backfill round-trip (fetchAllSentShares → backfillSentShareItemNames → PATCH item-name → encrypted at rest)."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
