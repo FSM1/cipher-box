@@ -1,0 +1,157 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ffdbce177943",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T14:17:07.050035Z",
+  "branch": "feat/share-itemname-lazy-backfill",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/web-e2e/tests/share-itemname-backfill.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "db394101a3fd",
+  "checkpoint_transcript_start": 444,
+  "transcript_lines_at_start": 444,
+  "token_usage": {
+    "input_tokens": 12242,
+    "cache_creation_tokens": 109704,
+    "cache_read_tokens": 12987837,
+    "output_tokens": 65006,
+    "api_call_count": 48
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Write an automated Playwright e2e spec for the share itemName lazy-backfill UAT (Phase 48 REQ-4), covering two-party setup, legacy-row seeding, owner-upload backfill trigger, at-rest ciphertext assertion, and recipient display — then run it against the local full stack and commit it.",
+    "outcome": "The spec was written (tests/web-e2e/tests/share-itemname-backfill.spec.ts), all 7 steps passed in 52.1s against the local stack proving the null→ciphertext state transition, lint/typecheck passed, but the commit was still pending at transcript end due to a wedged 1Password SSH signer requiring a restart.",
+    "learnings": {
+      "repo": [
+        "backfillSentShareItemNames fires ONLY via the SDK getCoveringShares callback (useAuth.ts:324-331) → findCoveringShares → fetchAllSentShares; the sole UI-reachable trigger is any owner file upload. ShareDialog bypasses fetchAllSentShares entirely by calling sharesControllerGetSentShares directly.",
+        "CreateShareDto.itemNameEncrypted is @IsOptional (create-share.dto.ts:91) so legacy NULL rows are creatable via direct API POST, but the web createShare() always sends ciphertext (share.service.ts:251-258) — legacy rows cannot be produced through the UI.",
+        "The recipient-decrypt path falls back to plaintext on failure (share.service.ts:121), so a broken ciphertext still renders the correct display name. Recipient assertion alone is insufficient; it must be paired with the GET /shares/sent null→hex assertion.",
+        "backfillSentShareItemNames runs fire-and-forget (share.service.ts:394) and the SDK caches fetchAllSentShares for 30s; specs must poll GET /shares/sent for the column to flip rather than asserting synchronously.",
+        "GET /shares/sent returns itemNameEncrypted as hex or null (shares.controller.ts:147), making it a strong in-harness proxy for at-rest ciphertext without needing a pg connection.",
+        "web-e2e has no pg/DataSource (absent from tests/web-e2e/package.json), so literal raw-bytea Postgres reads require either adding a pg util or a test-only debug endpoint; the Compose stack exposes 5432 postgres/postgres.",
+        "The repo enforces signed commits via 1Password op-ssh-sign; in sandboxed Bash environments the signer cannot be reached and commits fail silently or hang, requiring unsandboxed retries.",
+        "After gh pr create a bot pushes a chore(release): set release targets commit to the branch; the flow requires fetch + rebase + push before merging to avoid divergence.",
+        "The API runs in watch mode locally and auto-reloads changes; probe a new endpoint with a 401 vs 404 response to confirm it has loaded before running e2e tests."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 155,
+          "end_line": 155,
+          "finding": "getCoveringShares is called unconditionally before the length check on every reWrapNewItems (uploadFile) invocation — every owner upload triggers the backfill over all sent shares."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "line": 91,
+          "end_line": 91,
+          "finding": "@IsOptional on itemNameEncrypted — omitting this field in a POST /shares body produces a legacy NULL row, which is the only way to seed legacy state since the web layer always populates it."
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 98,
+          "end_line": 98,
+          "finding": "shouldBackfill returns false when ciphertext is already present — backfill is idempotent; re-triggering leaves the column unchanged."
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 121,
+          "end_line": 124,
+          "finding": "Recipient display falls back to plaintext itemName when itemNameEncrypted is null (legacy path) and decrypts the ciphertext when present — false-pass risk if ciphertext is malformed."
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 394,
+          "end_line": 394,
+          "finding": "backfillSentShareItemNames call is void/fire-and-forget; callers do not await it, requiring polling in tests."
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 21,
+          "end_line": 50,
+          "finding": "page.evaluate(fetch) + POST /auth/refresh pattern for obtaining access tokens inside browser context — reused as the base for the seedLegacyShare helper."
+        },
+        {
+          "path": "tests/web-e2e/utils/multi-account-wallet.ts",
+          "line": 63,
+          "end_line": 63,
+          "finding": "createWalletTestAccount(browser, name) is the established two-identity pattern; use with test.describe.serial for Alice/Bob specs."
+        },
+        {
+          "path": "tests/web-e2e/page-objects/file-browser/shared-file-browser.page.ts",
+          "line": 130,
+          "end_line": 133,
+          "finding": "Method is getSharedItemNames() (not getAllSharedItemNames() as the synthesis initially stated); getSharedItem(name) exists at line 64."
+        }
+      ],
+      "workflow": [
+        "A fan-out workflow (4 parallel investigators → synthesis → adversarial verifier) is the right tool for empirically determining test harness feasibility before writing a spec — it caught false method names and the false-pass risk the synthesis missed.",
+        "Prove state transitions, not just final state: asserting null before seeding and ciphertext ≠ plaintext after backfill eliminates the false-pass risk from the plaintext fallback path.",
+        "For fire-and-forget async backend operations in Playwright, poll an API endpoint with a timeout rather than using waitForResponse or fixed sleeps.",
+        "When a signed commit hangs with op-ssh-sign, check for rc=124 (timeout/hang) vs rc=128 (buffer error) — the latter requires restarting the 1Password app, not just retrying."
+      ]
+    },
+    "friction": [
+      "1Password op-ssh-sign SSH signer wedged twice: first timed out (rc=124), then failed with 'failed to fill whole buffer' (rc=128), requiring a full 1Password app restart before the commit could land.",
+      "Sandboxed Bash cannot reach the 1Password SSH agent, so signed commits must be retried in an unsandboxed context — not obvious from the failure mode.",
+      "The workflow result was truncated in the task notification (26k chars cut), requiring a separate file read to get the adversarial verifier's corrections including the wrong method name (getAllSharedItemNames vs getSharedItemNames).",
+      "The initial 'human-only' label for the UAT was wrong and required a full harness audit to disprove — the cost of labeling something out-of-scope without checking."
+    ],
+    "open_items": [
+      "Run /gsd-complete-milestone for v1.1 (33/33 phases, 146/146 plans) once PR #505 is merged.",
+      "PR #505 needs Lint + Release Preview CI checks to go green before merging.",
+      "Literal raw-bytea at-rest inspection is not covered by the new spec — only the GET /shares/sent hex≠plaintext proxy. Closing this fully requires adding a pg util to tests/web-e2e or a test-only debug endpoint (Postgres exposed at localhost:5432 postgres/postgres in Compose).",
+      "The spec commit/push was still pending at transcript end — needs confirmation that it landed on origin and appears in PR #505."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T14:16:04.078984Z",
+    "agent_lines": 282,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 282,
+    "total_lines_changed": 282,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 284,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 288,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
