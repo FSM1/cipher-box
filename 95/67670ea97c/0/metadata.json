@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9567670ea97c",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T20:26:12.163907Z",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "d56861774485",
+  "token_usage": {
+    "input_tokens": 98540,
+    "cache_creation_tokens": 1152529,
+    "cache_read_tokens": 79571307,
+    "output_tokens": 271844,
+    "api_call_count": 263
+  },
+  "session_metrics": {
+    "turn_count": 14
+  }
+}
