@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "bb3068e0d9ff",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T20:26:25.898689Z",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "d56861774485",
+  "checkpoint_transcript_start": 1455,
+  "transcript_lines_at_start": 1455,
+  "token_usage": {
+    "input_tokens": 133,
+    "cache_creation_tokens": 1374,
+    "cache_read_tokens": 1124218,
+    "output_tokens": 937,
+    "api_call_count": 2
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Commit completed work including e2e tests and documentation changes to the repository.",
+    "outcome": "The e2e commit was successfully created and signed. The docs commit was initially interrupted by a backgrounded 1Password signing prompt but was subsequently committed successfully with all commits verified as signed.",
+    "learnings": {
+      "repo": [],
+      "code": [],
+      "workflow": [
+        "1Password SSH/GPG signing prompts can interrupt backgrounded git commit commands, requiring a follow-up commit attempt for any remaining staged changes.",
+        "Checking commit state after a backgrounded command is necessary to determine which commits landed and which were cut off."
+      ]
+    },
+    "friction": [
+      "1Password signing prompt caused the docs commit to be cut off when the commit command was backgrounded, requiring a second commit attempt."
+    ],
+    "open_items": []
+  }
+}
