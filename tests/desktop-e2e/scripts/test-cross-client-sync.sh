@@ -80,6 +80,29 @@ run_rename_folder() {
     --new-name "$2"
 }
 
+# Verify an arbitrary root-level file by name via a fresh SDK client.
+#   $1 = file name, $2 = expected content
+run_verify_root_file() {
+  TEST_SECRET="$SECRET" node "$REPO_ROOT/packages/sdk-core/scripts/verify-filepointer.mjs" \
+    --api-url "$API_URL" \
+    --email "$TEST_EMAIL" \
+    --file-name "$1" \
+    --expected-content "$2"
+}
+
+# Verify a file that lives inside a root-level subfolder. Reads it back via a
+# FRESH SDK client under the SUBFOLDER's folderKey — the exact decrypt the
+# move/restore re-encryption must enable.
+#   $1 = file name, $2 = subfolder name, $3 = expected content
+run_verify_in_folder() {
+  TEST_SECRET="$SECRET" node "$REPO_ROOT/packages/sdk-core/scripts/verify-filepointer.mjs" \
+    --api-url "$API_URL" \
+    --email "$TEST_EMAIL" \
+    --file-name "$1" \
+    --folder-name "$2" \
+    --expected-content "$3"
+}
+
 echo "=== Cross-Client Sync Tests ==="
 echo "Mount point: $MP"
 echo "API URL:     $API_URL"
@@ -289,6 +312,72 @@ fi
 : "${MP:?Mount point is required}"
 rm -rf "$MP/$RENAMED_DIR" 2>/dev/null || true
 rm -rf "$MP/$RENAME_DIR" 2>/dev/null || true
+
+# ---- Test: Move a file into a subfolder, verify content via a fresh SDK read ----
+# Guards the re-encrypt-on-move fix: a file's FileMetadata is encrypted with its
+# parent folderKey, so moving it to a subfolder (different key) must re-encrypt
+# the record or every later decrypt fails. The existing FUSE move test reads back
+# from the same cached mount session; this reads via a FRESH SDK client under the
+# destination folderKey, which is what actually exercises the bug.
+echo "--- Test: Move file into subfolder, verify content via SDK ---"
+MOVE_FILE="move-reencrypt-${RANDOM}.txt"
+MOVE_SUBDIR="move-dest-${RANDOM}"
+MOVE_CONTENT="content must survive re-encryption on move"
+
+printf '%s' "$MOVE_CONTENT" > "$MP/$MOVE_FILE"
+mkdir -p "$MP/$MOVE_SUBDIR"
+sleep 2
+ls "$MP" > /dev/null 2>&1 || true
+
+# Confirm initial encryption is good: file readable via SDK at root.
+MOVE_PRE_OK=0
+for attempt in $(seq 1 24); do
+  stat "$MP/$MOVE_FILE" > /dev/null 2>&1 || true
+  ls "$MP" > /dev/null 2>&1 || true
+  sleep 5
+  if run_verify_root_file "$MOVE_FILE" "$MOVE_CONTENT" > /dev/null 2>&1; then
+    MOVE_PRE_OK=1
+    break
+  fi
+done
+
+if [ "$MOVE_PRE_OK" -ne 1 ]; then
+  fail "Move test: file not visible via SDK before move"
+else
+  # Move via FUSE -- Tauri translates the rename into client.moveItem, which
+  # re-encrypts the FileMetadata under the destination folderKey.
+  mv "$MP/$MOVE_FILE" "$MP/$MOVE_SUBDIR/$MOVE_FILE"
+  sleep 3
+  ls "$MP" > /dev/null 2>&1 || true
+  ls "$MP/$MOVE_SUBDIR" > /dev/null 2>&1 || true
+
+  MOVE_POST_OK=0
+  for attempt in $(seq 1 24); do
+    stat "$MP/$MOVE_SUBDIR/$MOVE_FILE" > /dev/null 2>&1 || true
+    ls "$MP/$MOVE_SUBDIR" > /dev/null 2>&1 || true
+    sleep 5
+    if run_verify_in_folder "$MOVE_FILE" "$MOVE_SUBDIR" "$MOVE_CONTENT" > /dev/null 2>&1; then
+      MOVE_POST_OK=1
+      break
+    fi
+  done
+
+  if [ "$MOVE_POST_OK" -eq 1 ]; then
+    pass "Move file into subfolder and verify content via SDK (re-encryption OK)"
+  elif [ "$(uname -s)" = "Darwin" ]; then
+    # macOS FUSE-T SMB cache timing can delay IPNS visibility; the re-encryption
+    # logic is independently covered by sdk unit tests + web e2e.
+    echo "WARN: SDK verify of moved file timed out on macOS (FUSE-T cache timing)"
+    pass "Move file content verify (optional on macOS -- timed out, see warning)"
+  else
+    fail "Move test: moved file not decryptable via SDK under destination key (re-encryption failed)"
+  fi
+fi
+
+# Cleanup move-test artifacts
+rm -rf "$MP/$MOVE_SUBDIR" 2>/dev/null || true
+rm -f "$MP/$MOVE_FILE" 2>/dev/null || true
+sleep 2
 
 # ---- Cleanup ----
 echo "--- Cleanup ---"

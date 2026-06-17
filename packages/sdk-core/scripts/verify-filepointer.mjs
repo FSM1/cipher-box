@@ -5,6 +5,7 @@ import {
   loadFolderMetadata,
   loadVaultKeyBlob,
 } from '../dist/index.mjs';
+import { unwrapKey, hexToBytes } from '../../crypto/dist/index.mjs';
 
 function parseArgs(argv) {
   const values = new Map();
@@ -36,7 +37,7 @@ function parseArgs(argv) {
 
   if (!apiUrl || !email || !fileName || !secret) {
     throw new Error(
-      'Usage: verify-filepointer.mjs --api-url <url> --email <email> --file-name <name> [--expected-content <text>] (requires TEST_SECRET env var)'
+      'Usage: verify-filepointer.mjs --api-url <url> --email <email> --file-name <name> [--folder-name <subfolder>] [--expected-content <text>] (requires TEST_SECRET env var)'
     );
   }
 
@@ -45,6 +46,9 @@ function parseArgs(argv) {
     secret,
     email,
     fileName,
+    // Optional: a single subfolder (at root level) to look in instead of root.
+    // Used to verify a file after it has been moved into a subfolder.
+    folderName: values.get('folder-name'),
     expectedContent: values.get('expected-content'),
   };
 }
@@ -107,7 +111,39 @@ async function main() {
     throw new Error(`Root folder metadata not found for ${rootIpnsName}`);
   }
 
-  const filePointer = folder.metadata.children.find(
+  // Resolve which folder to search in, and the folderKey the file's metadata is
+  // encrypted under. Default: root. With --folder-name, descend one level into
+  // that subfolder (its folderKey is ECIES-wrapped for the vault on its
+  // FolderEntry), so a file moved into a subfolder can be verified — and read
+  // back under the destination folderKey, which is exactly what the
+  // move/restore re-encryption must produce.
+  let searchChildren = folder.metadata.children;
+  let fileFolderKey = vaultKeyBlob.rootFolderKey;
+
+  if (args.folderName) {
+    const subEntry = folder.metadata.children.find(
+      (child) => child.type === 'folder' && child.name === args.folderName
+    );
+    if (!subEntry) {
+      throw new Error(`Subfolder not found at root: ${args.folderName}`);
+    }
+    const subFolderKey = await unwrapKey(
+      hexToBytes(subEntry.folderKeyEncrypted),
+      userPrivateKey
+    );
+    const subFolder = await loadFolderMetadata({
+      ipnsName: subEntry.ipnsName,
+      folderKey: subFolderKey,
+      ctx,
+    });
+    if (!subFolder) {
+      throw new Error(`Subfolder metadata not found for ${args.folderName}`);
+    }
+    searchChildren = subFolder.metadata.children;
+    fileFolderKey = subFolderKey;
+  }
+
+  const filePointer = searchChildren.find(
     (child) => child.type === 'file' && child.name === args.fileName
   );
 
@@ -121,7 +157,7 @@ async function main() {
 
   const { metadata, metadataCid } = await resolveFileMetadata(
     filePointer.fileMetaIpnsName,
-    vaultKeyBlob.rootFolderKey,
+    fileFolderKey,
     ctx
   );
 
