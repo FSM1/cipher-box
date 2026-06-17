@@ -247,9 +247,13 @@ describe('CipherBoxClient.moveItem — file metadata re-encryption', () => {
     // Ordering invariant: the destination must be published before the metadata is
     // re-keyed, so the file is never sealed under the destination key while only the
     // source still points at it.
+    // Tag each publish by its target folder so the assertion distinguishes the
+    // destination publish from the source publish — otherwise a wrong
+    // source → reencrypt → destination sequence would still satisfy a bare
+    // ['publish', 'reencrypt', 'publish'].
     const order: string[] = [];
-    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async () => {
-      order.push('publish');
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async (p) => {
+      order.push(p.ipnsName === DEST_IPNS ? 'publish:dest' : 'publish:source');
       return { cid: 'bafynew', newSequenceNumber: 2n, publishedChildren: [] };
     });
     vi.mocked(sdkCore.updateFileMetadata).mockImplementation(async () => {
@@ -265,7 +269,7 @@ describe('CipherBoxClient.moveItem — file metadata re-encryption', () => {
     await client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID);
 
     // publish (dest) → reencrypt → publish (source)
-    expect(order).toEqual(['publish', 'reencrypt', 'publish']);
+    expect(order).toEqual(['publish:dest', 'reencrypt', 'publish:source']);
   });
 
   // ── failure paths ──────────────────────────────────────────────────────────
