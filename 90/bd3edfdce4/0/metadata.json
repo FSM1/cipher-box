@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "90bd3edfdce4",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T21:12:34.985177Z",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/desktop-e2e/scripts/test-cross-client-sync.sh"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "93068d95f975",
+  "checkpoint_transcript_start": 1998,
+  "transcript_lines_at_start": 1998,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 1944,
+    "cache_read_tokens": 732875,
+    "output_tokens": 1778,
+    "api_call_count": 3
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Land a lint fix commit and a Rust (FUSE + WinFsp + core) fix along with a unified cross-platform test, all signed.",
+    "outcome": "Lint commit was verified as landed and signed; Rust changes and the unified cross-platform test were staged and committed (signed).",
+    "learnings": {
+      "repo": [
+        "The project uses signed commits (GPG or SSH signing) as a standard practice.",
+        "Cross-platform sync testing is covered by a shell script under tests/desktop-e2e/scripts/."
+      ],
+      "code": [
+        {
+          "path": "tests/desktop-e2e/scripts/test-cross-client-sync.sh",
+          "finding": "This script implements the unified cross-platform client sync test introduced in this session."
+        }
+      ],
+      "workflow": [
+        "Commits were staged and created in discrete steps (lint fix first, then Rust + test), keeping the history bisectable.",
+        "Signing was verified explicitly after each commit rather than assumed."
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T21:12:27.815486Z",
+    "agent_lines": 2,
+    "agent_removed": 88,
+    "human_added": 479,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 481,
+    "total_lines_changed": 569,
+    "agent_percentage": 15.817223198594025,
+    "metric_version": 2
+  }
+}
