@@ -92,7 +92,16 @@ function verify({ fileName, folderName, content }) {
   const result = spawnSync(process.execPath, cliArgs, {
     env: { ...process.env, TEST_SECRET: secret },
     encoding: 'utf8',
+    // Bound the child: a stalled verify must not hang the whole suite — pollVerify
+    // cannot recover from a blocking spawnSync. A timeout returns a non-zero status
+    // so the poll loop treats it as a failed attempt and retries.
+    timeout: 60_000,
+    maxBuffer: 1024 * 1024,
   });
+  if (result.error) {
+    console.error(`verify-filepointer failed to execute: ${result.error.message}`);
+    return false;
+  }
   return result.status === 0;
 }
 
