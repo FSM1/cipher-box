@@ -274,6 +274,13 @@ export async function addToBin(params: {
 
   // 4. Build bin entry
   const isFile = removedItem.type === 'file';
+  // Capture the source folder's folderKey (the key the file's FileMetadata is
+  // encrypted under) wrapped for the vault, so restore can re-encrypt to any
+  // destination later even if this parent folder is gone by then. Files only —
+  // a restored folder carries its own folderKey in its FolderEntry.
+  const originalFolderKeyEncrypted = isFile
+    ? bytesToHex(await wrapKey(folder.folderKey, params.binCtx.userPublicKey))
+    : undefined;
   const entry: BinEntry = {
     id: crypto.randomUUID(),
     itemType: isFile ? 'file' : 'folder',
@@ -285,6 +292,7 @@ export async function addToBin(params: {
     mimeType: '',
     filePointer: isFile ? (removedItem as FilePointer) : undefined,
     folderEntry: !isFile ? (removedItem as FolderEntry) : undefined,
+    originalFolderKeyEncrypted,
   };
 
   // 5. Update bin metadata and publish
@@ -366,11 +374,24 @@ export async function restoreFromBin(params: {
     entry.filePointer &&
     params.targetFolderIpnsName !== entry.originalParentIpnsName
   ) {
-    const sourceFolder = params.folderTree.get(entry.originalParentIpnsName);
-    if (!sourceFolder) {
-      throw new Error(
-        'Original parent folder must be loaded to restore a file to a different folder'
+    // Source key = the folderKey the FileMetadata is currently encrypted under.
+    // Prefer the key captured on the entry at delete time (works even if the
+    // original parent no longer exists); fall back to the live folder tree for
+    // legacy entries created before originalFolderKeyEncrypted was captured.
+    let sourceFolderKey: Uint8Array;
+    if (entry.originalFolderKeyEncrypted) {
+      sourceFolderKey = await unwrapKey(
+        hexToBytes(entry.originalFolderKeyEncrypted),
+        params.binCtx.userPrivateKey
       );
+    } else {
+      const sourceFolder = params.folderTree.get(entry.originalParentIpnsName);
+      if (!sourceFolder) {
+        throw new Error(
+          'Original parent folder must be loaded to restore a legacy file to a different folder'
+        );
+      }
+      sourceFolderKey = sourceFolder.folderKey;
     }
     if (!entry.filePointer.ipnsPrivateKeyEncrypted) {
       throw new Error('Cannot re-encrypt file metadata on restore: missing file IPNS key');
@@ -381,7 +402,7 @@ export async function restoreFromBin(params: {
     );
     const { metadata: currentMetadata } = await sdkCore.resolveFileMetadata(
       entry.filePointer.fileMetaIpnsName,
-      sourceFolder.folderKey,
+      sourceFolderKey,
       params.binCtx.ctx
     );
     await sdkCore.updateFileMetadata({

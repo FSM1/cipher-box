@@ -46,6 +46,17 @@ export type BinEntry = {
   filePointer?: FilePointer;
   /** For folders: the preserved FolderEntry from parent folder metadata */
   folderEntry?: FolderEntry;
+  /**
+   * For files: the original parent folder's folderKey, ECIES-wrapped for the
+   * vault public key, captured at soft-delete time. A file's FileMetadata is
+   * AES-256-GCM encrypted with this key; restoring to a folder with a different
+   * folderKey must re-encrypt the record (otherwise it becomes undecryptable).
+   * Captured here so restore can re-encrypt to ANY destination without needing
+   * the original parent to still exist in the folder tree. Hex-encoded.
+   * Optional for backward compatibility: entries created before this field
+   * fall back to resolving the original parent's key from the live folder tree.
+   */
+  originalFolderKeyEncrypted?: string;
 };
 
 /**

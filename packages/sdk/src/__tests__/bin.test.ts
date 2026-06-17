@@ -40,6 +40,7 @@ vi.mock('@cipherbox/crypto', () => ({
 }));
 
 import * as sdkCore from '@cipherbox/sdk-core';
+import { unwrapKey } from '@cipherbox/crypto';
 
 const binCtx: BinOperationContext = {
   ctx: { apiUrl: 'http://localhost:3000', getAccessToken: async () => 'token' },
@@ -437,7 +438,81 @@ describe('bin operations', () => {
       expect(arg.createVersion).toBe(false);
     });
 
-    it('throws when restoring to a different folder but the original parent is not loaded', async () => {
+    it('re-encrypts using the captured original folder key when the original parent is gone (delete file, delete parent, restore elsewhere)', async () => {
+      // User scenario: delete ~/a/b/c.txt, then delete ~/a/b/, then restore
+      // c.txt to a different existing folder. The original parent (b) is no
+      // longer in the folder tree, but its folderKey was captured on the entry
+      // at delete time, so re-encryption still succeeds.
+      const targetKey = new Uint8Array(32).fill(0x22);
+      const folderTree = new FolderTree();
+      // Only the target is loaded — the original parent 'b' is NOT in the tree.
+      folderTree.set('target-ipns', {
+        ipnsName: 'target-ipns',
+        folderKey: targetKey,
+        ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
+        sequenceNumber: 1n,
+        children: [],
+        metadata: null,
+        lastLoadedAt: Date.now(),
+      });
+
+      vi.mocked(sdkCore.resolveFileMetadata).mockResolvedValue({
+        metadata: { version: 'v1', name: 'c.txt' },
+      } as never);
+      vi.mocked(sdkCore.updateFileMetadata).mockResolvedValue({} as never);
+      vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+        cid: 'bafynew',
+        newSequenceNumber: 2n,
+        publishedChildren: [],
+      });
+
+      const binState: BinState = {
+        entries: [
+          {
+            id: 'e1',
+            itemType: 'file',
+            name: 'c.txt',
+            originalParentIpnsName: 'b-ipns-deleted',
+            originalPath: '/a/b',
+            deletedAt: 0,
+            size: 0,
+            mimeType: '',
+            originalFolderKeyEncrypted: 'cafe'.repeat(16),
+            filePointer: {
+              type: 'file',
+              id: 'f1',
+              name: 'c.txt',
+              fileMetaIpnsName: 'k51f',
+              ipnsPrivateKeyEncrypted: 'abc',
+              createdAt: 0,
+              modifiedAt: 0,
+            },
+          },
+        ],
+        sequenceNumber: 1,
+        ipnsName: 'k51bin',
+      };
+
+      // Must NOT throw despite the original parent being absent from the tree.
+      await restoreFromBin({
+        entryId: 'e1',
+        targetFolderIpnsName: 'target-ipns',
+        folderTree,
+        binState,
+        binCtx,
+      });
+
+      // Re-encryption ran: read the existing record, re-publish under the target key.
+      expect(sdkCore.resolveFileMetadata).toHaveBeenCalledTimes(1);
+      expect(sdkCore.updateFileMetadata).toHaveBeenCalledTimes(1);
+      const arg = vi.mocked(sdkCore.updateFileMetadata).mock.calls[0][0];
+      expect(arg.folderKey).toEqual(targetKey);
+      expect(arg.createVersion).toBe(false);
+      // The captured key was unwrapped (folder key + file IPNS key = 2 unwraps).
+      expect(unwrapKey).toHaveBeenCalledTimes(2);
+    });
+
+    it('throws when restoring a legacy entry (no captured key) to a different folder while the original parent is not loaded', async () => {
       const folderTree = new FolderTree();
       folderTree.set('target-ipns', {
         ipnsName: 'target-ipns',
