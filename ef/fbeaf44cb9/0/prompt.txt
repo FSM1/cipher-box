@@ -91,3 +91,11 @@ yes please dispatch a CI web e2e run against the branch
 ... (truncated 10309 chars, full result in /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/w7kteyl6c.output)</result>
 <usage><agent_count>5</agent_count><subagent_tokens>239521</subagent_tokens><tool_uses>120</tool_uses><duration_ms>250678</duration_ms></usage>
 </task-notification>
+
+---
+
+please launch the ci-e2e run against this branch
+
+---
+
+does the desktop delete handler record the original folder key when deleting items from desktop?
