@@ -712,16 +712,34 @@ export class CipherBoxClient {
         childId,
       });
 
-      // 1a. If the moved item is a file, re-encrypt its FileMetadata IPNS record
-      //     from source.folderKey to dest.folderKey.
+      // 2. Publish destination first (add-before-remove for crash safety): the
+      //    file is listed in BOTH folders during the transition, never orphaned.
+      const destResult = await sdkCore.updateFolderMetadataAndPublish({
+        children: updatedDestChildren,
+        baseChildren: baseDestChildren,
+        folderKey: dest.folderKey,
+        ipnsPrivateKey: dest.ipnsKeypair.privateKey,
+        ipnsName: destIpnsName,
+        sequenceNumber: dest.sequenceNumber,
+        ctx: this.ctx,
+      });
+
+      // 3. If the moved item is a file, re-encrypt its FileMetadata IPNS record
+      //    from source.folderKey to dest.folderKey. FileMetadata is AES-256-GCM
+      //    encrypted with the parent folder key; the decrypt path uses the key of
+      //    whichever folder lists the pointer.
       //
-      //     FileMetadata is AES-256-GCM encrypted with the parent folder key at
-      //     creation time.  After the move the decrypt path supplies dest.folderKey;
-      //     without re-encryption every subsequent download/preview fails.
+      //    Done AFTER the destination publish, not before: the metadata is only
+      //    re-keyed once the destination is durably visible, so at every
+      //    intermediate failure the file stays readable from a folder that still
+      //    lists it under the matching key — from the source before this step,
+      //    from the destination after it — never readable from neither. (If it
+      //    ran first, a failed destination publish would strand the file under the
+      //    destination key while only the source still pointed at it.)
       //
-      //     A finally guards the key: updateFileMetadata (sdk-core) zeroes it on
-      //     its own path (T-47-01), but resolveFileMetadata could throw first and
-      //     leave the unwrapped key in memory.
+      //    A finally guards the key: updateFileMetadata (sdk-core) zeroes it on
+      //    its own path (T-47-01), but resolveFileMetadata could throw first and
+      //    leave the unwrapped key in memory.
       if (movedItem.type === 'file') {
         const filePointer = movedItem as FilePointer;
         if (!filePointer.ipnsPrivateKeyEncrypted) {
@@ -751,18 +769,8 @@ export class CipherBoxClient {
         }
       }
 
-      // 2. Publish destination first (add-before-remove for crash safety)
-      const destResult = await sdkCore.updateFolderMetadataAndPublish({
-        children: updatedDestChildren,
-        baseChildren: baseDestChildren,
-        folderKey: dest.folderKey,
-        ipnsPrivateKey: dest.ipnsKeypair.privateKey,
-        ipnsName: destIpnsName,
-        sequenceNumber: dest.sequenceNumber,
-        ctx: this.ctx,
-      });
-
-      // 3. Publish source (remove)
+      // 4. Publish source (remove). The move is now complete: the pointer lives
+      //    only in the destination and its metadata is under the destination key.
       const sourceResult = await sdkCore.updateFolderMetadataAndPublish({
         children: updatedSourceChildren,
         baseChildren: baseSourceChildren,
@@ -773,7 +781,7 @@ export class CipherBoxClient {
         ctx: this.ctx,
       });
 
-      // 4. Update internal state — adopt merged published sets (CR-01)
+      // 5. Update internal state — adopt merged published sets (CR-01)
       source.children = sourceResult.publishedChildren;
       source.sequenceNumber = sourceResult.newSequenceNumber;
       dest.children = destResult.publishedChildren;
@@ -781,7 +789,7 @@ export class CipherBoxClient {
       this.folderTree.set(sourceIpnsName, source);
       this.folderTree.set(destIpnsName, dest);
 
-      // 5. Emit events for both folders
+      // 6. Emit events for both folders
       this.emitter.emit({
         type: 'folder:updated',
         folderId: sourceIpnsName,

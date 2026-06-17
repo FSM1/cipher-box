@@ -243,62 +243,89 @@ describe('CipherBoxClient.moveItem — file metadata re-encryption', () => {
     expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
   });
 
+  it('re-encrypts AFTER publishing the destination, not before', async () => {
+    // Ordering invariant: the destination must be published before the metadata is
+    // re-keyed, so the file is never sealed under the destination key while only the
+    // source still points at it.
+    const order: string[] = [];
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async () => {
+      order.push('publish');
+      return { cid: 'bafynew', newSequenceNumber: 2n, publishedChildren: [] };
+    });
+    vi.mocked(sdkCore.updateFileMetadata).mockImplementation(async () => {
+      order.push('reencrypt');
+      return {
+        ipnsName: FILE_META_IPNS,
+        metadataCid: 'bafymeta2',
+        newSequenceNumber: 2n,
+        prunedCids: [],
+      };
+    });
+
+    await client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID);
+
+    // publish (dest) → reencrypt → publish (source)
+    expect(order).toEqual(['publish', 'reencrypt', 'publish']);
+  });
+
   // ── failure paths ──────────────────────────────────────────────────────────
-  // The re-encryption runs BEFORE either folder publish, so a failure in it
-  // aborts the move cleanly with no folder mutation. These pin that behavior.
+  // Order is: publish dest → re-encrypt → publish source. At every failure point
+  // the file stays readable from a folder that still lists it under the matching
+  // key, and the move rejects without advancing internal state.
 
-  it('rejects with no folder publish when unwrapKey fails (corrupted file IPNS key)', async () => {
-    vi.mocked(unwrapKey).mockRejectedValueOnce(new Error('bad key'));
-
-    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
-
-    expect(sdkCore.resolveFileMetadata).not.toHaveBeenCalled();
-    expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
-    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
-    // Folder state untouched: pointer still in source, dest still empty.
-    expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
-    expect(client.getFolderTree().get(DEST_IPNS)!.children).toHaveLength(0);
-  });
-
-  it('rejects with no folder publish when resolveFileMetadata fails (source key cannot decrypt)', async () => {
-    vi.mocked(sdkCore.resolveFileMetadata).mockRejectedValueOnce(new Error('Decryption failed'));
-
-    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
-
-    expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
-    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
-    expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
-  });
-
-  it('rejects with no folder publish when updateFileMetadata fails (IPNS publish error)', async () => {
-    vi.mocked(sdkCore.updateFileMetadata).mockRejectedValueOnce(new Error('publish failed'));
-
-    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
-
-    // Re-encrypt failed → no folder mutation, fully recoverable by retry.
-    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
-    expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
-    expect(client.getFolderTree().get(DEST_IPNS)!.children).toHaveLength(0);
-  });
-
-  it('pins the re-encrypt/publish atomicity gap when the destination publish fails after re-encryption', async () => {
-    // updateFileMetadata succeeds (metadata is now sealed under the DEST key) but
-    // the destination folder publish then throws. The move rejects, yet the file's
-    // FileMetadata has ALREADY been re-keyed to the destination while its
-    // FilePointer is still only in the source folder — a known non-atomic window
-    // across two independent IPNS records. This test documents current behavior; it
-    // does not assert recovery (none exists yet).
+  it('aborts cleanly when the destination publish fails (re-encrypt never runs)', async () => {
     vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockRejectedValueOnce(
       new Error('dest publish failed')
     );
 
     await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
 
-    expect(sdkCore.updateFileMetadata).toHaveBeenCalledTimes(1); // re-encryption happened
-    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1); // dest attempted, failed
-    // Source still holds the pointer: the move did not complete and internal
-    // state was not advanced.
+    // Best case: nothing was re-keyed; the file is untouched and fully readable
+    // from the source, retry is clean.
+    expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
     expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
     expect(client.getFolderTree().get(DEST_IPNS)!.children).toHaveLength(0);
+  });
+
+  it('rejects after the destination publish when unwrapKey fails (file still readable from source)', async () => {
+    vi.mocked(unwrapKey).mockRejectedValueOnce(new Error('bad key'));
+
+    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
+
+    // Dest was published, re-encrypt aborted before touching the metadata, source
+    // not yet removed → metadata still under the source key, source still lists it.
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
+    expect(sdkCore.resolveFileMetadata).not.toHaveBeenCalled();
+    expect(sdkCore.updateFileMetadata).not.toHaveBeenCalled();
+    expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
+  });
+
+  it('rejects after the destination publish when updateFileMetadata fails (file still readable from source)', async () => {
+    vi.mocked(sdkCore.updateFileMetadata).mockRejectedValueOnce(new Error('publish failed'));
+
+    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
+
+    // Dest published, re-encrypt failed, source publish never reached → metadata
+    // still under the source key (re-encrypt did not commit), source still lists it.
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
+    expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
+  });
+
+  it('rejects when the source publish fails after re-encryption (file readable from destination)', async () => {
+    // Dest publish (call 1) succeeds, source publish (call 2) fails.
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish)
+      .mockResolvedValueOnce({ cid: 'bafydest', newSequenceNumber: 2n, publishedChildren: [] })
+      .mockRejectedValueOnce(new Error('source publish failed'));
+
+    await expect(client.moveItem(SRC_IPNS, DEST_IPNS, FILE_ID)).rejects.toThrow();
+
+    // Worst remaining case is benign: the metadata is re-keyed to the destination
+    // and the destination lists the file → readable from the destination. Only the
+    // stale source pointer is broken, and a retry of the source publish completes it.
+    expect(sdkCore.updateFileMetadata).toHaveBeenCalledTimes(1);
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(2);
+    // Internal state not advanced (move did not fully complete).
+    expect(client.getFolderTree().get(SRC_IPNS)!.children).toHaveLength(1);
   });
 });
