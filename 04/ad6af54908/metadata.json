@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "04ad6af54908",
+  "strategy": "manual-commit",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/04/ad6af54908/0/metadata.json",
+      "transcript": "/04/ad6af54908/0/full.jsonl",
+      "content_hash": "/04/ad6af54908/0/content_hash.txt",
+      "prompt": "/04/ad6af54908/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 422,
+    "cache_creation_tokens": 26208,
+    "cache_read_tokens": 5148186,
+    "output_tokens": 16876,
+    "api_call_count": 18
+  }
+}
