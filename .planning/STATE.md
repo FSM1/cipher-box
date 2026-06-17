@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Executing Phase 48
-last_updated: "2026-06-16T14:54:01.839Z"
-last_activity: 2026-06-16
+status: Phase 48 complete — milestone v1.1 ready to complete
+last_updated: "2026-06-17T13:20:10.000Z"
+last_activity: 2026-06-17
 progress:
   total_phases: 33
-  completed_phases: 31
+  completed_phases: 33
   total_plans: 146
-  completed_plans: 140
-  percent: 94
+  completed_plans: 146
+  percent: 100
 ---
 
 # Project State
@@ -20,13 +20,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 48 — sdk-self-bootstrap-regression-fix-and-shared-folder-metadata
+**Current focus:** Milestone v1.1 complete (33/33 phases) — ready for /gsd-complete-milestone
 
 ## Current Position
 
-Phase: 48 (sdk-self-bootstrap-regression-fix-and-shared-folder-metadata) — EXECUTING
-Plan: 48-03 (REQ-3 SDK) + 48-04 (REQ-3 web) + 48-05 (REQ-4 API) + 48-06 (REQ-4 web) complete; 48-02 (REQ-2) remains. UATs deferred to end-of-phase web-e2e: 48-04 Task 4 (shared-write), 48-06 Task 3 (itemName-at-rest ciphertext + display). 48-06 raised an API gap: no update endpoint accepts itemNameEncrypted, so the legacy lazy-backfill persist (A2) is blocked pending a follow-up API plan.
-Phases 18-45 complete; 46-47 added 2026-06-15 from grouped desktop + SDK todos. Phase 46 Linux remount-after-SIGKILL UAT passed 2026-06-15 — fully verified, no open items.
+Phase: 48 (sdk-self-bootstrap-regression-fix-and-shared-folder-metadata) — COMPLETE
+Plan: all 7 plans complete with summaries (48-01..48-07). 48-VERIFICATION.md written 2026-06-17 (3.5/4 → 4/4): REQ-1/2/3 ACHIEVED; REQ-4 (share itemName at rest) completed by the lazy-backfill API gap fix — added PATCH /shares/:shareId/item-name (sharer-only, server stores client ciphertext as-is) and re-enabled backfillSentShareItemNames in the web share service (branch feat/share-itemname-lazy-backfill). web-e2e + two-party shared-write/itemName UATs remain for live-environment human verification.
+Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolidation, PR #494) complete — its 5 SUMMARY.md files were backfilled 2026-06-17 (had shipped but were never written, which had tripped a false-positive resume gate).
 
 ## Performance Metrics
 
