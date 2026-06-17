@@ -37,6 +37,7 @@ vi.mock('@cipherbox/crypto', () => ({
   hexToBytes: vi.fn().mockReturnValue(new Uint8Array(32)),
   wrapKey: vi.fn().mockResolvedValue(new Uint8Array([0xaa])),
   unwrapKey: vi.fn().mockResolvedValue(new Uint8Array(64).fill(7)),
+  clearBytes: vi.fn((arr: Uint8Array) => arr.fill(0)),
 }));
 
 import * as sdkCore from '@cipherbox/sdk-core';

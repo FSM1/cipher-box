@@ -719,7 +719,9 @@ export class CipherBoxClient {
       //     creation time.  After the move the decrypt path supplies dest.folderKey;
       //     without re-encryption every subsequent download/preview fails.
       //
-      //     updateFileMetadata (sdk-core) owns zeroing fileIpnsPrivateKey (T-47-01).
+      //     A finally guards the key: updateFileMetadata (sdk-core) zeroes it on
+      //     its own path (T-47-01), but resolveFileMetadata could throw first and
+      //     leave the unwrapped key in memory.
       if (movedItem.type === 'file') {
         const filePointer = movedItem as FilePointer;
         if (!filePointer.ipnsPrivateKeyEncrypted) {
@@ -729,20 +731,24 @@ export class CipherBoxClient {
           hexToBytes(filePointer.ipnsPrivateKeyEncrypted),
           this.config.vaultKeypair.privateKey
         );
-        const { metadata: currentMetadata } = await sdkCore.resolveFileMetadata(
-          filePointer.fileMetaIpnsName,
-          source.folderKey,
-          this.ctx
-        );
-        await sdkCore.updateFileMetadata({
-          fileIpnsPrivateKey,
-          fileMetaIpnsName: filePointer.fileMetaIpnsName,
-          folderKey: dest.folderKey,
-          currentMetadata,
-          updates: {},
-          createVersion: false,
-          ctx: this.ctx,
-        });
+        try {
+          const { metadata: currentMetadata } = await sdkCore.resolveFileMetadata(
+            filePointer.fileMetaIpnsName,
+            source.folderKey,
+            this.ctx
+          );
+          await sdkCore.updateFileMetadata({
+            fileIpnsPrivateKey,
+            fileMetaIpnsName: filePointer.fileMetaIpnsName,
+            folderKey: dest.folderKey,
+            currentMetadata,
+            updates: {},
+            createVersion: false,
+            ctx: this.ctx,
+          });
+        } finally {
+          clearBytes(fileIpnsPrivateKey);
+        }
       }
 
       // 2. Publish destination first (add-before-remove for crash safety)

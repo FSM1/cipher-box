@@ -26,7 +26,7 @@ import {
   type FilePointer,
   type FolderEntry,
 } from '@cipherbox/core';
-import { bytesToHex, hexToBytes, unwrapKey, wrapKey } from '@cipherbox/crypto';
+import { bytesToHex, clearBytes, hexToBytes, unwrapKey, wrapKey } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
 
 /** Current bin metadata version. */
@@ -255,6 +255,18 @@ export async function addToBin(params: {
     childId: params.childId,
   });
 
+  // Capture the source folder's folderKey (the key the file's FileMetadata is
+  // encrypted under) wrapped for the vault, so restore can re-encrypt to any
+  // destination later even if this parent folder is gone by then. Files only —
+  // a restored folder carries its own folderKey in its FolderEntry. Computed
+  // BEFORE the publish so a wrapKey failure aborts before any folder/bin
+  // mutation, avoiding a split state where the file is removed from the folder
+  // but never recorded in the bin.
+  const isFile = removedItem.type === 'file';
+  const originalFolderKeyEncrypted = isFile
+    ? bytesToHex(await wrapKey(folder.folderKey, params.binCtx.userPublicKey))
+    : undefined;
+
   // 2. Publish updated folder metadata
   const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedChildren,
@@ -272,15 +284,8 @@ export async function addToBin(params: {
   folder.lastLoadedAt = Date.now();
   params.folderTree.set(params.folderIpnsName, folder);
 
-  // 4. Build bin entry
-  const isFile = removedItem.type === 'file';
-  // Capture the source folder's folderKey (the key the file's FileMetadata is
-  // encrypted under) wrapped for the vault, so restore can re-encrypt to any
-  // destination later even if this parent folder is gone by then. Files only —
-  // a restored folder carries its own folderKey in its FolderEntry.
-  const originalFolderKeyEncrypted = isFile
-    ? bytesToHex(await wrapKey(folder.folderKey, params.binCtx.userPublicKey))
-    : undefined;
+  // 4. Build bin entry (isFile / originalFolderKeyEncrypted computed above,
+  //    before the publish).
   const entry: BinEntry = {
     id: crypto.randomUUID(),
     itemType: isFile ? 'file' : 'folder',
@@ -374,46 +379,57 @@ export async function restoreFromBin(params: {
     entry.filePointer &&
     params.targetFolderIpnsName !== entry.originalParentIpnsName
   ) {
-    // Source key = the folderKey the FileMetadata is currently encrypted under.
-    // Prefer the key captured on the entry at delete time (works even if the
-    // original parent no longer exists); fall back to the live folder tree for
-    // legacy entries created before originalFolderKeyEncrypted was captured.
-    let sourceFolderKey: Uint8Array;
-    if (entry.originalFolderKeyEncrypted) {
-      sourceFolderKey = await unwrapKey(
-        hexToBytes(entry.originalFolderKeyEncrypted),
+    // Unwrapped key material is cleared in `finally`. Only the freshly
+    // unwrapped source key is zeroed — never the shared folderTree key from the
+    // legacy fallback, which the tree still owns.
+    let unwrappedSourceFolderKey: Uint8Array | undefined;
+    let fileIpnsPrivateKey: Uint8Array | undefined;
+    try {
+      // Source key = the folderKey the FileMetadata is currently encrypted under.
+      // Prefer the key captured on the entry at delete time (works even if the
+      // original parent no longer exists); fall back to the live folder tree for
+      // legacy entries created before originalFolderKeyEncrypted was captured.
+      let sourceFolderKey: Uint8Array;
+      if (entry.originalFolderKeyEncrypted) {
+        unwrappedSourceFolderKey = await unwrapKey(
+          hexToBytes(entry.originalFolderKeyEncrypted),
+          params.binCtx.userPrivateKey
+        );
+        sourceFolderKey = unwrappedSourceFolderKey;
+      } else {
+        const sourceFolder = params.folderTree.get(entry.originalParentIpnsName);
+        if (!sourceFolder) {
+          throw new Error(
+            'Original parent folder must be loaded to restore a legacy file to a different folder'
+          );
+        }
+        sourceFolderKey = sourceFolder.folderKey;
+      }
+      if (!entry.filePointer.ipnsPrivateKeyEncrypted) {
+        throw new Error('Cannot re-encrypt file metadata on restore: missing file IPNS key');
+      }
+      fileIpnsPrivateKey = await unwrapKey(
+        hexToBytes(entry.filePointer.ipnsPrivateKeyEncrypted),
         params.binCtx.userPrivateKey
       );
-    } else {
-      const sourceFolder = params.folderTree.get(entry.originalParentIpnsName);
-      if (!sourceFolder) {
-        throw new Error(
-          'Original parent folder must be loaded to restore a legacy file to a different folder'
-        );
-      }
-      sourceFolderKey = sourceFolder.folderKey;
+      const { metadata: currentMetadata } = await sdkCore.resolveFileMetadata(
+        entry.filePointer.fileMetaIpnsName,
+        sourceFolderKey,
+        params.binCtx.ctx
+      );
+      await sdkCore.updateFileMetadata({
+        fileIpnsPrivateKey,
+        fileMetaIpnsName: entry.filePointer.fileMetaIpnsName,
+        folderKey: targetFolder.folderKey,
+        currentMetadata,
+        updates: {},
+        createVersion: false,
+        ctx: params.binCtx.ctx,
+      });
+    } finally {
+      if (unwrappedSourceFolderKey) clearBytes(unwrappedSourceFolderKey);
+      if (fileIpnsPrivateKey) clearBytes(fileIpnsPrivateKey);
     }
-    if (!entry.filePointer.ipnsPrivateKeyEncrypted) {
-      throw new Error('Cannot re-encrypt file metadata on restore: missing file IPNS key');
-    }
-    const fileIpnsPrivateKey = await unwrapKey(
-      hexToBytes(entry.filePointer.ipnsPrivateKeyEncrypted),
-      params.binCtx.userPrivateKey
-    );
-    const { metadata: currentMetadata } = await sdkCore.resolveFileMetadata(
-      entry.filePointer.fileMetaIpnsName,
-      sourceFolderKey,
-      params.binCtx.ctx
-    );
-    await sdkCore.updateFileMetadata({
-      fileIpnsPrivateKey,
-      fileMetaIpnsName: entry.filePointer.fileMetaIpnsName,
-      folderKey: targetFolder.folderKey,
-      currentMetadata,
-      updates: {},
-      createVersion: false,
-      ctx: params.binCtx.ctx,
-    });
   }
 
   const baseChildren = [...targetFolder.children];
