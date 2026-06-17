@@ -3,7 +3,7 @@
   "checkpoint_id": "027e67269db2",
   "strategy": "manual-commit",
   "branch": "feat/share-itemname-lazy-backfill",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": null,
   "sessions": [
     {
@@ -14,10 +14,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 5647,
-    "cache_creation_tokens": 165654,
-    "cache_read_tokens": 1363543,
-    "output_tokens": 14259,
-    "api_call_count": 9
+    "input_tokens": 65000,
+    "cache_creation_tokens": 451118,
+    "cache_read_tokens": 9754281,
+    "output_tokens": 52814,
+    "api_call_count": 83
   }
 }
