@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "6f1555823b1f",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T23:18:27.776197Z",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/todos/completed/2026-06-17-move-restore-reencrypt-partial-failure-recovery.md",
+    ".planning/todos/pending/2026-06-17-move-restore-reencrypt-partial-failure-recovery.md",
+    "crates/fuse/src/lib.rs",
+    "packages/sdk/src/__tests__/bin.test.ts",
+    "packages/sdk/src/__tests__/client-move-reencrypt.test.ts",
+    "packages/sdk/src/bin/index.ts",
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/reencrypt.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "7760cda32ad4",
+  "token_usage": {
+    "input_tokens": 154086,
+    "cache_creation_tokens": 1795082,
+    "cache_read_tokens": 133201406,
+    "output_tokens": 631258,
+    "api_call_count": 494
+  },
+  "session_metrics": {
+    "turn_count": 26
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T23:17:05.338693Z",
+    "agent_lines": 678,
+    "agent_removed": 162,
+    "human_added": 107,
+    "human_modified": 9,
+    "human_removed": 0,
+    "total_committed": 794,
+    "total_lines_changed": 956,
+    "agent_percentage": 87.86610878661088,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 687,
+      "agent_lines_removed": 162,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}

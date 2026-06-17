@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "6f1555823b1f",
+  "strategy": "manual-commit",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/todos/completed/2026-06-17-move-restore-reencrypt-partial-failure-recovery.md",
+    ".planning/todos/pending/2026-06-17-move-restore-reencrypt-partial-failure-recovery.md",
+    "crates/fuse/src/lib.rs",
+    "packages/sdk/src/__tests__/bin.test.ts",
+    "packages/sdk/src/__tests__/client-move-reencrypt.test.ts",
+    "packages/sdk/src/bin/index.ts",
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/reencrypt.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6f/1555823b1f/0/metadata.json",
+      "transcript": "/6f/1555823b1f/0/full.jsonl",
+      "content_hash": "/6f/1555823b1f/0/content_hash.txt",
+      "prompt": "/6f/1555823b1f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 154086,
+    "cache_creation_tokens": 1795082,
+    "cache_read_tokens": 133201406,
+    "output_tokens": 631258,
+    "api_call_count": 494
+  }
+}
