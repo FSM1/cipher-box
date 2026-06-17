@@ -722,6 +722,9 @@ export class CipherBoxClient {
       //     updateFileMetadata (sdk-core) owns zeroing fileIpnsPrivateKey (T-47-01).
       if (movedItem.type === 'file') {
         const filePointer = movedItem as FilePointer;
+        if (!filePointer.ipnsPrivateKeyEncrypted) {
+          throw new Error('Cannot re-encrypt file metadata on move: missing file IPNS key');
+        }
         const fileIpnsPrivateKey = await unwrapKey(
           hexToBytes(filePointer.ipnsPrivateKeyEncrypted),
           this.config.vaultKeypair.privateKey

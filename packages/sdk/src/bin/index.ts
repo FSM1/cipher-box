@@ -26,7 +26,7 @@ import {
   type FilePointer,
   type FolderEntry,
 } from '@cipherbox/core';
-import { bytesToHex, hexToBytes, wrapKey } from '@cipherbox/crypto';
+import { bytesToHex, hexToBytes, unwrapKey, wrapKey } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
 
 /** Current bin metadata version. */
@@ -349,6 +349,50 @@ export async function restoreFromBin(params: {
       counter++;
     }
     child = { ...child, name: newName };
+  }
+
+  // 3b. Re-encrypt the file's FileMetadata IPNS record for the destination folder
+  // when restoring to a DIFFERENT folder than the original parent. The record is
+  // AES-256-GCM encrypted with the folderKey of wherever the file lived when
+  // deleted (entry.originalParentIpnsName); addToBin stores the FilePointer
+  // verbatim and never re-encrypts. Restoring to a folder with a different
+  // folderKey without re-encrypting would make the file undecryptable
+  // (CryptoError: Decryption failed) — the same class of bug as moveItem. When
+  // restoring in place (target === original parent, the default UI flow) the key
+  // is unchanged, so this is a no-op and we skip it. Run this BEFORE the folder
+  // publish so a failure aborts the restore with no partial state.
+  if (
+    entry.itemType === 'file' &&
+    entry.filePointer &&
+    params.targetFolderIpnsName !== entry.originalParentIpnsName
+  ) {
+    const sourceFolder = params.folderTree.get(entry.originalParentIpnsName);
+    if (!sourceFolder) {
+      throw new Error(
+        'Original parent folder must be loaded to restore a file to a different folder'
+      );
+    }
+    if (!entry.filePointer.ipnsPrivateKeyEncrypted) {
+      throw new Error('Cannot re-encrypt file metadata on restore: missing file IPNS key');
+    }
+    const fileIpnsPrivateKey = await unwrapKey(
+      hexToBytes(entry.filePointer.ipnsPrivateKeyEncrypted),
+      params.binCtx.userPrivateKey
+    );
+    const { metadata: currentMetadata } = await sdkCore.resolveFileMetadata(
+      entry.filePointer.fileMetaIpnsName,
+      sourceFolder.folderKey,
+      params.binCtx.ctx
+    );
+    await sdkCore.updateFileMetadata({
+      fileIpnsPrivateKey,
+      fileMetaIpnsName: entry.filePointer.fileMetaIpnsName,
+      folderKey: targetFolder.folderKey,
+      currentMetadata,
+      updates: {},
+      createVersion: false,
+      ctx: params.binCtx.ctx,
+    });
   }
 
   const baseChildren = [...targetFolder.children];
