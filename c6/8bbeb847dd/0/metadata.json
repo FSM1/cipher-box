@@ -1,0 +1,158 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "c68bbeb847dd",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T14:29:41.520755Z",
+  "branch": "feat/share-itemname-lazy-backfill",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/services/share.service.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "e2a21ee95fc6",
+  "token_usage": {
+    "input_tokens": 78020,
+    "cache_creation_tokens": 601451,
+    "cache_read_tokens": 32256272,
+    "output_tokens": 142691,
+    "api_call_count": 162
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Advance the cipher-box v1.1 milestone to completion: backfill missing Phase 47 summaries, write Phase 48 verification, implement and ship the share itemName lazy-backfill endpoint (REQ-4 gap), then write and run the two-party e2e spec that was incorrectly labeled human-only.",
+    "outcome": "All three bookkeeping gaps closed (Phase 47 summaries backfilled, Phase 48 VERIFICATION.md written, STATE.md at 100%), new `PATCH /shares/:shareId/item-name` endpoint fully implemented and tested (171 API + 48 web unit tests passing), e2e spec written with all 7 steps passing locally, PR #505 created with CI dispatched, and a CodeRabbit plaintext-bytes-not-zeroed finding fixed.",
+    "learnings": {
+      "repo": [
+        "GSD's resume-incomplete-phase gate fires false positives when SUMMARY.md files were never written but the phase genuinely shipped — must verify against git history before re-executing",
+        "web's createShare() always sends itemNameEncrypted ciphertext (share.service.ts:251-258), so legacy NULL rows can only be created by POSTing /shares directly (bypassing the UI), because itemNameEncrypted is @IsOptional at the API layer",
+        "backfillSentShareItemNames is void/fire-and-forget and only reachable via fetchAllSentShares → getCoveringShares → reWrapNewItems → uploadFile; no 'sent shares list' UI page triggers it, so the only deterministic e2e trigger is an owner file upload",
+        "getCoveringShares fires unconditionally (not gated on share count) when items are added to a folder, meaning any uploadFile call triggers backfill over all sent shares",
+        "ensureFreshSentShares has a 30s cache; a cold-cache upload is needed to guarantee backfill fires in tests",
+        "shouldBackfill skips rows where itemNameEncrypted is already set — the method is idempotent by design",
+        "Codebase convention: explicit inline per-method sharer-only guards rather than a shared helper; all 6 sharer-only service methods duplicate the guard verbatim",
+        "Hex validation copy-paste (rather than a shared validator) is the established pattern for DTO fields across the shares module",
+        "Codebase enforces zeroing plaintext bytes after encryption operations — CodeRabbit flagged an omission in the new backfill code",
+        "After `gh pr create`, the release bot pushes a chore(release) commit to the branch, requiring a fetch+rebase before any subsequent push",
+        "web-e2e CI only triggers on main-push (workflow_dispatch/workflow_call), not on pull_request events — new specs do not gate PRs automatically",
+        "GET /shares/sent returns itemNameEncrypted as hex or null, making it a usable proxy for at-rest ciphertext assertion without a direct Postgres connection",
+        "CodeRabbit posts actionable feedback as 'outside diff range' comments embedded in the review body, not as resolvable inline threads — requires reading the full review body via the REST reviews API, not the GraphQL reviewThreads query",
+        "The recipient-display assertion for decrypted itemName is insufficient alone — the fallback to plaintext on decrypt failure means a broken ciphertext still shows the right name; must pair with the GET /shares/sent hex-not-plaintext check"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 155,
+          "end_line": 155,
+          "finding": "getCoveringShares is called unconditionally before the length check on every reWrapNewItems invocation — any uploadFile triggers a full backfill pass over all sent shares"
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "line": 91,
+          "end_line": 91,
+          "finding": "itemNameEncrypted is @IsOptional, so POSTing /shares without it is valid and produces a NULL item_name_encrypted row — the only way to seed legacy shares since the web UI always sends ciphertext"
+        },
+        {
+          "path": "apps/api/src/shares/shares.controller.ts",
+          "line": 147,
+          "end_line": 147,
+          "finding": "GET /shares/sent returns itemNameEncrypted as hex string or null in SentShareResponseDto — usable as an at-rest ciphertext proxy without a DB connection"
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 98,
+          "end_line": 98,
+          "finding": "shouldBackfill returns false when itemNameEncrypted is already set, making backfillSentShareItemNames idempotent — safe to trigger multiple times"
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 124,
+          "end_line": 124,
+          "finding": "Recipient decrypt path falls back to the plaintext itemName on decryption failure — a broken ciphertext still renders the correct display name, so recipient-display assertion alone cannot prove backfill worked"
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 199,
+          "end_line": 210,
+          "finding": "Plaintext itemName bytes from TextEncoder().encode() were not zeroed after ECIES wrapping — CodeRabbit flagged this as violating the codebase convention of clearing sensitive data after use; fixed by filling the Uint8Array with zeros in a finally block"
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 394,
+          "end_line": 394,
+          "finding": "backfillSentShareItemNames is invoked as void/fire-and-forget — e2e tests must poll GET /shares/sent until itemNameEncrypted is non-null rather than awaiting a return value"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 21,
+          "end_line": 50,
+          "finding": "page.evaluate(fetch) + POST /auth/refresh token pattern is the established way to call API endpoints directly from e2e specs without a separate HTTP client — used by seedLegacyShare helper"
+        },
+        {
+          "path": "tests/web-e2e/utils/multi-account-wallet.ts",
+          "line": 63,
+          "end_line": 63,
+          "finding": "createWalletTestAccount(browser, name) creates a fully isolated wallet identity; used with test.describe.serial for Alice/Bob two-party patterns in sharing specs"
+        }
+      ],
+      "workflow": [
+        "Always verify git history before acting on GSD's resume-incomplete-phase routing — the invariant checks disk artifacts, not merge status, and produces false positives for shipped phases whose SUMMARY.md files were never written",
+        "Sandboxed Bash cannot reach the 1Password op-ssh-sign signer — commits made inside the sandbox are silently unsigned; use unsandboxed Bash with explicit `git commit -S` for signed commits",
+        "`git rebase --force-rebase` re-creates commit objects but does NOT apply gpgsign unless `-S` is passed explicitly to each pick",
+        "The 1Password SSH signer can wedge with 'failed to fill whole buffer' after a period of inactivity; the only fix is restarting the 1Password app",
+        "After `gh pr create`, always fetch + rebase before pushing any follow-on commits to handle the bot's automatic chore(release) push to the branch",
+        "CodeRabbit review findings outside the diff range appear in the review body text, not as GraphQL reviewThread nodes — must fetch the review body via `gh api repos/.../pulls/.../reviews` and scan it separately",
+        "Adversarial multi-agent workflow (4 investigators → synthesis → adversarial verifier) is the right tool for validating complex feasibility questions about the harness before committing to writing a spec",
+        "For fire-and-forget async operations in e2e specs, poll the API endpoint (with timeout) rather than awaiting a UI event that may not exist",
+        "`pnpm api:generate` must be run after any API endpoint additions to regenerate the typed client that the web layer imports — the pre-commit check-api-client.sh hook enforces this"
+      ]
+    },
+    "friction": [
+      "1Password SSH signer wedged mid-session with 'failed to fill whole buffer', blocking all signed commits until the user physically restarted the 1Password app",
+      "Sandboxed Bash silently strips commit signatures — commits appeared to succeed (exit 0) but had no gpgsig header; only discovered when the ship preflight explicitly checked signing config",
+      "`git rebase --force-rebase` doesn't re-sign commits without `-S`, despite gpgsign=true in config — required an additional explicit signed rebase pass",
+      "GSD's roadmap.analyze plan counts returned empty, forcing a fallback to direct directory scanning for the resume-incomplete-phase check",
+      "GitHub API returned network timeouts on consecutive calls during the review thread fetch phase",
+      "The bot chore(release) push to the branch immediately after `gh pr create` caused the STATE.md push to fail with 'non-fast-forward' — required an unplanned fetch+rebase+push cycle",
+      "CodeRabbit's actionable finding was not a resolvable thread (outside diff range) — the standard GraphQL reviewThreads query returned zero nodes, requiring a separate REST fetch of the full review body"
+    ],
+    "open_items": [
+      "PR #505 (`feat/share-itemname-lazy-backfill`) needs approval and merge before `/gsd-complete-milestone` can run for v1.1",
+      "CI web-e2e run (27695964339) dispatched against the branch but result not yet known at session end",
+      "New share-itemname-backfill.spec.ts does not gate PR #505 CI (web-e2e only triggers on main-push) — the spec is verification-after-merge, not pre-merge",
+      "Literal raw-bytea Postgres read for at-rest ciphertext is not in the e2e harness (no pg dependency in web-e2e, no DataSource); the GET /shares/sent hex-not-plaintext proxy is the current substitute",
+      "Two-party live UAT in a production/staging environment with real encrypted DB rows and a real second user account is not covered by the automated spec",
+      ".planning/intel/ directory is untracked and predates this session — left as-is",
+      "Phase 47 SUMMARY.md backfill is cosmetic (clearing the false-positive gate); the underlying GSD invariant has no mechanism to distinguish 'never written' from 'genuinely incomplete' without consulting git history",
+      "The `getSentSharesForItem` alternate backfill trigger path (page.evaluate import of share.service) was noted as a more reliable fallback than the upload trigger if uploads prove flaky in CI — not implemented"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T14:28:04.302442Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 8,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 8,
+    "total_lines_changed": 14,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}

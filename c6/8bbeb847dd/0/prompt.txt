@@ -1,0 +1,58 @@
+/simplify
+
+---
+
+/gsd:ship
+
+---
+
+are you sure that the deferred followup is not exercisable in the full e2e environment locally?
+
+---
+
+<task-notification>
+<task-id>w4ijaozh0</task-id>
+<tool-use-id>toolu_016mQuVigVrknPSRgBrMWQo3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/w4ijaozh0.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Determine whether the share itemName lazy-backfill two-party UAT is exercisable in the local full e2e stack" completed</summary>
+<result>{"synthesis":{"exercisable":"partially","rationale":"All three needs are achievable in the local full e2e stack, but none is fully turnkey, so this is \"partially\" not \"fully\". (1) Two identities is fully reusable: createWalletTestAccount(browser, name) under test.describe.serial is the established Alice/Bob pattern (multi-account-wallet.ts:63; used in sharing-workflow/writable-shares/invite-link specs), each with an isolated context and real secp256k1 identity. (2) Legacy-row creation is the soft blocker: CreateShareDto.itemNameEncrypted is @IsOptional (create-share.dto.ts:91) and the service stores NULL when omitted, so a legacy row IS creatable via the API — but the web createShare() ALWAYS sends ciphertext (share.service.ts:251-258), so the ShareDialog UI cannot produce one. Seeding requires a NEW helper that POSTs /shares with itemNameEncrypted omitted, bypassing the web layer (reusing the page.evaluate(fetch)+/auth/refresh token pattern from cleanup-helpers.ts:21-50). (3) The backfill trigger is the sharpest gotcha: backfillSentShareItemNames fires ONLY from fetchAllSentShares→ensureFreshSentShares, whose only callers are getSentSharesForItem/hasActiveShares/findCoveringShares. ShareDialog bypasses these (calls sharesControllerGetSentShares directly, ShareDialog.tsx:137). The only UI-reachable trigger is the SDK getCoveringShares callback (useAuth.ts:324-331) fired on a post-upload re-wrap — i.e. the owner must UPLOAD a file into the shared folder to fire backfill, not merely open a sent-shares list (no such list page exists). (4) Assertions: recipient-side is strong and fully reusable — SharedFileBrowserPage.getAllSharedItemNames()/getSharedItem (shared-file-browser.page.ts:64,133) reads the displayed name, which the recipient derives by decrypting itemNameEncrypted (share.service.ts:124), so \"recipient still sees correct name after backfill\" is a genuine UI assertion. At-rest ciphertext is the weak point: web-e2e has NO DB access (pg is in apps/api only, absent from tests/web-e2e/package.json; no DataSource in tests). Best in-harness proxy is GET /shares/sent which returns itemNameEncrypted as hex or null (shares.controller.ts:147; SentShareResponseDto documents this) — asserting it flips null→valid-hex≠plaintext after backfill proves the column holds non-plaintext ciphertext, the substance of the zero-knowledge claim. A literal raw-bytea read needs a new pg connection (compose exposes 5432 postgres/postgres, docker-compose.yml:3-19) or a test-only debug endpoint.","test_plan":["Add a Playwright spec tests/web-e2e/tests/share-itemname-backfill.spec.ts using test.describe.serial; in beforeAll create owner+recipient via createWalletTestAccount(browser,'alice') and createWalletTestAccount(browser,'bob') (multi-account-wallet.ts), capturing bob.publicKey for the share.","As Alice, upload a file and create a folder, then upload a file inside it (reuse the aliceUploadFile/aliceCreateFolder helpers from sharing-workflow.spec.ts), capturing the shared item's ipnsName and folderKey-wrapped encryptedKey needed for the share.","Add a new e2e helper seedLegacyShare(page, {recipientPublicKey, itemType, ipnsName, itemName, encryptedKey}) that, inside page.evaluate, refreshes an access token via POST /auth/refresh (pattern from cleanup-helpers.ts:21-50) then POSTs /shares with the plaintext itemName and itemNameEncrypted OMITTED — producing a legacy row with NULL item_name_encrypted (CreateShareDto allows omission, create-share.dto.ts:91). Call it as Alice to seed the legacy share to Bob.","Pre-assert legacy state: from Alice's page.evaluate call GET /shares/sent and assert the seeded share's itemNameEncrypted === null and itemName === the plaintext display name (shares.controller.ts:147).","Pre-assert recipient pre-backfill: navigateToShared(bob); using SharedFileBrowserPage assert Bob already sees the correct display name (legacy plaintext fallback path, share.service.ts:121).","Trigger the backfill as the OWNER by exercising the only reachable path: as Alice, upload a NEW file into the shared folder so the SDK getCoveringShares callback fires findCoveringShares→ensureFreshSentShares→fetchAllSentShares→backfillSentShareItemNames (useAuth.ts:324-331). (Alternative trigger if upload is flaky: await alice.page.evaluate to import share.service and call getSentSharesForItem(ipnsName), which also routes through fetchAllSentShares.)","Poll for backfill completion (fire-and-forget): from Alice's page.evaluate, repeatedly GET /shares/sent until the seeded share's itemNameEncrypted is non-null (with a timeout), since backfillSentShareItemNames runs as void/fire-and-forget (share.service.ts:394).","Assert at-rest ciphertext (proxy): assert the now-non-null itemNameEncrypted is a valid even-length hex string and is NOT equal to the plaintext itemName, and (optionally) that its decoded byte length exceeds the plaintext length (ECIES overhead) — establishing it is ciphertext, not plaintext.","Assert recipient post-backfill: re-run navigateToShared(bob) (forces remount + fresh fetchReceivedShares which decrypts itemNameEncrypted, share.service.ts:124) and assert Bob STILL sees the identical correct display name via SharedFileBrowserPage.getAllSharedItemNames().","Optionally assert idempotency: trigger the owner path a second time and confirm GET /shares/sent shows the ciphertext unchanged (shouldBackfill skips rows with ciphertext, share.service.ts:98).","Teardown via closeWalletTestAccounts([alice,bob]) which deletes accounts and closes contexts (multi-account-wallet.ts)."],"new_harness_needed":["seedLegacyShare(page, dto) helper that POSTs /shares with itemNameEncrypted omitted (bypassing web createShare, which always sends ciphertext) to create a legacy NULL-item_name_encrypted row — built on the page.evaluate(fetch)+/auth/refresh token pattern already in cleanup-helpers.ts","A getSentSharesViaApi(page) helper that calls GET /shares/sent from page context and returns the parsed rows (itemNameEncrypted hex/null) — needed for the pre/post at-rest proxy assertions; no such direct-API utility exists in tests/web-e2e (api-helpers.ts is all TODO stubs)","A deliberate backfill trigger in the spec: an owner file-upload into the shared folder (or a page.evaluate import of share.service.getSentSharesForItem) — because no UI 'sent shares list' page triggers fetchAllSentShares; ShareDialog bypasses it","OPTIONAL (only for literal raw-bytea at-rest inspection rather than the API proxy): add 'pg' to tests/web-e2e and a small Postgres query util (compose exposes 5432, postgres/postgres), OR add a test-only debug endpoint returning the raw shares row"],"residual_human_only":["Nothing in the UAT is intrinsically human-only. The single genuinely-unavailable-in-harness capability is direct inspection of the raw Postgres bytea column to literally prove 'server never saw plaintext' at the storage layer — and even that is automatable by adding a pg client/DB util or a test-only debug endpoint; absent that, the GET /shares/sent hex!=plaintext check is a strong automated proxy rather than a true at-rest byte read.","Confidence that ECIES ciphertext is cryptographically valid (vs merely non-plaintext hex) is only fully proven by the recipient successfully decrypting it to the correct name — which the spec already covers via Bob's post-backfill display assertion; no manual step required."],"confidence":0.86},"verdict":{"holds":true,"corrections":["File-path/citation errors: the e2e helpers live in tests/web-e2e/utils/ (multi-account-wallet.ts, cleanup-helpers.ts, api-helpers.ts), NOT tests/web-e2e/tests/helpers/. Page objects live in tests/web-e2e/page-objects/file-browser/. createWalletTestAccount is indeed at multi-account-wallet.ts:63.","Method-name error: the recipient-display assertion helper is SharedFileBrowserPage.getSharedItemNames() (shared-file-browser.page.ts:130), not getAllSharedItemNames(). getSharedItem(name) exists (line 64). These read .shared-list-row .file-name on t
+... (truncated 26301 chars, full result in /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/w4ijaozh0.output)</result>
+<usage><agent_count>6</agent_count><subagent_tokens>443609</subagent_tokens><tool_uses>204</tool_uses><duration_ms>908974</duration_ms></usage>
+</task-notification>
+
+---
+
+write the spec, commit it and spin up the full stack locally to ensure that the test passes.
+
+---
+
+<task-notification>
+<task-id>beewmwsq6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/beewmwsq6.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the new e2e spec against the local stack" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b10n0jj8u</task-id>
+<tool-use-id>toolu_01CdFiLiix2jNdsSdXJyq1QZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/b10n0jj8u.output</output-file>
+<status>completed</status>
+<summary>Background command "Retry signed commit in background" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+update the pr body. if the web-e2e spec is now kicked off against the branch in CI, will the new spec execute?
+
+---
+
+yes please dispatch a CI web e2e run against the branch
+
+---
+
+/resolve-pr-reviews
