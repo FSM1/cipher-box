@@ -364,6 +364,32 @@ export class SharesService {
   }
 
   /**
+   * Backfill the at-rest itemNameEncrypted ciphertext on a legacy share.
+   * Only the sharer can update it (they hold the recipient pubkey to re-wrap).
+   * The server never encrypts — it persists the client-supplied ciphertext as-is.
+   * Used by the decision-A2 lazy backfill for rows created before at-rest
+   * itemName encryption existed.
+   */
+  async updateShareItemName(
+    shareId: string,
+    sharerId: string,
+    itemNameEncrypted: string
+  ): Promise<void> {
+    const share = await this.shareRepo.findOne({ where: { id: shareId } });
+
+    if (!share) {
+      throw new NotFoundException('Share not found');
+    }
+
+    if (share.sharerId !== sharerId) {
+      throw new ForbiddenException('Only the sharer can update the item name');
+    }
+
+    share.itemNameEncrypted = Buffer.from(itemNameEncrypted, 'hex');
+    await this.shareRepo.save(share);
+  }
+
+  /**
    * Update the permission level of a share.
    * Only the sharer (owner) can upgrade or downgrade permission.
    * Upgrading to 'write' requires an ECIES-wrapped IPNS private key.

@@ -28,6 +28,7 @@ describe('SharesController', () => {
     getPendingRotations: jest.Mock;
     completeRotation: jest.Mock;
     updateShareEncryptedKey: jest.Mock;
+    updateShareItemName: jest.Mock;
   };
 
   const userId = '550e8400-e29b-41d4-a716-446655440000';
@@ -70,6 +71,7 @@ describe('SharesController', () => {
       getPendingRotations: jest.fn(),
       completeRotation: jest.fn(),
       updateShareEncryptedKey: jest.fn(),
+      updateShareItemName: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -564,6 +566,41 @@ describe('SharesController', () => {
 
       await expect(
         controller.updateShareEncryptedKey(mockReq, shareId, { encryptedKey: 'ff'.repeat(64) })
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('updateShareItemName', () => {
+    it('should call service with shareId, userId, and itemNameEncrypted', async () => {
+      mockSharesService.updateShareItemName.mockResolvedValue(undefined);
+      const itemNameEncrypted = 'ab'.repeat(80);
+
+      await controller.updateShareItemName(mockReq, shareId, { itemNameEncrypted });
+
+      expect(mockSharesService.updateShareItemName).toHaveBeenCalledWith(
+        shareId,
+        userId,
+        itemNameEncrypted
+      );
+    });
+
+    it('should propagate NotFoundException when share not found', async () => {
+      mockSharesService.updateShareItemName.mockRejectedValue(
+        new NotFoundException('Share not found')
+      );
+
+      await expect(
+        controller.updateShareItemName(mockReq, shareId, { itemNameEncrypted: 'ab'.repeat(80) })
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should propagate ForbiddenException when user is not the sharer', async () => {
+      mockSharesService.updateShareItemName.mockRejectedValue(
+        new ForbiddenException('Only the sharer can update the item name')
+      );
+
+      await expect(
+        controller.updateShareItemName(mockReq, shareId, { itemNameEncrypted: 'ab'.repeat(80) })
       ).rejects.toThrow(ForbiddenException);
     });
   });

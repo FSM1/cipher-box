@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.38.0
+ * OpenAPI spec version: 0.39.0
  */
 import type {
   AddShareKeysDto,
@@ -18,6 +18,7 @@ import type {
   SharesControllerGetSentSharesParams,
   SharesControllerLookupUserParams,
   UpdateEncryptedKeyDto,
+  UpdateItemNameDto,
   UpdatePermissionDto,
 } from '../../models';
 
@@ -186,6 +187,25 @@ export const sharesControllerUpdateShareEncryptedKey = (
   );
 };
 /**
+ * Persist the at-rest itemNameEncrypted ciphertext on a legacy share that predates at-rest encryption. Only the sharer can update it; the server never encrypts and stores the client-supplied ciphertext as-is.
+ * @summary Backfill share encrypted item name
+ */
+export const sharesControllerUpdateShareItemName = (
+  shareId: string,
+  updateItemNameDto: BodyType<UpdateItemNameDto>,
+  options?: SecondParameter<typeof customInstance<void>>
+) => {
+  return customInstance<void>(
+    {
+      url: `/shares/${shareId}/item-name`,
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      data: updateItemNameDto,
+    },
+    options
+  );
+};
+/**
  * Hard-delete a revoked share after the sharer has rotated the folder key. Called after the client performs lazy key rotation.
  * @summary Complete key rotation
  */
@@ -230,6 +250,9 @@ export type SharesControllerHideShareResult = NonNullable<
 >;
 export type SharesControllerUpdateShareEncryptedKeyResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>
+>;
+export type SharesControllerUpdateShareItemNameResult = NonNullable<
+  Awaited<ReturnType<typeof sharesControllerUpdateShareItemName>>
 >;
 export type SharesControllerCompleteRotationResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerCompleteRotation>>

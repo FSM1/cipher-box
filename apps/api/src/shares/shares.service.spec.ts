@@ -707,6 +707,36 @@ describe('SharesService', () => {
     });
   });
 
+  describe('updateShareItemName', () => {
+    it('should persist client-supplied ciphertext as a Buffer without encrypting', async () => {
+      const itemNameEncrypted = 'ab'.repeat(80);
+      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
+      mockShareRepo.save.mockResolvedValue({});
+
+      await service.updateShareItemName(shareId, sharerId, itemNameEncrypted);
+
+      const saved = mockShareRepo.save.mock.calls[0][0];
+      expect(Buffer.isBuffer(saved.itemNameEncrypted)).toBe(true);
+      expect(saved.itemNameEncrypted.toString('hex')).toBe(itemNameEncrypted);
+    });
+
+    it('should throw NotFoundException when share not found', async () => {
+      mockShareRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.updateShareItemName(shareId, sharerId, 'ab'.repeat(80))).rejects.toThrow(
+        NotFoundException
+      );
+    });
+
+    it('should throw ForbiddenException when user is not the sharer', async () => {
+      mockShareRepo.findOne.mockResolvedValue(mockShare);
+
+      await expect(
+        service.updateShareItemName(shareId, recipientId, 'ab'.repeat(80))
+      ).rejects.toThrow('Only the sharer can update the item name');
+    });
+  });
+
   // =========================================================================
   // Security: Phase 27 writable shares fixes
   // =========================================================================
