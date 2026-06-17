@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "effbeaf44cb9",
+  "strategy": "manual-commit",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/scripts/verify-filepointer.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ef/fbeaf44cb9/0/metadata.json",
+      "transcript": "/ef/fbeaf44cb9/0/full.jsonl",
+      "content_hash": "/ef/fbeaf44cb9/0/content_hash.txt",
+      "prompt": "/ef/fbeaf44cb9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26369,
+    "cache_creation_tokens": 233624,
+    "cache_read_tokens": 14218500,
+    "output_tokens": 122320,
+    "api_call_count": 84
+  }
+}
