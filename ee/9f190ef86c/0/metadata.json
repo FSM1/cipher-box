@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ee9f190ef86c",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T19:59:54.320595Z",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "d56861774485",
+  "token_usage": {
+    "input_tokens": 89564,
+    "cache_creation_tokens": 1046801,
+    "cache_read_tokens": 50935383,
+    "output_tokens": 198408,
+    "api_call_count": 208
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Advance cipher-box v1.1 milestone to completion by fixing GSD bookkeeping gaps (Phase 47/48), implementing and shipping the deferred share itemName lazy-backfill feature (PR #505), then investigating and fixing a staging bug where file decryption fails after moving a file into a subfolder.",
+    "outcome": "PR #505 shipped and merged (new PATCH /shares/:id/item-name endpoint, web wiring, e2e spec, CodeRabbit plaintext-zeroing fix). Root cause of decrypt-after-move identified (FileMetadata re-encryption missing from moveItem and restoreFromBin); both fixes implemented with regression tests on branch fix/decrypt-fail-after-move, pending PR.",
+    "learnings": {
+      "repo": [
+        "The GSD resume-incomplete-phase invariant false-positives when a phase shipped via PR has no SUMMARY.md files on disk — the gate checks artifact counts, not git history. Workaround: backfill summaries or use --no-resume.",
+        "backfillSentShareItemNames fires ONLY via the SDK getCoveringShares callback triggered on owner file upload (packages/sdk/src/client.ts:155) — there is no 'sent shares list' page or Share dialog path that triggers it.",
+        "FileMetadata IPNS records are AES-256-GCM encrypted with the parent folder's folderKey at upload time. Any operation that reparents a file without re-encrypting FileMetadata will cause Decryption failed on next preview/download.",
+        "moveItem in sdk/client.ts never re-encrypted FileMetadata for the destination folder (latent bug since feature was built). restoreFromBin has the identical omission.",
+        "Signed commits are required on all PRs. The 1Password SSH signer (op-ssh-sign) can silently produce no signature in sandboxed Bash (exit 0, no gpgsig header) and can also hard-wedge (exit 128 'failed to fill whole buffer') requiring an app restart.",
+        "pnpm api:generate must run after any API endpoint change — a pre-commit check-api-client.sh hook will block commits if the generated client is out of sync.",
+        "gh pr create triggers a bot chore(release) push to the branch immediately after PR creation; must fetch+rebase before any subsequent push.",
+        "web-e2e CI workflow has no push/pull_request trigger — it runs only on main-push (via workflow_call) or manual dispatch. New specs are not gated on PRs automatically.",
+        "CreateShareDto.itemNameEncrypted is @IsOptional (create-share.dto.ts:91), so a legacy NULL row IS creatable via direct API POST even though the web createShare() always sends ciphertext.",
+        "BinEntry stores originalParentIpnsName but not the encrypting folderKey. The current UI always restores to the original parent (source == target, no-op), which is why the restoreFromBin bug is latent rather than user-visible like moveItem."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 199,
+          "end_line": 215,
+          "finding": "backfillSentShareItemNames was not zeroing the plaintext itemName Uint8Array after ECIES wrapping — sensitive bytes left in memory. CodeRabbit finding: wrap+persist in try/finally and fill(0) both plaintext and ciphertext buffers."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 723,
+          "end_line": 743,
+          "finding": "moveItem re-encrypt fix: guarded by if (movedItem.type === 'file'), resolves FileMetadata with source.folderKey, calls updateFileMetadata with dest.folderKey + createVersion:false. Runs inside withOperation before either folder publish so failure aborts the move atomically."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 726,
+          "end_line": 726,
+          "finding": "filePointer.ipnsPrivateKeyEncrypted is string | undefined — tsc caught this but vitest (esbuild, no typecheck) missed it. Must guard before passing to hexToBytes."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 317,
+          "end_line": 393,
+          "finding": "restoreFromBin re-inserts FilePointer + publishes folder metadata but never calls resolveFileMetadata/updateFileMetadata to re-encrypt FileMetadata IPNS record. Identical class of bug as moveItem. Fix: resolve source folderKey from originalParentIpnsName via folderTree, re-encrypt only when target != originalParent."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 155,
+          "end_line": 155,
+          "finding": "getCoveringShares is called unconditionally on every addToFolder/reWrapNewItems, making any owner file upload a deterministic trigger for backfillSentShareItemNames — exploited by the e2e spec."
+        },
+        {
+          "path": "tests/web-e2e/tests/share-itemname-backfill.spec.ts",
+          "line": 1,
+          "end_line": 282,
+          "finding": "New 7-step two-party e2e spec: seeds legacy NULL-itemNameEncrypted share via direct API POST, triggers backfill via owner file upload, polls GET /shares/sent for null→ciphertext transition, asserts hex != plaintext and longer than plaintext (ECIES overhead), asserts recipient display unchanged. Passes locally (52s) and in CI (188/188)."
+        }
+      ],
+      "workflow": [
+        "Use git cat-file -p HEAD to verify a gpgsig header exists directly — git verify-commit may report 'No signature' even when the commit is signed, if allowedSignersFile is not configured locally.",
+        "The GSD progress --next flag mechanically routes by artifact counts and can produce destructive suggestions (re-execute a shipped phase). Always verify by cross-checking git log before acting on the resume-incomplete route.",
+        "For two-party UAT scenarios assumed to be human-only: fan out workflow investigators to probe the harness before labeling them non-automatable. In this case a 'human-only' UAT became a fully automated CI-passing spec.",
+        "Spinning up a 4-agent parallel simplify review (reuse/simplification/efficiency/altitude) quickly converged on 'no fixes needed' — the value was confirming the code was already idiomatic, not just skipping cleanup.",
+        "When committing signed commits in the background (run_in_background), a 200s timeout is still not safe if 1Password requires a Touch ID prompt — use foreground with dangerouslyDisableSandbox instead for signing operations."
+      ]
+    },
+    "friction": [
+      "1Password SSH signer wedged twice: first silently (exit 0 but no gpgsig header, masked by git verify-commit misreporting), then hard-wedged (exit 128 'failed to fill whole buffer') requiring a user-initiated app restart.",
+      "roadmap.analyze returned empty plan counts, forcing manual directory scanning for the resume-incomplete-phase invariant check.",
+      "git verify-commit reported 'No signature' for a commit that actually had a gpgsig header — misleading diagnostic that caused an unnecessary re-signing attempt.",
+      "gh pr create immediately triggers a bot chore(release) push, making the branch diverge before STATE.md could be updated and pushed — required an unplanned fetch+rebase cycle.",
+      "web-e2e CI doesn't run on PRs, so the new spec couldn't be validated in CI until a manual workflow_dispatch was issued separately.",
+      "Background task notifications for signed commits were ambiguous — the success message was from a git cat-file exit-0, not from the commit itself, masking the actual commit failure."
+    ],
+    "open_items": [
+      "fix/decrypt-fail-after-move branch has moveItem + restoreFromBin fixes with passing unit tests but no PR yet — needs shipping.",
+      "Web-e2e regression tests for move-then-decrypt and delete-to-bin+restore-then-decrypt are not yet written (captured as tasks).",
+      "Desktop/FUSE e2e verification for move-then-decrypt not yet done.",
+      "Within-share move is an unbuilt feature gap — when implemented it must re-encrypt FileMetadata to destination subfolder folderKey (same pattern as moveItem/restoreFromBin).",
+      "/gsd-complete-milestone for v1.1 not yet run — STATE.md reads 'ready to complete' but the milestone close step was deferred.",
+      ".planning/intel/ directory is untracked and predates this session — not cleaned up.",
+      "A second CI web-e2e run was not dispatched against the final branch HEAD (dbd65ac59, CodeRabbit fix commit) — the passing run targeted the prior commit (81b1a92e1).",
+      "The BinEntry type carries no folderKey field — if the original parent folder is deleted before restore, the source folderKey cannot be resolved from folderTree. A future improvement would capture folderKeyEncrypted on BinEntry at deleteToBin time."
+    ]
+  }
+}
