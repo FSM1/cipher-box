@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.43.0...@cipherbox/web-v0.44.0) (2026-06-17)
+
+
+### Features
+
+* **api:** share item-name backfill endpoint ([#505](https://github.com/FSM1/cipher-box/issues/505)) ([63638b5](https://github.com/FSM1/cipher-box/commit/63638b55983f00e91b5c8b4e8f6cf4372ad8b320))
+
 ## [0.43.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.42.0...@cipherbox/web-v0.43.0) (2026-06-16)
 
 
