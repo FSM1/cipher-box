@@ -1,0 +1,144 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b5de67334463",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T19:26:09.933719Z",
+  "branch": "fix/decrypt-fail-after-move",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/sdk/src/__tests__/client-extended.test.ts",
+    "packages/sdk/src/__tests__/client-move-reencrypt.test.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "d56861774485",
+  "token_usage": {
+    "input_tokens": 88670,
+    "cache_creation_tokens": 993968,
+    "cache_read_tokens": 37478524,
+    "output_tokens": 167319,
+    "api_call_count": 177
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Complete v1.1 milestone bookkeeping (backfill Phase 47 summaries, write Phase 48 verification), close a REQ-4 API gap by adding a share item-name backfill endpoint, ship via PR, write and run an e2e regression spec for the two-party UAT, resolve PR review comments, and debug a newly-discovered decrypt-after-move failure on staging.",
+    "outcome": "PR #505 merged to main (tagged as cipher-box-v0.41.0). All planned items shipped: Phase 47/48 planning artifacts written, PATCH /shares/:shareId/item-name endpoint added with full specs, web backfill wiring re-enabled, 7-test e2e spec passing locally and in CI (188/188). A CodeRabbit plaintext-buffer-zeroing fix was applied. Root cause of the decrypt-after-move bug was identified (FileMetadata re-encrypt missing from moveItem and restoreFromBin) and the moveItem fix was committed on a new branch, with restoreFromBin still pending.",
+    "learnings": {
+      "repo": [
+        "Phase 47 shipped via PR #494 but its 5 SUMMARY.md files were never written, causing a false-positive resume-incomplete gate (plans > summaries) that would have re-executed already-merged refactors.",
+        "The project enforces signed commits (commit.gpgsign=true via 1Password SSH op-ssh-sign); the sandboxed Bash environment cannot reach the signer, so commits made from sandboxed shells are silently unsigned.",
+        "Release-please bot pushes a chore(release) commit to feature branches immediately after gh pr create, requiring a fetch + rebase + re-sign before the final push.",
+        "web-e2e CI only runs on main-push (workflow_call) or manual dispatch — not on PRs — so the new spec gates post-merge, not during review.",
+        "The backfill trigger (backfillSentShareItemNames) fires exclusively via SDK getCoveringShares → reWrapNewItems → uploadFile; no 'sent shares list' UI page calls fetchAllSentShares, and ShareDialog bypasses it entirely.",
+        "FileMetadata IPNS records are AES-256-GCM encrypted with the parent folder's folderKey at upload time; moveItem and restoreFromBin must re-encrypt when reparenting a file.",
+        "restoreFromBin stores originalParentIpnsName on BinEntry but not the encrypting folderKey — the original parent folder may be gone at restore time, making the re-encrypt fix non-trivial.",
+        "CreateShareDto.itemNameEncrypted is @IsOptional (line 91); the service stores NULL when omitted, so legacy plaintext-only rows are API-creatable even though the web UI always sends ciphertext.",
+        "check-api-client.sh pre-commit hook requires the generated client to be committed alongside API endpoint changes; pnpm api:generate must be run before staging."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 199,
+          "end_line": 215,
+          "finding": "backfillSentShareItemNames: plaintext itemName bytes from TextEncoder().encode() were not zeroed after ECIES wrapping — CodeRabbit finding; fixed with try/finally + Uint8Array.fill(0)."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 723,
+          "end_line": 743,
+          "finding": "moveItem fix: after moving the FilePointer, unwrap the file's IPNS key, resolveFileMetadata with source.folderKey, then updateFileMetadata with dest.folderKey + createVersion:false — all inside withOperation before either folder publish so a failure aborts atomically."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 155,
+          "end_line": 155,
+          "finding": "getCoveringShares is called unconditionally on every item add (before the length check), guaranteeing the backfill fires on any uploadFile call."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 317,
+          "end_line": 393,
+          "finding": "restoreFromBin re-inserts the FilePointer and publishes folder metadata but never calls resolveFileMetadata/updateFileMetadata — same decrypt-after-reparent bug as the pre-fix moveItem."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "line": 91,
+          "end_line": 91,
+          "finding": "itemNameEncrypted is @IsOptional — the service stores NULL when omitted, enabling legacy plaintext-only share rows to be seeded via direct API call (bypassing the web layer that always sends ciphertext)."
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 251,
+          "end_line": 258,
+          "finding": "createShare() in the web layer always sends itemNameEncrypted — the UI cannot produce a legacy NULL row; seeding one requires a page.evaluate(fetch) + /auth/refresh token pattern."
+        }
+      ],
+      "workflow": [
+        "git rebase --force-rebase respects commit.gpgsign=true from config but does not always apply the signature; explicit -S flag on each commit or rebase exec is required to guarantee signing.",
+        "CodeRabbit posts some findings as 'outside diff range' comments embedded in the review body rather than resolvable inline threads — gh api graphql reviewThreads returns 0 for these; they must be scraped from the review body and replied to via REST comments.",
+        "Playwright runs `playwright test` unfiltered in CI (testDir: './tests', no testIgnore) — any new *.spec.ts added to the directory is automatically discovered without config changes.",
+        "The GSD resume-incomplete gate (plans > summaries) is a bookkeeping check, not a code-shipped check — a phase can be fully merged with zero summaries and still trip the gate, requiring manual override or summary backfill.",
+        "For a two-party e2e test needing a legacy DB row the UI cannot produce: use page.evaluate(fetch) + POST /auth/refresh token refresh pattern (from cleanup-helpers.ts) to POST directly to the API with the omitted field.",
+        "Polling fire-and-forget async operations in Playwright: GET the resource repeatedly until the field transitions (null → non-null) with a generous timeout (45s used here); don't rely on UI events."
+      ]
+    },
+    "friction": [
+      "1Password SSH signer wedged twice during the session — first producing silent failures (exit 0, no gpgsig header), then hanging with 'failed to fill whole buffer'; required a manual app restart each time.",
+      "Sandboxed Bash cannot reach op-ssh-sign: three commits were initially unsigned despite commit.gpgsign=true; detected only when inspecting raw commit objects, requiring an unsandboxed force-rebase with -S.",
+      "Release-please bot pushes chore(release) to branches immediately after PR creation, causing 'non-fast-forward' push failures; requires fetch + rebase + re-sign cycle.",
+      "Phase 47's false-positive resume gate would have routed to /gsd-execute-phase 47 and re-run already-merged refactors; required manual investigation of git history and VERIFICATION.md to detect.",
+      "Playwright HTML reporter in CI doesn't emit per-test names to stdout — impossible to grep for a specific spec's result in CI logs; pass/fail only verifiable by total count.",
+      "Network timeouts on gh API calls (workflow run list, review body fetch) required retries.",
+      "roadmap.analyze returned empty plan counts (bug in gsd-tools), forcing a fallback to direct ls-based phase scanning for the resume-incomplete check."
+    ],
+    "open_items": [
+      "restoreFromBin in packages/sdk/src/bin/index.ts:317-393 has the same decrypt-after-reparent bug as the pre-fix moveItem — fix is on a branch but not yet implemented or PRed.",
+      "Design decision needed for the bin-restore re-encrypt: (a) resolve the original parent's folderKey via folderTree at restore time, or (b) capture the encrypting folderKey on BinEntry at deleteToBin time (robust but requires a metadata schema change).",
+      "/gsd-complete-milestone has not been run for v1.1 — STATE.md reads 100% but the milestone archive step is pending.",
+      "Literal raw-bytea Postgres read is not implemented in the web-e2e harness; the e2e spec uses GET /shares/sent hex != plaintext as a proxy assertion for ciphertext-at-rest.",
+      "web-e2e spec (share-itemname-backfill.spec.ts) only gates post-merge — there is no way to run it automatically on a PR with the current workflow_dispatch-only CI trigger.",
+      "Two-party live-environment UAT (legacy share display for recipient after owner backfill, plus ciphertext-at-rest DB read) remains a human check in a non-local environment.",
+      "The atomicity/ordering regression test for moveItem (assert re-encrypt runs before both folder publishes; thrown updateFileMetadata aborts the move) was flagged as an optional follow-up but not written."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T19:24:50.289432Z",
+    "agent_lines": 303,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 303,
+    "total_lines_changed": 306,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 437,
+      "agent_lines_removed": 3,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
