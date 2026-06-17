@@ -689,6 +689,11 @@ export class CipherBoxClient {
    * Removes from source, adds to destination, publishes both IPNS records
    * (destination first for crash safety -- add-before-remove pattern).
    *
+   * When the moved child is a FilePointer, re-encrypts the per-file IPNS metadata
+   * record from the source folder key to the destination folder key. FileMetadata
+   * is AES-256-GCM encrypted with the parent folder key at upload time; without
+   * this step all decrypt operations (download, preview, edit) fail after a move.
+   *
    * @param sourceIpnsName - IPNS name of the source folder
    * @param destIpnsName - IPNS name of the destination folder
    * @param childId - ID of the child to move
@@ -701,11 +706,41 @@ export class CipherBoxClient {
       // 1. Compute updated children for both folders (pure operation)
       const baseDestChildren = [...dest.children];
       const baseSourceChildren = [...source.children];
-      const { updatedSourceChildren, updatedDestChildren } = sdkCore.moveItem({
+      const { updatedSourceChildren, updatedDestChildren, movedItem } = sdkCore.moveItem({
         sourceChildren: source.children,
         destChildren: dest.children,
         childId,
       });
+
+      // 1a. If the moved item is a file, re-encrypt its FileMetadata IPNS record
+      //     from source.folderKey to dest.folderKey.
+      //
+      //     FileMetadata is AES-256-GCM encrypted with the parent folder key at
+      //     creation time.  After the move the decrypt path supplies dest.folderKey;
+      //     without re-encryption every subsequent download/preview fails.
+      //
+      //     updateFileMetadata (sdk-core) owns zeroing fileIpnsPrivateKey (T-47-01).
+      if (movedItem.type === 'file') {
+        const filePointer = movedItem as FilePointer;
+        const fileIpnsPrivateKey = await unwrapKey(
+          hexToBytes(filePointer.ipnsPrivateKeyEncrypted),
+          this.config.vaultKeypair.privateKey
+        );
+        const { metadata: currentMetadata } = await sdkCore.resolveFileMetadata(
+          filePointer.fileMetaIpnsName,
+          source.folderKey,
+          this.ctx
+        );
+        await sdkCore.updateFileMetadata({
+          fileIpnsPrivateKey,
+          fileMetaIpnsName: filePointer.fileMetaIpnsName,
+          folderKey: dest.folderKey,
+          currentMetadata,
+          updates: {},
+          createVersion: false,
+          ctx: this.ctx,
+        });
+      }
 
       // 2. Publish destination first (add-before-remove for crash safety)
       const destResult = await sdkCore.updateFolderMetadataAndPublish({
