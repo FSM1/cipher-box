@@ -132,6 +132,28 @@ if ($SyncExitCode -eq 0) {
 }
 Write-Host ""
 
+# ---- Step 7: Move content re-encryption (cross-platform) ----
+# Shares one implementation with macOS/Linux (test-move-content.mjs); runs after
+# cross-client-sync so the SDK dist it shells out to is already built.
+Write-Host "--- Step 7: Move content re-encryption ---"
+$MoveExitCode = 0
+try {
+    $env:TEST_SECRET = $TestSecret
+    & node "$PSScriptRoot\test-move-content.mjs" --mount $MountPoint --api-url $ApiUrl
+    $MoveExitCode = $LASTEXITCODE
+} catch {
+    Write-Host "Move content script error: $($_.Exception.Message)"
+    $MoveExitCode = 1
+}
+
+if ($MoveExitCode -eq 0) {
+    Write-Host "Move content: PASSED"
+} else {
+    Write-Host "Move content: FAILED"
+    $TotalFail += $MoveExitCode
+}
+Write-Host ""
+
 # ---- Summary ----
 Write-Host "============================================"
 Write-Host "  Summary"

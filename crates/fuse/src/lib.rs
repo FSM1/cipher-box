@@ -687,6 +687,84 @@ pub fn spawn_bin_entry_publish(
     });
 }
 
+/// Re-encrypt a file's `FileMetadata` IPNS record from `source_folder_key` to
+/// `dest_folder_key` after a cross-folder move (fire-and-forget).
+///
+/// A file's `FileMetadata` is sealed with its PARENT folder's AES key. The rename
+/// handlers only republish the old/new *folder* metadata; the per-file record
+/// stays sealed under the source key. Without this, any fresh resolve under the
+/// destination folder's key — a remount, another device, or the web client —
+/// fails with a decryption error. This resolves the current record under the
+/// source key and republishes the SAME metadata sealed under the destination key
+/// (no version bump). Mirrors the SDK `moveItem` re-encrypt step.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_file_meta_reencrypt(
+    api: Arc<ApiClient>,
+    rt: tokio::runtime::Handle,
+    file_meta_ipns_name: String,
+    file_ipns_private_key: Zeroizing<Vec<u8>>,
+    source_folder_key: Vec<u8>,
+    dest_folder_key: Vec<u8>,
+    coordinator: Arc<PublishCoordinator>,
+    tee_public_key: Option<Vec<u8>>,
+    tee_key_epoch: Option<u32>,
+) {
+    // Distinct folders always carry distinct keys; this guard is purely defensive
+    // and skips a needless resolve+publish (and sequence bump) if they ever match.
+    if source_folder_key == dest_folder_key {
+        return;
+    }
+    std::thread::spawn(move || {
+        let result = rt.block_on(async {
+            let source_key_arr: [u8; 32] = source_folder_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| "Invalid source folder key length".to_string())?;
+
+            // Serialize against concurrent publishes to the same file IPNS record.
+            let lock = coordinator.get_lock(&file_meta_ipns_name);
+            let _guard = lock.lock().await;
+
+            // Resolve the CURRENT FileMetadata under the SOURCE folder key.
+            let resp = cipherbox_api_client::ipns::resolve_ipns(&api, &file_meta_ipns_name)
+                .await
+                .map_err(|e| format!("resolve file IPNS: {}", e))?;
+            let enc_bytes = cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid)
+                .await
+                .map_err(|e| format!("fetch file metadata: {}", e))?;
+            let file_meta =
+                cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &source_key_arr)
+                    .map_err(|e| format!("decrypt file metadata under source key: {}", e))?;
+
+            // Republish the SAME metadata sealed under the DESTINATION key. The
+            // record already exists, so this is an update (seq + 1), no TEE enroll.
+            publish_file_metadata(
+                &api,
+                &file_meta,
+                &dest_folder_key,
+                &file_ipns_private_key,
+                &file_meta_ipns_name,
+                coordinator.as_ref(),
+                tee_public_key.as_deref(),
+                tee_key_epoch,
+                false,
+            )
+            .await
+            .map_err(|e| format!("re-publish file metadata under dest key: {}", e))?;
+
+            log::info!(
+                "Re-encrypted file metadata for {} after cross-folder move",
+                file_meta_ipns_name
+            );
+            Ok::<(), String>(())
+        });
+        if let Err(e) = result {
+            log::error!("File metadata re-encrypt on move failed: {}", e);
+        }
+    });
+}
+
 /// The main filesystem struct.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct CipherBoxFS {
