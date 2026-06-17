@@ -201,13 +201,21 @@ export async function backfillSentShareItemNames(shares: SentShare[]): Promise<n
           ? share.recipientPublicKey.slice(2)
           : share.recipientPublicKey
       );
-      const wrapped = await wrapKey(new TextEncoder().encode(share.itemName), recipientPubKey);
-      const itemNameEncrypted = bytesToHex(wrapped);
+      const plaintextNameBytes = new TextEncoder().encode(share.itemName);
+      let wrapped: Uint8Array | null = null;
+      try {
+        wrapped = await wrapKey(plaintextNameBytes, recipientPubKey);
+        const itemNameEncrypted = bytesToHex(wrapped);
 
-      // Persist the re-wrapped ciphertext for this legacy row. Only the sharer
-      // may update it; the server stores the ciphertext as-is.
-      await sharesControllerUpdateShareItemName(share.shareId, { itemNameEncrypted });
-      backfilled += 1;
+        // Persist the re-wrapped ciphertext for this legacy row. Only the sharer
+        // may update it; the server stores the ciphertext as-is.
+        await sharesControllerUpdateShareItemName(share.shareId, { itemNameEncrypted });
+        backfilled += 1;
+      } finally {
+        // Clear the transient plaintext display name from memory after wrapping.
+        plaintextNameBytes.fill(0);
+        wrapped?.fill(0);
+      }
     } catch (err) {
       // Never log the plaintext/ciphertext name; only the failure marker.
       logger.warn('[share] itemName backfill re-wrap failed for share', share.shareId, err);
