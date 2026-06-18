@@ -1,0 +1,148 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3022e6584373",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T01:16:06.73165Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d24aef7651a4",
+  "token_usage": {
+    "input_tokens": 14367,
+    "cache_creation_tokens": 350473,
+    "cache_read_tokens": 5951823,
+    "output_tokens": 65262,
+    "api_call_count": 49
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation), execute the implementation, then run full PR-QA (simplify, security-review, CodeRabbit CLI) before pushing and opening a PR.",
+    "outcome": "Planning completed successfully: 5 plans across 3 waves covering all 6 requirements (scope expanded from 5 to include batch+drag move), plan-checker passed after one revision round. Execution began with Wave 1 dispatched but transcript ends mid-execution.",
+    "learnings": {
+      "repo": [
+        "`reencryptFileMetadataForFolderChange` (reencrypt.ts:49) is fully key-agnostic — takes raw sourceFolderKey/destFolderKey/fileIpnsPrivateKey, reusable verbatim for the shared-folder move case.",
+        "`share_keys` entries are keyed by itemId (file UUID), not parent folder — file keys do NOT need re-registration after a move. Download path resolves by `k.keyType === 'file' && k.itemId === item.id`.",
+        "`adoptSharedFolderResult` emits `sharedFolder:updated` with `live.ipnsName` (always source depth). Calling it for the dest result would corrupt the rendered view — correct design is source-only adoption.",
+        "`sdkCore.moveItem` throws 'An item with this name already exists in destination' on collision (sdk-core/src/folder/index.ts:346). No auto-rename — propagates through `runWrite` → `p.setError`.",
+        "`@internal` on `ensureFolderLoaded` is documentation-only since `CipherBoxClient` is already exported. Can call it directly from the web without adding a new public alias.",
+        "`SharedFolderClient` Pick allowlist (shared-folder-projection.ts:28-38) lists only the 7 Phase 48 methods — `moveInSharedFolder` and `enumerateSharedSubtree` must be added.",
+        "File IPNS key for re-encryption must come from `share_keys keyType:'file-ipns'`, NOT `FilePointer.ipnsPrivateKeyEncrypted` (owner-wrapped; recipients cannot decrypt it). Same pattern as `updateSharedFileHandler`.",
+        "Batch move is a web-layer pattern only — `useFileBrowserActions` selection Set → `handleBatchMoveConfirm` → `useFolderMutations.handleMoveItems` — loops single-item `client.moveItem`. No dedicated SDK batch method.",
+        "Drag move lives in `FileListItem`: `handleDragStart` (multi-select-aware) → drop target on folder rows → `handleDropOnFolder` → `moveItem`/`moveItems`. Shared side has none of this today.",
+        "`useSharedWriteOps.test.ts` already exists and can be extended with a `moveItemHandler` unit test rather than creating a new file.",
+        "Intel API surface extractor regex is unpopulated — produces empty output. RESEARCH.md with verified symbol refs is sufficient as planner input; skip the intel regen step when it returns nothing."
+      ],
+      "code": [
+        {
+          "path": "packages/reencrypt/src/reencrypt.ts",
+          "line": 49,
+          "end_line": 49,
+          "finding": "`reencryptFileMetadataForFolderChange` takes raw key bytes (sourceFolderKey, destFolderKey, fileIpnsPrivateKey) — no owner vs. recipient distinction, safe to call for shared-folder moves."
+        },
+        {
+          "path": "sdk-core/src/folder/index.ts",
+          "line": 346,
+          "end_line": 346,
+          "finding": "Collision policy is throw: 'An item with this name already exists in destination'. No auto-rename path exists."
+        },
+        {
+          "path": "packages/shared-folder-projection/src/shared-folder-projection.ts",
+          "line": 28,
+          "end_line": 38,
+          "finding": "Pick allowlist only contains Phase 48 methods. Phase 49 must add `moveInSharedFolder` and `enumerateSharedSubtree` here."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit CLI review (`coderabbit review --agent`) must run BEFORE PR creation. After the PR is opened, CodeRabbit posts a separate GitHub review automatically — address that with `/resolve-pr-reviews`.",
+        "Plan-checker is worth running: it caught a real gap (REQ-3 web handler had no unit test, making its verification vacuous) that the planner missed. Two other findings were doc-formatting nits fixable without re-planning.",
+        "Sequential execution (no parallel worktrees) is the correct AFK choice: parallel-worktree merge-back protocol has documented cwd-drift and merge-base footguns that make unattended runs fragile.",
+        "When the `gsd-executor` subagent lacks `gsd-tools` on PATH, it cannot commit planning artifacts — the orchestrator must commit those manually after the subagent completes.",
+        "Disabling `commit.gpgsign` locally (`git config --local commit.gpgsign false`) is required for AFK automated commits when the global git config uses 1Password signing — prevents the signer from wedging the session."
+      ]
+    },
+    "friction": [
+      "AI-SPEC gate false-positived on the word 'eval' in the e2e requirement text, requiring manual triage to confirm zero actual AI content.",
+      "1Password commit signing would block all automated AFK commits — required a local `commit.gpgsign=false` override and will need a signed rebase before the PR can merge.",
+      "`gsd-tools` binary not on PATH inside the planner-revision subagent, preventing it from committing its own artifacts — orchestrator had to commit manually.",
+      "Intel surface regen produces empty output (unpopulated regex extractor) — a no-op step that adds latency without value.",
+      "Plan-checker iteration required two passes (2 blockers + 1 warning on first pass); the research doc nits that triggered blocker 1 and the warning were formatting issues that should have been caught before submission."
+    ],
+    "open_items": [
+      "Branch commits are unsigned (gpgsign disabled for session) — a signed rebase or admin override is required before the PR can merge into main.",
+      "UI safety gate was skipped with `--skip-ui` (shared MoveDialog mirrors private design); `gsd:ui-review` retroactive validation still needed during QA.",
+      "Phase execution is incomplete — Wave 1 was just dispatched (0/5 plans done) when the transcript ends. Waves 2 and 3 (web single-item, batch+drag, e2e) remain.",
+      "After PR creation: wait for CodeRabbit GitHub review to post, then run `/resolve-pr-reviews` to address inline comments.",
+      "Scope was expanded mid-planning to include batch+drag move in the shared view (new REQ-6) — this is net-new functionality with no prior shared-side implementation and needs careful QA."
+    ]
+  }
+}
