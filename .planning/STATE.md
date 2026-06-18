@@ -253,6 +253,7 @@ Recent for v1.1:
 - Phase 46 added 2026-06-15: Desktop FUSE data-loss bugs + replay hardening — the #7/#8/#17 bugs Phase 45 deferred, the two PR #491 replay follow-ups, and the deferred read_ops/write_ops + journal_helpers test coverage (grouped desktop todos)
 - Phase 47 added 2026-06-15: SDK folder-state and publish-path consolidation — unify folderTree/Zustand ownership, one publishWithCas CAS-retry, encapsulate baseChildren bookkeeping, fix updateSharedFile prunedCids pin leak (grouped SDK todos)
 - Phase 48 added 2026-06-16: SDK self-bootstrap regression fix + shared-folder/metadata consolidation — P0 fix for the PR #498 self-bootstrap clobber regressing main web-e2e (run 27587113911), then remove redundant web folder-seeding (#9, gated on the fix), route shared-folder writes through the SDK client (#8), encrypt share itemName at rest (#5 / Phase-14 M1); defers CRDT-inbox research (#2)
+- Phase 49 added 2026-06-18: Shared-folder intra-share move + useFolderNavigation unwrap consolidation — recipient-side move of a file between subfolders within one share (re-encrypts FileMetadata to the dest folderKey via reencryptFileMetadataForFolderChange, mirroring owner moveItem / #507), anywhere-in-subtree destination picker (new SDK shared-subtree enumeration), plus consolidating the duplicate web useFolderNavigation ECIES unwrap onto client.ensureFolderLoaded; closes captured todos #8 + #7; builds on Phase 48 shared-folder ownership
 
 ### Open Concerns
 
