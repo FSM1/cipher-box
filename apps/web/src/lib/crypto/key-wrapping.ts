@@ -30,6 +30,9 @@ import { logger } from '../logger';
  * @param folderKey - Decrypted AES key of the current folder (for resolving file metadata)
  * @param ownerPrivateKey - Owner's secp256k1 private key for unwrapping ECIES keys
  * @param targetPubKeyBytes - Target uncompressed secp256k1 public key (recipient or ephemeral)
+ * @param permission - 'write' also re-wraps each descendant's IPNS signing key
+ *   (folder-ipns / file-ipns) so the recipient can write into / move items between
+ *   owner-created descendants. 'read' emits only the read keys (folder / file).
  * @param onProgress - Callback for progress tracking
  */
 export async function collectChildKeys(
@@ -37,6 +40,7 @@ export async function collectChildKeys(
   folderKey: Uint8Array,
   ownerPrivateKey: Uint8Array,
   targetPubKeyBytes: Uint8Array,
+  permission: 'read' | 'write',
   onProgress: (wrapped: number) => void
 ): Promise<ChildKeyDto[]> {
   const childKeys: ChildKeyDto[] = [];
@@ -60,6 +64,25 @@ export async function collectChildKeys(
         });
         wrapped++;
         onProgress(wrapped);
+
+        // Write share: also grant the file's IPNS signing key so the recipient can
+        // update content and move the file (re-publish its FileMetadata under a new
+        // folderKey). Legacy files with no wrapped IPNS key (HKDF-derived) cannot be
+        // granted write and stay read-only.
+        if (permission === 'write' && fp.ipnsPrivateKeyEncrypted) {
+          const reWrappedFileIpns = await reWrapEncryptedKey(
+            fp.ipnsPrivateKeyEncrypted,
+            ownerPrivateKey,
+            targetPubKeyBytes
+          );
+          childKeys.push({
+            keyType: 'file-ipns' as ChildKeyDto['keyType'],
+            itemId: fp.id,
+            encryptedKey: reWrappedFileIpns,
+          });
+          wrapped++;
+          onProgress(wrapped);
+        }
       } catch (err) {
         logger.error(`Failed to re-wrap file key for ${fp.name}:`, err);
         // Continue with other children
@@ -81,6 +104,26 @@ export async function collectChildKeys(
         wrapped++;
         onProgress(wrapped);
 
+        // Write share: also grant the subfolder's IPNS signing key so the recipient
+        // can write into / move items between owner-created descendant subfolders.
+        // The field is typed required on FolderEntry, but guard it anyway (mirrors
+        // the file branch) to defend against malformed/legacy folder metadata
+        // decrypted from IPFS — such folders stay read-only rather than crashing.
+        if (permission === 'write' && folder.ipnsPrivateKeyEncrypted) {
+          const reWrappedFolderIpns = await reWrapEncryptedKey(
+            folder.ipnsPrivateKeyEncrypted,
+            ownerPrivateKey,
+            targetPubKeyBytes
+          );
+          childKeys.push({
+            keyType: 'folder-ipns' as ChildKeyDto['keyType'],
+            itemId: folder.id,
+            encryptedKey: reWrappedFolderIpns,
+          });
+          wrapped++;
+          onProgress(wrapped);
+        }
+
         // Recurse into subfolder: resolve its metadata and collect its children
         const resolved = await resolveIpnsRecord(folder.ipnsName);
         if (resolved) {
@@ -99,6 +142,7 @@ export async function collectChildKeys(
               folderKeyBytes,
               ownerPrivateKey,
               targetPubKeyBytes,
+              permission,
               (subWrapped) => {
                 onProgress(wrapped + subWrapped);
               }

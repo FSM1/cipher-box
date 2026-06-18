@@ -48,22 +48,24 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    * back here.
    */
   const runWrite = useCallback(
-    async (op: (shareId: string) => Promise<void>, failMessage: string): Promise<void> => {
+    async (op: (shareId: string) => Promise<void>, failMessage: string): Promise<boolean> => {
       const shareId = p.currentShareId;
       if (!shareId) {
         p.setError('Write access not available');
-        return;
+        return false;
       }
       p.setIsLoading(true);
       p.setError(null);
       try {
         await withRevocationGuard(() => op(shareId));
+        return true;
       } catch (err) {
         const message = (err as Error).message || failMessage;
         if (!message.includes('write access revoked')) {
           p.setError(message);
         }
         logger.error(`[SharedNav] ${failMessage}:`, err);
+        return false;
       } finally {
         p.setIsLoading(false);
       }
@@ -179,11 +181,80 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
     [runWrite]
   );
 
+  /**
+   * Move an item within the shared folder to a different destination subfolder.
+   *
+   * The vault private key reference is passed directly to the SDK — the SDK owns
+   * all crypto (unwrap + re-encrypt) and key zeroing. The web does not clone or
+   * zero it here (matches the established pattern; T-49-10 accepted).
+   */
+  const moveItemHandler = useCallback(
+    async (item: FolderChild, destFolderId: string, destIpnsName: string) => {
+      const auth = useAuthStore.getState();
+      if (!auth.vaultKeypair) {
+        p.setError('No keypair available');
+        return;
+      }
+      await runWrite(async (shareId) => {
+        await getSdkClient().moveInSharedFolder(shareId, {
+          itemId: item.id,
+          destFolderId,
+          destIpnsName,
+          vaultPrivateKey: auth.vaultKeypair!.privateKey,
+          getShareKeysFn: fetchShareKeys,
+        });
+      }, 'Shared folder move failed');
+    },
+    [runWrite, p.setError]
+  );
+
+  /**
+   * Move multiple items to a destination subfolder by looping moveInSharedFolder
+   * per item (mirrors useFolderMutations.handleMoveItems — no dedicated SDK batch op).
+   *
+   * Per-item failure stops the loop and surfaces the error (T-49-11). Calls
+   * clearSelection() on full success.
+   */
+  const batchMoveItemsHandler = useCallback(
+    async (
+      items: FolderChild[],
+      destFolderId: string,
+      destIpnsName: string,
+      clearSelection: () => void
+    ) => {
+      const auth = useAuthStore.getState();
+      if (!auth.vaultKeypair) {
+        p.setError('No keypair available');
+        return;
+      }
+      if (items.length === 0) return;
+
+      const ok = await runWrite(async (shareId) => {
+        for (const item of items) {
+          await getSdkClient().moveInSharedFolder(shareId, {
+            itemId: item.id,
+            destFolderId,
+            destIpnsName,
+            vaultPrivateKey: auth.vaultKeypair!.privateKey,
+            getShareKeysFn: fetchShareKeys,
+          });
+        }
+      }, 'Shared folder batch move failed');
+
+      // Clear the selection only on full success — on failure (a per-item error
+      // stops the loop) keep the selection so the user can retry.
+      if (ok) clearSelection();
+    },
+    [runWrite, p.setError]
+  );
+
   return {
     uploadFile: uploadFileHandler,
     createFolder: createFolderHandler,
     renameItem: renameItemHandler,
     deleteItem: deleteItemHandler,
     updateSharedFile: updateSharedFileHandler,
+    moveItem: moveItemHandler,
+    batchMoveItems: batchMoveItemsHandler,
   };
 }

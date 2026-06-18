@@ -44,8 +44,10 @@ import {
   resolveFileMetadata,
   updateFileMetadata,
   unpinFromIpfs,
+  moveItem,
 } from '@cipherbox/sdk-core';
 import type { SdkContext } from '@cipherbox/sdk-core';
+import { reencryptFileMetadataForFolderChange } from '../reencrypt';
 import type { ShareKeyEntryDtoKeyType } from '@cipherbox/api-client';
 
 /** Re-export the canonical share key type for consumers */
@@ -508,7 +510,91 @@ export async function updateSharedFile(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Function 6: updateSharePermission
+// Function 6: moveInSharedFolder (stateless op)
+// ---------------------------------------------------------------------------
+
+/**
+ * Move an item between two subfolders within a single shared folder.
+ *
+ * Mirrors the owner `moveItem` publish ordering (DEST first → re-key → SOURCE).
+ * Does NOT zero any key material — the caller owns all zeroing in a `finally` block.
+ *
+ * @param params.ctx - SDK context for IPFS/IPNS API access
+ * @param params.srcCtx - Source folder context (keys, children, sequence)
+ * @param params.destCtx - Destination folder context (keys, children, sequence — loaded fresh)
+ * @param params.itemId - ID of the item to move (from srcCtx.children)
+ * @param params.fileIpnsPrivateKey - Pre-resolved file IPNS private key from share_keys
+ *   keyType:'file-ipns'; null for folder items. Caller owns zeroing in finally.
+ */
+export async function moveInSharedFolder(params: {
+  ctx: SdkContext;
+  srcCtx: {
+    folderKey: Uint8Array;
+    ipnsPrivateKey: Uint8Array;
+    ipnsName: string;
+    sequenceNumber: bigint;
+    children: FolderChild[];
+  };
+  destCtx: {
+    folderKey: Uint8Array;
+    ipnsPrivateKey: Uint8Array;
+    ipnsName: string;
+    sequenceNumber: bigint;
+    children: FolderChild[];
+  };
+  itemId: string;
+  fileIpnsPrivateKey: Uint8Array | null;
+}): Promise<{
+  srcResult: { publishedChildren: FolderChild[]; newSequenceNumber: bigint };
+  destResult: { publishedChildren: FolderChild[]; newSequenceNumber: bigint };
+}> {
+  // 1. Pure source/dest children mutation — throws on name collision or item-not-found
+  const { updatedSourceChildren, updatedDestChildren, movedItem } = moveItem({
+    sourceChildren: params.srcCtx.children,
+    destChildren: params.destCtx.children,
+    childId: params.itemId,
+  });
+
+  // 2. Publish DEST first (add-before-remove crash safety)
+  const destResult = await updateFolderMetadataAndPublish({
+    children: updatedDestChildren,
+    baseChildren: params.destCtx.children,
+    folderKey: params.destCtx.folderKey,
+    ipnsPrivateKey: params.destCtx.ipnsPrivateKey,
+    ipnsName: params.destCtx.ipnsName,
+    sequenceNumber: params.destCtx.sequenceNumber,
+    ctx: params.ctx,
+  });
+
+  // 3. If file: re-seal FileMetadata under dest folderKey (done AFTER dest publish)
+  if (movedItem.type === 'file' && params.fileIpnsPrivateKey) {
+    const fp = movedItem as FilePointer;
+    await reencryptFileMetadataForFolderChange({
+      fileMetaIpnsName: fp.fileMetaIpnsName,
+      fileIpnsPrivateKey: params.fileIpnsPrivateKey,
+      sourceFolderKey: params.srcCtx.folderKey,
+      destFolderKey: params.destCtx.folderKey,
+      ctx: params.ctx,
+    });
+    // Caller owns zeroing fileIpnsPrivateKey in finally — NOT this function.
+  }
+
+  // 4. Publish SOURCE (remove)
+  const srcResult = await updateFolderMetadataAndPublish({
+    children: updatedSourceChildren,
+    baseChildren: params.srcCtx.children,
+    folderKey: params.srcCtx.folderKey,
+    ipnsPrivateKey: params.srcCtx.ipnsPrivateKey,
+    ipnsName: params.srcCtx.ipnsName,
+    sequenceNumber: params.srcCtx.sequenceNumber,
+    ctx: params.ctx,
+  });
+
+  return { srcResult, destResult };
+}
+
+// ---------------------------------------------------------------------------
+// Function 7: updateSharePermission
 // ---------------------------------------------------------------------------
 
 /**

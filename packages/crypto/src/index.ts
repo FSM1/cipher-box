@@ -62,8 +62,11 @@ export { wrapKey, unwrapKey, reWrapKey } from './ecies';
 export { generateEd25519Keypair, deriveEd25519PublicKey, type Ed25519Keypair } from './ed25519';
 export { signEd25519, verifyEd25519 } from './ed25519/sign';
 
-// IPNS name derivation (kept in crypto as a pure crypto utility)
+// IPNS name derivation + record verification/parsing (pure crypto utilities,
+// backed by the `ipns` package so the wire format matches record creation)
 export { deriveIpnsName } from './ipns/derive-name';
+export { verifyIpnsRecordSignature } from './ipns/verify-record';
+export { parseIpnsRecord, type ParsedIpnsRecord } from './ipns/parse-record';
 
 // Device identity (per-device Ed25519 keypair)
 export { generateDeviceKeypair, deriveDeviceId, type DeviceKeypair } from './device';

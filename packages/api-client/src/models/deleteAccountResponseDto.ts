@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.39.0
+ * OpenAPI spec version: 0.40.0
  */
 
 export interface DeleteAccountResponseDto {

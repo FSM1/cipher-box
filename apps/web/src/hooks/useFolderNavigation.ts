@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { FolderEntry } from '@cipherbox/core';
-import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
+import type { FolderState } from '@cipherbox/sdk';
 import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
-import { useAuthStore } from '../stores/auth.store';
-import { fetchAndDecryptMetadata } from '@cipherbox/sdk-core';
 import { getSdkClient } from '../lib/sdk-provider';
-import { resolveIpnsRecord } from '../services/ipns.service';
 import { logger } from '../lib/logger';
 
 /**
@@ -210,13 +207,6 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         return;
       }
 
-      // Get user's ECIES private key for unwrapping
-      const vaultKeypair = useAuthStore.getState().vaultKeypair;
-      if (!vaultKeypair) {
-        logger.error('[Nav] Cannot load folder: no vault keypair available');
-        return;
-      }
-
       // Insert placeholder BEFORE navigating so the component re-render
       // finds the folder node already in the store (avoids undefined flash)
       setIsLoading(true);
@@ -238,68 +228,52 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       navigate(`/files/${targetFolderId}`);
 
       try {
-        // Unwrap keys using user's ECIES private key
-        const folderKey = await unwrapKey(
-          hexToBytes(folderEntry.folderKeyEncrypted),
-          vaultKeypair.privateKey
-        );
-        const ipnsPrivateKey = await unwrapKey(
-          hexToBytes(folderEntry.ipnsPrivateKeyEncrypted),
-          vaultKeypair.privateKey
-        );
-
-        // Load folder metadata from IPNS (retry if IPNS hasn't propagated yet)
+        // Load folder via SDK (handles ECIES unwrap + IPNS resolve + decrypt internally).
+        // ensureFolderLoaded returns null immediately without retry, so we wrap it in a
+        // thin 3x/2s retry loop to tolerate IPNS propagation delay on just-created folders.
         const MAX_RETRIES = 3;
         const RETRY_DELAY_MS = 2000;
-        let folderNode: FolderNode | null = null;
-        const baseFolderNode = {
-          id: targetFolderId,
-          name: folderEntry.name,
-          ipnsName: folderEntry.ipnsName,
-          parentId,
-          isLoading: false,
-          folderKey,
-          ipnsPrivateKey,
-        };
+        let state: FolderState | null = null;
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
           if (latestNavTarget.current !== targetFolderId) return;
-
-          const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
-
-          if (!resolved) {
-            // IPNS not propagated yet — mark as not loaded for retry
-            folderNode = {
-              ...baseFolderNode,
-              children: [],
-              isLoaded: false,
-              sequenceNumber: 0n,
-            };
-          } else {
-            const metadata = await fetchAndDecryptMetadata(
-              resolved.cid,
-              folderKey,
-              getSdkClient().getContext()
-            );
-            folderNode = {
-              ...baseFolderNode,
-              children: metadata.children ?? [],
-              isLoaded: true,
-              sequenceNumber: resolved.sequenceNumber,
-            };
-          }
-
-          // If loaded successfully or this is the last attempt, stop retrying
-          if (folderNode.isLoaded || attempt === MAX_RETRIES) break;
-
+          state = await getSdkClient().ensureFolderLoaded(folderEntry.ipnsName);
+          if (state) break;
+          if (attempt === MAX_RETRIES) break;
           // IPNS not propagated yet — wait and retry
           await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
         }
 
-        // Only apply result if this is still the latest navigation
+        // Re-check guard after all awaits (user may have navigated away mid-retry)
         if (latestNavTarget.current !== targetFolderId) return;
 
-        useFolderStore.getState().setFolder(folderNode!);
+        // ensureFolderLoaded exhausted its retries (IPNS not propagated yet) —
+        // treat as a load failure rather than rendering an empty, keyless folder.
+        // Throwing routes into the catch below (remove placeholder + redirect to
+        // parent), giving the user a clear failure instead of a stuck empty view.
+        if (!state) {
+          throw new Error('Folder not loaded — IPNS propagation timed out');
+        }
+
+        // Map FolderState -> FolderNode.
+        // Clone SDK-owned key buffers — client.destroy() zeroes them on logout,
+        // so aliasing would leave React state with use-after-zero references.
+        // Do NOT read state.ipnsKeypair.publicKey — it is new Uint8Array(0) for
+        // tree-walked folders (ensureFolderLoaded does not populate it).
+        const folderNode: FolderNode = {
+          id: targetFolderId,
+          name: folderEntry.name,
+          ipnsName: folderEntry.ipnsName,
+          parentId,
+          children: state.children,
+          isLoaded: true,
+          isLoading: false,
+          sequenceNumber: state.sequenceNumber,
+          folderKey: new Uint8Array(state.folderKey),
+          ipnsPrivateKey: new Uint8Array(state.ipnsKeypair.privateKey),
+        };
+
+        useFolderStore.getState().setFolder(folderNode);
       } catch (err) {
         logger.error('[Nav] Failed to load subfolder:', err);
         // Only clean up if this is still the latest navigation

@@ -2274,6 +2274,232 @@ export class CipherBoxClient {
     });
   }
 
+  /**
+   * Move an item between two subfolders within a single shared folder (REQ-2).
+   *
+   * Resolves the destination folder's keys from `share_keys` (recipient-wrapped),
+   * loads fresh dest children via `loadFolderMetadata` (A1 — never a cached ref),
+   * delegates to the stateless `moveInSharedFolder` op (publish DEST → re-key →
+   * publish SOURCE), adopts the SOURCE result into `sharedFolderTree`, and
+   * emits `sharedFolder:updated` for the active depth (source).
+   *
+   * Write-capability guard (T-49-01): requires a `share_keys keyType:'folder-ipns'`
+   * entry for `destFolderId` — absence throws before any publish.
+   *
+   * Key zeroing (T-49-04): `destFolderKey`, `destIpnsPrivateKey`, and
+   * `fileIpnsPrivateKey` are zeroed in `finally` (caller owns `vaultPrivateKey`).
+   */
+  async moveInSharedFolder(
+    shareId: string,
+    args: {
+      itemId: string;
+      destFolderId: string;
+      destIpnsName: string;
+      vaultPrivateKey: Uint8Array;
+      getShareKeysFn: (
+        shareId: string
+      ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
+    }
+  ): Promise<void> {
+    return this.withOperation('moveInSharedFolder', async () => {
+      const srcState = this.requireSharedFolder(shareId);
+
+      // Guard: a folder cannot be moved into itself — it would orphan/cycle the
+      // subtree. (Descendant-of-self is additionally prevented at the picker via
+      // enumerateSharedSubtree's parentId; this is defense-in-depth at the op.)
+      if (args.destFolderId === args.itemId) {
+        throw new Error('Cannot move a folder into itself');
+      }
+
+      const shareKeys = await args.getShareKeysFn(shareId);
+
+      // Validate both records exist BEFORE unwrapping any keys (write-cap guard T-49-01).
+      // Checking presence first keeps the error messages clear and avoids partial unwraps.
+      const destFolderKeyRecord = shareKeys.find(
+        (k) => k.keyType === 'folder' && k.itemId === args.destFolderId
+      );
+      if (!destFolderKeyRecord) throw new Error('No read key for destination folder');
+
+      const destFolderIpnsRecord = shareKeys.find(
+        (k) => k.keyType === 'folder-ipns' && k.itemId === args.destFolderId
+      );
+      if (!destFolderIpnsRecord) throw new Error('No write key for destination folder');
+
+      // Unwrap dest keys; declare before try so finally can zero them.
+      let destFolderKey: Uint8Array | null = null;
+      let destIpnsPrivateKey: Uint8Array | null = null;
+      let fileIpnsPrivateKey: Uint8Array | null = null;
+
+      try {
+        destFolderKey = await unwrapKey(
+          hexToBytes(destFolderKeyRecord.encryptedKey),
+          args.vaultPrivateKey
+        );
+        destIpnsPrivateKey = await unwrapKey(
+          hexToBytes(destFolderIpnsRecord.encryptedKey),
+          args.vaultPrivateKey
+        );
+
+        // Load dest children fresh — NEVER use a cached/stale ref (A1)
+        const destMeta = await sdkCore.loadFolderMetadata({
+          ipnsName: args.destIpnsName,
+          folderKey: destFolderKey,
+          ctx: this.ctx,
+        });
+        const destChildren = destMeta?.metadata?.children ?? [];
+        const destSequenceNumber = destMeta?.sequenceNumber ?? 0n;
+
+        // Resolve file IPNS key from share_keys (recipient-wrapped — NEVER FilePointer)
+        const movedItem = srcState.children.find((c) => c.id === args.itemId);
+        if (movedItem?.type === 'file') {
+          const fileIpnsRecord = shareKeys.find(
+            (k) => k.keyType === 'file-ipns' && k.itemId === args.itemId
+          );
+          if (fileIpnsRecord) {
+            fileIpnsPrivateKey = await unwrapKey(
+              hexToBytes(fileIpnsRecord.encryptedKey),
+              args.vaultPrivateKey
+            );
+          }
+        }
+
+        const { srcResult } = await shareOps.moveInSharedFolder({
+          ctx: this.ctx,
+          srcCtx: {
+            folderKey: srcState.folderKey,
+            ipnsPrivateKey: srcState.ipnsPrivateKey,
+            ipnsName: srcState.ipnsName,
+            sequenceNumber: srcState.sequenceNumber,
+            children: srcState.children,
+          },
+          destCtx: {
+            folderKey: destFolderKey,
+            ipnsPrivateKey: destIpnsPrivateKey,
+            ipnsName: args.destIpnsName,
+            sequenceNumber: destSequenceNumber,
+            children: destChildren,
+          },
+          itemId: args.itemId,
+          fileIpnsPrivateKey,
+        });
+        // Adopt SOURCE only — never call adoptSharedFolderResult for dest (Pitfall 1)
+        this.adoptSharedFolderResult(shareId, srcResult);
+      } finally {
+        // Zero all temporarily-resolved key material (T-49-04)
+        if (fileIpnsPrivateKey) fileIpnsPrivateKey.fill(0);
+        if (destIpnsPrivateKey) destIpnsPrivateKey.fill(0);
+        if (destFolderKey) destFolderKey.fill(0);
+      }
+    });
+  }
+
+  /**
+   * Enumerate all subfolders reachable from the share root via DFS (REQ-1).
+   *
+   * Uses the loaded share-root state as the starting point, then resolves
+   * each subfolder's `folderKey` from `share_keys keyType:'folder'` and
+   * determines write-capability from the presence of a `keyType:'folder-ipns'`
+   * entry. A `visited` set prevents cycles / repeated walks. Nodes missing
+   * their `folder` key in `share_keys` are silently skipped (no read access).
+   *
+   * Never zeroes `vaultPrivateKey` — the caller owns zeroing.
+   *
+   * @returns Flat array of `{ id, name, ipnsName, writable }` picker nodes.
+   */
+  async enumerateSharedSubtree(
+    shareId: string,
+    args: {
+      getShareKeysFn: (
+        shareId: string
+      ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
+      vaultPrivateKey: Uint8Array;
+    }
+  ): Promise<
+    Array<{
+      id: string;
+      name: string;
+      ipnsName: string;
+      writable: boolean;
+      parentId: string | null;
+    }>
+  > {
+    return this.withOperation('enumerateSharedSubtree', async () => {
+      const rootState = this.requireSharedFolder(shareId);
+      const shareKeys = await args.getShareKeysFn(shareId);
+
+      const result: Array<{
+        id: string;
+        name: string;
+        ipnsName: string;
+        writable: boolean;
+        parentId: string | null;
+      }> = [];
+      // visited keyed by ipnsName prevents cycles (a folder that references
+      // an ancestor's ipnsName would otherwise loop indefinitely)
+      const visited = new Set<string>([rootState.ipnsName]);
+      // `id` is the containing folder's id (null for the share root), threaded
+      // onto each node as `parentId` so the picker can exclude the moved
+      // folder's own subtree (a move into a descendant would cycle the tree).
+      const stack: Array<{
+        id: string | null;
+        ipnsName: string;
+        children: typeof rootState.children;
+      }> = [{ id: null, ipnsName: rootState.ipnsName, children: rootState.children }];
+
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        for (const child of current.children) {
+          if (child.type !== 'folder') continue;
+          if (visited.has(child.ipnsName)) continue;
+          visited.add(child.ipnsName);
+
+          // Require a read key — skip nodes the recipient cannot decrypt
+          const keyRecord = shareKeys.find((k) => k.keyType === 'folder' && k.itemId === child.id);
+          if (!keyRecord) continue;
+
+          const folderKey = await unwrapKey(
+            hexToBytes(keyRecord.encryptedKey),
+            args.vaultPrivateKey
+          );
+
+          try {
+            const writable = shareKeys.some(
+              (k) => k.keyType === 'folder-ipns' && k.itemId === child.id
+            );
+
+            result.push({
+              id: child.id,
+              name: child.name,
+              ipnsName: child.ipnsName,
+              writable,
+              parentId: current.id,
+            });
+
+            // Load children to continue DFS
+            const meta = await sdkCore.loadFolderMetadata({
+              ipnsName: child.ipnsName,
+              folderKey,
+              ctx: this.ctx,
+            });
+            if (meta?.metadata?.children) {
+              stack.push({
+                id: child.id,
+                ipnsName: child.ipnsName,
+                children: meta.metadata.children,
+              });
+            }
+          } finally {
+            // Zero the per-iteration folder key — never leave plaintext AES folder
+            // keys live in the heap across the DFS (caller owns vaultPrivateKey).
+            folderKey.fill(0);
+          }
+        }
+      }
+
+      return result;
+    });
+  }
+
   // ---- BYO-IPFS pinning ----
 
   /**

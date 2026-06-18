@@ -10,7 +10,15 @@
  */
 
 import type React from 'react';
-import { useState, useCallback, useRef, useEffect, type MouseEvent, type DragEvent } from 'react';
+import {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  useMemo,
+  type MouseEvent,
+  type DragEvent,
+} from 'react';
 import type { FolderChild, FilePointer } from '@cipherbox/core';
 import { useSharedNavigation } from '../../hooks/useSharedNavigation';
 import { useContextMenu } from '../../hooks/useContextMenu';
@@ -32,6 +40,8 @@ import { VideoPlayerDialog } from './VideoPlayerDialog';
 import { TextEditorDialog } from './TextEditorDialog';
 import { SharedListRow } from './SharedListRow';
 import { SharedFolderRow } from './SharedFolderRow';
+import { SharedMoveDialog } from './SharedMoveDialog';
+import { SelectionActionBar } from './SelectionActionBar';
 import '../../styles/shared-browser.css';
 
 /**
@@ -82,6 +92,8 @@ export function SharedFileBrowser() {
     renameItem,
     deleteItem,
     updateSharedFile,
+    moveItem,
+    batchMoveItems,
   } = useSharedNavigation();
 
   const contextMenu = useContextMenu();
@@ -119,6 +131,74 @@ export function SharedFileBrowser() {
 
   // Drag-and-drop state
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // Move dialog state
+  const [moveDialogItem, setMoveDialogItem] = useState<FolderChild | null>(null);
+  const handleMoveClick = useCallback((item: FolderChild) => setMoveDialogItem(item), []);
+
+  // ---------------------------------------------------------------------------
+  // Multi-select selection state (mirrors useFileBrowserActions :218-235)
+  // ---------------------------------------------------------------------------
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const selectedItems = useMemo(
+    () => folderChildren.filter((c) => selectedIds.has(c.id)),
+    [folderChildren, selectedIds]
+  );
+  // The batch action bar only appears for a genuine multi-selection (>1), mirroring
+  // the private vault (FileBrowser :205 `selectedIds.size > 1`). Gating on >0 would
+  // make a plain single click — which is also the first click of a double-click —
+  // pop the bar in above the list, shifting the rows down so the second click of
+  // the double-click misses the row and folder navigation never fires.
+  const multiSelectActive = selectedIds.size > 1;
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  const handleSelect = useCallback(
+    (itemId: string, event: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => {
+      const isCtrl = event.ctrlKey || event.metaKey;
+      if (isCtrl) {
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(itemId)) next.delete(itemId);
+          else next.add(itemId);
+          return next;
+        });
+      } else {
+        setSelectedIds(new Set([itemId]));
+      }
+    },
+    []
+  );
+
+  // Prune selected IDs when folder children change (navigation)
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const childIdSet = new Set(folderChildren.map((c) => c.id));
+      const pruned = new Set([...prev].filter((id) => childIdSet.has(id)));
+      if (pruned.size === prev.size) return prev;
+      return pruned;
+    });
+  }, [folderChildren]);
+
+  // Clear selection on navigation
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [currentShareId, breadcrumbs]);
+
+  // Batch move dialog state
+  const [batchMoveDialogOpen, setBatchMoveDialogOpen] = useState(false);
+  const [batchMoveItems_, setBatchMoveItems_] = useState<FolderChild[]>([]);
+
+  const handleBatchMoveClick = useCallback(() => {
+    if (selectedItems.length === 0) return;
+    setBatchMoveItems_([...selectedItems]);
+    setBatchMoveDialogOpen(true);
+  }, [selectedItems]);
 
   // Inline rename state
   const [renamingItem, setRenamingItem] = useState<FolderChild | null>(null);
@@ -562,6 +642,18 @@ export function SharedFileBrowser() {
         )}
       </div>
 
+      {/* Selection action bar -- shown when items are selected in write shares.
+          Only Move is wired for shared multi-select (phase 49); Download/Delete
+          are intentionally omitted so the bar renders no no-op buttons. */}
+      {isWritable && multiSelectActive && (
+        <SelectionActionBar
+          selectedItems={selectedItems}
+          isLoading={isLoading}
+          onClearSelection={clearSelection}
+          onMove={handleBatchMoveClick}
+        />
+      )}
+
       {/* Inline new folder input */}
       {showNewFolderInput && (
         <div className="shared-inline-input">
@@ -652,6 +744,8 @@ export function SharedFileBrowser() {
                 onRenameKeyDown={handleRenameKeyDown}
                 onRenameSubmit={handleRenameSubmit}
                 onContextMenu={(e) => handleContextMenu(e, item)}
+                isSelected={selectedIds.has(item.id)}
+                onSelect={(e) => handleSelect(item.id, e)}
                 onDoubleClick={() => {
                   if (item.type === 'folder') {
                     navigateToSubfolder(item.id, item.name);
@@ -659,6 +753,29 @@ export function SharedFileBrowser() {
                     downloadSharedFile(item);
                   }
                 }}
+                onMoveItemTo={
+                  isWritable
+                    ? (destFolderId, destIpnsName, draggedItems) => {
+                        // Route by what was actually dragged (not the current
+                        // selection, nor the drop target). Resolve the dragged
+                        // ids back to the current folder's children.
+                        const draggedIds = new Set(draggedItems.map((d) => d.id));
+                        const movedItems = sortedChildren.filter((c) => draggedIds.has(c.id));
+                        if (movedItems.length === 0) return;
+                        if (movedItems.length > 1) {
+                          void batchMoveItems(
+                            movedItems,
+                            destFolderId,
+                            destIpnsName,
+                            clearSelection
+                          );
+                        } else {
+                          void moveItem(movedItems[0], destFolderId, destIpnsName);
+                        }
+                      }
+                    : undefined
+                }
+                selectedItems={selectedItems}
               />
             ))}
           </div>
@@ -703,10 +820,48 @@ export function SharedFileBrowser() {
           }
           onRename={isWritable ? handleRename : () => {}}
           onDelete={isWritable ? handleDelete : () => {}}
+          onMove={
+            isWritable && contextMenu.item?.type === 'file'
+              ? () => handleMoveClick(contextMenu.item!)
+              : undefined
+          }
           onDetails={handleDetailsClick}
           readOnly={permission !== 'write'}
         />
       )}
+
+      {/* Move dialog -- shared subtree picker (folder view only) */}
+      <SharedMoveDialog
+        open={!!moveDialogItem}
+        item={moveDialogItem}
+        currentFolderId={breadcrumbs[breadcrumbs.length - 1]?.id ?? currentShareId ?? ''}
+        shareId={currentShareId}
+        onClose={() => setMoveDialogItem(null)}
+        onConfirm={(destFolderId, destIpnsName) => {
+          if (moveDialogItem) {
+            void moveItem(moveDialogItem, destFolderId, destIpnsName);
+          }
+          setMoveDialogItem(null);
+        }}
+      />
+
+      {/* Batch move dialog -- opened from SelectionActionBar */}
+      <SharedMoveDialog
+        open={batchMoveDialogOpen}
+        item={null}
+        items={batchMoveItems_}
+        currentFolderId={breadcrumbs[breadcrumbs.length - 1]?.id ?? currentShareId ?? ''}
+        shareId={currentShareId}
+        onClose={() => {
+          setBatchMoveDialogOpen(false);
+          setBatchMoveItems_([]);
+        }}
+        onConfirm={(destFolderId, destIpnsName) => {
+          void batchMoveItems(batchMoveItems_, destFolderId, destIpnsName, clearSelection);
+          setBatchMoveDialogOpen(false);
+          setBatchMoveItems_([]);
+        }}
+      />
 
       {/* Details dialog */}
       <DetailsDialog

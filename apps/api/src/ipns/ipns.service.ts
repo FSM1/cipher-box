@@ -4,7 +4,6 @@ import {
   HttpStatus,
   BadRequestException,
   ConflictException,
-  NotFoundException,
   Logger,
   Inject,
   forwardRef,
@@ -22,9 +21,7 @@ import {
 import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
-import { parseIpnsRecord } from './ipns-record-parser';
-import { SharesService } from '../shares/shares.service';
-import { deriveIpnsName } from '@cipherbox/crypto';
+import { deriveIpnsName, parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
 
 @Injectable()
 export class IpnsService {
@@ -36,8 +33,7 @@ export class IpnsService {
     private readonly delegatedRouting: DelegatedRoutingClient,
     @Inject(forwardRef(() => RepublishService))
     private readonly republishService: RepublishService,
-    private readonly metricsService: MetricsService,
-    private readonly sharesService: SharesService
+    private readonly metricsService: MetricsService
   ) {}
 
   /**
@@ -81,6 +77,14 @@ export class IpnsService {
         if (derivedName !== dto.ipnsName) {
           throw new BadRequestException('publicKey does not correspond to the given ipnsName');
         }
+      }
+
+      // Verify the record's Ed25519 SignatureV2 against the key the IPNS name
+      // encodes. A validly-signed record proves possession of the private key,
+      // which IS the authority to update this name — the cache is keyed by
+      // ipnsName, not by user, so any holder of the key may publish.
+      if (!(await verifyIpnsRecordSignature(dto.ipnsName, recordBytes))) {
+        throw new BadRequestException('IPNS record signature verification failed');
       }
 
       // Save to DB first so resolve always has a fallback, even if delegated
@@ -203,22 +207,29 @@ export class IpnsService {
     recordType: 'folder' | 'file' = 'folder',
     expectedSequenceNumber?: string
   ): Promise<FolderIpns> {
-    let existing = await this.getFolderIpns(userId, ipnsName);
+    // The cache is keyed by ipnsName alone — there is one canonical row per name.
+    // The caller's authority to update it was already proven by signature
+    // verification in publishRecord (key possession), so no ownership/share check
+    // is needed here: whoever holds the key updates the canonical record.
+    const existing = await this.folderIpnsRepository.findOne({ where: { ipnsName } });
 
-    // If not the owner, check for active write share authorization.
-    // When no owner record is found AND a write share exists, look up
-    // the owner's FolderIpns by ipnsName. When no write share exists,
-    // fall through to the create-new-entry path (owner's first publish).
-    if (!existing) {
-      const writeShare = await this.sharesService.findActiveWriteShare(userId, ipnsName);
-      if (writeShare) {
-        // Look up the sharer's FolderIpns record using their userId from the share
-        existing = await this.folderIpnsRepository.findOne({
-          where: { userId: writeShare.sharerId, ipnsName },
+    // Anti-rollback: the incoming record's EMBEDDED sequence (covered by the
+    // signature, so tamper-evident) must not regress below the stored record's.
+    // Without this, anyone who observes the public IPNS record could replay an
+    // old-but-still-valid signed copy (no key needed) to roll the canonical row
+    // back to a stale CID — independent of the optional expectedSequenceNumber CAS.
+    // Equal sequences are allowed (idempotent re-publish of the current record).
+    if (existing?.signedRecord) {
+      const [incoming, stored] = await Promise.all([
+        parseIpnsRecord(signedRecord),
+        parseIpnsRecord(existing.signedRecord),
+      ]);
+      if (incoming.sequence < stored.sequence) {
+        throw new ConflictException({
+          statusCode: 409,
+          message: 'IPNS record sequence regression rejected (rollback/replay)',
+          currentSequenceNumber: existing.sequenceNumber,
         });
-        if (!existing) {
-          throw new NotFoundException('IPNS name not found');
-        }
       }
     }
 
@@ -398,7 +409,7 @@ export class IpnsService {
       try {
         const recordBytes = await this.delegatedRouting.resolve(ipnsName);
         if (recordBytes) {
-          result = this.parseIpnsRecordBytes(recordBytes);
+          result = await this.parseIpnsRecordBytes(recordBytes);
           this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${result.cid}`);
         }
       } catch (error) {
@@ -418,7 +429,7 @@ export class IpnsService {
       const cached = await this.folderIpnsRepository.findOne({
         where: { ipnsName },
       });
-      const cachedResult = this.parseCachedRecord(cached);
+      const cachedResult = await this.parseCachedRecord(cached);
 
       if (result && cached?.publicKey) {
         result = this.withCachedPublicKey(result, cached.publicKey);
@@ -480,18 +491,18 @@ export class IpnsService {
   }
 
   /**
-   * Parse an IPNS record to extract CID and sequence number
-   * Uses inline protobuf decoder — no external dependencies
+   * Parse an IPNS record to extract CID and sequence number.
+   * Backed by the `ipns` package via @cipherbox/crypto (parseIpnsRecord).
    */
-  private parseIpnsRecordBytes(recordBytes: Uint8Array): {
+  private async parseIpnsRecordBytes(recordBytes: Uint8Array): Promise<{
     cid: string;
     sequenceNumber: string;
     signatureV2?: string;
     data?: string;
     pubKey?: string;
-  } {
+  }> {
     try {
-      const record = parseIpnsRecord(recordBytes);
+      const record = await parseIpnsRecord(recordBytes);
 
       // Extract CID from the Value field (format: /ipfs/<cid>)
       const valuePath = record.value;
@@ -522,13 +533,13 @@ export class IpnsService {
     }
   }
 
-  private parseCachedRecord(cached: FolderIpns | null): {
+  private async parseCachedRecord(cached: FolderIpns | null): Promise<{
     cid: string;
     sequenceNumber: string;
     signatureV2?: string;
     data?: string;
     pubKey?: string;
-  } | null {
+  } | null> {
     if (!cached?.latestCid) {
       return null;
     }
@@ -536,7 +547,7 @@ export class IpnsService {
     if (cached.signedRecord) {
       try {
         const parsed = this.withCachedPublicKey(
-          this.parseIpnsRecordBytes(cached.signedRecord),
+          await this.parseIpnsRecordBytes(cached.signedRecord),
           cached.publicKey ?? undefined
         );
         // Use the DB columns as authoritative — sequenceNumber is always

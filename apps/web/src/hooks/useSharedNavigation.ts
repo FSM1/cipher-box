@@ -79,6 +79,15 @@ type UseSharedNavigationReturn = {
   deleteItem: (item: FolderChild) => Promise<void>;
   /** Update a file's content in the currently-viewed write-shared folder */
   updateSharedFile: (item: FilePointer, newContent: Uint8Array) => Promise<void>;
+  /** Move an item to a destination subfolder within the same share */
+  moveItem: (item: FolderChild, destFolderId: string, destIpnsName: string) => Promise<void>;
+  /** Move multiple items to a destination subfolder (web-layer loop, no SDK batch op) */
+  batchMoveItems: (
+    items: FolderChild[],
+    destFolderId: string,
+    destIpnsName: string,
+    clearSelection: () => void
+  ) => Promise<void>;
 };
 
 /**

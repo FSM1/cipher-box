@@ -148,6 +148,8 @@ export async function createInviteLink(params: {
             itemFolderKey,
             ownerPrivateKey,
             ephemeralKeypair.publicKey,
+            // Invite links are read-only — never distribute IPNS signing keys.
+            'read',
             () => {} // No progress UI for invite creation
           );
         }

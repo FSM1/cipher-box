@@ -35,6 +35,8 @@ export type SharedFolderClient = Pick<
   | 'renameInSharedFolder'
   | 'deleteFromSharedFolder'
   | 'updateSharedFile'
+  | 'moveInSharedFolder' // REQ-2
+  | 'enumerateSharedSubtree' // REQ-1
 >;
 
 /** Inputs needed to seed (or re-seed) the SDK for the active shared folder. */

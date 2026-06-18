@@ -100,50 +100,21 @@ Write-Host "  Root IPNS: $RootIpns"
 Write-Host ""
 
 # ---- Helper: Invoke-BumpServerSequence ----
-# Bumps the server-side sequence number for a given IPNS name by publishing
-# without expectedSequenceNumber (backward-compatible unconditional publish).
-# This simulates another device publishing to the same folder.
+# Advances the vault's root IPNS sequence with a REAL, validly-signed record.
+# The server is signature-gated (it rejects records whose Ed25519 SignatureV2
+# does not verify against the name's key), so a dummy unsigned record can no
+# longer fake a bump. bump-ipns-sequence.mjs derives the deterministic vault IPNS
+# keypair and republishes the current root metadata UNCHANGED at sequence+1 --
+# exactly what a legitimate second device does -- making the desktop's cached
+# sequence stale.
 function Invoke-BumpServerSequence {
-    param([string]$IpnsName)
+    param([string]$IpnsName)  # informational; the helper bumps the vault root via /vault
 
-    # 1. Resolve current CID for this IPNS name (for the metadataCid field)
-    $CurrentCid = $null
-    try {
-        $ResolveResp = Invoke-RestMethod -Uri "$ApiUrl/ipns/resolve?ipnsName=$IpnsName" -Headers $Headers
-        $CurrentCid = if ($ResolveResp.cid) { $ResolveResp.cid } else { $ResolveResp.value }
-    } catch {
-        Write-Host "  WARNING: Could not resolve CID for $IpnsName"
-    }
-
-    if (-not $CurrentCid) {
-        Write-Host "  WARNING: Using placeholder CID for $IpnsName"
-        $CurrentCid = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
-    }
-
-    # 2. Publish with a dummy record and no expectedSequenceNumber.
-    #    This unconditionally increments the server-side sequence number,
-    #    making the desktop's cached sequence stale.
-    $DummyRecord = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("dummy-conflict-test-record"))
-
-    $PublishBody = @{
-        ipnsName    = $IpnsName
-        record      = $DummyRecord
-        metadataCid = $CurrentCid
-    } | ConvertTo-Json
-
-    try {
-        $PublishResp = Invoke-RestMethod -Uri "$ApiUrl/ipns/publish" `
-            -Method Post `
-            -Headers $Headers `
-            -ContentType "application/json" `
-            -Body $PublishBody
-        if ($PublishResp.success) {
-            Write-Host "  Server sequence bumped to $($PublishResp.sequenceNumber) for $IpnsName"
-        } else {
-            throw "Publish response did not indicate success for $IpnsName"
-        }
-    } catch {
-        throw "Failed to bump server sequence for ${IpnsName}: $_"
+    $BumpScript = Join-Path $PSScriptRoot "bump-ipns-sequence.mjs"
+    $env:TEST_SECRET = $TestSecret
+    & node $BumpScript --api-url $ApiUrl --email $TestEmail
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to bump server sequence for ${IpnsName} (exit $LASTEXITCODE)"
     }
 }
 

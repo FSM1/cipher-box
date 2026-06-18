@@ -1,12 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import {
-  BadRequestException,
-  ConflictException,
-  HttpException,
-  HttpStatus,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, HttpStatus } from '@nestjs/common';
 import { IpnsService } from './ipns.service';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { PublishIpnsDto, BatchPublishIpnsDto } from './dto';
@@ -14,11 +8,20 @@ import { User } from '../auth/entities/user.entity';
 import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
-import { SharesService } from '../shares/shares.service';
-import { parseIpnsRecord } from './ipns-record-parser';
+import { parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
 
-jest.mock('./ipns-record-parser');
+// Mock only the record parse + signature verification; keep deriveIpnsName real
+// (the test IPNS name is derived from testPublicKeyBytes via the real function).
+jest.mock('@cipherbox/crypto', () => {
+  const actual = jest.requireActual('@cipherbox/crypto');
+  return {
+    ...actual,
+    parseIpnsRecord: jest.fn(),
+    verifyIpnsRecordSignature: jest.fn().mockResolvedValue(true),
+  };
+});
 const mockParseIpnsRecord = parseIpnsRecord as jest.Mock;
+const mockVerifyIpnsRecordSignature = verifyIpnsRecordSignature as jest.Mock;
 
 describe('IpnsService', () => {
   let service: IpnsService;
@@ -38,9 +41,6 @@ describe('IpnsService', () => {
     ipfsIpnsDuration: { startTimer: jest.Mock };
     ipnsResolveDuration: { observe: jest.Mock };
     ipnsPublishDuration: { observe: jest.Mock };
-  };
-  let mockSharesService: {
-    findActiveWriteShare: jest.Mock;
   };
 
   // Test data
@@ -115,16 +115,15 @@ describe('IpnsService', () => {
           provide: MetricsService,
           useValue: mockMetricsService,
         },
-        {
-          provide: SharesService,
-          useValue: (mockSharesService = {
-            findActiveWriteShare: jest.fn().mockResolvedValue(null),
-          }),
-        },
       ],
     }).compile();
 
     service = module.get<IpnsService>(IpnsService);
+
+    // Defaults: records verify, and parse yields a benign sequence (0n) so the
+    // anti-rollback check in upsertFolderIpns is a no-op unless a test overrides.
+    mockVerifyIpnsRecordSignature.mockResolvedValue(true);
+    mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 0n });
   });
 
   afterEach(() => {
@@ -1370,32 +1369,15 @@ describe('IpnsService', () => {
   });
 
   // =========================================================================
-  // Write-share authorization (patch coverage)
+  // Decentralized authority: signature-gated, ipnsName-keyed publishing
   // =========================================================================
 
-  describe('publishRecord - write-share authorization', () => {
-    it('should allow write-share recipient to publish to shared IPNS name', async () => {
-      const recipientId = '660e8400-e29b-41d4-a716-446655440001';
-      // No owner record for this userId
-      mockFolderIpnsRepo.findOne
-        .mockResolvedValueOnce(null) // getFolderIpns(recipientId, ipnsName) = null
-        .mockResolvedValueOnce({ ...mockFolderEntity }); // findOne({ ipnsName }) = owner's record
-
-      mockSharesService.findActiveWriteShare.mockResolvedValue({
-        id: 'share-1',
-        sharerId: testUserId,
-        recipientId,
-      });
-
-      mockFolderIpnsRepo.save.mockResolvedValue({
-        ...mockFolderEntity,
-        sequenceNumber: '6',
-      });
-
-      mockParseIpnsRecord.mockReturnValue({
-        value: `/ipfs/${testMetadataCid}`,
-        sequenceNumber: 6n,
-      });
+  describe('publishRecord - signature-gated, ipnsName-keyed', () => {
+    it('lets any holder of the key update the canonical record (non-owner publish)', async () => {
+      const otherUser = '660e8400-e29b-41d4-a716-446655440001';
+      // One canonical row per ipnsName, created by testUserId; looked up by name.
+      mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '6' });
 
       const dto: PublishIpnsDto = {
         ipnsName: testIpnsName,
@@ -1403,24 +1385,22 @@ describe('IpnsService', () => {
         metadataCid: testMetadataCid,
       };
 
-      const result = await service.publishRecord(recipientId, dto);
+      const result = await service.publishRecord(otherUser, dto);
 
       expect(result.sequenceNumber).toBe('6');
-      expect(mockSharesService.findActiveWriteShare).toHaveBeenCalledWith(
-        recipientId,
-        testIpnsName
-      );
+      // Authorized by signature (verify mocked true); looked up by name alone —
+      // no per-user / share authorization.
+      expect(mockVerifyIpnsRecordSignature).toHaveBeenCalled();
+      expect(mockFolderIpnsRepo.findOne).toHaveBeenCalledWith({
+        where: { ipnsName: testIpnsName },
+      });
+      // The canonical row keeps its original creator (userId is not reassigned).
+      const saved = mockFolderIpnsRepo.save.mock.calls[0][0];
+      expect(saved.userId).toBe(testUserId);
     });
 
-    it('should throw NotFoundException when write-share exists but IPNS record missing', async () => {
-      const recipientId = '660e8400-e29b-41d4-a716-446655440001';
-      mockFolderIpnsRepo.findOne
-        .mockResolvedValueOnce(null) // getFolderIpns = null
-        .mockResolvedValueOnce(null); // findOne({ ipnsName }) = null
-
-      mockSharesService.findActiveWriteShare.mockResolvedValue({
-        id: 'share-1',
-      });
+    it('rejects a record whose signature does not verify', async () => {
+      mockVerifyIpnsRecordSignature.mockResolvedValueOnce(false);
 
       const dto: PublishIpnsDto = {
         ipnsName: testIpnsName,
@@ -1428,28 +1408,14 @@ describe('IpnsService', () => {
         metadataCid: testMetadataCid,
       };
 
-      await expect(service.publishRecord(recipientId, dto)).rejects.toThrow(NotFoundException);
+      await expect(service.publishRecord(testUserId, dto)).rejects.toThrow(BadRequestException);
+      expect(mockFolderIpnsRepo.save).not.toHaveBeenCalled();
     });
 
-    it('should not update TEE enrollment when caller is write-share recipient', async () => {
-      const recipientId = '660e8400-e29b-41d4-a716-446655440001';
-      mockFolderIpnsRepo.findOne
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ ...mockFolderEntity });
-
-      mockSharesService.findActiveWriteShare.mockResolvedValue({
-        id: 'share-1',
-        sharerId: testUserId,
-        recipientId,
-      });
-
-      const savedEntity = { ...mockFolderEntity, sequenceNumber: '6' };
-      mockFolderIpnsRepo.save.mockResolvedValue(savedEntity);
-
-      mockParseIpnsRecord.mockReturnValue({
-        value: `/ipfs/${testMetadataCid}`,
-        sequenceNumber: 6n,
-      });
+    it('does not touch TEE enrollment when the publisher is not the row creator', async () => {
+      const otherUser = '660e8400-e29b-41d4-a716-446655440001';
+      mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '6' });
 
       const dto: PublishIpnsDto = {
         ipnsName: testIpnsName,
@@ -1459,9 +1425,9 @@ describe('IpnsService', () => {
         keyEpoch: 2,
       };
 
-      await service.publishRecord(recipientId, dto);
+      await service.publishRecord(otherUser, dto);
 
-      // TEE enrollment fields should NOT be updated (existing.userId !== userId)
+      // Enrollment fields stay as the creator's (existing.userId !== publisher).
       const saved = mockFolderIpnsRepo.save.mock.calls[0][0];
       expect(saved.encryptedIpnsPrivateKey).toEqual(
         Buffer.from(testEncryptedIpnsPrivateKey, 'hex')
@@ -1469,18 +1435,12 @@ describe('IpnsService', () => {
       expect(saved.keyEpoch).toBe(testKeyEpoch);
     });
 
-    it('should create new IPNS entry for first-time publisher', async () => {
+    it('creates a new canonical entry for a first-time publisher', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
-      mockSharesService.findActiveWriteShare.mockResolvedValue(null);
 
       const newEntity = { ...mockFolderEntity, userId: 'new-user-id', sequenceNumber: '1' };
       mockFolderIpnsRepo.create.mockReturnValue(newEntity);
       mockFolderIpnsRepo.save.mockResolvedValue(newEntity);
-
-      mockParseIpnsRecord.mockReturnValue({
-        value: `/ipfs/${testMetadataCid}`,
-        sequenceNumber: 1n,
-      });
 
       const dto: PublishIpnsDto = {
         ipnsName: testIpnsName,
@@ -1490,6 +1450,50 @@ describe('IpnsService', () => {
 
       const result = await service.publishRecord('new-user-id', dto);
       expect(result.sequenceNumber).toBe('1');
+    });
+
+    it('rejects a replayed record whose embedded sequence regresses (anti-rollback)', async () => {
+      const stored = {
+        ...mockFolderEntity,
+        signedRecord: Buffer.from('stored-record-bytes'),
+        sequenceNumber: '9',
+      };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(stored);
+      // Promise.all order: incoming record first, stored record second.
+      mockParseIpnsRecord
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 4n }) // incoming
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 9n }); // stored
+
+      const dto: PublishIpnsDto = {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      };
+
+      await expect(service.publishRecord(testUserId, dto)).rejects.toThrow(ConflictException);
+      expect(mockFolderIpnsRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('accepts a record whose embedded sequence advances past the stored record', async () => {
+      const stored = {
+        ...mockFolderEntity,
+        signedRecord: Buffer.from('stored-record-bytes'),
+        sequenceNumber: '9',
+      };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(stored);
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...stored, sequenceNumber: '10' });
+      mockParseIpnsRecord
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 10n }) // incoming
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 9n }); // stored
+
+      const dto: PublishIpnsDto = {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      };
+
+      const result = await service.publishRecord(testUserId, dto);
+      expect(result.sequenceNumber).toBe('10');
     });
   });
 
