@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-06-18T01:25:42.481Z"
+last_updated: "2026-06-18T01:32:52.469Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 34
   completed_phases: 33
   total_plans: 151
-  completed_plans: 147
+  completed_plans: 148
   percent: 97
 ---
 
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 49 (shared-folder-move-intra-share-and-usefoldernavigation-unwra) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolidation, PR #494) complete — its 5 SUMMARY.md files were backfilled 2026-06-17 (had shipped but were never written, which had tripped a false-positive resume gate).
 
 ## Performance Metrics
@@ -147,6 +147,7 @@ Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolida
 | Phase 48 P05 | 8min | 3 tasks | 145 files |
 | Phase 48 P06 | 18min | 3 tasks | 5 files |
 | Phase 49 P01 | 13min | 2 tasks | 5 files |
+| Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P02 | 15min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -282,7 +283,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-18
 
-Last session: 2026-06-18T01:25:42.475Z
+Last session: 2026-06-18T01:32:48.463Z
 
 ## Decisions
 
@@ -294,3 +295,4 @@ Last session: 2026-06-18T01:25:42.475Z
 - [Phase ?]: journal_helpers: helper takes &OpenFileHandle directly (open_files entry removed before call)
 - [Phase ?]: journal_helpers: WinFsp write_gen read after write_generation bump; fuser uses result field captured before mutation
 - [Phase ?]: journal_helpers: build_mkdir_journal_entry called after child inode inserted so build_folder_metadata sees new child
+- [Phase ?]: Keep @internal on ensureFolderLoaded; call directly from web hook
