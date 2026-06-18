@@ -1,0 +1,9 @@
+no need to run markdown lint on the .planning folder - this is excluded from linting for a reason.
+
+---
+
+push it up and pr please
+
+---
+
+/resolve-pr-reviews

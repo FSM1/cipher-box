@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f0028d45d465",
+  "session_id": "e71e5adc-e2bd-4705-825e-ada21d580522",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T23:10:18.93481Z",
+  "branch": "docs/large-file-refactor-todo",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-19-large-file-refactor-candidates.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "794b129d2288",
+  "checkpoint_transcript_start": 142,
+  "transcript_lines_at_start": 142,
+  "token_usage": {
+    "input_tokens": 569,
+    "cache_creation_tokens": 15349,
+    "cache_read_tokens": 2555396,
+    "output_tokens": 11301,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Push a docs-only branch tracking large-file refactor candidates to GitHub, open a PR, then resolve automated reviewer comments on that PR.",
+    "outcome": "PR #517 opened on cipher-box (docs/large-file-refactor-todo → main); two Greptile review threads resolved by completing the frontmatter `files:` list and removing an ambiguous `read_ops.rs` entry from the Leave-as-is section.",
+    "learnings": {
+      "repo": [
+        ".planning/ is excluded from markdownlint by design (`--ignore .planning` in lint-staged); prettier still runs on those files via the hook",
+        "CodeRabbit was rate-limited on this PR; Greptile was the active automated reviewer instead",
+        "The `gh pr edit` command fails for Projects-classic on this repo — PR body must be set at creation time via `gh pr create --body`",
+        "The release bot (release-please) pushes a `chore(release)` commit onto open branches, requiring a `git fetch` + rebase before further edits"
+      ],
+      "code": [
+        {
+          "path": ".planning/todos/pending/2026-06-19-large-file-refactor-candidates.md",
+          "finding": "Frontmatter `files:` list was incomplete (missing entries for all 26 surveyed files); fixed in review-fix commit. Also had an ambiguous `read_ops.rs` entry in Leave-as-is that duplicated a Tier 2 item — removed."
+        }
+      ],
+      "workflow": [
+        "Background commit timeouts (exit 124) can be false negatives — verify the commit hash directly rather than retrying",
+        "For docs-only markdown changes in .planning/, skip pnpm typecheck/test and markdownlint; the commit can go straight through"
+      ]
+    },
+    "friction": [
+      "`gh pr edit` fails for Projects-classic on this repo, requiring body to be passed at PR creation time",
+      "Background commit reported exit 124 (timeout) even though the commit landed successfully — caused momentary confusion",
+      "CodeRabbit was rate-limited, so Greptile handled automated review instead — tool availability is inconsistent"
+    ],
+    "open_items": [
+      "Branch docs/large-file-refactor-todo is local-only until pushed (was pushed in this session); PR #517 awaits merge",
+      "The large-file refactor candidates documented in the todo are deferred work — the .planning file tracks them as pending"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T23:10:03.156984Z",
+    "agent_lines": 25,
+    "agent_removed": 7,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 25,
+    "total_lines_changed": 32,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
