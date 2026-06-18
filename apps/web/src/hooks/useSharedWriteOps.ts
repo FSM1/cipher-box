@@ -206,6 +206,45 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
     [runWrite, p.setError]
   );
 
+  /**
+   * Move multiple items to a destination subfolder by looping moveInSharedFolder
+   * per item (mirrors useFolderMutations.handleMoveItems — no dedicated SDK batch op).
+   *
+   * Per-item failure stops the loop and surfaces the error (T-49-11). Calls
+   * clearSelection() on full success.
+   */
+  const batchMoveItemsHandler = useCallback(
+    async (
+      items: FolderChild[],
+      destFolderId: string,
+      destIpnsName: string,
+      clearSelection: () => void
+    ) => {
+      const auth = useAuthStore.getState();
+      if (!auth.vaultKeypair) {
+        p.setError('No keypair available');
+        return;
+      }
+      if (items.length === 0) return;
+
+      await runWrite(async (shareId) => {
+        for (const item of items) {
+          await getSdkClient().moveInSharedFolder(shareId, {
+            itemId: item.id,
+            destFolderId,
+            destIpnsName,
+            vaultPrivateKey: auth.vaultKeypair!.privateKey,
+            getShareKeysFn: fetchShareKeys,
+          });
+        }
+      }, 'Shared folder batch move failed');
+
+      // clearSelection only on full success (runWrite would have set error on failure)
+      clearSelection();
+    },
+    [runWrite, p.setError]
+  );
+
   return {
     uploadFile: uploadFileHandler,
     createFolder: createFolderHandler,
@@ -213,5 +252,6 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
     deleteItem: deleteItemHandler,
     updateSharedFile: updateSharedFileHandler,
     moveItem: moveItemHandler,
+    batchMoveItems: batchMoveItemsHandler,
   };
 }
