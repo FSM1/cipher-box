@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "08cdb22c0127",
+  "session_id": "d9452949-a180-4283-bd09-b15866b3df3b",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T00:23:35.868739Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-CONTEXT.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ad5b66d89644",
+  "checkpoint_transcript_start": 165,
+  "transcript_lines_at_start": 165,
+  "token_usage": {
+    "input_tokens": 133,
+    "cache_creation_tokens": 9492,
+    "cache_read_tokens": 375943,
+    "output_tokens": 8064,
+    "api_call_count": 2
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015svuNM8fHYa45N41EajUyG",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ad5b66d89644",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 107,
+        "end": 108,
+        "entry_ids": [
+          "6b2b36c6-cd5c-4c63-9f52-cd809e1b4ee1"
+        ],
+        "tool_use_id": "toolu_015svuNM8fHYa45N41EajUyG"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015svuNM8fHYa45N41EajUyG"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Document Phase 49 requirements in the ROADMAP and preserve the understanding-workflow output as a context document for the planner to consume.",
+    "outcome": "Phase 49 was added to the ROADMAP and a context doc (49-CONTEXT.md) was written and committed under .planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/.",
+    "learnings": {
+      "repo": [
+        "The gsd commit helper reports commit_failed as a known false-negative; git log is the authoritative source of truth for whether a commit landed.",
+        "Phase planning artifacts live under .planning/phases/<phase-slug>/ with a <N>-CONTEXT.md file storing pre-researched context for the planner."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-CONTEXT.md",
+          "finding": "Newly created context doc capturing 500k-token understanding-workflow output for Phase 49 (shared folder move, intra-share, and useFolderNavigation unwrap)."
+        }
+      ],
+      "workflow": [
+        "When a large understanding workflow produces expensive context, persist it as a phase context doc before handing off to planning so the planner doesn't re-research from scratch.",
+        "Do not retry gsd commits that report commit_failed without first checking git log — the tool has a documented false-negative behavior."
+      ]
+    },
+    "friction": [
+      "gsd commit helper false-negative on commit_failed required a manual git log verification step to confirm the commit actually landed."
+    ],
+    "open_items": [
+      "Phase 49 planning has not yet started — the context doc is staged for planner consumption but implementation work is deferred."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T00:23:25.633082Z",
+    "agent_lines": 173,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 173,
+    "total_lines_changed": 173,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
