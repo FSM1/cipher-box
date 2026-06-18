@@ -475,3 +475,71 @@ describe('moveItemHandler (REQ-2) — routes through runWrite -> client.moveInSh
     getStateSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// batchMoveItemsHandler — loops moveInSharedFolder, clears selection on success
+// ---------------------------------------------------------------------------
+
+describe('batchMoveItemsHandler (REQ-6) — loops moveInSharedFolder', () => {
+  beforeEach(() => {
+    mockMoveInSharedFolder.mockReset();
+    mockMoveInSharedFolder.mockResolvedValue(undefined);
+  });
+
+  function makeBatchOps(setError = vi.fn()) {
+    const clearSelection = vi.fn();
+    const ops = useSharedWriteOpsForTest({
+      currentShareId: 'share-abc',
+      sharedItems: [],
+      setIsLoading: vi.fn(),
+      setError,
+      handleRevocation: vi.fn(),
+    });
+    return { ops, setError, clearSelection };
+  }
+
+  // Resolved lazily inside each test (the hook is dynamically imported elsewhere).
+  let useSharedWriteOpsForTest: typeof import('../useSharedWriteOps').useSharedWriteOps;
+  beforeEach(async () => {
+    ({ useSharedWriteOps: useSharedWriteOpsForTest } = await import('../useSharedWriteOps'));
+  });
+
+  it('returns early for an empty items array (no move, no clearSelection)', async () => {
+    const { ops, clearSelection } = makeBatchOps();
+
+    await ops.batchMoveItems([], 'dest-folder-id', 'k51dest-ipns', clearSelection);
+
+    expect(mockMoveInSharedFolder).not.toHaveBeenCalled();
+    expect(clearSelection).not.toHaveBeenCalled();
+  });
+
+  it('moves every item and clears the selection on full success', async () => {
+    const { ops, clearSelection } = makeBatchOps();
+    const items = [makeChild('a.txt'), makeChild('b.txt')];
+
+    await ops.batchMoveItems(items, 'dest-folder-id', 'k51dest-ipns', clearSelection);
+
+    expect(mockMoveInSharedFolder).toHaveBeenCalledTimes(2);
+    const movedIds = mockMoveInSharedFolder.mock.calls.map(
+      (c) => (c as unknown as [string, { itemId: string }])[1].itemId
+    );
+    expect(movedIds).toEqual([items[0].id, items[1].id]);
+    expect(clearSelection).toHaveBeenCalledOnce();
+  });
+
+  it('stops on the first failure and does NOT clear the selection', async () => {
+    mockMoveInSharedFolder
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('IPNS publish failed'));
+    const setError = vi.fn();
+    const { ops, clearSelection } = makeBatchOps(setError);
+    const items = [makeChild('a.txt'), makeChild('b.txt'), makeChild('c.txt')];
+
+    await ops.batchMoveItems(items, 'dest-folder-id', 'k51dest-ipns', clearSelection);
+
+    // a moved (ok), b threw → loop stops before c.
+    expect(mockMoveInSharedFolder).toHaveBeenCalledTimes(2);
+    expect(clearSelection).not.toHaveBeenCalled();
+    expect(setError).toHaveBeenCalledWith(expect.stringContaining('IPNS publish failed'));
+  });
+});

@@ -4,8 +4,9 @@ import { type Page, type Locator } from '@playwright/test';
  * Page object for SharedMoveDialog component.
  *
  * The SharedMoveDialog loads the shared subtree via enumerateSharedSubtree and
- * renders destination folder rows with role="button". Read-only or current-folder
- * rows are disabled (aria-disabled="true", class "move-dialog-folder-item--disabled").
+ * renders destination folder rows with role="option". Read-only, current-folder,
+ * or move-cycle rows are disabled (aria-disabled="true", class
+ * "move-dialog-folder-item--disabled").
  *
  * Mirrors the shape of MoveDialogPage for the private-vault dialog.
  */
@@ -40,10 +41,13 @@ export class SharedMoveDialogPage {
   /**
    * Get a specific shared picker row by folder name.
    * Rows have class "shared-move-dialog-folder-item" (in addition to
-   * "move-dialog-folder-item") and role="button".
+   * "move-dialog-folder-item") and role="option". Matches the folder-name span
+   * EXACTLY so overlapping names (e.g. "docs" vs "docs-old") don't collide.
    */
   getFolderItem(name: string): Locator {
-    return this.folderList().locator('.shared-move-dialog-folder-item', { hasText: name });
+    return this.folderItems().filter({
+      has: this.page.getByText(name, { exact: true }),
+    });
   }
 
   /**
@@ -107,9 +111,18 @@ export class SharedMoveDialogPage {
    * list is visible).
    */
   async waitForTreeLoaded(options?: { timeout?: number }): Promise<void> {
-    await this.folderList().waitFor({ state: 'visible', ...options });
-    // Allow an extra tick for the loading indicator to disappear
-    await this.loadingIndicator().waitFor({ state: 'hidden', timeout: options?.timeout ?? 15_000 });
+    const timeout = options?.timeout ?? 15_000;
+    // Loading ends in BOTH the success and error cases (the dialog renders the
+    // folder list OR an error, never both). Wait for the loading indicator to
+    // clear, then fail fast with a clear message if the tree failed to load —
+    // otherwise waiting for the (never-rendered) list would just time out.
+    await this.loadingIndicator().waitFor({ state: 'hidden', timeout });
+    if (await this.loadError().isVisible()) {
+      throw new Error(
+        `SharedMoveDialog failed to load folder tree: ${(await this.loadError().textContent()) ?? ''}`
+      );
+    }
+    await this.folderList().waitFor({ state: 'visible', timeout });
   }
 
   /**
