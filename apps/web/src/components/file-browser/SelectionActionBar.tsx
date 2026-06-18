@@ -7,12 +7,12 @@ type SelectionActionBarProps = {
   isLoading: boolean;
   /** Callback to clear selection */
   onClearSelection: () => void;
-  /** Callback to download selected files */
-  onDownload: () => void;
+  /** Callback to download selected files. Omit to hide the download button. */
+  onDownload?: () => void;
   /** Callback to move selected items */
   onMove: () => void;
-  /** Callback to delete selected items */
-  onDelete: () => void;
+  /** Callback to delete selected items. Omit to hide the delete button. */
+  onDelete?: () => void;
 };
 
 /**
@@ -50,7 +50,7 @@ export function SelectionActionBar({
         </button>
       </div>
       <div className="selection-action-bar-actions">
-        {fileCount > 0 && (
+        {onDownload && fileCount > 0 && (
           <button
             type="button"
             className="toolbar-btn toolbar-btn--secondary"
@@ -70,15 +70,17 @@ export function SelectionActionBar({
         >
           &#8594; move
         </button>
-        <button
-          type="button"
-          className="toolbar-btn toolbar-btn--secondary selection-action-bar-delete"
-          onClick={onDelete}
-          disabled={isLoading}
-          aria-label={`Delete ${description}`}
-        >
-          &#128465; delete
-        </button>
+        {onDelete && (
+          <button
+            type="button"
+            className="toolbar-btn toolbar-btn--secondary selection-action-bar-delete"
+            onClick={onDelete}
+            disabled={isLoading}
+            aria-label={`Delete ${description}`}
+          >
+            &#128465; delete
+          </button>
+        )}
       </div>
     </div>
   );

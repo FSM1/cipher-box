@@ -637,15 +637,15 @@ export function SharedFileBrowser() {
         )}
       </div>
 
-      {/* Selection action bar -- shown when items are selected in write shares */}
+      {/* Selection action bar -- shown when items are selected in write shares.
+          Only Move is wired for shared multi-select (phase 49); Download/Delete
+          are intentionally omitted so the bar renders no no-op buttons. */}
       {isWritable && multiSelectActive && (
         <SelectionActionBar
           selectedItems={selectedItems}
           isLoading={isLoading}
           onClearSelection={clearSelection}
-          onDownload={() => {}}
           onMove={handleBatchMoveClick}
-          onDelete={() => {}}
         />
       )}
 
