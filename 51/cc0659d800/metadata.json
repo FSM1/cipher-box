@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "51cc0659d800",
+  "strategy": "manual-commit",
+  "branch": "docs/close-verification-ledger-19_2-23-27",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/51/cc0659d800/0/metadata.json",
+      "transcript": "/51/cc0659d800/0/full.jsonl",
+      "content_hash": "/51/cc0659d800/0/content_hash.txt",
+      "prompt": "/51/cc0659d800/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 84285,
+    "cache_creation_tokens": 2798509,
+    "cache_read_tokens": 140220249,
+    "output_tokens": 725535,
+    "api_call_count": 545
+  }
+}
