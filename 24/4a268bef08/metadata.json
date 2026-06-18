@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "244a268bef08",
+  "strategy": "manual-commit",
+  "branch": "docs/milestone-v1.1-summary-and-tech-debt",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/24/4a268bef08/0/metadata.json",
+      "transcript": "/24/4a268bef08/0/full.jsonl",
+      "content_hash": "/24/4a268bef08/0/content_hash.txt",
+      "prompt": "/24/4a268bef08/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18949,
+    "cache_creation_tokens": 349793,
+    "cache_read_tokens": 10278343,
+    "output_tokens": 118156,
+    "api_call_count": 62
+  }
+}

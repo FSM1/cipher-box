@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "244a268bef08",
+  "session_id": "6b107080-01fc-4642-99cd-af2e37e84054",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T19:56:55.167749Z",
+  "branch": "docs/milestone-v1.1-summary-and-tech-debt",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "9c9d4b010046",
+  "token_usage": {
+    "input_tokens": 18949,
+    "cache_creation_tokens": 349793,
+    "cache_read_tokens": 10278343,
+    "output_tokens": 118156,
+    "api_call_count": 62
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Generate a milestone v1.1 summary for team onboarding, then document all tech debt as tracked todos and open a docs PR capturing what was built, key decisions, and open work.",
+    "outcome": "PR #515 opened on branch `docs/milestone-v1.1-summary-and-tech-debt` (commit `0c394aef5`) containing MILESTONE_SUMMARY-v1.1.md, TECH_DEBT-v1.1.md, 5 net-new pending todo files (24 verified-open findings), a BACKLOG.md dated pointer, and a corrected ROADMAP.md with all 34 phases listed.",
+    "learnings": {
+      "repo": [
+        "Tech debt is tracked in two complementary places: `.planning/BACKLOG.md` (consolidated inventory) and `.planning/todos/pending/YYYY-MM-DD-*.md` (dated actionable files); new items must go in both to be discoverable.",
+        "The repo uses per-component semver tags (`cipher-box-vX.Y.Z`), not milestone-level tags — `v1.1` tag does not exist, so git stats require a commit-boundary fallback via earliest `.planning/phases/` commit.",
+        "`.planning/` is listed in `.markdownlintignore`, so pre-commit markdownlint/lint-staged skips all planning docs — no linting friction when writing there.",
+        "Phase `REVIEW.md` files are the richest source of untracked tech debt: phase 42 had no resolution section (all 12 WR/IN findings still open); phase 43 had a 'Post-Review Resolution (2026-06-14)' section confirming criticals fixed but warnings unresolved.",
+        "The milestone summary erroneously claimed ledger close-out commits #512/#513 resolved phases 18/31/32 verification gaps — those commits only covered phases 19.2/23/27/47-49; phases 18, 31, and 32 still lack VERIFICATION.md.",
+        "ROADMAP.md's Phase Details section was accurate (all 18–49), but the summary table and Phases checklist were stale: checklist stopped at phase 35 and was missing 19.1, 27, and phases 36–49.",
+        "Main branch is protected — always branch + PR, never commit directly to main."
+      ],
+      "code": [],
+      "workflow": [
+        "Workflow synthesize agents fail in a schema-validation retry loop when asked to emit 200+ nested items as a single StructuredOutput call; better pattern is sweep agents returning raw arrays and synthesizing in the main context with BACKLOG cross-reference.",
+        "Stopping a stuck workflow agent (`TaskStop`) and doing synthesis manually is faster and more accurate when the agent has wedged: the manual pass can verify each candidate against current code rather than trusting artifact text alone.",
+        "Phase completion dates are best derived from `git log --diff-filter=A --follow -- <phase_dir>` when SUMMARY.md frontmatter lacks a `completed_at` field.",
+        "Scheduled wakeup fallbacks can fire after the task has already completed in the same session — always check current state before re-executing work."
+      ]
+    },
+    "friction": [
+      "Workflow synthesize agent (effort: high, 292 raw items) wedged in schema-validation retry loop for 13+ minutes before being manually stopped — largest single delay in the session.",
+      "No milestone-level git tag meant git stats required a multi-step fallback (earliest `.planning/phases/` commit), adding complexity to the stats section.",
+      "Milestone summary's audit-gap claim was wrong (18/31/32 not actually closed), requiring a post-hoc correction edit — an error introduced by trusting STATE.md 100%-complete status rather than verifying artifact presence.",
+      "Scheduled fallback wakeup fired after task completion, requiring a no-op confirmation step."
+    ],
+    "open_items": [
+      "Phase 42 unpin integrity: 12 open WR/IN findings including WR-01 (INT_MIN advisory-lock overflow → permanent undeletability) and WR-03 (stale-outbox re-pin race → potential data loss) — tracked in `2026-06-18-phase42-unpin-integrity-review-open-findings.md`.",
+      "FUSE journal: WR-06 (unbounded journal growth, full ciphertext stored in JSON, no GC) and WR-07 (replay has no network timeout) — tracked in `2026-06-18-fuse-journal-growth-and-replay-timeout.md`.",
+      "Web/SDK observability: logger `redact()` never implemented, `registerFaroTransport` defined but never called (warn/error not reaching Faro) — tracked in `2026-06-18-web-logger-redaction-and-faro-transport-unwired.md`.",
+      "P29 unenroll skips unloaded subtrees — tracked in `2026-06-18-unenroll-skips-unloaded-subtrees.md`.",
+      "GSD process gaps: phases 18, 31, 32 still lack VERIFICATION.md; PERF-01..04 requirements orphaned — tracked in `2026-06-18-gsd-verification-gaps-phases-18-31-32.md`.",
+      "Deferred to v1.2+: Rust FUSE 409-merge approximates TS op-replay (can stomp remote-only changes), BYO provider.unpin not wired into client delete flows, writable-share version-prune leak, CRDT IPNS inbox, advisory folder_ipns cache, client-direct upload, desktop code-signing, pending-uploads UI.",
+      "PR #515 needs review and merge."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
