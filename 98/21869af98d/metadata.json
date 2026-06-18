@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9821869af98d",
+  "strategy": "manual-commit",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-VERIFICATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/98/21869af98d/0/metadata.json",
+      "transcript": "/98/21869af98d/0/full.jsonl",
+      "content_hash": "/98/21869af98d/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 292,
+    "cache_creation_tokens": 18521,
+    "cache_read_tokens": 2620641,
+    "output_tokens": 9885,
+    "api_call_count": 10
+  }
+}

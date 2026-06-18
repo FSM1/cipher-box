@@ -1,0 +1,140 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9821869af98d",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T02:27:28.377827Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d24aef7651a4",
+  "checkpoint_transcript_start": 388,
+  "transcript_lines_at_start": 388,
+  "token_usage": {
+    "input_tokens": 292,
+    "cache_creation_tokens": 18521,
+    "cache_read_tokens": 2620641,
+    "output_tokens": 9885,
+    "api_call_count": 10
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Complete phase 49 of a GSD workflow implementing shared folder move (intra-share) and usefolderNavigation unwrapping, then run final integration gates and verification.",
+    "outcome": "All 5 plans executed successfully. Typechecks clean, SDK 233/236 pass (3 known live-API failures), web 51/51 pass, lint clean across all packages. Verification report generated with 6/6 must-haves verified and committed.",
+    "learnings": {
+      "repo": [
+        "The project uses a multi-package structure with at minimum: SDK, web, and e2e packages, each with separate tsc and eslint gates.",
+        "Integration tests in `integration.test.ts` require a live local API + docker stack and are known to fail without it — these 3 failures are expected on main without docker.",
+        "The GSD workflow uses a verifier agent (sonnet) that produces a VERIFICATION.md with goal-backward REQ-N checks and a human_needed status when e2e requires docker.",
+        "Automated commits via the workflow can bypass husky pre-commit hooks, so lint must be run as a manual backstop.",
+        "Phase verification artifacts go to `.planning/phases/<phase-slug>/<phase>-VERIFICATION.md`.",
+        "The `.planning/intel/` directory contains generated API-surface hints and is not a deliverable — excluded from commits."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-VERIFICATION.md",
+          "finding": "REQ-5 e2e verification deferred to main-push gated live docker stack, same pattern as Phase 48."
+        }
+      ],
+      "workflow": [
+        "GSD workflow runs 5 plans sequentially per phase wave, then a final integration gate (typecheck + tests) before spawning a verifier agent.",
+        "Test suites are run sequentially (SDK then web) to avoid RAM contention.",
+        "The verifier agent does goal-backward verification and emits a structured VERIFICATION.md with REQ-N must-have checks.",
+        "WARNINGs from the verifier that are UX-only with no crypto/data impact are deferred to a QA pass rather than blocking phase completion."
+      ]
+    },
+    "friction": [
+      "Husky pre-commit hooks are bypassed by automated commits, requiring a manual eslint backstop step after all plans complete.",
+      "Live-API integration tests create persistent false-fail noise in the test suite (3 failures every run without docker).",
+      "The verifier status is `human_needed` due to e2e docker dependency, which may cause confusion about phase completeness."
+    ],
+    "open_items": [
+      "`batchMoveItemsHandler` clears selection unconditionally instead of on-success-only because `runWrite` swallows errors — UX regression deferred to QA pass.",
+      "REQ-5 e2e test for shared folder move needs live docker stack; deferred to main-push gate.",
+      "The 3 `integration.test.ts` live-API failures remain as known tech debt requiring docker environment setup to resolve."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T02:27:10.058221Z",
+    "agent_lines": 133,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 133,
+    "total_lines_changed": 133,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
