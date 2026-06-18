@@ -1,0 +1,295 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "c4a5195bab1e",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T14:18:18.778735Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "5c807c56e8bb",
+  "token_usage": {
+    "input_tokens": 58184,
+    "cache_creation_tokens": 2324584,
+    "cache_read_tokens": 117788403,
+    "output_tokens": 580109,
+    "api_call_count": 422
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5c807c56e8bb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5c807c56e8bb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Y9BFzDxtkoyDA2gfzwyF1m",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5c807c56e8bb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 459,
+        "end": 460,
+        "entry_ids": [
+          "a181a7be-0491-4eec-a94b-4db6dedb2187"
+        ],
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Ma4FwRABWAuLAfQHFYdZgs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security:review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5c807c56e8bb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 685,
+        "end": 686,
+        "entry_ids": [
+          "56903a0b-59b1-4fd1-88e3-5c4e813c7102"
+        ],
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security:review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01WS4GMAtYJKePcoMNvUErzY",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5c807c56e8bb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1072,
+        "end": 1073,
+        "entry_ids": [
+          "41ce9be6-cfc6-40ac-9d3b-113043ea7395"
+        ],
+        "tool_use_id": "toolu_01WS4GMAtYJKePcoMNvUErzY"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WS4GMAtYJKePcoMNvUErzY"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Plan and execute CipherBox Phase 49 (shared-folder intra-share move + useFolderNavigation consolidation + batch/drag move parity), run the standard PR-QA pipeline (simplify, security-review, CodeRabbit), push, and open a PR. After PR creation, fix CI E2E failures that surfaced two cascading architectural gaps: missing write-key distribution to share recipients, and a per-user-keyed IPNS cache that prevented any non-owner from publishing to a canonical record.",
+    "outcome": "PR #509 opened and all PR-QA gates passed. Three sessions of CI E2E failures were diagnosed and fixed, culminating in a decentralized IPNS re-architecture: `folder_ipns` is now keyed by `ipnsName` alone, publishes are authorized by Ed25519 record signature (key possession), the hand-rolled IPNS parser was replaced with the `ipns` library, and an anti-rollback sequence check was added. Web E2E passed on the third run; the only remaining failure was Windows desktop E2E whose conflict-detection helper used an unsigned dummy record that the new signature gate correctly rejected.",
+    "learnings": {
+      "repo": [
+        "Cross-package dist staleness: web tsc checks the *built* SDK dist, not source — must `pnpm build` in packages/sdk between waves whenever new public API is added before running web typecheck.",
+        "SDK `dist/` is gitignored; CI rebuilds it. Only source changes need committing.",
+        "Web package has no `typecheck` script; use `pnpm --filter @cipherbox/web exec tsc -b` instead.",
+        "`collectChildKeys` (key-wrapping.ts) previously emitted only 'folder'/'file' read keys for descendants, never 'folder-ipns'/'file-ipns' write keys — every owner-created subfolder/file in a write-share was read-only to the recipient.",
+        "`CHILD_KEY_TYPES` in apps/api/src/shares/types.ts is the validation source-of-truth for child key types; ChildKeyDto @IsIn and @ApiProperty enum both derive from it — adding a value there propagates to validation and the regenerated client.",
+        "The CipherBox IPNS service resolves records via its own DB first (DB is source of truth), then fires to DHT asynchronously. The TEE republishes enrolled records every 6h, overwriting unenrolled records even on the DHT.",
+        "`folder_ipns` had a `@Unique(['userId', 'ipnsName'])` constraint — a non-owner publish forked a duplicate row, and `resolveRecord` had no ordering so returned an arbitrary row. Changed to `@Unique(['ipnsName'])` with signature-gated authority.",
+        "Desktop E2E conflict-detection helpers (test-conflict-detection.sh/.ps1) used a dummy unsigned base64 string as a fake IPNS record to bump the server sequence — worked under the old trust-the-caller model, correctly rejected by the new signature gate. macOS/Linux swallowed the failure with a WARNING; Windows threw on it, creating an inconsistency.",
+        "TypeORM migrations are glob-loaded (`src/migrations/*.ts`) — just adding a file is sufficient; no registration step needed.",
+        "Pre-commit hook `check-api-client.sh` only blocks when generated client files have *unstaged* changes AND a triggering source file (.dto.ts/.controller.ts/.entity.ts) changed — staging the regenerated client satisfies it.",
+        "The private vault `FileBrowser.tsx` gates its `SelectionActionBar` on `selectedIds.size > 1`, not `> 0`. Gating on `> 0` causes the bar to pop in on the first click of a double-click, shifts the file list down, and breaks folder navigation via dblclick.",
+        "`SharedFolderRow` renders folder names with a decorative trailing `/` (`{item.name}{isFolder ? '/' : ''}`). Page-object name assertions must strip this or use slash-tolerant `.includes()` — the established convention in other e2e specs.",
+        "CodeRabbit's CHILL profile delivers findings in the PR review body, not as inline thread comments. `/resolve-pr-reviews` returns 0 threads; findings must be applied manually from the body."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/FileBrowser.tsx",
+          "line": 205,
+          "end_line": 205,
+          "finding": "Private vault gates SelectionActionBar on `selectedIds.size > 1` to prevent mid-double-click layout shifts. SharedFileBrowser must mirror this, not use `> 0`."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 213,
+          "end_line": 213,
+          "finding": "Old `findActiveWriteShare` used exact `ipnsName` match against top-level write Share rows — had no mechanism to authorize descendant subfolder publishes."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 287,
+          "end_line": 287,
+          "finding": "Old non-owner publish path forked a second row under the publisher's userId rather than updating the canonical row. `resolveRecord` had no ordering on the lookup, so returned an arbitrary row."
+        },
+        {
+          "path": "apps/api/src/ipns/entities/folder-ipns.entity.ts",
+          "line": 15,
+          "end_line": 15,
+          "finding": "Was `@Unique(['userId', 'ipnsName'])` — changed to `@Unique(['ipnsName'])` so any holder of the IPNS signing key can update the canonical record, enabling the decentralized model."
+        },
+        {
+          "path": "apps/web/src/lib/crypto/key-wrapping.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "`collectChildKeys` had no `permission` parameter and never emitted 'folder-ipns'/'file-ipns' write keys. Added `permission: 'read' | 'write'` param; on write it re-wraps ipnsPrivateKeyEncrypted for each descendant folder/file (guarded: fp.ipnsPrivateKeyEncrypted is optional on legacy files)."
+        },
+        {
+          "path": "packages/crypto/src/ipns/parse-record.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "`extractPublicKeyFromIPNSRecord` returns `undefined` synchronously for identity-key records (not a rejected promise) — must use try/catch, not `.catch()`. A `.catch()` on an undefined return throws immediately."
+        },
+        {
+          "path": "apps/api/src/shares/types.ts",
+          "line": 1,
+          "end_line": 5,
+          "finding": "`CHILD_KEY_TYPES` is the single source of truth for child key validation. Both `ChildKeyDto @IsIn` and `@ApiProperty enum` derive from it — updating the array is sufficient to propagate to validation and the regenerated OpenAPI client."
+        }
+      ],
+      "workflow": [
+        "Sequential executor mode (no worktrees) is safer than parallel worktrees for AFK runs — avoids worktree merge-back footguns and cwd-drift. Rebuild SDK dist manually between waves instead.",
+        "CodeRabbit CLI review before PR creation; CodeRabbit posts a GitHub review after creation. Under the CHILL profile, findings are in the review body (not inline threads), so `/resolve-pr-reviews` returns 0 threads — apply findings from body manually.",
+        "Commits that are non-building in isolation (e.g., a commit that stages git-rm'd files alongside unrelated changes) are acceptable when CI runs on the final HEAD which is verified correct.",
+        "Security reviews should cover both crypto-focused and general appsec angles separately — each surfaces different finding classes. Run both before merge on crypto-sensitive changes.",
+        "When a security review surfaces a High finding (e.g., replay/rollback via old signed records), fix it inline with a test before committing — don't defer.",
+        "An anti-rollback guard based on the *embedded* (signature-covered) sequence number is tamper-evident and the right fix; checking only the DB-stored sequenceNumber is not (it could be stale).",
+        "GSD plan-checker iteration is worth running twice: first pass catches doc-formatting nits and missing test coverage; second pass confirms clean. One revision round is typical.",
+        "After each wave in sequential execution, rebuild the affected package's dist and typecheck the consuming package immediately — catching cross-package type errors wave-by-wave is cheaper than finding them all at the end."
+      ]
+    },
+    "friction": [
+      "CodeRabbit GitHub review (CHILL profile) delivers findings in the review body, not inline threads — `/resolve-pr-reviews` returned 0 threads, requiring manual extraction and application.",
+      "gsd-tools commit helper (`gsd query commit`) false-negatives: reported `commit_failed` while commits actually landed — required a follow-up `git log` to verify every executor commit.",
+      "Commit `1be0dca11` swept in staged `git rm` parser deletions making it non-building in isolation; accepted since CI runs on final HEAD.",
+      "`extractPublicKeyFromIPNSRecord` returns `undefined` synchronously for identity keys (not a rejected promise) — `.catch()` threw immediately; required reading the libp2p source to diagnose.",
+      "CodeRabbit finding 2 (`setError` assertion) was a false positive — `runWrite` calls `setError(null)` to clear prior errors on entry, so `setError` IS called on success. Revert required after web test failed.",
+      "JSX comment syntax error: a `{/* comment */}` placed inside a `{cond && (...)}` single-child expression caused TS1005.",
+      "TS2352/TS2493 in batch test: the mock's call tuple was typed as `[]`, requiring `(c as unknown as [string, { itemId: string }])[1].itemId` cast.",
+      "Windows desktop E2E conflict helper threw on the now-correctly-rejected dummy bump while macOS/Linux silently swallowed it, masking the issue on non-Windows platforms and making the failure appear Windows-specific.",
+      "The intel API surface extractor (used by the gsd-planner as a HINT artifact) returned empty results — regex extractor unpopulated, requiring the planner to rely solely on RESEARCH.md for symbol refs.",
+      "Web has no `typecheck` npm script — discovering this required inspecting package.json; `tsc -b` must be invoked directly via the package filter."
+    ],
+    "open_items": [
+      "Branch commits are unsigned (signer disabled for AFK session per user authorization) — requires a signed rebase or admin override before merge since the repo enforces signed commits on PRs.",
+      "Live e2e UAT: `shared-folder-move.spec.ts` decrypt-survival assertions need a running docker stack (local or CI on merge) to fully exercise the two-account cross-client sync path.",
+      "Write access revocation now requires IPNS key rotation + re-share (accepted tradeoff of the decentralized model) — no server-side revoke path remains.",
+      "Descendant move-cycle guard is UI-only (`SharedMoveDialog` picker exclusion via `parentId`) + SDK self-move throw — no full SDK subtree-enforcement preventing a crafted client from sending a cycle-creating move. Documented in PR as proportionate given actor holds write keys.",
+      "Client-side `signatureVerified` field enforcement (fast-follow noted in PR): web client should surface a warning when a resolved record's signature doesn't verify client-side.",
+      "Resolve-path signature verification on un-cached records (fast-follow noted in PR).",
+      "Batch key-refetch on every `batchMoveItemsHandler` call — re-fetches ECIES keys for each item independently. Acceptable for v1 parity but could be batched.",
+      "DFS in `enumerateSharedSubtree` is sequential (gateway-rate-limit tradeoff); parallelizing would be faster but risks rate limiting the IPNS gateway.",
+      "`useMultiSelect` hook extraction across shared/private browsers — currently both manage selection state independently. Cross-boundary scope creep, noted as a follow-up.",
+      "Desktop E2E `.mjs` helper scripts → TypeScript migration (todo created at `.planning/todos/pending/2026-06-18-migrate-mjs-e2e-helper-scripts-to-typescript.md`).",
+      "3 pre-existing `integration.test.ts` SDK failures (live-API `/auth/test-login` suite) require a running docker stack — these fail on `main` too and are not regressions.",
+      "`SelectionActionBar` Delete and Download are hidden in the shared browser (made optional props, conditionally rendered) — shared-browser batch delete and download are not yet implemented."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
