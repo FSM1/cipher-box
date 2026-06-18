@@ -12,7 +12,11 @@ import {
 import { User } from '../../auth/entities/user.entity';
 
 @Entity('folder_ipns')
-@Unique(['userId', 'ipnsName'])
+// Keyed by ipnsName alone: there is one canonical record per IPNS name, and any
+// holder of the name's key may update it (authority is proven by the record's
+// signature, not by row ownership). `userId` is retained as a denormalized
+// creator marker for listing / TEE enrollment / cleanup only.
+@Unique(['ipnsName'])
 export class FolderIpns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

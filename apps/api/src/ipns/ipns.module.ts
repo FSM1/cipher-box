@@ -5,12 +5,10 @@ import { IpnsService } from './ipns.service';
 import { DelegatedRoutingModule } from './delegated-routing.module';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { RepublishModule } from '../republish/republish.module';
-import { SharesModule } from '../shares/shares.module';
 
 @Module({
   imports: [
     DelegatedRoutingModule,
-    SharesModule,
     TypeOrmModule.forFeature([FolderIpns]),
     forwardRef(() => RepublishModule),
   ],
