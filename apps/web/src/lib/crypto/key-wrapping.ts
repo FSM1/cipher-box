@@ -106,7 +106,10 @@ export async function collectChildKeys(
 
         // Write share: also grant the subfolder's IPNS signing key so the recipient
         // can write into / move items between owner-created descendant subfolders.
-        if (permission === 'write') {
+        // The field is typed required on FolderEntry, but guard it anyway (mirrors
+        // the file branch) to defend against malformed/legacy folder metadata
+        // decrypted from IPFS — such folders stay read-only rather than crashing.
+        if (permission === 'write' && folder.ipnsPrivateKeyEncrypted) {
           const reWrappedFolderIpns = await reWrapEncryptedKey(
             folder.ipnsPrivateKeyEncrypted,
             ownerPrivateKey,
