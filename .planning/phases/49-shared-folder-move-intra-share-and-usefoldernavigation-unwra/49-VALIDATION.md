@@ -45,7 +45,7 @@ created: 2026-06-18
 | REQ-1       | —                  | DFS enumerates subtree; folders lacking `folder-ipns` key marked non-writable    | unit      | `pnpm --filter @cipherbox/sdk test --run -- enumerate-shared-subtree`        | ❌ W0       | ⬜ pending |
 | REQ-2       | T-49 Access Ctrl   | Publish DEST → re-key FileMetadata → publish SOURCE; write-cap checked both ends  | unit      | `pnpm --filter @cipherbox/sdk test --run -- move-in-shared-folder`           | ❌ W0       | ⬜ pending |
 | REQ-2       | T-49 Tampering     | Name collision throws; re-key idempotent (source DECRYPTION_FAILED probes dest)   | unit      | same suite                                                                  | ❌ W0       | ⬜ pending |
-| REQ-3       | —                  | Web move handler via `runWrite`; shared `MoveDialog` picker; `onMove` folder-view | unit      | `pnpm --filter @cipherbox/web test --run`                                    | ❌ W0       | ⬜ pending |
+| REQ-3       | —                  | Web move handler via `runWrite`; shared `MoveDialog` picker; `onMove` folder-view | unit      | `pnpm --filter @cipherbox/web test --run -- useSharedWriteOps`               | ❌ W0       | ⬜ pending |
 | REQ-4       | T-49 InfoDisclose  | `ensureFolderLoaded` replaces unwrap; SDK buffers cloned into `FolderNode`        | unit      | `pnpm --filter @cipherbox/web test --run` + existing `ensure-folder-loaded` | ✅ partial  | ⬜ pending |
 | REQ-5       | T-49 CryptoFailure | Bob moves file; content DECRYPTS via TextEditor for Bob AND Alice after sync      | e2e       | `pnpm --filter web-e2e test -- shared-folder-move` (local docker stack)      | ❌ W0       | ⬜ pending |
 
@@ -57,6 +57,7 @@ _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 - [ ] `packages/sdk/src/__tests__/enumerate-shared-subtree.test.ts` — REQ-1 DFS + writable flag
 - [ ] `packages/sdk/src/__tests__/move-in-shared-folder.test.ts` — REQ-2 publish ordering, re-key, name collision, write-capability check
+- [ ] `apps/web/src/hooks/__tests__/useSharedWriteOps.test.ts` (moveItemHandler case) — REQ-3 `moveItemHandler` routes through `runWrite` → `client.moveInSharedFolder` with the expected shareId + move args, and surfaces errors via the `setError` path. Extends the EXISTING file (do NOT create a new one); the scoped run `-- useSharedWriteOps` must FAIL if the handler is missing (no vacuous full-suite pass).
 - [ ] `tests/web-e2e/tests/shared-folder-move.spec.ts` — REQ-5 two-account move + decrypt-survival (TextEditor `getContent`)
 
 _Existing `ensure-folder-loaded.test.ts` covers the `ensureFolderLoaded` SDK behavior; REQ-4 consolidation is verified at the web unit layer (FolderState→FolderNode mapping) — no new SDK test needed._
@@ -81,3 +82,4 @@ _Existing `ensure-folder-loaded.test.ts` covers the `ensureFolderLoaded` SDK beh
 - [ ] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** pending
+</content>

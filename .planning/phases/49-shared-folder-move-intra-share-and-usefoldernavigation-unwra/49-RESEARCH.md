@@ -46,7 +46,8 @@ two-account setup.
 
 - Cross-share moves
 - Share↔private-vault moves
-- Batch/drag move in the shared view (single-item context-menu move only for v1)
+- ~~Batch/drag move in the shared view~~ — RE-SCOPED INTO REQ-6 per the 2026-06-18 scope
+  addendum (see 49-CONTEXT.md); no longer deferred. Mirrors the private-vault analogs.
 - `ensureFolderLoaded` negative-cache / re-walk mitigation
 
 ## Phase Requirements
@@ -624,17 +625,17 @@ Existing `ensure-folder-loaded.test.ts` covers the `ensureFolderLoaded` SDK beha
 | A1 | The destination folder's current children must be fetched fresh via `loadFolderMetadata` inside the client method (not cached anywhere) | Architecture Patterns | If stale children are used for the dest publish, a name that was just added by another writer would not be caught, causing data loss on the 3-way merge |
 | A2 | `enumerateSharedSubtree` lives in `client.ts` (not `shared-write.ts`) because it requires ECIES key unwrap (vault private key), which is SDK-internal | Standard Stack | If placed in stateless `shared-write.ts`, the web would need to pass the vault private key, violating the SDK-owns-crypto boundary |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does `getShareKeysFn` need to be passed through to the stateless `moveInSharedFolder` op or resolved in the client method?**
    - What we know: `updateSharedFile` passes `getFileIpnsKeyFn` as a callback to the stateless op. `moveInSharedFolder` also needs the file's IPNS key (for re-encryption) and the dest folder's keys.
    - What's unclear: whether the stateless op should receive pre-resolved keys (simpler, avoids callback threading) or callbacks.
-   - Recommendation: Pass pre-resolved raw key bytes to the stateless op. The client method resolves all keys before calling the stateless function, mirroring how `moveItem` in client.ts pre-resolves `source` and `dest` FolderState before calling `sdkCore.moveItem`.
+   - **RESOLVED:** Pass pre-resolved raw key bytes to the stateless op. The client method resolves all keys before calling the stateless function, mirroring how `moveItem` in client.ts pre-resolves `source` and `dest` FolderState before calling `sdkCore.moveItem`.
 
 2. **Should `enumerateSharedSubtree` use the recipient's vault private key directly (requires passing it in) or should it accept per-folder folderKey callbacks?**
    - What we know: The DFS must unwrap each subfolder's `folderKey` from `share_keys`, ECIES-unwrapped with the recipient's vault private key.
    - What's unclear: whether the client method holds the vault private key or requires the web to pass it.
-   - Recommendation: The client does NOT hold the vault private key — the web must pass it (same pattern as `navigateToSubfolder` which receives `auth.vaultKeypair.privateKey`). Accept `vaultPrivateKey: Uint8Array` as an argument. Zero it never (caller owns).
+   - **RESOLVED:** The client does NOT hold the vault private key — the web must pass it (same pattern as `navigateToSubfolder` which receives `auth.vaultKeypair.privateKey`). Accept `vaultPrivateKey: Uint8Array` as an argument. Zero it never (caller owns).
 
 ## Sources
 
