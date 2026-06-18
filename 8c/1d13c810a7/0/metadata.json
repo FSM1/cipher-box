@@ -1,0 +1,73 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "8c1d13c810a7",
+  "session_id": "230ebd5e-7bc8-4128-b41a-7c99c052d9e4",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T23:51:12.955044Z",
+  "branch": "chore/ci-release-please-sdk-changelog-loop",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/sdk/CHANGELOG.md",
+    "release-please-config.json"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "35650f43be42",
+  "checkpoint_transcript_start": 256,
+  "transcript_lines_at_start": 256,
+  "token_usage": {
+    "input_tokens": 5741,
+    "cache_creation_tokens": 20082,
+    "cache_read_tokens": 942733,
+    "output_tokens": 15594,
+    "api_call_count": 5
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Fix a CI configuration issue where a bot's commit setting release targets for PR #509 was orphaned/clobbered during a rebase, causing sdk changelog targets to be missing.",
+    "outcome": "PR #520 was opened with an immediate fix; the branch/commit was renamed from `fix` to `chore(ci)` and the confirmed root cause (bot commit clobbered by rebase onto post-#508 main) was documented in the PR.",
+    "learnings": {
+      "repo": [
+        "release-please bot commits (e.g., 'set release targets for PR #509') can be orphaned if a branch is rebased/force-pushed after the bot acts, dropping the bot's commit from the ancestry of the merged result.",
+        "The merged PR #509 commit (c36ac6d77) descended from the #508 release commit (76647712d), not from the bot's commit (b13e99355), confirming the clobber pattern.",
+        "release-please-config.json holds sdk release targets that must survive branch rebases to take effect."
+      ],
+      "code": [
+        {
+          "path": "release-please-config.json",
+          "finding": "SDK release targets set by the bot were lost when the branch was rebased; config changes from bot commits must be preserved through rebase."
+        },
+        {
+          "path": "packages/sdk/CHANGELOG.md",
+          "finding": "Linter normalized changelog formatting on commit c9e2481b9; this is expected and benign."
+        }
+      ],
+      "workflow": [
+        "When a release-please bot commit is not an ancestor of main after merge, the fix branch should be typed as `chore(ci)` not `fix` since it restores CI config, not a code bug.",
+        "Checking `git log --ancestry-path` between the bot commit and main is the reliable way to confirm whether a bot commit survived a rebase/force-push."
+      ]
+    },
+    "friction": [
+      "Bot commit b13e99355 was silently orphaned by a rebase/force-push, with no immediate CI failure surfacing the dropped config change.",
+      "Initial branch/commit/PR type was `fix` and required rename to `chore(ci)` after root cause was clarified, adding an amend + force-push step."
+    ],
+    "open_items": [
+      "Systemic fix for the clobbered-bot-commit pattern was deferred to a separate `docs/` branch todo — not yet implemented.",
+      "Guard added to prevent recurrence was noted but the docs branch for the systemic fix had not been fully created/pushed at transcript end."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T23:50:58.844252Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 0,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
