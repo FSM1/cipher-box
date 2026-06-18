@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9a5948e4e19e",
+  "strategy": "manual-commit",
+  "branch": "docs/verify-phases-47-49",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/47-sdk-folder-state-publish-consolidation/47-VERIFICATION.md",
+    ".planning/phases/48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata/48-VERIFICATION.md",
+    ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-VERIFICATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9a/5948e4e19e/0/metadata.json",
+      "transcript": "/9a/5948e4e19e/0/full.jsonl",
+      "content_hash": "/9a/5948e4e19e/0/content_hash.txt",
+      "prompt": "/9a/5948e4e19e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 68024,
+    "cache_creation_tokens": 2686471,
+    "cache_read_tokens": 136049452,
+    "output_tokens": 680070,
+    "api_call_count": 516
+  }
+}
