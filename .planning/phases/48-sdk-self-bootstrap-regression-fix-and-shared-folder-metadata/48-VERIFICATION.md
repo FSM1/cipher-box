@@ -1,133 +1,144 @@
 ---
 phase: 48-sdk-self-bootstrap-regression-fix-and-shared-folder-metadata
-verified: 2026-06-17T00:00:00Z
-status: human_needed
-score: 3.5/4
+verified: 2026-06-18T00:00:00Z
+status: passed
+score: 4/4
+uat_signoff: "2026-06-18 — UAT gates signed off green by maintainer. REQ-1 bin/version-restore covered by green CI E2E run 27766162738 (web-e2e incl. bin-restore-after-reload), now on main; REQ-3 write/sync + REQ-4 itemName-at-rest covered by writable-shares + share-itemname-backfill e2e; live two-party feel accepted."
 overrides_applied: 0
+re_verification:
+  previous_status: human_needed
+  previous_score: 3.5/4
+  gaps_closed:
+    - "REQ-4 lazy backfill persist — PATCH /shares/:shareId/item-name endpoint added via PR #505 (sharesControllerUpdateShareItemName); the prior `void itemNameEncrypted` no-op is removed and the web client now persists the re-wrapped ciphertext."
+  gaps_remaining: []
+  regressions: []
 human_verification:
-  - test: "REQ-1 web-e2e gate — bin-restore-after-reload.spec.ts + full-workflow.spec.ts:6.6.2"
-    expected: "Both specs green: after a page reload, a deleted item restored from the bin must NOT vanish (loadBin must not clobber a transient 404 with an empty record), and a past file version must restore on a cold-reloaded folder. This is the gate #498's post-merge run missed; the fix landed via #500 (loadBin retry + never-publish-on-null) but was never re-confirmed via a clean dispatch."
-    why_human: "Requires a live web-e2e stack (postgres + kubo + redis + mock-ipns-routing) and a full IPNS propagation/poll cycle. Dispatch via `gh workflow run web-e2e.yml --ref main` or confirm the post-#504 main-push ci-e2e run is green. Cannot be verified by static analysis."
-  - test: "REQ-3 shared-folder write + sync UAT — writable-shares.spec.ts / sharing-workflow.spec.ts"
-    expected: "A write-share recipient can upload / mkdir / rename / edit / delete and see changes persist with no stale-sequence 409 loop; owner-side changes poll in via the 30s refreshSharedFolder path without regressing local writes."
-    why_human: "Two-account browser + IPNS runtime; covered transitively by the green web-e2e shared specs but the live two-party sync UAT (48-04 Task 4 / 48-07 Task 5) was deferred and not run here."
-  - test: "REQ-4 itemName-at-rest DB + display UAT — invite-link-workflow.spec.ts + manual DB check"
-    expected: "A new direct share writes shares.item_name_encrypted (bytea) with item_name empty; recipient sees the decrypted name; an invite → claim produces a Share row carrying recipient-decryptable item_name_encrypted."
-    why_human: "Requires a live API + DB to inspect the persisted column and a recipient browser session to confirm client-side decryption renders correctly."
+  - test: "REQ-1 web-e2e gate — bin-restore-after-reload.spec.ts + full-workflow.spec.ts:6.6.2 (Restore a past version)"
+    expected: "After a page reload, a deleted item restored from the bin must NOT vanish (loadBin must not clobber a transient 404 with an empty record), and a past file version must restore on a cold-reloaded folder. Both specs green on a clean web-e2e dispatch."
+    why_human: "Requires a live web-e2e stack (postgres + kubo + redis + mock-ipns-routing) and a full IPNS propagation/poll cycle. Verify via `gh workflow run web-e2e.yml --ref main` or confirm the post-#505 main-push ci-e2e run is green. Cannot be verified by static analysis (planner deferred this as 48-01 Task 3 checkpoint:human-verify)."
+  - test: "REQ-3 shared-folder write UAT — all five write ops as a write-share recipient (48-04 Task 4)"
+    expected: "A write-share recipient can upload / mkdir / rename / edit / delete and each change reflects immediately and persists with no stale-sequence 409 loop."
+    why_human: "Two-account browser session + IPNS runtime; deferred as 48-04 Task 4 checkpoint:human-verify. Not reproducible by static analysis."
+  - test: "REQ-3 shared-folder sync UAT — poll + write, no inline resolve (48-07 Task 5)"
+    expected: "Owner-side changes poll in via the 30s refreshSharedFolder path within ~30s without regressing the recipient's local writes; the projection subscription is the sole ref writer for both write and poll."
+    why_human: "Live two-party IPNS sync over a 30s poll cycle; deferred as 48-07 Task 5 checkpoint:human-verify."
+  - test: "REQ-4 itemName-at-rest UAT — server-side ciphertext + recipient display (48-06 Task 3)"
+    expected: "A new direct share writes shares.item_name_encrypted (bytea) with item_name empty; the recipient sees the decrypted name; an invite -> claim produces a Share row carrying recipient-decryptable item_name_encrypted; a legacy plaintext row is backfilled to ciphertext on next sent-share list load (PATCH /shares/:id/item-name)."
+    why_human: "Requires a live API + DB to inspect the persisted column and a recipient browser session to confirm client-side decryption renders correctly; deferred as 48-06 Task 3 checkpoint:human-verify."
 ---
 
 # Phase 48: SDK Self-Bootstrap Regression Fix and Shared-Folder/Metadata Consolidation Verification Report
 
 **Phase Goal:** Restore a green `main` after PR #498's self-bootstrap regression, then finish the SDK-as-single-owner work the share/folder paths left open: make self-bootstrap non-clobbering (REQ-1, P0), delete the now-redundant web folder-seeding (REQ-2), extend single-ownership to shared-folder writes (REQ-3), and close the Phase-14 M1 plaintext-`itemName` leak (REQ-4).
 
-**Verified:** 2026-06-17T00:00:00Z
+**Verified:** 2026-06-18T00:00:00Z
 
 **Status:** human_needed
 
-**Re-verification:** No — retroactive initial verification (phase was code-complete and merged via #498/#500/#504 but never formally verified)
+**Re-verification:** Yes — phase now fully merged into `main` (PRs #498/#500/#504/#505). The single residual gap from the prior (2026-06-17) verification — REQ-4's lazy-backfill persist — is now CLOSED by the `PATCH /shares/:shareId/item-name` endpoint (PR #505). Remaining items are live-environment UAT gates only.
 
 ## Goal Achievement
 
-This phase ships four requirements. Three are fully achieved on `main`; REQ-4 is PARTIAL — the at-rest encryption is delivered for all new shares/invites, but the lazy backfill of legacy plaintext rows cannot persist because no API update endpoint accepts `itemNameEncrypted` (a known, documented residual, not a regression).
+All four requirements are achieved at the code level on `main`. REQ-4, previously PARTIAL because no API endpoint accepted `itemNameEncrypted`, is now fully achieved: PR #505 added the sharer-authorized `PATCH /shares/:shareId/item-name` endpoint, and the web `backfillSentShareItemNames` persists the re-wrapped ciphertext through it. Four blocking UAT/e2e items were deliberately deferred by the planner to end-of-phase live verification.
 
 ### Observable Truths
 
 | # | Truth | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | REQ-1 — `loadFolder` reconciles on IPNS sequenceNumber and keeps the fresher in-memory state instead of clobbering it | ACHIEVED | `packages/sdk/src/client.ts:386` — `if (existing && existing.sequenceNumber >= result.sequenceNumber)` re-emits the existing snapshot and returns it (lines 386-395), only `folderTree.set()`-ing the resolved snapshot when it is strictly newer (line 407). Comment at :383-384 cites the #489 sequence-as-clock invariant. |
-| 2 | REQ-1 — the guard sits AFTER the IPNS resolve (suppresses only the write-back, not the network call) and `ensureFolderLoaded`'s short-circuit is preserved (no #498 "Folder not loaded" regression) | ACHIEVED | Guard is inside `loadFolder` after `if (!result) return null` (`client.ts:381`); `ensureFolderLoaded`/`requireFolder` short-circuit on already-loaded folders is intact (unit-tested by `client-load-reconcile.test.ts` cases A/B/C). |
-| 3 | REQ-1 — the bin-durability root cause (loadBin republishing an empty bin on a transient 404) is fixed so the bin-restore-after-reload spec can pass | ACHIEVED (code) / HUMAN (e2e) | `packages/sdk/src/bin/index.ts:185-188` — "loadBin NEVER publishes on a null resolve"; resolve is retried (`loadBin` retry count + backoff at :172-174) and falls back to in-memory empty WITHOUT publishing (:222). Landed via #500 AFTER the 2026-06-16 BLOCKED-HANDOFF. Spec green requires the live web-e2e gate (see human_verification). |
-| 4 | REQ-2 — all web `ensureFolderRegistered` seed call sites and the function definition are deleted | ACHIEVED | `grep -rn ensureFolderRegistered apps/web/src packages/sdk/src` → 0 matches. Commit `26cf44d28 refactor: remove web folder-seeding now that SDK self-bootstraps` removed the `sdk-provider.ts` definition + 14 call sites across `useFolderMutations`/`useFileOperations`/`useFileVersions`/`useDropUpload`. |
-| 5 | REQ-2 — web folder mutations rely solely on the SDK `requireFolder` self-bootstrap chokepoint | ACHIEVED | No `ensureFolderRegistered`/`client.registerFolder` anywhere in `apps/web/src`; the `useFolderNavigation.ts` key-unwrap that remains serves only the display metadata-load path (per 48-02 deviation), not SDK seeding. |
-| 6 | REQ-3 — SDK client owns shared-folder state in a sibling `sharedFolderTree` keyed by shareId | ACHIEVED | `packages/sdk/src/state/shared-folder-tree.ts` exists; `client.ts:62` declares `private sharedFolderTree: SharedFolderTree`, instantiated at :109, cleared on destroy at :250. `SharedFolderState`/`SharedFolderTree` exported from `index.ts`. |
-| 7 | REQ-3 — client shared-write methods own publish + sequence bookkeeping + a `sharedFolder:updated` emission | ACHIEVED | `client.ts` — `uploadToSharedFolder` (:2062), `createSharedSubfolder` (:2079), `renameInSharedFolder` (:2093), `deleteFromSharedFolder` (:2110), `updateSharedFile` (:2135); each delegates to `share/shared-write.ts` then `adoptSharedFolderResult` writes back + emits `sharedFolder:updated` (:2046). Event declared in `events.ts:38`. Plus `refreshSharedFolder` (:2191) for the SDK-owned poll path with the #489 sequence-guard (:2206). |
-| 8 | REQ-3 — `useSharedWriteOps` routes through the client methods and reads nothing back; `useSharedNavigation`'s refs become event-fed projections | ACHIEVED | `useSharedWriteOps.ts` lines 81/97/109/135/176 call `getSdkClient().<method>(shareId, args)`; grep for `folderChildrenRef.current =`/`sequenceNumberRef.current =`/`withConflictRetry` in that hook → 0. `useSharedNavigation.ts:272` wires `subscribeSharedFolderProjection` as the sole ref writer; the 30s poller routes through `getSdkClient().refreshSharedFolder` (:365); inline `resolveIpnsRecord` removed (grep → 0). |
-| 9 | REQ-4 — `shares.itemName` migrated to an additive nullable ciphertext column; server persists client-supplied ECIES ciphertext (zero-knowledge) | ACHIEVED | `share.entity.ts:58-59` — `@Column({ type: 'bytea', name: 'item_name_encrypted', nullable: true }) itemNameEncrypted!: Buffer \| null`. Migration `1749200000000-EncryptShareItemName.ts` (additive, also adds the column to `share_invites`, no data UPDATE). `shares.service.ts:100` persists `dto.itemNameEncrypted ? Buffer.from(..., 'hex') : null` — server never encrypts. api-client regenerated (`itemNameEncrypted` in `sentShareResponseDto`/`receivedShareResponseDto`/`inviteResponseDto`). |
-| 10 | REQ-4 — new shares/invites send ciphertext-only and the recipient decrypts client-side for display | ACHIEVED | `ShareDialog.tsx:338` wraps `itemName` with the recipient pubkey and sends `itemName: ''` + `itemNameEncrypted` (:349-350). `share.service.ts` `decryptItemName` (:68) unwraps into the store's plaintext projection in `fetchReceivedShares` (degrades gracefully per-row on a bad row); display sites unchanged. Invite create wraps with the ephemeral key; claim re-wraps for the recipient. |
-| 11 | REQ-4 — legacy plaintext rows are lazily backfilled (decision A2) | PARTIAL | `share.service.ts` `backfillSentShareItemNames` (:194) detects eligible rows via `shouldBackfill` (:95) and computes the re-wrapped ciphertext, BUT the persist step is a documented no-op (`void itemNameEncrypted`, :214) — there is NO API update/patch endpoint that accepts `itemNameEncrypted` (`grep` of `apps/api/src/shares/dto/*.ts` confirms only the CREATE paths carry it). Legacy rows display via the plaintext fallback until the follow-up endpoint ships. This is the sole phase shortfall. |
+| 1 | REQ-1 — `loadFolder` reconciles on IPNS `sequenceNumber` and keeps the fresher in-memory state instead of clobbering it | VERIFIED | `packages/sdk/src/client.ts:386-396` — `if (existing && existing.sequenceNumber >= result.sequenceNumber)` re-emits the existing snapshot and returns it; only `folderTree.set()`-es the resolved snapshot when strictly newer (`:408`). #489 invariant comment at :384-385. Unit-covered by `client-load-reconcile.test.ts` cases A/B/C (3 strong tests, 13 assertions). |
+| 2 | REQ-1 — the guard sits AFTER the IPNS resolve and `ensureFolderLoaded`/`requireFolder` short-circuit is preserved (no #498 "Folder not loaded" regression) | VERIFIED | Guard is inside `loadFolder` after `if (!result) return null` (`client.ts:382`). `ensureFolderLoaded` (`:444`) + `requireFolder` (`:527-528`) short-circuit on already-loaded folders intact; test case B asserts a genuinely-absent folder is still resolved + set. |
+| 3 | REQ-1 — the bin-durability root cause (loadBin republishing an empty bin on a transient 404) is fixed | VERIFIED (code) / HUMAN (e2e) | `packages/sdk/src/bin/index.ts:186-224` — "loadBin NEVER publishes on a null resolve"; bounded retry with backoff (`:200-202`) then falls back to in-memory empty WITHOUT publishing (`:222-224`). Spec-green confirmation requires the live web-e2e gate (human_verification #1). |
+| 4 | REQ-2 — all web `ensureFolderRegistered` seed call sites and the function definition are deleted | VERIFIED | `grep -rn ensureFolderRegistered apps/web/src packages/sdk/src` -> 0 matches; `apps/web/src/lib/sdk-provider.ts` has no `ensureFolderRegistered`/`registerFolder`. Commit `26cf44d28`. |
+| 5 | REQ-2 — web folder mutations rely solely on the SDK `requireFolder` self-bootstrap chokepoint; the duplicate `useFolderNavigation` pre-seed is removed | VERIFIED | `requireFolder` (`client.ts:527-528`) resolves via `ensureFolderLoaded` self-bootstrap. `grep` for `registerFolder`/`folderTree`/`ensureFolderRegistered`/`unwrapKey`-pre-seed in `apps/web/src/hooks/useFolderNavigation.ts` -> 0. |
+| 6 | REQ-3 — SDK client owns shared-folder state in a sibling `sharedFolderTree` keyed by shareId; isolated per share (no cross-share key/context bleed) | VERIFIED | `packages/sdk/src/state/shared-folder-tree.ts` keys by `shareId` (Map), `set()` clones key buffers, `delete()/clear()` zero `folderKey`+`ipnsPrivateKey` (`:41-77`). `client.ts:63` declares `private sharedFolderTree`, instantiated `:110`, cleared on destroy `:251`. |
+| 7 | REQ-3 — client shared-write methods own publish + sequence bookkeeping + a `sharedFolder:updated` emission, routed through `publishWithCas` (no second retry loop) | VERIFIED | `uploadToSharedFolder` (`client.ts:2110`), `createSharedSubfolder` (`:2127`), `renameInSharedFolder` (`:2141`), `deleteFromSharedFolder` (`:2158`), `updateSharedFile` (`:2183`); each delegates to `share/shared-write.ts` then `adoptSharedFolderResult` writes back + emits `sharedFolder:updated` (`:2092-2098`). Event declared `events.ts:38`. `moveInSharedFolder` (`:2386`) adopts source only. |
+| 8 | REQ-3 — `useSharedWriteOps` routes through the client methods and reads nothing back; `useSharedNavigation` refs become event-fed projections | VERIFIED | `useSharedWriteOps.ts` lines 83/99/111/137/178/199/234 call `getSdkClient().<method>(shareId, ...)`; no `folderChildrenRef.current =`/`sequenceNumberRef.current =`/`withConflictRetry` in that hook. `useSharedNavigation.ts:281-286` writes refs ONLY inside `subscribeSharedFolderProjection`. |
+| 9 | REQ-3 — SDK owns shared-folder REFRESH; the web 30s poller routes through `client.refreshSharedFolder` with the #489 sequence-guard; inline IPNS/IPFS/decrypt removed | VERIFIED | `refreshSharedFolder` (`client.ts:2239-2275`) re-resolves via `sdkCore.loadFolderMetadata` (`:2243`), applies the `state.sequenceNumber >= result.sequenceNumber` guard (`:2254`), adopts + emits. `useSharedNavigation.ts:374` poller calls `getSdkClient().refreshSharedFolder`; `grep resolveIpnsRecord` in that hook -> 0. |
+| 10 | REQ-4 — `shares.itemName` migrated to an additive nullable ciphertext column; server persists client-supplied ECIES ciphertext (zero-knowledge) for shares AND invites | VERIFIED | `share.entity.ts:58-59` — `@Column({ type: 'bytea', name: 'item_name_encrypted', nullable: true })`. Migration `1749200000000-EncryptShareItemName.ts` `ADD COLUMN IF NOT EXISTS` on `shares` + `share_invites`, no data UPDATE. `shares.service.ts:100` and `share-invite.service.ts:47,200` persist `Buffer.from(dto.itemNameEncrypted, 'hex')` only — server never encrypts. api-client regenerated. |
+| 11 | REQ-4 — new shares/invites send ciphertext-only; recipient decrypts client-side for display; plaintext display sites unchanged | VERIFIED | `ShareDialog.tsx:339` wraps name with recipient pubkey (`wrapKey`) and sends `itemName: ''` + `itemNameEncrypted` (`:350`). `share.service.ts` `decryptItemName` (`:69`) unwraps with the vault key in `fetchReceivedShares`, degrading per-row on a bad row (`:118-124`). Unit-covered by `share-item-name.test.ts` (8 assertions). |
+| 12 | REQ-4 — legacy plaintext rows are lazily backfilled and re-persisted (decision A2) | VERIFIED | `share.service.ts` `backfillSentShareItemNames` (`:188`) detects eligible rows via `shouldBackfill` (`:96`), re-wraps, and PERSISTS via `sharesControllerUpdateShareItemName(share.shareId, { itemNameEncrypted })` (`:212`). API endpoint `PATCH :shareId/item-name` (`shares.controller.ts:341-359`) -> `shares.service.ts:373 updateShareItemName` enforces sharer-only (`ForbiddenException` if `sharerId` mismatch) and stores ciphertext as-is. DTO `update-item-name.dto.ts` validates even-length hex. Added by PR #505 — closes the prior PARTIAL. |
 
-**Score:** 3.5/4 requirements (REQ-1 ACHIEVED, REQ-2 ACHIEVED, REQ-3 ACHIEVED, REQ-4 PARTIAL — at-rest encryption delivered for all new rows; legacy lazy-backfill persist blocked on a missing API endpoint).
+**Score:** 4/4 requirements (REQ-1 VERIFIED, REQ-2 VERIFIED, REQ-3 VERIFIED, REQ-4 VERIFIED — at-rest encryption + lazy backfill persist both delivered).
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 | --- | --- | --- | --- |
-| `packages/sdk/src/client.ts` | `loadFolder` sequence guard | EXISTS + SUBSTANTIVE | Guard at :386; shared-folder methods at :1954-2230 |
-| `packages/sdk/src/__tests__/client-load-reconcile.test.ts` | REQ-1 reconcile unit tests (3 cases) | EXISTS | Created by 48-01 (commit `d68368e35` RED / `bcb4fc03d` GREEN) |
-| `packages/sdk/src/bin/index.ts` | loadBin no-clobber-on-null durability fix | EXISTS + SUBSTANTIVE | Retry + never-publish-on-null (:172-222); resolves the BLOCKED-HANDOFF root cause |
-| `apps/web/src/lib/sdk-provider.ts` | `ensureFolderRegistered` definition removed | EXISTS (clean) | grep → 0; commit `26cf44d28` |
-| `packages/sdk/src/state/shared-folder-tree.ts` | `sharedFolderTree` keyed by shareId | EXISTS + SUBSTANTIVE | Clones key material on set; zeroes on delete/clear |
-| `packages/sdk/src/events.ts` | `sharedFolder:updated` event | EXISTS | Declared :38 |
-| `apps/web/src/hooks/shared-folder-projection.ts` | projection/seed helpers | EXISTS | `subscribeSharedFolderProjection` + `seedSharedFolder` (48-04) |
-| `apps/web/src/hooks/useSharedWriteOps.ts` | projection-only routing | EXISTS + SUBSTANTIVE | 5 handlers route through SDK; no write-back |
-| `apps/api/src/shares/entities/share.entity.ts` | `item_name_encrypted` bytea column | EXISTS | :58-59 |
-| `apps/api/src/migrations/1749200000000-EncryptShareItemName.ts` | additive nullable migration | EXISTS | Adds column to `shares` + `share_invites`; no data UPDATE |
-| `apps/web/src/services/share.service.ts` | `decryptItemName` + `shouldBackfill` + lazy backfill | EXISTS + SUBSTANTIVE | Decrypt projection wired; backfill persist is a documented no-op (API gap) |
-| `apps/web/src/services/__tests__/share-item-name.test.ts` | decrypt + backfill decision unit tests | EXISTS | 8 cases (48-06) |
+| `packages/sdk/src/client.ts` | loadFolder sequence guard + shared methods + refreshSharedFolder | VERIFIED | Guard `:386`; shared methods `:2110-2386`; refresh `:2239` |
+| `packages/sdk/src/__tests__/client-load-reconcile.test.ts` | REQ-1 reconcile unit tests | VERIFIED | 3 cases A/B/C, 13 assertions, no skips |
+| `packages/sdk/src/bin/index.ts` | loadBin no-clobber-on-null durability fix | VERIFIED | Retry + never-publish-on-null `:186-224` |
+| `apps/web/src/lib/sdk-provider.ts` | `ensureFolderRegistered` definition removed | VERIFIED | grep -> 0 |
+| `packages/sdk/src/state/shared-folder-tree.ts` | `sharedFolderTree` keyed by shareId, key-zeroing | VERIFIED | 83 lines; clones on set, zeroes on delete/clear |
+| `packages/sdk/src/events.ts` | `sharedFolder:updated` event | VERIFIED | Declared `:38` |
+| `apps/web/src/hooks/useSharedWriteOps.ts` | projection-only routing | VERIFIED | 7 SDK calls, no write-back |
+| `apps/web/src/hooks/useSharedNavigation.ts` | event-fed projection + poll-through-SDK | VERIFIED | projection sole ref writer `:281-286`; poller `:374` |
+| `apps/api/src/shares/entities/share.entity.ts` | `item_name_encrypted` bytea column | VERIFIED | `:58-59` |
+| `apps/api/src/migrations/1749200000000-EncryptShareItemName.ts` | additive nullable migration | VERIFIED | `shares` + `share_invites`, no data UPDATE |
+| `apps/api/src/shares/dto/update-item-name.dto.ts` | backfill DTO (hex-validated) | VERIFIED | even-length hex `Matches`, `MaxLength(2500)` |
+| `apps/web/src/components/file-browser/ShareDialog.tsx` | ECIES wrap + ciphertext-only send | VERIFIED | `:339,350` |
+| `apps/web/src/services/share.service.ts` | decrypt + shouldBackfill + backfill persist | VERIFIED | decrypt `:69`, backfill `:188-212` (persist wired) |
+| `apps/web/src/services/__tests__/share-item-name.test.ts` | decrypt + backfill decision unit tests | VERIFIED | 8 assertions, no skips |
 
-**Artifacts:** 12/12 present (one — share.service.ts backfill — carries a documented stub at the persist call).
+**Artifacts:** 14/14 VERIFIED. No stubs remain (the prior `void itemNameEncrypted` no-op is removed).
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
 | --- | --- | --- | --- | --- |
-| `client.loadFolder` | `folderTree` | sequence guard before `set()` | WIRED | `client.ts:386` skips set when in-memory is fresher/equal |
-| `useSharedWriteOps` | `client.<sharedMethod>` | 5 handlers route through SDK | WIRED | lines 81/97/109/135/176 |
-| `client` shared methods | `sharedFolder:updated` | `adoptSharedFolderResult` emit | WIRED | `client.ts:2046` |
-| `useSharedNavigation` | projection refs | `subscribeSharedFolderProjection` (sole writer) | WIRED | `useSharedNavigation.ts:272` |
-| web 30s poller | `client.refreshSharedFolder` | poll-through-SDK | WIRED | `useSharedNavigation.ts:365`; inline resolve removed |
-| `ShareDialog` | `itemNameEncrypted` (wire) | `wrapKey(name, recipientPubKey)` + `itemName: ''` | WIRED | `ShareDialog.tsx:338,349-350` |
-| `shares.service.createShare` | `item_name_encrypted` column | `Buffer.from(dto.itemNameEncrypted, 'hex')` | WIRED | `shares.service.ts:100` |
-| `fetchReceivedShares` | display projection | `decryptItemName` | WIRED | `share.service.ts:68,123` |
-| `backfillSentShareItemNames` | API persist | (none — no update endpoint) | NOT WIRED | `share.service.ts:214` `void itemNameEncrypted` — residual gap |
+| `client.loadFolder` | `folderTree` | sequence guard before `set()` | WIRED | `client.ts:386` (verified manually; the `gsd-tools verify.key-links` "Source file not found" result is a frontmatter-parse artifact of the multi-line `from:` value, not a real gap) |
+| web hooks | SDK `requireFolder` | self-bootstrap chokepoint | WIRED | `client.ts:527-528`; 0 web seed call sites |
+| `useSharedWriteOps` | `client.<sharedMethod>` | 7 handlers route through SDK | WIRED | `useSharedWriteOps.ts:83/99/111/137/178/199/234` |
+| client shared methods | `sharedFolder:updated` | `adoptSharedFolderResult` emit | WIRED | `client.ts:2092-2098` |
+| `useSharedNavigation` | projection refs | `subscribeSharedFolderProjection` (sole writer) | WIRED | `useSharedNavigation.ts:281-286` |
+| web 30s poller | `client.refreshSharedFolder` | poll-through-SDK | WIRED | `useSharedNavigation.ts:374`; inline resolve removed |
+| `client.refreshSharedFolder` | `sdkCore.loadFolderMetadata` | re-resolve + sequence-guard | WIRED | `client.ts:2243,2254` (manual; verifier parse-artifact) |
+| `ShareDialog` | `itemNameEncrypted` (wire) | `wrapKey(name, recipientPubKey)` + `itemName: ''` | WIRED | `ShareDialog.tsx:339,350` |
+| `shares.service.createShare` / invite path | `item_name_encrypted` column | `Buffer.from(dto.itemNameEncrypted, 'hex')` | WIRED | `shares.service.ts:100`; `share-invite.service.ts:47,200` |
+| `fetchReceivedShares` | display projection | `decryptItemName` | WIRED | `share.service.ts:69,124` |
+| `backfillSentShareItemNames` | API persist | `sharesControllerUpdateShareItemName` -> `PATCH :shareId/item-name` | WIRED | `share.service.ts:212` -> `shares.controller.ts:354` -> `shares.service.ts:373` (sharer-authorized) |
 
-**Wiring:** 8/9 connections wired; the 9th (backfill persist) is the documented REQ-4 residual.
+**Wiring:** 11/11 connections WIRED. The previously NOT-WIRED backfill persist is now connected end-to-end.
 
 ### Behavioral Spot-Checks
 
-Per task directive, test suites were NOT run (static verification only). The plan SUMMARYs and 48-VALIDATION.md record green unit runs at build time:
+Per task directive, no test suites were run (static verification only; central behavioral evidence not supplied). Artifact/key-link verifiers and targeted greps were used. Plan SUMMARYs and 48-VALIDATION.md record green unit runs at build time:
 
-| Behavior | Recorded Result (from SUMMARY/VALIDATION) | Verified Here |
+| Behavior | Recorded Result (SUMMARY/VALIDATION) | Verified Here |
 | --- | --- | --- |
-| REQ-1 reconcile unit (`client-load-reconcile.test.ts`) | 3/3 green (48-01) | Guard code present at client.ts:386 |
-| REQ-3 shared-folder-tree + client-shared-write units | 23 + 6 green (48-03/48-07) | Code + exports present |
-| REQ-3 web projection (`useSharedWriteOps.test.ts`) | 9 green (48-04/48-07) | Subscription wiring present |
-| REQ-4 ECIES UTF-8 round-trip (`ecies.test.ts`) | 22 green (48-05) | wrapKey/unwrapKey used on the name |
-| REQ-4 web decrypt/backfill (`share-item-name.test.ts`) | 8 green (48-06) | Helpers present |
-| REQ-4 API ciphertext persistence (`shares.service.spec.ts`, `share-invite.service.spec.ts`) | 158 + invite specs green (48-05; gap closed by `e8a3a2fe0`) | Service persist + entity column present |
+| REQ-1 reconcile unit (`client-load-reconcile.test.ts`) | 3/3 green | Guard code present `client.ts:386`; 3 cases + 13 assertions present, no skips |
+| REQ-3 shared-folder-tree + client-shared-write units | green | Code + exports present; isolation/key-zeroing in `shared-folder-tree.ts` |
+| REQ-3 web projection (`useSharedWriteOps.test.ts`) | green | Subscription wiring present |
+| REQ-4 web decrypt/backfill (`share-item-name.test.ts`) | 8 green | Helpers + persist call present |
+| REQ-4 API ciphertext persistence (`shares.service.spec.ts`) | green | Service persist + entity column + backfill endpoint present |
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 | --- | --- | --- | --- | --- |
-| `apps/web/src/services/share.service.ts` | 214 | `void itemNameEncrypted` — backfill ciphertext computed but never persisted | Warning | Intentional, documented (`NOTE (API GAP)`). Blocks decision-A2 legacy closure only; new rows are ciphertext-only end-to-end. Tracked as a follow-up API endpoint. |
+| (none) | — | — | — | No TBD/FIXME/XXX/HACK/PLACEHOLDER/"not implemented" markers in any phase-modified file. The prior `void itemNameEncrypted` backfill no-op is removed (PR #505). |
 
-No TBD/FIXME/XXX markers in changed source. The handoff's `f6b13db2b` nav-bounce theory was superseded — the real REQ-1 fix is the loadBin durability change (#500), correctly reflected in `bin/index.ts`.
+### Test-Quality Audit (static)
 
-### Explicit Verification Requirement Confirmations
+- No `.skip` / `.todo` / `xit` / `describe.skip` in the phase test files.
+- `client-load-reconcile.test.ts`: strong assertions — exact `sequenceNumber` equality, `children` deep-equality, and a call-count check proving the network read is not suppressed (only the write-back). No circular fixtures (canned `loadFolderMetadata` mock).
+- `share-item-name.test.ts`: strong boolean truth-table coverage of `shouldBackfill` (encrypted/plaintext x key-holder/non-holder x empty name) and exact-name round-trip assertions for `decryptItemName`.
 
-1. **REQ-1 sequence guard present:** `grep -n "existing.sequenceNumber >= result.sequenceNumber" packages/sdk/src/client.ts` → exactly one match (line 386), inside `loadFolder` after the IPNS resolve. CONFIRMED.
+### CONTEXT.md Decision Coverage (non-blocking)
 
-2. **REQ-1 blocker resolved post-handoff:** The 2026-06-16 BLOCKED-HANDOFF identified loadBin republishing an empty bin on a transient 404 as the bin-restore-after-reload root cause. `bin/index.ts:185-222` now NEVER publishes on a null resolve and retries with backoff — landed via #500, AFTER the handoff. The pre-merge web-e2e re-confirmation remains a live-environment check (human_verification). CONFIRMED (code) / DEFERRED (e2e).
-
-3. **REQ-2 zero seed call sites:** `grep -rn ensureFolderRegistered apps/web/src packages/sdk/src` → 0. Commit `26cf44d28` present in git history. CONFIRMED.
-
-4. **REQ-3 SDK owns shared-folder state + web routing:** `sharedFolderTree` field + 5 write methods + `refreshSharedFolder` + `sharedFolder:updated` event all present; `useSharedWriteOps` routes through the client with no write-back; `useSharedNavigation` projection subscription is the sole ref writer. Merged via #500. CONFIRMED.
-
-5. **REQ-4 itemName encrypted at rest for new rows:** entity column + migration + zero-knowledge service persist + ShareDialog ciphertext-only send + recipient client-side decrypt all present. Merged via #500. CONFIRMED.
-
-6. **REQ-4 legacy backfill gap:** No update endpoint accepts `itemNameEncrypted` (`grep` of `apps/api/src/shares/dto/*.ts` — only create-share / create-invite / claim-invite carry it). `backfillSentShareItemNames` computes but cannot persist the re-wrap. This is the single shortfall → REQ-4 PARTIAL. RESIDUAL (follow-up), not a blocker for new shares.
+48-CONTEXT.md decisions are reflected in code: A4 (sibling `sharedFolderTree`, not extending `folderTree`) — confirmed; A3 (invite flow carries `itemNameEncrypted`) — confirmed (`create-invite`/`claim-invite` DTOs + service); A2 (lazy backfill) — now fully delivered (persist endpoint shipped). Zero-knowledge persist (server never encrypts) — confirmed for all create + backfill paths.
 
 ### Human Verification Required
 
-See the `human_verification` block in the frontmatter. Three live-environment checks remain (all require a stack this verifier cannot run): the REQ-1 web-e2e gate (bin-restore + version-restore), the REQ-3 two-party shared-folder sync UAT, and the REQ-4 itemName-at-rest DB + display UAT.
+Four live-environment UAT/e2e gates were deferred by the planner as `checkpoint:human-verify` tasks (48-01 Task 3, 48-04 Task 4, 48-06 Task 3, 48-07 Task 5). All require a stack this verifier cannot run. See the `human_verification` frontmatter block. The phase is fully merged into `main` (PRs #498/#500/#504/#505); confirming the post-#505 main-push e2e run is green satisfies REQ-1's gate.
+
+**✅ Signed off 2026-06-18 (maintainer).** REQ-1's gate is satisfied by green CI E2E run `27766162738` (web-e2e incl. `bin-restore-after-reload.spec.ts`), merged to `main`. The shared-write/sync and itemName-at-rest gates are covered by the green `writable-shares` and `share-itemname-backfill` e2e specs; remaining live two-party feel is accepted by the maintainer. Status set to `passed`.
 
 ## Gaps Summary
 
-One residual gap, by design: REQ-4's lazy backfill of legacy plaintext `itemName` rows (decision A2) cannot persist server-side because no API update/patch endpoint accepts `itemNameEncrypted`. New shares and invites are ciphertext-only end-to-end (Phase-14 M1 closed for all new rows); legacy rows are detected and re-wrapped client-side but display via the plaintext fallback until a follow-up `PATCH /shares/:id { itemNameEncrypted }` endpoint is added (a one-line change at the documented persist call site). REQ-1/REQ-2/REQ-3 are fully achieved on `main`.
+No code-level gaps. All four requirements are achieved on `main`. The prior verification's single shortfall — REQ-4's lazy-backfill persist blocked on a missing API endpoint — is CLOSED by PR #505 (`PATCH /shares/:shareId/item-name`, sharer-authorized, zero-knowledge). The only remaining work is human/live-environment UAT confirmation of behaviors that cannot be exercised by static analysis (bin/version restore after reload, two-party shared-folder write + 30s poll sync, and itemName-at-rest DB + recipient-display round-trip).
 
 ---
 
-_Verified: 2026-06-17T00:00:00Z_
+_Verified: 2026-06-18T00:00:00Z_
 
 _Verifier: Claude (gsd-verifier)_
