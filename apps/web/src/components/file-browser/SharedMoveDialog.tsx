@@ -224,10 +224,10 @@ export function SharedMoveDialog({
                     ]
                       .filter(Boolean)
                       .join(' ')}
-                    role="button"
+                    role="option"
                     tabIndex={isDisabled ? -1 : 0}
                     aria-disabled={isDisabled}
-                    aria-pressed={isSelected}
+                    aria-selected={isSelected}
                     title={disabledReason}
                     onClick={() => handleSelectNode(node)}
                     onKeyDown={(e) => handleKeyDown(e, node)}

@@ -34,9 +34,11 @@ export type SharedFolderRowProps = {
   onSelect?: (e: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => void;
   /**
    * Callback invoked when an internal drag is dropped onto this folder row.
-   * Receives destination folder ID and IPNS name. Only set on folder items.
+   * Receives destination folder ID + IPNS name and the dragged source items, so
+   * the parent moves exactly what was dragged rather than re-deriving from the
+   * current selection. Only set on folder items.
    */
-  onMoveItemTo?: (destFolderId: string, destIpnsName: string) => void;
+  onMoveItemTo?: (destFolderId: string, destIpnsName: string, draggedItems: DragItem[]) => void;
   /** Currently selected items (for multi-select-aware drag payload) */
   selectedItems?: FolderChild[];
 };
@@ -141,9 +143,10 @@ export function SharedFolderRow({
       // would move it into itself and cycle the tree (mirrors FileListItem).
       if (parsed.items.some((i) => i.id === item.id)) return;
 
-      // Route through the parent's handleDropOnFolder-equivalent. Per-item
+      // Route through the parent's handleDropOnFolder-equivalent, forwarding the
+      // dragged items so the parent moves exactly what was dragged. Per-item
       // validation (name collision + write-capability) is in the SDK.
-      onMoveItemTo(item.id, item.ipnsName);
+      onMoveItemTo(item.id, item.ipnsName, parsed.items);
     },
     [isFolder, item, onMoveItemTo]
   );
@@ -166,10 +169,16 @@ export function SharedFolderRow({
       if (isRenaming) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        onDoubleClick();
+        // Ctrl/Cmd + Enter/Space toggles (multi-)selection for keyboard parity
+        // with Ctrl/Cmd+click; plain Enter/Space navigates.
+        if ((e.ctrlKey || e.metaKey) && onSelect) {
+          onSelect({ ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey });
+        } else {
+          onDoubleClick();
+        }
       }
     },
-    [isRenaming, onDoubleClick]
+    [isRenaming, onDoubleClick, onSelect]
   );
 
   const className = [

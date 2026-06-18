@@ -750,16 +750,22 @@ export function SharedFileBrowser() {
                 }}
                 onMoveItemTo={
                   isWritable
-                    ? (destFolderId, destIpnsName) => {
-                        if (selectedIds.has(item.id) && selectedIds.size > 1) {
+                    ? (destFolderId, destIpnsName, draggedItems) => {
+                        // Route by what was actually dragged (not the current
+                        // selection, nor the drop target). Resolve the dragged
+                        // ids back to the current folder's children.
+                        const draggedIds = new Set(draggedItems.map((d) => d.id));
+                        const movedItems = sortedChildren.filter((c) => draggedIds.has(c.id));
+                        if (movedItems.length === 0) return;
+                        if (movedItems.length > 1) {
                           void batchMoveItems(
-                            selectedItems,
+                            movedItems,
                             destFolderId,
                             destIpnsName,
                             clearSelection
                           );
                         } else {
-                          void moveItem(item, destFolderId, destIpnsName);
+                          void moveItem(movedItems[0], destFolderId, destIpnsName);
                         }
                       }
                     : undefined

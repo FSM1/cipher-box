@@ -418,7 +418,9 @@ describe('moveItemHandler (REQ-2) — routes through runWrite -> client.moveInSh
     expect(calledArgs.destFolderId).toBe('dest-folder-id');
     expect(calledArgs.destIpnsName).toBe('k51dest-ipns-name');
     expect(calledArgs.vaultPrivateKey).toEqual(new Uint8Array(32).fill(9));
-    // setError NOT called on success
+    // No error message surfaced on success. runWrite calls setError(null) on
+    // entry to clear any prior error, so assert it was never called with a
+    // string (an actual error), not that it was never called at all.
     expect(setError).not.toHaveBeenCalledWith(expect.any(String));
   });
 
@@ -447,10 +449,13 @@ describe('moveItemHandler (REQ-2) — routes through runWrite -> client.moveInSh
   });
 
   it('sets error immediately when vaultKeypair is absent', async () => {
-    // Temporarily override the auth mock to return no keypair
+    // Spy + mockRestore so the override is undone even if an assertion throws.
     const { useAuthStore } = await import('../../stores/auth.store');
-    const original = (useAuthStore as { getState: () => unknown }).getState;
-    (useAuthStore as { getState: () => unknown }).getState = () => ({ vaultKeypair: null });
+    const getStateSpy = vi
+      .spyOn(useAuthStore, 'getState')
+      .mockReturnValue({ vaultKeypair: null } as unknown as ReturnType<
+        typeof useAuthStore.getState
+      >);
 
     const { useSharedWriteOps } = await import('../useSharedWriteOps');
     const setError = vi.fn();
@@ -467,7 +472,6 @@ describe('moveItemHandler (REQ-2) — routes through runWrite -> client.moveInSh
     expect(setError).toHaveBeenCalledWith('No keypair available');
     expect(mockMoveInSharedFolder).not.toHaveBeenCalled();
 
-    // Restore
-    (useAuthStore as { getState: () => unknown }).getState = original;
+    getStateSpy.mockRestore();
   });
 });

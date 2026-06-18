@@ -247,6 +247,14 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         // Re-check guard after all awaits (user may have navigated away mid-retry)
         if (latestNavTarget.current !== targetFolderId) return;
 
+        // ensureFolderLoaded exhausted its retries (IPNS not propagated yet) —
+        // treat as a load failure rather than rendering an empty, keyless folder.
+        // Throwing routes into the catch below (remove placeholder + redirect to
+        // parent), giving the user a clear failure instead of a stuck empty view.
+        if (!state) {
+          throw new Error('Folder not loaded — IPNS propagation timed out');
+        }
+
         // Map FolderState -> FolderNode.
         // Clone SDK-owned key buffers — client.destroy() zeroes them on logout,
         // so aliasing would leave React state with use-after-zero references.
@@ -257,12 +265,12 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
           name: folderEntry.name,
           ipnsName: folderEntry.ipnsName,
           parentId,
-          children: state?.children ?? [],
-          isLoaded: !!state,
+          children: state.children,
+          isLoaded: true,
           isLoading: false,
-          sequenceNumber: state?.sequenceNumber ?? 0n,
-          folderKey: state ? new Uint8Array(state.folderKey) : new Uint8Array(0),
-          ipnsPrivateKey: state ? new Uint8Array(state.ipnsKeypair.privateKey) : new Uint8Array(0),
+          sequenceNumber: state.sequenceNumber,
+          folderKey: new Uint8Array(state.folderKey),
+          ipnsPrivateKey: new Uint8Array(state.ipnsKeypair.privateKey),
         };
 
         useFolderStore.getState().setFolder(folderNode);
