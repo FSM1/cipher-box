@@ -128,6 +128,18 @@ If `.planning/STATE.md` exists:
 Commit the todo and any updated state:
 
 ```bash
+# Branch protection: never commit planning docs directly to main/master.
+# Switch to a dated docs/ branch first (create or reuse).
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
+  DOCS_BRANCH="docs/planning-$(date +%Y%m%d)"
+  if git show-ref --verify --quiet "refs/heads/$DOCS_BRANCH"; then
+    git switch "$DOCS_BRANCH"
+  else
+    git switch -c "$DOCS_BRANCH"
+  fi
+  echo "⚠ Branch protection: switched off $CURRENT_BRANCH to $DOCS_BRANCH before committing."
+fi
 gsd_run query commit "docs: capture todo - [title]" --files .planning/todos/pending/[filename] .planning/STATE.md
 ```
 
