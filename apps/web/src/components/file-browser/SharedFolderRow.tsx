@@ -137,12 +137,12 @@ export function SharedFolderRow({
         return;
       }
 
-      // Guard: never drop onto a non-folder or the item's own current parent
-      // parentId in the payload may be empty (from this row) — skip the guard
-      // for now; per-item validation (name collision + write-capability) is in
-      // the SDK and the batchMoveItemsHandler (T-49-12).
+      // Guard: never drop a folder onto itself (one of the dragged items) — that
+      // would move it into itself and cycle the tree (mirrors FileListItem).
+      if (parsed.items.some((i) => i.id === item.id)) return;
 
-      // Route through the parent's handleDropOnFolder-equivalent
+      // Route through the parent's handleDropOnFolder-equivalent. Per-item
+      // validation (name collision + write-capability) is in the SDK.
       onMoveItemTo(item.id, item.ipnsName);
     },
     [isFolder, item, onMoveItemTo]

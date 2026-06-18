@@ -316,6 +316,24 @@ describe('CipherBoxClient.moveInSharedFolder', () => {
     expect(reencryptModule.reencryptFileMetadataForFolderChange).not.toHaveBeenCalled();
   });
 
+  // ── cycle guard ─────────────────────────────────────────────────────────────
+
+  it('throws (no publish) when a folder is moved into itself (destFolderId === itemId)', async () => {
+    seedSharedFolder(client, [folderItem]);
+
+    await expect(
+      client.moveInSharedFolder(SHARE_ID, {
+        itemId: FOLDER_ITEM_ID,
+        destFolderId: FOLDER_ITEM_ID,
+        destIpnsName: DEST_IPNS,
+        vaultPrivateKey: new Uint8Array(32).fill(0x99),
+        getShareKeysFn: async () => makeShareKeys({ destFolder: true, destFolderIpns: true }),
+      })
+    ).rejects.toThrow(/Cannot move a folder into itself/);
+
+    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
+  });
+
   // ── write-capability guard (T-49-01) ───────────────────────────────────────
 
   it('throws before any publish when dest is missing keyType:folder-ipns (no write key)', async () => {

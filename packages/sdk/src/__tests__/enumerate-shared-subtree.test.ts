@@ -264,10 +264,15 @@ describe('CipherBoxClient.enumerateSharedSubtree', () => {
     const subA = result.find((n) => n.id === SUB_A_ID)!;
     expect(subA.name).toBe(SUB_A_NAME);
     expect(subA.ipnsName).toBe(SUB_A_IPNS);
+    // Root-level subfolder → no parent id (used by the move-cycle guard).
+    expect(subA.parentId).toBeNull();
 
     const subA1 = result.find((n) => n.id === SUB_A1_ID)!;
     expect(subA1.name).toBe(SUB_A1_NAME);
     expect(subA1.ipnsName).toBe(SUB_A1_IPNS);
+    // Nested subfolder → parentId points at its containing folder (subA), so the
+    // picker can exclude subA's subtree when subA itself is the moved item.
+    expect(subA1.parentId).toBe(SUB_A_ID);
   });
 
   it('throws "Shared folder not loaded" when share is not seeded', async () => {

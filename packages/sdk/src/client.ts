@@ -2303,6 +2303,14 @@ export class CipherBoxClient {
   ): Promise<void> {
     return this.withOperation('moveInSharedFolder', async () => {
       const srcState = this.requireSharedFolder(shareId);
+
+      // Guard: a folder cannot be moved into itself — it would orphan/cycle the
+      // subtree. (Descendant-of-self is additionally prevented at the picker via
+      // enumerateSharedSubtree's parentId; this is defense-in-depth at the op.)
+      if (args.destFolderId === args.itemId) {
+        throw new Error('Cannot move a folder into itself');
+      }
+
       const shareKeys = await args.getShareKeysFn(shareId);
 
       // Validate both records exist BEFORE unwrapping any keys (write-cap guard T-49-01).
@@ -2406,18 +2414,37 @@ export class CipherBoxClient {
       ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
       vaultPrivateKey: Uint8Array;
     }
-  ): Promise<Array<{ id: string; name: string; ipnsName: string; writable: boolean }>> {
+  ): Promise<
+    Array<{
+      id: string;
+      name: string;
+      ipnsName: string;
+      writable: boolean;
+      parentId: string | null;
+    }>
+  > {
     return this.withOperation('enumerateSharedSubtree', async () => {
       const rootState = this.requireSharedFolder(shareId);
       const shareKeys = await args.getShareKeysFn(shareId);
 
-      const result: Array<{ id: string; name: string; ipnsName: string; writable: boolean }> = [];
+      const result: Array<{
+        id: string;
+        name: string;
+        ipnsName: string;
+        writable: boolean;
+        parentId: string | null;
+      }> = [];
       // visited keyed by ipnsName prevents cycles (a folder that references
       // an ancestor's ipnsName would otherwise loop indefinitely)
       const visited = new Set<string>([rootState.ipnsName]);
-      const stack: Array<{ ipnsName: string; children: typeof rootState.children }> = [
-        { ipnsName: rootState.ipnsName, children: rootState.children },
-      ];
+      // `id` is the containing folder's id (null for the share root), threaded
+      // onto each node as `parentId` so the picker can exclude the moved
+      // folder's own subtree (a move into a descendant would cycle the tree).
+      const stack: Array<{
+        id: string | null;
+        ipnsName: string;
+        children: typeof rootState.children;
+      }> = [{ id: null, ipnsName: rootState.ipnsName, children: rootState.children }];
 
       while (stack.length > 0) {
         const current = stack.pop()!;
@@ -2439,7 +2466,13 @@ export class CipherBoxClient {
             (k) => k.keyType === 'folder-ipns' && k.itemId === child.id
           );
 
-          result.push({ id: child.id, name: child.name, ipnsName: child.ipnsName, writable });
+          result.push({
+            id: child.id,
+            name: child.name,
+            ipnsName: child.ipnsName,
+            writable,
+            parentId: current.id,
+          });
 
           // Load children to continue DFS
           const meta = await sdkCore.loadFolderMetadata({
@@ -2448,7 +2481,11 @@ export class CipherBoxClient {
             ctx: this.ctx,
           });
           if (meta?.metadata?.children) {
-            stack.push({ ipnsName: child.ipnsName, children: meta.metadata.children });
+            stack.push({
+              id: child.id,
+              ipnsName: child.ipnsName,
+              children: meta.metadata.children,
+            });
           }
         }
       }

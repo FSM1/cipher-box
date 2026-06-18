@@ -48,22 +48,24 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    * back here.
    */
   const runWrite = useCallback(
-    async (op: (shareId: string) => Promise<void>, failMessage: string): Promise<void> => {
+    async (op: (shareId: string) => Promise<void>, failMessage: string): Promise<boolean> => {
       const shareId = p.currentShareId;
       if (!shareId) {
         p.setError('Write access not available');
-        return;
+        return false;
       }
       p.setIsLoading(true);
       p.setError(null);
       try {
         await withRevocationGuard(() => op(shareId));
+        return true;
       } catch (err) {
         const message = (err as Error).message || failMessage;
         if (!message.includes('write access revoked')) {
           p.setError(message);
         }
         logger.error(`[SharedNav] ${failMessage}:`, err);
+        return false;
       } finally {
         p.setIsLoading(false);
       }
@@ -227,7 +229,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
       }
       if (items.length === 0) return;
 
-      await runWrite(async (shareId) => {
+      const ok = await runWrite(async (shareId) => {
         for (const item of items) {
           await getSdkClient().moveInSharedFolder(shareId, {
             itemId: item.id,
@@ -239,8 +241,9 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         }
       }, 'Shared folder batch move failed');
 
-      // clearSelection only on full success (runWrite would have set error on failure)
-      clearSelection();
+      // Clear the selection only on full success — on failure (a per-item error
+      // stops the loop) keep the selection so the user can retry.
+      if (ok) clearSelection();
     },
     [runWrite, p.setError]
   );

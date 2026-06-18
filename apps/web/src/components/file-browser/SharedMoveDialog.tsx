@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type KeyboardEvent } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent } from 'react';
 import type { FolderChild } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { getSdkClient } from '../../lib/sdk-provider';
@@ -11,6 +11,8 @@ type SharedPickerNode = {
   name: string;
   ipnsName: string;
   writable: boolean;
+  /** Containing folder id (null for share-root children) — used for the cycle guard. */
+  parentId: string | null;
 };
 
 type SharedMoveDialogProps = {
@@ -99,13 +101,44 @@ export function SharedMoveDialog({
       });
   }, [open, shareId]);
 
+  // Folders being moved (only folders can create a cycle); their own subtree
+  // must be excluded as a destination.
+  const movedFolderIds = useMemo(() => {
+    const moved = isBatchMode ? (items ?? []) : item ? [item] : [];
+    return new Set(moved.filter((m) => m.type === 'folder').map((m) => m.id));
+  }, [isBatchMode, items, item]);
+
+  // A moved folder and every node beneath it cannot be a destination — moving a
+  // folder into its own subtree would orphan/cycle the tree.
+  const disabledDestIds = useMemo(() => {
+    const disabled = new Set(movedFolderIds);
+    if (movedFolderIds.size === 0) return disabled;
+    const byId = new Map(pickerNodes.map((n) => [n.id, n]));
+    for (const node of pickerNodes) {
+      let ancestor = node.parentId;
+      while (ancestor) {
+        if (movedFolderIds.has(ancestor)) {
+          disabled.add(node.id);
+          break;
+        }
+        ancestor = byId.get(ancestor)?.parentId ?? null;
+      }
+    }
+    return disabled;
+  }, [pickerNodes, movedFolderIds]);
+
+  const isNodeDisabled = useCallback(
+    (node: SharedPickerNode) =>
+      !node.writable || node.id === currentFolderId || disabledDestIds.has(node.id),
+    [currentFolderId, disabledDestIds]
+  );
+
   const handleSelectNode = useCallback(
     (node: SharedPickerNode) => {
-      const isDisabled = !node.writable || node.id === currentFolderId;
-      if (isDisabled) return;
+      if (isNodeDisabled(node)) return;
       setSelectedId(node.id);
     },
-    [currentFolderId]
+    [isNodeDisabled]
   );
 
   const handleKeyDown = useCallback(
@@ -143,8 +176,10 @@ export function SharedMoveDialog({
       ? `Move "${item.name}" to:`
       : 'Move to:';
 
+  // selectedId is only ever set by handleSelectNode, which refuses disabled
+  // nodes — so a resolved selectedNode is always a valid destination.
   const selectedNode = pickerNodes.find((n) => n.id === selectedId);
-  const isValid = !!selectedNode && selectedNode.writable && selectedNode.id !== currentFolderId;
+  const isValid = !!selectedNode;
 
   return (
     <Modal open={open} onClose={handleCancel} title={title}>
@@ -168,13 +203,15 @@ export function SharedMoveDialog({
                 <div className="move-dialog-empty">No writable folders available</div>
               )}
               {pickerNodes.map((node) => {
-                const isDisabled = !node.writable || node.id === currentFolderId;
+                const isDisabled = isNodeDisabled(node);
                 const isSelected = selectedId === node.id;
                 const disabledReason = !node.writable
                   ? 'Read-only folder'
                   : node.id === currentFolderId
                     ? 'Item is already here'
-                    : undefined;
+                    : disabledDestIds.has(node.id)
+                      ? 'Cannot move into itself or a subfolder'
+                      : undefined;
 
                 return (
                   <div
