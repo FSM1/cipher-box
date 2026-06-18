@@ -273,6 +273,7 @@ export function ShareDialog({
               itemFolderKey,
               ownerPrivateKey,
               recipientPubKeyBytes,
+              permission,
               (wrapped) => setProgress({ current: wrapped, total: 0 })
             );
           }

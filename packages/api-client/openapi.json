@@ -2208,7 +2208,7 @@
   "info": {
     "title": "CipherBox API",
     "description": "Zero-knowledge encrypted cloud storage API",
-    "version": "0.39.0",
+    "version": "0.40.0",
     "contact": {}
   },
   "tags": [
@@ -3099,7 +3099,7 @@
           "keyType": {
             "type": "string",
             "description": "Type of key: file, folder, or file-ipns",
-            "enum": ["file", "folder", "file-ipns"]
+            "enum": ["file", "folder", "file-ipns", "folder-ipns"]
           },
           "itemId": {
             "type": "string",
@@ -3494,7 +3494,7 @@
           "keyType": {
             "type": "string",
             "description": "Type of key: file, folder, or file-ipns",
-            "enum": ["file", "folder", "file-ipns"]
+            "enum": ["file", "folder", "file-ipns", "folder-ipns"]
           },
           "itemId": {
             "type": "string",
@@ -3561,7 +3561,7 @@
           "keyType": {
             "type": "string",
             "description": "Type of key: file, folder, or file-ipns",
-            "enum": ["file", "folder", "file-ipns"]
+            "enum": ["file", "folder", "file-ipns", "folder-ipns"]
           },
           "itemId": {
             "type": "string",
