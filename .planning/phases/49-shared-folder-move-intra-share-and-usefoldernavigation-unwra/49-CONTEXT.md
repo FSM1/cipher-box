@@ -123,6 +123,39 @@ How a subfolder's keys are resolved (the mechanism to reuse — see
 - A new client method must be added to the `SharedFolderClient` Pick allowlist
   (`shared-folder-projection.ts:28-38`) or the projection types won't see it.
 
+### Scope addendum (2026-06-18) — batch + drag move (REQ-6, parity with private vault)
+
+User pulled batch + drag move back INTO scope (was "v1 single-item only") because the
+private vault already has both — mirror those analogs, do not invent. The single-item
+SDK op `moveInSharedFolder` stays the atom; batch + drag are WEB-LAYER additions that
+reuse it.
+
+Private-vault analogs (verified — mirror these):
+
+- **Selection state:** `useFileBrowserActions.ts:218-234` — `selectedIds: Set<string>`,
+  `selectedItems` (useMemo filter), `multiSelectActive`. `SharedFileBrowser` has NONE today.
+- **Batch dialog + handlers:** `useFileBrowserActions.ts` `batchMoveDialog` state (:262-265),
+  `handleBatchMoveClick` (:430), `handleBatchMoveConfirm` (:468-485) → `moveItems`.
+- **Batch SDK call = a LOOP, not a batch method:** `useFolderMutations.ts:245-311`
+  `handleMoveItems` loops `client.moveItem(src, dest, id)` per item with per-item
+  validation (descendant/depth/name-collision). Shared side mirrors: loop
+  `moveInSharedFolder` per item; validate name-collision + recipient write-capability per
+  item; `clearSelection()` on success.
+- **MoveDialog already batch-capable:** private `MoveDialog.tsx:20-21,174-179` accepts
+  `item | items` and auto-adapts title/label. The NEW shared `MoveDialog` should take the
+  same `items` prop shape.
+- **Drag-and-drop:** `FileListItem.tsx` `handleDragStart` (:160-177, multi-select-aware:
+  if dragged item is selected and >1, payload includes all selected) + `handleDrop`
+  (:275-317, folder-only drop target) with `dataTransfer` payload
+  `application/json {items, parentId}`; `FileList.tsx:221-225` wires drop only on folders;
+  `useFileBrowserActions.ts:349-367` `handleDropOnFolder` routes 1→`moveItem`,
+  N→`moveItems`. Shared side: add drag/drop to `SharedFolderRow` (only the external-file
+  upload drop exists today, `SharedFileBrowser.tsx:318-333`) + a `handleDropOnFolder`-equiv.
+- Breadcrumbs are also a private drop target (`Breadcrumbs.tsx:112-151`) — OPTIONAL for shared.
+
+No dedicated batch/transactional SDK op (matches private). Each looped
+`moveInSharedFolder` publishes DEST+SOURCE; acceptable for v1 parity.
+
 ## #7 — `useFolderNavigation` unwrap consolidation
 
 `useFolderNavigation.navigateTo` (`apps/web/src/hooks/useFolderNavigation.ts:169-331`)
