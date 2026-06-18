@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3d9511d28040",
+  "strategy": "manual-commit",
+  "branch": "docs/todo-release-please-pin-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-19-harden-release-please-pin-automation.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3d/9511d28040/0/metadata.json",
+      "transcript": "/3d/9511d28040/0/full.jsonl",
+      "content_hash": "/3d/9511d28040/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 8055,
+    "cache_read_tokens": 824800,
+    "output_tokens": 5066,
+    "api_call_count": 4
+  }
+}

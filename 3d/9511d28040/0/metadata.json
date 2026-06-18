@@ -1,0 +1,63 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3d9511d28040",
+  "session_id": "230ebd5e-7bc8-4128-b41a-7c99c052d9e4",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T23:52:56.106739Z",
+  "branch": "docs/todo-release-please-pin-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-19-harden-release-please-pin-automation.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "35650f43be42",
+  "checkpoint_transcript_start": 294,
+  "transcript_lines_at_start": 294,
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 8055,
+    "cache_read_tokens": 824800,
+    "output_tokens": 5066,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Rename a PR from fix/ to chore(ci) naming convention, close the old PR, and document a systemic fix todo for hardening release-please pin automation.",
+    "outcome": "PR #521 opened with chore(ci) naming, old PR #520 closed and its fix/ branch deleted, and a GSD todo file committed to the docs branch tracking the systemic release-please pin hardening work.",
+    "learnings": {
+      "repo": [
+        "CipherBox uses a .planning/todos/pending/ directory for GSD-style todo tracking with date-prefixed filenames",
+        "Branch naming follows conventional commits style: chore(ci)/... preferred over fix/... for CI-related changes"
+      ],
+      "code": [
+        {
+          "path": ".planning/todos/pending/2026-06-19-harden-release-please-pin-automation.md",
+          "finding": "New todo created to track systemic fix for release-please pin automation, with the clobber mechanism documented as the confirmed root cause"
+        }
+      ],
+      "workflow": [
+        "PR rename requires closing old PR and opening a new one from a renamed branch rather than editing in place",
+        "GSD todos are committed to a separate docs branch, not the feature branch"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Systemic fix for hardening release-please pin automation (tracked in 2026-06-19-harden-release-please-pin-automation.md) — the clobber mechanism is understood but the fix is not yet implemented"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T23:52:46.948289Z",
+    "agent_lines": 37,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 37,
+    "total_lines_changed": 37,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
