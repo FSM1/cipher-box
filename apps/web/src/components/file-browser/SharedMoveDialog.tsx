@@ -62,9 +62,15 @@ export function SharedMoveDialog({
   const openRef = useRef(open);
   openRef.current = open;
 
-  // Load the shared subtree when the dialog opens
+  // Reset on close; load the shared subtree on open.
   useEffect(() => {
-    if (!open || !shareId) return;
+    if (!open) {
+      setSelectedId(null);
+      setLoadError(null);
+      setPickerNodes([]);
+      return;
+    }
+    if (!shareId) return;
     const auth = useAuthStore.getState();
     if (!auth.vaultKeypair) return;
 
@@ -92,15 +98,6 @@ export function SharedMoveDialog({
         setIsLoadingTree(false);
       });
   }, [open, shareId]);
-
-  // Reset state when dialog closes
-  useEffect(() => {
-    if (!open) {
-      setSelectedId(null);
-      setLoadError(null);
-      setPickerNodes([]);
-    }
-  }, [open]);
 
   const handleSelectNode = useCallback(
     (node: SharedPickerNode) => {

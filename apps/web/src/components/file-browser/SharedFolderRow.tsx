@@ -10,10 +10,11 @@ import type React from 'react';
 import { useState, useCallback } from 'react';
 import type { MouseEvent, DragEvent, KeyboardEvent } from 'react';
 import type { FolderChild } from '@cipherbox/core';
+import { isExternalFileDrag } from '../../hooks/useDropUpload';
+import type { DragItem } from './FileListItem';
 
 type DragPayload = {
-  items: Array<{ id: string; type: string }>;
-  parentId: string;
+  items: DragItem[];
 };
 
 export type SharedFolderRowProps = {
@@ -70,16 +71,12 @@ export function SharedFolderRow({
   const handleDragStart = useCallback(
     (e: DragEvent) => {
       // If this item is part of a multi-select, payload includes all selected items
-      let dragItems: Array<{ id: string; type: string }>;
-      if (isSelected && selectedItems.length > 1) {
-        dragItems = selectedItems.map((i) => ({ id: i.id, type: i.type }));
-      } else {
-        dragItems = [{ id: item.id, type: item.type }];
-      }
+      const dragItems: DragItem[] =
+        isSelected && selectedItems.length > 1
+          ? selectedItems.map((i) => ({ id: i.id, type: i.type }))
+          : [{ id: item.id, type: item.type }];
 
-      // parentId in the payload is used for same-parent guard in the drop handler
-      // We don't know it here, so use a sentinel that is not a folder id
-      const payload: DragPayload = { items: dragItems, parentId: '' };
+      const payload: DragPayload = { items: dragItems };
       e.dataTransfer.setData('application/json', JSON.stringify(payload));
       e.dataTransfer.effectAllowed = 'move';
     },
@@ -96,8 +93,7 @@ export function SharedFolderRow({
       e.stopPropagation();
 
       // Distinguish internal moves from external file uploads
-      const hasJson = e.dataTransfer.types.includes('application/json');
-      e.dataTransfer.dropEffect = hasJson ? 'move' : 'copy';
+      e.dataTransfer.dropEffect = isExternalFileDrag(e.dataTransfer) ? 'copy' : 'move';
       setIsDragOver(true);
     },
     [isFolder, onMoveItemTo]
@@ -121,7 +117,6 @@ export function SharedFolderRow({
 
       // Only handle drops on folder rows
       if (!isFolder || !onMoveItemTo) return;
-      if (item.type !== 'folder') return;
 
       // Distinguish internal move from external file upload
       const jsonData = e.dataTransfer.getData('application/json');
