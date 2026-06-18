@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.35.0...@cipherbox/sdk-v0.36.0) (2026-06-17)
+
+
+### Bug Fixes
+
+* re-encrypt file metadata on move and bin restore ([#507](https://github.com/FSM1/cipher-box/issues/507)) ([2c639de](https://github.com/FSM1/cipher-box/commit/2c639de8a4acec923fe5396f8fc5a6255c59978d))
+
 ## [0.35.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.34.0...@cipherbox/sdk-v0.35.0) (2026-06-16)
 
 
