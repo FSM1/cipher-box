@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.32.0...@cipherbox/crypto-v0.33.0) (2026-06-18)
+
+
+### Features
+
+* **web:** shared-folder intra-share move and useFolderNavigation consolidation ([#509](https://github.com/FSM1/cipher-box/issues/509)) ([c36ac6d](https://github.com/FSM1/cipher-box/commit/c36ac6d7792947a734a539a23de6b42d5c1fdd98))
+
 ## [0.32.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.31.0...@cipherbox/crypto-v0.32.0) (2026-06-16)
 
 
