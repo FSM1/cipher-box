@@ -1,0 +1,306 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "dd5f2c5043ab",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T15:37:32.614635Z",
+  "branch": "docs/verify-phases-47-49",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Cargo.lock"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "6c8a0571f360",
+  "token_usage": {
+    "input_tokens": 68513,
+    "cache_creation_tokens": 2691805,
+    "cache_read_tokens": 136952816,
+    "output_tokens": 682350,
+    "api_call_count": 519
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6c8a0571f360",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6c8a0571f360",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Y9BFzDxtkoyDA2gfzwyF1m",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6c8a0571f360",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 459,
+        "end": 460,
+        "entry_ids": [
+          "a181a7be-0491-4eec-a94b-4db6dedb2187"
+        ],
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Ma4FwRABWAuLAfQHFYdZgs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security:review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6c8a0571f360",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 685,
+        "end": 686,
+        "entry_ids": [
+          "56903a0b-59b1-4fd1-88e3-5c4e813c7102"
+        ],
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security:review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01WS4GMAtYJKePcoMNvUErzY",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6c8a0571f360",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1072,
+        "end": 1073,
+        "entry_ids": [
+          "41ce9be6-cfc6-40ac-9d3b-113043ea7395"
+        ],
+        "tool_use_id": "toolu_01WS4GMAtYJKePcoMNvUErzY"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WS4GMAtYJKePcoMNvUErzY"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Plan and execute CipherBox Phase 49 (shared-folder intra-share move + useFolderNavigation consolidation + batch/drag move parity), run standard PR-QA (simplify, security reviews, CodeRabbit CLI, push, PR, resolve GitHub review), fix resulting CI E2E failures, then run verify-phase on phases 47–49 and mark them complete.",
+    "outcome": "PR #509 merged to main with 5 plans/6 requirements including scope-expanded batch+drag parity; two architectural improvements bundled in (write-key distribution for write-shares on subtree descendants; decentralized signature-gated IPNS cache keyed by name not user); all CI E2E failures diagnosed and fixed; phases 47–49 verified (17+4+24 truths each, adversarially confirmed with 0 overturns) and marked Complete, bringing the project to 25/34 phases (74%).",
+    "learnings": {
+      "repo": [
+        "`collectChildKeys` in `apps/web/src/lib/crypto/key-wrapping.ts` historically emitted only read keys (`folder`/`file`) for share descendants even on write-permission shares — recipients could never move into owner-created subfolders. Fixed by adding a `permission` param and emitting `folder-ipns`/`file-ipns` on write shares, guarded on the optional `ipnsPrivateKeyEncrypted` field.",
+        "CipherBox resolves IPNS via a DB cache (`folder_ipns` table) that is the authoritative source — the DHT is a secondary fallback. The table was keyed `(userId, ipnsName)` causing non-owners to fork duplicate rows on publish. Re-architected to `(ipnsName)` alone with mandatory Ed25519 signature verification, making authority a function of key possession. Revocation now requires IPNS key rotation instead of a server-side revoke.",
+        "`SharedFileBrowser` gated `SelectionActionBar` on `selectedIds.size > 0` — the first click of a double-click selected one item, the bar rendered above the file list, shifted rows down, and the second click missed its target, silently breaking all double-click folder navigation. Private vault `FileBrowser.tsx:205` correctly uses `size > 1`.",
+        "`SharedFolderRow` renders folder names with a trailing `/` in `.file-name` text content. E2E `getFolderItemNames()` must strip the slash; other pre-existing specs use `.includes()` for the same reason.",
+        "The desktop E2E conflict-detection helpers (`test-conflict-detection.sh` / `.ps1`) faked a competing device by POSTing a dummy unsigned byte string to `/ipns/publish`. Under the new signature-gated server this is correctly rejected (400). The `.sh` only logged a warning (macOS/Linux passed falsely); the `.ps1` `throw`s on failure (Windows broke). Fixed with `bump-ipns-sequence.mjs` that publishes a real validly-signed record at sequence+1.",
+        "`FolderEntry.ipnsPrivateKeyEncrypted` is typed required (`packages/core/src/folder/types.ts:40`) while `FilePointer.ipnsPrivateKeyEncrypted` is optional (`file/types.ts:68`). The `collectChildKeys` folder branch accessed it unconditionally; a defensive null guard was added to degrade gracefully on malformed legacy metadata rather than crash.",
+        "`ChildKeyDtoKeyType` in the API DTO was missing `folder-ipns` (only `file`/`folder`/`file-ipns`). `CHILD_KEY_TYPES` is the single source of truth feeding both `@IsIn` validation and `@ApiProperty enum`, so adding it there propagated everywhere including the regenerated client.",
+        "GSD `phase uat-passed <N>` is listed in CLI help but has no handler — use `phase complete <N>` instead. The `phase complete` command also emits a false-positive 'needs human verification' warning when `previous_status: human_needed` appears in VERIFICATION.md frontmatter history (regex matches the history line, not the current status).",
+        "Release-please bumps crate `Cargo.toml` version fields but never regenerates `Cargo.lock`, leaving the lockfile stale after every Rust release. Captured as a pending todo.",
+        "The `ipns` npm package (`ipns@10.1.3`) is already a dependency of `@cipherbox/core` (and transitively the API via `@cipherbox/crypto`). `validate` from `ipns/validator`, `unmarshalIPNSRecord`, and `extractPublicKeyFromIPNSRecord` were available for server-side verification without adding deps.",
+        "`extractPublicKeyFromIPNSRecord` returns `undefined` synchronously (not a rejected promise) for identity-key records that omit the embedded public key. Wrapping the call in try/catch rather than `.catch()` is the correct handling pattern.",
+        "GSD executor agents report `commit_failed` as a false negative in non-worktree sequential mode — the commits actually land. Always verify with `git log` rather than trusting the executor's reported commit status.",
+        "The `check-api-client.sh` pre-commit hook requires the generated client to be staged whenever `.dto.ts`/`.controller.ts`/`.entity.ts` files are changed AND generated files have unstaged changes. Regenerating the client (openapi-generator) triggered a version header bump (0.39.0→0.40.0) across 131 files — benign but noisy in diffs.",
+        "CodeRabbit under the CHILL profile delivers review-body nitpicks rather than inline review threads. `/resolve-pr-reviews` queries GraphQL `reviewThreads` and finds 0 threads, masking the body-bundled nitpicks. Must also fetch review bodies separately to triage bundled comments."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/FileBrowser.tsx",
+          "line": 205,
+          "end_line": 205,
+          "finding": "Private vault gates SelectionActionBar on `selectedIds.size > 1`, not `> 0` — this prevents the bar from appearing on a plain single click (which is also the first click of a double-click), avoiding a layout shift that would break double-click navigation."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+          "line": 121,
+          "end_line": 121,
+          "finding": "TypeScript 4.4+ narrows a union type through `const isFolder = item.type === 'folder'` (aliased discriminant), so subsequent accesses like `item.ipnsName` at line 149 are type-safe without an explicit type guard — `tsc -b` confirms no error."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 213,
+          "end_line": 213,
+          "finding": "`findActiveWriteShare` was an exact `ipnsName` match against top-level write Share rows only — no descendant coverage. Non-owner publishes for any descendant ipnsName fell through to the create-new path at line 287, forking a duplicate recipient-owned row. This was the M-1 server authorization gap."
+        },
+        {
+          "path": "apps/api/src/ipns/entities/folder-ipns.entity.ts",
+          "line": 15,
+          "end_line": 15,
+          "finding": "Changed `@Unique(['userId', 'ipnsName'])` to `@Unique(['ipnsName'])` — one canonical record per IPNS name, authority determined by Ed25519 signature rather than user ownership. `userId` retained as denormalized creator marker for TEE enrollment and cleanup only."
+        },
+        {
+          "path": "apps/web/src/lib/crypto/key-wrapping.ts",
+          "line": 111,
+          "end_line": 111,
+          "finding": "`collectChildKeys` folder branch accessed `folder.ipnsPrivateKeyEncrypted` unconditionally. Unlike `FilePointer`, `FolderEntry.ipnsPrivateKeyEncrypted` is typed required, so it can't be undefined for type-conforming data — but a defensive null guard was added for malformed legacy IPFS metadata."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2466,
+          "end_line": 2468,
+          "finding": "`enumerateSharedSubtree` writability check requires a per-subfolder `share_keys` row with `keyType: 'folder-ipns'`. Before write-key distribution was fixed, recipients never got these rows for owner-created subfolders, so all owner-created subfolders appeared read-only (`writable: false`) in the move dialog."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/SharedFileBrowser.tsx",
+          "line": 149,
+          "end_line": 149,
+          "finding": "`onMoveItemTo` closure was routing by the *drop target folder's* selection state and discarding the dragged payload — dragging an unselected item while others were selected moved the wrong items. Fixed to resolve dragged items from `sortedChildren` via the forwarded `DragItem[]` from `SharedFolderRow`."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-record-parser.ts",
+          "line": 1,
+          "end_line": 162,
+          "finding": "Hand-rolled IPNS record parser (162 lines) was deleted and replaced with `ipns` library calls (`unmarshalIPNSRecord`, `extractPublicKeyFromIPNSRecord`) now in `@cipherbox/crypto`. The hand-rolled version duplicated library behavior and skipped signature validation entirely."
+        },
+        {
+          "path": "packages/crypto/src/ipns/verify-record.ts",
+          "line": 1,
+          "end_line": 53,
+          "finding": "New `verifyIpnsRecordSignature(ipnsName, marshalledRecord)` helper: parses ipnsName as base36 CID → peerIdFromCID → `validate(peerId.publicKey, record)` from `ipns/validator`. Returns false on any error or null public key rather than throwing."
+        }
+      ],
+      "workflow": [
+        "Run GSD executors sequentially in wave order (not parallel worktrees) for AFK/autonomous runs — avoids worktree merge-base footguns and concurrent test-suite RAM starvation. The SDK dist must be manually rebuilt between waves when new public API methods are added, since web `tsc -b` checks the built dist, not source.",
+        "CodeRabbit CLI (`coderabbit review --agent`) returns structured JSON findings with schema `{severity, fileName, codegenInstructions, suggestions}`. The GitHub review posts findings in the review body (not inline threads) under the CHILL profile — `/resolve-pr-reviews` must also fetch review bodies to surface bundled nitpicks.",
+        "When a background `gh run watch` or poll script uses `status` as a variable name in zsh, it conflicts with zsh's read-only `$status` variable and fails with exit code 1. Use a different variable name (e.g., `run_status`).",
+        "ci-e2e workflow dispatch via `gh workflow run` can return a network timeout error even when the dispatch succeeds — always verify with `gh run list` after a timeout rather than assuming failure and retrying.",
+        "The GSD plan-checker runs as a separate verification agent after the planner and is worth the iteration cost — it caught a REQ-3 unit-test gap (vacuous pass in plan 49-03) that needed a targeted planner revision before execution.",
+        "For exhaustive phase verification, running 3 parallel `gsd-verifier` agents each followed by an independent adversarial skeptic via Workflow tool (6 agents total) with pre-run behavioral test evidence injected as context is faster and more thorough than sequential single-pass verification.",
+        "The GSD `gsd:stats` workflow reports `Needs Review` for phases that have been executed but not yet verified, and `Executed` for older phases without verification artifacts at all — these are separate states with different remediation paths.",
+        "When checking whether CI E2E failures are regressions vs pre-existing flakes, compare against `gh run list --branch main` — a green main history over 8+ runs reliably distinguishes regressions from flakes."
+      ]
+    },
+    "friction": [
+      "AFK commit-signing disable (`git config --local commit.gpgsign false`) left all branch commits unsigned; the repo enforces signed commits on PRs, requiring a signed rebase or admin override at merge time.",
+      "GSD executor agents report `commit_failed` as a false negative in sequential non-worktree mode — multiple commits in the session appeared failed but had actually landed, requiring manual `git log` verification each time.",
+      "The `gsd-tools` parser deletions were already staged from a prior `git rm` when the write-key distribution commit ran, sweeping them into commit `1be0dca11` and making that commit non-building in isolation (the parser-consuming API service was committed in the next commit). CI-only-runs-on-HEAD mitigated this, but it's a footgun.",
+      "`phase uat-passed <N>` is listed in `gsd-tools` CLI help output but has no implementation — silently fails with a usage error. Only `phase complete` is implemented.",
+      "zsh `$status` is a read-only built-in variable; a background watch script using `status` as a loop variable failed with exit code 1, requiring a restart with a renamed variable.",
+      "CodeRabbit's CHILL profile doesn't auto-re-review incremental pushes, so verifying that nitpick fixes satisfied the review required a second manual poll rather than an automatic re-check.",
+      "The `check-api-client.sh` pre-commit hook swept 131 generated files (an OpenAPI version header bump) into the commit whenever any DTO changed — makes it hard to isolate the meaningful semantic change in the diff.",
+      "API TypeScript has 3 pre-existing errors in untouched spec files (`itemNameEncrypted`, `@nestjs/common` type) that block `tsc --project tsconfig.json` but not `nest build` — the gap between type-check commands causes confusion about what 'passing typecheck' means for the API.",
+      "`gsd-tools phase complete` emits a spurious 'needs human verification' warning for phases whose VERIFICATION.md frontmatter contains `previous_status: human_needed` in the history section — the status regex matches the history line, not the current status field."
+    ],
+    "open_items": [
+      "Write access to shared folder subtrees is now revocable only via IPNS key rotation + re-share (not server-side). This is an accepted architectural tradeoff for decentralization but must be documented in the share/revoke UX and future key-rotation tooling.",
+      "Full SDK-level subtree cycle guard for `moveInSharedFolder`: current guard is UI (descendant picker exclusion) + SDK self-move throw, but a malicious/crafted client could still call the op directly to create a tree cycle affecting co-recipients. Documented in PR as optional hardening.",
+      "Client-side IPNS `signatureVerified` enforcement on resolution — the client currently trusts the server-returned record without verifying the signature client-side. Noted in PR as a fast-follow.",
+      "Un-cached-name IPNS resolve verification — records resolved by name-only lookup have no signature check on the client side. Noted in PR.",
+      "Pending todo: migrate desktop E2E helper scripts from `.mjs` (untyped, imports from `dist/`) to TypeScript (imports from source, `tsc`-verified). Tracked at `.planning/todos/pending/2026-06-18-migrate-mjs-e2e-helper-scripts-to-typescript.md`.",
+      "Pending todo: release-please bumps `Cargo.toml` version fields but never regenerates `Cargo.lock`, leaving the lockfile stale after every Rust release. Tracked at `.planning/todos/pending/2026-06-18-releaseplease-does-not-bump-cargo-lock.md`.",
+      "Phases 18, 23, 31, 32, 38, 39, 46 remain in 'Executed' status (code complete, not yet verified). 7 phases to work through in future verify-phase sessions.",
+      "`useMultiSelect` extraction into a shared hook (to deduplicate selection state between private and shared browsers) was flagged by /simplify but deferred as scope creep beyond Phase 49.",
+      "Batch move re-fetches share keys per item (N round trips for N-item batch). Noted as parity-acceptable for v1 but is a performance follow-up.",
+      "`enumerateSharedSubtree` DFS runs sequentially per node. Concurrent DFS was considered but deferred due to gateway rate-limit tradeoff."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T15:34:59.82631Z",
+    "agent_lines": 2,
+    "agent_removed": 2,
+    "human_added": 62,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 64,
+    "total_lines_changed": 66,
+    "agent_percentage": 6.0606060606060606,
+    "metric_version": 2
+  }
+}
