@@ -47,3 +47,7 @@ web e2e is reporting some failures https://github.com/FSM1/cipher-box/actions/ru
 ---
 
 I feel like this reliance on server state is really impacting some of the decentralization goals I have for the project. the ipns record cache should not be keyed by user and any user with a valid key for an ipns name should be able to update that key's value.
+
+---
+
+I honestly feel like making this change here is the easiest route - the commit history and such will be cleaner by separating the PR's but honestly I don't see this as worthwhile having to do the rebase afterwards.
