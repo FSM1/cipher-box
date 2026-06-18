@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type KeyboardEvent } from 'react';
 import type { FolderChild } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { getSdkClient } from '../../lib/sdk-provider';
@@ -20,9 +20,11 @@ type SharedMoveDialogProps = {
   onClose: () => void;
   /** Callback when move is confirmed with destination folder ID and IPNS name */
   onConfirm: (destFolderId: string, destIpnsName: string) => void;
-  /** The item being moved */
+  /** The item being moved (single-item mode) */
   item: FolderChild | null;
-  /** Current parent folder ID of the item (disabled as a destination) */
+  /** Multiple items being moved (batch mode — takes precedence over item when length > 1) */
+  items?: FolderChild[];
+  /** Current parent folder ID of the item(s) (disabled as a destination) */
   currentFolderId: string;
   /** Active share ID (required to load the subtree) */
   shareId: string | null;
@@ -44,10 +46,13 @@ export function SharedMoveDialog({
   onClose,
   onConfirm,
   item,
+  items,
   currentFolderId,
   shareId,
   isLoading = false,
 }: SharedMoveDialogProps) {
+  // Batch mode when items prop is provided with more than one item
+  const isBatchMode = Array.isArray(items) && items.length > 1;
   const [pickerNodes, setPickerNodes] = useState<SharedPickerNode[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -107,7 +112,7 @@ export function SharedMoveDialog({
   );
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent, node: SharedPickerNode) => {
+    (e: KeyboardEvent, node: SharedPickerNode) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         handleSelectNode(node);
@@ -129,8 +134,17 @@ export function SharedMoveDialog({
     }
   }, [isLoading, onClose]);
 
-  const title = item?.type === 'folder' ? 'Move Folder' : 'Move File';
-  const label = item ? `Move "${item.name}" to:` : 'Move to:';
+  // Auto-adapt title/label for batch vs single mode (mirrors private MoveDialog :174-179)
+  const title = isBatchMode
+    ? `Move ${items!.length} items`
+    : item?.type === 'folder'
+      ? 'Move Folder'
+      : 'Move File';
+  const label = isBatchMode
+    ? `Move ${items!.length} items to:`
+    : item
+      ? `Move "${item.name}" to:`
+      : 'Move to:';
 
   const selectedNode = pickerNodes.find((n) => n.id === selectedId);
   const isValid = !!selectedNode && selectedNode.writable && selectedNode.id !== currentFolderId;
