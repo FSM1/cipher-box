@@ -9,8 +9,8 @@ progress:
   total_phases: 34
   completed_phases: 33
   total_plans: 151
-  completed_plans: 150
-  percent: 98
+  completed_plans: 151
+  percent: 100
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 49 (shared-folder-move-intra-share-and-usefoldernavigation-unwra) — EXECUTING
-Plan: 5 of 5
+Plan: 5 of 5 — COMPLETE
 Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolidation, PR #494) complete — its 5 SUMMARY.md files were backfilled 2026-06-17 (had shipped but were never written, which had tripped a false-positive resume gate).
 
 ## Performance Metrics
@@ -150,6 +150,7 @@ Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolida
 | Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P02 | 15min | 1 tasks | 1 files |
 | Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P03 | 11min | 4 tasks | 7 files |
 | Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P04 | 26min | 3 tasks | 5 files |
+| Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P05 | 12min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -285,7 +286,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-18
 
-Last session: 2026-06-18T02:03:38Z — Completed 49-04 (batch + drag move: batchMoveItemsHandler, multi-select, SharedMoveDialog items prop, SharedFolderRow DnD)
+Last session: 2026-06-18T04:12:00Z — Completed 49-05 (shared-folder intra-share move e2e: SharedMoveDialogPage + shared-folder-move.spec.ts decrypt-survival two-account test)
 
 ## Decisions
 
@@ -304,3 +305,6 @@ Last session: 2026-06-18T02:03:38Z — Completed 49-04 (batch + drag move: batch
 - [Phase 49-04]: batchMoveItemsHandler clearSelection called after runWrite completes (full success only)
 - [Phase 49-04]: SharedFolderRow drop uses row's id/ipnsName as authoritative dest (ignores payload parentId per T-49-12)
 - [Phase 49-04]: SelectionActionBar onDelete/onDownload are no-op stubs (REQ-6 scopes to move parity only)
+- [Phase 49-05]: SharedMoveDialogPage.dialog() scoped via .move-dialog-folder-list filter (avoids collision with private MoveDialog)
+- [Phase 49-05]: readContentViaEditor dispatches rightClickFolderItem vs rightClickItem based on instanceof check (shared vs private browser page)
+- [Phase 49-05]: Alice decrypt assertion uses FileListPage (private vault view), not SharedFileBrowserPage — owner reads own files via vault browser

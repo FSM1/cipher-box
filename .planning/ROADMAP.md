@@ -809,13 +809,13 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 49-04-PLAN.md — REQ-6: shared batch + drag move (multi-select, SelectionActionBar, batch loop, MoveDialog items prop, SharedFolderRow drag-drop) (depends 49-03)
-- [ ] 49-05-PLAN.md — REQ-5: two-account within-share move e2e + decrypt-survival via TextEditor (depends 49-03)
+- [x] 49-04-PLAN.md — REQ-6: shared batch + drag move (multi-select, SelectionActionBar, batch loop, MoveDialog items prop, SharedFolderRow drag-drop) (depends 49-03)
+- [x] 49-05-PLAN.md — REQ-5: two-account within-share move e2e + decrypt-survival via TextEditor (depends 49-03)
 
 Scope (captured todos):
 
-- [ ] **[#8]** Shared-folder move must re-encrypt file metadata to the destination folderKey — `2026-06-17-shared-folder-move-must-reencrypt-file-metadata.md`
-- [ ] **[#7]** Consolidate the web useFolderNavigation key-unwrap into the SDK — `2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md`
+- [x] **[#8]** Shared-folder move must re-encrypt file metadata to the destination folderKey — `2026-06-17-shared-folder-move-must-reencrypt-file-metadata.md`
+- [x] **[#7]** Consolidate the web useFolderNavigation key-unwrap into the SDK — `2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md`
 
 ---
 
