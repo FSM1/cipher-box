@@ -1,0 +1,92 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3310d61beace",
+  "session_id": "230ebd5e-7bc8-4128-b41a-7c99c052d9e4",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T23:45:40.76361Z",
+  "branch": "fix/release-please-sdk-changelog-loop",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/sdk/CHANGELOG.md",
+    "release-please-config.json"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "35650f43be42",
+  "checkpoint_transcript_start": 133,
+  "transcript_lines_at_start": 133,
+  "token_usage": {
+    "input_tokens": 4144,
+    "cache_creation_tokens": 62205,
+    "cache_read_tokens": 3004270,
+    "output_tokens": 35910,
+    "api_call_count": 20
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Fix release-please repeatedly posting duplicate self-comparing SDK changelog entries on every push to main, and track a systemic fix for the underlying preview automation bug.",
+    "outcome": "Immediate fix committed: removed two bogus self-compare 0.36.0 blocks from packages/sdk/CHANGELOG.md and advanced the sdk release-as pin to 0.37.0 to break the duplicate loop. Systemic fix tracked as a GSD todo.",
+    "learnings": {
+      "repo": [
+        "release-please-config.json has a 'release-as' pin pattern where packages are pinned to their current version — when release-as == manifest == latest tag, any releasable commit landing after the tag causes a self-comparing changelog header (v0.36.0...v0.36.0) that loops on every push.",
+        "The preview automation (.github/scripts/pr-release-preview.js) injects 'chore(release): set release targets for PR #N' commits and manages release-as pins, but only clears pins the PR itself added — pins already on main are never cleared.",
+        "8 packages currently have release-as == manifest version (api, web, core, crypto, api-client, sdk-core, sdk, crates/core, crates/fuse) — all are latent traps for the same duplicate-loop bug.",
+        "The preview script's path attribution for packageBumps (line 298, changedFiles) diverged from release-please's attribution on PR #509, leaving sdk's pin behind while release-please still counted the sdk feat commit.",
+        "separate-pull-requests is false (single aggregated release PR for the monorepo) and there is NO linked-versions or node-workspace plugin in the config."
+      ],
+      "code": [
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 644,
+          "end_line": 652,
+          "finding": "Pin-clearing logic only removes pins that this PR added and weren't inherited from main — inherited stale pins (release-as <= manifest) are never cleared, which is the systemic bug."
+        },
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 298,
+          "end_line": 298,
+          "finding": "packageBumps is computed by reading changedFiles per commit — same approach as release-please but diverged on #509 for packages/sdk."
+        }
+      ],
+      "workflow": [
+        "Split urgent changelog corruption fixes from systemic script hardening into separate PRs — cleanup is safe and urgent; script changes need more care.",
+        "When release-please emits a self-comparing compare link (vX...vX), the root cause is always that computed next version == current version == latest tag.",
+        "Advancing release-as to the correct next semver (manifest + bump-minor-pre-major for a feat = minor bump) is the immediate loop-breaker."
+      ]
+    },
+    "friction": [
+      "The preview automation's pin-clearing gap is non-obvious — it silently leaves inherited pins in place, making the bug hard to attribute to automation vs. human edits.",
+      "Three stacked 0.36.0 headers in CHANGELOG.md (two bogus, one legitimate) required careful identification of which entries to remove without losing the real release history."
+    ],
+    "open_items": [
+      "Systemic fix for pr-release-preview.js: (a) clear inherited pins already satisfied (release-as <= manifest), not just PR-added ones; (b) reconcile path attribution with release-please so sdk source changes can't leave sdk's pin behind.",
+      "Drop the 8 other stale release-as pins where release-as == manifest across api, web, core, crypto, api-client, sdk-core, crates/core, crates/fuse to prevent the same loop from triggering on those packages."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T23:45:19.055016Z",
+    "agent_lines": 13,
+    "agent_removed": 38,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 13,
+    "total_lines_changed": 51,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
