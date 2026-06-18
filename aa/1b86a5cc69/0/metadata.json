@@ -1,0 +1,112 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "aa1b86a5cc69",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T01:06:15.858878Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-03-PLAN.md",
+    ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-RESEARCH.md",
+    ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d24aef7651a4",
+  "checkpoint_transcript_start": 209,
+  "transcript_lines_at_start": 209,
+  "token_usage": {
+    "input_tokens": 3168,
+    "cache_creation_tokens": 32611,
+    "cache_read_tokens": 1341945,
+    "output_tokens": 10920,
+    "api_call_count": 8
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan and verify implementation of Phase 49: shared folder move (intra-share) and useFolderNavigation unwrapping in the cipher-box project.",
+    "outcome": "Planning completed successfully — 5 plans across 3 waves covering all 6 requirements, with a plan-checker finding and resolving 2 blockers + 1 warning before committing revision artifacts.",
+    "learnings": {
+      "repo": [
+        "Phase plans live under .planning/phases/<phase-slug>/ with RESEARCH.md, PLAN.md, and VALIDATION.md files per plan.",
+        "useSharedWriteOps.test.ts already exists and should be extended (not replaced) for new handler test coverage.",
+        "gsd-tools is not on the PATH inside spawned planner/revision subagents, requiring commits to be done from the main agent."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-03-PLAN.md",
+          "finding": "Plan 49-03 was revised to add a moveItemHandler unit test extending useSharedWriteOps.test.ts, covering REQ-3 which had no dedicated web unit test."
+        },
+        {
+          "path": ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-VALIDATION.md",
+          "finding": "VALIDATION.md Wave 0 was updated to list the new moveItemHandler test case after plan revision."
+        },
+        {
+          "path": ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-RESEARCH.md",
+          "finding": "Two doc-formatting issues (section heading nits) were fixed directly by the main agent rather than via a planner revision."
+        }
+      ],
+      "workflow": [
+        "Two-pass plan verification (planner → checker → fix → re-check) caught a real gap (vacuously passing test coverage) that a single pass would have missed.",
+        "Subagents (planner, checker) cannot commit when project-specific tools like gsd-tools are absent from their PATH — commits must be delegated back to the main agent.",
+        "Plan-checker output should be triaged: doc-formatting nits can be fixed inline, but substantive coverage gaps require a targeted planner revision before re-verification."
+      ]
+    },
+    "friction": [
+      "gsd-tools not on PATH inside spawned subagents, preventing the planner-revision agent from committing its own artifacts.",
+      "Plan-checker iteration 1 found 2 blockers requiring separate fix passes before a clean verification could be obtained."
+    ],
+    "open_items": [
+      "Execution of the 5 plans across 3 waves has not yet begun — planning is complete but implementation is deferred."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T01:06:00.970981Z",
+    "agent_lines": 57,
+    "agent_removed": 11,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 57,
+    "total_lines_changed": 68,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
