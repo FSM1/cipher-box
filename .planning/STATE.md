@@ -32,7 +32,7 @@ Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolida
 
 **Velocity:**
 
-- Total plans completed: 199 (72 M1 + 83 M2 + 6 M3)
+- Total plans completed: 151 (all 34 milestone v1.1 phases; every PLAN has a SUMMARY)
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
