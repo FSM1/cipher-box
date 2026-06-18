@@ -1,0 +1,153 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2dffc00ec239",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T01:38:18.150577Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d24aef7651a4",
+  "token_usage": {
+    "input_tokens": 14651,
+    "cache_creation_tokens": 362577,
+    "cache_read_tokens": 7381149,
+    "output_tokens": 73972,
+    "api_call_count": 55
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan and execute phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation), then run full PR-QA pipeline (simplify, security-review, CodeRabbit CLI) before pushing and opening a PR.",
+    "outcome": "Planning completed (5 plans / 3 waves, 6 requirements, plan-checker passed after one revision round). Wave 1 executed successfully (49-01 SDK op + 49-02 useFolderNavigation consolidation). Wave 2 (49-03 web single-item move) was dispatched but the transcript ends mid-execution; PR-QA and PR creation not yet started.",
+    "learnings": {
+      "repo": [
+        "reencryptFileMetadataForFolderChange is fully key-agnostic (takes raw key bytes) — reusable verbatim for the shared-folder case without modification.",
+        "share_keys entries are keyed by itemId (file UUID), not parent folder path — file keys do NOT need re-registration after an intra-share move.",
+        "adoptSharedFolderResult must only be called once for the source result; calling it for the dest result corrupts the sharedFolderTree projection (dual-emit problem).",
+        "Collision policy in sdk-core: moveItem throws 'An item with this name already exists in destination' — no auto-rename logic needed.",
+        "@internal on ensureFolderLoaded is documentation-only (not enforced) — can be called directly from web without a new public alias.",
+        "SharedFolderClient Pick allowlist (shared-folder-projection.ts:28-38) must be extended with moveInSharedFolder and enumerateSharedSubtree for each new op.",
+        "File IPNS key for re-encryption must come from share_keys keyType:'file-ipns', NOT FilePointer.ipnsPrivateKeyEncrypted (owner-wrapped; recipient cannot decrypt it).",
+        "Batch move is a web-layer pattern looping single-item SDK calls — there is no dedicated SDK batch-move method on either private or shared side.",
+        "SDK dist type declarations: new public methods appear in client.d.ts (class declaration), not index.d.ts (barrel re-export) — both are visible to consumers."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/reencrypt.ts",
+          "line": 49,
+          "end_line": 49,
+          "finding": "reencryptFileMetadataForFolderChange is key-agnostic — takes sourceFolderKey/destFolderKey/fileIpnsPrivateKey as raw bytes, no owner/recipient distinction."
+        },
+        {
+          "path": "packages/shared-folder/src/shared-folder-projection.ts",
+          "line": 28,
+          "end_line": 38,
+          "finding": "Pick allowlist for SharedFolderClient — must add moveInSharedFolder and enumerateSharedSubtree whenever new ops are introduced."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 346,
+          "end_line": 346,
+          "finding": "moveItem throws on name collision ('An item with this name already exists in destination') — propagates through runWrite to p.setError."
+        },
+        {
+          "path": "packages/shared-folder/src/share_keys",
+          "line": 524,
+          "end_line": 524,
+          "finding": "Key resolution uses k.keyType === 'file' && k.itemId === item.id — parent folder is irrelevant, so no key re-registration is needed after move."
+        }
+      ],
+      "workflow": [
+        "GSD planning chain: researcher → VALIDATION.md (Nyquist) → pattern-mapper → planner (opus) → plan-checker → revision loop until clean pass.",
+        "Sequential execution without worktrees is the safer choice for autonomous/AFK runs — parallel worktree merge-back protocol is error-prone to hand-drive.",
+        "Cross-package dist-staleness gotcha: web tsc checks the built SDK dist, not source — rebuild SDK dist after adding new public methods before dispatching web-layer plans.",
+        "AI-SPEC gate can false-positive on the word 'eval' — treat as non-blocking when there is no actual AI content in the phase.",
+        "UI-SPEC can be skipped (--skip-ui) when the new dialog directly mirrors an existing, fully-specified design in code + CONTEXT.md.",
+        "CodeRabbit runs twice: CLI review (coderabbit review --agent) before PR creation, then auto-posts a GitHub review after PR creation (address with /resolve-pr-reviews).",
+        "Plan-checker should verify that every REQ has a named test artifact, not just a passing verify step — vacuous verify passes are a real gap category."
+      ]
+    },
+    "friction": [
+      "1Password commit signing wedged during autonomous run — required disabling commit.gpgsign locally before GSD automated commits could proceed.",
+      "Plan-checker iteration 1 returned 2 blockers: RESEARCH.md missing resolution markers on open questions, and REQ-3 had no dedicated unit test (verify passed vacuously). Required a revision round before execution could start.",
+      "Intel API surface regeneration (gsd query intel) returned empty output — regex extractor unpopulated, wasted a step.",
+      "SDK dist staleness concern triggered a multi-step investigation (index.d.ts vs client.d.ts) that turned out to be a non-issue — methods were visible all along."
+    ],
+    "open_items": [
+      "Execution incomplete: Wave 2 (49-03 web single-item move) still in-flight at transcript end; Wave 3 (49-04 batch+drag, 49-05 e2e) not yet started.",
+      "PR-QA pipeline not yet run: /simplify, security-review, security:review, CodeRabbit CLI all pending.",
+      "PR not yet created; CodeRabbit GitHub review and /resolve-pr-reviews pass pending.",
+      "commit.gpgsign disabled locally for the session — requires a signed rebase (or admin override) before merge since the repo enforces signed commits on PRs.",
+      "3 SDK integration test failures noted as 'known live-API tests needing a local stack' — not regressions, but should be triaged against the local-stack setup docs."
+    ]
+  }
+}
