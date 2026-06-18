@@ -50,7 +50,7 @@ These were genuinely open and tracked nowhere actionable (only in stale review d
 
 ### Still open, remaining in this backlog
 
-All other items below remain open and correctly tracked here: the deferred feature set (sharing, desktop UI, MFA, performance, etc.), the `uint8ToBase64` dedup (Tier 3.3 — confirmed still 4-5 copies, no shared util), and Tier-3 cleanups 3.1, 3.2, 3.4, 3.5, 3.7, 3.8, 3.10, 3.11, 3.12, 3.13, 3.14.
+All other items below remain open and correctly tracked here: the deferred feature set (sharing, desktop UI, MFA, performance, etc.), the `uint8ToBase64` dedup (Tier 3.3 — confirmed still 3 copies, no shared util), and Tier-3 cleanups 3.1, 3.2, 3.4, 3.5, 3.7, 3.8, 3.10, 3.11, 3.12, 3.13, 3.14.
 
 ## Deferred Items Inventory
 
