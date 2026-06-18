@@ -17,7 +17,7 @@
  * See: phase 48 REQ-3; analog phase 47 folder.store.test.ts.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { FolderChild } from '@cipherbox/core';
 import type { SdkEvent, SdkEventHandler } from '@cipherbox/sdk';
 import {
@@ -26,6 +26,41 @@ import {
   parsePublicKey,
   type SharedFolderClient,
 } from '../shared-folder-projection';
+
+// ---------------------------------------------------------------------------
+// Mocks for useSharedWriteOps (node env — no React render harness)
+// useCallback is stubbed as identity so the hook can be called like a plain fn.
+// ---------------------------------------------------------------------------
+
+const mockMoveInSharedFolder = vi.fn<[string, unknown], Promise<void>>();
+const mockSdkClient = { moveInSharedFolder: mockMoveInSharedFolder };
+
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return { ...actual, useCallback: (fn: unknown) => fn };
+});
+
+vi.mock('../../stores/auth.store', () => ({
+  useAuthStore: {
+    getState: () => ({ vaultKeypair: { privateKey: new Uint8Array(32).fill(9) } }),
+  },
+}));
+
+vi.mock('../../lib/sdk-provider', () => ({
+  getSdkClient: () => mockSdkClient,
+}));
+
+vi.mock('../../services/share.service', () => ({
+  fetchShareKeys: vi.fn(async () => []),
+}));
+
+vi.mock('@cipherbox/sdk', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/sdk')>();
+  return {
+    ...actual,
+    withRevocationGuard: async (op: () => Promise<unknown>) => op(),
+  };
+});
 
 /** Build a FolderChild file pointer fixture with a recognizable name. */
 function makeChild(name: string): FolderChild {
@@ -342,5 +377,97 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
     ).toThrow('handler not subscribed');
 
     expect(refs.children).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// moveItemHandler — routes through runWrite -> client.moveInSharedFolder
+// ---------------------------------------------------------------------------
+
+describe('moveItemHandler (REQ-2) — routes through runWrite -> client.moveInSharedFolder', () => {
+  beforeEach(() => {
+    mockMoveInSharedFolder.mockReset();
+    mockMoveInSharedFolder.mockResolvedValue(undefined);
+  });
+
+  it('calls client.moveInSharedFolder with the active shareId and move args', async () => {
+    const { useSharedWriteOps } = await import('../useSharedWriteOps');
+
+    const setError = vi.fn();
+    const setIsLoading = vi.fn();
+    const handleRevocation = vi.fn();
+
+    const ops = useSharedWriteOps({
+      currentShareId: 'share-abc',
+      sharedItems: [],
+      setIsLoading,
+      setError,
+      handleRevocation,
+    });
+
+    const item = makeChild('doc.txt');
+    await ops.moveItem(item, 'dest-folder-id', 'k51dest-ipns-name');
+
+    expect(mockMoveInSharedFolder).toHaveBeenCalledOnce();
+    const [calledShareId, calledArgs] = mockMoveInSharedFolder.mock.calls[0] as [
+      string,
+      { itemId: string; destFolderId: string; destIpnsName: string; vaultPrivateKey: Uint8Array },
+    ];
+    expect(calledShareId).toBe('share-abc');
+    expect(calledArgs.itemId).toBe(item.id);
+    expect(calledArgs.destFolderId).toBe('dest-folder-id');
+    expect(calledArgs.destIpnsName).toBe('k51dest-ipns-name');
+    expect(calledArgs.vaultPrivateKey).toEqual(new Uint8Array(32).fill(9));
+    // setError NOT called on success
+    expect(setError).not.toHaveBeenCalledWith(expect.any(String));
+  });
+
+  it('surfaces errors via setError when moveInSharedFolder rejects', async () => {
+    mockMoveInSharedFolder.mockRejectedValueOnce(new Error('IPNS publish failed'));
+
+    const { useSharedWriteOps } = await import('../useSharedWriteOps');
+
+    const setError = vi.fn();
+    const setIsLoading = vi.fn();
+    const handleRevocation = vi.fn();
+
+    const ops = useSharedWriteOps({
+      currentShareId: 'share-abc',
+      sharedItems: [],
+      setIsLoading,
+      setError,
+      handleRevocation,
+    });
+
+    const item = makeChild('doc.txt');
+    await ops.moveItem(item, 'dest-folder-id', 'k51dest-ipns-name');
+
+    // Error must surface through setError (not swallowed)
+    expect(setError).toHaveBeenCalledWith(expect.stringContaining('IPNS publish failed'));
+  });
+
+  it('sets error immediately when vaultKeypair is absent', async () => {
+    // Temporarily override the auth mock to return no keypair
+    const { useAuthStore } = await import('../../stores/auth.store');
+    const original = (useAuthStore as { getState: () => unknown }).getState;
+    (useAuthStore as { getState: () => unknown }).getState = () => ({ vaultKeypair: null });
+
+    const { useSharedWriteOps } = await import('../useSharedWriteOps');
+    const setError = vi.fn();
+
+    const ops = useSharedWriteOps({
+      currentShareId: 'share-abc',
+      sharedItems: [],
+      setIsLoading: vi.fn(),
+      setError,
+      handleRevocation: vi.fn(),
+    });
+
+    await ops.moveItem(makeChild('x.txt'), 'dest', 'ipns');
+    expect(setError).toHaveBeenCalledWith('No keypair available');
+    expect(mockMoveInSharedFolder).not.toHaveBeenCalled();
+
+    // Restore
+    (useAuthStore as { getState: () => unknown }).getState = original;
   });
 });
