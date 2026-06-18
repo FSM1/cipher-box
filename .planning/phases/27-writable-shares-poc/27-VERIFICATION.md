@@ -1,8 +1,9 @@
 ---
 phase: 27-writable-shares-poc
 verified: 2026-03-26T05:30:00Z
-status: human_needed
+status: passed
 score: 10/10 must-haves verified
+uat_signoff: "2026-06-18 — UAT signed off (maintainer). Items 1-4 (write-share create + ECIES IPNS-key wrap, recipient [RW] badge/write toolbar, recipient upload/dual-wrap, permission upgrade/downgrade) covered by the green E2E suite tests/web-e2e/tests/writable-shares.spec.ts (+ shared-folder-move.spec.ts). Item 5's observable core (owner downgrade -> [RW]->[RO] read-only collapse, write toolbar hidden, textarea readonly) is covered; item 5's exact 403-key-zeroization detail and item 6's 30s-poll timing are not E2E-asserted and are administratively accepted for this PoC. Feature was subsequently productionized and re-verified green through phases 47-49."
 re_verification: false
 human_verification:
   - test: 'Create a write share end-to-end'
@@ -29,8 +30,8 @@ human_verification:
 
 **Phase Goal:** Writable shares PoC -- enable write-share recipients to upload, edit, rename, and delete files in shared folders
 **Verified:** 2026-03-26T05:30:00Z
-**Status:** human_needed (all automated checks pass; 6 items require live browser verification)
-**Re-verification:** No -- initial verification
+**Status:** passed (UAT signed off 2026-06-18 — see uat_signoff: E2E-covered core + accepted PoC timing detail)
+**Re-verification:** No -- initial verification; UAT signed off 2026-06-18
 
 ## Goal Achievement
 
@@ -126,7 +127,9 @@ Notable implementation details (no action required):
 
 ### Human Verification Required
 
-6 items need live browser verification. The entire feature is crypto-dependent and the critical paths cannot be verified statically.
+**✅ Signed off 2026-06-18 (maintainer).** Items 1-4 and the observable core of item 5 (owner downgrade → recipient `[RW]`→`[RO]`, write toolbar hidden, textarea read-only) are covered by the green E2E suite `tests/web-e2e/tests/writable-shares.spec.ts` (plus `shared-folder-move.spec.ts`), run dir-wide by Playwright (`testDir: './tests'`). Item 5's exact 403-key-zeroization path and item 6's 30s-poll timing are not asserted by E2E and are administratively accepted for this PoC — the feature was subsequently productionized and re-verified green through phases 47-49. Status set to `passed`.
+
+The original 6 items (recorded at initial verification) follow as the historical record. The entire feature is crypto-dependent and the critical paths could not be verified statically at the time.
 
 #### 1. Write share creation flow
 
