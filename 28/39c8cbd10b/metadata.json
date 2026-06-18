@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2839c8cbd10b",
+  "strategy": "manual-commit",
+  "branch": "docs/verify-phases-47-49",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/28/39c8cbd10b/0/metadata.json",
+      "transcript": "/28/39c8cbd10b/0/full.jsonl",
+      "content_hash": "/28/39c8cbd10b/0/content_hash.txt",
+      "prompt": "/28/39c8cbd10b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 91515,
+    "cache_creation_tokens": 2885055,
+    "cache_read_tokens": 147216128,
+    "output_tokens": 783582,
+    "api_call_count": 591
+  }
+}
