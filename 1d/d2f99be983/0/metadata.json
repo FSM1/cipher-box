@@ -1,0 +1,151 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1dd2f99be983",
+  "session_id": "230ebd5e-7bc8-4128-b41a-7c99c052d9e4",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T23:19:59.506871Z",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-13-ipns-signature-storage-review-deferred.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "5a53594a5446",
+  "token_usage": {
+    "input_tokens": 37335,
+    "cache_creation_tokens": 140042,
+    "cache_read_tokens": 625687,
+    "output_tokens": 11257,
+    "api_call_count": 10
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Browse pending todos and re-verify the status of three IPNS signature storage security findings (S1, S2, S3) that were deferred 6 days ago to check if they had been addressed in the interim.",
+    "outcome": "All three findings confirmed still open (S1 partially mitigated, S2 and S3 fully open) against current code with refreshed line numbers. The todo was put back to pending with an updated file capturing the re-verification results.",
+    "learnings": {
+      "repo": [
+        "An anti-rollback sequence check was added to ipns.service.ts (lines 222-234) since the security review, but it compares embedded-vs-embedded (incoming record's sequence vs stored record's sequence), not embedded-vs-DTO — the core S1 gap remains.",
+        "The server stores dto.metadataCid verbatim without ever parsing the embedded CID from the signed record and cross-checking; the resolve path (lines 553-561) also only logger.warn's on mismatch and returns DB columns as authoritative.",
+        "signatureVerified is returned by both TS resolvers but is consumed by zero production callers across 20+ call sites — every consumer reads only .cid and .sequenceNumber.",
+        "Rust api-client (crates/api-client/src/types.rs:130-137) structurally cannot verify IPNS signatures — IpnsResolveResponse lacks signatureV2/data/pubKey fields entirely.",
+        "Clients sign sequence 0 on first publish but the DB stores '1' due to a pre-increment convention; any strict embedded-seq equality check must account for this to avoid breaking legitimate first publishes.",
+        "parseIpnsRecord is already imported and called in upsertFolderIpns, so S1 fix has the infrastructure in place — the parse just needs to also extract and compare the embedded CID and sequence against the DTO.",
+        "Key zeroization is inconsistent: updateFileMetadata (file/index.ts:369-373) zeroizes its caller-passed key while updateFolderMetadataAndPublish (folder/index.ts:177-242) zeroizes nothing; no documented caller-owns-key convention exists."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 222,
+          "end_line": 234,
+          "finding": "Anti-rollback check added post-review: compares incoming embedded sequence to stored embedded sequence (409 on regression), but never compares embedded fields to DTO values — embedded-vs-embedded, not embedded-vs-DTO."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 237,
+          "end_line": 248,
+          "finding": "expectedSequenceNumber is compared against the DB column (existing.sequenceNumber), not against the embedded sequence in the signed record — S1 core gap."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 256,
+          "end_line": 258,
+          "finding": "On update: existing.latestCid = metadataCid stored verbatim; embedded record CID never compared to it."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 553,
+          "end_line": 561,
+          "finding": "Resolve path: treats DB columns as authoritative; on CID mismatch with parsed record only logger.warn's and returns DB value — warn-only, no integrity enforcement."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 197,
+          "end_line": 219,
+          "finding": "Throws on invalid signature only when all three fields (signatureV2, data, pubKey) are present; silently skips with console.warn + signatureVerified=false when any field is absent — fail-open downgrade path."
+        },
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "line": 184,
+          "end_line": 185,
+          "finding": "Web path fails open even on INVALID signature: logs logger.warn then falls through and returns the CID with signatureVerified=false."
+        },
+        {
+          "path": "crates/api-client/src/types.rs",
+          "line": 130,
+          "end_line": 137,
+          "finding": "IpnsResolveResponse has only success, cid, sequence_number — no signature fields; Rust client structurally cannot verify IPNS signatures."
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 369,
+          "end_line": 373,
+          "finding": "updateFileMetadata zeroizes its caller-passed key — sets the pattern but not followed elsewhere."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 177,
+          "end_line": 242,
+          "finding": "updateFolderMetadataAndPublish does not zeroize any keys — asymmetric with file counterpart, no documented convention."
+        },
+        {
+          "path": "crates/cipher-box/src/ecies.rs",
+          "line": 35,
+          "end_line": 47,
+          "finding": "Rust leaks raw Vec<u8> keys — no zeroization on drop."
+        },
+        {
+          "path": "crates/cipher-box/src/fuse/lib.rs",
+          "line": 933,
+          "end_line": 938,
+          "finding": "Rust fuse layer leaks raw Vec<u8> keys."
+        },
+        {
+          "path": "crates/cipher-box/src/fuse/lib.rs",
+          "line": 1595,
+          "end_line": 1661,
+          "finding": "Additional Rust fuse key leak sites."
+        }
+      ],
+      "workflow": [
+        "The GSD check-todos --list flow supports inline re-verification via parallel subagent workflow before deciding on an action, which is useful for staleness-checking security findings.",
+        "When a todo is 'put back', the workflow refreshes the file with current line numbers and verification status — keeps the todo self-contained for the next session.",
+        "The three S1/S2/S3 findings are ship-separable: S1 is a focused server-side fix (~one function), S2 is cross-cutting (TS + Rust + 20+ callers), S3 is defense-in-depth memory hygiene."
+      ]
+    },
+    "friction": [
+      "The parallel verification workflow's task notification output was truncated (7154 chars cut), requiring a separate file read to get S3 results — large structured workflow results exceed the notification payload limit."
+    ],
+    "open_items": [
+      "S1 (Medium): Parse embedded CID and sequence from signed record in upsertFolderIpns and reject with 400 if they disagree with dto.metadataCid / dto.expectedSequenceNumber; must account for client's sequence-0 pre-increment convention on first publish.",
+      "S2 (Medium): Fix fail-open signature verification across four surfaces — sdk-core (throw on absent fields), web service (throw/reject on invalid), Rust client (add signature fields + Ed25519 verification), and enforce signatureVerified at all 20+ call sites.",
+      "S3 (Medium): Establish and document a caller-owns-key convention; add zeroization to updateFolderMetadataAndPublish and Rust key handling sites in ecies.rs and fuse/lib.rs."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T23:19:07.801921Z",
+    "agent_lines": 10,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 10,
+    "total_lines_changed": 10,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
