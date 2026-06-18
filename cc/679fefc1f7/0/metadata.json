@@ -1,0 +1,142 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "cc679fefc1f7",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T00:40:38.673869Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-VALIDATION.md",
+    ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-RESEARCH.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d24aef7651a4",
+  "token_usage": {
+    "input_tokens": 10222,
+    "cache_creation_tokens": 246699,
+    "cache_read_tokens": 1582782,
+    "output_tokens": 23867,
+    "api_call_count": 23
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan and execute phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation), then run the full PR-QA pipeline (simplify, security-review, CodeRabbit CLI) before pushing and opening a PR, followed by resolving CodeRabbit's GitHub review post-PR.",
+    "outcome": "Planning was partially completed: the researcher ran successfully (HIGH confidence), RESEARCH.md and VALIDATION.md were written and committed. The workflow was mid-execution at the Nyquist gate step before spawning the planner — execution, QA, and PR creation had not yet started.",
+    "learnings": {
+      "repo": [
+        "reencryptFileMetadataForFolderChange is fully key-agnostic (takes raw key bytes, no owner/recipient distinction) — directly reusable for the shared-folder move without modification.",
+        "share_keys entries are keyed by itemId (file UUID), not parent folder path — file keys do NOT need re-registration after a folder move.",
+        "adoptSharedFolderResult must only be called once for the source result; calling it for the dest result would corrupt the sharedFolderTree projection (dual-emit bug).",
+        "sdkCore.moveItem throws on name collision ('An item with this name already exists in destination') — no auto-rename logic needed in the handler.",
+        "@internal on ensureFolderLoaded is documentation-only, not enforced — safe to call directly from web code without adding a new public alias.",
+        "SharedFolderClient Pick allowlist in shared-folder-projection.ts needs moveInSharedFolder and enumerateSharedSubtree added (currently only lists the 7 Phase 48 methods).",
+        "File IPNS key for re-encryption must be sourced from share_keys keyType:'file-ipns', NOT from FilePointer.ipnsPrivateKeyEncrypted (owner-wrapped; recipients cannot decrypt it) — same pattern as updateSharedFileHandler."
+      ],
+      "code": [
+        {
+          "path": "reencrypt.ts",
+          "line": 49,
+          "end_line": 49,
+          "finding": "reencryptFileMetadataForFolderChange is key-agnostic and reusable verbatim for the shared-folder move case."
+        },
+        {
+          "path": "sdk-core/src/folder/index.ts",
+          "line": 346,
+          "end_line": 346,
+          "finding": "moveItem throws on destination name collision — collision policy is throw, no auto-rename."
+        },
+        {
+          "path": "shared-folder-projection.ts",
+          "line": 28,
+          "end_line": 38,
+          "finding": "SharedFolderClient Pick allowlist — must add moveInSharedFolder and enumerateSharedSubtree for Phase 49."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit CLI review (coderabbit review --agent) runs before PR creation; after the PR is created, CodeRabbit also posts a GitHub review which should be addressed via /resolve-pr-reviews.",
+        "The GSD plan-phase chain for this project is: researcher → Nyquist VALIDATION.md → pattern-mapper → gsd-planner (Opus) → gsd-plan-checker revision loop until clean.",
+        "AI-SPEC gate can false-positive on non-AI keywords (e.g., 'eval' appearing in e2e requirement text) — gate is non-blocking and can be skipped with rationale documented.",
+        "UI-SPEC can be skipped (--skip-ui) when a new component mirrors an existing, already-coded design; gsd:ui-review can validate retroactively during QA.",
+        "To prevent 1Password signer from wedging during long AFK automated runs, disable repo-local commit signing with git config --local commit.gpgsign false."
+      ]
+    },
+    "friction": [
+      "Global commit.gpgsign=true would have caused 1Password signer prompts to wedge the entire automated pipeline during AFK execution — required manual local override before proceeding.",
+      "AI-SPEC keyword gate false-positived on 'eval' from a normal e2e requirement string, creating a spurious review step that had to be manually dismissed.",
+      "UI safety gate triggered (frontend indicators found) despite the new MoveDialog design being fully established in existing code and CONTEXT.md, requiring an explicit --skip-ui justification."
+    ],
+    "open_items": [
+      "Execute phase 49 via gsd:execute-phase (wave-based, atomic commits) — not yet started.",
+      "Run /simplify on the phase 49 diff after execution.",
+      "Run security-review and security:review, with extra scrutiny on the crypto re-encryption path.",
+      "Run CodeRabbit CLI review (coderabbit review --agent, scoped to phase diff) and address findings.",
+      "Push feat/shared-folder-move branch to remote and open a PR against main.",
+      "After PR creation: wait for CodeRabbit's GitHub review, then run /resolve-pr-reviews to address inline comments.",
+      "Re-enable commit signing (git config --local --unset commit.gpgsign) after the session — the branch will need a signed rebase or admin override before merge since the repo enforces signed commits on PRs."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T00:40:00.725685Z",
+    "agent_lines": 83,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 83,
+    "total_lines_changed": 83,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 679,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6,
+        ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-RESEARCH.md": 672
+      }
+    }
+  ]
+}

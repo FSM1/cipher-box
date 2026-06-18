@@ -1,0 +1,58 @@
+plan phase 49, execute the plan, then the usual pr-qa tasks (simplify, security-review, security:review, coderabbit, etc) before pushing to remote and creating a pr.
+
+---
+
+the coderabbit cli review should be run before creating a pr. after the pr is created, coderabbit will also post a review to github, and the /resolve-pr-review skill can be utilized to address any comments made.
+
+---
+
+<task-notification>
+<task-id>a3a6c766767528cb0</task-id>
+<tool-use-id>toolu_01Xv4DD4ixpswW7G3usFbudY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/a3a6c766767528cb0.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 49" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## RESEARCH COMPLETE
+
+**Phase:** 49 - Shared-folder move (intra-share) and useFolderNavigation unwrap consolidation
+**Confidence:** HIGH
+
+### Key Findings
+
+- `reencryptFileMetadataForFolderChange` (reencrypt.ts:49) is fully key-agnostic — takes raw `sourceFolderKey`/`destFolderKey`/`fileIpnsPrivateKey`, no owner vs. recipient distinction. Reusable verbatim for the shared case. [VERIFIED]
+
+- **File keys DO NOT need re-registration after move.** `share_keys` entries are keyed by `itemId` (file UUID), not by parent folder. The download path at line 524 resolves `k.keyType === 'file' &amp;&amp; k.itemId === item.id` — parent folder is irrelevant. [VERIFIED]
+
+- **Dual-emit problem resolved.** `adoptSharedFolderResult` emits `sharedFolder:updated` with `live.ipnsName` (always the active/source depth). The projection filters by `shareId` only — calling adopt for the dest would corrupt the rendered view. Correct design: call `adoptSharedFolderResult` once for the source result only. The dest result is not persisted in `sharedFolderTree` (re-loaded on next `navigateToSubfolder`).
+
+- **Collision policy: throw.** `sdkCore.moveItem` throws `'An item with this name already exists in destination'` (sdk-core/src/folder/index.ts:346). Propagates through `runWrite` → `p.setError`. No auto-rename needed.
+
+- **`@internal` on `ensureFolderLoaded`: keep it.** `CipherBoxClient` is already exported. The `@internal` tag is documentation-only. Call it directly from the web; no new public alias needed.
+
+- **`SharedFolderClient` Pick allowlist** (shared-folder-projection.ts:28-38) must have both `moveInSharedFolder` and `enumerateSharedSubtree` added — currently only lists the 7 Phase 48 methods.
+
+- **File IPNS key for re-encryption must come from `share_keys keyType:'file-ipns'`**, not `FilePointer.ipnsPrivateKeyEncrypted` (owner-wrapped, recipient cannot decrypt it). Same pattern as `updateSharedFileHandler`.
+
+### File Created
+
+`.planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-RESEARCH.md`
+
+### Confidence Assessment
+
+| Area | Level | Reason |
+| ---- | ----- | ------ |
+| Standard stack | HIGH | All primitives verified in live code with exact signatures |
+| Architecture | HIGH | Adoption/emit semantics, key resolution, and projection behavior all traced to specific verified lines |
+| Pitfalls | HIGH | Each pitfall derived from verified code behavior, not assumptions |
+
+### Open Questions (minor, for planner)
+
+1. Whether the stateless `moveInSharedFolder` op receives pre-resolved key bytes or callbacks — recommendation: pre-resolved bytes (simpler, mirrors `sdkCore.moveItem` caller pattern).
+2. Whether `enumerateSharedSubtree` accepts `vaultPrivateKey` as an argument — recommendation: yes, matching `navigateToSubfolder` pattern.
+
+### Ready for Planning
+
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><subagent_tokens>93696</subagent_tokens><tool_uses>72</tool_uses><duration_ms>488482</duration_ms></usage>
+</task-notification>
