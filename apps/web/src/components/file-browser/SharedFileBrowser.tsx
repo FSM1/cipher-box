@@ -32,6 +32,7 @@ import { VideoPlayerDialog } from './VideoPlayerDialog';
 import { TextEditorDialog } from './TextEditorDialog';
 import { SharedListRow } from './SharedListRow';
 import { SharedFolderRow } from './SharedFolderRow';
+import { SharedMoveDialog } from './SharedMoveDialog';
 import '../../styles/shared-browser.css';
 
 /**
@@ -82,6 +83,7 @@ export function SharedFileBrowser() {
     renameItem,
     deleteItem,
     updateSharedFile,
+    moveItem,
   } = useSharedNavigation();
 
   const contextMenu = useContextMenu();
@@ -119,6 +121,10 @@ export function SharedFileBrowser() {
 
   // Drag-and-drop state
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // Move dialog state
+  const [moveDialogItem, setMoveDialogItem] = useState<FolderChild | null>(null);
+  const handleMoveClick = useCallback((item: FolderChild) => setMoveDialogItem(item), []);
 
   // Inline rename state
   const [renamingItem, setRenamingItem] = useState<FolderChild | null>(null);
@@ -703,10 +709,30 @@ export function SharedFileBrowser() {
           }
           onRename={isWritable ? handleRename : () => {}}
           onDelete={isWritable ? handleDelete : () => {}}
+          onMove={
+            isWritable && contextMenu.item?.type === 'file'
+              ? () => handleMoveClick(contextMenu.item!)
+              : undefined
+          }
           onDetails={handleDetailsClick}
           readOnly={permission !== 'write'}
         />
       )}
+
+      {/* Move dialog -- shared subtree picker (folder view only) */}
+      <SharedMoveDialog
+        open={!!moveDialogItem}
+        item={moveDialogItem}
+        currentFolderId={breadcrumbs[breadcrumbs.length - 1]?.id ?? currentShareId ?? ''}
+        shareId={currentShareId}
+        onClose={() => setMoveDialogItem(null)}
+        onConfirm={(destFolderId, destIpnsName) => {
+          if (moveDialogItem) {
+            void moveItem(moveDialogItem, destFolderId, destIpnsName);
+          }
+          setMoveDialogItem(null);
+        }}
+      />
 
       {/* Details dialog */}
       <DetailsDialog
