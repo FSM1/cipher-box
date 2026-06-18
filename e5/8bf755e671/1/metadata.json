@@ -1,0 +1,161 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e58bf755e671",
+  "session_id": "f39cbb5d-53e0-4021-af0b-4b7371474c03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T00:24:59.692345Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "516ffb16edd9",
+  "token_usage": {
+    "input_tokens": 154932,
+    "cache_creation_tokens": 1827889,
+    "cache_read_tokens": 140764494,
+    "output_tokens": 654351,
+    "api_call_count": 520
+  },
+  "session_metrics": {
+    "turn_count": 31
+  },
+  "summary": {
+    "intent": "Ship Phase 48 REQ-4 (share itemName lazy backfill API), then root-cause and fully fix a staging 'Decryption failed' bug that occurs after moving a file into a subfolder — including bin-restore, desktop FUSE/WinFsp paths, idempotent retry, and cross-platform e2e coverage.",
+    "outcome": "PR #505 (share itemName backfill endpoint + 7-step two-party e2e spec) and PR #507 (FileMetadata re-encrypt on move/restore — TS SDK, Rust FUSE, WinFsp — plus bounded desktop retry, idempotent-by-id restore, and cross-platform move-content e2e) both merged to main.",
+    "learnings": {
+      "repo": [
+        "FileMetadata IPNS records are AES-256-GCM encrypted with the PARENT folder's folderKey at upload; the decrypt path uses the key of whichever folder currently lists the FilePointer — so cross-folder moves without re-encryption silently corrupt read access.",
+        "The desktop FUSE/WinFsp path is a parallel Rust implementation that completely bypasses the TS SDK; fixes in packages/sdk do not protect desktop moves or deletes.",
+        "Shared-folder move is currently unimplemented — SharedFileBrowser.tsx renders ContextMenu with no onMove prop; useSharedWriteOps has no move function — so no bug exists there yet, but the first implementation must include re-encryption.",
+        "backfillSentShareItemNames fires ONLY via SDK getCoveringShares → reWrapNewItems, which is called unconditionally on every uploadFile; there is no 'sent shares list' page that triggers fetchAllSentShares — ShareDialog calls sharesControllerGetSentShares directly.",
+        "fetchAllSentShares has a 30-second in-memory cache (ensureFreshSentShares); e2e tests that depend on backfill must upload a file to trigger a cold-cache path.",
+        "Web e2e uses the built @cipherbox/sdk dist (not src); running specs against locally-modified SDK code requires pnpm build --filter @cipherbox/sdk first or the pre-fix binary runs.",
+        "Web e2e only triggers on main-push per ci config, not on PR push — must be manually dispatched with gh workflow run to validate a branch.",
+        "CI coverage (cargo llvm-cov) runs with --features fuse; all WinFsp code (#[cfg(feature = \"winfsp\")]) is excluded from the report entirely — missing lines there are not regressions.",
+        "CI does not gate cargo fmt or cargo clippy — only cargo test --workspace. Pre-existing fmt drift must not be swept by running cargo fmt (out-of-scope churn).",
+        "clearBytes (from @cipherbox/crypto) is the canonical in-memory zeroization helper; the project enforces clearing sensitive key material after use and CodeRabbit flags violations.",
+        "BinEntry (both TS core and Rust crates/core) use camelCase JSON serialization; Rust serde rename_all = camelCase means original_folder_key_encrypted serializes as originalFolderKeyEncrypted — compatible across the boundary.",
+        "restoreFromBin always restores to originalParentIpnsName; if that folder was deleted, requireFolder throws 'Target folder not found' before any re-key attempt — recovery requires restoring the parent folder first.",
+        "The release-please bot pushes a chore(release) commit to every PR branch shortly after PR creation; must fetch + rebase before pushing any subsequent commits."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 743,
+          "end_line": 770,
+          "finding": "moveItem re-encrypt block: publish destination FIRST (add-before-remove crash safety), THEN re-encrypt FileMetadata source.folderKey → dest.folderKey, THEN publish source. Order matters: metadata is only re-keyed after destination is durably visible, so the file is always readable from a folder that still lists it under the matching key."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 356,
+          "end_line": 360,
+          "finding": "Idempotent-by-id guard added before the collision-rename branch: if targetFolder.children already contains a child with the same id (from a prior partial restore attempt), skip the add and go straight to re-key + bin removal. Without this, a retry after a step-5b failure double-lists the file (same id, different name) because the no-conflict publish path doesn't dedup by id."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 408,
+          "end_line": 476,
+          "finding": "restoreFromBin reorder: publish target folder → re-key FileMetadata (step 5b) → remove from bin (step 6). Preconditions validated before publish so a guaranteed failure (missing key, wrong type) aborts cleanly. The in-memory folderTree commit was moved to AFTER the re-key to mirror moveItem and prevent the duplicate-listing defect on retry."
+        },
+        {
+          "path": "packages/sdk/src/reencrypt.ts",
+          "line": 1,
+          "end_line": 86,
+          "finding": "New shared idempotent re-encrypt helper: if resolveFileMetadata fails to decrypt under the source key with a CryptoError, it attempts to verify the record is already readable under the destination key (duck-typed on .code discriminator) and treats that as already-done. Non-decrypt errors propagate. Shared by moveItem and restoreFromBin."
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 718,
+          "end_line": 764,
+          "finding": "spawn_file_meta_reencrypt: bounded retry loop (5 attempts, exponential backoff 500ms–8s + jitter, lock released across sleep). Short-circuits when source_folder_key == dest_folder_key. After resolve failure, verifies the record under dest key; if readable, treats as idempotent success. Decrypt-under-neither-key is terminal (no retry)."
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 869,
+          "end_line": 900,
+          "finding": "Unix handle_rename captures reencrypt_inputs (file_meta_ipns_name, file_ipns_private_key, source folderKey, dest folderKey) BEFORE mutating folder state, then spawns spawn_file_meta_reencrypt after both folder publishes. handle_unlink captures originalFolderKeyEncrypted via ecies::wrap_key before publishing the BinEntry."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-move-reencrypt.test.ts",
+          "line": 269,
+          "end_line": 285,
+          "finding": "Ordering invariant test uses distinct markers per publish site: ['publish:dest', 'reencrypt', 'publish:source']. Using the same 'publish' label for both folder publishes would allow a reversed source→reencrypt→dest sequence to pass falsely."
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 199,
+          "end_line": 215,
+          "finding": "backfillSentShareItemNames wraps the ECIES encrypt + PATCH call in try/finally that fills both plaintextNameBytes and the wrapped ciphertext buffer with zeros. Violating this pattern is flagged by CodeRabbit as a security issue."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 421,
+          "end_line": 422,
+          "finding": "The original code committed targetFolder.children to in-memory folderTree at step 5 BEFORE the re-key at step 5b. A throw in 5b left the pointer committed but the re-key incomplete; a retry then renamed-and-duplicated the entry because the name-collision handler saw the committed entry but the child's id was unchanged."
+        },
+        {
+          "path": "packages/core/src/bin/types.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Added originalFolderKeyEncrypted?: string to BinEntry (placed after original_path). Captured at addToBin time by ECIES-wrapping the parent folder's folderKey with the user's public key, enabling restoreFromBin to re-encrypt FileMetadata even after the original parent folder is deleted."
+        }
+      ],
+      "workflow": [
+        "Sandboxed Bash cannot reach the 1Password op-ssh-sign binary; all git commit and git rebase -S calls require dangerouslyDisableSandbox: true. Commits made in sandbox silently succeed without signatures, which causes PR merge failures on repos enforcing signed commits.",
+        "1Password SSH signer wedges with 'failed to fill whole buffer' after extended use; the only fix is restarting the 1Password desktop app. Run signed commits in the background with a timeout guard so a hang doesn't block the session.",
+        "vitest with esbuild does not perform full TypeScript type-checking — tsc --noEmit catches type errors (e.g. string | undefined passed to a string parameter) that vitest tests pass through silently. Always run tsc after writing or modifying typed code.",
+        "When running pnpm api:generate (orval), every generated file gets a version bump in its header comment — this is expected cosmetic noise, not a regression.",
+        "The gh run watch command can die on a network timeout with exit 0, falsely indicating completion. Always verify run conclusion via gh run view --json conclusion after the watcher exits.",
+        "CodeRabbit out-of-diff-range comments appear in the review body, not as inline threads — they cannot be resolved via the resolveReviewThread GraphQL mutation. Reply via a PR comment instead.",
+        "Multi-agent adversarial verification (Workflow tool, 3 independent verifiers per finding) caught a real duplicate-listing defect in restoreFromBin that passed all existing tests — the duplicate only surfaces on same-session retries after a partial failure, which the existing tests modeled with an empty target folder.",
+        "When the desktop e2e has platform-specific test sections in a .sh script, Windows runs the .ps1 equivalent — any new test section added to .sh must also be ported to .ps1, or Windows silently omits it. The better fix is a single cross-platform Node .mjs script invoked by both runners."
+      ]
+    },
+    "friction": [
+      "1Password SSH signer wedged ('failed to fill whole buffer') twice during the session, requiring a manual app restart and blocking signed commits for several minutes each time.",
+      "Sandboxed Bash silently produces unsigned commits — there is no warning, only a downstream PR merge failure. The sandbox limitation requires dangerouslyDisableSandbox for every signing operation, which itself carries prompt-approval friction.",
+      "Release-please bot pushes chore(release) commits to the PR branch after every gh pr create invocation, requiring an immediate fetch + rebase + re-sign + push cycle before further commits can land.",
+      "gh api GraphQL and REST endpoints had repeated transient network timeouts throughout the session, requiring retries with dangerouslyDisableSandbox.",
+      "The macOS Desktop E2E CI job had an explicit leniency branch that downgraded real failures to warnings — this was silently masking the unfixed Rust decrypt bug for macOS users and required careful inspection to discover.",
+      "Windows Desktop E2E ran a separate .ps1 runner that didn't include the new move-content test section (added only to the .sh), so Windows silently omitted the test and appeared green without validating the WinFsp fix.",
+      "cargo check produces dead_code warnings from the vendored fuser crate on every invocation, making it harder to spot real warnings in the output.",
+      "The web e2e stale-dist hazard (web imports built SDK, not src) is easy to forget and produces tests that validate pre-fix behavior with no indication something is wrong."
+    ],
+    "open_items": [
+      "Shared-folder move is unimplemented: SharedFileBrowser renders no onMove prop; useSharedWriteOps has no move function. When implemented, must re-encrypt FileMetadata to the destination subfolder folderKey. Tracked in .planning/todos/pending/2026-06-17-shared-folder-move-must-reencrypt-file-metadata.md.",
+      "Desktop delete (handle_unlink/WinFsp cleanup) now captures the folderKey on BinEntry, but there is no desktop-delete → SDK-restore-to-a-different-folder e2e test (no restore CLI helper script exists for the desktop harness).",
+      "Idempotent clean-retry for restoreFromBin and the Rust spawn_file_meta_reencrypt is in-memory only (bounded retry, no persistent journal). A cross-session recovery mechanism (e.g. a JournalOp that survives process restart) was explicitly deferred.",
+      "The at-rest ciphertext assertion in the share-itemname-backfill.spec.ts uses GET /shares/sent hex≠plaintext as a proxy; a literal raw-bytea Postgres read (proving server never saw plaintext at the storage layer) requires adding a pg client to tests/web-e2e or a test-only debug endpoint.",
+      "sdk integration.test.ts failures require a running local API stack (docker compose -f docker/docker-compose.yml up -d + pnpm --filter @cipherbox/api dev); these are always excluded from CI unit-test results but easy to misread as regressions.",
+      "WinFsp handle_rename re-encrypt added in crates/fuse/src/platform/windows/write_ops.rs cannot be compiled or locally tested on macOS; relies entirely on the Windows CI desktop-e2e job for validation."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T00:22:43.141119Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 19,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 19,
+    "total_lines_changed": 20,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
