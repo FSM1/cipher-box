@@ -1,0 +1,160 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "6ff2b365878a",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T02:13:24.438538Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d24aef7651a4",
+  "token_usage": {
+    "input_tokens": 14935,
+    "cache_creation_tokens": 600288,
+    "cache_read_tokens": 8648516,
+    "output_tokens": 80562,
+    "api_call_count": 61
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan and execute phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation), then run the full PR-QA pipeline (simplify, security-review, CodeRabbit CLI, push, PR creation, and post-PR CodeRabbit GitHub review resolution).",
+    "outcome": "Planning completed (5 plans / 3 waves, 6 requirements, plan-check passed after one revision round). Execution reached 4/5 plans complete (49-01 through 49-04); plan 49-05 (e2e) was dispatched but the transcript ends before confirmation. PR-QA tasks (simplify, security-review, CodeRabbit, push, PR) were not yet run.",
+    "learnings": {
+      "repo": [
+        "reencryptFileMetadataForFolderChange is key-agnostic (takes raw key bytes) and is reusable verbatim for the shared-folder case without modification.",
+        "share_keys entries are keyed by itemId (file UUID), not by parent folder — file keys do NOT need re-registration after a folder move.",
+        "adoptSharedFolderResult must be called only once for the source result; calling it for the dest would corrupt the sharedFolderTree projection (dest is re-loaded on next navigateToSubfolder).",
+        "sdkCore.moveItem throws 'An item with this name already exists in destination' on collision — no auto-rename logic needed.",
+        "@internal on ensureFolderLoaded is documentation-only; CipherBoxClient is already exported, so direct calls from web are safe.",
+        "SharedFolderClient Pick allowlist (shared-folder-projection.ts:28-38) must be explicitly extended when adding new client methods — it only listed the 7 Phase 48 methods.",
+        "File IPNS key for re-encryption must be sourced from share_keys keyType:'file-ipns', NOT FilePointer.ipnsPrivateKeyEncrypted (owner-wrapped; recipient cannot decrypt it).",
+        "Private-vault batch move is a web-layer pattern that loops single-item client.moveItem via useFileBrowserActions — there is no dedicated SDK batch method.",
+        "useSharedWriteOps.test.ts already exists; new handler unit tests should extend it rather than create a new file.",
+        "Intel API surface regeneration (gsd-tools regen intel) was a no-op — the regex extractor is unpopulated and produces an empty output."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/reencrypt.ts",
+          "line": 49,
+          "end_line": 49,
+          "finding": "reencryptFileMetadataForFolderChange signature is fully key-agnostic; accepts raw sourceFolderKey/destFolderKey/fileIpnsPrivateKey bytes with no owner/recipient distinction."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 346,
+          "end_line": 346,
+          "finding": "sdkCore.moveItem throws on name collision — the error propagates through runWrite → p.setError with no auto-rename."
+        },
+        {
+          "path": "packages/sdk-core/src/shared-folder-projection.ts",
+          "line": 28,
+          "end_line": 38,
+          "finding": "SharedFolderClient Pick allowlist — must add moveInSharedFolder and enumerateSharedSubtree when those methods are added to the client."
+        },
+        {
+          "path": "packages/web/src/hooks/useFileBrowserActions.ts",
+          "finding": "handleBatchMoveConfirm loops single-item moveItem calls using a selection Set; the private MoveDialog already accepts an items prop — batch shared move mirrors this pattern exactly."
+        },
+        {
+          "path": "packages/web/src/components/FileListItem.tsx",
+          "finding": "handleDragStart is multi-select-aware; drop targets live on folder rows via handleDropOnFolder — the analog for SharedFolderRow DnD wiring."
+        }
+      ],
+      "workflow": [
+        "GSD plan-phase flow: research → Nyquist VALIDATION.md → pattern-mapper → planner (opus) → plan-checker (sonnet) → revision loop until clean. One revision pass was needed here.",
+        "Sequential execution without worktrees was chosen for the AFK autonomous run to avoid the parallel-worktree merge-back protocol complexity (cwd-drift and merge-base footguns noted in project memory).",
+        "SDK dist must be explicitly rebuilt between waves when wave N adds new public SDK methods that wave N+1 imports — tsc checks the built dist, not source.",
+        "Web package has no typecheck npm script; the correct command is tsc -b run from the web package root.",
+        "gsd-tools is not on PATH inside planner-revision subagents — commits staged by those agents must be made manually by the orchestrator afterwards.",
+        "Scope expansion (batch + drag move) can be safely folded in mid-planning if the planner hasn't been spawned yet; ROADMAP and CONTEXT edits are committed before the planner runs so it picks them up cleanly.",
+        "User clarified that CodeRabbit CLI review runs before PR creation; after the PR is created CodeRabbit auto-posts a GitHub review, which is then addressed via /resolve-pr-reviews."
+      ]
+    },
+    "friction": [
+      "Plan-checker flagged 2 blockers on first pass: REQ-3 had no dedicated web unit test (test existed but wasn't referenced in the plan) and RESEARCH.md was missing resolution markers — required a full planner revision round.",
+      "commit.gpgsign=true (global) caused 1Password signer to wedge during AFK automated commits; had to disable signing at repo level for the session.",
+      "AI-SPEC keyword gate false-positived on 'eval' in an e2e test string — required manual inspection to confirm no actual AI content.",
+      "UI gate found frontend indicators without a UI-SPEC; had to take the --skip-ui path and defer to retroactive gsd:ui-review.",
+      "SDK dist type declaration investigation was briefly misleading — index.d.ts is a barrel re-export, actual method declarations are in client.d.ts, which caused unnecessary concern about dist staleness.",
+      "Intel API surface regen was a no-op (regex extractor unpopulated), making the pre-planner intel step entirely inert."
+    ],
+    "open_items": [
+      "Plan 49-05 (two-account within-share move e2e + decrypt-survival) was dispatched but not yet confirmed complete.",
+      "PR-QA pipeline not yet run: /simplify, security-review, security:review, CodeRabbit CLI (coderabbit review --agent) all pending.",
+      "Branch push and PR creation not yet done.",
+      "Post-PR: CodeRabbit will auto-post a GitHub review; /resolve-pr-reviews must be run to address inline comments.",
+      "commit.gpgsign was disabled locally for the session — must be re-enabled (git config --local --unset commit.gpgsign) and the branch likely needs a signed rebase before merge.",
+      "gsd:ui-review retroactive validation of the new shared MoveDialog component is deferred to QA.",
+      "3 SDK integration tests fail without a live local stack (expected, pre-existing); these are not regressions but should be noted for CI."
+    ]
+  }
+}
