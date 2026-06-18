@@ -1,9 +1,19 @@
 ---
 phase: 23-rust-sdk-extraction
 verified: 2026-03-24T12:30:00Z
-status: gaps_found
-score: 4/5 success criteria verified
-re_verification: false
+status: passed
+score: 5/5 success criteria verified (re-verified 2026-06-18 — both gaps closed)
+re_verification:
+  previous_status: gaps_found
+  previous_score: 4/5
+  reverified: 2026-06-18
+  gaps_closed:
+    - 'Orphaned legacy FUSE files deleted — apps/desktop/src-tauri/src/fuse/ now contains only mod.rs + windows/mod.rs (inode/cache/operations/read_ops/write_ops/dir_ops/file_handle/helpers/constants all gone)'
+    - 'WinFsp operations relocated to crates/fuse/src/platform/windows/ (read_ops/dir_ops/write_ops/operations/mod.rs) exactly as Plan 04 specified'
+    - 'Cargo workspace check/test human-verification gate satisfied by .github/workflows/ci.yml — cargo check + cargo test --workspace on Windows (winfsp), macOS (fuse), Linux (fuse), continuously green'
+  gaps_remaining: []
+  regressions: []
+# Historical gaps below were the original 2026-03-24 finding; all closed by subsequent FUSE refactors (see re_verification above).
 gaps:
   - truth: 'Desktop app is a thin Tauri shell (~1,500 LOC) with all logic delegated to workspace crates'
     status: partial
@@ -53,8 +63,8 @@ human_verification:
 
 **Phase Goal:** Extract five Rust crates (cipherbox-crypto, cipherbox-core, cipherbox-api-client, cipherbox-fuse, cipherbox-sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript. Desktop app becomes a thin Tauri shell.
 **Verified:** 2026-03-24T12:30:00Z
-**Status:** gaps_found
-**Re-verification:** No — initial verification
+**Status:** passed (re-verified 2026-06-18 — both gaps closed)
+**Re-verification:** Yes — closed 2026-06-18 (original: 2026-03-24, gaps_found 4/5)
 
 ## Goal Achievement
 
@@ -163,7 +173,11 @@ human_verification:
 
 ## Gaps Summary
 
-**Two gaps block full goal achievement. Both relate to the cipherbox-fuse Windows extraction:**
+**✅ Re-verified & closed 2026-06-18 (maintainer).** Both gaps below are resolved on current `main`: (1) the 9 orphaned legacy FUSE files no longer exist — `apps/desktop/src-tauri/src/fuse/` contains only `mod.rs` + `windows/mod.rs`; (2) the WinFsp operations now live in `crates/fuse/src/platform/windows/` (`read_ops`/`dir_ops`/`write_ops`/`operations`/`mod.rs`), exactly as Plan 04 specified. The cargo workspace check/test human-verification gate is satisfied by `.github/workflows/ci.yml` (`cargo check` + `cargo test --workspace` on Windows/macOS/Linux, continuously green). The original findings below are retained as the historical record. Status set to `passed`.
+
+---
+
+**[HISTORICAL — 2026-03-24] Two gaps blocked full goal achievement. Both related to the cipherbox-fuse Windows extraction:**
 
 **Gap 1: Orphaned FUSE files still on disk in desktop/fuse/**
 

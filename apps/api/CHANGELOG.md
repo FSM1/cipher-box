@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.41.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-v0.40.0...@cipherbox/api-v0.41.0) (2026-06-18)
+
+
+### Features
+
+* **web:** shared-folder intra-share move and useFolderNavigation consolidation ([#509](https://github.com/FSM1/cipher-box/issues/509)) ([c36ac6d](https://github.com/FSM1/cipher-box/commit/c36ac6d7792947a734a539a23de6b42d5c1fdd98))
+
 ## [0.40.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-v0.39.0...@cipherbox/api-v0.40.0) (2026-06-17)
 
 
