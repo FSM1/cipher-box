@@ -1,0 +1,113 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "4ea2f59e45f2",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T01:57:42.585315Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d24aef7651a4",
+  "checkpoint_transcript_start": 347,
+  "transcript_lines_at_start": 347,
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 233681,
+    "cache_read_tokens": 763927,
+    "output_tokens": 3930,
+    "api_call_count": 4
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Complete phase 49 wave 2/3 of an SDK rebuild, then start wave 3/3 focused on batch/drag move parity features.",
+    "outcome": "Plan 49-03 was verified clean (5 commits, web tsc -b passed), wave 2/3 marked complete, and wave 3/3 was initiated by dispatching plan 49-04 via a subagent.",
+    "learnings": {
+      "repo": [
+        "The web package does not have a 'typecheck' script in package.json; the correct typecheck command is 'tsc -b' run directly."
+      ],
+      "code": [],
+      "workflow": [
+        "Post-wave gate pattern: spot-check recent commits + run tsc -b before proceeding to the next wave to confirm integration.",
+        "vitest-generic issues can be auto-fixed as a minor side effect during plan execution without blocking progress.",
+        "Wave/plan dispatch uses the Agent tool to parallelize or serialize subagent execution within a larger phased rollout."
+      ]
+    },
+    "friction": [
+      "The web package lacked a 'typecheck' npm script, requiring a fallback to 'tsc -b' directly — caused an extra lookup step."
+    ],
+    "open_items": [
+      "Plan 49-04 (REQ-6: batch + drag move parity — multi-select, SelectionActionBar, batch loop, items prop, SharedFolderRow drag-drop) was dispatched but not yet completed.",
+      "Plan 49-05 (the 5th and final plan of phase 49) has not yet been started.",
+      "e2e wave referenced as a future gate after wave 3 completes."
+    ]
+  }
+}
