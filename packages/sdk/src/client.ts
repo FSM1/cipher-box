@@ -2462,30 +2462,36 @@ export class CipherBoxClient {
             args.vaultPrivateKey
           );
 
-          const writable = shareKeys.some(
-            (k) => k.keyType === 'folder-ipns' && k.itemId === child.id
-          );
+          try {
+            const writable = shareKeys.some(
+              (k) => k.keyType === 'folder-ipns' && k.itemId === child.id
+            );
 
-          result.push({
-            id: child.id,
-            name: child.name,
-            ipnsName: child.ipnsName,
-            writable,
-            parentId: current.id,
-          });
-
-          // Load children to continue DFS
-          const meta = await sdkCore.loadFolderMetadata({
-            ipnsName: child.ipnsName,
-            folderKey,
-            ctx: this.ctx,
-          });
-          if (meta?.metadata?.children) {
-            stack.push({
+            result.push({
               id: child.id,
+              name: child.name,
               ipnsName: child.ipnsName,
-              children: meta.metadata.children,
+              writable,
+              parentId: current.id,
             });
+
+            // Load children to continue DFS
+            const meta = await sdkCore.loadFolderMetadata({
+              ipnsName: child.ipnsName,
+              folderKey,
+              ctx: this.ctx,
+            });
+            if (meta?.metadata?.children) {
+              stack.push({
+                id: child.id,
+                ipnsName: child.ipnsName,
+                children: meta.metadata.children,
+              });
+            }
+          } finally {
+            // Zero the per-iteration folder key — never leave plaintext AES folder
+            // keys live in the heap across the DFS (caller owns vaultPrivateKey).
+            folderKey.fill(0);
           }
         }
       }

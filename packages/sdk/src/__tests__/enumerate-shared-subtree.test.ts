@@ -8,6 +8,7 @@
  * - A repeated ipnsName does not cause infinite loop (visited set guard)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { unwrapKey } from '@cipherbox/crypto';
 import { CipherBoxClient } from '../client';
 import type { SharedFolderState } from '../types';
 import type { FolderChild, FolderEntry } from '@cipherbox/core';
@@ -295,5 +296,26 @@ describe('CipherBoxClient.enumerateSharedSubtree', () => {
 
     // vaultPrivateKey must NOT be zeroed by the method
     expect(vaultPrivateKey.every((b) => b === 0x99)).toBe(true);
+  });
+
+  it('zeros every per-iteration folderKey after use (no plaintext key left in heap)', async () => {
+    seedSharedFolder(client);
+    // Hand back a fresh buffer per unwrap so we can assert each is zeroed.
+    const unwrapped: Uint8Array[] = [];
+    vi.mocked(unwrapKey).mockImplementation(async () => {
+      const k = new Uint8Array(32).fill(0xab);
+      unwrapped.push(k);
+      return k;
+    });
+
+    await client.enumerateSharedSubtree(SHARE_ID, {
+      getShareKeysFn: async () => makeShareKeys(),
+      vaultPrivateKey: new Uint8Array(32).fill(0x99),
+    });
+
+    expect(unwrapped.length).toBeGreaterThan(0);
+    for (const k of unwrapped) {
+      expect(k.every((b) => b === 0)).toBe(true);
+    }
   });
 });
