@@ -1,75 +1,53 @@
 # Changelog
 
-## [0.36.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.36.0...@cipherbox/sdk-v0.36.0) (2026-06-18)
-
-
-### Features
-
-* **web:** shared-folder intra-share move and useFolderNavigation consolidation ([#509](https://github.com/FSM1/cipher-box/issues/509)) ([c36ac6d](https://github.com/FSM1/cipher-box/commit/c36ac6d7792947a734a539a23de6b42d5c1fdd98))
-
-## [0.36.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.36.0...@cipherbox/sdk-v0.36.0) (2026-06-18)
-
-
-### Features
-
-* **web:** shared-folder intra-share move and useFolderNavigation consolidation ([#509](https://github.com/FSM1/cipher-box/issues/509)) ([c36ac6d](https://github.com/FSM1/cipher-box/commit/c36ac6d7792947a734a539a23de6b42d5c1fdd98))
-
 ## [0.36.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.35.0...@cipherbox/sdk-v0.36.0) (2026-06-17)
-
 
 ### Bug Fixes
 
-* re-encrypt file metadata on move and bin restore ([#507](https://github.com/FSM1/cipher-box/issues/507)) ([2c639de](https://github.com/FSM1/cipher-box/commit/2c639de8a4acec923fe5396f8fc5a6255c59978d))
+- re-encrypt file metadata on move and bin restore ([#507](https://github.com/FSM1/cipher-box/issues/507)) ([2c639de](https://github.com/FSM1/cipher-box/commit/2c639de8a4acec923fe5396f8fc5a6255c59978d))
 
 ## [0.35.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.34.0...@cipherbox/sdk-v0.35.0) (2026-06-16)
 
-
 ### Features
 
-* consolidate SDK shared-folder ownership and encrypt share itemName at rest ([#500](https://github.com/FSM1/cipher-box/issues/500)) ([383e856](https://github.com/FSM1/cipher-box/commit/383e856cbfba6a23b60cc116e0b5163c92e6be97))
-* **sdk:** self-bootstrap folder tree from root IPNS key ([#498](https://github.com/FSM1/cipher-box/issues/498)) ([2657740](https://github.com/FSM1/cipher-box/commit/2657740f144203a095f43e8692794fcd71c9e283))
+- consolidate SDK shared-folder ownership and encrypt share itemName at rest ([#500](https://github.com/FSM1/cipher-box/issues/500)) ([383e856](https://github.com/FSM1/cipher-box/commit/383e856cbfba6a23b60cc116e0b5163c92e6be97))
+- **sdk:** self-bootstrap folder tree from root IPNS key ([#498](https://github.com/FSM1/cipher-box/issues/498)) ([2657740](https://github.com/FSM1/cipher-box/commit/2657740f144203a095f43e8692794fcd71c9e283))
 
 ## [0.34.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.33.0...@cipherbox/sdk-v0.34.0) (2026-06-15)
 
-
 ### Features
 
-* **sdk-core:** handle IPNS write conflicts via 409 merge and file CAS publish ([#488](https://github.com/FSM1/cipher-box/issues/488)) ([1abceb4](https://github.com/FSM1/cipher-box/commit/1abceb4b88a6245509db44794e56f687695d2b30))
-
+- **sdk-core:** handle IPNS write conflicts via 409 merge and file CAS publish ([#488](https://github.com/FSM1/cipher-box/issues/488)) ([1abceb4](https://github.com/FSM1/cipher-box/commit/1abceb4b88a6245509db44794e56f687695d2b30))
 
 ### Bug Fixes
 
-* **web:** reconcile SDK folderTree sequence to stop deleted-file resurrection ([#489](https://github.com/FSM1/cipher-box/issues/489)) ([e7ea982](https://github.com/FSM1/cipher-box/commit/e7ea98235b25cdfabb6b6341d34dc79f93d58517))
+- **web:** reconcile SDK folderTree sequence to stop deleted-file resurrection ([#489](https://github.com/FSM1/cipher-box/issues/489)) ([e7ea982](https://github.com/FSM1/cipher-box/commit/e7ea98235b25cdfabb6b6341d34dc79f93d58517))
 
 ## [0.33.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.32.0...@cipherbox/sdk-v0.33.0) (2026-03-30)
 
-
 ### Features
 
-* parallel batch upload pipeline with Web Worker encryption ([#416](https://github.com/FSM1/cipher-box/issues/416)) ([ee918ac](https://github.com/FSM1/cipher-box/commit/ee918accc1bd82339eca87d973c13ab2e0556f37))
+- parallel batch upload pipeline with Web Worker encryption ([#416](https://github.com/FSM1/cipher-box/issues/416)) ([ee918ac](https://github.com/FSM1/cipher-box/commit/ee918accc1bd82339eca87d973c13ab2e0556f37))
 
 ## [0.32.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.31.0...@cipherbox/sdk-v0.32.0) (2026-03-30)
 
-
 ### Features
 
-* Phase 28 Code Hygiene & Logging ([#382](https://github.com/FSM1/cipher-box/issues/382)) ([9827f49](https://github.com/FSM1/cipher-box/commit/9827f49df59a8730ef0b4ea7bf74caa59b36b055))
-* Phase 29 Infrastructure Hardening ([#383](https://github.com/FSM1/cipher-box/issues/383)) ([a209337](https://github.com/FSM1/cipher-box/commit/a2093370c4bd7203a18ba028c7506387b192cd32))
-* **sdk:** select AES-CTR encryption for streaming media uploads ([#399](https://github.com/FSM1/cipher-box/issues/399)) ([a595e4b](https://github.com/FSM1/cipher-box/commit/a595e4b53eb5c33fd68e50eb97cee1b647f595fc))
+- Phase 28 Code Hygiene & Logging ([#382](https://github.com/FSM1/cipher-box/issues/382)) ([9827f49](https://github.com/FSM1/cipher-box/commit/9827f49df59a8730ef0b4ea7bf74caa59b36b055))
+- Phase 29 Infrastructure Hardening ([#383](https://github.com/FSM1/cipher-box/issues/383)) ([a209337](https://github.com/FSM1/cipher-box/commit/a2093370c4bd7203a18ba028c7506387b192cd32))
+- **sdk:** select AES-CTR encryption for streaming media uploads ([#399](https://github.com/FSM1/cipher-box/issues/399)) ([a595e4b](https://github.com/FSM1/cipher-box/commit/a595e4b53eb5c33fd68e50eb97cee1b647f595fc))
 
 ## [0.31.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.30.0...@cipherbox/sdk-v0.31.0) (2026-03-27)
 
-
 ### Features
 
-* **phase-27:** writable shares ([#372](https://github.com/FSM1/cipher-box/issues/372)) ([65721b4](https://github.com/FSM1/cipher-box/commit/65721b47f7791d908efb78323b27ee8487e9d3a5))
+- **phase-27:** writable shares ([#372](https://github.com/FSM1/cipher-box/issues/372)) ([65721b4](https://github.com/FSM1/cipher-box/commit/65721b47f7791d908efb78323b27ee8487e9d3a5))
 
 ## [0.30.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.29.0...@cipherbox/sdk-v0.30.0) (2026-03-26)
 
-
 ### Features
 
-* **phase-24:** bug fixes & test infrastructure ([#361](https://github.com/FSM1/cipher-box/issues/361)) ([2f1f93b](https://github.com/FSM1/cipher-box/commit/2f1f93ba7e7a9411e3a73b31e91992c95efd7bfa))
+- **phase-24:** bug fixes & test infrastructure ([#361](https://github.com/FSM1/cipher-box/issues/361)) ([2f1f93b](https://github.com/FSM1/cipher-box/commit/2f1f93ba7e7a9411e3a73b31e91992c95efd7bfa))
 
 ## [0.29.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.28.0...@cipherbox/sdk-v0.29.0) (2026-03-25)
 
