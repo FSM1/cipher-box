@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "244b430c8211",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T00:44:43.25708Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-PATTERNS.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d24aef7651a4",
+  "checkpoint_transcript_start": 151,
+  "transcript_lines_at_start": 151,
+  "token_usage": {
+    "input_tokens": 278,
+    "cache_creation_tokens": 5002,
+    "cache_read_tokens": 386706,
+    "output_tokens": 4138,
+    "api_call_count": 3
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Continue a multi-phase development session by completing Phase 49 pattern mapping for a shared folder move / intra-share and useFolderNavigation unwrapping task.",
+    "outcome": "Pattern-mapper agent completed 10/10 analogs, PATTERNS.md was committed, and the session was preparing to spawn the planner after verifying TDD/security gate configuration.",
+    "learnings": {
+      "repo": [
+        "Intel API surface (regex extractor) can be empty/unpopulated — it is a HINT-only artifact and can be omitted from planner prompts when RESEARCH.md already carries verified symbol refs.",
+        "Phase planning artifacts live under .planning/phases/<phase-id>/ with structured files like PATTERNS.md and RESEARCH.md."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-PATTERNS.md",
+          "finding": "Pattern file for Phase 49 capturing 10/10 analogs for the shared-folder-move / useFolderNavigation unwrapping refactor."
+        }
+      ],
+      "workflow": [
+        "Pattern-mapper agent runs before the planner; its output (PATTERNS.md) is committed before spawning the next agent.",
+        "TDD and security gate configuration should be verified before spawning the planner agent.",
+        "The intel API surface regeneration step precedes pattern mapping in the phase pipeline."
+      ]
+    },
+    "friction": [
+      "Intel API surface was empty because the regex extractor was unpopulated, requiring a workaround (falling back to RESEARCH.md as the sole symbol reference source)."
+    ],
+    "open_items": [
+      "Planner agent for Phase 49 has not yet been spawned — next step pending TDD/security gate config verification.",
+      "TDD and security gate configuration needs to be confirmed before proceeding."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T00:44:32.544411Z",
+    "agent_lines": 701,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 701,
+    "total_lines_changed": 701,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
