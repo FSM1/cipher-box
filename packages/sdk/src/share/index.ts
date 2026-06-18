@@ -149,6 +149,7 @@ export {
   deleteFromSharedFolder,
   updateSharedFile,
   updateSharePermission,
+  moveInSharedFolder,
   type SharedWriteContext,
 } from './shared-write';
 

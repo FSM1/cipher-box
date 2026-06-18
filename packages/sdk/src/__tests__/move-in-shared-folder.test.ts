@@ -235,6 +235,18 @@ describe('CipherBoxClient.moveInSharedFolder', () => {
   it('calls reencryptFileMetadataForFolderChange with src and dest folderKeys for file item', async () => {
     seedSharedFolder(client, [fileItem]);
 
+    // Capture snapshots at call time — the buffers are zeroed in finally
+    let capturedSourceFolderKey: Uint8Array | undefined;
+    let capturedDestFolderKey: Uint8Array | undefined;
+    let capturedFileMetaIpnsName: string | undefined;
+    vi.mocked(reencryptModule.reencryptFileMetadataForFolderChange).mockImplementation(
+      async (p) => {
+        capturedSourceFolderKey = new Uint8Array(p.sourceFolderKey);
+        capturedDestFolderKey = new Uint8Array(p.destFolderKey);
+        capturedFileMetaIpnsName = p.fileMetaIpnsName;
+      }
+    );
+
     await client.moveInSharedFolder(SHARE_ID, {
       itemId: FILE_ID,
       destFolderId: DEST_FOLDER_ID,
@@ -245,22 +257,30 @@ describe('CipherBoxClient.moveInSharedFolder', () => {
     });
 
     expect(reencryptModule.reencryptFileMetadataForFolderChange).toHaveBeenCalledTimes(1);
-    const call = vi.mocked(reencryptModule.reencryptFileMetadataForFolderChange).mock.calls[0][0];
-    expect(call.fileMetaIpnsName).toBe(FILE_META_IPNS);
+    expect(capturedFileMetaIpnsName).toBe(FILE_META_IPNS);
     // sourceFolderKey must be the SOURCE folder key (from sharedFolderTree)
-    expect(call.sourceFolderKey).toEqual(SRC_FOLDER_KEY);
+    expect(capturedSourceFolderKey).toEqual(SRC_FOLDER_KEY);
     // destFolderKey must be what was unwrapped from share_keys for destFolderId
-    expect(call.destFolderKey).toEqual(DEST_FOLDER_KEY_BYTES);
+    expect(capturedDestFolderKey).toEqual(DEST_FOLDER_KEY_BYTES);
   });
 
   it('file IPNS key is resolved from share_keys keyType:file-ipns (NEVER FilePointer.ipnsPrivateKeyEncrypted)', async () => {
     seedSharedFolder(client, [fileItem]);
-    // The file IPNS key unwrap is the THIRD unwrapKey call (after destFolderKey, destIpnsKey)
+    // Reset unwrapKey to provide exactly 3 calls in sequence (no interference from beforeEach queue)
     const fileIpnsBytes = new Uint8Array(32).fill(0x77);
+    vi.mocked(unwrapKey).mockReset();
     vi.mocked(unwrapKey)
-      .mockResolvedValueOnce(new Uint8Array(DEST_FOLDER_KEY_BYTES)) // dest folder key
-      .mockResolvedValueOnce(new Uint8Array(DEST_IPNS_KEY_BYTES)) // dest ipns key
-      .mockResolvedValueOnce(fileIpnsBytes); // file-ipns key from share_keys
+      .mockResolvedValueOnce(new Uint8Array(DEST_FOLDER_KEY_BYTES)) // 1st: dest folder key
+      .mockResolvedValueOnce(new Uint8Array(DEST_IPNS_KEY_BYTES)) // 2nd: dest ipns key
+      .mockResolvedValueOnce(new Uint8Array(fileIpnsBytes)); // 3rd: file-ipns key from share_keys
+
+    // Capture the fileIpnsPrivateKey snapshot before finally zeroes it
+    let capturedFileIpnsKey: Uint8Array | undefined;
+    vi.mocked(reencryptModule.reencryptFileMetadataForFolderChange).mockImplementation(
+      async (p) => {
+        capturedFileIpnsKey = new Uint8Array(p.fileIpnsPrivateKey);
+      }
+    );
 
     await client.moveInSharedFolder(SHARE_ID, {
       itemId: FILE_ID,
@@ -271,10 +291,9 @@ describe('CipherBoxClient.moveInSharedFolder', () => {
         makeShareKeys({ destFolder: true, destFolderIpns: true, fileIpns: true }),
     });
 
-    const call = vi.mocked(reencryptModule.reencryptFileMetadataForFolderChange).mock.calls[0][0];
-    expect(call.fileIpnsPrivateKey).toEqual(fileIpnsBytes);
-    // Must NOT have used FilePointer.ipnsPrivateKeyEncrypted (FILE_IPNS_KEY_ENC hex)
-    // The 3rd unwrapKey call should have received the share_keys file-ipns encryptedKey bytes
+    // fileIpnsPrivateKey must be from share_keys (value 0x77), not FilePointer (0x01)
+    expect(capturedFileIpnsKey).toEqual(fileIpnsBytes);
+    // Must have called unwrapKey exactly 3 times: destFolderKey, destIpnsKey, fileIpnsKey
     expect(vi.mocked(unwrapKey)).toHaveBeenCalledTimes(3);
   });
 
@@ -404,6 +423,8 @@ describe('CipherBoxClient.moveInSharedFolder', () => {
     const destIpnsKeyBuf = new Uint8Array(64).fill(0x44);
     const fileIpnsKeyBuf = new Uint8Array(32).fill(0x55);
 
+    // Reset to provide exactly 3 calls in order (no interference from beforeEach queue)
+    vi.mocked(unwrapKey).mockReset();
     vi.mocked(unwrapKey)
       .mockResolvedValueOnce(destFolderKeyBuf)
       .mockResolvedValueOnce(destIpnsKeyBuf)
@@ -431,11 +452,14 @@ describe('CipherBoxClient.moveInSharedFolder', () => {
     expect(fileIpnsKeyBuf.every((b) => b === 0)).toBe(true);
   });
 
-  it('zeroes keys in finally when write-cap check throws (before any key usage)', async () => {
+  it('zeroes keys in finally when unwrapKey throws after partial resolution', async () => {
     seedSharedFolder(client, [fileItem]);
-    // Only provide dest folder key (no folder-ipns → throws immediately)
+    // destFolderKey resolves but destIpnsPrivateKey unwrap fails
     const destFolderKeyBuf = new Uint8Array(32).fill(0x33);
-    vi.mocked(unwrapKey).mockResolvedValueOnce(destFolderKeyBuf);
+    vi.mocked(unwrapKey).mockReset();
+    vi.mocked(unwrapKey)
+      .mockResolvedValueOnce(destFolderKeyBuf)
+      .mockRejectedValueOnce(new Error('unwrap failed'));
 
     await expect(
       client.moveInSharedFolder(SHARE_ID, {
@@ -443,11 +467,12 @@ describe('CipherBoxClient.moveInSharedFolder', () => {
         destFolderId: DEST_FOLDER_ID,
         destIpnsName: DEST_IPNS,
         vaultPrivateKey: new Uint8Array(32).fill(0x99),
-        getShareKeysFn: async () => makeShareKeys({ destFolder: true }),
+        // Both keys exist so record lookup succeeds, but 2nd unwrap throws
+        getShareKeysFn: async () => makeShareKeys({ destFolder: true, destFolderIpns: true }),
       })
-    ).rejects.toThrow();
+    ).rejects.toThrow('unwrap failed');
 
-    // destFolderKey must still be zeroed
+    // destFolderKey was resolved before the throw — must be zeroed in finally
     expect(destFolderKeyBuf.every((b) => b === 0)).toBe(true);
   });
 
