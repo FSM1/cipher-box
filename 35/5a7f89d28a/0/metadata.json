@@ -1,0 +1,299 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "355a7f89d28a",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T13:51:27.733241Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/ipns/entities/folder-ipns.entity.ts",
+    "apps/api/src/ipns/ipns.module.ts",
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/api/src/migrations/1749300000000-IpnsCacheKeyedByName.ts",
+    "packages/crypto/src/__tests__/ipns-record.test.ts",
+    "packages/crypto/src/index.ts",
+    "packages/crypto/src/ipns/parse-record.ts",
+    "packages/crypto/src/ipns/verify-record.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "69d7ca9d9b2e",
+  "token_usage": {
+    "input_tokens": 44863,
+    "cache_creation_tokens": 2223600,
+    "cache_read_tokens": 111245725,
+    "output_tokens": 536074,
+    "api_call_count": 377
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "69d7ca9d9b2e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "69d7ca9d9b2e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Y9BFzDxtkoyDA2gfzwyF1m",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "69d7ca9d9b2e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 459,
+        "end": 460,
+        "entry_ids": [
+          "a181a7be-0491-4eec-a94b-4db6dedb2187"
+        ],
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Ma4FwRABWAuLAfQHFYdZgs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security:review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "69d7ca9d9b2e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 685,
+        "end": 686,
+        "entry_ids": [
+          "56903a0b-59b1-4fd1-88e3-5c4e813c7102"
+        ],
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security:review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01WS4GMAtYJKePcoMNvUErzY",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "69d7ca9d9b2e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1072,
+        "end": 1073,
+        "entry_ids": [
+          "41ce9be6-cfc6-40ac-9d3b-113043ea7395"
+        ],
+        "tool_use_id": "toolu_01WS4GMAtYJKePcoMNvUErzY"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WS4GMAtYJKePcoMNvUErzY"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Plan and execute Phase 49 of CipherBox (shared-folder intra-share move + useFolderNavigation unwrap consolidation, plus REQ-6 batch/drag parity added mid-session), then run the full PR-QA pipeline (simplify, security-review, security:review, CodeRabbit CLI, push, PR, resolve CodeRabbit GitHub review) and kick off a CI e2e run.",
+    "outcome": "PR #509 was created and all pre-PR QA passed. CI e2e failures revealed a regression (mid-double-click layout shift from selection bar gating) and a deeper architectural gap (shared subfolder write keys not distributed + IPNS cache per-user keying blocking decentralized moves), which were fixed by distributing folder-ipns/file-ipns write keys to recipients and replacing the share-authorization-gated IPNS publish model with a signature-gated, name-keyed model; the final CI run was still in progress at session end.",
+    "learnings": {
+      "repo": [
+        "Cross-package dist staleness: web tsc checks the built SDK dist, not source — must run `pnpm build` in the SDK package before web typecheck after any public API changes, or web tsc silently uses stale types.",
+        "The private vault gates SelectionActionBar on `selectedIds.size > 1`; gating on `size > 0` causes a mid-double-click layout shift because the first click of a dblclick pops the bar in and shifts rows, so the second click misses the row and navigation silently dies.",
+        "`SharedFolderRow` renders folder names with a trailing `/` in the DOM, so `getFolderItemNames()` returned `'name/'`; established test convention is slash-tolerant `.includes()`, not exact `.toContain(bareName)`.",
+        "`collectChildKeys` (key-wrapping.ts) only emits `folder`/`file` (read) keys for descendants — never `folder-ipns`/`file-ipns` write keys — even on write shares, so every owner-created subfolder/file in the subtree was read-only to the recipient.",
+        "`CHILD_KEY_TYPES` in `apps/api/src/shares/types.ts` was missing `folder-ipns` — adding it propagates to both `@IsIn` validation and the `@ApiProperty enum` in `ChildKeyDto` and triggers a regenerated API client.",
+        "`folder_ipns` was keyed `@Unique(['userId', 'ipnsName'])` — a per-user design causing non-owner publishes to fork duplicate rows. `resolveRecord` used `findOne({ where: { ipnsName } })` with no user filter and no ordering, so resolution returned an arbitrary row when two existed.",
+        "The TEE republishes the owner's enrolled `folder_ipns` row to the DHT every 6h, overwriting any non-owner DHT updates — so key possession alone is not sufficient for durable writes without also updating the canonical DB row.",
+        "The `ipns` package (already a dep of `@cipherbox/core`) exports `validate(publicKey, marshalledRecord)` for Ed25519 SignatureV2 verification, and `@cipherbox/crypto` was the right home for the crypto helpers since the API already depends on it.",
+        "CodeRabbit CLI (`--agent`) produces structured JSON findings; its GitHub review posts nitpicks in the review body (not inline threads), so `/resolve-pr-reviews` sees 0 unresolved threads — address body nitpicks manually.",
+        "GSD executors may report `commit_failed` even when the commit actually landed — always verify with `git log` rather than trusting the executor's commit status output.",
+        "Migrations are glob-loaded from the migrations dir — adding a new file is sufficient; no explicit registration needed.",
+        "The `varchar(12)` column for share key types accommodates `folder-ipns` (11 chars) without a schema migration for column width."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/FileBrowser.tsx",
+          "line": 205,
+          "end_line": 205,
+          "finding": "Private vault gates SelectionActionBar on `selectedIds.size > 1` — the critical pattern that prevents mid-dblclick layout shift. SharedFileBrowser incorrectly used `size > 0` initially."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 213,
+          "end_line": 213,
+          "finding": "`findActiveWriteShare` was an exact-`ipnsName` match against only the top-level Share row — no mechanism to authorize a recipient publishing a descendant ipnsName, causing forks."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 86,
+          "end_line": 107,
+          "finding": "CipherBox saves IPNS records to the DB first before the DHT ('so resolve always has a fallback'), making the DB the source of truth for resolution — why key possession alone is insufficient without server authorization."
+        },
+        {
+          "path": "apps/api/src/ipns/entities/folder-ipns.entity.ts",
+          "line": 15,
+          "end_line": 15,
+          "finding": "`@Unique(['userId', 'ipnsName'])` was the per-user keying constraint, changed to `@Unique(['ipnsName'])` for the decentralized model."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2466,
+          "end_line": 2468,
+          "finding": "`enumerateSharedSubtree` writability check requires a per-subfolder `share_keys` row with `keyType: 'folder-ipns'`; without it the subfolder renders as aria-disabled 'Read-only folder' in the move dialog."
+        },
+        {
+          "path": "tests/web-e2e/page-objects/file-browser/shared-file-browser.page.ts",
+          "finding": "`getFolderItemNames()` returned `'name/'` because `SharedFolderRow` appends a trailing `/` to folder names. Fixed by stripping trailing `/` in the page object."
+        },
+        {
+          "path": "apps/api/src/shares/types.ts",
+          "finding": "`CHILD_KEY_TYPES` controls both `@IsIn` validation and `@ApiProperty enum` for `ChildKeyDto` — the single source of truth for which key types the API accepts as child keys on share creation."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "`enumerateSharedSubtree` DFS needed per-iteration `folderKey.fill(0)` in a try/finally to avoid plaintext AES folder keys remaining live in heap across the entire DFS traversal."
+        }
+      ],
+      "workflow": [
+        "Sequential wave execution (no worktrees) is more reliable for long AFK runs than parallel-worktree execution — avoids cwd-drift, merge-base footguns, and concurrent test RAM contention.",
+        "When disabling commit signing for an AFK session (`git config --local commit.gpgsign false`), flag immediately that a signed rebase is required before merge if the repo enforces signatures on PRs.",
+        "Deleting source files in one commit (parser deletion) before the replacement is committed leaves an intermediate non-building state — structure such changes so deletion and replacement land atomically.",
+        "Security reviews should be run after major architectural changes (not just once pre-PR) — the decentralized IPNS model needed a second review that caught the replay/rollback hole.",
+        "When a CI e2e test fails with a 'folder not found' or navigation assertion error in the shared browser, check `SharedFolderRow` first — it's the primary interaction surface and was modified heavily for DnD.",
+        "The `/resolve-pr-reviews` skill queries GraphQL `reviewThreads` and reports 0 threads when CodeRabbit uses review-body format — manually extract and apply body nitpicks in that case.",
+        "The `ipns` library's `validate()` enforces record EOL (expiry) automatically — no manual EOL check needed in the verify helper.",
+        "Anti-rollback sequence checking must use the record's embedded (signature-verified) sequence number, not the CAS field (which is optional and not always present)."
+      ]
+    },
+    "friction": [
+      "GSD executor commit helper reported `commit_failed` on multiple plans even when commits landed successfully — required manual `git log` verification after each wave.",
+      "Web package has no `typecheck` script; had to use `pnpm --filter @cipherbox/web exec tsc -b` instead of a standard `pnpm typecheck` command.",
+      "CodeRabbit GitHub review posts all findings in the review body as nitpicks with 0 inline threads — `/resolve-pr-reviews` reported nothing to resolve, requiring manual extraction and application.",
+      "JSX comment inside a `{cond && (...)}` expression caused TS1005 parse error — had to merge the comment into the outer JSX comment block.",
+      "TS2352/TS2493 in batch test mock: `(c[1] as { itemId: string })` failed because the mock call tuple is typed as `[]`, requiring `(c as unknown as [string, { itemId: string }])[1].itemId`.",
+      "CodeRabbit false positive on `setError` assertion: suggested `not.toHaveBeenCalled()` but `runWrite` legitimately calls `setError(null)` on entry to clear prior errors — had to revert and document.",
+      "Parser file deletion landed in commit A (client key distribution) while the replacement `@cipherbox/crypto` helpers landed in commit B — leaving an intermediate commit where the API won't build in isolation.",
+      "The `extractPublicKeyFromIPNSRecord` function returns `undefined` synchronously for identity-key records (not a rejected promise), causing a `.catch` handler in `parseIpnsRecord` to never fire — required a sync undefined guard.",
+      "The pre-existing `writable-shares.spec.ts` passing on main masked the regression until CI ran — unit tests couldn't catch a Playwright dblclick coordinate-shift failure."
+    ],
+    "open_items": [
+      "Branch commits are unsigned (signer disabled for AFK session) — needs a signed rebase before merge since the repo enforces signed commits on PRs.",
+      "Live e2e UAT for `shared-folder-move.spec.ts` is deferred to main-push (requires local docker stack with two accounts); the test is authored and type-checked but gated on CI infrastructure.",
+      "Third CI e2e run (after IPNS model + write-key distribution commits) was not yet dispatched at session end — needs to be confirmed green before merge.",
+      "Descendant move-cycle guard is UI-enforced (dialog disables descendants via parentId) + SDK self-move enforced (throws on same itemId), but there is no authoritative SDK subtree check — documented in PR as proportionate given the actor already holds write keys.",
+      "Revocation under the new decentralized IPNS model now requires IPNS key rotation + re-share rather than server-side row deletion — the security/UX implications of this tradeoff are documented but not yet surfaced in user-facing revoke flows.",
+      "3 pre-existing `integration.test.ts` SDK failures (need local docker API stack) — not regressions but they fail on every CI run without the docker environment.",
+      "`useMultiSelect` extraction (shared + private vault selection state) was identified as a simplification opportunity but deferred as cross-boundary scope creep beyond phase 49.",
+      "Batch key-refetch per item in `batchMoveItemsHandler` (fetches keys for each file individually rather than in bulk) noted as a performance follow-up — parity-acceptable for v1.",
+      "Database migration `1749300000000-IpnsCacheKeyedByName.ts` deduplicates `folder_ipns` rows by highest sequence and swaps the unique constraint — needs to be run and verified against staging before merge."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T13:49:44.638144Z",
+    "agent_lines": 398,
+    "agent_removed": 120,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 398,
+    "total_lines_changed": 518,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
