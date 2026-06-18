@@ -1,0 +1,243 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b300fa0a45ce",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T03:04:51.191736Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/security/REVIEW-phase49-20260618T025359Z.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d24aef7651a4",
+  "token_usage": {
+    "input_tokens": 20313,
+    "cache_creation_tokens": 734408,
+    "cache_read_tokens": 29681308,
+    "output_tokens": 159848,
+    "api_call_count": 125
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Y9BFzDxtkoyDA2gfzwyF1m",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 459,
+        "end": 460,
+        "entry_ids": [
+          "a181a7be-0491-4eec-a94b-4db6dedb2187"
+        ],
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Ma4FwRABWAuLAfQHFYdZgs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security:review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d24aef7651a4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 685,
+        "end": 686,
+        "entry_ids": [
+          "56903a0b-59b1-4fd1-88e3-5c4e813c7102"
+        ],
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security:review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan and execute phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation) across 6 requirements, then run the full PR-QA pipeline (simplify, security reviews, CodeRabbit CLI) before pushing and opening a PR.",
+    "outcome": "Phase 49 fully planned (5 plans, 3 waves, 6 requirements including a scope expansion for batch+drag move parity) and executed with all gates green. Simplify pass completed with a correctness commit (cycle guards, clearSelection-on-success). Crypto security review completed with one MEDIUM fix applied (folderKey zeroing). Session ended during the general appsec review, before CodeRabbit CLI, push, and PR creation.",
+    "learnings": {
+      "repo": [
+        "reencryptFileMetadataForFolderChange (reencrypt.ts:49) is fully key-agnostic — takes raw key bytes with no owner/recipient distinction, reusable verbatim for the shared-folder case",
+        "share_keys entries are keyed by itemId (file UUID), not parent folder — file keys do NOT need re-registration after a folder move",
+        "adoptSharedFolderResult must only be called once for the source result; calling it for the dest would corrupt the sharedFolderTree projection (dest is re-loaded on next navigateToSubfolder)",
+        "sdkCore.moveItem throws 'An item with this name already exists in destination' on collision (sdk-core/src/folder/index.ts:346) — no auto-rename needed",
+        "@internal on ensureFolderLoaded is documentation-only; CipherBoxClient is already exported and can be called directly from the web without a new public alias",
+        "File IPNS key for re-encryption must come from share_keys keyType:'file-ipns', NOT FilePointer.ipnsPrivateKeyEncrypted (owner-wrapped; recipient cannot decrypt it)",
+        "SDK dist/ is gitignored — CI rebuilds it; new SDK methods appear in client.d.ts (not index.d.ts which is a barrel re-export), so consumers do see them",
+        "Web package has no 'typecheck' npm script — use tsc -b directly",
+        "Intel API surface extractor (gsd-tools) is unpopulated and returns empty output — omit from planner prompt, RESEARCH.md carries all symbol refs",
+        "Private-vault batch move loops single-item client.moveItem (no dedicated SDK batch method); drag move is multi-select-aware in FileListItem — both are clean analogs for the shared side",
+        "isExternalFileDrag (from useDropUpload) and DragItem (from FileListItem) exist as shared helpers — SharedFolderRow should import rather than re-implement them"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "enumerateSharedSubtree did not zero per-iteration folderKey after use, leaving plaintext AES folder keys live in heap across the DFS traversal — fixed with try/finally zeroing"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedWriteOps.ts",
+          "finding": "runWrite swallowed errors and returned void, causing batchMoveItemsHandler to always clear selection regardless of success/failure — changed runWrite to return boolean so clearSelection only fires on success"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/SharedMoveDialog.tsx",
+          "finding": "Missing descendant/cycle guard — a recipient could move a folder into its own descendant creating a tree cycle; fixed by adding isNodeDisabled computed from parentId returned by enumerateSharedSubtree"
+        },
+        {
+          "path": ".planning/phases/49-shared-folder-move-intra-share-and-usefoldernavigation-unwra/49-RESEARCH.md",
+          "finding": "Plan-checker blockers: two were RESEARCH.md doc-formatting nits (resolution markers missing from open questions); one was real — REQ-3 had no dedicated web unit test in plan 49-03's verification section"
+        },
+        {
+          "path": "packages/sdk/src/shared-folder-projection.ts",
+          "line": 28,
+          "end_line": 38,
+          "finding": "SharedFolderClient Pick allowlist needed moveInSharedFolder and enumerateSharedSubtree added — only listed the 7 Phase 48 methods"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "finding": "Appeared in the PR diff (+9 lines) but was not in any plan's files_modified list — needs investigation to confirm it's intentional wiring vs. unplanned side-effect"
+        }
+      ],
+      "workflow": [
+        "Sequential wave execution (no worktrees) is more reliable than parallel worktrees for autonomous/AFK GSD runs — the parallel-worktree merge-back protocol is error-prone to hand-drive",
+        "After adding new public SDK methods, must rebuild SDK dist before web typecheck or the cross-package dist-staleness will cause false tsc failures in wave 2+",
+        "gsd-tools is not on PATH for planner-revision subagents — plan revisions cannot self-commit; orchestrator must commit them after the subagent returns",
+        "prettier hook reformats committed files, so any planned edits to recently-committed files must re-read the file first (the reformatted version) before applying edits",
+        "CodeRabbit: run CLI review before creating the PR; after PR creation CodeRabbit auto-posts a GitHub review; use /resolve-pr-reviews to address inline comments",
+        "Disable commit.gpgsign locally (git config --local commit.gpgsign false) for AFK sessions to prevent 1Password signer from wedging during automated commits — must re-enable before merge if repo enforces signed commits",
+        "GSD plan-checker iteration 1 false positives (doc-formatting nits) are worth fixing directly in the docs rather than re-spawning the full planner — much cheaper",
+        "Simplify pass should apply behavior-preserving quality fixes and defer behavior-changing correctness issues to a dedicated commit labeled as such (not skip them entirely)"
+      ]
+    },
+    "friction": [
+      "commit.gpgsign=true globally caused 1Password signer to wedge during automated commits — required manual session-level override before proceeding AFK",
+      "Web package missing a 'typecheck' npm script required discovery of the correct tsc -b invocation",
+      "SDK index.d.ts barrel re-export structure caused initial confusion about whether new methods were visible to consumers (they were in client.d.ts)",
+      "gsd-tools not on PATH inside planner-revision subagent — planner couldn't commit its own revisions, requiring orchestrator to commit them manually",
+      "prettier pre-commit hook reformatted client.ts after commit, breaking the queued edit — had to re-read the file before applying the security fix",
+      "unwrapKey was not imported as a named binding in the enumerate test file, requiring an import addition before the zeroing assertion could be written",
+      "Plan-checker flagged two RESEARCH.md doc-formatting issues as blockers — minor overhead but required an extra revision round"
+    ],
+    "open_items": [
+      "CodeRabbit CLI review (coderabbit review --agent) not yet run — session ended before this step",
+      "Push to remote and PR creation not yet done",
+      "/resolve-pr-reviews pass for CodeRabbit's GitHub review not yet run",
+      "General appsec security-review (non-crypto angles: XSS, authz, DoS, projection allowlist) was still running at end of transcript",
+      "REQ-5 e2e test (two-account within-share move + decrypt-survival) requires live docker stack — deferred to main-push gate",
+      "useSharedNavigation.ts (+9) appeared in PR diff but was not in any plan's files_modified — needs investigation",
+      "git config --local --unset commit.gpgsign must be run before merge (repo enforces signed commits on PRs)",
+      "useMultiSelect extraction (shared selection state hook for private+shared views) — deferred as scope creep beyond phase 49",
+      "Batch key-refetch perf (batchMoveItemsHandler fetches share_keys per item sequentially) — parity-acceptable for v1, noted as follow-up",
+      "DFS concurrency in enumerateSharedSubtree — sequential to avoid gateway rate-limiting, noted as follow-up optimization",
+      "prunedCids storage hygiene — pre-existing issue noted in security review, not fixed in this phase"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T03:02:14.012914Z",
+    "agent_lines": 242,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 242,
+    "total_lines_changed": 242,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
