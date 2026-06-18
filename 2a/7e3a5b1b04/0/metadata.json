@@ -1,0 +1,464 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2a7e3a5b1b04",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T13:49:03.282282Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "apps/api/src/ipns/ipns-record-parser.spec.ts",
+    "apps/api/src/ipns/ipns-record-parser.ts",
+    "apps/api/src/shares/types.ts",
+    "apps/web/src/components/file-browser/ShareDialog.tsx",
+    "apps/web/src/lib/crypto/key-wrapping.ts",
+    "apps/web/src/services/invite.service.ts",
+    "packages/api-client/openapi.json",
+    "packages/api-client/src/generated/auth/auth.ts",
+    "packages/api-client/src/generated/device-approval/device-approval.ts",
+    "packages/api-client/src/generated/health/health.ts",
+    "packages/api-client/src/generated/identity/identity.ts",
+    "packages/api-client/src/generated/invites/invites.ts",
+    "packages/api-client/src/generated/ipfs/ipfs.ts",
+    "packages/api-client/src/generated/ipns/ipns.ts",
+    "packages/api-client/src/generated/root/root.ts",
+    "packages/api-client/src/generated/share-invites/share-invites.ts",
+    "packages/api-client/src/generated/shares/shares.ts",
+    "packages/api-client/src/generated/tee/tee.ts",
+    "packages/api-client/src/generated/vault/vault.ts",
+    "packages/api-client/src/models/addShareKeysDto.ts",
+    "packages/api-client/src/models/authMethodResponseDto.ts",
+    "packages/api-client/src/models/authMethodResponseDtoType.ts",
+    "packages/api-client/src/models/batchPublishIpnsDto.ts",
+    "packages/api-client/src/models/batchPublishIpnsResponseDto.ts",
+    "packages/api-client/src/models/batchUnenrollIpnsDto.ts",
+    "packages/api-client/src/models/batchUnenrollIpnsResponseDto.ts",
+    "packages/api-client/src/models/childKeyDto.ts",
+    "packages/api-client/src/models/childKeyDtoKeyType.ts",
+    "packages/api-client/src/models/claimChildKeyDto.ts",
+    "packages/api-client/src/models/claimChildKeyDtoKeyType.ts",
+    "packages/api-client/src/models/claimInviteDto.ts",
+    "packages/api-client/src/models/claimInviteResponseDto.ts",
+    "packages/api-client/src/models/connectionTestRequestDto.ts",
+    "packages/api-client/src/models/connectionTestResponseDto.ts",
+    "packages/api-client/src/models/connectionTestResponseDtoProtocol.ts",
+    "packages/api-client/src/models/createApprovalDto.ts",
+    "packages/api-client/src/models/createInviteDto.ts",
+    "packages/api-client/src/models/createInviteDtoItemType.ts",
+    "packages/api-client/src/models/createShareDto.ts",
+    "packages/api-client/src/models/createShareDtoItemType.ts",
+    "packages/api-client/src/models/createShareDtoPermission.ts",
+    "packages/api-client/src/models/createShareResponseDto.ts",
+    "packages/api-client/src/models/createShareResponseDtoItemType.ts",
+    "packages/api-client/src/models/createShareResponseDtoPermission.ts",
+    "packages/api-client/src/models/deleteAccountDto.ts",
+    "packages/api-client/src/models/deleteAccountResponseDto.ts",
+    "packages/api-client/src/models/desktopRefreshDto.ts",
+    "packages/api-client/src/models/deviceApprovalControllerCreateRequest201.ts",
+    "packages/api-client/src/models/deviceApprovalControllerGetPending200Item.ts",
+    "packages/api-client/src/models/deviceApprovalControllerGetStatus200.ts",
+    "packages/api-client/src/models/deviceApprovalControllerGetStatus200Status.ts",
+    "packages/api-client/src/models/googleLoginDto.ts",
+    "packages/api-client/src/models/googleLoginDtoIntent.ts",
+    "packages/api-client/src/models/healthControllerCheck200.ts",
+    "packages/api-client/src/models/healthControllerCheck200Details.ts",
+    "packages/api-client/src/models/healthControllerCheck200DetailsDatabase.ts",
+    "packages/api-client/src/models/healthControllerCheck200Error.ts",
+    "packages/api-client/src/models/healthControllerCheck200Info.ts",
+    "packages/api-client/src/models/healthControllerCheck200InfoDatabase.ts",
+    "packages/api-client/src/models/identityControllerGetJwks200.ts",
+    "packages/api-client/src/models/identityControllerGetJwks200KeysItem.ts",
+    "packages/api-client/src/models/identityControllerGetWalletNonce200.ts",
+    "packages/api-client/src/models/identityTokenResponseDto.ts",
+    "packages/api-client/src/models/index.ts",
+    "packages/api-client/src/models/initVaultDto.ts",
+    "packages/api-client/src/models/inviteChildKeyDto.ts",
+    "packages/api-client/src/models/inviteChildKeyDtoKeyType.ts",
+    "packages/api-client/src/models/inviteDataResponseDto.ts",
+    "packages/api-client/src/models/inviteDataResponseDtoItemType.ts",
+    "packages/api-client/src/models/inviteDataResponseDtoStatus.ts",
+    "packages/api-client/src/models/inviteResponseDto.ts",
+    "packages/api-client/src/models/inviteResponseDtoItemType.ts",
+    "packages/api-client/src/models/inviteResponseDtoStatus.ts",
+    "packages/api-client/src/models/inviteStatusResponseDto.ts",
+    "packages/api-client/src/models/inviteStatusResponseDtoStatus.ts",
+    "packages/api-client/src/models/ipfsControllerUploadBody.ts",
+    "packages/api-client/src/models/ipnsControllerResolveRecordParams.ts",
+    "packages/api-client/src/models/linkMethodDto.ts",
+    "packages/api-client/src/models/linkMethodDtoLoginType.ts",
+    "packages/api-client/src/models/loginDto.ts",
+    "packages/api-client/src/models/loginDtoLoginType.ts",
+    "packages/api-client/src/models/loginResponseDto.ts",
+    "packages/api-client/src/models/logoutResponseDto.ts",
+    "packages/api-client/src/models/lookupUserResponseDto.ts",
+    "packages/api-client/src/models/paginatedReceivedSharesDto.ts",
+    "packages/api-client/src/models/paginatedSentSharesDto.ts",
+    "packages/api-client/src/models/pendingRotationResponseDto.ts",
+    "packages/api-client/src/models/pendingRotationResponseDtoItemType.ts",
+    "packages/api-client/src/models/publishIpnsDto.ts",
+    "packages/api-client/src/models/publishIpnsEntryDto.ts",
+    "packages/api-client/src/models/publishIpnsEntryDtoRecordType.ts",
+    "packages/api-client/src/models/publishIpnsResponseDto.ts",
+    "packages/api-client/src/models/quotaResponseDto.ts",
+    "packages/api-client/src/models/receivedShareResponseDto.ts",
+    "packages/api-client/src/models/receivedShareResponseDtoItemType.ts",
+    "packages/api-client/src/models/receivedShareResponseDtoPermission.ts",
+    "packages/api-client/src/models/registerCidDto.ts",
+    "packages/api-client/src/models/registerCidResponseDto.ts",
+    "packages/api-client/src/models/resolveIpnsResponseDto.ts",
+    "packages/api-client/src/models/respondApprovalDto.ts",
+    "packages/api-client/src/models/respondApprovalDtoAction.ts",
+    "packages/api-client/src/models/sendOtpDto.ts",
+    "packages/api-client/src/models/sendOtpResponseDto.ts",
+    "packages/api-client/src/models/sentShareResponseDto.ts",
+    "packages/api-client/src/models/sentShareResponseDtoItemType.ts",
+    "packages/api-client/src/models/sentShareResponseDtoPermission.ts",
+    "packages/api-client/src/models/setByoStatusDto.ts",
+    "packages/api-client/src/models/setByoStatusResponseDto.ts",
+    "packages/api-client/src/models/shareInvitesControllerListInvitesParams.ts",
+    "packages/api-client/src/models/shareKeyEntryDto.ts",
+    "packages/api-client/src/models/shareKeyEntryDtoKeyType.ts",
+    "packages/api-client/src/models/shareKeyResponseDto.ts",
+    "packages/api-client/src/models/shareKeyResponseDtoKeyType.ts",
+    "packages/api-client/src/models/sharesControllerGetReceivedSharesParams.ts",
+    "packages/api-client/src/models/sharesControllerGetSentSharesParams.ts",
+    "packages/api-client/src/models/sharesControllerLookupUserParams.ts",
+    "packages/api-client/src/models/teeKeysDto.ts",
+    "packages/api-client/src/models/testLoginDto.ts",
+    "packages/api-client/src/models/testLoginResponseDto.ts",
+    "packages/api-client/src/models/tokenResponseDto.ts",
+    "packages/api-client/src/models/unlinkMethodDto.ts",
+    "packages/api-client/src/models/unlinkMethodResponseDto.ts",
+    "packages/api-client/src/models/unpinDto.ts",
+    "packages/api-client/src/models/unpinResponseDto.ts",
+    "packages/api-client/src/models/updateEncryptedKeyDto.ts",
+    "packages/api-client/src/models/updateItemNameDto.ts",
+    "packages/api-client/src/models/updatePermissionDto.ts",
+    "packages/api-client/src/models/updatePermissionDtoPermission.ts",
+    "packages/api-client/src/models/uploadResponseDto.ts",
+    "packages/api-client/src/models/vaultConfigResponseDto.ts",
+    "packages/api-client/src/models/vaultExportDto.ts",
+    "packages/api-client/src/models/vaultResponseDto.ts",
+    "packages/api-client/src/models/vaultResponseDtoTeeKeys.ts",
+    "packages/api-client/src/models/verifyOtpDto.ts",
+    "packages/api-client/src/models/verifyOtpDtoIntent.ts",
+    "packages/api-client/src/models/walletVerifyDto.ts",
+    "packages/api-client/src/models/walletVerifyDtoIntent.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "69d7ca9d9b2e",
+  "token_usage": {
+    "input_tokens": 44861,
+    "cache_creation_tokens": 2220431,
+    "cache_read_tokens": 110784824,
+    "output_tokens": 533413,
+    "api_call_count": 376
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "69d7ca9d9b2e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "69d7ca9d9b2e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Y9BFzDxtkoyDA2gfzwyF1m",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "69d7ca9d9b2e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 459,
+        "end": 460,
+        "entry_ids": [
+          "a181a7be-0491-4eec-a94b-4db6dedb2187"
+        ],
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Ma4FwRABWAuLAfQHFYdZgs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security:review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "69d7ca9d9b2e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 685,
+        "end": 686,
+        "entry_ids": [
+          "56903a0b-59b1-4fd1-88e3-5c4e813c7102"
+        ],
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security:review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01WS4GMAtYJKePcoMNvUErzY",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "69d7ca9d9b2e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1072,
+        "end": 1073,
+        "entry_ids": [
+          "41ce9be6-cfc6-40ac-9d3b-113043ea7395"
+        ],
+        "tool_use_id": "toolu_01WS4GMAtYJKePcoMNvUErzY"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WS4GMAtYJKePcoMNvUErzY"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Plan and execute Phase 49 of CipherBox (shared-folder intra-share move + useFolderNavigation consolidation + batch/drag parity), then run full PR-QA (simplify, two security reviews, CodeRabbit CLI/GitHub, push + PR, resolve review comments). A CI failure in the subsequent e2e run uncovered a missing write-key distribution for descendant shared subfolders, which cascaded into a fundamental architectural decision to decentralize the IPNS cache from per-user to per-name keying with signature-based authorization.",
+    "outcome": "PR #509 was created and all pre-push QA passed (SDK 235/web 54 unit tests, tsc+lint clean, CodeRabbit CLI + GitHub review fully resolved). CI-e2e revealed two regressions (SelectionActionBar layout-shift breaking dblclick navigation; spec folder-name mismatch with trailing slash) which were fixed and re-run. A third CI failure exposed that write shares never distributed `folder-ipns`/`file-ipns` keys for descendants, leading to a two-part fix: (1) client-side write-key distribution committed, and (2) IPNS cache re-architecture (per-name keying + Ed25519 signature verification + anti-rollback check) implemented and tested but not yet committed at session end.",
+    "learnings": {
+      "repo": [
+        "Private vault's SelectionActionBar gates on `selectedIds.size > 1`, not `> 0` — critical for dblclick navigation because a single click (the first half of a dblclick) on size > 0 causes a layout shift that moves the row off the click coordinate before the second click fires.",
+        "SharedFolderRow renders folder names with a decorative trailing `/` — page-object `getFolderItemNames()` must strip it; other specs already use slash-tolerant `.includes()` for this reason.",
+        "`collectChildKeys` (key-wrapping.ts) has always emitted only `'folder'`/`'file'` (read) keys for descendants, never `folder-ipns`/`file-ipns` write keys — so every owner-created subfolder/file in a write share was read-only to the recipient.",
+        "CipherBox's IPNS cache (`folder_ipns` entity) was keyed `@Unique(['userId','ipnsName'])` with `findActiveWriteShare` as the sole server-side publish authorization for non-owners. The TEE republishes the owner's enrolled rows every 6h, which overwrites any non-owner DHT update — making server-side authz unavoidable under the old model.",
+        "The `ipns` package's `validate(pubKey, marshalledRecord)` verifies Ed25519 SignatureV2 records and is already transitively available in `@cipherbox/crypto` — so server-side signature verification was always feasible.",
+        "`CHILD_KEY_TYPES` array in `apps/api/src/shares/types.ts` drives both `@IsIn` validation and `@ApiProperty enum` on `ChildKeyDto` — adding an entry there propagates automatically to both validation and the regenerated API client.",
+        "API migrations are glob-loaded from the migrations directory; adding a file is sufficient for registration.",
+        "SDK `dist/` is gitignored (CI rebuilds it), but must be rebuilt locally after public API additions — web's `tsc -b` checks the built dist, not source. New public methods appear in `client.d.ts`, not `index.d.ts` (the barrel re-export).",
+        "Web package has no `typecheck` script; use `pnpm --filter @cipherbox/web exec tsc -b` instead.",
+        "CodeRabbit CHILL profile delivers nitpicks in the review body, not as inline threads — `resolve-pr-reviews` will correctly report 0 unresolved threads even when actionable feedback exists.",
+        "`ipnsName` is the public key in CIDv1 encoding — key-possession alone is insufficient for server authorization because any authenticated user could replay a validly-signed record from the DHT to roll back another user's folder, necessitating an anti-rollback sequence check.",
+        "CodeRabbit CLI (`--agent` flag) produces structured JSON findings with fields `{severity, fileName, codegenInstructions, suggestions}` — not the flat text format."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/FileBrowser.tsx",
+          "line": 205,
+          "end_line": 205,
+          "finding": "Private vault gates SelectionActionBar on `selectedIds.size > 1` — the model the shared browser should mirror to avoid layout-shift on single click (first half of dblclick)."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 213,
+          "end_line": 213,
+          "finding": "`findActiveWriteShare` was the only server-side publish authorization for non-owner IPNS updates — an exact ipnsName match against a top-level write Share row, covering only the share root, not descendants."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 287,
+          "end_line": 287,
+          "finding": "When no existing row is found for `(userId, ipnsName)`, `upsertFolderIpns` forks a new user-owned record — causing a duplicate for the same ipnsName under the old per-user schema."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 86,
+          "end_line": 107,
+          "finding": "DB-first publish pattern: the server writes the signed record to `folder_ipns` synchronously before fire-and-forgetting to the DHT. Resolution always prefers the DB row, making the DB the true source of truth for IPNS resolution."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 416,
+          "end_line": 420,
+          "finding": "`resolveRecord` queries `findOne({ where: { ipnsName } })` with no user filter — already correct/decentralized, but non-deterministic when duplicate rows exist under the old schema."
+        },
+        {
+          "path": "apps/web/src/lib/crypto/key-wrapping.ts",
+          "finding": "`collectChildKeys` hard-codes `'folder'`/`'file'` key types — no permission param, never emits `folder-ipns`/`file-ipns`. Fixed to accept a `permission` param and emit write keys for descendants on write shares, guarding `file-ipns` on the optional `FilePointer.ipnsPrivateKeyEncrypted` field."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2466,
+          "end_line": 2468,
+          "finding": "`enumerateSharedSubtree` writability check requires a per-subfolder `share_keys` row with `keyType: 'folder-ipns'` — previously never emitted for descendants, so every owner-created subfolder appeared read-only in the move dialog."
+        },
+        {
+          "path": "apps/api/src/shares/types.ts",
+          "finding": "`CHILD_KEY_TYPES` is the single source of truth for both DTO validation (`@IsIn`) and OpenAPI enum (`@ApiProperty`) — adding `'folder-ipns'` here propagates automatically to the regenerated client."
+        }
+      ],
+      "workflow": [
+        "GSD sequential execution (no worktrees) is more reliable for AFK/autonomous runs — avoids the worktree merge-base footguns and cwd-drift issues that the parallel-worktree merge-back protocol is prone to.",
+        "Must rebuild SDK dist between execution waves whenever public API changes, before running web typecheck — the cross-package dist-staleness gotcha.",
+        "After a GSD plan-check catch + RESEARCH.md doc-formatting nits, re-running the checker passes only when both the doc fix AND the substantive gap are addressed in the same iteration.",
+        "CodeRabbit CLI review should run before PR creation; the GitHub-posted review comes after PR and may contain different/overlapping findings. CHILL profile won't auto-re-review incremental fix pushes, so confirming 'no new findings' requires manually checking the run or accepting silence as clean.",
+        "When CI reveals a regression that traces to a missing layer in the underlying architecture (write-key distribution → server IPNS authorization), the right call is to scope the architectural fix into the same PR rather than deferring — mid-PR rebases create more friction than the expanded scope.",
+        "`gh workflow run` can silently succeed despite a CLI-level timeout error — always verify dispatch with `gh run list` rather than trusting the exit code.",
+        "Disabling local commit signing (`git config --local commit.gpgsign false`) for AFK sessions is viable but requires a signed rebase before merge on repos with signature enforcement — worth explicitly noting in the PR description as a merge blocker."
+      ]
+    },
+    "friction": [
+      "gsd-tools commit helper false-negatives: multiple executors reported `commit_failed` while commits actually landed — required manual `git log` verification after each executor.",
+      "Web package has no `typecheck` script, unlike SDK/e2e — the discovery that `pnpm --filter @cipherbox/web exec tsc -b` is the right incantation only came after trying `pnpm typecheck` variants.",
+      "JSX comment placed inside a `{cond && (...)}` single-child expression caused TS1005, requiring a fixup commit.",
+      "TS2352/TS2493 typing for vitest mock call arrays required `(c as unknown as [string, { itemId: string }])[1]` workaround — the straightforward cast `(c[1] as ...)` fails because the mock tuple is typed as `[]`.",
+      "CodeRabbit false-positive (finding 2: `expect(setError).not.toHaveBeenCalled()`) — `runWrite` calls `setError(null)` on entry to clear prior errors, which is correct but made the suggested assertion wrong. Reverted after a test failure.",
+      "Three pre-existing API tsc errors (unrelated to phase 49 changes) caused noise in typecheck output on every pass.",
+      "Intel API surface regeneration produced an empty file (regex extractor unpopulated) — not the real artifact, but caused a moment of confusion about whether the intel gate was satisfied.",
+      "Transient network timeout when re-dispatching `ci-e2e` workflow run via `gh workflow run` — dispatch landed despite CLI error, but required `gh run list` verification.",
+      "CodeRabbit CHILL profile doesn't auto-re-review incremental fix pushes — no automated confirmation that addressed findings were accepted.",
+      "The drag-routing critical bug (moves wrong items when some are selected) was only caught by CodeRabbit CLI, not by local unit tests or the simplify/security passes — requires e2e to observe."
+    ],
+    "open_items": [
+      "Commits on the branch are unsigned (local gpgsign disabled for AFK session) — requires a signed rebase or admin override before the PR can merge (repo enforces signed commits).",
+      "Live e2e UAT: `shared-folder-move.spec.ts` is authored and type-checked but main-push-gated (needs docker stack with two accounts). The third CI failure (test 3.3) was the trigger for the write-key distribution work and was still unconfirmed green at session end.",
+      "IPNS architectural change (Commit B: per-name keying, signature-based authorization, anti-rollback sequence check, hand-rolled parser removal, migration) was fully implemented and tested (134 IPNS + 289 shares/republish/vault tests pass) but not yet committed or pushed at session end.",
+      "Full SDK-level descendant cycle guard (SDK refuses to move folder A into its own subtree) deferred — current protection is UI-only picker exclusion + SDK self-move throw. Documented in PR as proportionate residual (actor already holds write keys).",
+      "Batch move key-refetch performance: `batchMoveItemsHandler` re-fetches the share write key for each item individually — acceptable for v1 but noted as a follow-up optimization.",
+      "`useMultiSelect` extraction into a shared hook (for private + shared browser parity) deferred as cross-boundary scope creep beyond phase 49.",
+      "`enumerateSharedSubtree` DFS concurrency: currently sequential per-level — deferred due to gateway-rate-limit tradeoff, noted as follow-up.",
+      "Revocation semantics changed by the IPNS architectural shift: revoking a write share no longer prevents a key-holding recipient from publishing indefinitely — revocation now requires IPNS key rotation + re-share, which is a deliberate architectural tradeoff accepted by the user but not yet documented in any ADR or ROADMAP note.",
+      "The generated API client was regenerated as part of the `folder-ipns` ChildKeyDtoKeyType addition — the regeneration also included an OpenAPI spec-version bump (0.39.0→0.40.0) across all generated models, which was benign but not intentional."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T13:47:04.59188Z",
+    "agent_lines": 190,
+    "agent_removed": 646,
+    "human_added": 0,
+    "human_modified": 152,
+    "human_removed": 421,
+    "total_committed": 342,
+    "total_lines_changed": 1409,
+    "agent_percentage": 59.33286018452804,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 763,
+      "agent_lines_removed": 288,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 763,
+      "agent_lines_removed": 288,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
