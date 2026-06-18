@@ -1,0 +1,5 @@
+did you just commit directly to `main`?
+
+---
+
+yes please update the workflow to check branch before committing and switch to a `docs/` branch if currently on main.

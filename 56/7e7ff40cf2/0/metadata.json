@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "567e7ff40cf2",
+  "session_id": "230ebd5e-7bc8-4128-b41a-7c99c052d9e4",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T23:25:16.649252Z",
+  "branch": "docs/gsd-capture-branch-guard",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".claude/gsd-core/workflows/add-todo.md",
+    ".claude/gsd-core/workflows/add-backlog.md",
+    ".claude/gsd-core/workflows/plant-seed.md",
+    ".claude/gsd-core/workflows/check-todos.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "9294daa2b3a1",
+  "checkpoint_transcript_start": 79,
+  "transcript_lines_at_start": 79,
+  "token_usage": {
+    "input_tokens": 1583,
+    "cache_creation_tokens": 14950,
+    "cache_read_tokens": 830411,
+    "output_tokens": 13196,
+    "api_call_count": 8
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Update GSD capture workflows to check the current branch before committing and automatically switch to a docs/ branch if on main, after the assistant accidentally committed directly to main.",
+    "outcome": "The accidental commit was preserved on docs/reverify-ipns-signature-todo and removed from local main via git reset --hard. A branch-protection guard was added to four GSD workflows (add-todo, add-backlog, plant-seed, check-todos) and committed on docs/gsd-capture-branch-guard.",
+    "learnings": {
+      "repo": [
+        "GSD capture/todo workflows (add-todo, add-backlog, plant-seed, check-todos) all commit .planning/ changes inline to the current branch by design; the `note` workflow does not commit.",
+        "CLAUDE.md contains a branch-protection rule prohibiting direct commits to main.",
+        "The /gsd:capture workflow uses `gsd-tools query commit` which commits to HEAD without branch awareness."
+      ],
+      "code": [
+        {
+          "path": ".claude/gsd-core/workflows/add-todo.md",
+          "finding": "Added branch-protection guard: switches to a dated docs/planning-YYYYMMDD branch when HEAD is main or master before committing."
+        },
+        {
+          "path": ".claude/gsd-core/workflows/add-backlog.md",
+          "finding": "Added same branch-protection guard as add-todo.md."
+        },
+        {
+          "path": ".claude/gsd-core/workflows/plant-seed.md",
+          "finding": "Added same branch-protection guard as add-todo.md."
+        },
+        {
+          "path": ".claude/gsd-core/workflows/check-todos.md",
+          "finding": "Added same branch-protection guard as add-todo.md."
+        }
+      ],
+      "workflow": [
+        "When reverting an accidental commit: `git branch <new-branch> <commit-sha>` to save it, then `git reset --hard origin/main` to rewind — preserves work without force-push.",
+        "Branch-protection guards in workflow files should default to a dated docs/planning-YYYYMMDD branch to avoid naming collisions across sessions."
+      ]
+    },
+    "friction": [
+      "The GSD workflow committed directly to main without any branch awareness, violating project branch-protection rules — a design gap in the workflow tooling.",
+      "The assistant did not check the current branch before invoking /gsd:capture, which led to the accidental main commit."
+    ],
+    "open_items": [
+      "The commit on docs/reverify-ipns-signature-todo (b31f58dd8) containing re-verification edits has not been pushed or PR'd — left for the user to handle when convenient.",
+      "The docs/gsd-capture-branch-guard branch with the workflow guard changes has not been pushed or merged to main yet.",
+      "Consider whether the underlying gsd-tools binary should also be patched to refuse commits on protected branches, rather than relying solely on workflow-level guards."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T23:25:01.682674Z",
+    "agent_lines": 48,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 48,
+    "total_lines_changed": 48,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
