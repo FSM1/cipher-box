@@ -32,7 +32,7 @@ import {
 // useCallback is stubbed as identity so the hook can be called like a plain fn.
 // ---------------------------------------------------------------------------
 
-const mockMoveInSharedFolder = vi.fn<[string, unknown], Promise<void>>();
+const mockMoveInSharedFolder = vi.fn<() => Promise<void>>();
 const mockSdkClient = { moveInSharedFolder: mockMoveInSharedFolder };
 
 vi.mock('react', async (importOriginal) => {
@@ -409,7 +409,7 @@ describe('moveItemHandler (REQ-2) — routes through runWrite -> client.moveInSh
     await ops.moveItem(item, 'dest-folder-id', 'k51dest-ipns-name');
 
     expect(mockMoveInSharedFolder).toHaveBeenCalledOnce();
-    const [calledShareId, calledArgs] = mockMoveInSharedFolder.mock.calls[0] as [
+    const [calledShareId, calledArgs] = mockMoveInSharedFolder.mock.calls[0] as unknown as [
       string,
       { itemId: string; destFolderId: string; destIpnsName: string; vaultPrivateKey: Uint8Array },
     ];
