@@ -3,11 +3,18 @@
  *
  * Shows [RW] or [RO] badge based on the share's permission level.
  * Supports inline renaming when isRenaming is true.
+ * Supports multi-select (Ctrl/Cmd+click) and drag-and-drop move onto folder rows.
  */
 
 import type React from 'react';
-import type { MouseEvent } from 'react';
+import { useState, useCallback } from 'react';
+import type { MouseEvent, DragEvent, KeyboardEvent } from 'react';
 import type { FolderChild } from '@cipherbox/core';
+
+type DragPayload = {
+  items: Array<{ id: string; type: string }>;
+  parentId: string;
+};
 
 export type SharedFolderRowProps = {
   item: FolderChild;
@@ -20,6 +27,17 @@ export type SharedFolderRowProps = {
   onRenameSubmit: () => void;
   onContextMenu: (e: MouseEvent) => void;
   onDoubleClick: () => void;
+  /** Whether this row is currently selected */
+  isSelected?: boolean;
+  /** Click handler for multi-select (receives modifier key info) */
+  onSelect?: (e: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => void;
+  /**
+   * Callback invoked when an internal drag is dropped onto this folder row.
+   * Receives destination folder ID and IPNS name. Only set on folder items.
+   */
+  onMoveItemTo?: (destFolderId: string, destIpnsName: string) => void;
+  /** Currently selected items (for multi-select-aware drag payload) */
+  selectedItems?: FolderChild[];
 };
 
 export function SharedFolderRow({
@@ -33,29 +51,157 @@ export function SharedFolderRow({
   onRenameSubmit,
   onContextMenu,
   onDoubleClick,
+  isSelected = false,
+  onSelect,
+  onMoveItemTo,
+  selectedItems = [],
 }: SharedFolderRowProps) {
   const isFolder = item.type === 'folder';
-  const icon = isFolder ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
+  const icon = isFolder ? '📁' : '📄';
   const date = item.modifiedAt ? new Date(item.modifiedAt).toLocaleDateString() : '--';
   const isWrite = permission === 'write';
 
+  // Internal drag-over visual state
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  // ---------------------------------------------------------------------------
+  // Drag source -- multi-select-aware (mirrors FileListItem :160-177)
+  // ---------------------------------------------------------------------------
+  const handleDragStart = useCallback(
+    (e: DragEvent) => {
+      // If this item is part of a multi-select, payload includes all selected items
+      let dragItems: Array<{ id: string; type: string }>;
+      if (isSelected && selectedItems.length > 1) {
+        dragItems = selectedItems.map((i) => ({ id: i.id, type: i.type }));
+      } else {
+        dragItems = [{ id: item.id, type: item.type }];
+      }
+
+      // parentId in the payload is used for same-parent guard in the drop handler
+      // We don't know it here, so use a sentinel that is not a folder id
+      const payload: DragPayload = { items: dragItems, parentId: '' };
+      e.dataTransfer.setData('application/json', JSON.stringify(payload));
+      e.dataTransfer.effectAllowed = 'move';
+    },
+    [item, isSelected, selectedItems]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Drop target -- folder rows only (mirrors FileListItem :275-317)
+  // ---------------------------------------------------------------------------
+  const handleDragOver = useCallback(
+    (e: DragEvent) => {
+      if (!isFolder || !onMoveItemTo) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Distinguish internal moves from external file uploads
+      const hasJson = e.dataTransfer.types.includes('application/json');
+      e.dataTransfer.dropEffect = hasJson ? 'move' : 'copy';
+      setIsDragOver(true);
+    },
+    [isFolder, onMoveItemTo]
+  );
+
+  const handleDragLeave = useCallback(
+    (e: DragEvent) => {
+      if (!isFolder || !onMoveItemTo) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragOver(false);
+    },
+    [isFolder, onMoveItemTo]
+  );
+
+  const handleDrop = useCallback(
+    (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragOver(false);
+
+      // Only handle drops on folder rows
+      if (!isFolder || !onMoveItemTo) return;
+      if (item.type !== 'folder') return;
+
+      // Distinguish internal move from external file upload
+      const jsonData = e.dataTransfer.getData('application/json');
+
+      if (!jsonData) {
+        // External file drop — no handler here; the parent SharedFileBrowser
+        // handles external drops at the container level
+        return;
+      }
+
+      // Internal move — parse defensively (T-49-13)
+      let parsed: DragPayload;
+      try {
+        parsed = JSON.parse(jsonData) as DragPayload;
+        if (!Array.isArray(parsed.items) || parsed.items.length === 0) return;
+      } catch {
+        // Invalid JSON — treat as external and let parent handle it
+        return;
+      }
+
+      // Guard: never drop onto a non-folder or the item's own current parent
+      // parentId in the payload may be empty (from this row) — skip the guard
+      // for now; per-item validation (name collision + write-capability) is in
+      // the SDK and the batchMoveItemsHandler (T-49-12).
+
+      // Route through the parent's handleDropOnFolder-equivalent
+      onMoveItemTo(item.id, item.ipnsName);
+    },
+    [isFolder, item, onMoveItemTo]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Click handler for selection
+  // ---------------------------------------------------------------------------
+  const handleClick = useCallback(
+    (e: MouseEvent) => {
+      if (isRenaming) return;
+      if (onSelect) {
+        onSelect({ ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey });
+      }
+    },
+    [isRenaming, onSelect]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (isRenaming) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onDoubleClick();
+      }
+    },
+    [isRenaming, onDoubleClick]
+  );
+
+  const className = [
+    'file-list-row',
+    isSelected ? 'file-list-row--selected' : '',
+    isDragOver && isFolder ? 'file-list-item--drag-over' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
     <div
-      className="file-list-row"
+      className={className}
       role="row"
       tabIndex={0}
+      draggable
+      onDragStart={handleDragStart}
+      onDragOver={isFolder && onMoveItemTo ? handleDragOver : undefined}
+      onDragLeave={isFolder && onMoveItemTo ? handleDragLeave : undefined}
+      onDrop={isFolder && onMoveItemTo ? handleDrop : undefined}
+      onClick={handleClick}
       onDoubleClick={isRenaming ? undefined : onDoubleClick}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu(e);
       }}
-      onKeyDown={(e) => {
-        if (isRenaming) return;
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onDoubleClick();
-        }
-      }}
+      onKeyDown={handleKeyDown}
     >
       <div className="file-list-cell file-list-cell-name" role="gridcell">
         <span className="file-icon">{icon}</span>
