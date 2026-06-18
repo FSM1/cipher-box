@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 
 ## Current Position
 
-Phase: 49
-Plan: Not started
+Phase: 49 (shared-folder-move-intra-share-and-usefoldernavigation-unwra) — COMPLETE
+Plan: 5 of 5 — COMPLETE
 Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolidation, PR #494) complete — its 5 SUMMARY.md files were backfilled 2026-06-17 (had shipped but were never written, which had tripped a false-positive resume gate).
 
 ## Performance Metrics
