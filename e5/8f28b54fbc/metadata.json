@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e58f28b54fbc",
+  "strategy": "manual-commit",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+    "apps/web/src/components/file-browser/SharedMoveDialog.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e5/8f28b54fbc/0/metadata.json",
+      "transcript": "/e5/8f28b54fbc/0/full.jsonl",
+      "content_hash": "/e5/8f28b54fbc/0/content_hash.txt",
+      "prompt": "/e5/8f28b54fbc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22868,
+    "cache_creation_tokens": 1213342,
+    "cache_read_tokens": 45981115,
+    "output_tokens": 207983,
+    "api_call_count": 164
+  }
+}

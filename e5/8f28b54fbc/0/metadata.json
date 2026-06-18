@@ -1,0 +1,260 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e58f28b54fbc",
+  "session_id": "ca83442d-e993-4fad-8db8-b0bd2dad4a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T03:34:44.465682Z",
+  "branch": "feat/shared-folder-move-intra-share-and-usefoldernavigation-unwra",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+    "apps/web/src/components/file-browser/SharedMoveDialog.tsx"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "cae41dd897dd",
+  "token_usage": {
+    "input_tokens": 22868,
+    "cache_creation_tokens": 1213342,
+    "cache_read_tokens": 45981115,
+    "output_tokens": 207983,
+    "api_call_count": 164
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01K7iea5WQydvhDRSGKDM4Lj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "cae41dd897dd",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "cba38aa4-b7b5-4780-b78d-f7eac7134439"
+        ],
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7iea5WQydvhDRSGKDM4Lj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016yCvLjVk2DAkUYSP3nNASE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "cae41dd897dd",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 272,
+        "end": 273,
+        "entry_ids": [
+          "a65589b6-2792-4ec6-a687-4c5c64a3d816"
+        ],
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016yCvLjVk2DAkUYSP3nNASE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Y9BFzDxtkoyDA2gfzwyF1m",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "cae41dd897dd",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 459,
+        "end": 460,
+        "entry_ids": [
+          "a181a7be-0491-4eec-a94b-4db6dedb2187"
+        ],
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y9BFzDxtkoyDA2gfzwyF1m"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Ma4FwRABWAuLAfQHFYdZgs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security:review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "cae41dd897dd",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 685,
+        "end": 686,
+        "entry_ids": [
+          "56903a0b-59b1-4fd1-88e3-5c4e813c7102"
+        ],
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Ma4FwRABWAuLAfQHFYdZgs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security:review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan and execute phase 49 of cipher-box (shared-folder intra-share move + useFolderNavigation ECIES unwrap consolidation, expanded mid-session to include batch and drag-move parity), then run the full PR-QA pipeline (simplify, security reviews, CodeRabbit CLI) before pushing and opening a PR.",
+    "outcome": "Planning completed (5 plans / 3 waves, 6 requirements, plan-checker passed after one revision round). All 5 plans executed with gates green (SDK 235 pass, web 51/51, tsc + lint clean). Simplify, security, and CodeRabbit CLI passes completed with 9 correctness/quality fixes applied. Branch is 30 commits ahead of main; PR push and post-PR CodeRabbit GitHub review resolution remain pending at transcript end.",
+    "learnings": {
+      "repo": [
+        "`reencryptFileMetadataForFolderChange` (reencrypt.ts:49) is fully key-agnostic — takes raw key bytes, no owner-vs-recipient distinction — reusable verbatim for the shared-folder move path.",
+        "`share_keys` entries are keyed by `itemId` (file UUID), not by parent folder; the download path resolves `k.keyType === 'file' && k.itemId === item.id`, so file keys need no re-registration after an intra-share move.",
+        "`adoptSharedFolderResult` emits `sharedFolder:updated` with `live.ipnsName`; it must be called only once (for the source result) — calling it for the dest result corrupts the rendered shared-folder tree view.",
+        "`sdkCore.moveItem` throws `'An item with this name already exists in destination'` (sdk-core/src/folder/index.ts:346); collision policy is throw-and-surface, no auto-rename needed.",
+        "The `@internal` tag on `ensureFolderLoaded` is documentation-only; `CipherBoxClient` is already exported and can be called directly from web without a new public alias.",
+        "The `SharedFolderClient` Pick allowlist (shared-folder-projection.ts:28-38) only listed the 7 Phase 48 methods; any new SDK client methods added to the shared-folder surface must be explicitly added to this allowlist.",
+        "File IPNS keys for re-encryption must come from `share_keys keyType:'file-ipns'`, not `FilePointer.ipnsPrivateKeyEncrypted` — the latter is owner-wrapped and recipients cannot decrypt it.",
+        "SDK `dist/` is gitignored; CI rebuilds it. Between waves when new public SDK methods are added that web imports, a manual `pnpm -F @cipher-box/sdk build` is required or web `tsc -b` will fail against stale declarations.",
+        "The web package has no `typecheck` npm script; the correct gate command is `tsc -b` run from the web package root.",
+        "The intel API surface file is empty (regex extractor unpopulated) — it is a HINT-only artifact; RESEARCH.md already carries all verified symbol refs and is the authoritative source for the planner.",
+        "`runWrite` in `useSharedWriteOps` calls `setError(null)` on entry to clear prior errors before attempting the operation — test assertions on `setError` must account for this initial null call on the success path.",
+        "Batch and drag-move for the shared view had zero implementation today; the private vault analogs (`useFileBrowserActions` selection Set → `handleBatchMoveConfirm`, `handleDragStart` multi-select-aware → `handleDropOnFolder`) are clean mirrors to follow.",
+        "`SelectionActionBar` required `onDownload` and `onDelete` props, causing the shared browser to stub them as no-ops — best fix is making those props optional and conditionally rendering the buttons."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "`enumerateSharedSubtree` DFS does not zero each per-iteration `folderKey` after decryption — plaintext AES folder keys remain live in heap across the full traversal. Fixed with try/finally zeroing on each iteration."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "finding": "The refactored null-after-retries path built a degraded keyless `FolderNode` instead of erroring and redirecting (regression from Phase 48 behavior). CodeRabbit caught this; fixed by restoring the error + redirect branch."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/SharedFileBrowser.tsx",
+          "finding": "`onMoveItemTo` closure checked the *drop target folder's* selection state to determine what to move, discarding the actual dragged payload. Fixed to resolve dragged items from `sortedChildren` by the ids forwarded from `SharedFolderRow`."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+          "finding": "The drag handler did not forward which specific items were dragged (used selection state instead). Fixed to pass the dragged item ids explicitly, matching `FileListItem`'s multi-select-aware drag pattern."
+        },
+        {
+          "path": "shared-folder-projection.ts",
+          "line": 28,
+          "end_line": 38,
+          "finding": "Pick allowlist only covers Phase 48 methods; any new `SharedFolderClient` methods (e.g., `moveInSharedFolder`, `enumerateSharedSubtree`) must be explicitly added here or they are not callable from the web layer."
+        }
+      ],
+      "workflow": [
+        "Sequential wave execution (no parallel worktrees) is the safer autonomous/AFK mode — the parallel-worktree merge-back protocol has known cwd-drift and merge-base footguns; sequential is a first-class supported path.",
+        "GSD plan-checker runs across 12 verification dimensions; the revision loop (re-spawn planner on blockers, re-run checker) converged in 1 iteration after fixing a missing unit-test gap and two RESEARCH.md doc nits.",
+        "/simplify is strictly quality-only (behavior-preserving); correctness bugs found during the simplify pass go in a dedicated correctness commit, not mixed into the simplify commit.",
+        "Two security review passes cover different surfaces: `security:review` (crypto-focused: ECIES, key zeroing, trust boundaries) and `security-review` (general appsec: input validation, authz, DoS, UI trust). Both should run for crypto-sensitive phases.",
+        "CodeRabbit CLI is run pre-PR (`coderabbit review --agent` scoped to merge-base); after PR creation CodeRabbit auto-posts a GitHub review and `/resolve-pr-reviews` addresses inline comments.",
+        "Batch + drag-move scope was added mid-planning (before the planner ran) — folding scope into ROADMAP.md + CONTEXT.md before spawning the planner avoids an expensive re-plan cycle.",
+        "When `commit.gpgsign` is disabled locally for an AFK run (to prevent 1Password signer from wedging), a signed rebase or admin override is needed before merge if the repo enforces signed commits on PRs.",
+        "The plan-checker's unit-test gap finding (REQ has no dedicated test → verify passes vacuously) is a high-value catch; check for existing test files before deciding to create new ones — extending an existing suite is cheaper."
+      ]
+    },
+    "friction": [
+      "`gsd-tools` was not on PATH inside the planner-revision subagent — it could not commit its own artifacts, requiring a manual commit from the orchestrator after the revision returned.",
+      "Prettier reformatted `client.ts` during the security-fix commit, requiring a re-read of the file before the MEDIUM zeroing edit could be applied correctly.",
+      "CodeRabbit finding 2 (assert `setError` not called on success path) was a false positive — `runWrite` calls `setError(null)` on entry, so the assertion `not.toHaveBeenCalled()` incorrectly failed the test. Required investigation and revert.",
+      "A JSX comment placed inside a single-child conditional expression (`{cond && (...)}`) in SharedFileBrowser broke `tsc -b` — required a re-read and fix before tests could run.",
+      "Intel API surface file was empty (regex extractor unpopulated), making the HINT artifact useless for the planner; RESEARCH.md had to serve as the sole symbol-ref source.",
+      "RESEARCH.md had two doc formatting issues (missing resolution markers on open questions, wrong heading level) that caused plan-checker blockers — required direct edits before the revision round could proceed.",
+      "The initial concern about new SDK methods not appearing in `index.d.ts` (barrel re-export) sent unnecessary investigation time — methods were correctly in `client.d.ts` and visible to consumers."
+    ],
+    "open_items": [
+      "PR push and creation are still pending (transcript ends before `git push` + `gh pr create` step).",
+      "CodeRabbit GitHub review resolution (`/resolve-pr-reviews`) is pending PR creation.",
+      "`useMultiSelect` extraction into a shared hook (reuse finding from /simplify) — deferred as cross-boundary scope creep beyond phase 49.",
+      "Batch key-refetch optimization in `batchMoveItemsHandler` (currently re-fetches `share_keys` per item) — accepted as v1 parity, deferred.",
+      "DFS concurrency in `enumerateSharedSubtree` (sequential by design to avoid gateway rate-limit amplification) — potential follow-up if subtrees become large.",
+      "Full SDK-layer enforcement of descendant/cycle guard — currently UI-guarded (SharedMoveDialog disables descendants) + SDK self-move-guarded; full server-side subtree check deferred since actor already holds write keys.",
+      "REQ-5 e2e tests require the live docker stack and local API — deferred to main-push gated UAT (same pattern as Phase 48).",
+      "`commit.gpgsign = false` local override needs to be re-enabled (`git config --local --unset commit.gpgsign`) before or after merge to restore global signing behavior.",
+      "`prunedCids` storage hygiene is pre-existing tech debt (not introduced by phase 49) — flagged in security review as a LOW recommendation."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T03:31:57.410338Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 42,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 42,
+    "total_lines_changed": 65,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
