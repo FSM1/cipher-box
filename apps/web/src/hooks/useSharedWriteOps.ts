@@ -179,11 +179,39 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
     [runWrite]
   );
 
+  /**
+   * Move an item within the shared folder to a different destination subfolder.
+   *
+   * The vault private key reference is passed directly to the SDK — the SDK owns
+   * all crypto (unwrap + re-encrypt) and key zeroing. The web does not clone or
+   * zero it here (matches the established pattern; T-49-10 accepted).
+   */
+  const moveItemHandler = useCallback(
+    async (item: FolderChild, destFolderId: string, destIpnsName: string) => {
+      const auth = useAuthStore.getState();
+      if (!auth.vaultKeypair) {
+        p.setError('No keypair available');
+        return;
+      }
+      await runWrite(async (shareId) => {
+        await getSdkClient().moveInSharedFolder(shareId, {
+          itemId: item.id,
+          destFolderId,
+          destIpnsName,
+          vaultPrivateKey: auth.vaultKeypair!.privateKey,
+          getShareKeysFn: fetchShareKeys,
+        });
+      }, 'Shared folder move failed');
+    },
+    [runWrite, p.setError]
+  );
+
   return {
     uploadFile: uploadFileHandler,
     createFolder: createFolderHandler,
     renameItem: renameItemHandler,
     deleteItem: deleteItemHandler,
     updateSharedFile: updateSharedFileHandler,
+    moveItem: moveItemHandler,
   };
 }
