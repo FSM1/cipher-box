@@ -6,15 +6,31 @@ severity: low
 source: Multi-agent survey 2026-06-19 of all production source files >= ~500 LoC (vendored fuser + test files excluded), with implementation-ready deep dives for client.ts and lib.rs
 files:
   - packages/sdk/src/client.ts
+  - packages/sdk/src/bin/index.ts
+  - packages/sdk/src/share/shared-write.ts
+  - packages/sdk-core/src/folder/index.ts
+  - apps/api/src/ipns/ipns.service.ts
+  - apps/web/src/components/file-browser/SharedFileBrowser.tsx
+  - apps/web/src/components/file-browser/ShareDialog.tsx
+  - apps/web/src/components/file-browser/DetailsDialog.tsx
+  - apps/web/src/components/file-browser/BinBrowser.tsx
+  - apps/web/src/components/file-browser/useFileBrowserActions.ts
+  - apps/web/src/hooks/useAuth.ts
+  - apps/web/src/hooks/useSharedNavigationActions.ts
+  - apps/web/src/services/share.service.ts
+  - apps/desktop/src/auth.ts
+  - apps/desktop/src/main.ts
+  - apps/desktop/src-tauri/src/commands/auth.rs
+  - apps/desktop/src-tauri/src/fuse/windows/mod.rs
   - crates/fuse/src/lib.rs
   - crates/fuse/src/inode.rs
   - crates/fuse/src/write_ops.rs
+  - crates/fuse/src/read_ops.rs
+  - crates/fuse/src/journal_helpers.rs
   - crates/fuse/src/platform/windows/operations.rs
-  - apps/desktop/src-tauri/src/fuse/windows/mod.rs
-  - packages/sdk-core/src/folder/index.ts
-  - apps/api/src/ipns/ipns.service.ts
-  - apps/web/src/components/file-browser/DetailsDialog.tsx
-  - apps/web/src/hooks/useAuth.ts
+  - crates/fuse/src/platform/windows/write_ops.rs
+  - crates/fuse/src/platform/windows/read_ops.rs
+  - crates/sdk/src/queue.rs
 ---
 
 ## Problem
@@ -151,8 +167,10 @@ stable, so no `pnpm api:generate` and no consumer edits are required.
   cohesive production code (journal model + the one WriteQueue that owns its persistence).
 - `crates/fuse/src/journal_helpers.rs` (603) — single security-critical encrypt->wrap->build pipeline
   shared by fuser + WinFsp; splitting scatters the zeroize-on-error contract. Risk high, value low.
-- `crates/fuse/src/read_ops.rs` (1012) — keep the FUSE read/write/dir partition symmetry (dedup only,
-  listed in Tier 2).
+
+(`crates/fuse/src/read_ops.rs` is intentionally NOT listed here — it must not be split structurally,
+but it does have an active dedup-only task, so it lives solely under Tier 2 to avoid a "do not touch"
+vs "has work" contradiction.)
 
 ## Deep-dive plan — client.ts (full facade decomposition, if chosen over conservative)
 
