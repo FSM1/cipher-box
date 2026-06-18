@@ -805,7 +805,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 49-03-PLAN.md — REQ-3: useSharedWriteOps moveItemHandler + new SharedMoveDialog subtree picker + folder-view onMove wire + Pick allowlist (depends 49-01)
+- [x] 49-03-PLAN.md — REQ-3: useSharedWriteOps moveItemHandler + new SharedMoveDialog subtree picker + folder-view onMove wire + Pick allowlist (depends 49-01)
 
 **Wave 3** *(blocked on Wave 2)*
 
