@@ -9,7 +9,7 @@ progress:
   total_phases: 34
   completed_phases: 33
   total_plans: 151
-  completed_plans: 149
+  completed_plans: 150
   percent: 98
 ---
 
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 49 (shared-folder-move-intra-share-and-usefoldernavigation-unwra) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolidation, PR #494) complete — its 5 SUMMARY.md files were backfilled 2026-06-17 (had shipped but were never written, which had tripped a false-positive resume gate).
 
 ## Performance Metrics
@@ -149,6 +149,7 @@ Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolida
 | Phase 49 P01 | 13min | 2 tasks | 5 files |
 | Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P02 | 15min | 1 tasks | 1 files |
 | Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P03 | 11min | 4 tasks | 7 files |
+| Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P04 | 26min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -284,7 +285,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-18
 
-Last session: 2026-06-18T03:50:00.000Z — Completed 49-03 (web UI move: SharedMoveDialog, moveItemHandler, onMove wiring)
+Last session: 2026-06-18T02:03:38Z — Completed 49-04 (batch + drag move: batchMoveItemsHandler, multi-select, SharedMoveDialog items prop, SharedFolderRow DnD)
 
 ## Decisions
 
@@ -300,3 +301,6 @@ Last session: 2026-06-18T03:50:00.000Z — Completed 49-03 (web UI move: SharedM
 - [Phase 49-03]: onMove wired for files only in folder-view ContextMenu; list-view synthetic items stay readOnly (T-49-09)
 - [Phase 49-03]: currentFolderId for SharedMoveDialog derived from breadcrumbs last entry (not separate state)
 - [Phase 49-03]: SharedMoveDialog lazy-loads subtree via enumerateSharedSubtree in useEffect gated on open && shareId
+- [Phase 49-04]: batchMoveItemsHandler clearSelection called after runWrite completes (full success only)
+- [Phase 49-04]: SharedFolderRow drop uses row's id/ipnsName as authoritative dest (ignores payload parentId per T-49-12)
+- [Phase 49-04]: SelectionActionBar onDelete/onDownload are no-op stubs (REQ-6 scopes to move parity only)
