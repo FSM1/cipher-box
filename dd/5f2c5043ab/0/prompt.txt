@@ -110,3 +110,7 @@ ok please run verify-phase on phases 47-49
 ---
 
 all 4 please - all uat gates can be marked as green.
+
+---
+
+ok I think it makes sense to handle the 'bookeeping' for the other phases that `need review` or are `awaiting verify`

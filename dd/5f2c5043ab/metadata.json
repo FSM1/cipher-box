@@ -3,10 +3,8 @@
   "checkpoint_id": "dd5f2c5043ab",
   "strategy": "manual-commit",
   "branch": "docs/verify-phases-47-49",
-  "checkpoints_count": 1,
-  "files_touched": [
-    "Cargo.lock"
-  ],
+  "checkpoints_count": 0,
+  "files_touched": null,
   "sessions": [
     {
       "metadata": "/dd/5f2c5043ab/0/metadata.json",
@@ -16,10 +14,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 68513,
-    "cache_creation_tokens": 2691805,
-    "cache_read_tokens": 136952816,
-    "output_tokens": 682350,
-    "api_call_count": 519
+    "input_tokens": 294,
+    "cache_creation_tokens": 2057,
+    "cache_read_tokens": 260912,
+    "output_tokens": 2711,
+    "api_call_count": 2
   }
 }
