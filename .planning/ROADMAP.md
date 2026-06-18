@@ -2,13 +2,15 @@
 
 ## Overview
 
-CipherBox v1.1 transforms the platform from "IPFS as a storage backend with database fallbacks" to "IPFS-native with the database serving only auth." The milestone establishes performance baselines before making changes, replaces the unreliable delegated-ipfs.dev dependency with self-hosted IPNS resolution, migrates rootFolderKey to an IPFS vault blob (achieving true zero-knowledge server), adds BYO-IPFS node support for data sovereignty, and completes performance baselines with client-side instrumentation and load testing after all features are stable.
+CipherBox v1.1 transformed the platform from "IPFS as a storage backend with database fallbacks" to "IPFS-native with the database serving only auth." It established performance baselines before making changes, replaced the unreliable delegated-ipfs.dev dependency with self-hosted Someguy IPNS resolution, migrated rootFolderKey to an IPFS vault blob v2 (achieving a true zero-knowledge server), added BYO-IPFS node support for data sovereignty, and completed performance baselines with client-side instrumentation and load testing.
+
+Scope expanded well beyond those original four thrusts to include a layered TypeScript + Rust SDK extraction, writable shares, FUSE write-durability and data-loss hardening, the production Phala TEE migration, per-package release engineering, and SDK folder-state/sharing consolidation. **Completed 2026-06-18 — 34 phases (18–49), 151 plans.**
 
 ## Milestones
 
 - **v0.1 Staging MVP** - Phases 1-10 (shipped 2026-02-11)
 - **v1.0 Production** - Phases 11-17.1 (shipped 2026-03-05)
-- **v1.1 IPFS Infrastructure** - Phases 18-22 (in progress)
+- **v1.1 IPFS Infrastructure** - Phases 18-49 (completed 2026-06-18)
 
 ## Phases
 
@@ -21,22 +23,38 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 18: Performance Instrumentation** - Server-side Prometheus histograms and Kubo metrics scraping to establish baselines before any architectural changes (completed 2026-03-07)
 - [x] **Phase 19: IPNS Resolution Improvement** - Replace delegated-ipfs.dev with self-hosted Someguy sidecar for reliable IPNS routing, add latency histograms for resolve/publish operations (completed 2026-03-07)
+- [x] **Phase 19.1: Extract Core Crypto SDK as Shared Package** - Split the web app's crypto/file logic into a five-package layered SDK (@cipherbox/crypto, core, api-client, sdk-core, sdk) (INSERTED) (completed 2026-03-21)
 - [x] **Phase 19.2: IPFS Upload Performance Optimization** - Optimize Kubo pinning path (concurrent pins, worker tuning, pin batching) to reduce upload latency (INSERTED) (completed 2026-03-23)
-- [x] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material (gap closure in progress) (completed 2026-03-24)
-- [x] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing (gap closure in progress) (completed 2026-03-25)
+- [x] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material (completed 2026-03-24)
+- [x] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing (completed 2026-03-25)
 - [x] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, Vitest-based load testing, and capacity documentation (completed 2026-03-25)
 - [x] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (completed 2026-03-24)
 - [x] **Phase 24: Bug Fixes & Test Infrastructure** - Fix known bugs (bin IPNS 404, device registry format error) and strengthen test infrastructure (headless load tests, vault recovery E2E, load test auth refresh) (completed 2026-03-25)
 - [x] **Phase 25: Desktop Enhancements** - Desktop auto-update mechanism and TEE file enrollment for new files (completed 2026-03-25)
 - [x] **Phase 26: Observability & UX Tuning** - Grafana alerting thresholds from existing baselines and timeout tuning for sub-2s UX (completed 2026-03-26)
+- [x] **Phase 27: Writable Shares (PoC)** - Write-permission shares with ECIES-wrapped IPNS key delivery, permission toggle UI, and multi-writer conflict retry (completed 2026-03-27)
 - [x] **Phase 28: Code Hygiene & Logging** - Structured logger wrapper, replace 124 console.\* calls, fix silenced unpin failures, clean any casts, archive legacy POC (completed 2026-03-28)
 - [x] **Phase 29: Infrastructure Hardening** - Wire up IPNS unenrollment on deletion, test login endpoint hardening, IPFS node access control (completed 2026-03-28)
-- [x] **Phase 30: Web App Observability** - Error tracking service, error boundaries, client-side telemetry (completed 2026-03-28)
+- [x] **Phase 30: Web App Observability** - Error tracking service (Grafana Faro), error boundaries, client-side telemetry (completed 2026-03-28)
 - [x] **Phase 31: Structural Decomposition** - Split monolithic files (useSharedNavigation, FileBrowser, folder.service) into focused modules (completed 2026-03-28)
 - [x] **Phase 32: FUSE Async FilePointer Resolution** - Channel-based async resolution to prevent Finder disconnects from blocking FUSE thread (completed 2026-03-28)
 - [x] **Phase 33: Windows Async FilePointer Resolution** - Port Phase 32's channel-based async FilePointer resolution to the WinFsp backend (completed 2026-03-28)
 - [x] **Phase 34: E2E Test Expansion & Staging Baselines** - Streaming playback, media preview, batch download, and shared teardown E2E tests; BYO-IPFS load test and Faro metrics baselines on staging (completed 2026-03-29)
 - [x] **Phase 35: Phala Testnet TEE Migration** - Replace staging TEE simulator with real Phala testnet CVM deployment, validate hardware-backed key derivation and IPNS republishing end-to-end (completed 2026-03-29)
+- [x] **Phase 36: Inline Upload Progress** - Replace the floating upload modal with per-file inline progress rows in the file list (completed 2026-03-30)
+- [x] **Phase 37: Parallel Batch Upload Pipeline** - Parallel encrypt+pin pipeline with a single folder IPNS publish and Web Worker encryption offload (completed 2026-03-30)
+- [x] **Phase 38: Retire Deprecated Web Services** - Migrate all callers from folder.service.ts/bin.service.ts to @cipherbox/sdk and delete them (-2,030 LOC) (completed 2026-03-31)
+- [x] **Phase 39: User-Configurable Vault Parameters** - End-user vault settings (recycle-bin retention, delete behavior, versioning) stored encrypted in vault metadata (completed 2026-04-01)
+- [x] **Phase 40: Desktop Vault Settings Integration** - Propagate user-configurable vault settings to the desktop Rust SDK and FUSE layer (completed 2026-03-31)
+- [x] **Phase 41: Package and App Versioning and Release Cycles** - Per-package semver driven by PR-time conventional-commit analysis, with date-based staging tags (completed 2026-04-01)
+- [x] **Phase 42: API Unpin Integrity** - Ownership-guarded unpin with cross-user CID reference counting and a transactional pending-unpins outbox (completed 2026-06-13)
+- [x] **Phase 43: FUSE Write Durability** - fsync'd ciphertext write journal with crash-recovery replay; fixes silent release() data loss and mkdir orphans (completed 2026-06-14)
+- [x] **Phase 44: IPNS Conflict Handling** - Three-way merge (publishWithCas) for concurrent IPNS writes; loser-becomes-version for file conflicts (completed 2026-06-14)
+- [x] **Phase 45: Desktop FUSE Write-Durability Cleanup** - Journal hygiene refactor (shared builders, typed resolve outcome) plus six crash-recovery safety-net tests (completed 2026-06-15)
+- [x] **Phase 46: Desktop FUSE Data-Loss Bugs + Replay Hardening** - Close three data-loss bugs and add Linux stale-mount auto-recovery + replay hardening (completed 2026-06-15)
+- [x] **Phase 47: SDK Folder-State and Publish-Path Consolidation** - Single SDK-owned folder state and a unified file/folder CAS-retry publish helper (completed 2026-06-17)
+- [x] **Phase 48: SDK Self-Bootstrap Regression Fix and Shared-Folder/Metadata Consolidation** - Sequence-based reconcile, single-ownership shared writes, and ECIES-encrypted shared item names (completed 2026-06-17)
+- [x] **Phase 49: Shared-Folder Move (Intra-Share) and useFolderNavigation Unwrap Consolidation** - Write-recipients move files between subfolders with FileMetadata re-encryption (completed 2026-06-18)
 
 ## Phase Details
 

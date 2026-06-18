@@ -2,6 +2,27 @@
 
 > Pending ideas and deferred work. Consolidated 2026-06-12 from the former `.planning/DEFERRED.md` and `.planning/REFACTORING.md` (gsd-health W019 remediation).
 
+## v1.1 Tech Debt Close-out (2026-06-18)
+
+A full tech-debt sweep of milestone v1.1 (phases 18–49) — including the phase 42/43 `REVIEW.md`
+code reviews and in-code TODOs — was consolidated and verified against current code. See the
+ledger at [`reports/TECH_DEBT-v1.1.md`](reports/TECH_DEBT-v1.1.md) (companion to
+[`reports/MILESTONE_SUMMARY-v1.1.md`](reports/MILESTONE_SUMMARY-v1.1.md)).
+
+Net-new, verified-open items promoted to `.planning/todos/pending/` (not previously tracked):
+
+- `2026-06-18-phase42-unpin-integrity-review-open-findings.md` — **high**; incl. WR-01 advisory-lock `INT_MIN` overflow (permanent undeletability) and WR-03 stale-outbox re-pin race (data loss), plus 10 more WR/IN items.
+- `2026-06-18-fuse-journal-growth-and-replay-timeout.md` — **high**; WR-06 unbounded journal + full ciphertext in JSON (no GC/purge), WR-07 replay has no network timeout, + IN-03/04/05.
+- `2026-06-18-web-logger-redaction-and-faro-transport-unwired.md` — **med**; logger `redact()` never implemented, `registerFaroTransport` defined but never called (warn/error not reaching Faro).
+- `2026-06-18-unenroll-skips-unloaded-subtrees.md` — **med**; `collectSubtreeIpnsNames` only walks loaded folders.
+- `2026-06-18-gsd-verification-gaps-phases-18-31-32.md` — **med**; phases 18/31/32 still lack `VERIFICATION.md` (PERF-01..04 orphaned).
+
+Verified resolved during the sweep (so they are not re-filed): phase 43 critical findings CR-01..CR-08
+(fixed 2026-06-14) and most of its warnings (closed by phases 45/46); phase 42 WR-04 (Counter is
+acceptable). Already-tracked v1.1 deferrals (sharing, desktop signing, upload-pipeline P37, Kubo ACL,
+`uint8ToBase64` Tier 3.3, etc.) remain in the inventory below and are referenced, not duplicated, by
+the ledger.
+
 ## Status Reconciliation (2026-06-13)
 
 The inventories below are a verbatim snapshot dated 2026-03-31 and predate phases 36-44. They were reviewed against the current codebase on 2026-06-13. The original tables are preserved unchanged for the historical record; the current status of changed items is authoritative here.
@@ -29,7 +50,7 @@ These were genuinely open and tracked nowhere actionable (only in stale review d
 
 ### Still open, remaining in this backlog
 
-All other items below remain open and correctly tracked here: the deferred feature set (sharing, desktop UI, MFA, performance, etc.), the `uint8ToBase64` dedup (Tier 3.3 — confirmed still 4-5 copies, no shared util), and Tier-3 cleanups 3.1, 3.2, 3.4, 3.5, 3.7, 3.8, 3.10, 3.11, 3.12, 3.13, 3.14.
+All other items below remain open and correctly tracked here: the deferred feature set (sharing, desktop UI, MFA, performance, etc.), the `uint8ToBase64` dedup (Tier 3.3 — confirmed still 3 copies, no shared util), and Tier-3 cleanups 3.1, 3.2, 3.4, 3.5, 3.7, 3.8, 3.10, 3.11, 3.12, 3.13, 3.14.
 
 ## Deferred Items Inventory
 
