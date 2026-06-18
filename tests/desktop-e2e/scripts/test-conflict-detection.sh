@@ -81,47 +81,22 @@ echo "  Root IPNS: $ROOT_IPNS"
 echo ""
 
 # ---- Helper: bump_server_sequence ----
-# Bumps the server-side sequence number for a given IPNS name by publishing
-# without expectedSequenceNumber (backward-compatible unconditional publish).
-# This simulates another device publishing to the same folder.
+# Advances the vault's root IPNS sequence with a REAL, validly-signed record.
+# The server is signature-gated (it rejects records whose Ed25519 SignatureV2
+# does not verify against the name's key), so a dummy unsigned record can no
+# longer fake a bump. bump-ipns-sequence.mjs derives the deterministic vault IPNS
+# keypair and republishes the current root metadata UNCHANGED at sequence+1 --
+# exactly what a legitimate second device does -- making the desktop's cached
+# sequence stale.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bump_server_sequence() {
-  local ipns_name="$1"
+  local ipns_name="$1"  # informational; the helper bumps the vault root via /vault
 
-  # 1. Resolve current CID for this IPNS name (for the metadataCid field)
-  local resolve_resp
-  resolve_resp=$(curl -fsS --connect-timeout 5 --max-time 30 \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
-    "$API_URL/ipns/resolve?ipnsName=$ipns_name" 2>&1) || true
-  local current_cid
-  current_cid=$(echo "$resolve_resp" | jq -r '.cid // .value // empty')
-
-  if [ -z "$current_cid" ] || [ "$current_cid" = "null" ]; then
-    echo "  WARNING: Could not resolve CID for $ipns_name, using placeholder"
-    current_cid="bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
-  fi
-
-  # 2. Publish with a dummy record and no expectedSequenceNumber.
-  #    This unconditionally increments the server-side sequence number,
-  #    making the desktop's cached sequence stale.
-  local dummy_record
-  dummy_record=$(echo -n "dummy-conflict-test-record" | base64)
-
-  local publish_resp
-  publish_resp=$(curl -fsS --connect-timeout 5 --max-time 30 -X POST \
-    "$API_URL/ipns/publish" \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"ipnsName\":\"$ipns_name\",\"record\":\"$dummy_record\",\"metadataCid\":\"$current_cid\"}" 2>&1) || true
-
-  local success
-  success=$(echo "$publish_resp" | jq -r '.success // empty')
-  local new_seq
-  new_seq=$(echo "$publish_resp" | jq -r '.sequenceNumber // empty')
-
-  if [ "$success" = "true" ]; then
-    echo "  Server sequence bumped to $new_seq for $ipns_name"
+  if TEST_SECRET="$SECRET" node "$SCRIPT_DIR/bump-ipns-sequence.mjs" \
+    --api-url "$API_URL" --email "$TEST_EMAIL"; then
+    : # bump succeeded; sequence advanced for $ipns_name
   else
-    echo "  WARNING: Failed to bump server sequence: $publish_resp"
+    echo "  WARNING: Failed to bump server sequence for $ipns_name"
   fi
 }
 
