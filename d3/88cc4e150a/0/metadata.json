@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "d388cc4e150a",
+  "session_id": "e71e5adc-e2bd-4705-825e-ada21d580522",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T22:57:14.352767Z",
+  "branch": "docs/large-file-refactor-todo",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-19-large-file-refactor-candidates.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "3e742c16883e",
+  "token_usage": {
+    "input_tokens": 10159,
+    "cache_creation_tokens": 154520,
+    "cache_read_tokens": 2861891,
+    "output_tokens": 36924,
+    "api_call_count": 23
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T22:56:40.064586Z",
+    "agent_lines": 261,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 261,
+    "total_lines_changed": 261,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
