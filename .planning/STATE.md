@@ -136,7 +136,7 @@ Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolida
 | Phase 41 P04    | 2min     | 2 tasks | 2 files   |
 | Phase 41 P05    | 3min     | 2 tasks | 3 files   |
 | Phase 45 P01    | 8min     | 2 tasks | 2 files   |
-| Phase 45-desktop-fuse-write-durability-cleanup P45-02 | 8min | 1 tasks | 3 files |
+| Phase 45 P02    | 8min     | 1 tasks | 3 files   |
 | Phase 45 P03 | 7min | 2 tasks | 4 files |
 | Phase 45 P04 | 8min | 1 tasks | 2 files |
 | Phase 45 P05 | 12 | 2 tasks | 1 files |
@@ -147,10 +147,10 @@ Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolida
 | Phase 48 P05 | 8min | 3 tasks | 145 files |
 | Phase 48 P06 | 18min | 3 tasks | 5 files |
 | Phase 49 P01 | 13min | 2 tasks | 5 files |
-| Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P02 | 15min | 1 tasks | 1 files |
-| Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P03 | 11min | 4 tasks | 7 files |
-| Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P04 | 26min | 3 tasks | 5 files |
-| Phase 49-shared-folder-move-intra-share-and-usefoldernavigation-unwra P05 | 12min | 2 tasks | 2 files |
+| Phase 49 P02 | 15min | 1 tasks | 1 files |
+| Phase 49 P03 | 11min | 4 tasks | 7 files |
+| Phase 49 P04 | 26min | 3 tasks | 5 files |
+| Phase 49 P05 | 12min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
