@@ -222,7 +222,9 @@ export class SharedFileBrowserPage {
     const names: string[] = [];
     for (let i = 0; i < count; i++) {
       const nameText = await rows.nth(i).locator('.file-name').textContent();
-      if (nameText) names.push(nameText.trim());
+      // Folder rows render a decorative trailing "/" (SharedFolderRow). Strip it so
+      // callers get the semantic name and can use exact `toContain(name)` assertions.
+      if (nameText) names.push(nameText.trim().replace(/\/$/, ''));
     }
     return names;
   }

@@ -146,7 +146,12 @@ export function SharedFileBrowser() {
     () => folderChildren.filter((c) => selectedIds.has(c.id)),
     [folderChildren, selectedIds]
   );
-  const multiSelectActive = selectedIds.size > 0;
+  // The batch action bar only appears for a genuine multi-selection (>1), mirroring
+  // the private vault (FileBrowser :205 `selectedIds.size > 1`). Gating on >0 would
+  // make a plain single click — which is also the first click of a double-click —
+  // pop the bar in above the list, shifting the rows down so the second click of
+  // the double-click misses the row and folder navigation never fires.
+  const multiSelectActive = selectedIds.size > 1;
 
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
