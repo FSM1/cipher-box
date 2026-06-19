@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Logger } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { Job } from 'bullmq';
 import { PendingUnpin } from '../../vault/entities/pending-unpin.entity';
 import { PinnedCid } from '../../vault/entities/pinned-cid.entity';
@@ -43,8 +44,35 @@ describe('PendingUnpinProcessor', () => {
     }),
   };
 
+  // WR-01: the drain now runs each row's recheck + unpin + delete inside a
+  // transaction guarded by pg_advisory_xact_lock. The manager-scoped repos are
+  // routed to the same mocks the existing assertions reference.
+  const mockManagerQuery = jest.fn().mockResolvedValue([]);
+  const mockManager = {
+    query: mockManagerQuery,
+    getRepository: jest.fn((Entity: unknown) => {
+      if (Entity === PinnedCid) return mockPinnedCidRepository;
+      if (Entity === PendingUnpin) return mockPendingUnpinRepository;
+      return {};
+    }),
+  };
+  const mockDataSource = {
+    transaction: jest.fn(async (cb: (manager: unknown) => Promise<unknown>) => cb(mockManager)),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
+
+    // Restore transaction/manager mock implementations cleared by clearAllMocks.
+    mockManagerQuery.mockResolvedValue([]);
+    mockDataSource.transaction.mockImplementation(
+      async (cb: (manager: unknown) => Promise<unknown>) => cb(mockManager)
+    );
+    mockManager.getRepository.mockImplementation((Entity: unknown) => {
+      if (Entity === PinnedCid) return mockPinnedCidRepository;
+      if (Entity === PendingUnpin) return mockPendingUnpinRepository;
+      return {};
+    });
 
     // Default: CID has no active pins — drain proceeds normally.
     // WR-03: individual tests override this to simulate a re-pinned CID.
@@ -72,6 +100,10 @@ describe('PendingUnpinProcessor', () => {
         {
           provide: ConfigService,
           useValue: mockConfigService,
+        },
+        {
+          provide: DataSource,
+          useValue: mockDataSource,
         },
       ],
     }).compile();
@@ -255,6 +287,43 @@ describe('PendingUnpinProcessor', () => {
       expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
       // Stale outbox row MUST still be cleaned up
       expect(mockPendingUnpinRepository.delete).toHaveBeenCalledWith({ cid: row.cid });
+    });
+  });
+
+  // ---- WR-01: drain recheck + unpin are serialized under the advisory lock ----
+  describe('drain: serializes recheck + unpin under advisory lock (WR-01)', () => {
+    it('takes pg_advisory_xact_lock for the CID before re-checking refcount and unpinning', async () => {
+      const row = { id: 'uuid-wr01', cid: 'cidLocked', createdAt: new Date() } as PendingUnpin;
+      mockPendingUnpinRepository.find.mockResolvedValue([row]);
+      mockPinnedCidRepository.count.mockResolvedValue(0);
+      mockIpfsProvider.unpinFile.mockResolvedValue(undefined);
+      mockPendingUnpinRepository.delete.mockResolvedValue({ affected: 1 });
+
+      const callOrder: string[] = [];
+      mockManagerQuery.mockImplementation((sql: string) => {
+        if (sql.includes('pg_advisory_xact_lock')) callOrder.push('advisory_lock');
+        return Promise.resolve([]);
+      });
+      mockPinnedCidRepository.count.mockImplementation(() => {
+        callOrder.push('refcount_check');
+        return Promise.resolve(0);
+      });
+      mockIpfsProvider.unpinFile.mockImplementation(() => {
+        callOrder.push('unpin');
+        return Promise.resolve(undefined);
+      });
+
+      await processor.process(makeJob('drain-pending-unpins'));
+
+      // The whole recheck+unpin must run inside a transaction...
+      expect(mockDataSource.transaction).toHaveBeenCalledTimes(1);
+      // ...and the advisory lock must be acquired BEFORE the refcount check and unpin.
+      expect(callOrder).toEqual(['advisory_lock', 'refcount_check', 'unpin']);
+      // The lock query targets pg_advisory_xact_lock(hashtext(...)::bigint), matching guardedUnpin.
+      const lockSql = mockManagerQuery.mock.calls.find(([sql]: [string]) =>
+        sql.includes('pg_advisory_xact_lock')
+      );
+      expect(lockSql?.[0]).toMatch(/pg_advisory_xact_lock\(hashtext\(\$1\)::bigint\)/);
     });
   });
 });

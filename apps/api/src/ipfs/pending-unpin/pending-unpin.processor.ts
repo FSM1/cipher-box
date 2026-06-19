@@ -2,7 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Job } from 'bullmq';
 import { PendingUnpin } from '../../vault/entities/pending-unpin.entity';
 import { PinnedCid } from '../../vault/entities/pinned-cid.entity';
@@ -27,7 +27,8 @@ export class PendingUnpinProcessor extends WorkerHost {
     @Inject(IPFS_PROVIDER)
     private readonly ipfsProvider: IpfsProvider,
     private readonly metricsService: MetricsService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly dataSource: DataSource
   ) {
     super();
     this.apiUrl = this.configService.get<string>('IPFS_LOCAL_API_URL', 'http://localhost:5001');
@@ -52,24 +53,7 @@ export class PendingUnpinProcessor extends WorkerHost {
 
     for (const row of rows) {
       try {
-        // D-02 / WR-03: Re-check refcount before unpinning. A concurrent re-upload
-        // or pin-migration may have re-pinned this CID while it sat in the outbox.
-        // Unpinning a live pin would cause Kubo GC → data loss. Skip the physical
-        // unpin but still delete the stale outbox row so it is not retried.
-        const refs = await this.pinnedCidRepository.count({ where: { cid: row.cid } });
-        if (refs > 0) {
-          await this.pendingUnpinRepository.delete({ cid: row.cid });
-          this.logger.log(
-            `Drain: skipped unpin for cid=${row.cid} — CID is re-pinned (refs=${refs}); stale outbox row discarded`
-          );
-          continue;
-        }
-
-        // D-05: Call through provider so "not pinned" is treated as success
-        // (LocalProvider.unpinFile swallows "not pinned" at local.provider.ts:94)
-        await this.ipfsProvider.unpinFile(row.cid);
-        await this.pendingUnpinRepository.delete({ cid: row.cid });
-        this.logger.log(`Drained cid=${row.cid}`);
+        await this.drainRow(row.cid);
       } catch (err) {
         // Kubo failure: leave row for next run; do not abort the batch
         const message = err instanceof Error ? err.message : String(err);
@@ -80,6 +64,50 @@ export class PendingUnpinProcessor extends WorkerHost {
     // D-05: Publish outbox depth gauge after the drain pass
     const remaining = await this.pendingUnpinRepository.count();
     this.metricsService.pendingUnpinsGauge.set(remaining);
+  }
+
+  /**
+   * Process a single outbox row under the same per-CID advisory lock that
+   * guardedUnpin uses (vault.service.ts), serializing the refcount re-check +
+   * physical unpin against concurrent recordPin/guardedUnpin for the same CID.
+   *
+   * WR-01: Previously the count + unpinFile ran in autocommit with no lock — a
+   * TOCTOU window where a concurrent re-upload could insert a fresh pinned_cids
+   * row after the drain read count=0, so the drain would physically unpin a
+   * now-live CID → Kubo GC → data loss. Holding pg_advisory_xact_lock(hashtext(cid))
+   * around the recheck closes that window.
+   *
+   * The physical unpin is performed INSIDE the lock so a racing guardedUnpin
+   * cannot insert a pin between our recheck and the Kubo call. The unpin is
+   * idempotent (LocalProvider swallows "not pinned"), so holding the lock across
+   * the network call is acceptable for the drain's low-frequency, batched path.
+   */
+  private async drainRow(cid: string): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      // Advisory xact lock — MUST be the first transactional statement, mirroring
+      // guardedUnpin (D-04). Released automatically when the transaction ends.
+      await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [cid]);
+
+      // D-02 / WR-01: Re-check refcount UNDER the lock before unpinning. A concurrent
+      // re-upload or pin-migration may have re-pinned this CID while it sat in the
+      // outbox. Unpinning a live pin would cause Kubo GC → data loss. Skip the
+      // physical unpin but still delete the stale outbox row so it is not retried.
+      const refs = await manager.getRepository(PinnedCid).count({ where: { cid } });
+      if (refs > 0) {
+        await manager.getRepository(PendingUnpin).delete({ cid });
+        this.logger.log(
+          `Drain: skipped unpin for cid=${cid} — CID is re-pinned (refs=${refs}); stale outbox row discarded`
+        );
+        return;
+      }
+
+      // D-05: Call through provider so "not pinned" is treated as success
+      // (LocalProvider.unpinFile swallows "not pinned" at local.provider.ts:94).
+      // Inside the lock so a racing guardedUnpin cannot re-pin between recheck and unpin.
+      await this.ipfsProvider.unpinFile(cid);
+      await manager.getRepository(PendingUnpin).delete({ cid });
+      this.logger.log(`Drained cid=${cid}`);
+    });
   }
 
   private async runDriftReport(): Promise<void> {
