@@ -480,6 +480,145 @@ describe('IpnsService', () => {
       expect(savedEntity.updatedAt.getTime()).toBeGreaterThanOrEqual(beforeTest.getTime());
       expect(savedEntity.updatedAt.getTime()).toBeLessThanOrEqual(afterTest.getTime());
     });
+
+    // S1: embedded-vs-DTO CID validation (D-01)
+    it('should throw BadRequestException (400) when embedded CID does not match metadataCid', async () => {
+      // No existing entry — first-publish path. mockFolderEntity has signedRecord: null so
+      // the anti-rollback block does NOT run; S1 calls parseIpnsRecord once for the check.
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      const differentCid = 'bafkreidifferentcidthatdoesnotmatchthedto123456789abcdef';
+      // Override the global default so the embedded CID differs from testMetadataCid
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${differentCid}`,
+        sequence: 1n,
+      });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+          expectedSequenceNumber: '0',
+        })
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    // S1: offset-aware sequence mismatch on non-first-publish (D-01)
+    it('should throw BadRequestException (400) when embedded sequence mismatches expectedSequenceNumber on update', async () => {
+      // Existing entry with signedRecord so anti-rollback parses incoming+stored.
+      // mockFolderEntity.sequenceNumber = '5', expectedSequenceNumber = '5'.
+      // Non-first publish convention: embedded must be expectedSeq + 1n = 6n.
+      // We submit embedded sequence 7n → mismatch → 400.
+      const existingWithRecord = {
+        ...mockFolderEntity,
+        signedRecord: Buffer.from('stored-record-bytes'),
+        sequenceNumber: '5',
+      };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingWithRecord);
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...existingWithRecord, sequenceNumber: '6' });
+      // Promise.all: incoming parsed first, stored parsed second
+      mockParseIpnsRecord
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 7n }) // incoming: seq 7 (should be 6)
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 5n }); // stored
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+          expectedSequenceNumber: '5',
+        })
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    // S1: first-publish tolerance — embedded seq 0n accepted when expectedSequenceNumber='0'
+    it('should accept embedded sequence 0n on first publish (tolerance for pre-increment)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      // embedded seq 0n with expectedSequenceNumber '0' → diff is 0n → accepted
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 0n,
+      });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+          expectedSequenceNumber: '0',
+        })
+      ).resolves.toBeDefined();
+    });
+
+    // S1: first-publish tolerance — embedded seq 1n also accepted
+    it('should accept embedded sequence 1n on first publish (pre-increment convention)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      // embedded seq 1n with expectedSequenceNumber '0' → diff is 1n → accepted
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 1n,
+      });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+          expectedSequenceNumber: '0',
+        })
+      ).resolves.toBeDefined();
+    });
+
+    // S1: valid pass-through — embedded CID matches and seq is expectedSeq+1 (non-first)
+    it('should pass through when embedded CID and sequence both match DTO on update', async () => {
+      const existingWithRecord = {
+        ...mockFolderEntity,
+        signedRecord: Buffer.from('stored-record-bytes'),
+        sequenceNumber: '5',
+      };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingWithRecord);
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...existingWithRecord, sequenceNumber: '6' });
+      // CID matches; embedded seq = expectedSeq + 1n = 6n → passes S1
+      mockParseIpnsRecord
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 6n }) // incoming
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 5n }); // stored
+
+      const result = await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+        expectedSequenceNumber: '5',
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
+    });
+
+    // S1 regression guard: the anti-rollback 409 must still fire (not replaced by S1)
+    it('should throw ConflictException (409) for anti-rollback sequence regression (regression guard)', async () => {
+      const stored = {
+        ...mockFolderEntity,
+        signedRecord: Buffer.from('stored-record-bytes'),
+        sequenceNumber: '9',
+      };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(stored);
+      // incoming.sequence (3n) < stored.sequence (9n) → anti-rollback fires before S1
+      mockParseIpnsRecord
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 3n }) // incoming
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 9n }); // stored
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
   });
 
   describe('resolveRecord', () => {
