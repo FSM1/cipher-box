@@ -718,17 +718,19 @@ Step 2.6: This phase is code-only changes (no new runtimes, services, or CLI too
 
 **If this table is populated:** Assumptions A1–A3 are low-risk and have mitigations stated inline. No user confirmation required before execution.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`block_with_timeout` timeout for content_ops.rs**
    - What we know: operations.rs has private NETWORK_TIMEOUT = 3s; lib.rs/runtime.rs has 10s. Both exist for different reasons (sync filesystem callback vs general async).
    - What's unclear: Which timeout the shared `fetch_and_decrypt_file_content` in content_ops.rs should use.
    - Recommendation: Use `crate::block_with_timeout` (10s from runtime.rs) to match the lib.rs-level usage; if the fuse-feature `operations.rs` sync path needs 3s, leave `fetch_and_decrypt_file_content` in `operations.rs` rather than pulling to content_ops.rs (adjust scope accordingly). Executor should verify current behavior before deciding.
+   - **RESOLVED:** Executor verifies the timeout intent at runtime via the DEVIATION-CHECK step in Plan 55-03 Task 1. Default: content_ops.rs uses crate::block_with_timeout (10s, from runtime.rs). If the fuse sync path requires the 3s NETWORK_TIMEOUT, fetch_and_decrypt stays in operations.rs and content_ops is narrowed to the truly-identical helpers.
 
 2. **`next_file_publish_sequence` has no `#[cfg(...)]` gate**
    - What we know: The function is ungated; its `#[cfg(test)]` test mod uses `super::` directly.
    - What's unclear: Whether publish.rs should declare it ungated too, or gate it `any(fuse,winfsp)`.
    - Recommendation: Keep ungated (it's a pure utility fn with no platform dependency). The test in lib.rs's `mod tests` (ungated) can move to publish.rs's own `mod tests` (ungated). No issue.
+   - **RESOLVED:** publish.rs declares next_file_publish_sequence ungated, matching its current ungated form in lib.rs (pure utility fn, no platform dependency); its #[cfg(test)] mod moves with it.
 
 ## Sources
 
