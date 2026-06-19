@@ -1,0 +1,194 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b05ee7305656",
+  "session_id": "ca575d75-db2f-4c2d-8294-09d1af4240cb",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T21:38:29.60061Z",
+  "branch": "feat/crypto-signature-secret-leak-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "e20221d0afdb",
+  "token_usage": {
+    "input_tokens": 49254,
+    "cache_creation_tokens": 1166352,
+    "cache_read_tokens": 43230660,
+    "output_tokens": 298269,
+    "api_call_count": 163
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Lz5h1zNHMx7SqG233yqYKN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e20221d0afdb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 42,
+        "end": 43,
+        "entry_ids": [
+          "ee10835c-b9e7-42df-8e82-7648bbee013c"
+        ],
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:discuss-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01MVTunGUz94VxUj4msoYPsE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e20221d0afdb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 625,
+        "end": 626,
+        "entry_ids": [
+          "63acba58-0d06-4d20-a29a-32d54cea19ec"
+        ],
+        "tool_use_id": "toolu_01MVTunGUz94VxUj4msoYPsE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01MVTunGUz94VxUj4msoYPsE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:verify-work",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01ByiBknFKy13fpgCWLGK5kw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e20221d0afdb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 681,
+        "end": 682,
+        "entry_ids": [
+          "fc53b1a7-4d6c-4e70-93d4-bcf3f356f047"
+        ],
+        "tool_use_id": "toolu_01ByiBknFKy13fpgCWLGK5kw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01ByiBknFKy13fpgCWLGK5kw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PpumQQM2AYJrC3um2SqPvT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e20221d0afdb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 719,
+        "end": 720,
+        "entry_ids": [
+          "261a523d-6718-44ae-974d-a87575075fee"
+        ],
+        "tool_use_id": "toolu_01PpumQQM2AYJrC3um2SqPvT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PpumQQM2AYJrC3um2SqPvT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:validate-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015bMYgLLFUznv2NzbevUSN9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e20221d0afdb",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 776,
+        "end": 777,
+        "entry_ids": [
+          "164d623c-cd8c-458e-9a89-6596725ed67e"
+        ],
+        "tool_use_id": "toolu_015bMYgLLFUznv2NzbevUSN9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015bMYgLLFUznv2NzbevUSN9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 22,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
