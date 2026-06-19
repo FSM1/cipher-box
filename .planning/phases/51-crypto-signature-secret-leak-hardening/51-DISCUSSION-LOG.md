@@ -65,7 +65,16 @@
 - Phase sequencing (S1 → S2 → S3, #15 in parallel) suggested in CONTEXT.md; planner may refine.
 - Exact telemetry/metric shape for the D-03 missing-signature path left to the planner/executor.
 
+## Post-Discussion Scope Change
+
+- **Todo #15 (web logger redaction + Faro transport) removed from Phase 51** at the user's direction
+  after the four forks were locked: end-user logging/monitoring is not being implemented yet, and the
+  redaction interceptor has marginal value without a remote transport (its acceptance criteria
+  require Faro). #15 re-defers to a future observability phase. ROADMAP.md, REQUIREMENTS.md (HARD-02),
+  and CONTEXT.md updated to match. Phase 51 is now purely the IPNS crypto-signature S1/S2/S3 work.
+
 ## Deferred Ideas
 
+- Todo #15 — web logger redaction interceptor + Faro transport (see Post-Discussion Scope Change).
 - Full CRDT conflict model for IPNS — tracked in the CRDT-inbox research todo.
 - Require-signed (fail-closed on missing signature) — deferred until all records re-published with signatures.

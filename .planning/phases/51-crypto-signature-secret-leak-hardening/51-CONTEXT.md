@@ -2,17 +2,19 @@
 
 **Gathered:** 2026-06-19
 **Status:** Ready for planning
-**Source:** Discuss-phase. Scope is two re-verified captured todos (#5, #15) under requirement
-HARD-02. Four implementation forks discussed and locked; the rest are pre-answered by the todos.
+**Source:** Discuss-phase. Scope is one re-verified captured todo (#5) under requirement HARD-02.
+Four implementation forks discussed and locked; the rest are pre-answered by the todo. Todo #15
+(web logger redaction + Faro transport) was **removed from this phase** post-discussion — see
+Deferred Ideas.
 
 <domain>
 
 ## Phase Boundary
 
-Close the three deferred IPNS signed-record findings from the PR #448 security review plus the
-unwired web logging redaction/transport, under requirement **HARD-02**. The server stays a
-zero-knowledge relay and the **DB remains the authoritative CID source** — these are defense-in-depth
-/ correctness hardening (all Medium severity), not High-severity data loss.
+Close the three deferred IPNS signed-record findings (S1/S2/S3) from the PR #448 security review,
+under requirement **HARD-02**. The server stays a zero-knowledge relay and the **DB remains the
+authoritative CID source** — these are defense-in-depth / correctness hardening (all Medium
+severity), not High-severity data loss.
 
 In scope:
 
@@ -22,13 +24,12 @@ In scope:
   Rust client; resolve callers honor `signatureVerified`.
 - **S3** — Establish + enforce a caller-owns-key zeroization convention across the TypeScript SDK
   and Rust crates (exhaustive — see D-05).
-- **#15** — Add the web logger `redact()` interceptor + `transports[]` hook and wire
-  `registerFaroTransport` (`apps/web/src/lib/logger.ts`, `apps/web/src/lib/faro.ts`, `main.tsx`).
 
-Out of scope: any broader IPNS/CRDT redesign (full CRDT deferred to the CRDT-inbox todo), the
-HARD-03..06 items (Phases 52–55), and changing the server's authoritative-CID model. S1's
-already-shipped embedded-vs-embedded anti-rollback (409) stays as-is — only the embedded-vs-DTO gap
-is open.
+Out of scope: the web logger redaction interceptor + Faro transport wiring (todo #15) — deferred
+with end-user logging/monitoring, which is not being implemented yet; any broader IPNS/CRDT redesign
+(full CRDT deferred to the CRDT-inbox todo); the HARD-03..06 items (Phases 52–55); and changing the
+server's authoritative-CID model. S1's already-shipped embedded-vs-embedded anti-rollback (409) stays
+as-is — only the embedded-vs-DTO gap is open.
 
 </domain>
 
@@ -79,28 +80,15 @@ is open.
     touched paths so the convention does not re-drift (the bounded-vs-exhaustive tradeoff was
     explicitly resolved toward exhaustive *with* a guard).
 
-### #15 — Web logger redaction + Faro transport (locked by todo)
-
-- **D-06 (#15):** Add a `transports: LogTransport[]` array to `logger.ts`, invoked on warn/error.
-- **D-07 (#15):** Add a `redact(context)` interceptor applied before any transport/console emit,
-  reusing the Faro `beforeSend` scrub field list for parity:
-  `privateKey` / `rootFolderKey` / `folderKey` / `fileKey` / `accessToken`.
-- **D-08 (#15):** Call `registerFaroTransport(logger.transports)` after `initFaro()` in `main.tsx`,
-  guarded to no-op when Faro is disabled (`VITE_FARO_URL` absent).
-- Acceptance (from todo): a warn/error log with a sensitive field is redacted in **both** console and
-  Faro, and a forced error is visible in Faro from a build with `VITE_FARO_URL` set.
-
 ### Suggested sequencing (planner may refine)
 
 S1 (server-authoritative, ~one function) → S2 (cross-cutting: TS + Rust + every resolve caller) →
-S3 (exhaustive zeroization + guard). #15 is independent of S1–S3 and can land in parallel.
+S3 (exhaustive zeroization + guard).
 
 ### Folded Todos
 
 - **[#5]** `2026-06-13-ipns-signature-storage-review-deferred.md` — S1/S2/S3 IPNS signed-record
   findings (re-verified 2026-06-19, all still open). Maps to D-01..D-05.
-- **[#15]** `2026-06-18-web-logger-redaction-and-faro-transport-unwired.md` — logger redaction +
-  Faro wiring (verified 2026-06-18). Maps to D-06..D-08.
 
 </decisions>
 
@@ -116,9 +104,7 @@ S3 (exhaustive zeroization + guard). #15 is independent of S1–S3 and can land 
   origin of S1/S2/S3.
 - `.planning/todos/2026-06-13-ipns-signature-storage-review-deferred.md` — S1/S2/S3 with current
   line numbers, caveats, and re-verification (2026-06-19). The most important ref for S1–S3.
-- `.planning/todos/2026-06-18-web-logger-redaction-and-faro-transport-unwired.md` — #15 fix +
-  acceptance.
-- `.planning/REQUIREMENTS.md` — HARD-02 (line 111).
+- `.planning/REQUIREMENTS.md` — HARD-02.
 - `.planning/ROADMAP.md` §"Phase 51" — scope checkboxes.
 
 ### IPNS / signed records (S1, S2)
@@ -136,11 +122,6 @@ S3 (exhaustive zeroization + guard). #15 is independent of S1–S3 and can land 
 - `packages/sdk-core/src/{file,folder,ipns,vault}/index.ts` — TS key-handling paths.
 - `crates/crypto/src/ecies.rs`, `crates/fuse/src/lib.rs` — Rust raw-key paths to harden.
 
-### Logging / observability (#15)
-
-- `apps/web/src/lib/logger.ts`, `apps/web/src/lib/faro.ts` (`registerFaroTransport`,
-  `beforeSend` scrub list), `apps/web/src/main.tsx`.
-
 </canonical_refs>
 
 <code_context>
@@ -151,8 +132,6 @@ S3 (exhaustive zeroization + guard). #15 is independent of S1–S3 and can land 
 
 - `parseIpnsRecord` (already imported in `ipns.service.ts:24`) — gives the embedded CID/sequence for
   the S1 D-01 comparison; no new parser needed.
-- Faro `beforeSend` scrub field list (`apps/web/src/lib/faro.ts`) — reuse verbatim for the logger
-  `redact()` interceptor so console + Faro redaction stay in parity (D-07).
 - Rust `Zeroizing` / `ZeroizeOnDrop` are already used widely in the crates — the S3 fix is closing
   the raw-`Vec<u8>` escape hatches, not introducing the pattern.
 - Existing per-fn `T-47-01` zeroize comments in the higher-level `sdk` package — model for the
@@ -189,12 +168,15 @@ S3 (exhaustive zeroization + guard). #15 is independent of S1–S3 and can land 
 
 ## Deferred Ideas
 
+- **Todo #15 — web logger redaction interceptor + Faro transport wiring**
+  (`2026-06-18-web-logger-redaction-and-faro-transport-unwired.md`). Removed from Phase 51
+  post-discussion: end-user logging/monitoring is not being implemented yet, and the redaction
+  interceptor has marginal value with no remote transport (its acceptance requires Faro). Re-defer
+  to a future observability/monitoring phase, where it gets folded alongside the Faro work.
 - Full CRDT conflict model for IPNS — already tracked in the CRDT-inbox research todo; explicitly out
   of scope here.
 - Require-signed (fail-closed on missing signature) — deferred until all records are re-published
   with signatures (see D-03 / Specifics).
-
-None other — discussion stayed within phase scope.
 
 </deferred>
 

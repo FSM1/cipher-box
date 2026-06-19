@@ -61,7 +61,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **v1.1 Hardening Block (reopened 2026-06-19):**
 
 - [x] **Phase 50: IPFS/IPNS Data-Integrity Fixes** - Resolve Phase 42 unpin-integrity data-loss findings and unenroll nested IPNS records under unloaded subtrees (completed 2026-06-19)
-- [ ] **Phase 51: Crypto-Signature & Secret-Leak Hardening** - Enforce IPNS signedRecord validation/verification and key zeroization; add web logger redaction interceptor and wire the Faro transport
+- [ ] **Phase 51: Crypto-Signature & Secret-Leak Hardening** - Enforce IPNS signedRecord validation/verification and key zeroization (web logger redaction + Faro transport deferred with end-user monitoring)
 - [ ] **Phase 52: Desktop FUSE Durability & At-Rest Safety** - Bound write-journal growth, stream large-file writes, add replay network timeouts, and scrub at-rest plaintext filenames
 - [ ] **Phase 53: Release & Supply-Chain Engineering** - Pin GitHub Actions to immutable SHAs, regenerate Cargo.lock on release, and harden release-please release-as pin automation
 - [ ] **Phase 54: E2E Test-Infra Typing** - Migrate untyped .mjs E2E helper scripts to TypeScript wired into typecheck and lint
@@ -848,7 +848,10 @@ Plans:
 Scope (captured todos):
 
 - [ ] **[#5]** IPNS signature storage review: enforce signedRecord validation, verification, and key zeroization (S1, S2, S3) — `2026-06-13-ipns-signature-storage-review-deferred.md`
-- [ ] **[#15]** Web logger redaction interceptor missing and Faro transport never wired — `2026-06-18-web-logger-redaction-and-faro-transport-unwired.md`
+
+Deferred from this phase:
+
+- **[#15]** Web logger redaction interceptor + Faro transport (`2026-06-18-web-logger-redaction-and-faro-transport-unwired.md`) — deferred with end-user logging/monitoring (not being implemented yet); folds into a future observability phase.
 
 Plans:
 

@@ -108,7 +108,7 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 Tech-debt, security, and reliability remediation surfaced during v1.1 verification and audits. Reopened into Milestone 3 (v1.1) on 2026-06-19.
 
 - **HARD-01**: IPFS/IPNS data-integrity — resolve Phase 42 unpin-integrity findings (no data loss / no permanently-undeletable CIDs) and unenroll nested IPNS records under unloaded subtrees (Phase 50)
-- **HARD-02**: Crypto-signature & secret-leak hardening — enforce IPNS signedRecord validation, signature verification, and private-key zeroization; add the web logger redaction interceptor and wire the Faro transport (Phase 51)
+- **HARD-02**: Crypto-signature & secret-leak hardening — enforce IPNS signedRecord validation, signature verification, and private-key zeroization (Phase 51). Web logger redaction interceptor + Faro transport deferred with end-user monitoring (todo #15).
 - **HARD-03**: Desktop FUSE durability & at-rest safety — bound write-journal growth, stream large-file writes, add replay network timeouts, and scrub at-rest plaintext filenames (Phase 52)
 - **HARD-04**: Release & supply-chain engineering — pin GitHub Actions to immutable SHAs, regenerate Cargo.lock on release, and harden release-please release-as pin automation (Phase 53)
 - **HARD-05**: E2E test-infra typing — migrate untyped .mjs E2E helper scripts to TypeScript wired into typecheck and lint (Phase 54)
