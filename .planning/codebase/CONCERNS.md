@@ -1,27 +1,28 @@
 # Codebase Concerns
 
 **Analysis Date:** 2026-03-30
+**Drift review:** 2026-06-19
 
 ## Tech Debt
 
 **Orphaned IPNS records on file/folder deletion:**
 
 - Issue: When files or folders are deleted, their IPNS records and TEE republish enrollments are handled by `fireAndForgetUnenroll()` in `packages/sdk/src/client.ts`. The web app services correctly delegate to the SDK. However, SDK-based unenrollment is fire-and-forget with no persistence — if the browser tab closes before the API call completes, unenrollments are silently dropped.
-- Files: `packages/sdk/src/client.ts:156-174`, `apps/web/src/services/folder.service.ts`
+- Files: `packages/sdk/src/client.ts:183-201`
 - Impact: Orphaned IPNS records accumulate in the TEE republish schedule. Each orphan wastes TEE compute and delegated routing bandwidth every 6 hours. Capacity warnings trigger at 1000+ records.
 - Fix approach: Persist a local unenrollment queue to IndexedDB. Flush on next session start before loading folders.
 
 **Desktop device approval polling not implemented:**
 
 - Issue: Phase 11.2 TODO comments indicate the desktop app lacks approval notification polling. When another device needs MFA approval, the desktop user has no notification.
-- Files: `apps/desktop/src/main.ts:32`, `apps/desktop/src/auth.ts:680`
+- Files: `apps/desktop/src/main.ts:32`, `apps/desktop/src/auth.ts:681`
 - Impact: Desktop users must use the web app to approve new devices. Reduces desktop app self-sufficiency.
 - Fix approach: Add a background polling interval (similar to web's `useDeviceApproval`) that checks for pending approvals and surfaces native OS notifications via Tauri's notification API.
 
-**FUSE mkdir publish retry not implemented:**
+**FUSE mkdir publish retry (RESOLVED):** On a parent-publish conflict after mkdir, both macOS (`crates/fuse/src/write_ops.rs:682-690`) and Windows (`crates/fuse/src/platform/windows/write_ops.rs:261-269`) now send `FsEvent::MkdirConflict`, which re-arms the debounced publisher to re-queue and re-publish the parent (`crates/fuse/src/lib.rs:1154-1160`; regression test `mkdir_conflict_rearms` at `lib.rs:3070-3094`). Tracked todo closed (`.planning/todos/completed/2026-06-11-fuse-mkdir-parent-publish-orphan.md`).
 
 - Issue: The FUSE write_ops for directory creation has a TODO noting that full re-fetch+merge+retry is needed for parent directory IPNS publishing after mkdir.
-- Files: `crates/fuse/src/write_ops.rs:584`, `crates/fuse/src/platform/windows/write_ops.rs:194`
+- Files: `crates/fuse/src/write_ops.rs:687`, `crates/fuse/src/platform/windows/write_ops.rs:266`
 - Impact: Concurrent mkdir operations from different clients could produce conflicting IPNS metadata. Current behavior silently drops one operation.
 - Fix approach: Implement retry with CAS-style re-fetch, merge children, re-publish pattern (same as web client's folder mutation flow).
 
@@ -41,15 +42,15 @@
 
 **Residual `console.warn` calls in SDK packages (not structured logger):**
 
-- Issue: 11 `console.warn` calls in `packages/sdk/src/client.ts` and isolated calls in `packages/sdk/src/bin/index.ts:193` and `packages/sdk-core/src/ipns/index.ts:193` use raw `console.warn` rather than going through a structured logger. Phase 28 structured logging covered the web app but not the SDK packages (which have no logger dependency by design — they are zero-dependency packages).
-- Files: `packages/sdk/src/client.ts` (lines 139, 168, 460, 752, 763, 817, 1012, 1022, 1073, 1437, 1516), `packages/sdk/src/bin/index.ts:193`, `packages/sdk-core/src/ipns/index.ts:193`
+- Issue: 11 `console.warn` calls in `packages/sdk/src/client.ts` and an isolated call in `packages/sdk-core/src/ipns/index.ts:218` use raw `console.warn` rather than going through a structured logger. Phase 28 structured logging covered the web app but not the SDK packages (which have no logger dependency by design — they are zero-dependency packages).
+- Files: `packages/sdk/src/client.ts` (lines 166, 195, 619, 967, 978, 1032, 1229, 1239, 1290, 2561, 2640), `packages/sdk-core/src/ipns/index.ts:218`
 - Impact: SDK warnings bypass the web app's Faro transport and won't appear in Grafana dashboards. Debugging SDK-level issues in staging/production requires reading raw browser console logs.
 - Fix approach: SDK and SDK-core are zero-dependency packages — they should not import a logging library. An acceptable alternative is accepting a logger callback in `CipherBoxClientConfig` and routing internal warnings through it. Alternatively, document that SDK warnings remain on raw console and are outside Faro coverage.
 
 **Duplicate file upload path bypasses Web Worker encryption:**
 
-- Issue: When a dropped file has the same name as an existing file in the target folder, it enters the duplicate/replacement path in `apps/web/src/hooks/useDropUpload.ts:199-255`. This path uses `encryptFile()` from `file-crypto.service.ts` which runs synchronously on the main thread, not through the `EncryptionWorkerService` introduced in Phase 37.
-- Files: `apps/web/src/hooks/useDropUpload.ts:203`, `apps/web/src/services/file-crypto.service.ts`
+- Issue: When a dropped file has the same name as an existing file in the target folder, it enters the duplicate/replacement path in `apps/web/src/hooks/useDropUpload.ts:198-254`. This path uses `encryptFile()` from `file-crypto.service.ts` which runs synchronously on the main thread, not through the `EncryptionWorkerService` introduced in Phase 37.
+- Files: `apps/web/src/hooks/useDropUpload.ts:218`, `apps/web/src/services/file-crypto.service.ts`
 - Impact: Large duplicate files (up to 100 MB) block the main thread during encryption, causing UI jank. Inconsistent with the batch upload path which uses the Worker.
 - Fix approach: Route the duplicate upload through `getEncryptionWorker().createEncryptFn()` instead of `encryptFile()`. The `file-crypto.service` can remain for testing purposes.
 
@@ -123,21 +124,21 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 **FUSE-T SMB backend on macOS:**
 
-- Files: `crates/fuse/src/lib.rs` (766 lines), `crates/fuse/src/write_ops.rs` (976 lines), `crates/fuse/src/read_ops.rs` (928 lines), `apps/desktop/src-tauri/vendor/fuser/src/channel.rs`
+- Files: `crates/fuse/src/lib.rs` (3276 lines), `crates/fuse/src/write_ops.rs` (1132 lines), `crates/fuse/src/read_ops.rs` (1012 lines), `apps/desktop/src-tauri/vendor/fuser/src/channel.rs`
 - Why fragile: FUSE-T is a userspace NFS/SMB translation layer, not kernel FUSE. Numerous workarounds for macOS-specific issues (SMB opendir requires non-zero fh, rename truncates filenames by 8 bytes, UID mismatch under SMB proxy). Each macOS update could introduce new kernel-side behavior changes.
 - Safe modification: Always test with Finder, Terminal `ls`/`mv`/`cp`, and multi-file operations.
 - Test coverage: Desktop E2E shell scripts exercise basic operations. Rust inline tests cover inode table and cache. No unit tests for filesystem callback implementations (won't fix — Desktop E2E is the appropriate level).
 
 **Windows FUSE implementation (WinFSP):**
 
-- Files: `crates/fuse/src/platform/windows/write_ops.rs` (1008 lines), `crates/fuse/src/platform/windows/operations.rs` (602 lines), `crates/fuse/src/platform/windows/read_ops.rs` (464 lines), `crates/fuse/src/platform/windows/dir_ops.rs` (206 lines)
-- Why fragile: 2280 lines of platform-specific FUSE code. Uses WinFSP which has different semantics from macOS FUSE-T.
+- Files: `crates/fuse/src/platform/windows/write_ops.rs` (1192 lines), `crates/fuse/src/platform/windows/operations.rs` (604 lines), `crates/fuse/src/platform/windows/read_ops.rs` (499 lines), `crates/fuse/src/platform/windows/dir_ops.rs` (184 lines)
+- Why fragile: ~2479 lines of platform-specific FUSE code. Uses WinFSP which has different semantics from macOS FUSE-T.
 - Safe modification: Test on actual Windows with Explorer, cmd, and PowerShell.
 - Test coverage: Desktop E2E runs on Windows in CI. No unit tests for Windows FUSE operations (won't fix).
 
 **Mutex `unwrap()` calls in FUSE production code:**
 
-- Files: `crates/fuse/src/lib.rs:141`, `:179`, `:183`; `crates/fuse/src/platform/windows/read_ops.rs` (7 occurrences); `crates/fuse/src/platform/windows/write_ops.rs` (9 occurrences); `crates/fuse/src/platform/windows/dir_ops.rs:27`
+- Files: `crates/fuse/src/lib.rs:259`, `:333`, `:337`; `crates/fuse/src/platform/windows/read_ops.rs` (8 occurrences); `crates/fuse/src/platform/windows/write_ops.rs` (7 occurrences); `crates/fuse/src/platform/windows/dir_ops.rs:27`
 - Why fragile: 19+ `lock().unwrap()` calls on `Mutex` objects in FUSE production code (not tests). If any background thread panics while holding a lock, subsequent lock attempts will panic with "poisoned mutex", crashing the filesystem thread and unmounting the drive.
 - Safe modification: Replace with `lock().unwrap_or_else(|p| p.into_inner())` for poison recovery, or propagate errors via `EIO`.
 - Test coverage: No tests exercise panic-during-lock scenarios.
@@ -158,7 +159,7 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 **Web3Auth MPC Core Kit integration:**
 
-- Files: `apps/web/src/lib/web3auth/core-kit.ts`, `apps/web/src/lib/web3auth/hooks.ts`, `apps/web/src/hooks/useAuth.ts` (723 lines)
+- Files: `apps/web/src/lib/web3auth/core-kit.ts`, `apps/web/src/lib/web3auth/hooks.ts`, `apps/web/src/hooks/useAuth.ts` (732 lines)
 - Why fragile: Web3Auth SDK has poor TypeScript definitions. SDK version upgrades frequently change behavior. The REQUIRED_SHARE state handling works around an SDK bug.
 - Safe modification: Test all auth flows (email, Google, wallet) end-to-end after any Web3Auth dependency update.
 - Test coverage: Auth flow tested via E2E. Web3Auth unit mocking is complex.
@@ -239,26 +240,26 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 **Web app has minimal unit tests (won't fix):**
 
-- Status: Won't fix. The web app layer is primarily thin wrappers around `@cipherbox/sdk` and React UI components. The 14 Playwright E2E suites in `tests/web-e2e/` cover all critical user flows end-to-end (upload, download, sharing, bin, search, auth, media preview, etc.). Unit testing these wrappers would duplicate E2E coverage with high mocking overhead and low marginal value. The SDK and SDK-core packages — where the actual logic lives — have comprehensive unit test suites (13 files each).
+- Status: Won't fix. The web app layer is primarily thin wrappers around `@cipherbox/sdk` and React UI components. The 18 Playwright E2E suites in `tests/web-e2e/` cover all critical user flows end-to-end (upload, download, sharing, bin, search, auth, media preview, etc.). Unit testing these wrappers would duplicate E2E coverage with high mocking overhead and low marginal value. The SDK and SDK-core packages — where the actual logic lives — have comprehensive unit test suites (21 and 18 files respectively).
 
 **TEE worker has improved but incomplete test coverage (5 test files for 14 source files):**
 
 - What's not tested: The `migrate.ts` route handler, the `metrics.ts` middleware/route, and the production CVM code path in `tee-keys.ts`.
 - Files: Tests at `apps/tee-worker/src/__tests__/` cover ssrf-validation, key-manager, auth middleware, tee-keys (test-mode only), and republish route. The `migrate.ts` route and `migration-worker.ts` service have no test coverage.
-- Risk: The migration route handles epoch key rotation — a critical security operation. Bugs would go undetected until staging or production. The `migration-worker.ts` service is 19+ functions with no tests.
+- Risk: The migration route handles epoch key rotation — a critical security operation. Bugs would go undetected until staging or production. The `migration-worker.ts` service exports a single `migrateBatch` epoch-rotation function (plus ~4 internal helpers) with no tests.
 - Priority: High for migration-worker. Medium for metrics route.
 
 **Desktop app has no TypeScript unit tests:**
 
 - What's not tested: All TypeScript code in `apps/desktop/src/` (auth flow, Tauri IPC handlers, webview integration).
-- Files: `apps/desktop/src/auth.ts` (711 lines), `apps/desktop/src/main.ts`
+- Files: `apps/desktop/src/auth.ts` (800 lines), `apps/desktop/src/main.ts`
 - Risk: Auth flow regressions, IPC communication errors.
 - Priority: Medium. Desktop E2E covers the critical paths.
 
 **FUSE write operations have no unit tests (won't fix):**
 
 - What's not tested: Write operation implementations (create file, write data, rename, delete, mkdir, publish coordination) in both macOS and Windows variants.
-- Files: `crates/fuse/src/write_ops.rs` (976 lines), `crates/fuse/src/platform/windows/write_ops.rs` (1008 lines)
+- Files: `crates/fuse/src/write_ops.rs` (1132 lines), `crates/fuse/src/platform/windows/write_ops.rs` (1192 lines)
 - Status: Won't fix. FUSE callbacks are thin plumbing between OS filesystem calls and the Rust SDK — unit testing them would require mocking the entire host OS filesystem layer, which is unreliable and brittle. These code paths are exercised by the Desktop E2E test suite (`tests/desktop-e2e/`) which tests actual file operations through the mounted filesystem.
 
 **API Client package has minimal tests:**

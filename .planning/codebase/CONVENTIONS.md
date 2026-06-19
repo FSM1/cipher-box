@@ -1,6 +1,7 @@
 # Coding Conventions
 
 **Analysis Date:** 2026-03-27
+**Drift review:** 2026-06-19
 
 ## TypeScript Configuration
 
@@ -97,7 +98,7 @@
 
 ### String Literal Unions Over Enums
 
-**Never use TypeScript `enum`**. The codebase has zero enum declarations. Use string literal union types:
+**Prefer string literal union types over TypeScript `enum`**. The codebase has only one enum declaration (`LogLevel` in `apps/web/src/lib/logger.ts`); everywhere else uses string literal union types. Use string literal union types:
 
 ```typescript
 // Correct
@@ -141,13 +142,13 @@ createdAt!: Date;
 
 ### Formatting
 
-**Tool:** Prettier 3.x (root-level dependency, no `.prettierrc` file -- uses defaults)
+**Tool:** Prettier 3.x (root-level dependency, configured via `prettier.config.js`)
 
 - 2-space indentation
 - Single quotes for strings
 - Semicolons required
-- Trailing commas (Prettier default: `all` in v3)
-- 100-char print width (default)
+- Trailing commas: `es5` (set explicitly in `prettier.config.js`, overriding the Prettier v3 `all` default)
+- 100-char print width (set explicitly in `prettier.config.js`)
 
 ### Linting
 
@@ -172,11 +173,11 @@ createdAt!: Date;
 2. `lint-staged` runs:
    - `*.{ts,tsx,js,jsx}` -> `eslint --fix` + `prettier --write`
    - `*.{json,yml,yaml}` -> `prettier --write`
-   - `*.md` -> `markdownlint --fix` + `prettier --write`
+   - `*.md` -> `markdownlint --fix --ignore .planning` + `prettier --write`
 
 ### Commit Messages
 
-**commitlint** enforces Conventional Commits via husky `commit-msg` hook:
+**commitlint** defines Conventional Commits rules (`commitlint.config.js`), enforced in CI via PR-title validation (`.github/workflows/pr-title.yml`). The husky `commit-msg` hook is now an Entire CLI wrapper and does not run commitlint locally:
 
 ```text
 type(optional-scope): description
