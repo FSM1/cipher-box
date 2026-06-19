@@ -15,10 +15,7 @@ pub async fn resolve_ipns(
     client: &ApiClient,
     ipns_name: &str,
 ) -> Result<IpnsResolveResponse, ApiError> {
-    let path = format!(
-        "/ipns/resolve?ipnsName={}",
-        urlencoding::encode(ipns_name)
-    );
+    let path = format!("/ipns/resolve?ipnsName={}", urlencoding::encode(ipns_name));
     let resp = client.authenticated_get(&path).await?;
 
     if resp.status().as_u16() == 404 {
@@ -68,13 +65,15 @@ pub fn verify_ipns_resolve_signature(
     resp: &crate::types::IpnsResolveResponse,
     ipns_name: &str,
 ) -> Result<Option<bool>, crate::error::ApiError> {
-    use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
 
     // D-03: absent fields → allow + flag (caller should warn and continue).
-    let (Some(sig_b64), Some(data_b64), Some(pub_key_b64)) =
-        (resp.signature_v2.as_ref(), resp.data.as_ref(), resp.pub_key.as_ref())
-    else {
+    let (Some(sig_b64), Some(data_b64), Some(pub_key_b64)) = (
+        resp.signature_v2.as_ref(),
+        resp.data.as_ref(),
+        resp.pub_key.as_ref(),
+    ) else {
         return Ok(None);
     };
 
@@ -114,10 +113,7 @@ pub fn verify_ipns_resolve_signature(
 
     // Derive IPNS name and check it binds to the resolved name.
     let derived_name = cipherbox_crypto::derive_ipns_name(&pubkey_arr).map_err(|e| {
-        crate::error::ApiError::DeserializationFailed(format!(
-            "IPNS name derivation failed: {}",
-            e
-        ))
+        crate::error::ApiError::DeserializationFailed(format!("IPNS name derivation failed: {}", e))
     })?;
 
     Ok(Some(derived_name == ipns_name))
@@ -135,9 +131,7 @@ pub async fn publish_ipns(
     client: &ApiClient,
     request: &IpnsPublishRequest,
 ) -> Result<PublishResult, ApiError> {
-    let resp = client
-        .authenticated_post("/ipns/publish", request)
-        .await?;
+    let resp = client.authenticated_post("/ipns/publish", request).await?;
 
     if resp.status().as_u16() == 409 {
         // Parse conflict response body: { currentSequenceNumber: "..." }
@@ -174,8 +168,8 @@ pub async fn publish_ipns(
 mod tests {
     use super::verify_ipns_resolve_signature;
     use crate::types::IpnsResolveResponse;
-    use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
 
     fn make_resolve_response_no_sig() -> IpnsResolveResponse {
         IpnsResolveResponse {
@@ -252,9 +246,9 @@ mod tests {
             &STANDARD.encode(data_bytes),
             &STANDARD.encode(&pub_key_bytes),
         );
-        let ipns_name = cipherbox_crypto::derive_ipns_name(
-            pub_key_bytes.as_slice().try_into().unwrap()
-        ).unwrap();
+        let ipns_name =
+            cipherbox_crypto::derive_ipns_name(pub_key_bytes.as_slice().try_into().unwrap())
+                .unwrap();
         let result = verify_ipns_resolve_signature(&resp, &ipns_name);
         assert_eq!(result.unwrap(), Some(false));
     }

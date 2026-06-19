@@ -172,7 +172,13 @@ impl std::fmt::Debug for IpnsPublishRequest {
             .field("ipns_name", &self.ipns_name)
             .field("metadata_cid", &self.metadata_cid)
             .field("record", &"[REDACTED]")
-            .field("encrypted_ipns_private_key", &self.encrypted_ipns_private_key.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "encrypted_ipns_private_key",
+                &self
+                    .encrypted_ipns_private_key
+                    .as_ref()
+                    .map(|_| "[REDACTED]"),
+            )
             .field("key_epoch", &self.key_epoch)
             .field("expected_sequence_number", &self.expected_sequence_number)
             .finish()
