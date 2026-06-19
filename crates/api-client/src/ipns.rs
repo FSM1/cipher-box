@@ -77,24 +77,17 @@ pub fn verify_ipns_resolve_signature(
         return Ok(None);
     };
 
-    let sig = STANDARD.decode(sig_b64).map_err(|e| {
-        crate::error::ApiError::DeserializationFailed(format!(
-            "IPNS signatureV2 base64 decode failed: {}",
-            e
-        ))
-    })?;
-    let cbor_data = STANDARD.decode(data_b64).map_err(|e| {
-        crate::error::ApiError::DeserializationFailed(format!(
-            "IPNS data base64 decode failed: {}",
-            e
-        ))
-    })?;
-    let pub_key = STANDARD.decode(pub_key_b64).map_err(|e| {
-        crate::error::ApiError::DeserializationFailed(format!(
-            "IPNS pubKey base64 decode failed: {}",
-            e
-        ))
-    })?;
+    let decode_field = |label: &str, s: &str| -> Result<Vec<u8>, crate::error::ApiError> {
+        STANDARD.decode(s).map_err(|e| {
+            crate::error::ApiError::DeserializationFailed(format!(
+                "IPNS {} base64 decode failed: {}",
+                label, e
+            ))
+        })
+    };
+    let sig = decode_field("signatureV2", sig_b64)?;
+    let cbor_data = decode_field("data", data_b64)?;
+    let pub_key = decode_field("pubKey", pub_key_b64)?;
 
     // Build signed bytes: "ipns-signature:" prefix || CBOR data.
     let mut signed_data = b"ipns-signature:".to_vec();
