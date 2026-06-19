@@ -1,8 +1,8 @@
 ---
 phase: 52
 slug: desktop-fuse-durability-at-rest-safety
-status: draft
-nyquist_compliant: false
+status: ready
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-19
 ---
@@ -42,22 +42,22 @@ synchronous `#[test]`; async replay logic uses `#[tokio::test]`.
 
 | Task ID | Plan | Wave | Requirement | Threat Ref           | Secure Behavior                                            | Test Type    | Automated Command                                                  | File Exists | Status     |
 | ------- | ---- | ---- | ----------- | -------------------- | ---------------------------------------------------------- | ------------ | ----------------------------------------------------------------- | ----------- | ---------- |
-| D-01-a  | TBD  | TBD  | HARD-03     | Info Disclosure      | ciphertext stored in 0600 sidecar, not in JSON            | unit         | `cargo test -p cipherbox-sdk sidecar_ciphertext_not_in_json`      | ❌ W0       | ⬜ pending |
-| D-01-b  | TBD  | TBD  | HARD-03     | —                    | release() acks only after sidecar fsync (durable-ack)     | unit (async) | `cargo test -p cipherbox-fuse durable_ack_with_sidecar`           | ❌ W0       | ⬜ pending |
-| D-01-c  | TBD  | TBD  | HARD-03     | DoS                  | per-entry size cap returns Err above threshold            | unit         | `cargo test -p cipherbox-fuse payload_size_cap_returns_err`       | ❌ W0       | ⬜ pending |
-| D-02-a  | TBD  | TBD  | HARD-03     | Info Disclosure      | purge_vault removes all entries for one vault             | unit         | `cargo test -p cipherbox-sdk purge_vault_removes_all`             | ❌ W0       | ⬜ pending |
-| D-02-b  | TBD  | TBD  | HARD-03     | —                    | gc_failed_entries purges by age                          | unit         | `cargo test -p cipherbox-sdk gc_purges_old_failed`               | ❌ W0       | ⬜ pending |
-| D-02-c  | TBD  | TBD  | HARD-03     | —                    | gc_failed_entries purges to size budget                  | unit         | `cargo test -p cipherbox-sdk gc_purges_to_size_budget`           | ❌ W0       | ⬜ pending |
-| D-03-a  | TBD  | TBD  | HARD-03     | DoS                  | replay entry returns Err on network timeout              | unit (async) | `cargo test -p cipherbox-fuse replay_entry_timeout`              | ❌ W0       | ⬜ pending |
-| D-04-a  | TBD  | TBD  | HARD-03     | Info Disclosure      | no plaintext filename in journal JSON                    | unit         | `cargo test -p cipherbox-sdk journal_no_plaintext_filename`      | ❌ W0       | ⬜ pending |
-| D-04-b  | TBD  | TBD  | HARD-03     | Cryptography (V6)    | round-trip encrypt filename → write → reload → decrypt   | unit         | `cargo test -p cipherbox-sdk filename_encryption_round_trips`    | ❌ W0       | ⬜ pending |
-| D-04-c  | TBD  | TBD  | HARD-03     | —                    | compat deserialization of old plaintext filename field   | unit         | `cargo test -p cipherbox-sdk legacy_plaintext_filename_compat`   | ❌ W0       | ⬜ pending |
-| D-05-a  | TBD  | TBD  | HARD-03     | Input Validation (V5) | sanitize_error scrubs C:\Users\, /var, /tmp, /private    | unit         | `cargo test -p cipherbox-sdk sanitize_error_extended_paths`      | ❌ W0       | ⬜ pending |
-| D-06-a  | TBD  | TBD  | HARD-03     | Tampering            | journal.remove failure logs warn! (not swallowed)       | unit         | `cargo test -p cipherbox-fuse remove_failure_is_logged`         | ❌ W0       | ⬜ pending |
+| D-01-a | 52-02 | 1 | HARD-03 | Info Disclosure | ciphertext stored in 0600 sidecar, not in JSON | unit | `cargo test -p cipherbox-sdk sidecar_ciphertext_not_in_json` | ❌ W0 | ⬜ pending |
+| D-01-b | 52-03 | 2 | HARD-03 | — | release() acks only after sidecar fsync (durable-ack) | unit (async) | `cargo test -p cipherbox-fuse durable_ack_with_sidecar` | ❌ W0 | ⬜ pending |
+| D-01-c | 52-03 | 2 | HARD-03 | DoS | per-entry size cap returns Err above threshold | unit | `cargo test -p cipherbox-fuse payload_size_cap_returns_err` | ❌ W0 | ⬜ pending |
+| D-02-a | 52-05 | 3 | HARD-03 | Info Disclosure | purge_vault removes all entries for one vault | unit | `cargo test -p cipherbox-sdk purge_vault_removes_all` | ❌ W0 | ⬜ pending |
+| D-02-b | 52-05 | 3 | HARD-03 | — | gc_failed_entries purges by age | unit | `cargo test -p cipherbox-sdk gc_purges_old_failed` | ❌ W0 | ⬜ pending |
+| D-02-c | 52-05 | 3 | HARD-03 | — | gc_failed_entries purges to size budget | unit | `cargo test -p cipherbox-sdk gc_purges_to_size_budget` | ❌ W0 | ⬜ pending |
+| D-03-a | 52-04 | 2 | HARD-03 | DoS | replay entry returns Err on network timeout | unit (async) | `cargo test -p cipherbox-fuse replay_entry_timeout` | ❌ W0 | ⬜ pending |
+| D-04-a | 52-02 | 1 | HARD-03 | Info Disclosure | no plaintext filename in journal JSON | unit | `cargo test -p cipherbox-sdk journal_no_plaintext_filename` | ❌ W0 | ⬜ pending |
+| D-04-b | 52-02 | 1 | HARD-03 | Cryptography (V6) | round-trip encrypt filename → write → reload → decrypt | unit | `cargo test -p cipherbox-sdk filename_encryption_round_trips` | ❌ W0 | ⬜ pending |
+| D-04-c | 52-02 | 1 | HARD-03 | — | compat deserialization of old plaintext filename field | unit | `cargo test -p cipherbox-sdk legacy_plaintext_filename_compat` | ❌ W0 | ⬜ pending |
+| D-05-a | 52-01 | 1 | HARD-03 | Input Validation (V5) | sanitize_error scrubs C:\Users\, /var, /tmp, /private | unit | `cargo test -p cipherbox-sdk sanitize_error_extended_paths` | ❌ W0 | ⬜ pending |
+| D-06-a | 52-01 | 1 | HARD-03 | Tampering | journal.remove failure logs warn! (not swallowed) | unit | `cargo test -p cipherbox-fuse remove_failure_is_logged` | ❌ W0 | ⬜ pending |
 
 _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky · ❌ W0 = test does not yet exist, created in Wave 0_
 
-_Plan/Wave columns are TBD until the planner assigns tasks to plans; the planner MUST map each row above to a concrete task ID._
+_Plan/Wave columns assigned by the planner (2026-06-19). Each row maps to a task in the named plan; ❌ W0 rows are created by the first TDD task of that plan before its implementation step._
 
 ---
 
