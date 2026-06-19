@@ -102,7 +102,7 @@ S3 (exhaustive zeroization + guard).
 
 - `.planning/security/REVIEW-20260402-172126.md` — original IPNS Signature Storage review (PR #448);
   origin of S1/S2/S3.
-- `.planning/todos/2026-06-13-ipns-signature-storage-review-deferred.md` — S1/S2/S3 with current
+- `.planning/todos/pending/2026-06-13-ipns-signature-storage-review-deferred.md` — S1/S2/S3 with current
   line numbers, caveats, and re-verification (2026-06-19). The most important ref for S1–S3.
 - `.planning/REQUIREMENTS.md` — HARD-02.
 - `.planning/ROADMAP.md` §"Phase 51" — scope checkboxes.
