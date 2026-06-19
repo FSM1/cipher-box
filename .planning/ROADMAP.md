@@ -819,7 +819,7 @@ Scope (captured todos):
 **Goal:** No data loss and no permanently-undeletable CIDs — the Phase 42 unpin-integrity findings are resolved (INT_MIN-hash CID stays deletable; a re-pinned CID is never drained) and deleting a folder unenrolls every descendant IPNS record even when the subtree was never loaded.
 **Requirements**: HARD-01
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 5 plans
+**Plans:** 4/5 plans executed
 
 Scope (captured todos):
 
@@ -829,10 +829,10 @@ Scope (captured todos):
 Plans:
 **Wave 1**
 
-- [ ] 50-01-PLAN.md — D-01 (WR-01): drop abs() from guardedUnpin advisory-lock so INT_MIN-hash CIDs stay deletable (TDD, RED regression)
-- [ ] 50-02-PLAN.md — D-02 (WR-03): refcount-aware pending-unpin drain so re-pinned CIDs are not unpinned (TDD, RED regression)
-- [ ] 50-03-PLAN.md — D-03 (LOCKED): on-demand subtree IPNS collection so unloaded subtrees fully unenroll (TDD, RED regression)
-- [ ] 50-05-PLAN.md — D-04 dispositions in controller / UnpinDto+api:generate / backfill / modules (WR-02, IN-02, WR-05, WR-06, IN-04)
+- [x] 50-01-PLAN.md — D-01 (WR-01): drop abs() from guardedUnpin advisory-lock so INT_MIN-hash CIDs stay deletable (TDD, RED regression)
+- [x] 50-02-PLAN.md — D-02 (WR-03): refcount-aware pending-unpin drain so re-pinned CIDs are not unpinned (TDD, RED regression)
+- [x] 50-03-PLAN.md — D-03 (LOCKED): on-demand subtree IPNS collection so unloaded subtrees fully unenroll (TDD, RED regression)
+- [x] 50-05-PLAN.md — D-04 dispositions in controller / UnpinDto+api:generate / backfill / modules (WR-02, IN-02, WR-05, WR-06, IN-04)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -959,7 +959,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 47. SDK Folder-State Consolidation        | v1.1      | 5/5            | Complete | 2026-06-17 |
 | 48. SDK Self-Bootstrap + Shared Metadata  | v1.1      | 7/7            | Complete | 2026-06-17 |
 | 49. Shared-Folder Move (Intra-Share)      | v1.1      | 5/5            | Complete | 2026-06-18 |
-| 50. IPFS/IPNS Data-Integrity Fixes        | v1.1-hardening | -         | Planned  | -          |
+| 50. IPFS/IPNS Data-Integrity Fixes        | v1.1-hardening | 4/5 | In Progress|  |
 | 51. Crypto-Signature & Secret-Leak Hardening | v1.1-hardening | -      | Planned  | -          |
 | 52. Desktop FUSE Durability & At-Rest Safety | v1.1-hardening | -      | Planned  | -          |
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
