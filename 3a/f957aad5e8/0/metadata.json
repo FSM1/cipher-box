@@ -1,0 +1,114 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3af957aad5e8",
+  "session_id": "ca575d75-db2f-4c2d-8294-09d1af4240cb",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T18:16:18.11564Z",
+  "branch": "feat/crypto-signature-secret-leak-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/51-crypto-signature-secret-leak-hardening/51-CONTEXT.md",
+    ".planning/phases/51-crypto-signature-secret-leak-hardening/51-DISCUSSION-LOG.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "b991e336997d",
+  "token_usage": {
+    "input_tokens": 24007,
+    "cache_creation_tokens": 108754,
+    "cache_read_tokens": 1645992,
+    "output_tokens": 24069,
+    "api_call_count": 19
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Lz5h1zNHMx7SqG233yqYKN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b991e336997d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 42,
+        "end": 43,
+        "entry_ids": [
+          "ee10835c-b9e7-42df-8e82-7648bbee013c"
+        ],
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:discuss-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Use the GSD Manager to orchestrate the v1.1 milestone's remaining hardening block, starting by discussing Phase 51 (Crypto-Signature & Secret-Leak Hardening) to capture implementation decisions before planning and execution.",
+    "outcome": "Manager dashboard initialized showing 35/40 phases complete with 5 hardening phases remaining (51–55); Phase 51 discuss workflow completed successfully, producing 51-CONTEXT.md and 51-DISCUSSION-LOG.md with four locked implementation decisions covering HARD-02 requirements.",
+    "learnings": {
+      "repo": [
+        "Phases 51–55 all depend only on Phase 49 (complete) and are fully independent hardening tracks — they can be worked in any order or in parallel.",
+        "HARD-02 scope covers three IPNS signed-record findings (S1 publish validation, S2 fail-closed verification, S3 key zeroization) plus web logger redaction wired to a Faro transport (#15).",
+        "S1 anti-rollback for embedded-vs-embedded 409 already shipped; only the embedded-vs-DTO variant is open work.",
+        "Faro beforeSend scrub list is locked: privateKey, rootFolderKey, folderKey, fileKey, accessToken — registerFaroTransport guarded on VITE_FARO_URL.",
+        "S3 scope was deliberately expanded to an exhaustive sweep (every SDK function + every Rust unwrap path + enforcement with lint/test guard) to prevent re-drift."
+      ],
+      "code": [],
+      "workflow": [
+        "GSD dep parser breaks on parenthetical annotations in roadmap phase names — '(v1.1 baseline)' was split into deps [49, '1.1'], making all downstream phases appear blocked with deps_satisfied: false.",
+        "When deps_satisfied is false for all phases, recommended_actions returns empty, so the Continue action menu is blank even when phases are actually unblocked.",
+        "Phase active flags (is_active) can go stale in STATE.md even after a phase is marked complete in ROADMAP.md — the two sources can diverge.",
+        "The discuss-phase workflow's init phase-op call loads context files lazily; prior CONTEXT.md files from earlier phases carry forward locked decisions to avoid re-asking."
+      ]
+    },
+    "friction": [
+      "GSD dep parser misread 'Phase 49 (v1.1 baseline)' as two deps (49 and phantom '1.1'), causing all five hardening phases to show deps_satisfied: false and producing an empty recommended_actions list.",
+      "Phase 50 showed is_active: true and roadmap_complete: false despite being marked '[x] completed 2026-06-19' in ROADMAP — required manual override to proceed.",
+      "Because recommended_actions was empty, the manager's Continue button was absent; the user had to manually identify phases 51–55 as unblocked and select Phase 51 explicitly."
+    ],
+    "open_items": [
+      "Phases 52–55 (Desktop FUSE Durability, Release & Supply-Chain, E2E Test-Infra Typing, Large Source-File Refactor) still need discuss → plan → execute.",
+      "Phase 51 planning and execution not yet started — CONTEXT.md written but no plan exists.",
+      "GSD dep parser bug with parenthetical annotations in roadmap phase names should be reported/fixed upstream.",
+      "Stale is_active flag on Phase 50 in STATE.md should be cleared to keep dashboard accurate.",
+      "S3 exhaustive key zeroization sweep across all SDK functions and Rust unwrap paths is a significant scope expansion — needs scoping during planning to estimate wave count."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T18:15:43.616217Z",
+    "agent_lines": 275,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 275,
+    "total_lines_changed": 275,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    }
+  ]
+}
