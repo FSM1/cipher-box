@@ -959,7 +959,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 47. SDK Folder-State Consolidation        | v1.1      | 5/5            | Complete | 2026-06-17 |
 | 48. SDK Self-Bootstrap + Shared Metadata  | v1.1      | 7/7            | Complete | 2026-06-17 |
 | 49. Shared-Folder Move (Intra-Share)      | v1.1      | 5/5            | Complete | 2026-06-18 |
-| 50. IPFS/IPNS Data-Integrity Fixes        | v1.1-hardening | 5/5 | Complete   | 2026-06-19 |
+| 50. IPFS/IPNS Data-Integrity Fixes        | v1.1-hardening | 5/5 | Complete    | 2026-06-19 |
 | 51. Crypto-Signature & Secret-Leak Hardening | v1.1-hardening | -      | Planned  | -          |
 | 52. Desktop FUSE Durability & At-Rest Safety | v1.1-hardening | -      | Planned  | -          |
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
