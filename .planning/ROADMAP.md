@@ -866,11 +866,18 @@ Scope (captured todos):
 - [ ] **[#9]** FUSE write-journal unbounded growth + ciphertext-in-JSON, and replay has no network timeout — `2026-06-18-fuse-journal-growth-and-replay-timeout.md`
 
 Plans:
+**Wave 1**
 
 - [ ] 52-01-PLAN.md — D-05 sanitize_error scrub + D-06 logged journal.remove failures (trivials, Wave 1)
 - [ ] 52-02-PLAN.md — D-01/D-04 journal entry shape: sidecar fields, put_with_sidecar, GC/cap constants, compat deserializer (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 52-03-PLAN.md — D-01/D-04 write-side: size cap, ECIES filename encryption, off-thread sidecar write with bounded durable-ack oneshot (Wave 2)
 - [ ] 52-04-PLAN.md — D-03/D-04 replay-side: sidecar read+verify, name decryption, per-entry timeouts, replay concurrent with mount (Unix+Windows) (Wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 52-05-PLAN.md — D-02 retention: purge_vault on logout + gc_failed_entries at mount (Wave 3)
 
 ### Phase 53: Release & Supply-Chain Engineering
