@@ -99,10 +99,11 @@ describe('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal', () => {
     vi.clearAllMocks();
     // Restore defaults after clearAllMocks
     vi.mocked(ipnsControllerUnenrollBatch).mockResolvedValue(undefined as never);
-    // Default deleteItem publish mock: returns updated children list and seq number
+    // Default deleteItem publish mock: returns updated children list, seq number, and cid
     vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
       newSequenceNumber: 2n,
       publishedChildren: [],
+      cid: 'cid-new',
     });
   });
 
