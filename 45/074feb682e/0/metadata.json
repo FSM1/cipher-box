@@ -1,0 +1,125 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "45074feb682e",
+  "session_id": "fdde1651-b516-4cb7-ba0f-5e5195775c8e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T14:59:49.293255Z",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-01-PLAN.md",
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-02-PLAN.md",
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-03-PLAN.md",
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-04-PLAN.md",
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-05-PLAN.md",
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-PATTERNS.md",
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-RESEARCH.md",
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "42edd405f3ef",
+  "token_usage": {
+    "input_tokens": 14432,
+    "cache_creation_tokens": 161063,
+    "cache_read_tokens": 4023646,
+    "output_tokens": 55063,
+    "api_call_count": 39
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01P2zVWRvuDCZ9hqLyKvt9J9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "42edd405f3ef",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 54,
+        "end": 55,
+        "entry_ids": [
+          "5c34e935-fefb-4556-9750-51e0358b404b"
+        ],
+        "tool_use_id": "toolu_01P2zVWRvuDCZ9hqLyKvt9J9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P2zVWRvuDCZ9hqLyKvt9J9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Lock in the on-demand traversal decision for unenroll todo #14 and create executable PLAN.md files for Phase 50 (IPFS/IPNS data integrity fixes covering two captured bug todos).",
+    "outcome": "Phase 50 fully planned on branch feat/ipfs-ipns-data-integrity-fixes: 5 PLAN.md files in 2 waves, 11 tasks, with CONTEXT.md, RESEARCH.md, VALIDATION.md, and PATTERNS.md all committed and plan-checker passing on iteration 2.",
+    "learnings": {
+      "repo": [
+        "Phase 50 scope: WR-01 (abs() on hashtext causing INT_MIN integer overflow → CID permanently undeletable), WR-03 (count pinned_cids before draining outbox to avoid re-pin-during-drain data loss), plus 9 other medium/low findings from 42-REVIEW.md.",
+        "The canonical planning branch for Phase 50 is feat/ipfs-ipns-data-integrity-fixes — commits auto-switched main to this branch during the plan-phase query step.",
+        "API surface regeneration extracted 0 symbols for this phase — the intel artifact is stale/empty and treated as HINT-only.",
+        "TDD mode is on for this project; pattern mapper found the ensureFolderLoaded DFS as the template analog for the on-demand traversal implementation in 50-03.",
+        "The .planning/intel/ directory is not gitignored and should be excluded from plan commits when empty."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/42-api-unpin-integrity/42-REVIEW.md",
+          "finding": "Contains root cause, exact patch, and acceptance criteria for all 13 WR/IN findings; live line numbers were re-verified and pinned in 50-RESEARCH.md since review's line numbers were stale."
+        },
+        {
+          "path": ".planning/todos/pending/2026-06-18-unenroll-skips-unloaded-subtrees.md",
+          "finding": "The bug: collectSubtreeIpnsNames uses in-memory folderTree and skips unloaded subtrees during delete. Fix: fetch+decrypt persisted child folder metadata on-demand during deletion (on-demand traversal, not reconciliation-job backstop)."
+        },
+        {
+          "path": ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-VALIDATION.md",
+          "finding": "Plan-phase Step 5.5 instructs filling only frontmatter in VALIDATION.md, but the Nyquist gate requires the full per-task verification map; this mismatch caused a blocker on checker iteration 1."
+        }
+      ],
+      "workflow": [
+        "The gsd commit helper reports 'commit_failed' as a false negative (known behavior) — always verify with git log directly rather than trusting the helper's return status.",
+        "The planner subagent violated the Git Branch Invariant by creating and switching to docs/plan-phase-50; this stray branch had no unique commits and was safe to delete — but requires manual inspection of where commits actually landed after any planner run.",
+        "RESEARCH.md Open Questions must be annotated with (RESOLVED) markers referencing the plan that addresses them, or the plan-checker will flag a blocker even if the plans themselves are correct.",
+        "When VALIDATION.md and RESEARCH.md are edited by a doc-fix subagent after their initial commit, their changes must be folded into the final plan commit to keep the tree clean.",
+        "discuss-phase can be skipped if the user provides locked decisions and scope directly; synthesizing a CONTEXT.md with trackable decision IDs (D-01, D-02, etc.) satisfies the decision-coverage gate."
+      ]
+    },
+    "friction": [
+      "Planner subagent created a stray branch docs/plan-phase-50, violating the plan-phase Git Branch Invariant — required manual branch cleanup and git state inspection mid-workflow.",
+      "gsd commit helper consistently reports false-negative 'commit_failed' status, requiring a follow-up git log verification after every commit step.",
+      "Plan-checker iteration 1 blocked on VALIDATION.md being an unfilled template and RESEARCH.md missing (RESOLVED) markers — neither was flagged before spawning the checker, adding a full checker + doc-fix + re-checker round.",
+      "API surface regeneration extracted 0 symbols (stale intel), producing a useless artifact that still needed to be excluded from the commit manually."
+    ],
+    "open_items": [
+      "Reconciliation-job backstop (periodic orphan-record cleanup) was explicitly deferred as an alternative to on-demand traversal; it remains in BACKLOG and may still be worth implementing as a safety net.",
+      "Medium/low WR/IN findings beyond WR-01 and WR-03 need triage during execution — fix vs. explicitly-accept-with-comment decisions were deferred to plan-time per the discussion.",
+      ".planning/intel/ is not gitignored; if it accumulates stale artifacts across phases it should be added to .gitignore.",
+      "The 1Password commit signer wedged during the planner's attempted commit — worth investigating whether it requires a periodic re-authentication to stay healthy across long subagent sessions."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T14:59:13.168862Z",
+    "agent_lines": 1401,
+    "agent_removed": 35,
+    "human_added": 7,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 1409,
+    "total_lines_changed": 1447,
+    "agent_percentage": 99.23980649619904,
+    "metric_version": 2
+  }
+}
