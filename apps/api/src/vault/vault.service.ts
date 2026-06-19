@@ -257,9 +257,10 @@ export class VaultService {
       const pendingUnpinRepo = manager.getRepository(PendingUnpin);
 
       // 1. Advisory xact lock — MUST be the first transactional statement (D-04)
-      // Compute the lock key inline so the lock is literally the first statement;
-      // abs() avoids bigint-out-of-range on negative hashtext values (Pitfall 2)
-      await manager.query(`SELECT pg_advisory_xact_lock(abs(hashtext($1))::bigint)`, [cid]);
+      // abs() was incorrectly applied to int4 before the bigint cast, overflowing for INT_MIN
+      // (-2147483648); pg_advisory_xact_lock accepts signed bigint so sign-extending
+      // hashtext int4→bigint is safe (D-01 / WR-01).
+      await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [cid]);
 
       // 2. Ownership check (D-01)
       const row = await pinnedCidRepo.findOne({ where: { userId, cid } });
