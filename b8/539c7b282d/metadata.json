@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b8539c7b282d",
+  "strategy": "manual-commit",
+  "branch": "docs/reopen-m3-hardening-phases",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/PROJECT.md",
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/.gitkeep",
+    ".planning/phases/51-crypto-signature-secret-leak-hardening/.gitkeep",
+    ".planning/phases/52-desktop-fuse-durability-at-rest-safety/.gitkeep",
+    ".planning/phases/53-release-supply-chain-engineering/.gitkeep",
+    ".planning/phases/54-e2e-test-infra-typing/.gitkeep",
+    ".planning/phases/55-large-source-file-refactor/.gitkeep",
+    ".planning/todos/completed/2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md",
+    ".planning/todos/completed/2026-06-17-shared-folder-move-must-reencrypt-file-metadata.md",
+    ".planning/todos/pending/2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md",
+    ".planning/todos/pending/2026-06-17-shared-folder-move-must-reencrypt-file-metadata.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b8/539c7b282d/0/metadata.json",
+      "transcript": "/b8/539c7b282d/0/full.jsonl",
+      "content_hash": "/b8/539c7b282d/0/content_hash.txt",
+      "prompt": "/b8/539c7b282d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 29894,
+    "cache_creation_tokens": 289060,
+    "cache_read_tokens": 9727679,
+    "output_tokens": 82881,
+    "api_call_count": 49
+  }
+}

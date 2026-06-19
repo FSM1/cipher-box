@@ -1,0 +1,124 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b8539c7b282d",
+  "session_id": "749b15c9-2a46-459e-b881-6078a254515e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T13:18:37.809138Z",
+  "branch": "docs/reopen-m3-hardening-phases",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/PROJECT.md",
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/.gitkeep",
+    ".planning/phases/51-crypto-signature-secret-leak-hardening/.gitkeep",
+    ".planning/phases/52-desktop-fuse-durability-at-rest-safety/.gitkeep",
+    ".planning/phases/53-release-supply-chain-engineering/.gitkeep",
+    ".planning/phases/54-e2e-test-infra-typing/.gitkeep",
+    ".planning/phases/55-large-source-file-refactor/.gitkeep",
+    ".planning/todos/completed/2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md",
+    ".planning/todos/completed/2026-06-17-shared-folder-move-must-reencrypt-file-metadata.md",
+    ".planning/todos/pending/2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md",
+    ".planning/todos/pending/2026-06-17-shared-folder-move-must-reencrypt-file-metadata.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "33a3bba70b84",
+  "checkpoint_transcript_start": 148,
+  "transcript_lines_at_start": 148,
+  "token_usage": {
+    "input_tokens": 29894,
+    "cache_creation_tokens": 289060,
+    "cache_read_tokens": 9727679,
+    "output_tokens": 82881,
+    "api_call_count": 49
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Review 13 open todos (items #5–17) and organize them into coherent phases to append to the current milestone (M3/v1.1), then reopen M3, backfill the ROADMAP progress table, commit, and open a PR.",
+    "outcome": "M3 (v1.1) reopened with 6 new hardening phases (50–55) absorbing 10 todos; ROADMAP progress table backfilled for phases 40–55; todos #7 and #8 correctly moved to completed (already delivered by Phase 49); changes committed on branch docs/reopen-m3-hardening-phases and pushed for PR.",
+    "learnings": {
+      "repo": [
+        "M3 = v1.1 (phases 18–49, previously marked complete 2026-06-18); M4 = v2.0 Encrypted Productivity Suite is already defined with its own dir — inserting a v1.2 milestone between them was ruled out in favor of reopening M3.",
+        "REQUIREMENTS.md already had a 'v1.2 Requirements' section, but it covers future features (CRDT shares, DB minimization, BYO-direct), not hardening — new HARD-01…06 requirement IDs were needed.",
+        "ROADMAP Progress table was stale: it stopped tracking after Phase 39, and rows for phases 38/39 were incorrectly marked 'Planned' despite being 4/4 Complete.",
+        "Todos #7 (useFolderNavigation key-unwrap consolidation) and #8 (shared-move re-encrypt) were stale-pending — Phase 49 had already delivered both, confirmed in live code.",
+        "gsd-tools has no `milestone reopen` command; reopening requires manual edits to STATE.md frontmatter and multiple ROADMAP sections.",
+        "`phase add-batch` only appends Phase Detail blocks to ROADMAP (before the last `---`) and creates phase dirs — it does not touch the checklist bullets, Progress table, Milestones range, or STATE.md.",
+        "Todo #10 (gsd-tools `phase complete` regresses STATE.md) is GSD's own tooling bug, not CipherBox product code — excluded from product milestone phases and routed as upstream chore.",
+        "4 older feature todos (#1 ERC-1271, #2 CRDT inbox, #3 async search, #4 MFA factors) remain unscheduled and were not grouped into phases."
+      ],
+      "code": [
+        {
+          "path": "apps/web/hooks/useFolderNavigation.ts",
+          "line": 240,
+          "end_line": 240,
+          "finding": "Todo #7 already resolved: now delegates to client.ensureFolderLoaded instead of duplicating key-unwrap logic inline — Phase 49 delivered this."
+        },
+        {
+          "path": "apps/web/features/shared-folder/moveInSharedFolder.ts",
+          "finding": "Todo #8 already resolved: moveInSharedFolder with re-key-to-destination logic exists, along with shared-folder-move.spec.ts — Phase 49 delivered this."
+        }
+      ],
+      "workflow": [
+        "Always verify live code before treating a stale-pending todo as open — ROADMAP/STATE history and todo files can fall out of sync with what was actually shipped.",
+        "When reopening a completed milestone, the safer pattern is to fan out parallel read-only agents to digest todos by theme before synthesizing phase groups — keeps main context clean for the structural decisions.",
+        "gsd-tools `progress --raw` shows 100% plan-completion even immediately after a milestone reopen because new phases have no plans yet; this is distinct from the phase-based percent in STATE.md frontmatter — both figures are correct and consistent."
+      ]
+    },
+    "friction": [
+      "A `cd` in an earlier Bash tool call persisted the shell working directory into subsequent calls, causing 'file not found' errors when reading ROADMAP/STATE from what was expected to be the repo root.",
+      "No `milestone reopen` command in gsd-tools — required careful manual edits across STATE.md frontmatter, ROADMAP Overview, Milestones line, Phases checklist, Progress table, and Phase Details sections with no single sanctioned codepath.",
+      "ROADMAP Progress table had 16 phases of drift (40–55 missing, 38/39 incorrect status) that had to be backfilled using per-phase plan-file counts scraped from disk.",
+      "Two todos (#7, #8) were stale-pending despite being delivered by Phase 49 — required a code verification pass mid-flight before the phase grouping could be finalized."
+    ],
+    "open_items": [
+      "Phases 50–55 have no plans yet — each needs /gsd:plan-phase before execution can begin.",
+      "4 older feature todos remain unscheduled outside the hardening block: #1 ERC-1271 auth, #2 CRDT IPNS inbox, #3 async search index, #4 alternative MFA factors.",
+      "Todo #10 (gsd-tools `phase complete` regresses STATE.md on a milestone's final phase) is a known upstream GSD tooling bug — routed as an upstream chore, not tracked in the CipherBox milestone.",
+      "REQUIREMENTS.md traceability table now has HARD-01…06 rows but no 'Source' or 'Phase' cross-links — may need reconciliation when phases are individually planned.",
+      "The ROADMAP Progress table 'Status' column for phases 50–55 is 'Pending' with 0 plans — will drift again unless updated during each phase's plan-phase run."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T13:17:49.55052Z",
+    "agent_lines": 168,
+    "agent_removed": 73,
+    "human_added": 0,
+    "human_modified": 96,
+    "human_removed": 0,
+    "total_committed": 216,
+    "total_lines_changed": 337,
+    "agent_percentage": 71.51335311572701,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 49,
+      "user_lines_removed": 48,
+      "agent_lines_added": 264,
+      "agent_lines_removed": 121,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/ROADMAP.md": 48
+      },
+      "user_removed_per_file": {
+        ".planning/ROADMAP.md": 48
+      }
+    }
+  ]
+}
