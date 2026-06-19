@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "dcbc3365f6aa",
+  "strategy": "manual-commit",
+  "branch": "docs/v1.1-verification-nyquist-closeout",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/28-code-hygiene-logging/28-VALIDATION.md",
+    ".planning/phases/30-web-app-observability/30-VALIDATION.md",
+    ".planning/reports/MILESTONE_SUMMARY-v1.1.md",
+    ".planning/reports/TECH_DEBT-v1.1.md",
+    ".planning/v1.1-MILESTONE-AUDIT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/dc/bc3365f6aa/0/metadata.json",
+      "transcript": "/dc/bc3365f6aa/0/full.jsonl",
+      "content_hash": "/dc/bc3365f6aa/0/content_hash.txt",
+      "prompt": "/dc/bc3365f6aa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 587,
+    "cache_creation_tokens": 52875,
+    "cache_read_tokens": 8103727,
+    "output_tokens": 30787,
+    "api_call_count": 26
+  }
+}

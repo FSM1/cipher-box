@@ -1,0 +1,110 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "dcbc3365f6aa",
+  "session_id": "9cb885a0-aa9d-49e9-92d3-93dd9f36538d",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T00:57:15.358767Z",
+  "branch": "docs/v1.1-verification-nyquist-closeout",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/28-code-hygiene-logging/28-VALIDATION.md",
+    ".planning/phases/30-web-app-observability/30-VALIDATION.md",
+    ".planning/v1.1-MILESTONE-AUDIT.md",
+    ".planning/reports/MILESTONE_SUMMARY-v1.1.md",
+    ".planning/reports/TECH_DEBT-v1.1.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "152e38d7a742",
+  "checkpoint_transcript_start": 370,
+  "transcript_lines_at_start": 370,
+  "token_usage": {
+    "input_tokens": 587,
+    "cache_creation_tokens": 52875,
+    "cache_read_tokens": 8103727,
+    "output_tokens": 30787,
+    "api_call_count": 26
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Rename a branch to a better name and add Nyquist validation contracts (VALIDATION.md) for the 4 phases (28, 29, 30, 32) that were missing them, as part of a v1.1 docs/verification closeout.",
+    "outcome": "Branch renamed to `docs/v1.1-verification-nyquist-closeout`; VALIDATION.md authored for all 4 missing phases via multi-agent workflow with adversarial spot-checking; audit/milestone/tech-debt docs updated to reflect 0 missing VALIDATION.md files; one doc accuracy fix applied to phase 28; commit amended.",
+    "learnings": {
+      "repo": [
+        "Phase 34 already had a VALIDATION.md (authored 2026-06-12) — the v1.1-MILESTONE-AUDIT.md Nyquist 'missing' list was stale (dated 2026-06-11) and incorrectly included it.",
+        "Phase 28 nyquist_compliant=true is defensible: all SCs are static hygiene invariants (0 console.*, 0 as any, POC dir removed) verifiable by grep, not runtime tests.",
+        "Phase 29 headline behavior (delete→unenroll wiring via fireAndForgetUnenroll, collectSubtreeIpnsNames recursion) ships with zero automated tests — overlaps existing todo #15.",
+        "Phase 30 has a real dead-code bug: registerFaroTransport is unreachable because the logger has no transports array — this is exactly todo #16.",
+        "Phase 32 E2E covers the async main-push path but unit tier is missing for drain/dedup and poll-wait/EIO handling.",
+        "28-VALIDATION.md incorrectly referenced 'apps/web/vite.config.ts' for test config — actual config is 'apps/web/vitest.config.ts'; vite.config.ts contains no test configuration.",
+        "upload-error-recovery.test.ts was misleadingly cited as behavioral evidence for SC2 logging guarantee in phase 28 — it contains no logger mocks or assertions."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/29-infrastructure-hardening/29-VALIDATION.md",
+          "finding": "ipns.service.spec.ts line ~1500 contains a describe('unenrollBatch') block with exactly 4 tests — the only real test coverage for phase 29's headline feature."
+        },
+        {
+          "path": ".planning/phases/30-web-app-observability/30-VALIDATION.md",
+          "finding": "apps/web/src/lib/faro.ts privacy scrubber (scrubObject/scrubValue/beforeSend, HEX_KEY_PATTERN) has zero automated tests despite being pure deterministic logic — highest-priority test gap."
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "finding": "registerFaroTransport is dead code — logger object has no transports array, so the function can never execute. Flagged as real bug in VALIDATION.md, cross-referenced to todo #16."
+        },
+        {
+          "path": "apps/web/src/lib/logger.ts",
+          "finding": "delete.service.test.ts:65 asserts logger.warn on quota-reconcile failure, providing the only runtime evidence for SC1/SC2 logging in phase 28."
+        }
+      ],
+      "workflow": [
+        "Multi-agent Nyquist workflow with per-phase skeptic/adversarial spot-check is effective for retroactive validation doc authoring — caught doc accuracy issues that a single-pass agent missed.",
+        "Retroactive VALIDATION.md should be authored via static analysis only (grep/fs invariants, no test suite runs) when the branch is docs-only — keeps scope clean.",
+        "Workflow output truncation in task notifications is a real risk for long results; always read the full output file before acting on results.",
+        "The GSD audit 'missing' list should be treated as potentially stale — always verify against actual filesystem state before scoping work."
+      ]
+    },
+    "friction": [
+      "The v1.1-MILESTONE-AUDIT.md Nyquist missing list was stale (6 days old), causing the initial scope to include phase 34 which already had a VALIDATION.md — required a filesystem scan to correct before starting.",
+      "Task notification output was truncated (6997 chars cut) — required a separate Read of the full output file to get phase 32 results.",
+      "Phase 28 skeptic caught two doc accuracy issues (wrong config file path, misleading coverage claim) that required manual follow-up edits after the workflow completed."
+    ],
+    "open_items": [
+      "Phases 29, 30, 32 are nyquist_compliant=false — test backfill required (code change, deferred to separate PRs): phase 29 needs SDK fireAndForgetUnenroll + collectSubtreeIpnsNames tests (todo #15); phase 30 needs faro.ts privacy scrubber unit tests; phase 32 needs drain/dedup and poll-wait/EIO unit tests.",
+      "Phase 30 dead-code bug: registerFaroTransport unreachable due to missing transports array on logger — tracked as todo #16, not fixed on this docs branch.",
+      "Phase 29 POST /ipns/unenroll endpoint has no ipns.controller.spec.ts — JWT scoping, 200-name cap, and IPNS regex are static-grep-verified only.",
+      "8 phases with 'partial' VALIDATION.md status still exist — pushing them to fully Nyquist-compliant requires writing tests (code change, out of scope for this docs branch).",
+      "Phase 28 plan deviation noted: 28-04 called for a 00-Preliminary-R&D/ARCHIVED.md provenance note that was never created — the whole parent dir was removed instead; SC satisfied via git history but deviation is undocumented in plan."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T00:56:37.560574Z",
+    "agent_lines": 22,
+    "agent_removed": 12,
+    "human_added": 437,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 459,
+    "total_lines_changed": 514,
+    "agent_percentage": 6.614785992217899,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 690,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/28-code-hygiene-logging/28-VALIDATION.md": 172,
+        ".planning/phases/29-infrastructure-hardening/29-VALIDATION.md": 170,
+        ".planning/phases/30-web-app-observability/30-VALIDATION.md": 175,
+        ".planning/phases/32-fuse-async-filepointer-resolution/32-VALIDATION.md": 172
+      }
+    }
+  ]
+}
