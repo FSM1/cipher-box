@@ -1000,6 +1000,26 @@ describe('VaultService', () => {
       expect(mockPendingUnpinRepository.delete).not.toHaveBeenCalled();
     });
 
+    it('WR-01: advisory lock query must not use abs(int4) form (INT_MIN CID stays deletable)', async () => {
+      // Regression for D-01 / WR-01: abs(int4) overflows for INT_MIN (-2147483648),
+      // making the file permanently undeletable. The fix: pg_advisory_xact_lock(hashtext($1)::bigint)
+      // without abs() — signed bigint sign-extends safely from int4.
+      mockManagerPinnedCidRepo.findOne.mockResolvedValue(mockPinnedRow);
+      mockManagerQueryBuilder.getRawOne.mockResolvedValue({ count: '0' });
+      mockIpfsProvider.unpinFile.mockResolvedValue(undefined);
+
+      let capturedSql = '';
+      mockManager.query.mockImplementation((sql: string) => {
+        capturedSql = sql;
+        return Promise.resolve([]);
+      });
+
+      await service.guardedUnpin(testUserId, testCid);
+
+      expect(capturedSql).toMatch(/pg_advisory_xact_lock/);
+      expect(capturedSql).not.toMatch(/abs\(hashtext/);
+    });
+
     it('advisory lock ordering: pg_advisory_xact_lock is called via manager.query BEFORE pinnedCidRepo.delete', async () => {
       mockManagerPinnedCidRepo.findOne.mockResolvedValue(mockPinnedRow);
       mockManagerQueryBuilder.getRawOne.mockResolvedValue({ count: '1' });
