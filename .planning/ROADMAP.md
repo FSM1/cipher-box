@@ -898,10 +898,17 @@ Scope (captured todos):
 - [ ] **[#11]** Migrate untyped .mjs E2E helper scripts to TypeScript — `2026-06-18-migrate-mjs-e2e-helper-scripts-to-typescript.md`
 
 Plans:
+**Wave 1**
 
 - [ ] 54-01-PLAN.md — Foundation: tsconfig.scripts.json (D-03) + shared tests/e2e-helpers/auth.ts (D-04) + root typecheck ordering (D-02) + eslint scope (D-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 54-02-PLAN.md — Migrate sdk-core trio (edit-filepointer, rename-folder, verify-filepointer) to .ts (D-02/D-04/D-05/D-07)
 - [ ] 54-03-PLAN.md — Migrate desktop-e2e pair + web-perf + generate-test-vectors (@cipherbox/core gap, tsx child-spawn) (D-02/D-04/D-05/D-07)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 54-04-PLAN.md — Update all 8 runners node→tsx in lockstep + delete 7 .mjs (D-05/D-06/D-07)
 
 ### Phase 55: Large Source-File Refactor
