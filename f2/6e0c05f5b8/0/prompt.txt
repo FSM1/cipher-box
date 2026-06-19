@@ -1,0 +1,5 @@
+is there any point in discussing phase 50?
+
+---
+
+for #14, I think the on-demand traversal is the preferred approach. kick off planning with that decision locked in.
