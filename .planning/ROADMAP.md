@@ -840,10 +840,10 @@ Plans:
 
 ### Phase 51: Crypto-Signature & Secret-Leak Hardening
 
-**Goal:** [To be planned]
+**Goal:** Close the three deferred IPNS signed-record findings (S1/S2/S3) from the PR #448 security review under HARD-02 — publish-time embedded-vs-DTO validation (S1), fail-closed signature verification across web + sdk-core + Rust with callers honoring signatureVerified (S2), and an exhaustive caller-owns-key zeroization convention across the TS SDK and Rust crates with an enforcement guard (S3). Server stays zero-knowledge; DB remains the authoritative CID source.
 **Requirements**: HARD-02
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Scope (captured todos):
 
@@ -855,7 +855,10 @@ Deferred from this phase:
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 51 to break down)
+- [ ] 51-01-PLAN.md — S1: publish-time embedded-vs-DTO CID + offset-aware sequence validation (api)
+- [ ] 51-02-PLAN.md — S2 web: fail-closed resolveIpnsRecord (throw on invalid, allow+flag on absent)
+- [ ] 51-03-PLAN.md — S2/S3 Rust: IpnsResolveResponse sig fields + verify fn + FUSE callers honor it; Zeroizing key paths
+- [ ] 51-04-PLAN.md — S3 TS: sdk-core ipns/vault/folder zeroization sweep + enforcement guard tests
 
 ### Phase 52: Desktop FUSE Durability & At-Rest Safety
 
