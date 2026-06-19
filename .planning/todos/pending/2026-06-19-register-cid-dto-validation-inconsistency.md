@@ -35,3 +35,11 @@ to `{44}` unless an intentional reason for the open bound is documented.
 `register-cid.dto.ts` is outside phase 50's confirmed fix scope. Captured here so
 the DTO change ships with its own review rather than being bundled into the
 phase-50 data-integrity fixes.
+
+## Phase 50 /simplify note
+
+Phase 50 /simplify (reuse) confirmed the two CID regexes already DIVERGE in
+practice — `unpin.dto.ts` uses `Qm...{44}` (fixed length) while
+`register-cid.dto.ts` uses `Qm...{44,}` (variable length). Recommend a single
+shared `CID_REGEX` constant or an `@IsCid()` decorator as the fix — it resolves
+both the divergence captured above and WR-02 in one change.
