@@ -151,9 +151,9 @@ describe('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal', () => {
     await new Promise((r) => setTimeout(r, 100));
 
     // Collect all names passed to unenrollBatch across all calls
-    const allNames = vi.mocked(ipnsControllerUnenrollBatch).mock.calls.flatMap(
-      (call) => call[0].ipnsNames
-    );
+    const allNames = vi
+      .mocked(ipnsControllerUnenrollBatch)
+      .mock.calls.flatMap((call) => call[0].ipnsNames);
 
     // Must include SUBFOLDER (the deleted folder), AND SUBFOLDER_FILE (loaded on demand).
     // RED: current sync code omits SUBFOLDER_FILE because it stops at the folderTree miss.
@@ -219,9 +219,9 @@ describe('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal', () => {
     // Wait for fire-and-forget async traversal to complete
     await new Promise((r) => setTimeout(r, 100));
 
-    const allNames = vi.mocked(ipnsControllerUnenrollBatch).mock.calls.flatMap(
-      (call) => call[0].ipnsNames
-    );
+    const allNames = vi
+      .mocked(ipnsControllerUnenrollBatch)
+      .mock.calls.flatMap((call) => call[0].ipnsNames);
 
     // PARENT was deleted — must be unenrolled
     expect(allNames).toContain(PARENT);
@@ -274,5 +274,61 @@ describe('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal', () => {
     expect(client.getFolderTree().has(SUBFOLDER)).toBe(false);
     // folderTree must only contain PARENT (the folder we seeded), not SUBFOLDER
     expect(client.getFolderTree().has(PARENT)).toBe(true);
+  });
+
+  /**
+   * Test D (CR-01 regression): a cyclic folder graph A→B→A must terminate.
+   *
+   * Folder A's metadata lists folder B as a child, and B's metadata lists A.
+   * Without the `visited` cycle guard this recurses until the call stack is
+   * exhausted (RangeError: Maximum call stack size exceeded) or hangs fetching
+   * the same IPNS names forever. With the guard, traversal terminates and each
+   * IPNS name is collected exactly once (also covers IN-02 de-dup).
+   */
+  it('Test D: A→B→A folder cycle terminates and collects each name once', async () => {
+    const client = new CipherBoxClient(createTestConfig({ rootIpnsName: ROOT, rootIpnsKeypair }));
+
+    const FOLDER_A = 'k51cycleA';
+    const FOLDER_B = 'k51cycleB';
+
+    // Seed PARENT in folderTree containing FOLDER_A (the deleted folder).
+    client.getFolderTree().set(PARENT, {
+      ipnsName: PARENT,
+      folderKey: new Uint8Array(32).fill(1),
+      ipnsKeypair: { publicKey: new Uint8Array(0), privateKey: new Uint8Array(64).fill(2) },
+      sequenceNumber: 1n,
+      children: [folderEntry(FOLDER_A, 'FolderA')],
+      metadata: null,
+      lastLoadedAt: Date.now(),
+    });
+
+    // A lists B as a child; B lists A as a child — a cycle.
+    mockTree({
+      [FOLDER_A]: [folderEntry(FOLDER_B, 'FolderB')],
+      [FOLDER_B]: [folderEntry(FOLDER_A, 'FolderA')],
+    });
+
+    const removedFolder = folderEntry(FOLDER_A, 'FolderA');
+    vi.mocked(sdkCore.deleteFromFolder).mockReturnValue({
+      updatedChildren: [],
+      removedItem: removedFolder,
+    });
+
+    // Must terminate (no stack overflow / no hang).
+    await expect(client.deleteItem(PARENT, `id-${FOLDER_A}`)).resolves.not.toThrow();
+
+    // Wait for fire-and-forget async traversal to complete
+    await new Promise((r) => setTimeout(r, 100));
+
+    const allNames = vi
+      .mocked(ipnsControllerUnenrollBatch)
+      .mock.calls.flatMap((call) => call[0].ipnsNames);
+
+    // Both folders collected.
+    expect(allNames).toContain(FOLDER_A);
+    expect(allNames).toContain(FOLDER_B);
+    // Each name collected exactly once despite the cycle (visited de-dup, IN-02).
+    expect(allNames.filter((n) => n === FOLDER_A)).toHaveLength(1);
+    expect(allNames.filter((n) => n === FOLDER_B)).toHaveLength(1);
   });
 });
