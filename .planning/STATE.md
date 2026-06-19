@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Ready to execute
-last_updated: "2026-06-19T19:53:12.870Z"
+status: Phase 51 complete
+last_updated: "2026-06-19T22:20:00.000Z"
 last_activity: 2026-06-19
 progress:
   total_phases: 40
-  completed_phases: 35
+  completed_phases: 36
   total_plans: 160
-  completed_plans: 159
-  percent: 88
+  completed_plans: 160
+  percent: 89
 ---
 
 # Project State
@@ -153,6 +153,7 @@ Milestone v1.1 reopened 2026-06-19 with a hardening block (Phases 50–55). Phas
 | Phase 49 P05 | 12min | 2 tasks | 2 files |
 | Phase 51 P01 | 9min | 3 tasks | 2 files |
 | Phase 51 P03 | 45min | 4 tasks | 12 files |
+| Phase 51 P04 | 12min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -289,7 +290,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-19
 
-Last session: 2026-06-19T21:30:00Z
+Last session: 2026-06-19T22:20:00Z
 
 ## Decisions
 
@@ -314,3 +315,4 @@ Last session: 2026-06-19T21:30:00Z
 - [Phase 51-01]: CAS ConflictException (409) check placed before S1 BadRequestException (400) sequence check so concurrent-modification signals remain authoritative; S1 reuses anti-rollback incomingParsed to avoid double parse
 - [Phase 51-03]: resolve_folder_key_cached cache left as HashMap<String, Vec<u8>> (not Zeroizing); cache is short-lived, cleared on replay_for_vault drop — only BFS queue and get_folder_key return changed
 - [Phase 51-03]: verify_ipns_resolve_signature absent-fields path returns Ok(None) + warn (D-03), not error; verify gate in resolve_folder_key BFS only (not fetch_merge_publish_parent replay path)
+- [Phase 51-04]: updateFolderMetadataAndPublish SKIP zeroing — all client.ts call sites pass live session keys from folderTree state reused across session lifetime; caller retains ownership (T-47-01 documented skip with guard test)
