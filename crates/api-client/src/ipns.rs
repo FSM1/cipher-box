@@ -65,10 +65,62 @@ pub async fn resolve_ipns(
 /// - `Ok(Some(true))` when the signature is valid and the public key derives to `ipns_name`.
 /// - `Err` when base64 decoding or IPNS name derivation fails on present fields.
 pub fn verify_ipns_resolve_signature(
-    _resp: &crate::types::IpnsResolveResponse,
-    _ipns_name: &str,
+    resp: &crate::types::IpnsResolveResponse,
+    ipns_name: &str,
 ) -> Result<Option<bool>, crate::error::ApiError> {
-    unimplemented!("verify_ipns_resolve_signature is not yet implemented")
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+
+    // D-03: absent fields → allow + flag (caller should warn and continue).
+    let (Some(sig_b64), Some(data_b64), Some(pub_key_b64)) =
+        (resp.signature_v2.as_ref(), resp.data.as_ref(), resp.pub_key.as_ref())
+    else {
+        return Ok(None);
+    };
+
+    let sig = STANDARD.decode(sig_b64).map_err(|e| {
+        crate::error::ApiError::DeserializationFailed(format!(
+            "IPNS signatureV2 base64 decode failed: {}",
+            e
+        ))
+    })?;
+    let cbor_data = STANDARD.decode(data_b64).map_err(|e| {
+        crate::error::ApiError::DeserializationFailed(format!(
+            "IPNS data base64 decode failed: {}",
+            e
+        ))
+    })?;
+    let pub_key = STANDARD.decode(pub_key_b64).map_err(|e| {
+        crate::error::ApiError::DeserializationFailed(format!(
+            "IPNS pubKey base64 decode failed: {}",
+            e
+        ))
+    })?;
+
+    // Build signed bytes: "ipns-signature:" prefix || CBOR data.
+    let mut signed_data = b"ipns-signature:".to_vec();
+    signed_data.extend_from_slice(&cbor_data);
+
+    // D-02: invalid signature → fail closed.
+    if !cipherbox_crypto::verify_ed25519(&signed_data, &sig, &pub_key) {
+        return Ok(Some(false));
+    }
+
+    // Convert decoded pub_key to fixed 32-byte array; wrong length → treat as invalid.
+    let pubkey_arr: [u8; 32] = match pub_key.as_slice().try_into() {
+        Ok(arr) => arr,
+        Err(_) => return Ok(Some(false)),
+    };
+
+    // Derive IPNS name and check it binds to the resolved name.
+    let derived_name = cipherbox_crypto::derive_ipns_name(&pubkey_arr).map_err(|e| {
+        crate::error::ApiError::DeserializationFailed(format!(
+            "IPNS name derivation failed: {}",
+            e
+        ))
+    })?;
+
+    Ok(Some(derived_name == ipns_name))
 }
 
 /// Publish a signed IPNS record via the backend.
