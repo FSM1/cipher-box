@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "c5d1a25a475d",
+  "strategy": "manual-commit",
+  "branch": "feat/desktop-fuse-durability-at-rest-safety",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/c5/d1a25a475d/0/metadata.json",
+      "transcript": "/c5/d1a25a475d/0/full.jsonl",
+      "content_hash": "/c5/d1a25a475d/0/content_hash.txt",
+      "prompt": "/c5/d1a25a475d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 33844,
+    "cache_creation_tokens": 353167,
+    "cache_read_tokens": 8934132,
+    "output_tokens": 97102,
+    "api_call_count": 66
+  }
+}
