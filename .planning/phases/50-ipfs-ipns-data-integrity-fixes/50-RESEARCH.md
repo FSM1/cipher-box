@@ -455,17 +455,19 @@ No `[ASSUMED]` claims in this research. All findings verified against live code 
 
 **This table is empty:** All claims in this research were verified against live files.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **WR-07 (BYO blocks physical unpin) — fix or accept?**
    - What we know: the D-04 context says "fix unless there is a strong rationale to accept." Filtering BYO rows from the hosted refcount requires updating the `guardedUnpin` query AND the drift `dbCids` set (IN-05) consistently.
    - What's unclear: whether the product intends BYO advisory rows to block hosted-pin deletion (it currently does, by design per D-07).
    - Recommendation: At minimum document the retention consequence in `docs/CAPACITY.md` with an inline comment in `vault.service.ts:279-284`. The Claude's Discretion section does not lock this.
+   - **RESOLVED:** in plan **50-04** (Task 2). Default disposition is ACCEPT-with-documentation rather than fix, because filtering BYO rows from the hosted refcount is a behavior change that ripples into IN-05 and contradicts the original D-07 design intent. 50-04 adds an inline accept-comment at `vault.service.ts:279-284` citing WR-07 (BYO advisory rows intentionally block physical unpin of hosted content per D-07) plus a "Retention consequence of BYO advisory rows" subsection in `docs/CAPACITY.md`, and keeps IN-05's `dbCids` drift set consistent (comment noting it intentionally includes BYO rows to mirror the refcount semantics). The plan leaves the FIX path (a refcount predicate excluding BYO rows + matching IN-05 filter) available if execution chooses it, but records ACCEPT as the recommended, lower-risk default; the chosen disposition is recorded in 50-04-SUMMARY.md.
 
 2. **D-03 on-demand traversal — async signature impact**
    - What we know: `collectSubtreeIpnsNames` is currently synchronous; making it async changes the call chain through `collectRemovedItemIpnsNames`, `collectBinEntryIpnsNames`, and ultimately the fire-and-forget pattern at all four deletion paths.
    - What's unclear: Whether to add a parallel async method or rename-and-convert. The planner should decide based on the test conventions in `ensure-folder-loaded.test.ts`.
    - Recommendation: Add a new `async collectSubtreeIpnsNamesAsync(folderIpnsName, folderKey)` and convert the four call sites to `Promise<string[]>`, resolving before passing to `fireAndForgetUnenroll`.
+   - **RESOLVED:** in plan **50-03** (Task 2). The decision is the new-method approach: add a new `private async collectSubtreeIpnsNamesAsync(folderIpnsName: string, folderKey: Uint8Array, acc?: string[]): Promise<string[]>` that fetches+decrypts persisted child metadata via `sdkCore.loadFolderMetadata` on a folderTree miss (and does NOT mutate `folderTree`). `collectRemovedItemIpnsNames` and `collectBinEntryIpnsNames` become async (`Promise<string[]>`), and all four deletion call sites — `deleteItem` (~:856), `permanentDelete` (~:1866), `emptyBin` (~:1880), `purgeExpired` (~:1927) — resolve the promise before calling `fireAndForgetUnenroll`, preserving the synchronous fire-and-forget contract. The obsolete synchronous `collectSubtreeIpnsNames` is removed in favor of the single async path.
 
 ## Environment Availability
 
