@@ -197,5 +197,81 @@ describe('IPNS operations', () => {
         'IPNS signature verification failed'
       );
     });
+
+    // S2 regression guard (D-02): present-but-invalid signature must throw (fail-closed).
+    // This test locks in the already-correct sdk-core behavior so a future edit cannot
+    // silently regress it.
+    it('S2 regression: throws on present-but-invalid signature (fail-closed)', async () => {
+      const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+      const { verifyEd25519 } = await import('@cipherbox/crypto');
+      vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+        success: true,
+        cid: 'QmS2Test',
+        sequenceNumber: '3',
+        signatureV2: btoa('invalid-sig'),
+        data: btoa('cbor-data'),
+        pubKey: btoa('pubkey'),
+      });
+      // Signature fields are present but verification returns false — must throw, not warn+continue
+      vi.mocked(verifyEd25519).mockResolvedValue(false);
+
+      await expect(resolveIpnsRecord('k51s2-regression')).rejects.toThrow(
+        'IPNS signature verification failed'
+      );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S3 zeroization guard tests (D-05 enforcement: T-47-01 caller-owns-key)
+// These tests assert that createAndPublishIpnsRecord zeroes its caller-passed
+// ipnsPrivateKey on all exit paths (success and throw).
+// ---------------------------------------------------------------------------
+
+describe('createAndPublishIpnsRecord zeroization (S3/D-05)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Test A: key is zeroed on the success path
+  it('A: zeroes the ipnsPrivateKey buffer after successful publish', async () => {
+    const { ipnsControllerPublishRecord } = await import('@cipherbox/api-client');
+    vi.mocked(ipnsControllerPublishRecord).mockResolvedValue({
+      success: true,
+      sequenceNumber: '1',
+      ipnsName: 'k51zeroize',
+    });
+
+    const key = new Uint8Array(32).fill(5);
+    await createAndPublishIpnsRecord({
+      ipnsPrivateKey: key,
+      ipnsName: 'k51zeroize',
+      metadataCid: 'QmCid',
+      sequenceNumber: 0n,
+    });
+
+    // T-47-01: buffer must be all zeroes after the owning function returns
+    expect(key.every((b) => b === 0)).toBe(true);
+  });
+
+  // Test B: key is zeroed even when the publish rejects (finally path)
+  it('B: zeroes the ipnsPrivateKey buffer even when publish throws', async () => {
+    const { ipnsControllerPublishRecord } = await import('@cipherbox/api-client');
+    vi.mocked(ipnsControllerPublishRecord).mockRejectedValue(new Error('publish failed'));
+
+    const key = new Uint8Array(32).fill(9);
+    try {
+      await createAndPublishIpnsRecord({
+        ipnsPrivateKey: key,
+        ipnsName: 'k51zeroize-throw',
+        metadataCid: 'QmCid',
+        sequenceNumber: 0n,
+      });
+    } catch {
+      // expected
+    }
+
+    // finally block must have run regardless of throw
+    expect(key.every((b) => b === 0)).toBe(true);
   });
 });

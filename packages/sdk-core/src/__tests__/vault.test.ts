@@ -50,6 +50,40 @@ describe('vault key blob operations', () => {
     vi.clearAllMocks();
   });
 
+  // S3 zeroization guard (D-05 / T-47-01): publishVaultKeyBlob is the terminal
+  // owner of vaultKeyKeypair.privateKey (derived internally, not passed by caller).
+  // It must zero the private key buffer on all exit paths.
+  describe('publishVaultKeyBlob zeroization (S3/D-05)', () => {
+    // Test C: the derived privateKey buffer is zeroed after a successful publish
+    it('C: zeroes the derived vaultKeyKeypair.privateKey after successful publish', async () => {
+      const { deriveVaultKeyIpnsKeypair } = await import('@cipherbox/crypto');
+
+      // Fresh non-zero private key buffer for this test
+      const privateKeyBuf = new Uint8Array(32).fill(0xab);
+      vi.mocked(deriveVaultKeyIpnsKeypair).mockResolvedValueOnce({
+        ipnsName: 'k51vaultkey',
+        publicKey: new Uint8Array(32).fill(1),
+        privateKey: privateKeyBuf,
+      });
+
+      vi.mocked(addToIpfs).mockResolvedValue({ cid: 'bafyvaultblob', size: 64, recorded: true });
+      vi.mocked(createAndPublishIpnsRecord).mockResolvedValue({
+        success: true,
+        sequenceNumber: 0n,
+      });
+
+      await publishVaultKeyBlob({
+        userPrivateKey: new Uint8Array(32).fill(0x01),
+        userPublicKey: new Uint8Array(33).fill(0x02),
+        rootFolderKey: new Uint8Array(32).fill(0x03),
+        ctx: mockCtx,
+      });
+
+      // T-47-01: terminal owner must zero the buffer after returning
+      expect(privateKeyBuf.every((b) => b === 0)).toBe(true);
+    });
+  });
+
   describe('publishVaultKeyBlob', () => {
     it('publishes vault key blob and returns IPNS name', async () => {
       vi.mocked(addToIpfs).mockResolvedValue({ cid: 'bafyvaultblob', size: 64, recorded: true });
