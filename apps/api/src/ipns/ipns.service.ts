@@ -219,6 +219,9 @@ export class IpnsService {
     // old-but-still-valid signed copy (no key needed) to roll the canonical row
     // back to a stale CID — independent of the optional expectedSequenceNumber CAS.
     // Equal sequences are allowed (idempotent re-publish of the current record).
+    // incomingParsed is set here when existing?.signedRecord is present (anti-rollback
+    // path) so S1 can reuse it below without a second parseIpnsRecord call.
+    let incomingParsed: { value: string; sequence: bigint } | null = null;
     if (existing?.signedRecord) {
       const [incoming, stored] = await Promise.all([
         parseIpnsRecord(signedRecord),
@@ -231,9 +234,13 @@ export class IpnsService {
           currentSequenceNumber: existing.sequenceNumber,
         });
       }
+      incomingParsed = incoming;
     }
 
     // Conflict detection: when expectedSequenceNumber is provided, verify it matches
+    // the DB-stored sequence. This is an optimistic concurrency check (CAS) that fires
+    // before the S1 embedded-sequence check so that concurrent-modification 409s remain
+    // the authoritative signal for stale clients.
     if (existing && expectedSequenceNumber !== undefined) {
       const expected = BigInt(expectedSequenceNumber);
       const current = BigInt(existing.sequenceNumber);
@@ -244,6 +251,45 @@ export class IpnsService {
           currentSequenceNumber: existing.sequenceNumber,
           expectedSequenceNumber,
         });
+      }
+    }
+
+    // S1 (D-01): embedded-vs-DTO publish-time integrity gate. Runs after the CAS check
+    // so that concurrent-modification 409s take priority over tamper-detection 400s.
+    // Parse the incoming record exactly once (reuse anti-rollback parse when available).
+    if (incomingParsed === null) {
+      incomingParsed = await parseIpnsRecord(signedRecord);
+    }
+    // S1 CID check: the embedded signed-record CID must strictly equal metadataCid.
+    const embeddedCidMatch = incomingParsed.value.match(/\/ipfs\/([a-zA-Z0-9]+)/);
+    const embeddedCid = embeddedCidMatch?.[1];
+    if (embeddedCid !== metadataCid) {
+      throw new BadRequestException(
+        `signedRecord embedded CID does not match metadataCid: embedded=${embeddedCid}, dto=${metadataCid}`
+      );
+    }
+    // S1 sequence check (offset-aware for the first-publish pre-increment convention):
+    // clients sign seq 0n or 1n on first publish (DB stores '1'). On subsequent publishes
+    // clients sign expectedSequenceNumber + 1n. Only runs when expectedSequenceNumber given.
+    if (expectedSequenceNumber !== undefined) {
+      const expectedSeqBigInt = BigInt(expectedSequenceNumber);
+      const isFirstPublish = !existing;
+      if (isFirstPublish) {
+        // Accept embedded seq equal to expectedSeqBigInt (0n) or expectedSeqBigInt + 1n (1n)
+        const diff = incomingParsed.sequence - expectedSeqBigInt;
+        if (diff !== 0n && diff !== 1n) {
+          throw new BadRequestException(
+            `signedRecord sequence does not match expectedSequenceNumber on first publish: embedded=${incomingParsed.sequence}, expected=${expectedSequenceNumber}`
+          );
+        }
+      } else {
+        // Non-first publish: embedded must be exactly expectedSeqBigInt + 1n
+        const expectedEmbedded = expectedSeqBigInt + 1n;
+        if (incomingParsed.sequence !== expectedEmbedded) {
+          throw new BadRequestException(
+            `signedRecord sequence does not match expectedSequenceNumber: embedded=${incomingParsed.sequence}, expected=${expectedEmbedded}`
+          );
+        }
       }
     }
 

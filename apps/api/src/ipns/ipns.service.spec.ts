@@ -424,17 +424,19 @@ describe('IpnsService', () => {
       const existingFolder = { ...mockFolderEntity, sequenceNumber: '10' };
       mockFolderIpnsRepo.findOne.mockResolvedValue(existingFolder);
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      // S1 validates embedded CID vs metadataCid — use testMetadataCid so the default
+      // parseIpnsRecord mock (value: /ipfs/testMetadataCid) aligns with the DTO value.
 
       await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
         record: testRecord,
-        metadataCid: 'new-cid',
+        metadataCid: testMetadataCid,
       });
 
       expect(mockFolderIpnsRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({
           sequenceNumber: '11',
-          latestCid: 'new-cid',
+          latestCid: testMetadataCid,
         })
       );
     });
@@ -446,11 +448,13 @@ describe('IpnsService', () => {
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(largeSeqFolder);
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      // S1 validates embedded CID vs metadataCid — use testMetadataCid so the default
+      // parseIpnsRecord mock aligns with the DTO value.
 
       await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
         record: testRecord,
-        metadataCid: 'new-cid',
+        metadataCid: testMetadataCid,
       });
 
       expect(mockFolderIpnsRepo.save).toHaveBeenCalledWith(
@@ -467,12 +471,14 @@ describe('IpnsService', () => {
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(existingFolder);
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      // S1 validates embedded CID vs metadataCid — use testMetadataCid so the default
+      // parseIpnsRecord mock aligns with the DTO value.
 
       const beforeTest = new Date();
       await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
         record: testRecord,
-        metadataCid: 'new-cid',
+        metadataCid: testMetadataCid,
       });
       const afterTest = new Date();
 
@@ -1404,6 +1410,8 @@ describe('IpnsService', () => {
     it('accepts publish with matching expectedSequenceNumber', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '5' });
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
+      // S1 sequence check: expects embedded = expectedSeq + 1n = 6n
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       const dto = createDto({ expectedSequenceNumber: '5' });
       const result = await service.publishRecord(testUserId, dto);
@@ -1436,19 +1444,20 @@ describe('IpnsService', () => {
       );
       mockFolderIpnsRepo.create.mockImplementation((data) => ({ ...data, id: 'new-id' }));
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
+      // S1 CID check: all records use testMetadataCid so the default mock aligns
 
       const batchDto: BatchPublishIpnsDto = {
         records: [
           {
             ipnsName: 'k51qzi5uqu5dg12345abcdef00001',
             record: testRecord,
-            metadataCid: 'bafkreifile1',
+            metadataCid: testMetadataCid, // S1: matches embedded CID from default mock
             recordType: 'file',
           },
           {
             ipnsName: 'k51qzi5uqu5dg12345abcdef00002',
             record: testRecord,
-            metadataCid: 'bafkreifile2',
+            metadataCid: testMetadataCid, // S1: matches embedded CID from default mock
             recordType: 'file',
           },
           {
@@ -1456,7 +1465,7 @@ describe('IpnsService', () => {
             record: testRecord,
             metadataCid: testMetadataCid,
             recordType: 'folder',
-            expectedSequenceNumber: '3', // Stale: DB has '5'
+            expectedSequenceNumber: '3', // Stale: DB has '5' → CAS 409 fires first
           },
         ],
       };
@@ -1479,13 +1488,22 @@ describe('IpnsService', () => {
         sequenceNumber: '1',
       }));
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
+      // S1 sequence check for folder: expects embedded = 5 + 1 = 6n
+      // File record (no expectedSequenceNumber): default mock sequence 0n is fine (no S1 seq check)
+      // But since these run concurrently we use mockImplementation to disambiguate by call order:
+      // Both calls use testMetadataCid for CID (default mock satisfies), but folder needs seq 6n.
+      // Use mockResolvedValueOnce for the file's call, then the folder's call.
+      // Note: Promise.allSettled order matches records array order.
+      mockParseIpnsRecord
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 0n }) // file record
+        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 6n }); // folder (seq=expectedSeq+1)
 
       const batchDto: BatchPublishIpnsDto = {
         records: [
           {
             ipnsName: 'k51qzi5uqu5dg12345abcdef00001',
             record: testRecord,
-            metadataCid: 'bafkreifile1',
+            metadataCid: testMetadataCid, // S1: matches embedded CID
             recordType: 'file',
           },
           {
@@ -1493,7 +1511,7 @@ describe('IpnsService', () => {
             record: testRecord,
             metadataCid: testMetadataCid,
             recordType: 'folder',
-            expectedSequenceNumber: '5', // Matches DB
+            expectedSequenceNumber: '5', // Matches DB; embedded seq must be 6n
           },
         ],
       };
