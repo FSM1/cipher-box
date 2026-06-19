@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "63ac3e2a0b38",
+  "session_id": "ca575d75-db2f-4c2d-8294-09d1af4240cb",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T18:16:36.096737Z",
+  "branch": "feat/crypto-signature-secret-leak-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "b991e336997d",
+  "checkpoint_transcript_start": 108,
+  "transcript_lines_at_start": 108,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 1294,
+    "cache_read_tokens": 251168,
+    "output_tokens": 1771,
+    "api_call_count": 2
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Lz5h1zNHMx7SqG233yqYKN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b991e336997d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 42,
+        "end": 43,
+        "entry_ids": [
+          "ee10835c-b9e7-42df-8e82-7648bbee013c"
+        ],
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:discuss-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Verify that a documentation commit landed correctly and update STATE.md to record the session.",
+    "outcome": "Confirmed commit b3215131e landed successfully despite a false-negative report from the commit helper; STATE.md was updated and committed.",
+    "learnings": {
+      "repo": [
+        ".planning/intel/ contains pre-existing untracked files that appear in git status but are not part of normal commits"
+      ],
+      "code": [],
+      "workflow": [
+        "The commit helper can report commit_failed as a false negative; always verify with git log when the helper reports failure"
+      ]
+    },
+    "friction": [
+      "Commit helper returned a false-negative commit_failed result, requiring an extra git log verification step"
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T18:16:30.142501Z",
+    "agent_lines": 2,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "total_lines_changed": 4,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
