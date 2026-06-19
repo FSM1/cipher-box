@@ -1,0 +1,191 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2c0e5ef5af45",
+  "session_id": "23b28342-e76c-41da-872a-14e0f4fbc9ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T16:34:38.357125Z",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4bdfeb110c40",
+  "token_usage": {
+    "input_tokens": 29889,
+    "cache_creation_tokens": 584287,
+    "cache_read_tokens": 23526905,
+    "output_tokens": 144114,
+    "api_call_count": 104
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01XWNxPn9Y2eDALMFaCnVhv6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 36,
+        "end": 37,
+        "entry_ids": [
+          "0ec3006c-056a-4fa5-a4e1-81bf4c70bbd6"
+        ],
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A67zEtU8W6i7yf84Hses7n",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 328,
+        "end": 329,
+        "entry_ids": [
+          "ef3aabff-921f-4f81-8539-b95d6c03715d"
+        ],
+        "tool_use_id": "toolu_01A67zEtU8W6i7yf84Hses7n"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A67zEtU8W6i7yf84Hses7n"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:code-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01ENaavbBYGs8Yqsvbik3KUp",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 464,
+        "end": 465,
+        "entry_ids": [
+          "c7e4b674-99b7-4cdf-b35f-a1f9ad528528"
+        ],
+        "tool_use_id": "toolu_01ENaavbBYGs8Yqsvbik3KUp"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01ENaavbBYGs8Yqsvbik3KUp"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute all 5 plans for Phase 50 (IPFS/IPNS Data-Integrity Fixes) via the GSD manager — parallel worktree execution, code review, fix application, and phase verification.",
+    "outcome": "Phase 50 fully complete: all 5 plans merged (INT_MIN overflow fix, refcount-aware drain, on-demand subtree IPNS traversal with cycle guard, D-04 dispositions, unpin-integrity fixes + api-client regen), 2 code-review blockers fixed, verification passed 3/3 must-haves, phase marked complete, 2 resolved todos closed. /simplify pass initiated but not yet landed.",
+    "learnings": {
+      "repo": [
+        "orval/pnpm api:generate resolves to the workspace root, not the worktree — any worktree that runs pnpm install or api:generate leaks regenerated api-client (132 files) and openapi.json into the main checkout's working tree.",
+        "Husky regenerates .husky/_/* stubs in any worktree that runs pnpm install, leaving untracked files that block the cleanup-wave merge helper.",
+        "The GSD merge helper's internal commit silently fails when lint-staged (eslint+prettier) runs across 131 staged api-client files — the helper reports opaque merge_failed with empty stderr; completing the merge manually with hooks enabled works fine.",
+        "The GSD commit helper false-negatives: reports commit_failed but git log confirms the commit landed. Do not retry.",
+        "todos/done/ (70 items, frozen ~2026-06-15) and todos/completed/ (20 items, current canonical) coexist — GSD tooling references completed/ exclusively; done/ is unmigrated legacy drift.",
+        "phase.complete warns about missing REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) in REQUIREMENTS traceability — pre-existing doc-sync debt, not a phase failure.",
+        "The GSD init.manager dep-parser mis-parses 'Phase 49 (v1.1 baseline)' into a phantom phase '1.1', marking deps unsatisfied even when Phase 49 is complete.",
+        "worktree base-check result 'baseref-head' means executors fork off current HEAD — PLAN files are always present in forked worktrees without additional setup."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 272,
+          "end_line": 341,
+          "finding": "collectSubtreeIpnsNamesAsync lacked a visited set for cycle detection despite docstring claiming to mirror ensureFolderLoaded DFS pattern; siblings ensureFolderLoaded (line 549) and the shared walker (line 2526) both carry one. Fixed in code-review follow-up."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 286,
+          "end_line": 294,
+          "finding": "After fix: visited guard added as parameter (line 286) with early-return guard (line 293-294) and child-skip (line 327-341)."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "4 fire-and-forget bin-unenroll dispatch sites had no .catch() handlers — unhandled promise rejections on failure. Fixed; /simplify followup will consolidate into a single fireAndForgetUnenrollEntries helper."
+        },
+        {
+          "path": "apps/api/src/ipfs/pending-unpin/pending-unpin.processor.ts",
+          "line": 55,
+          "end_line": 59,
+          "finding": "WR-01: refcount recheck and physical unpin happen outside the advisory lock in the drain path — data-loss race window. Fixed by moving unpin inside lock scope. Accepted trade-off: lock now held across Kubo network call on a low-frequency batched path."
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "IN-06: outboxRowInserted renamed to shouldAttemptPhysicalUnpin for clarity. IN-01: fileUnpins.inc() now gated by rowDeleted flag — no longer fires on no-op paths. IN-03: recordUnpin deleted (zero callers)."
+        }
+      ],
+      "workflow": [
+        "When a wave merge fails with empty stderr, check whether the pre-commit hook (check-api-client.sh + lint-staged) is timing out or silently failing the merge helper's internal commit — completing the merge manually with hooks enabled resolves it.",
+        "After parallel worktrees run pnpm operations, always inspect main checkout dirty state before merging; leaked generated files from worktrees can be safely discarded once confirmed to match the incoming worktree's committed content.",
+        "Key-link forward-reference artifacts (parser treating an upcoming wave's own deliverable as a missing prior dependency) can be ignored — verify by checking that the actual prior-wave files are present on HEAD.",
+        "GSD phase.complete REQ-ID warnings are surfaced by gsd-tools checking REQUIREMENTS.md traceability — separate from HARD-01 verification; pre-existing gaps don't block completion.",
+        "TDD gate: each type:tdd plan must have a clean RED test commit followed by a GREEN fix commit — reviewable via git log per-plan. Disposition plans (50-04/50-05) are exempt."
+      ]
+    },
+    "friction": [
+      "orval/pnpm api:generate leaked 132 api-client files + openapi.json from the 50-05 worktree into main checkout — blocked cleanup-wave merge; required manual dirty-state inspection, content verification, and discard before re-merging.",
+      "Husky stubs (.husky/_/*) generated in 50-05 worktree blocked initial cleanup-wave merge as untracked files — required explicit clean step before retry.",
+      "GSD merge helper silently failed its internal hook-gated commit (lint-staged across 131 staged files) and returned opaque merge_failed with empty stderr — required manual diagnosis and manual merge completion.",
+      "GSD commit helper false-negative: reports commit_failed on docs(phase-50) tracking commits but git log confirms commits landed — creates unnecessary uncertainty.",
+      "GSD init.manager mis-parses phase dependency strings containing version numbers (e.g. 'Phase 49 (v1.1 baseline)'), creating phantom phase '1.1' and falsely marking deps unsatisfied.",
+      "mktemp on macOS BSD doesn't substitute XXXXXX in the middle of a template path — minor but creates non-standard temp filenames.",
+      "Bash pipe masking exit codes on typecheck runs — required re-running without pipe to confirm BUILD_EXIT=0."
+    ],
+    "open_items": [
+      "WR-02: RegisterCidDto CID regex ({44} vs {44,} divergence vs UnpinDto) — deferred, file not in phase-50 scope; todo filed.",
+      "WR-05: LocalProvider unescaped CID in shell command — deferred, file not in phase-50 scope; todo filed.",
+      "WR-01 lock-across-Kubo-network accepted trade-off routed to security review — needs explicit sign-off.",
+      "/simplify extractions not yet landed: fireAndForgetUnenrollEntries (collapses 3 copy-paste dispatch blocks + 4 CR-02 .catch handlers) and collectFolderSubtree (collapses 2 duplicated unwrap+delegate+fallback branches) in client.ts.",
+      "shared withCidLock+refcount primitive: advisory-lock SQL inlined 3× across vault.service — accepted debt, todo filed.",
+      "IpfsProviderModule circular dependency comment is factually wrong (only needs ConfigService) — deferred extraction, todo filed.",
+      "Consolidate todos/done/ (70 legacy items) into todos/completed/ (canonical) — flagged but not actioned.",
+      "REQUIREMENTS traceability gaps: IPNS-05/06, DB-01/02, BYO-08 missing from REQUIREMENTS.md — pre-existing doc-sync debt.",
+      "Two orphaned worktree branches (worktree-agent-a92edd36, worktree-agent-abd7998d) from a prior session remain — no worktrees attached, left untouched.",
+      "Phase 51 (Crypto-Signature & Auth) next up — status: Ready to discuss."
+    ]
+  }
+}
