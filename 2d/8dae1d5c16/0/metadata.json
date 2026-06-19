@@ -173,6 +173,37 @@
         "label": "Skill: simplify",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_012GfoRTYrjkRhzpZepPUXo1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:ship"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "9f58bbc60fbe",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 945,
+        "end": 946,
+        "entry_ids": [
+          "7fc0c2d0-008e-4cf3-98f5-1e92d7f851fa"
+        ],
+        "tool_use_id": "toolu_012GfoRTYrjkRhzpZepPUXo1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_012GfoRTYrjkRhzpZepPUXo1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:ship",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
