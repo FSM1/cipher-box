@@ -1,0 +1,121 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "aec8a71dabe5",
+  "session_id": "23b28342-e76c-41da-872a-14e0f4fbc9ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T15:35:15.61081Z",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "1116b1e20395",
+  "token_usage": {
+    "input_tokens": 25907,
+    "cache_creation_tokens": 216070,
+    "cache_read_tokens": 8124625,
+    "output_tokens": 73847,
+    "api_call_count": 50
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01XWNxPn9Y2eDALMFaCnVhv6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "1116b1e20395",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 36,
+        "end": 37,
+        "entry_ids": [
+          "0ec3006c-056a-4fa5-a4e1-81bf4c70bbd6"
+        ],
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute Phase 50 (IPFS/IPNS Data-Integrity Fixes) of the cipher-box project using wave-based parallel worktree execution across 5 plans covering integer-overflow fixes, refcount-aware drain, subtree IPNS traversal, and unpin integrity fixes.",
+    "outcome": "Wave 1 (plans 50-01, 50-02, 50-03, 50-05) completed successfully with all 4 worktrees merged to the phase branch, post-merge typecheck clean, and 93/93 targeted tests green. Wave 1 tracking committed; Wave 2 (plan 50-04) not yet dispatched at transcript end.",
+    "learnings": {
+      "repo": [
+        "pnpm/orval api-client generation resolves against the workspace root rather than the active worktree, so any plan that runs `pnpm api:generate` or `pnpm install` leaks generated/regenerated files (131+ api-client files, sdk/client.ts) into the main checkout's working tree.",
+        "The pre-commit hook runs `check-api-client.sh` + `pnpm lint-staged` (eslint+prettier across the full api-client output); this is slow enough (~137 files) that the gsd-tools `cleanup-wave` merge helper silently times out or fails its internal commit step, returning `merge_failed` with empty stderr.",
+        "`.husky/_/` hook stubs are auto-generated (untracked) in worktrees when `pnpm install` runs there — these block `cleanup-wave` from cleaning a worktree and must be removed before re-running the helper.",
+        "The `gsd-tools query init.manager` dep parser mis-parses version-qualified dep strings like 'Phase 49 (v1.1 baseline)' into a phantom phase '1.1', marking real deps unsatisfied and suppressing auto-recommendations even when the phase is ready to execute.",
+        "Two orphan `worktree-agent-a92edd36` / `worktree-agent-abd7998d` branches exist with no attached worktrees — left from a prior session, not safe to blindly delete without investigation.",
+        "The IpfsModule → VaultModule circular import was accepted as-is in plan 50-04 (IN-04); extraction to a shared module was explicitly deferred with cycle-reason comments in IpfsModule, PendingUnpinModule, and VaultModule."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipfs/pending-unpin/pending-unpin.processor.ts",
+          "line": 59,
+          "end_line": 59,
+          "finding": "Refcount guard added here (plan 50-02): skip physical unpin in drain when CID is re-pinned, fixing WR-03 race where a re-pin during drain caused spurious removal."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "New `collectSubtreeIpnsNamesAsync` function added (plan 50-03) for on-demand fetch+decrypt traversal of unloaded subtrees; 4 deletion call-sites updated to await it, fixing D-03 silent data loss on unloaded folders."
+        },
+        {
+          "path": "apps/api/src/ipfs/unpin/unpin.dto.ts",
+          "finding": "CID field now enforces `@MaxLength(255)` and `@Matches` (CIDv0/CIDv1 regex) per IN-02; api-client regenerated (132 files) as a consequence."
+        }
+      ],
+      "workflow": [
+        "Never run the full monorepo test suite in parallel from worktree agents — RAM starvation and infra-dependent integration tests make it unsafe. Run targeted test suites (changed packages only) for the post-merge gate instead.",
+        "When `gsd-tools cleanup-wave` returns `merge_failed` with empty stderr and leaves `MERGE_HEAD` in place, the merge itself succeeded cleanly — the failure is in the hook-gated commit step. Completing the merge manually with `git commit` (hooks enabled, generous timeout) is the correct recovery path.",
+        "Before re-merging after a leaked-file block: verify all dirty working-tree files match the worktree branch exactly (git diff against worktree tip), then `git checkout -- .` to discard them so the merge can proceed cleanly.",
+        "macOS (BSD) `mktemp` does not substitute `XXXXXX` in the middle of a template string — place the `XXXXXX` at the end only."
+      ]
+    },
+    "friction": [
+      "`gsd-tools cleanup-wave` merge helper silently failed mid-wave when the pre-commit hook couldn't complete its internal merge commit — left `MERGE_HEAD` dangling and reported an opaque `merge_failed` with no diagnostic output, requiring manual diagnosis and recovery.",
+      "pnpm/orval api-client generation leaked 131 files from the 50-05 worktree into the main checkout after earlier merges triggered post-commit hooks, blocking the subsequent merge until the leaked files were verified and discarded.",
+      "`.husky/_/` stubs auto-generated in the 50-05 worktree blocked `cleanup-wave` from processing that worktree; required explicit `git clean -fd .husky/_/` before re-running.",
+      "The init.manager dep parser phantom-phase bug suppressed recommendations for Phase 50 even though all real deps were satisfied, requiring manual judgment to proceed.",
+      "Bash `mktemp` mid-template `XXXXXX` substitution silently failed (BSD behavior), producing a non-unique temp filename for the wave manifest."
+    ],
+    "open_items": [
+      "Wave 2 (plan 50-04, depends on 50-01 + 50-02) not yet dispatched — transcript ends after Wave 1 merge and tracking commit.",
+      "Phase 50 verification step (gsd-verify-work / acceptance testing) not yet run.",
+      "IN-04 circular import (IpfsModule → VaultModule): extraction to a shared module explicitly deferred; cycle-reason comments added as a workaround.",
+      "Two orphan worktree branches (`worktree-agent-a92edd36`, `worktree-agent-abd7998d`) left from a prior session — should be investigated and cleaned up.",
+      "The `gsd-tools cleanup-wave` merge-commit step should be hardened to surface pre-commit hook failures with actionable output instead of returning a bare `merge_failed`."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T15:34:21.017538Z",
+    "agent_lines": 6,
+    "agent_removed": 6,
+    "human_added": 6,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 12,
+    "total_lines_changed": 24,
+    "agent_percentage": 50,
+    "metric_version": 2
+  }
+}

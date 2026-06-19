@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "aec8a71dabe5",
+  "strategy": "manual-commit",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ae/c8a71dabe5/0/metadata.json",
+      "transcript": "/ae/c8a71dabe5/0/full.jsonl",
+      "content_hash": "/ae/c8a71dabe5/0/content_hash.txt",
+      "prompt": "/ae/c8a71dabe5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 25907,
+    "cache_creation_tokens": 216070,
+    "cache_read_tokens": 8124625,
+    "output_tokens": 73847,
+    "api_call_count": 50
+  }
+}
