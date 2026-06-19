@@ -52,6 +52,19 @@ export class PendingUnpinProcessor extends WorkerHost {
 
     for (const row of rows) {
       try {
+        // D-02 / WR-03: Re-check refcount before unpinning. A concurrent re-upload
+        // or pin-migration may have re-pinned this CID while it sat in the outbox.
+        // Unpinning a live pin would cause Kubo GC → data loss. Skip the physical
+        // unpin but still delete the stale outbox row so it is not retried.
+        const refs = await this.pinnedCidRepository.count({ where: { cid: row.cid } });
+        if (refs > 0) {
+          await this.pendingUnpinRepository.delete({ cid: row.cid });
+          this.logger.log(
+            `Drain: skipped unpin for cid=${row.cid} — CID is re-pinned (refs=${refs}); stale outbox row discarded`
+          );
+          continue;
+        }
+
         // D-05: Call through provider so "not pinned" is treated as success
         // (LocalProvider.unpinFile swallows "not pinned" at local.provider.ts:94)
         await this.ipfsProvider.unpinFile(row.cid);
