@@ -42,6 +42,14 @@ import { reencryptFileMetadataForFolderChange } from './reencrypt';
 /** Maximum concurrent encrypt+pin operations for batch uploads. */
 const UPLOAD_CONCURRENCY = 3;
 
+/**
+ * Maximum concurrent on-demand IPNS subtree collections for fire-and-forget
+ * unenroll. Bounds the request fan-out when emptying/purging a bin with many
+ * top-level entries (WR-04). Each collection still walks its own subtree
+ * sequentially, so this caps the number of subtrees fetched in parallel.
+ */
+const UNENROLL_COLLECT_CONCURRENCY = 8;
+
 /** Thrown when a bin operation is attempted before loadBin() has been called. */
 export class BinNotLoadedError extends Error {
   constructor() {
@@ -200,43 +208,161 @@ export class CipherBoxClient {
     }
   }
 
-  /** Extract IPNS names from a removed FolderChild (file or folder subtree). */
-  private collectRemovedItemIpnsNames(item: FolderChild): string[] {
+  /**
+   * Fire-and-forget IPNS unenrollment for a set of bin entries.
+   * Collects each entry's subtree IPNS names with a bounded concurrency limit
+   * (WR-04), then dispatches the flattened batch. Failures are logged but never
+   * block the caller.
+   */
+  private fireAndForgetUnenrollEntries(entries: BinEntry[]): void {
+    const collectLimit = pLimit(UNENROLL_COLLECT_CONCURRENCY);
+    Promise.all(entries.map((entry) => collectLimit(() => this.collectBinEntryIpnsNames(entry))))
+      .then((nameArrays) => this.fireAndForgetUnenroll(nameArrays.flat()))
+      .catch((err) => console.warn('[CipherBox] IPNS unenroll collection failed:', err));
+  }
+
+  /**
+   * Extract IPNS names from a removed FolderChild (file or folder subtree).
+   *
+   * For folder items, unwraps the folder's key from its encrypted form (present
+   * because the item came from its parent's decrypted metadata) and delegates to
+   * the async on-demand subtree collector (D-03).
+   */
+  private async collectRemovedItemIpnsNames(item: FolderChild): Promise<string[]> {
     if (item.type === 'file') {
       return [(item as FilePointer).fileMetaIpnsName];
     } else if (item.type === 'folder') {
-      return this.collectSubtreeIpnsNames((item as FolderEntry).ipnsName);
+      const entry = item as FolderEntry;
+      return this.collectFolderSubtree(entry.ipnsName, entry.folderKeyEncrypted);
     }
     return [];
   }
 
-  /** Extract IPNS names from a BinEntry (file pointer and/or folder subtree). */
-  private collectBinEntryIpnsNames(entry: BinEntry): string[] {
+  /**
+   * Unwrap a folder's key and collect its full subtree of IPNS names.
+   *
+   * Shared by the removed-item and bin-entry collectors. On unwrap or fetch
+   * failure, falls back to returning only the folder's own IPNS name so the
+   * caller never aborts on a single bad node.
+   */
+  private async collectFolderSubtree(
+    ipnsName: string,
+    folderKeyEncrypted: string
+  ): Promise<string[]> {
+    try {
+      const folderKey = await unwrapKey(
+        hexToBytes(folderKeyEncrypted),
+        this.internalVaultKeypair.privateKey
+      );
+      return await this.collectSubtreeIpnsNamesAsync(ipnsName, folderKey);
+    } catch {
+      // Key unwrap or subtree fetch failed — return only the folder's own IPNS name
+      return [ipnsName];
+    }
+  }
+
+  /**
+   * Extract IPNS names from a BinEntry (file pointer and/or folder subtree).
+   *
+   * For folder entries, unwraps the folder key from its encrypted form and
+   * delegates to the async on-demand subtree collector (D-03).
+   */
+  private async collectBinEntryIpnsNames(entry: BinEntry): Promise<string[]> {
     const names: string[] = [];
     if (entry.filePointer?.fileMetaIpnsName) {
       names.push(entry.filePointer.fileMetaIpnsName);
     }
     if (entry.folderEntry?.ipnsName) {
-      names.push(...this.collectSubtreeIpnsNames(entry.folderEntry.ipnsName));
+      names.push(
+        ...(await this.collectFolderSubtree(
+          entry.folderEntry.ipnsName,
+          entry.folderEntry.folderKeyEncrypted
+        ))
+      );
     }
     return names;
   }
 
   /**
-   * Recursively collect all IPNS names from a folder subtree.
-   * Walks the in-memory folderTree to find file IPNS names and subfolder IPNS names.
-   * Only collects from loaded folders -- unloaded subtrees are skipped.
+   * Recursively collect all IPNS names from a folder subtree via on-demand fetch+decrypt.
+   *
+   * Tries in-memory folderTree first; on a miss, calls sdkCore.loadFolderMetadata
+   * to fetch and decrypt the persisted child folder metadata from IPNS (D-03 locked
+   * — on-demand traversal, no reconciliation-job backstop). This ensures that deleting
+   * a folder whose subtree was never expanded in the current session still unenrolls
+   * every descendant IPNS record, closing the nested-IPNS-unenroll leak (HARD-01).
+   *
+   * INVARIANT: This method NEVER writes to this.folderTree. Fire-and-forget timing
+   * means writing fetched state back would cause the Zustand/SDK folderTree desync
+   * (stale-sequence 409 / resurrected deletes). Fetched metadata is local only.
+   *
+   * A null return from loadFolderMetadata (IPNS record not yet published) and any
+   * per-child fetch/unwrap failure are caught independently — one bad node cannot
+   * abort collection for its siblings (Pitfall 4 / constraint 5).
    */
-  private collectSubtreeIpnsNames(folderIpnsName: string, acc: string[] = []): string[] {
+  private async collectSubtreeIpnsNamesAsync(
+    folderIpnsName: string,
+    folderKey: Uint8Array,
+    acc: string[] = [],
+    visited: Set<string> = new Set()
+  ): Promise<string[]> {
+    // Cycle/repeat guard: folder metadata is client-supplied, decrypted,
+    // attacker-or-corruption-influenceable data. Without this, an A→B→A cycle (or
+    // a deep/wide adversarial tree) recurses until the stack overflows, and a
+    // DAG/diamond accumulates the same names repeatedly (CR-01 / IN-02). Mirrors
+    // the `visited` set in ensureFolderLoaded's DFS.
+    if (visited.has(folderIpnsName)) return acc;
+    visited.add(folderIpnsName);
     acc.push(folderIpnsName);
-    const folder = this.folderTree.get(folderIpnsName);
-    if (!folder) return acc;
 
-    for (const child of folder.children) {
+    // Try in-memory first — avoids an unnecessary IPNS fetch for loaded subtrees.
+    let children = this.folderTree.get(folderIpnsName)?.children;
+
+    if (!children) {
+      // On-demand fetch from IPNS — mirrors the ensureFolderLoaded DFS pattern.
+      try {
+        const result = await sdkCore.loadFolderMetadata({
+          ipnsName: folderIpnsName,
+          folderKey,
+          ctx: this.ctx,
+        });
+        // null means the IPNS record has not been published yet (Pitfall 3).
+        // The folder's own IPNS name is already in acc; skip recursion.
+        if (!result) return acc;
+        children = result.metadata.children;
+      } catch {
+        // Fetch/decrypt failure: log without key material and skip this node's children.
+        // The folder's own IPNS name is already in acc.
+        console.warn(
+          `[CipherBox] IPNS unenroll traversal: could not load metadata for ${folderIpnsName}, skipping children`
+        );
+        return acc;
+      }
+    }
+
+    for (const child of children) {
       if (child.type === 'file') {
         acc.push((child as FilePointer).fileMetaIpnsName);
       } else if (child.type === 'folder') {
-        this.collectSubtreeIpnsNames((child as FolderEntry).ipnsName, acc);
+        const entry = child as FolderEntry;
+        // Skip children already visited (cycle/diamond) before any fetch or unwrap.
+        if (visited.has(entry.ipnsName)) continue;
+        try {
+          // Unwrap this subfolder's key with the vault keypair (ECIES).
+          // Each child's failure is caught independently so siblings are still collected.
+          const childFolderKey = await unwrapKey(
+            hexToBytes(entry.folderKeyEncrypted),
+            this.internalVaultKeypair.privateKey
+          );
+          await this.collectSubtreeIpnsNamesAsync(entry.ipnsName, childFolderKey, acc, visited);
+        } catch {
+          // Unwrap or child fetch failure: collect the child's IPNS name at minimum
+          // and continue with siblings (constraint 5 — one bad child must not abort all).
+          if (!visited.has(entry.ipnsName)) {
+            visited.add(entry.ipnsName);
+            acc.push(entry.ipnsName);
+          }
+        }
       }
     }
     return acc;
@@ -852,8 +978,10 @@ export class CipherBoxClient {
         sequenceNumber: newSequenceNumber,
       });
 
-      // 5. Fire-and-forget IPNS unenrollment
-      this.fireAndForgetUnenroll(this.collectRemovedItemIpnsNames(removedItem));
+      // 5. Fire-and-forget IPNS unenrollment (resolve async collection then dispatch)
+      this.collectRemovedItemIpnsNames(removedItem)
+        .then((names) => this.fireAndForgetUnenroll(names))
+        .catch((err) => console.warn('[CipherBox] IPNS unenroll collection failed:', err));
 
       return { removedItem };
     });
@@ -1863,7 +1991,7 @@ export class CipherBoxClient {
 
       // Fire-and-forget IPNS unenrollment for permanently deleted bin entry
       if (entry) {
-        this.fireAndForgetUnenroll(this.collectBinEntryIpnsNames(entry));
+        this.fireAndForgetUnenrollEntries([entry]);
       }
     });
   }
@@ -1875,10 +2003,8 @@ export class CipherBoxClient {
     return this.withOperation('emptyBin', async () => {
       if (!this.binState) throw new BinNotLoadedError();
 
-      // Collect all IPNS names before emptying (includes subtree for folders)
-      const ipnsNamesToUnenroll = this.binState.entries.flatMap((entry) =>
-        this.collectBinEntryIpnsNames(entry)
-      );
+      // Capture entries before emptying so async collection can proceed after the bin is cleared
+      const entriesToUnenroll = [...this.binState.entries];
 
       const { updatedBinState } = await binOps.emptyBin({
         binState: this.binState,
@@ -1888,8 +2014,8 @@ export class CipherBoxClient {
       this.binState = updatedBinState;
       this.emitter.emit({ type: 'bin:updated', entries: [] });
 
-      // Fire-and-forget IPNS unenrollment for all emptied bin entries
-      this.fireAndForgetUnenroll(ipnsNamesToUnenroll);
+      // Fire-and-forget IPNS unenrollment: collect async (on-demand subtree fetch) then dispatch.
+      this.fireAndForgetUnenrollEntries(entriesToUnenroll);
     });
   }
 
@@ -1923,9 +2049,8 @@ export class CipherBoxClient {
         );
         this.binState = updatedState;
         this.emitter.emit({ type: 'bin:updated', entries: updatedState.entries });
-        this.fireAndForgetUnenroll(
-          purgedEntries.flatMap((entry) => this.collectBinEntryIpnsNames(entry))
-        );
+        // Fire-and-forget IPNS unenrollment: collect async (on-demand subtree fetch) then dispatch.
+        this.fireAndForgetUnenrollEntries(purgedEntries);
       }
 
       return purgedCount;

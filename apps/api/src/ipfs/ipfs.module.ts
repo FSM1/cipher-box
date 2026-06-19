@@ -13,6 +13,11 @@ export class IpfsModule {
       controllers: [IpfsController],
       providers: [
         {
+          // IN-04 (accepted): IPFS_PROVIDER useFactory is duplicated across IpfsModule,
+          // VaultModule, and PendingUnpinModule. Extraction into a shared IpfsProviderCoreModule
+          // is avoided because IpfsModule imports VaultModule and VaultModule imports
+          // IpfsModule's provider — a shared module would create a circular dependency.
+          // Each module self-provides to break the cycle. Accepted with this comment.
           provide: IPFS_PROVIDER,
           useFactory: (configService: ConfigService) => {
             const apiUrl = configService.get<string>('IPFS_LOCAL_API_URL', 'http://localhost:5001');

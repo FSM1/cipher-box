@@ -3,10 +3,14 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.40.0
+ * OpenAPI spec version: 0.41.0
  */
 
 export interface UnpinDto {
-  /** The IPFS CID of the file to unpin */
+  /**
+   * The IPFS CID of the file to unpin. Must be a valid CIDv0 (Qm... base58) or CIDv1 (b... base32). Max 255 characters.
+   * @maxLength 255
+   * @pattern ^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{58,})$
+   */
   cid: string;
 }

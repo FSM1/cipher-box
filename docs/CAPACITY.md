@@ -320,6 +320,50 @@ Automated pass/fail thresholds are defined in `tests/load/src/harness/thresholds
 
 ---
 
+## 7. Retention Consequence of BYO Advisory Rows
+
+### 7.1 Background
+
+CipherBox supports two storage modes for each file CID in `pinned_cids`:
+
+- **Hosted rows**: CIDs pinned via the CipherBox relay (`isByoUser = false`). The CipherBox
+  Kubo node physically holds the content.
+- **BYO advisory rows**: CIDs registered by BYO-IPFS users (`isByoUser = true`). These rows
+  track what the user claims is pinned on their own infrastructure; the CipherBox Kubo node
+  does NOT hold these CIDs.
+
+### 7.2 The Retention Consequence
+
+The `guardedUnpin` refcount query counts ALL `pinned_cids` rows for a given CID regardless of
+origin — both hosted and BYO advisory rows contribute to the refcount (D-07 design, WR-07
+disposition: accepted).
+
+**Consequence:** If a BYO advisory row exists for a CID that is also held by the CipherBox Kubo
+node (hosted), deleting the hosted row will NOT trigger a physical unpin of the CID from Kubo
+until the BYO advisory row is also removed. The CID is retained in Kubo for as long as any BYO
+advisory row references it.
+
+**When this occurs:**
+
+1. User A uploads a file via the CipherBox relay (hosted `pinned_cids` row created).
+2. User B (BYO-IPFS mode) registers the same CID (advisory `pinned_cids` row created).
+3. User A deletes their file — their hosted row is removed and their quota is decremented
+   immediately (D-03), but the CID remains pinned in Kubo because User B's advisory row
+   keeps the refcount above zero.
+4. Kubo storage is freed only when User B also removes their advisory row.
+
+**Impact on capacity planning:** In environments with significant BYO-IPFS usage, Kubo storage
+consumption may exceed what is attributable to hosted users alone. Monitor
+`cipherbox_pending_unpin_queue_depth` and `cipherbox_drift_orphaned_pins_total` for divergence
+between DB-accounted and Kubo-actual pin counts.
+
+**Operator action:** No action is required — this is intentional design. If an operator needs
+to reclaim Kubo storage held by a BYO-referenced CID, they must first remove the BYO advisory
+row (e.g., by having the BYO user delete their reference), which will allow the next
+`drain-pending-unpins` BullMQ run to physically unpin it.
+
+---
+
 ## 6. References
 
 ### Baseline Documents

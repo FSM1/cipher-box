@@ -34,8 +34,6 @@ export class VaultService {
     private readonly folderIpnsRepository: Repository<FolderIpns>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectRepository(PendingUnpin)
-    private readonly pendingUnpinRepository: Repository<PendingUnpin>,
     private readonly teeKeyStateService: TeeKeyStateService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
@@ -250,16 +248,23 @@ export class VaultService {
     cid: string,
     options?: { suppressCrossUserAudit?: boolean }
   ): Promise<void> {
-    let outboxRowInserted = false;
+    // IN-06: renamed from `outboxRowInserted` (misleading — the flag also gates the
+    // post-commit Kubo call, which has nothing to do with an "outbox row insertion").
+    // The new name describes the flag's actual semantics.
+    let shouldAttemptPhysicalUnpin = false;
+    // IN-01: track whether a pinned_cids row was actually deleted so the metric only
+    // fires on real unpins, not on no-op paths (unknown CID, cross-user, refcount > 0).
+    let rowDeleted = false;
 
     await this.dataSource.transaction(async (manager) => {
       const pinnedCidRepo = manager.getRepository(PinnedCid);
       const pendingUnpinRepo = manager.getRepository(PendingUnpin);
 
       // 1. Advisory xact lock — MUST be the first transactional statement (D-04)
-      // Compute the lock key inline so the lock is literally the first statement;
-      // abs() avoids bigint-out-of-range on negative hashtext values (Pitfall 2)
-      await manager.query(`SELECT pg_advisory_xact_lock(abs(hashtext($1))::bigint)`, [cid]);
+      // abs() was incorrectly applied to int4 before the bigint cast, overflowing for INT_MIN
+      // (-2147483648); pg_advisory_xact_lock accepts signed bigint so sign-extending
+      // hashtext int4→bigint is safe (D-01 / WR-01).
+      await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [cid]);
 
       // 2. Ownership check (D-01)
       const row = await pinnedCidRepo.findOne({ where: { userId, cid } });
@@ -273,9 +278,15 @@ export class VaultService {
       }
 
       // 3. Delete caller's row — this IS the quota decrement (D-03)
-      await pinnedCidRepo.delete({ userId, cid });
+      const deleteResult = await pinnedCidRepo.delete({ userId, cid });
+      rowDeleted = (deleteResult.affected ?? 0) > 0; // IN-01: only true on an actual row deletion
 
       // 4. Refcount across all users (D-05, D-07: no origin filtering)
+      // WR-07 disposition: BYO advisory rows intentionally count toward the hosted
+      // refcount — this is the D-07 design: a BYO advisory row blocks physical unpin
+      // of hosted content until that BYO row is removed. See docs/CAPACITY.md §7 for
+      // the retention consequence. (WR-07 accepted: filtering BYO rows would change
+      // refcount semantics and break the shared-owner-vs-BYO invariant from D-07.)
       const result = await manager
         .createQueryBuilder(PinnedCid, 'pc')
         .select('COUNT(*)', 'count')
@@ -292,34 +303,42 @@ export class VaultService {
           .values({ cid })
           .orIgnore()
           .execute();
-        outboxRowInserted = true;
+        shouldAttemptPhysicalUnpin = true; // IN-06: flag gates the post-commit Kubo call
       }
       // Transaction commits; advisory lock released automatically at end of transaction
     });
 
     // 6. Post-commit best-effort Kubo call (D-03 ordering: NEVER inside transaction, Pitfall 3)
-    if (outboxRowInserted) {
+    if (shouldAttemptPhysicalUnpin) {
       try {
         await this.ipfsProvider.unpinFile(cid);
-        await this.pendingUnpinRepository.delete({ cid });
+        // WR-03: serialize the outbox-row delete with the per-CID refcount decision by
+        // re-taking the same advisory lock used above before deleting. Without the lock,
+        // this delete races a concurrent guardedUnpin/drain that re-inserted the outbox
+        // row as its retry safety net, and could remove the row out from under it. The
+        // Kubo call stays outside the lock/transaction (D-03 ordering, Pitfall 3); only
+        // the row delete is serialized.
+        await this.dataSource.transaction(async (manager) => {
+          await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [cid]);
+          await manager.getRepository(PendingUnpin).delete({ cid });
+        });
       } catch {
         // Leave outbox row for BullMQ retry worker — Kubo failure is not a request failure
       }
     }
 
-    this.metricsService.fileUnpins.inc();
+    // IN-01: increment fileUnpins only when a pinned_cids row was actually deleted.
+    // Prior to this fix the metric fired unconditionally, inflating counts on no-op
+    // paths (unknown CID, cross-user attempt, early returns above).
+    if (rowDeleted) {
+      this.metricsService.fileUnpins.inc();
+    }
   }
 
-  /**
-   * Remove a pinned CID record
-   * Idempotent - no error if CID not found
-   */
-  async recordUnpin(userId: string, cid: string): Promise<void> {
-    await this.pinnedCidRepository.delete({
-      userId,
-      cid,
-    });
-  }
+  // IN-03: recordUnpin removed — it had zero production callers and its only
+  // reference was its own test. All production unpin paths go through guardedUnpin,
+  // which handles ownership checks, refcounting, and outbox-based physical unpin.
+  // (Deleted rather than @deprecated because there is no caller to migrate.)
 
   /**
    * Mark vault as initialized (first file uploaded)

@@ -2208,7 +2208,7 @@
   "info": {
     "title": "CipherBox API",
     "description": "Zero-knowledge encrypted cloud storage API",
-    "version": "0.40.0",
+    "version": "0.41.0",
     "contact": {}
   },
   "tags": [
@@ -2624,8 +2624,10 @@
         "properties": {
           "cid": {
             "type": "string",
-            "description": "The IPFS CID of the file to unpin",
-            "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi"
+            "description": "The IPFS CID of the file to unpin. Must be a valid CIDv0 (Qm... base58) or CIDv1 (b... base32). Max 255 characters.",
+            "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi",
+            "pattern": "^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{58,})$",
+            "maxLength": 255
           }
         },
         "required": ["cid"]

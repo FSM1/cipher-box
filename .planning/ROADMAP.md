@@ -60,7 +60,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **v1.1 Hardening Block (reopened 2026-06-19):**
 
-- [ ] **Phase 50: IPFS/IPNS Data-Integrity Fixes** - Resolve Phase 42 unpin-integrity data-loss findings and unenroll nested IPNS records under unloaded subtrees
+- [x] **Phase 50: IPFS/IPNS Data-Integrity Fixes** - Resolve Phase 42 unpin-integrity data-loss findings and unenroll nested IPNS records under unloaded subtrees (completed 2026-06-19)
 - [ ] **Phase 51: Crypto-Signature & Secret-Leak Hardening** - Enforce IPNS signedRecord validation/verification and key zeroization; add web logger redaction interceptor and wire the Faro transport
 - [ ] **Phase 52: Desktop FUSE Durability & At-Rest Safety** - Bound write-journal growth, stream large-file writes, add replay network timeouts, and scrub at-rest plaintext filenames
 - [ ] **Phase 53: Release & Supply-Chain Engineering** - Pin GitHub Actions to immutable SHAs, regenerate Cargo.lock on release, and harden release-please release-as pin automation
@@ -816,10 +816,10 @@ Scope (captured todos):
 
 ### Phase 50: IPFS/IPNS Data-Integrity Fixes
 
-**Goal:** [To be planned]
+**Goal:** No data loss and no permanently-undeletable CIDs — the Phase 42 unpin-integrity findings are resolved (INT_MIN-hash CID stays deletable; a re-pinned CID is never drained) and deleting a folder unenrolls every descendant IPNS record even when the subtree was never loaded.
 **Requirements**: HARD-01
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 0 plans
+**Plans:** 5/5 plans complete
 
 Scope (captured todos):
 
@@ -827,8 +827,16 @@ Scope (captured todos):
 - [ ] **[#14]** collectSubtreeIpnsNames skips unloaded subtrees, leaving nested IPNS records un-unenrolled — `2026-06-18-unenroll-skips-unloaded-subtrees.md`
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd:plan-phase 50 to break down)
+- [x] 50-01-PLAN.md — D-01 (WR-01): drop abs() from guardedUnpin advisory-lock so INT_MIN-hash CIDs stay deletable (TDD, RED regression)
+- [x] 50-02-PLAN.md — D-02 (WR-03): refcount-aware pending-unpin drain so re-pinned CIDs are not unpinned (TDD, RED regression)
+- [x] 50-03-PLAN.md — D-03 (LOCKED): on-demand subtree IPNS collection so unloaded subtrees fully unenroll (TDD, RED regression)
+- [x] 50-05-PLAN.md — D-04 dispositions in controller / UnpinDto+api:generate / backfill / modules (WR-02, IN-02, WR-05, WR-06, IN-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 50-04-PLAN.md — D-04 dispositions in vault.service.ts / pending-unpin.processor.ts (IN-01, IN-03, IN-06, WR-04, WR-07, IN-05)
 
 ### Phase 51: Crypto-Signature & Secret-Leak Hardening
 
@@ -951,7 +959,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 47. SDK Folder-State Consolidation        | v1.1      | 5/5            | Complete | 2026-06-17 |
 | 48. SDK Self-Bootstrap + Shared Metadata  | v1.1      | 7/7            | Complete | 2026-06-17 |
 | 49. Shared-Folder Move (Intra-Share)      | v1.1      | 5/5            | Complete | 2026-06-18 |
-| 50. IPFS/IPNS Data-Integrity Fixes        | v1.1-hardening | -         | Planned  | -          |
+| 50. IPFS/IPNS Data-Integrity Fixes        | v1.1-hardening | 5/5 | Complete    | 2026-06-19 |
 | 51. Crypto-Signature & Secret-Leak Hardening | v1.1-hardening | -      | Planned  | -          |
 | 52. Desktop FUSE Durability & At-Rest Safety | v1.1-hardening | -      | Planned  | -          |
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
