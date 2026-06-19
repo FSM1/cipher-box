@@ -6,11 +6,13 @@ CipherBox v1.1 transformed the platform from "IPFS as a storage backend with dat
 
 Scope expanded well beyond those original four thrusts to include a layered TypeScript + Rust SDK extraction, writable shares, FUSE write-durability and data-loss hardening, the production Phala TEE migration, per-package release engineering, and SDK folder-state/sharing consolidation. **Completed 2026-06-18 — 34 phases (18–49), 151 plans.**
 
+**Reopened 2026-06-19** to absorb a hardening block (Phases 50–55) — IPFS/IPNS data-integrity, crypto-signature and secret-leak hardening, desktop FUSE durability, release/supply-chain engineering, and code-health remediation surfaced during v1.1 verification and audits. Reopened into Milestone 3 rather than opening a v1.2, since Milestone 4 (v2.0) is already defined.
+
 ## Milestones
 
 - **v0.1 Staging MVP** - Phases 1-10 (shipped 2026-02-11)
 - **v1.0 Production** - Phases 11-17.1 (shipped 2026-03-05)
-- **v1.1 IPFS Infrastructure** - Phases 18-49 (completed 2026-06-18)
+- **v1.1 IPFS Infrastructure** - Phases 18-55 (18-49 completed 2026-06-18; hardening block 50-55 reopened 2026-06-19)
 
 ## Phases
 
@@ -55,6 +57,15 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 47: SDK Folder-State and Publish-Path Consolidation** - Single SDK-owned folder state and a unified file/folder CAS-retry publish helper (completed 2026-06-17)
 - [x] **Phase 48: SDK Self-Bootstrap Regression Fix and Shared-Folder/Metadata Consolidation** - Sequence-based reconcile, single-ownership shared writes, and ECIES-encrypted shared item names (completed 2026-06-17)
 - [x] **Phase 49: Shared-Folder Move (Intra-Share) and useFolderNavigation Unwrap Consolidation** - Write-recipients move files between subfolders with FileMetadata re-encryption (completed 2026-06-18)
+
+**v1.1 Hardening Block (reopened 2026-06-19):**
+
+- [ ] **Phase 50: IPFS/IPNS Data-Integrity Fixes** - Resolve Phase 42 unpin-integrity data-loss findings and unenroll nested IPNS records under unloaded subtrees
+- [ ] **Phase 51: Crypto-Signature & Secret-Leak Hardening** - Enforce IPNS signedRecord validation/verification and key zeroization; add web logger redaction interceptor and wire the Faro transport
+- [ ] **Phase 52: Desktop FUSE Durability & At-Rest Safety** - Bound write-journal growth, stream large-file writes, add replay network timeouts, and scrub at-rest plaintext filenames
+- [ ] **Phase 53: Release & Supply-Chain Engineering** - Pin GitHub Actions to immutable SHAs, regenerate Cargo.lock on release, and harden release-please release-as pin automation
+- [ ] **Phase 54: E2E Test-Infra Typing** - Migrate untyped .mjs E2E helper scripts to TypeScript wired into typecheck and lint
+- [ ] **Phase 55: Large Source-File Refactor** - Split/dedup oversized source files (client.ts, lib.rs, etc.) tier-by-tier without public-API changes
 
 ## Phase Details
 
@@ -457,38 +468,6 @@ Plans:
 
 **Plans:** 6/6 plans complete
 
-## Progress
-
-**Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33 -> 34 -> 35
-
-| Phase                                     | Milestone | Plans Complete | Status   | Completed  |
-| ----------------------------------------- | --------- | -------------- | -------- | ---------- |
-| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete | 2026-03-07 |
-| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete | 2026-03-20 |
-| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete | 2026-03-23 |
-| 20. Vault Migration                       | v1.1      | 6/6            | Complete | 2026-03-24 |
-| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete | 2026-03-25 |
-| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete | 2026-03-25 |
-| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete | 2026-03-24 |
-| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete | 2026-03-25 |
-| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete | 2026-03-25 |
-| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete | 2026-03-26 |
-| 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete | 2026-03-26 |
-| 28. Code Hygiene & Logging                | v1.1      | 4/4            | Complete | 2026-03-28 |
-| 29. Infrastructure Hardening              | v1.1      | 3/3            | Complete | 2026-03-28 |
-| 30. Web App Observability                 | v1.1      | 4/4            | Complete | 2026-03-28 |
-| 31. Structural Decomposition              | v1.1      | 3/3            | Complete | 2026-03-28 |
-| 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete | 2026-03-28 |
-| 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete | 2026-03-28 |
-| 34. E2E Test Expansion & Baselines        | v1.1      | 4/4            | Complete | 2026-03-29 |
-| 35. Phala Testnet TEE Migration           | v1.1      | 6/6            | Complete | 2026-03-29 |
-| 36. Inline Upload Progress                | post-v1.1 | 2/2            | Complete | 2026-03-29 |
-| 37. Parallel Batch Upload Pipeline        | post-v1.1 | 2/2            | Complete | 2026-03-30 |
-| 38. Retire Deprecated Web Services        | post-v1.1 | -              | Planned  | -          |
-| 39. User-Configurable Vault Parameters    | post-v1.1 | -              | Planned  | -          |
-
 ### Phase 27: Writable Shares (PoC)
 
 **Goal:** Extend Phase 14's read-only sharing to support read-write shares, leveraging existing server-side optimistic concurrency (expectedSequenceNumber / 409 conflict detection) to coordinate multi-writer IPNS publishes.
@@ -835,8 +814,151 @@ Scope (captured todos):
 - [x] **[#8]** Shared-folder move must re-encrypt file metadata to the destination folderKey — `2026-06-17-shared-folder-move-must-reencrypt-file-metadata.md`
 - [x] **[#7]** Consolidate the web useFolderNavigation key-unwrap into the SDK — `2026-06-16-remove-redundant-web-folder-seeding-now-that-sdk-self-bootst.md`
 
+### Phase 50: IPFS/IPNS Data-Integrity Fixes
+
+**Goal:** [To be planned]
+**Requirements**: HARD-01
+**Depends on:** Phase 49 (v1.1 baseline)
+**Plans:** 0 plans
+
+Scope (captured todos):
+
+- [ ] **[#12]** Phase 42 unpin-integrity code-review findings (WR/IN) unresolved in current code — `2026-06-18-phase42-unpin-integrity-review-open-findings.md`
+- [ ] **[#14]** collectSubtreeIpnsNames skips unloaded subtrees, leaving nested IPNS records un-unenrolled — `2026-06-18-unenroll-skips-unloaded-subtrees.md`
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 50 to break down)
+
+### Phase 51: Crypto-Signature & Secret-Leak Hardening
+
+**Goal:** [To be planned]
+**Requirements**: HARD-02
+**Depends on:** Phase 49 (v1.1 baseline)
+**Plans:** 0 plans
+
+Scope (captured todos):
+
+- [ ] **[#5]** IPNS signature storage review: enforce signedRecord validation, verification, and key zeroization (S1, S2, S3) — `2026-06-13-ipns-signature-storage-review-deferred.md`
+- [ ] **[#15]** Web logger redaction interceptor missing and Faro transport never wired — `2026-06-18-web-logger-redaction-and-faro-transport-unwired.md`
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 51 to break down)
+
+### Phase 52: Desktop FUSE Durability & At-Rest Safety
+
+**Goal:** [To be planned]
+**Requirements**: HARD-03
+**Depends on:** Phase 49 (v1.1 baseline)
+**Plans:** 0 plans
+
+Scope (captured todos):
+
+- [ ] **[#9]** FUSE write-journal unbounded growth + ciphertext-in-JSON, and replay has no network timeout — `2026-06-18-fuse-journal-growth-and-replay-timeout.md`
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 52 to break down)
+
+### Phase 53: Release & Supply-Chain Engineering
+
+**Goal:** [To be planned]
+**Requirements**: HARD-04
+**Depends on:** Phase 49 (v1.1 baseline)
+**Plans:** 0 plans
+
+Scope (captured todos):
+
+- [ ] **[#6]** Pin GitHub Actions to immutable SHAs (CI supply-chain hardening) — `2026-06-14-pin-github-actions-to-immutable-shas.md`
+- [ ] **[#13]** release-please bumps crate Cargo.toml versions but not Cargo.lock — `2026-06-18-releaseplease-does-not-bump-cargo-lock.md`
+- [ ] **[#16]** Harden release-please release-as pin automation against force-push clobber and stale pins — `2026-06-19-harden-release-please-pin-automation.md`
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 53 to break down)
+
+### Phase 54: E2E Test-Infra Typing
+
+**Goal:** [To be planned]
+**Requirements**: HARD-05
+**Depends on:** Phase 49 (v1.1 baseline)
+**Plans:** 0 plans
+
+Scope (captured todos):
+
+- [ ] **[#11]** Migrate untyped .mjs E2E helper scripts to TypeScript — `2026-06-18-migrate-mjs-e2e-helper-scripts-to-typescript.md`
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 54 to break down)
+
+### Phase 55: Large Source-File Refactor
+
+**Goal:** [To be planned]
+**Requirements**: HARD-06
+**Depends on:** Phase 49 (v1.1 baseline)
+**Plans:** 0 plans
+
+Scope (captured todos):
+
+- [ ] **[#17]** Large source-file refactor candidates (split/dedup survey of 26 files) — `2026-06-19-large-file-refactor-candidates.md`
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 55 to break down)
+
 ---
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33 -> 34 -> 35 -> 36 -> 37 -> 38 -> 39 -> 40 -> 41 -> 42 -> 43 -> 44 -> 45 -> 46 -> 47 -> 48 -> 49 -> 50 -> 51 -> 52 -> 53 -> 54 -> 55
+
+| Phase                                     | Milestone | Plans Complete | Status   | Completed  |
+| ----------------------------------------- | --------- | -------------- | -------- | ---------- |
+| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete | 2026-03-07 |
+| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete | 2026-03-20 |
+| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete | 2026-03-23 |
+| 20. Vault Migration                       | v1.1      | 6/6            | Complete | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | v1.1      | 11/11          | Complete | 2026-03-25 |
+| 22. Performance Baselines Complete        | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete | 2026-03-24 |
+| 24. Bug Fixes & Test Infrastructure       | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 25. Desktop Enhancements                  | v1.1      | 3/3            | Complete | 2026-03-25 |
+| 26. Observability & UX Tuning             | v1.1      | 2/2            | Complete | 2026-03-26 |
+| 27. Writable Shares (PoC)                 | v1.1      | 3/3            | Complete | 2026-03-26 |
+| 28. Code Hygiene & Logging                | v1.1      | 4/4            | Complete | 2026-03-28 |
+| 29. Infrastructure Hardening              | v1.1      | 3/3            | Complete | 2026-03-28 |
+| 30. Web App Observability                 | v1.1      | 4/4            | Complete | 2026-03-28 |
+| 31. Structural Decomposition              | v1.1      | 3/3            | Complete | 2026-03-28 |
+| 32. FUSE Async FilePointer Resolution     | v1.1      | 3/3            | Complete | 2026-03-28 |
+| 33. Windows Async FilePointer Resolution  | v1.1      | 2/2            | Complete | 2026-03-28 |
+| 34. E2E Test Expansion & Baselines        | v1.1      | 4/4            | Complete | 2026-03-29 |
+| 35. Phala Testnet TEE Migration           | v1.1      | 6/6            | Complete | 2026-03-29 |
+| 36. Inline Upload Progress                | v1.1      | 2/2            | Complete | 2026-03-29 |
+| 37. Parallel Batch Upload Pipeline        | v1.1      | 2/2            | Complete | 2026-03-30 |
+| 38. Retire Deprecated Web Services        | v1.1      | 4/4            | Complete | 2026-03-31 |
+| 39. User-Configurable Vault Parameters    | v1.1      | 4/4            | Complete | 2026-04-01 |
+| 40. Desktop Vault Settings Integration    | v1.1      | 2/2            | Complete | 2026-03-31 |
+| 41. Package & App Versioning              | v1.1      | 5/5            | Complete | 2026-04-01 |
+| 42. API Unpin Integrity                   | v1.1      | 8/8            | Complete | 2026-06-13 |
+| 43. FUSE Write Durability                 | v1.1      | 8/8            | Complete | 2026-06-14 |
+| 44. IPNS Conflict Handling                | v1.1      | 7/7            | Complete | 2026-06-14 |
+| 45. Desktop FUSE Write-Durability Cleanup | v1.1      | 6/6            | Complete | 2026-06-15 |
+| 46. Desktop FUSE Data-Loss + Replay       | v1.1      | 4/4            | Complete | 2026-06-15 |
+| 47. SDK Folder-State Consolidation        | v1.1      | 5/5            | Complete | 2026-06-17 |
+| 48. SDK Self-Bootstrap + Shared Metadata  | v1.1      | 7/7            | Complete | 2026-06-17 |
+| 49. Shared-Folder Move (Intra-Share)      | v1.1      | 5/5            | Complete | 2026-06-18 |
+| 50. IPFS/IPNS Data-Integrity Fixes        | v1.1-hardening | -         | Planned  | -          |
+| 51. Crypto-Signature & Secret-Leak Hardening | v1.1-hardening | -      | Planned  | -          |
+| 52. Desktop FUSE Durability & At-Rest Safety | v1.1-hardening | -      | Planned  | -          |
+| 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
+| 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |
+| 55. Large Source-File Refactor            | v1.1-hardening | -         | Planned  | -          |
 
 _Roadmap created: 2026-03-07_
 _Last updated: 2026-06-18 — added phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation; closes todos #8 + #7, builds on phase 48 shared-folder ownership)_
-_Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 5 phases (36-40) | Gap closure: 3 phases (42-44)_
+_Last updated: 2026-06-19 — reopened v1.1 with hardening block; added phases 50–55 (HARD-01..06); backfilled progress table for phases 40–55; corrected phases 38/39 status to Complete_
+_Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 5 phases (36-40) | Gap closure: 3 phases (42-44) | Hardening block: 6 phases (50-55)_

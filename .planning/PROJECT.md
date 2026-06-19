@@ -143,3 +143,5 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 ---
 
 Last updated: 2026-06-13 after Phase 44 IPNS Conflict Handling completed. UAT-audit gap-closure phases 42-44 all done: Phase 42 ownership-guarded unpin (cross-user refcounting, transactional quota decrement, pending-unpins outbox); Phase 43 FUSE write durability (fsynced ciphertext journal, replay-on-mount, mkdir-conflict retry, park notifications across macOS/Linux/Windows); Phase 44 IPNS conflict handling (three-way folder merge on 409 with publishedChildren convergence, file-record CAS with loser-becomes-version). v1.1 milestone complete.
+
+Updated 2026-06-19: v1.1 (Milestone 3) reopened with a hardening block — Phases 50–55 absorb tracked tech-debt/security todos from v1.1 verification and audits (50 IPFS/IPNS data-integrity, 51 crypto-signature & secret-leak hardening, 52 desktop FUSE durability & at-rest safety, 53 release & supply-chain engineering, 54 E2E test-infra typing, 55 large source-file refactor). Reopened into M3 rather than opening v1.2, since Milestone 4 (v2.0) is already defined. See REQUIREMENTS.md HARD-01..HARD-06.

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Milestone complete
-last_updated: "2026-06-18T15:30:06.459Z"
-last_activity: 2026-06-18
+status: In progress
+last_updated: "2026-06-19T13:01:16.601Z"
+last_activity: 2026-06-19
 progress:
-  total_phases: 34
+  total_phases: 40
   completed_phases: 34
   total_plans: 151
   completed_plans: 151
-  percent: 100
+  percent: 85
 ---
 
 # Project State
@@ -20,13 +20,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 49 — shared-folder-move-intra-share-and-usefoldernavigation-unwra
+**Current focus:** Phase 50 — v1.1 hardening block (data-integrity, crypto/secret hardening, FUSE durability, release engineering, code health)
 
 ## Current Position
 
-Phase: 49 (shared-folder-move-intra-share-and-usefoldernavigation-unwra) — COMPLETE
-Plan: 5 of 5 — COMPLETE
-Phases 18-46 complete and verified. Phase 47 (SDK folder-state/publish consolidation, PR #494) complete — its 5 SUMMARY.md files were backfilled 2026-06-17 (had shipped but were never written, which had tripped a false-positive resume gate).
+Phase: 50 (ipfs-ipns-data-integrity-fixes) — NOT STARTED
+Plan: 0 of TBD — not started
+Milestone v1.1 reopened 2026-06-19 with a hardening block (Phases 50–55). Phases 18–49 complete and verified (151 plans). Next: run /gsd:plan-phase 50 (recommended risk order: 50 data-integrity → 51 crypto/secret hardening → 52 FUSE → 53 release-eng → 54 test-infra → 55 refactor).
 
 ## Performance Metrics
 
@@ -259,6 +259,7 @@ Recent for v1.1:
 - Phase 47 added 2026-06-15: SDK folder-state and publish-path consolidation — unify folderTree/Zustand ownership, one publishWithCas CAS-retry, encapsulate baseChildren bookkeeping, fix updateSharedFile prunedCids pin leak (grouped SDK todos)
 - Phase 48 added 2026-06-16: SDK self-bootstrap regression fix + shared-folder/metadata consolidation — P0 fix for the PR #498 self-bootstrap clobber regressing main web-e2e (run 27587113911), then remove redundant web folder-seeding (#9, gated on the fix), route shared-folder writes through the SDK client (#8), encrypt share itemName at rest (#5 / Phase-14 M1); defers CRDT-inbox research (#2)
 - Phase 49 added 2026-06-18: Shared-folder intra-share move + useFolderNavigation unwrap consolidation — recipient-side move of a file between subfolders within one share (re-encrypts FileMetadata to the dest folderKey via reencryptFileMetadataForFolderChange, mirroring owner moveItem / #507), anywhere-in-subtree destination picker (new SDK shared-subtree enumeration), plus consolidating the duplicate web useFolderNavigation ECIES unwrap onto client.ensureFolderLoaded; closes captured todos #8 + #7; builds on Phase 48 shared-folder ownership
+- Milestone v1.1 REOPENED 2026-06-19 with a hardening block (Phases 50–55) absorbing tracked tech-debt/security todos from v1.1 verification and audits: 50 IPFS/IPNS data-integrity (#12 unpin-integrity, #14 unenroll-subtrees); 51 crypto-signature & secret-leak hardening (#5 IPNS sig, #15 web logger redaction/Faro); 52 desktop FUSE durability & at-rest safety (#9); 53 release & supply-chain engineering (#6 pin-actions, #13 cargo-lock, #16 release-please-pins); 54 E2E test-infra typing (#11); 55 large source-file refactor (#17). Reopened into Milestone 3 rather than opening v1.2, since Milestone 4 (v2.0) is already defined. Excludes the GSD-tooling STATE regression (#10 — upstream chore, not product code). Todos #7 (useFolderNavigation consolidation) and #8 (shared-move re-encrypt) were verified already-resolved by Phase 49 (confirmed in live code) and moved to `.planning/todos/completed/`.
 
 ### Open Concerns
 
@@ -268,7 +269,7 @@ Recent for v1.1:
 
 ### Pending Todos
 
-9 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. The desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. The architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; bin-restore gap surfaced while combing the #494 fix) was completed 2026-06-16 in PR #498 (branch `feat/sdk-client-self-bootstrap-folder-tree`) and moved to `.planning/todos/completed/`; its follow-ups (delete the now-redundant web `ensureFolderRegistered`/`useFolderNavigation` unwrap paths once self-heal proves out; optional negative-cache) were captured as a new pending todo. Remaining pending still includes the route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47. The v1.1 verification-ledger todo (phases 18/31/32 missing VERIFICATION.md) was completed 2026-06-19 — all three reports authored (goal-backward, adversarially spot-checked), PERF-01..04 closed (PERF-03 via accepted override), and the milestone audit verdict flipped to `passed` (66/66, 20/20); moved to `.planning/todos/completed/`.
+15 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. **2026-06-19:** todos #7 (useFolderNavigation consolidation) and #8 (shared-move re-encrypt) were verified already-resolved by Phase 49 (confirmed in live code) and moved to `completed/`; ten remaining tech-debt/security todos were grouped into the reopened v1.1 hardening block (Phases 50–55, see Roadmap Evolution). The four older feature todos (ERC-1271 wallet auth, CRDT IPNS inbox research, async search index, alternative MFA factors) and the GSD-tooling STATE regression (#10) remain unscheduled. _Historical:_ the desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. The architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; bin-restore gap surfaced while combing the #494 fix) was completed 2026-06-16 in PR #498 (branch `feat/sdk-client-self-bootstrap-folder-tree`) and moved to `.planning/todos/completed/`; its follow-ups (delete the now-redundant web `ensureFolderRegistered`/`useFolderNavigation` unwrap paths once self-heal proves out; optional negative-cache) were captured as a new pending todo. Remaining pending still includes the route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47. The v1.1 verification-ledger todo (phases 18/31/32 missing VERIFICATION.md) was completed 2026-06-19 — all three reports authored (goal-backward, adversarially spot-checked), PERF-01..04 closed (PERF-03 via accepted override), and the milestone audit verdict flipped to `passed` (66/66, 20/20); moved to `.planning/todos/completed/`.
 
 ### Resolved
 
