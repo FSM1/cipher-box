@@ -1,0 +1,168 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "6638cf6659ac",
+  "session_id": "23b28342-e76c-41da-872a-14e0f4fbc9ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T16:08:11.527632Z",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4bdfeb110c40",
+  "token_usage": {
+    "input_tokens": 26471,
+    "cache_creation_tokens": 545334,
+    "cache_read_tokens": 15401892,
+    "output_tokens": 109533,
+    "api_call_count": 78
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01XWNxPn9Y2eDALMFaCnVhv6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 36,
+        "end": 37,
+        "entry_ids": [
+          "0ec3006c-056a-4fa5-a4e1-81bf4c70bbd6"
+        ],
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A67zEtU8W6i7yf84Hses7n",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 328,
+        "end": 329,
+        "entry_ids": [
+          "ef3aabff-921f-4f81-8539-b95d6c03715d"
+        ],
+        "tool_use_id": "toolu_01A67zEtU8W6i7yf84Hses7n"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A67zEtU8W6i7yf84Hses7n"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute all 5 plans in Phase 50 (IPFS/IPNS Data-Integrity Fixes) using wave-based parallel worktree execution, then run a code review gate before proceeding to verification and shipping.",
+    "outcome": "All 5 plans executed and merged across 2 waves (Wave 1: 50-01/02/03/05 in parallel; Wave 2: 50-04). Post-merge gates passed (93/93 targeted tests, typecheck clean). Code review found 2 confirmed blockers (cycle guard missing in 50-03's new traversal, unhandled rejections in 4 dispatch sites) and a fixer agent was dispatched — phase not yet complete.",
+    "learnings": {
+      "repo": [
+        "pnpm/orval resolves to the workspace root, not to the active worktree — api-client regeneration (132 files) and SDK `client.ts` changes leak into the main checkout when any worktree agent runs `pnpm api:generate` or `pnpm install`",
+        "husky auto-generates `.husky/_/` stub files inside any worktree that runs pnpm commands; these show as untracked and block the cleanup-wave merge helper",
+        "The pre-commit hook runs `check-api-client.sh` + `pnpm lint-staged` (eslint+prettier across all staged api-client files); on 131-file merges this takes long enough to silently stall the cleanup-wave helper's internal commit",
+        "The `gsd_run query commit` helper reports `commit_failed` as a false-negative even when the commit succeeds — must verify with `git log`",
+        "The `gsd_run query init.manager` dep-string parser mis-reads 'Phase 49 (v1.1 baseline)' as a phantom phase '1.1', producing a false dep-unsatisfied state for Phase 50",
+        "`collectSubtreeIpnsNamesAsync` in packages/sdk/src/client.ts was written without a visited/cycle guard despite its docstring claiming to mirror `ensureFolderLoaded`'s DFS pattern — sibling functions at lines 549 and 2526 both have cycle guards",
+        "TDD commit convention: RED commit prefixed `test(N-NN):` → GREEN commit prefixed `fix/feat(N-NN):`; plans not typed `tdd` (disposition plans) are exempt from the TDD gate",
+        "CAPACITY.md (section 7) documents BYO retention consequences for refcount semantics; this is the canonical reference for quota/unpin lifecycle decisions",
+        "Two orphan worktree branches (`worktree-agent-a92edd36`, `worktree-agent-abd7998d`) from a prior session exist with no attached worktrees"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 272,
+          "end_line": 316,
+          "finding": "collectSubtreeIpnsNamesAsync recurses at lines 220, 246, 316 with no visited set — a folder cycle causes unbounded recursion and deleteItem failure, directly contradicting the phase's data-integrity goal"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 549,
+          "end_line": 549,
+          "finding": "ensureFolderLoaded carries a visited/cycle guard that collectSubtreeIpnsNamesAsync should mirror but doesn't"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2526,
+          "end_line": 2526,
+          "finding": "Shared walker also carries a cycle guard, establishing the pattern collectSubtreeIpnsNamesAsync must follow"
+        },
+        {
+          "path": "apps/api/src/ipfs/pending-unpin/pending-unpin.processor.ts",
+          "line": 55,
+          "end_line": 59,
+          "finding": "Refcount guard added by 50-02: skips physical unpin when CID is re-pinned during drain"
+        },
+        {
+          "path": "apps/api/src/ipfs/pending-unpin/pending-unpin.processor.ts",
+          "line": 59,
+          "end_line": 59,
+          "finding": "50-02 added refcount guard here; 50-04 confirmed this is the integration point for the row-deleted flag gating metricsService.fileUnpins"
+        }
+      ],
+      "workflow": [
+        "When cleanup-wave helper fails silently with `merge_failed` and empty stderr, a MERGE_HEAD is likely in progress — complete the merge manually with `git merge --no-ff` or by committing the already-staged index rather than aborting and retrying",
+        "Post-merge test gates should target changed packages specifically (not `pnpm --parallel -r run test`) to avoid RAM starvation and infra-dependent integration test failures",
+        "Verify leaked generated files match the worktree's committed version before discarding them — if they match, a simple `git checkout -- .` is safe; if they differ, investigate before discarding",
+        "When a worktree base-check returns `baseref-head`, worktrees fork off current HEAD and will contain all plan files — the key-link failure for 'upcoming wave's own deliverable' is a forward-reference artifact, not a real gap",
+        "Code review blockers that contradict the phase's own stated goal (e.g., a traversal fix that introduces a new traversal cycle) must be fixed before shipping, even if the executor's targeted tests passed"
+      ]
+    },
+    "friction": [
+      "cleanup-wave helper failed three times for the 50-05 worktree: first due to untracked husky stubs, then due to 131 leaked api-client files in the main checkout, then due to a stalled pre-commit hook leaving MERGE_HEAD set — required manual merge completion",
+      "pnpm/orval api-client generation inside a worktree pollutes the main checkout, requiring per-merge leak inspection and `git checkout -- .` before each subsequent worktree merge",
+      "init.manager dep-string parser created a phantom phase '1.1' from 'Phase 49 (v1.1 baseline)', suppressing the Execute Phase 50 recommendation and requiring manual override",
+      "gsd commit helper false-negative (`commit_failed`) on every tracking commit required `git log` verification after each call",
+      "macOS `mktemp` with mid-template Xs (`XXXXXX` not at end) doesn't substitute — wave manifest got a literal filename with Xs, not a random suffix"
+    ],
+    "open_items": [
+      "CR-01 fix: add visited/cycle guard to collectSubtreeIpnsNamesAsync in packages/sdk/src/client.ts (fixer agent dispatched, not yet confirmed complete)",
+      "CR-02 fix: add .catch() to 4 fire-and-forget unenroll dispatch sites in client.ts",
+      "WR-01: drain refcount-check+unpin runs outside advisory lock — potential data-loss race under concurrent unpins",
+      "WR-03: guardedUnpin issues delete after lock release",
+      "WR-04: unbounded deleteItem traversal fan-out",
+      "WR-02 (RegisterCidDto regex validation) — out of scope for this phase, deferred",
+      "WR-05 (LocalProvider unescaped CID in shell command) — out of scope, deferred",
+      "Run /simplify on phase 50 changes after code-review fixes land",
+      "Run security review (/gsd:secure-phase 50) — no SECURITY.md exists yet",
+      "Run CodeRabbit review scoped to phase 50 diff",
+      "Phase 50 verification via gsd-verifier (HARD-01 coverage audit)",
+      "Phase 50 completion: phase.complete, close_phase_todos (issues #12 and #14), update PROJECT.md",
+      "Create PR via gsd:ship and resolve post-PR CodeRabbit review body findings",
+      "Two orphan worktree branches (worktree-agent-a92edd36, worktree-agent-abd7998d) from a prior session need cleanup",
+      "Phase 51 (Crypto-Signature & ...) ready to discuss next"
+    ]
+  }
+}
