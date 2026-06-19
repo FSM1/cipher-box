@@ -207,7 +207,9 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
     let root_folder_key = cipherbox_crypto::ecies::unwrap_key(enc_key, &private_key)
         .map_err(|e| format!("Failed to decrypt rootFolderKey from v2 blob: {}", e))?;
 
-    *state.sdk.root_folder_key.write().await = Some(root_folder_key);
+    // `unwrap_key` now returns `Zeroizing<Vec<u8>>` (Phase 51 S3); copy into the
+    // plain `Vec<u8>` SDK-state field. The `Zeroizing` original zeroizes on drop.
+    *state.sdk.root_folder_key.write().await = Some(root_folder_key.to_vec());
 
     // Root folder IPNS key is HKDF-derived
     *state.sdk.root_ipns_private_key.write().await = Some(root_ipns_priv.to_vec());
