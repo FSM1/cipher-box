@@ -143,8 +143,11 @@ describe('IpfsController', () => {
       expect(vaultService.recordPin).not.toHaveBeenCalled();
     });
 
-    // Test 4: compensation routes through guardedUnpin, NOT ipfsProvider.unpinFile; original error rethrown
-    it('should call guardedUnpin (not ipfsProvider.unpinFile) when recordPin fails', async () => {
+    // Test 4 (WR-02): when recordPin fails, no pinned_cids row was written so guardedUnpin would
+    // return early without touching Kubo (leaking the physical pin). The compensation path must
+    // call ipfsProvider.unpinFile directly. guardedUnpin must NOT be called (which would bypass
+    // the audit path — no cross-user security alert is fired).
+    it('should call ipfsProvider.unpinFile when recordPin fails and not call guardedUnpin', async () => {
       const mockFile = {
         buffer: Buffer.from('encrypted file content'),
         size: 22,
@@ -154,20 +157,19 @@ describe('IpfsController', () => {
       vaultService.checkQuota.mockResolvedValue(true);
       ipfsProvider.pinFile.mockResolvedValue({ cid: mockCid, size: mockSize });
       vaultService.recordPin.mockRejectedValue(recordPinError);
-      vaultService.guardedUnpin.mockResolvedValue(undefined);
+      ipfsProvider.unpinFile.mockResolvedValue(undefined);
 
       await expect(controller.upload(mockReq, mockFile)).rejects.toThrow('DB error');
 
-      // Internal rollback suppresses the cross-user audit so a deduped-CID
-      // compensation can't emit a false cross-user security signal.
-      expect(vaultService.guardedUnpin).toHaveBeenCalledWith('user-123', mockCid, {
-        suppressCrossUserAudit: true,
-      });
-      expect(ipfsProvider.unpinFile).not.toHaveBeenCalled();
+      // WR-02: physical unpin via direct call on the no-row compensation path
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith(mockCid);
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledTimes(1);
+      // Cross-user audit is NOT triggered — guardedUnpin is not used on the no-row path
+      expect(vaultService.guardedUnpin).not.toHaveBeenCalled();
     });
 
-    // Test 5: compensation is best-effort — guardedUnpin rejection is swallowed; original error thrown
-    it('should rethrow original recordPin error even if guardedUnpin also rejects', async () => {
+    // Test 5: compensation is best-effort — unpinFile rejection is swallowed; original error thrown
+    it('should rethrow original recordPin error even if unpinFile also rejects', async () => {
       const mockFile = {
         buffer: Buffer.from('encrypted file content'),
         size: 22,
@@ -177,7 +179,7 @@ describe('IpfsController', () => {
       vaultService.checkQuota.mockResolvedValue(true);
       ipfsProvider.pinFile.mockResolvedValue({ cid: mockCid, size: mockSize });
       vaultService.recordPin.mockRejectedValue(recordPinError);
-      vaultService.guardedUnpin.mockRejectedValue(new Error('guardedUnpin also failed'));
+      ipfsProvider.unpinFile.mockRejectedValue(new Error('unpinFile also failed'));
 
       const thrown = await controller.upload(mockReq, mockFile).catch((e: unknown) => e);
 

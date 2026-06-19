@@ -119,15 +119,18 @@ export class IpfsController {
     try {
       await this.vaultService.recordPin(req.user.id, result.cid, result.size);
     } catch (err) {
+      // WR-02: recordPin failed — no pinned_cids row was written. guardedUnpin looks up
+      // the DB row first; if no row exists it returns early without touching Kubo, leaking
+      // the just-created physical pin. Call unpinFile directly so the Kubo pin is physically
+      // removed regardless of DB state. This is internal compensation only — we do not route
+      // through guardedUnpin and therefore never reach the cross-user audit path, so no false
+      // cross-user security signal is emitted.
+      //
       // RACE WINDOW NOTE (D-13): a concurrent deleter of the same deduped CID could
       // have refcounted to zero between the Kubo pin above and recordPin here,
       // leaving this uploader with a row-but-no-pin. Cryptographically negligible
       // (requires identical ciphertext + sub-second window). Drift report detects.
-      // Internal compensation, not an external probe: suppress cross-user audit
-      // so a deduped-CID rollback can't emit a false cross-user security signal.
-      await this.vaultService
-        .guardedUnpin(req.user.id, result.cid, { suppressCrossUserAudit: true })
-        .catch(() => undefined);
+      await this.ipfsProvider.unpinFile(result.cid).catch(() => undefined);
       throw err;
     }
     this.metricsService.fileUploads.inc();
