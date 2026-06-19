@@ -756,17 +756,19 @@ pub fn spawn_file_meta_reencrypt(
     }
     std::thread::spawn(move || {
         // Fixed-size keys; a bad length is a terminal misconfiguration, not retryable.
-        let source_key_arr: [u8; 32] = match source_folder_key.as_slice().try_into() {
-            Ok(arr) => arr,
-            Err(_) => {
-                log::error!(
-                    "File metadata re-encrypt on move failed: invalid source folder key length"
-                );
-                return;
-            }
-        };
-        let dest_key_arr: [u8; 32] = match dest_folder_key.as_slice().try_into() {
-            Ok(arr) => arr,
+        // Wrap the copies in `Zeroizing` so the fixed-size key bytes are wiped on drop.
+        let source_key_arr: Zeroizing<[u8; 32]> =
+            match source_folder_key.as_slice().try_into() {
+                Ok(arr) => Zeroizing::new(arr),
+                Err(_) => {
+                    log::error!(
+                        "File metadata re-encrypt on move failed: invalid source folder key length"
+                    );
+                    return;
+                }
+            };
+        let dest_key_arr: Zeroizing<[u8; 32]> = match dest_folder_key.as_slice().try_into() {
+            Ok(arr) => Zeroizing::new(arr),
             Err(_) => {
                 log::error!(
                     "File metadata re-encrypt on move failed: invalid destination folder key length"
@@ -1444,9 +1446,12 @@ pub async fn replay_for_vault(
     // #15: local to one replay_for_vault call; never persisted.
     // Seeded with the root key so that root-shortcut lookups (folder_ipns_name == root)
     // are served directly from the cache without entering resolve_folder_key at all.
-    let mut folder_key_cache: std::collections::HashMap<String, Vec<u8>> =
+    let mut folder_key_cache: std::collections::HashMap<String, Zeroizing<Vec<u8>>> =
         std::collections::HashMap::new();
-    folder_key_cache.insert(root_ipns_name.to_string(), root_folder_key.to_vec());
+    folder_key_cache.insert(
+        root_ipns_name.to_string(),
+        Zeroizing::new(root_folder_key.to_vec()),
+    );
 
     for entry in &ordered {
         // Skip already-failed entries (user must manually intervene for those).
@@ -1709,7 +1714,7 @@ async fn resolve_folder_key(
 /// it is never persisted and never shared with the running filesystem.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 async fn resolve_folder_key_cached(
-    cache: &mut std::collections::HashMap<String, Vec<u8>>,
+    cache: &mut std::collections::HashMap<String, Zeroizing<Vec<u8>>>,
     api: &ApiClient,
     private_key: &[u8],
     root_folder_key: &[u8],
@@ -1717,7 +1722,7 @@ async fn resolve_folder_key_cached(
     folder_ipns_name: &str,
 ) -> Result<Vec<u8>, String> {
     if let Some(key) = cache.get(folder_ipns_name) {
-        return Ok(key.clone());
+        return Ok(key.to_vec());
     }
     let key = resolve_folder_key(
         api,
@@ -1727,10 +1732,13 @@ async fn resolve_folder_key_cached(
         folder_ipns_name,
     )
     .await?;
-    // Store the raw Vec<u8> in the cache (extracted from Zeroizing).
-    // The cache entry is cleared when the cache is dropped at the end of replay_for_vault.
-    cache.insert(folder_ipns_name.to_string(), key.to_vec());
-    Ok(key.to_vec())
+    // Store the key wrapped in `Zeroizing` so it is wiped from memory when the cache
+    // is dropped at the end of `replay_for_vault`. `resolve_folder_key` already returns
+    // `Zeroizing<Vec<u8>>`, so this is a single clone into the cache.
+    let cached = cache
+        .entry(folder_ipns_name.to_string())
+        .or_insert_with(|| key.clone());
+    Ok(cached.to_vec())
 }
 
 /// Fetch, decrypt, merge, and CAS-publish a parent folder update.
@@ -1962,7 +1970,7 @@ async fn replay_mkdir_entry(
     root_folder_key: &[u8],
     root_ipns_name: &str,
     // #15: per-replay folder-key cache; seeded with root key in replay_for_vault.
-    folder_key_cache: &mut std::collections::HashMap<String, Vec<u8>>,
+    folder_key_cache: &mut std::collections::HashMap<String, Zeroizing<Vec<u8>>>,
     coordinator: Arc<PublishCoordinator>,
     child_ipns_name: &str,
     child_folder_key_hex: &str,
@@ -2100,7 +2108,7 @@ async fn replay_upload_entry(
     root_folder_key: &[u8],
     root_ipns_name: &str,
     // #15: per-replay folder-key cache; seeded with root key in replay_for_vault.
-    folder_key_cache: &mut std::collections::HashMap<String, Vec<u8>>,
+    folder_key_cache: &mut std::collections::HashMap<String, Zeroizing<Vec<u8>>>,
     coordinator: Arc<PublishCoordinator>,
     ciphertext_b64: &str,
     wrapped_key_hex: &str,
@@ -2312,6 +2320,8 @@ pub fn mount_point() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::next_file_publish_sequence;
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    use zeroize::Zeroizing;
 
     #[test]
     fn next_file_publish_sequence_starts_new_records_at_zero() {
@@ -2468,9 +2478,12 @@ mod tests {
         let api = Arc::new(cipherbox_api_client::ApiClient::new("http://127.0.0.1:1"));
 
         // Seed the cache exactly as replay_for_vault does (#15).
-        let mut cache: std::collections::HashMap<String, Vec<u8>> =
+        let mut cache: std::collections::HashMap<String, Zeroizing<Vec<u8>>> =
             std::collections::HashMap::new();
-        cache.insert(root_ipns_name.to_string(), root_folder_key.to_vec());
+        cache.insert(
+            root_ipns_name.to_string(),
+            Zeroizing::new(root_folder_key.to_vec()),
+        );
 
         // First lookup: cache hit (seeded above) — no BFS, no network.
         let key1 = super::resolve_folder_key_cached(
