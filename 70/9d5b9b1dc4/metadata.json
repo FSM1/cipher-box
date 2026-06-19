@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "709d5b9b1dc4",
+  "strategy": "manual-commit",
+  "branch": "docs/planning-20260619",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/completed/2026-06-18-gsd-verification-gaps-phases-18-31-32.md",
+    ".planning/todos/pending/2026-06-18-gsd-verification-gaps-phases-18-31-32.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/70/9d5b9b1dc4/0/metadata.json",
+      "transcript": "/70/9d5b9b1dc4/0/full.jsonl",
+      "content_hash": "/70/9d5b9b1dc4/0/content_hash.txt",
+      "prompt": "/70/9d5b9b1dc4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 39988,
+    "cache_creation_tokens": 379010,
+    "cache_read_tokens": 13165229,
+    "output_tokens": 88785,
+    "api_call_count": 65
+  }
+}
