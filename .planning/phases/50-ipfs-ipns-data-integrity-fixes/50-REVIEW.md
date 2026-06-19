@@ -22,7 +22,7 @@ findings:
   warning: 5
   info: 3
   total: 10
-status: issues_found
+status: resolved
 ---
 
 # Phase 50: Code Review Report
@@ -30,7 +30,24 @@ status: issues_found
 **Reviewed:** 2026-06-19T00:00:00Z
 **Depth:** deep
 **Files Reviewed:** 13
-**Status:** issues_found
+**Status:** resolved — all blockers and in-scope warnings were fixed after this review (see Resolution)
+
+## Resolution (post-review)
+
+> This report records the findings **as discovered** (pre-fix). The two blockers and the in-scope warnings were fixed immediately afterward; `50-VERIFICATION.md` reflects the post-fix code. This table reconciles the two documents (and resolves the CodeRabbit CLI doc-consistency findings). Sections below are retained verbatim as the original finding record.
+
+| Finding                              | Status      | Where / commit                                                                                                    |
+| ------------------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------- |
+| CR-01 — cycle/visited guard          | ✅ Fixed    | `client.ts` `collectSubtreeIpnsNamesAsync` gains `visited: Set<string>` + skip-before-recurse — `d70714412`        |
+| CR-02 — `.catch()` on dispatch sites | ✅ Fixed    | `.catch()` added to all fire-and-forget unenroll dispatches — `d70714412` (later consolidated into a helper `ef9782f69`) |
+| WR-01 — drain recheck+unpin lock     | ✅ Fixed    | serialized under `pg_advisory_xact_lock` — `5a42a36f5`                                                             |
+| WR-03 — post-commit outbox delete    | ✅ Fixed    | delete moved under the advisory lock — `7ecbf5a33`                                                                 |
+| WR-04 — unbounded traversal fan-out  | ✅ Fixed    | bounded with `pLimit(UNENROLL_COLLECT_CONCURRENCY)` — `d70714412`                                                  |
+| WR-02 — RegisterCidDto regex         | ⏭ Deferred | out-of-phase file — todo `2026-06-19-register-cid-dto-validation-inconsistency.md`                                 |
+| WR-05 — LocalProvider unescaped CID  | ⏭ Deferred | out-of-phase file; non-exploitable per both security passes — todo `2026-06-19-local-provider-unescaped-cid-in-pin-url.md` |
+| IN-01 / IN-02 / IN-03                | ℹ Noted    | IN-02 (duplicate-name) incidentally resolved by CR-01's `visited` set                                              |
+
+The verifier re-confirmed 3/3 must-haves against the fixed tree; sdk (`collect-subtree-ipns-names` 4/4, incl. a cycle test) and api (90/90) suites are green.
 
 ## Summary
 
