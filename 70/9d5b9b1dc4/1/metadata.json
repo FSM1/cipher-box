@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "709d5b9b1dc4",
+  "session_id": "6b107080-01fc-4642-99cd-af2e37e84054",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T00:40:27.859003Z",
+  "branch": "docs/planning-20260619",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/reports/MILESTONE_SUMMARY-v1.1.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "9c9d4b010046",
+  "token_usage": {
+    "input_tokens": 19380,
+    "cache_creation_tokens": 352047,
+    "cache_read_tokens": 11032949,
+    "output_tokens": 119043,
+    "api_call_count": 65
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Generate a structured milestone summary for v1.1, document all tech debt as tracked todos, and open a docs PR so new contributors can onboard and deferred work is formally tracked.",
+    "outcome": "PR #515 opened on branch docs/milestone-v1.1-summary-and-tech-debt with MILESTONE_SUMMARY-v1.1.md, TECH_DEBT-v1.1.md, 5 net-new pending todos (24 code-verified open findings), a BACKLOG.md pointer section, and a ROADMAP correction fixing stale summary sections that had omitted 16 phases.",
+    "learnings": {
+      "repo": [
+        "The project uses per-component semver tags (cipher-box-vX.Y.Z), not milestone-level tags (v1.1), so milestone git stats require falling back to earliest-phase-commit date boundaries.",
+        ".planning/ is in .markdownlintignore, so pre-commit markdownlint/lint-staged never validates planning docs.",
+        "Tech debt is tracked in two tiers: .planning/BACKLOG.md (consolidated inventory) and .planning/todos/pending/*.md (dated, structured actionable files). Net-new items must go in both.",
+        "The ledger close-out commits (#512/#513) covered phases 19.2/23/27/47–49, NOT phases 18/31/32 — those three still lack VERIFICATION.md and PERF-01..04 requirements remain orphaned.",
+        "Phase 43 REVIEW.md has a 'Post-Review Resolution (2026-06-14)' section confirming all 8 criticals were fixed; phases 45/46 closed most of its warnings. Phase 42 REVIEW.md has no resolution section — all 12 WR/IN findings remain open.",
+        "Phase 27's detail block in ROADMAP.md sits out of numeric order (placed after Phase 35, where it was executed chronologically) — intentionally left unfixed in this PR.",
+        "Signed commits via 1Password SSH agent can hang; running git commit in background with TaskOutput polling is the safe pattern for this repo."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/42-api-unpin-integrity/42-REVIEW.md",
+          "finding": "WR-01: advisory-lock counter uses i32 with abs(), vulnerable to INT_MIN overflow → permanent undeletability. WR-03: stale outbox entries can trigger re-pin race on drain, risking data loss. No resolution section; all 12 WR/IN findings confirmed still open in current code."
+        },
+        {
+          "path": ".planning/phases/43-fuse-write-durability/43-REVIEW.md",
+          "finding": "WR-06: write journal stores full ciphertext in JSON with no GC or size cap — unbounded growth risk. WR-07: journal replay has no network timeout. Criticals CR-01..CR-08 all verified fixed by 2026-06-14; phases 45/46 closed most warnings."
+        },
+        {
+          "path": ".planning/phases/29-unenroll-flow",
+          "finding": "P29 unenroll flow skips unloaded subtrees — confirmed open, not in BACKLOG."
+        }
+      ],
+      "workflow": [
+        "Workflow synthesis agents reliably choke on large nested structured-output schemas (292 items → 13-min retry loop on 'must have required property summary/groups'). Better pattern: let sweep agents return raw arrays, stop the workflow early, and synthesize in the main context where BACKLOG cross-referencing is available.",
+        "TaskList does not show in-flight workflow agent progress; inspect the workflow transcript directory (ls -lt on the session dir) to gauge which agents are running vs. stuck.",
+        "Adversarially verifying candidate tech-debt findings against current code (rather than trusting artifact prose) is essential — it caught phase 43 criticals already fixed and the ledger close-out scope mismatch, preventing both stale filings and false 'already closed' claims.",
+        "When a milestone summary claims process gaps were closed, verify the specific commit ranges cover the specific phases before writing it as fact."
+      ]
+    },
+    "friction": [
+      "Workflow synthesis agent entered an unrecoverable schema-validation retry loop (~13 min) trying to emit 292 deduped items as a single nested StructuredOutput — had to be killed manually via TaskStop.",
+      "TaskList returned empty during workflow execution, giving no visibility into agent count or progress; required direct filesystem inspection of transcript directories.",
+      "The milestone summary draft overstated that phases 18/31/32 verification gaps were closed (they weren't) — required a correction commit after the fact.",
+      "Signed git commits via 1Password SSH can hang the terminal; required background execution + TaskOutput polling rather than a simple blocking git commit."
+    ],
+    "open_items": [
+      "Phase 42 WR-01: INT_MIN advisory-lock overflow (permanent undeletability) — highest priority untracked finding, tracked in 2026-06-18-phase42-unpin-integrity-review-open-findings.md",
+      "Phase 42 WR-03: stale-outbox re-pin race (data loss risk) — tracked in same todo file",
+      "Phase 43 WR-06: unbounded FUSE journal growth with full ciphertext in JSON, no GC — tracked in 2026-06-18-fuse-journal-growth-and-replay-timeout.md",
+      "Web logger redact() never implemented and registerFaroTransport defined but never called (warn/error not reaching Faro) — tracked in 2026-06-18-web-logger-redaction-and-faro-transport-unwired.md",
+      "Unenroll skips unloaded subtrees (P29) — tracked in 2026-06-18-unenroll-skips-unloaded-subtrees.md",
+      "Phases 18/31/32 still lack VERIFICATION.md; PERF-01..04 requirements remain orphaned — tracked in 2026-06-18-gsd-verification-gaps-phases-18-31-32.md, requires running /gsd:validate-phase 18 31 32",
+      "Phase 27 detail block in ROADMAP.md is out of numeric order (sits after Phase 35) — intentionally deferred from this PR",
+      "BYO provider.unpin not wired into client delete flows; writable-share version-prune leak (from BACKLOG pre-existing)",
+      "Rust FUSE 3-way merge approximates TS op-replay and can stomp remote-only changes (from BACKLOG pre-existing)",
+      "Desktop: platform code-signing, pending-uploads UI, Windows mkdir-publish-retry TODO (from BACKLOG pre-existing)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T00:39:34.954399Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 441,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 441,
+    "total_lines_changed": 492,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}

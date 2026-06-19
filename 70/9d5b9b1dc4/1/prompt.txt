@@ -1,0 +1,17 @@
+/gsd:milestone-summary
+
+---
+
+branch, open a docs pr and document all tech debt in todos so that this is tracked
+
+---
+
+synthesis taking its time?
+
+---
+
+Continue the docs-PR task: the v1.1 tech-debt sweep workflow should have completed. Build TECH_DEBT-v1.1.md, create net-new pending todos, update BACKLOG pointer, commit, push, and open the docs PR.
+
+---
+
+looking at the @.planning/ROADMAP.md it seems like this is significantly lacking in accuracy right now, with lots of phases missing.

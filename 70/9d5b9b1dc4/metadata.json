@@ -3,8 +3,9 @@
   "checkpoint_id": "709d5b9b1dc4",
   "strategy": "manual-commit",
   "branch": "docs/planning-20260619",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
+    ".planning/reports/MILESTONE_SUMMARY-v1.1.md",
     ".planning/todos/completed/2026-06-18-gsd-verification-gaps-phases-18-31-32.md",
     ".planning/todos/pending/2026-06-18-gsd-verification-gaps-phases-18-31-32.md"
   ],
@@ -14,13 +15,19 @@
       "transcript": "/70/9d5b9b1dc4/0/full.jsonl",
       "content_hash": "/70/9d5b9b1dc4/0/content_hash.txt",
       "prompt": "/70/9d5b9b1dc4/0/prompt.txt"
+    },
+    {
+      "metadata": "/70/9d5b9b1dc4/1/metadata.json",
+      "transcript": "/70/9d5b9b1dc4/1/full.jsonl",
+      "content_hash": "/70/9d5b9b1dc4/1/content_hash.txt",
+      "prompt": "/70/9d5b9b1dc4/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 39988,
-    "cache_creation_tokens": 379010,
-    "cache_read_tokens": 13165229,
-    "output_tokens": 88785,
-    "api_call_count": 65
+    "input_tokens": 59368,
+    "cache_creation_tokens": 731057,
+    "cache_read_tokens": 24198178,
+    "output_tokens": 207828,
+    "api_call_count": 130
   }
 }
