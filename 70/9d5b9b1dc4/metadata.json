@@ -3,11 +3,13 @@
   "checkpoint_id": "709d5b9b1dc4",
   "strategy": "manual-commit",
   "branch": "docs/planning-20260619",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/STATE.md",
     ".planning/reports/MILESTONE_SUMMARY-v1.1.md",
-    ".planning/todos/completed/2026-06-18-gsd-verification-gaps-phases-18-31-32.md",
-    ".planning/todos/pending/2026-06-18-gsd-verification-gaps-phases-18-31-32.md"
+    ".planning/reports/TECH_DEBT-v1.1.md",
+    ".planning/v1.1-MILESTONE-AUDIT.md"
   ],
   "sessions": [
     {
@@ -24,10 +26,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 59368,
-    "cache_creation_tokens": 731057,
-    "cache_read_tokens": 24198178,
-    "output_tokens": 207828,
-    "api_call_count": 130
+    "input_tokens": 59594,
+    "cache_creation_tokens": 734484,
+    "cache_read_tokens": 24728933,
+    "output_tokens": 209357,
+    "api_call_count": 132
   }
 }

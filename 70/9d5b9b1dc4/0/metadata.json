@@ -3,136 +3,109 @@
   "checkpoint_id": "709d5b9b1dc4",
   "session_id": "9cb885a0-aa9d-49e9-92d3-93dd9f36538d",
   "strategy": "manual-commit",
-  "created_at": "2026-06-19T00:39:09.436893Z",
+  "created_at": "2026-06-19T00:41:27.209964Z",
   "branch": "docs/planning-20260619",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
-    ".planning/todos/completed/2026-06-18-gsd-verification-gaps-phases-18-31-32.md",
-    ".planning/todos/pending/2026-06-18-gsd-verification-gaps-phases-18-31-32.md"
+    ".planning/v1.1-MILESTONE-AUDIT.md",
+    ".planning/REQUIREMENTS.md",
+    ".planning/reports/MILESTONE_SUMMARY-v1.1.md",
+    ".planning/reports/TECH_DEBT-v1.1.md",
+    ".planning/STATE.md"
   ],
   "agent": "Claude Code",
   "model": "",
   "turn_id": "42f1f0f23830",
   "token_usage": {
-    "input_tokens": 39988,
-    "cache_creation_tokens": 379010,
-    "cache_read_tokens": 13165229,
-    "output_tokens": 88785,
-    "api_call_count": 65
+    "input_tokens": 40214,
+    "cache_creation_tokens": 382437,
+    "cache_read_tokens": 13695984,
+    "output_tokens": 90314,
+    "api_call_count": 67
   },
   "session_metrics": {
     "turn_count": 3
   },
   "summary": {
-    "intent": "Resolve todo #11: create the three missing VERIFICATION.md files for phases 18, 31, and 32, and close out the 'orphaned' PERF-01..04 requirements traceability gap so the v1.1 milestone audit can flip from gaps_found to passed.",
-    "outcome": "All three goal-backward VERIFICATION.md files were produced via a multi-agent workflow (gsd-verifier + adversarial skeptic per phase), amended to `passed` status based on maintainer sign-off, and committed on a docs/planning branch along with updated milestone audit, REQUIREMENTS.md, MILESTONE_SUMMARY, and TECH_DEBT docs.",
+    "intent": "Resolve missing VERIFICATION.md files for phases 18, 31, and 32 in the CipherBox v1.1 GSD planning system, which were blocking the milestone audit from showing as passed (17/20 phases verified, 62/66 requirements).",
+    "outcome": "Three goal-backward VERIFICATION.md files were written via multi-agent workflow (with adversarial spot-checking confirming 5/5 claims each), amended to `passed` based on user UAT decisions and accepted overrides, and committed on a docs/planning-20260619 branch. The v1.1 milestone audit was flipped to passed (20/20 phases, 66/66 requirements).",
     "learnings": {
       "repo": [
-        "VERIFICATION.md files are phase-number-prefixed (e.g. 18-VERIFICATION.md), not generically named — searching for 'VERIFICATION.md' without a glob wildcard silently returns nothing.",
-        "REQUIREMENTS.md already had PERF-01..04 marked [x] and 66/66 mapped before this session; the 'orphaned' flag in the audit was solely about missing direct per-phase verification, not an actual requirements gap.",
-        "Phase 31 folder.service.ts was retired wholesale by PR #422 (2026-03-31) rather than decomposed into CRUD/metadata/publish as the phase specified; successor sdk-core/src/folder/index.ts is a 602-line monolith.",
-        "SharedFileBrowser.tsx grew to 946 lines after phase 31 decomposition — larger than the 943-line pre-split original; only row sub-components were extracted, no container/presentational split.",
-        "Kubo v0.34.0 does not expose libp2p peer/bandwidth metrics (libp2p_swarm_connections_*, libp2p_network_*_bytes_total emit No data); datastore size in Grafana comes from the app's own cipherbox_storage_bytes_total gauge, not the scraped Kubo endpoint — documented in the project's own staging baselines.",
-        "Milestone audit verdict (gaps_found vs passed) is driven by two counters: requirements mapped (62→66/66) and phases verified (17→20/20); both closed after producing the three reports."
+        "VERIFICATION.md files are phase-number-prefixed (e.g., 18-VERIFICATION.md), not named VERIFICATION.md — glob patterns must account for this prefix",
+        "REQUIREMENTS.md already had PERF-01..04 marked complete at 66/66 mapped; the 'orphaned' todo framing was misleading — only the direct phase-level verification files were missing",
+        "Phase 31 folder.service.ts was retired wholesale by PR #422 (2026-03-31) rather than decomposed into CRUD/metadata/publish modules as the phase specified; the sdk-core successor (sdk-core/src/folder/index.ts) is a 602-line monolith",
+        "SharedFileBrowser.tsx grew to 946 lines during phase 31 — larger than the 943-line original — because only row sub-components were extracted, not a container/presentational split",
+        "Kubo v0.34.0 does not expose libp2p peer/bandwidth metrics (libp2p_swarm_connections_*, libp2p_network_*_bytes_total); Alloy scrape block and Grafana panels are correctly wired but show 'No data' — documented in project baselines at lines 87-91",
+        "The cipherbox_storage_bytes_total datastore size figure comes from the app gauge, not the scraped Kubo endpoint — the staging baseline figure (~320 MiB) is from the app, not Kubo",
+        "The v1.1 milestone audit `gaps_found` verdict was driven by requirements count 62/66 and phases 17/20 — both closed once the three VERIFICATION.md files existed"
       ],
       "code": [
         {
-          "path": "apps/api/src/metrics/metrics.service.ts",
+          "path": "apps/backend/src/metrics/metrics.service.ts",
           "line": 206,
           "end_line": 212,
-          "finding": "Registers cipherbox_ipfs_ipns_duration_seconds histogram with operation/result/source labels (PERF-01/02 wiring)."
+          "finding": "Registers cipherbox_ipfs_ipns_duration_seconds histogram with operation/result/source labels (PERF-01/02 evidence)"
         },
         {
-          "path": "apps/api/src/metrics/metrics.service.ts",
+          "path": "apps/backend/src/metrics/metrics.service.ts",
           "line": 214,
           "end_line": 220,
-          "finding": "Registers cipherbox_republish_batch_duration_seconds with tee_provider/result labels (PERF-04 wiring)."
+          "finding": "Registers cipherbox_republish_batch_duration_seconds with tee_provider/result labels (PERF-04 evidence)"
         },
         {
-          "path": "apps/api/src/metrics/http-metrics.interceptor.ts",
-          "line": 48,
-          "end_line": 50,
-          "finding": "Records httpRequestDuration histogram on each HTTP response."
-        },
-        {
-          "path": "apps/api/src/app.module.ts",
+          "path": "apps/backend/src/app.module.ts",
           "line": 131,
           "end_line": 132,
-          "finding": "Globally registers http-metrics interceptor via APP_INTERCEPTOR provider."
+          "finding": "HTTP metrics interceptor registered globally via APP_INTERCEPTOR"
         },
         {
-          "path": "infra/alloy-config.river",
+          "path": "apps/backend/src/metrics/http-metrics.interceptor.ts",
+          "line": 48,
+          "end_line": 50,
+          "finding": "Records httpRequestDuration histogram"
+        },
+        {
+          "path": "monitoring/alloy-config.river",
           "line": 83,
           "end_line": 91,
-          "finding": "Scrape block targets ipfs:5001/debug/metrics/prometheus with libp2p relabel filters — wiring is correct but Kubo v0.34 emits no libp2p metrics at that endpoint."
+          "finding": "Scrape block targets ipfs:5001/debug/metrics/prometheus with libp2p relabel filters — wired correctly but Kubo v0.34 emits no libp2p metrics"
         },
         {
-          "path": "apps/api/src/republish/republish.processor.ts",
+          "path": "apps/worker/src/processors/republish.processor.ts",
           "line": 22,
           "end_line": 49,
-          "finding": "startTimer at :22, endBatchTimer at :49 with batchResult toggled to 'error' on failures (PERF-04 instrumentation)."
-        },
-        {
-          "path": ".planning/REQUIREMENTS.md",
-          "line": 38,
-          "end_line": 41,
-          "finding": "PERF-01..04 already checked [x] with phase references before this session; only direct per-phase verification was missing."
-        },
-        {
-          "path": ".planning/REQUIREMENTS.md",
-          "line": 161,
-          "end_line": 164,
-          "finding": "Traceability table rows for PERF-01..04 already marked Complete at 66/66 total."
+          "finding": "startTimer at :22, endBatchTimer at :49 with batchResult toggled to 'error' on failures"
         }
       ],
       "workflow": [
-        "Pipeline workflow pattern (gsd-verifier agent → adversarial skeptic agent) is effective for producing and independently confirming goal-backward VERIFICATION.md reports without running test suites.",
-        "Never run full test suites concurrently from parallel subagents — they starve RAM; static-analysis-only verification is the correct mode for parallel agent verification work.",
-        "human_needed is the wrong bucket for upstream library limitations (e.g. Kubo not emitting metrics) — these should be recorded as accepted overrides with rationale, not queued for human action.",
-        "Branch protection rule in this repo: planning docs must never be committed directly to main/master; always use a docs/planning-YYYYMMDD branch (create or reuse).",
-        "The gsd `phase uat-passed` CLI exists in help output but has no handler; the workaround is to manually edit VERIFICATION.md + run `phase complete`."
+        "Adversarial spot-checking (independent skeptic agent rechecking load-bearing claims) is effective: caught 0 fabricated claims across 15 total across three reports, building trust to promote reports without manual re-verification",
+        "git add on a path that has already been mv'd fails silently (source path gone) — partial commit results; use git mv or stage the destination path directly",
+        "When a todo's framing contradicts code reality (e.g., 'VERIFICATION.md missing' vs. files existing with number prefixes), scouting before acting (ls, find, git log) avoids building the wrong thing",
+        "human_needed status is the wrong bucket for immutable upstream limitations (Kubo not exposing metrics) — those should be accepted overrides with documented rationale, not deferred human checks"
       ]
     },
     "friction": [
-      "Initial glob command to find VERIFICATION.md files failed with a glob error, causing a false 'zero VERIFICATION.md files exist' conclusion that had to be corrected.",
-      "Terminology mismatch: todo used 'VERIFICATION.md' but the project also has VALIDATION.md files; required an extra investigation pass to confirm which naming convention was authoritative.",
-      "human_needed was the wrong status bucket for PERF-03 (a Kubo upstream limitation) — required a maintainer decision to reclassify as an accepted override rather than a pending human check.",
-      "Updating each VERIFICATION.md to passed required 6+ sequential Edit calls per file due to multiple sections needing independent edits (frontmatter, summary, status fields, override tables).",
-      "STATE.md's 'Pending Todos' section is narrative prose with a stale count — appending a completion note without rewriting the whole section required careful scoping to avoid a larger edit."
+      "Initial find/glob for VERIFICATION.md returned zero results due to the phase-number prefix not being accounted for, causing a false 'no VERIFICATION.md exists anywhere' conclusion that had to be corrected",
+      "git add failed on the renamed todo's pending path (already moved), leaving 8 files out of the first commit and requiring an amend",
+      "The todo's terminology ('VERIFICATION.md' vs. project's coexisting 'VALIDATION.md') required reconciliation before work could begin",
+      "AskUserQuestion resolved with no answer — required a follow-up prompt to extract the user's three decisions (phase 32 UAT complete, phase 31 accepted as tech-debt, phase 18 PERF-03 reclassified as upstream limitation)"
     ],
     "open_items": [
-      "Todo #17: Large source-file refactor candidates — 26 files flagged; includes SharedFileBrowser.tsx (946 lines, SC2 deviation from phase 31) and sdk-core/src/folder/index.ts (602-line successor to retired folder.service.ts, SC3 deviation).",
-      "Phase 31 SC1: useSharedNavigationActions.ts is 579 lines against a ~400-line target — accepted as tech-debt but not yet split.",
-      "Phase 32 SC4: three E2E spec suites exist and are substantive (735/900/1468 lines) but were not executed against a live stack to confirm pass status — runtime-only item.",
-      "PERF-03 / Kubo v0.34 metric gap: libp2p peer count and bandwidth metrics are not emitted by the current Kubo version; Grafana panels are correctly wired but show No data — requires a Kubo upgrade to resolve.",
-      "16 remaining pending todos in the GSD system covering auth (ERC-1271, MFA), architecture (CRDT inbox, SDK consolidation), CI (pinning GitHub Actions SHAs), bugs (FUSE write-journal, IPNS subtree traversal), observability (logger redaction, Faro transport), and others."
+      "Todo #17: Large source-file refactor candidates — 26 files surveyed, includes SharedFileBrowser.tsx (946 lines), useSharedNavigationActions.ts (579 lines), sdk-core/src/folder/index.ts (602 lines) from phase 31 deviations",
+      "PERF-03: Kubo peer/bandwidth metrics will remain unavailable until a Kubo version newer than v0.34.0 exposes libp2p_swarm_connections_* and libp2p_network_*_bytes_total",
+      "Phase 31 SC3 — folder.service.ts was retired rather than decomposed; sdk-core/src/folder/index.ts is the 602-line successor and is not modularized into CRUD/metadata/publish"
     ]
   },
   "initial_attribution": {
-    "calculated_at": "2026-06-19T00:38:08.820374Z",
-    "agent_lines": 0,
-    "agent_removed": 0,
-    "human_added": 0,
-    "human_modified": 42,
+    "calculated_at": "2026-06-19T00:40:31.60433Z",
+    "agent_lines": 51,
+    "agent_removed": 54,
+    "human_added": 435,
+    "human_modified": 0,
     "human_removed": 0,
-    "total_committed": 0,
-    "total_lines_changed": 42,
-    "agent_percentage": 0,
+    "total_committed": 486,
+    "total_lines_changed": 582,
+    "agent_percentage": 18.04123711340206,
     "metric_version": 2
-  },
-  "prompt_attributions": [
-    {
-      "checkpoint_number": 1,
-      "user_lines_added": 407,
-      "user_lines_removed": 0,
-      "agent_lines_added": 0,
-      "agent_lines_removed": 0,
-      "user_added_per_file": {
-        ".claude/scheduled_tasks.lock": 1,
-        ".planning/phases/18-performance-instrumentation/18-VERIFICATION.md": 119,
-        ".planning/phases/31-structural-decomposition/31-VERIFICATION.md": 144,
-        ".planning/phases/32-fuse-async-filepointer-resolution/32-VERIFICATION.md": 143
-      }
-    }
-  ]
+  }
 }
