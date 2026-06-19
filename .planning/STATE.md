@@ -9,7 +9,7 @@ progress:
   total_phases: 40
   completed_phases: 35
   total_plans: 160
-  completed_plans: 158
+  completed_plans: 159
   percent: 88
 ---
 
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 51 (crypto-signature-secret-leak-hardening) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Milestone v1.1 reopened 2026-06-19 with a hardening block (Phases 50–55). Phases 18–49 complete and verified (151 plans). Next: run /gsd:plan-phase 50 (recommended risk order: 50 data-integrity → 51 crypto/secret hardening → 52 FUSE → 53 release-eng → 54 test-infra → 55 refactor).
 
 ## Performance Metrics
@@ -152,6 +152,7 @@ Milestone v1.1 reopened 2026-06-19 with a hardening block (Phases 50–55). Phas
 | Phase 49 P04 | 26min | 3 tasks | 5 files |
 | Phase 49 P05 | 12min | 2 tasks | 2 files |
 | Phase 51 P01 | 9min | 3 tasks | 2 files |
+| Phase 51 P03 | 45min | 4 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -288,7 +289,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-19
 
-Last session: 2026-06-19T19:53:12.864Z
+Last session: 2026-06-19T21:30:00Z
 
 ## Decisions
 
@@ -311,3 +312,5 @@ Last session: 2026-06-19T19:53:12.864Z
 - [Phase 49-05]: readContentViaEditor dispatches rightClickFolderItem vs rightClickItem based on instanceof check (shared vs private browser page)
 - [Phase 49-05]: Alice decrypt assertion uses FileListPage (private vault view), not SharedFileBrowserPage — owner reads own files via vault browser
 - [Phase 51-01]: CAS ConflictException (409) check placed before S1 BadRequestException (400) sequence check so concurrent-modification signals remain authoritative; S1 reuses anti-rollback incomingParsed to avoid double parse
+- [Phase 51-03]: resolve_folder_key_cached cache left as HashMap<String, Vec<u8>> (not Zeroizing); cache is short-lived, cleared on replay_for_vault drop — only BFS queue and get_folder_key return changed
+- [Phase 51-03]: verify_ipns_resolve_signature absent-fields path returns Ok(None) + warn (D-03), not error; verify gate in resolve_folder_key BFS only (not fetch_merge_publish_parent replay path)
