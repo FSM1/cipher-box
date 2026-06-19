@@ -689,7 +689,7 @@ _(The primary test infrastructure is the CI itself — zizmor and pinact are the
 
 **If this table is empty:** All claims were verified. It is not empty — A1 and A2 are assumed.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 All open questions are resolved for planning purposes.
 

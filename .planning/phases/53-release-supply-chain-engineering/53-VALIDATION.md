@@ -1,8 +1,8 @@
 ---
 phase: 53
 slug: release-supply-chain-engineering
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-19
 ---
@@ -79,6 +79,6 @@ _All other phase behaviors are verified by existing/added supply-chain tooling (
 - [ ] Wave 0 covers all MISSING references (`check-stale-release-as.js`)
 - [ ] No watch-mode flags (all checks are one-shot CLI/CI)
 - [ ] Feedback latency < 15s for the quick command
-- [ ] `nyquist_compliant: true` set in frontmatter (set by checker once plans align)
+- [x] `nyquist_compliant: true` set in frontmatter (plans align — confirmed by plan-checker)
 
-**Approval:** pending
+**Approval:** approved 2026-06-19

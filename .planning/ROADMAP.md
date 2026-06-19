@@ -871,10 +871,10 @@ Plans:
 
 ### Phase 53: Release & Supply-Chain Engineering
 
-**Goal:** [To be planned]
+**Goal:** Harden the CI/release supply chain (HARD-04): SHA-pin all third-party GitHub Actions with a zizmor regression gate and least-privilege permissions, sync Cargo.lock with release-please crate bumps, and make the release-please pin recompute resilient to force-push clobber.
 **Requirements**: HARD-04
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Scope (captured todos):
 
@@ -883,8 +883,18 @@ Scope (captured todos):
 - [ ] **[#16]** Harden release-please release-as pin automation against force-push clobber and stale pins — `2026-06-19-harden-release-please-pin-automation.md`
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd:plan-phase 53 to break down)
+- [ ] 53-01-PLAN.md — SHA-pin all third-party action refs via pinact (all 14 workflows) + verify Dependabot github-actions block [wave 1]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 53-02-PLAN.md — zizmor CI hard gate (CLI mode) + least-privilege permissions blocks on all unscoped jobs/workflows [wave 2]
+- [ ] 53-03-PLAN.md — Cargo.lock sync on release (cargo update --precise + stale-lock guard; cargo-workspace plugin rejected) [wave 2]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 53-04-PLAN.md — release-please pin-automation resilience: stale-pin guard script (TDD), remove 3 stale release-as pins, cancel-in-progress safety-net, fetch+rebase discipline docs [wave 3]
 
 ### Phase 54: E2E Test-Infra Typing
 
