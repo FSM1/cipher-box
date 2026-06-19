@@ -1,0 +1,295 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "77888d8dd82d",
+  "session_id": "23b28342-e76c-41da-872a-14e0f4fbc9ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T16:48:33.260598Z",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/security/REVIEW-2026-06-19-phase50.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4bdfeb110c40",
+  "token_usage": {
+    "input_tokens": 38007,
+    "cache_creation_tokens": 665668,
+    "cache_read_tokens": 32141852,
+    "output_tokens": 167815,
+    "api_call_count": 127
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01XWNxPn9Y2eDALMFaCnVhv6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 36,
+        "end": 37,
+        "entry_ids": [
+          "0ec3006c-056a-4fa5-a4e1-81bf4c70bbd6"
+        ],
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A67zEtU8W6i7yf84Hses7n",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 328,
+        "end": 329,
+        "entry_ids": [
+          "ef3aabff-921f-4f81-8539-b95d6c03715d"
+        ],
+        "tool_use_id": "toolu_01A67zEtU8W6i7yf84Hses7n"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A67zEtU8W6i7yf84Hses7n"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:code-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01ENaavbBYGs8Yqsvbik3KUp",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 464,
+        "end": 465,
+        "entry_ids": [
+          "c7e4b674-99b7-4cdf-b35f-a1f9ad528528"
+        ],
+        "tool_use_id": "toolu_01ENaavbBYGs8Yqsvbik3KUp"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01ENaavbBYGs8Yqsvbik3KUp"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01GPJPgRipo47yVPLCzoRLXu",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 529,
+        "end": 530,
+        "entry_ids": [
+          "ef19b32b-7a7e-4aee-90e7-b9a7623b5e9a"
+        ],
+        "tool_use_id": "toolu_01GPJPgRipo47yVPLCzoRLXu"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01GPJPgRipo47yVPLCzoRLXu"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:validate-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01J3KrWPnFYzkU7pdXzbBSCd",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security:review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 586,
+        "end": 587,
+        "entry_ids": [
+          "e05d5c38-a960-446b-9725-f8a0df6e9284"
+        ],
+        "tool_use_id": "toolu_01J3KrWPnFYzkU7pdXzbBSCd"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01J3KrWPnFYzkU7pdXzbBSCd"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security:review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01NZ1rMoWy2FPAK3Zx2xdFN3",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 598,
+        "end": 599,
+        "entry_ids": [
+          "aaedda92-3971-4882-8aee-3da0318a7a0e"
+        ],
+        "tool_use_id": "toolu_01NZ1rMoWy2FPAK3Zx2xdFN3"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01NZ1rMoWy2FPAK3Zx2xdFN3"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute Phase 50 (IPFS/IPNS Data-Integrity Fixes) across 5 planned fixes for unpin integrity bugs and IPNS subtree unenrollment gaps, then run the full post-execution quality pipeline (code review, verification, validation, simplify, security reviews).",
+    "outcome": "Phase 50 fully executed and shipped: 5 plans merged via parallel worktrees, 2 blocker code-review findings (cycle guard, missing .catch) fixed, 90/90 tests green, verification passed on all 3 must-haves, Nyquist-compliant, security reviews found no exploitable vulnerabilities. Phase marked complete, 2 resolved todos closed.",
+    "learnings": {
+      "repo": [
+        "GSD dep-string parsing is fragile: 'Phase 49 (v1.1 baseline)' gets mis-parsed into a phantom phase '1.1', incorrectly marking dependencies unsatisfied even when Phase 49 is complete.",
+        "Worktrees have no own node_modules — pnpm/orval resolve to the workspace root, so invoking pnpm api:generate inside a worktree leaks 131+ generated api-client files and any SDK output directly into the main checkout's working tree.",
+        "Husky regenerates .husky/_/* stub files as untracked inside worktrees when pnpm install is triggered; these block the cleanup-wave merge helper with a dirty-working-tree error.",
+        "The cleanup-wave merge helper silently fails (opaque 'merge_failed', no stderr) when the pre-commit hook times out or fails internally — the staged content is clean and the fix is to complete the merge commit manually with hooks enabled.",
+        "gsd_run query commit reliably reports commit_failed but actually succeeds — always verify via git log rather than trusting the helper's exit status.",
+        "todos/done/ (70 legacy items, last touched 2026-06-15) and todos/completed/ (canonical, referenced 6× in GSD tooling) drifted apart; GSD always writes to completed/, done/ was never migrated.",
+        "Markdownlint ignores .planning/ directory so planning-doc commits never trigger lint-staged failures.",
+        "The VALIDATION.md grep for 'outboxRowInserted' hit a documenting comment 'renamed from outboxRowInserted' at vault.service.ts:251 even after the rename, producing a false-positive gap report.",
+        "cleanup-wave requires a fully clean orchestrator working tree including STATE.md; the orchestrator's own state.begin-phase write blocks the first merge attempt."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 272,
+          "end_line": 341,
+          "finding": "collectSubtreeIpnsNamesAsync lacked a visited Set guard (unlike ensureFolderLoaded at line 549 and the shared walker at line 2526), making it vulnerable to infinite recursion on folder-metadata cycles. Fixed by CR-01: visited Set added at line 293-294, child-skip at 327-341."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 220,
+          "end_line": 316,
+          "finding": "Four fire-and-forget unenroll dispatch sites (lines ~220, 246, 316+) used .then() with no .catch(), causing unhandled promise rejections that violated the 'failures never block the caller' contract. Fixed by CR-02, then further refactored into a single fireAndForgetUnenrollEntries helper by /simplify."
+        },
+        {
+          "path": "apps/api/src/ipfs/pending-unpin/pending-unpin.processor.ts",
+          "line": 55,
+          "end_line": 59,
+          "finding": "WR-01: drain re-checked pinned_cids count and called unpinFile in autocommit with no advisory lock — TOCTOU window where concurrent re-upload could cause Kubo GC of a live CID. Fixed by wrapping recheck+unpin+delete in a transaction that first takes pg_advisory_xact_lock(hashtext(cid)::bigint)."
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "line": 251,
+          "end_line": 251,
+          "finding": "Documenting comment 'renamed from outboxRowInserted' (IN-06) caused VALIDATION.md grep assertions to false-positive, appearing as a gap even though the actual variable was correctly renamed to shouldAttemptPhysicalUnpin at lines 254/306/312."
+        }
+      ],
+      "workflow": [
+        "When a worktree's pnpm run leaks generated files into the main checkout, verify all dirty files match the expected worktree branch before discarding them — this avoids accidentally discarding legitimate changes.",
+        "Post-merge build/typecheck gate (pnpm -r run build chain + web tsc -b) is the real cross-plan integration check after worktree merges; targeted unit tests alone don't catch type/import breakage from api-client regen.",
+        "Running full monorepo parallel test suites (pnpm --parallel -r run test) risks RAM starvation and hits infra-dependent integration tests; prefer targeted per-package runs for post-merge gates.",
+        "The /simplify pass after code-review fixes is a valuable sequencing choice: CR-02's four .catch() handlers became easier to consolidate into one helper after they were all co-located by the fix."
+      ]
+    },
+    "friction": [
+      "Dep-string mis-parsing ('Phase 49 (v1.1 baseline)' → phantom phase '1.1') required manually confirming readiness instead of trusting the dashboard recommendation.",
+      "Worktree pnpm api:generate leaking 131 api-client files + client.ts into main checkout required manual per-file verification before discarding, adding ~10 min of diagnostic work.",
+      "Husky .husky/_/* stubs regenerated as untracked in worktrees blocked cleanup-wave with an opaque dirty-state error.",
+      "cleanup-wave merge helper produced silent 'merge_failed' (empty stderr) on pre-commit hook timeout for 131 generated files — required diagnosing via manual git merge + inspecting staged state.",
+      "cleanup-wave also blocked because orchestrator STATE.md was dirty from state.begin-phase write.",
+      "gsd_run query commit false-negative on every commit required verifying via git log after each call.",
+      "macOS mktemp left XXXXXX literal in filename when template had X's mid-string (BSD mktemp limitation).",
+      "VALIDATION.md grep assertions false-positived on a documenting comment for a renamed variable, requiring manual inspection to confirm the rename was actually done."
+    ],
+    "open_items": [
+      "WR-02: RegisterCidDto CID regex uses {44} vs {44,} inconsistency with UnpinDto — deferred todo 2026-06-19-register-cid-dto-validation-inconsistency.md",
+      "WR-05: LocalProvider.unpinFile builds pin/rm?arg=${cid} URL with no encodeURIComponent — deferred todo 2026-06-19-local-provider-unescaped-cid-in-pin-url.md",
+      "Refactor: extract withCidLock as a shared unpin primitive to eliminate advisory-lock SQL duplicated 3× — deferred todo 2026-06-19-extract-withcidlock-shared-unpin-primitive.md",
+      "Refactor: extract leaf IpfsProviderModule to resolve circular import (currently accepted with comments in 3 module files) — deferred todo 2026-06-19-extract-leaf-ipfs-provider-module.md",
+      "REQUIREMENTS.md traceability gaps: REQ-IDs IPNS-05/06, DB-01/02, BYO-08 missing from traceability table (pre-existing doc-sync debt surfaced by phase.complete).",
+      "Two orphaned worktree-agent-* branches (a92edd36, abd7998d) from a prior session with no associated worktrees — left untouched to avoid scope creep.",
+      "CodeRabbit review (Task #8), PR creation via gsd:ship (Task #9), and resolve-pr-reviews (Task #10) not yet run — pipeline ends at security review.",
+      "WR-01 fix holds the advisory lock across a Kubo network call in the pending-unpin drain — low-frequency batched path, accepted but flagged for future review if drain latency becomes an issue."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T16:47:04.941661Z",
+    "agent_lines": 124,
+    "agent_removed": 0,
+    "human_added": 19,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 143,
+    "total_lines_changed": 143,
+    "agent_percentage": 86.7132867132867,
+    "metric_version": 2
+  }
+}
