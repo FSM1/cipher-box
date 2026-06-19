@@ -217,4 +217,5 @@ Which phases cover which requirements. Updated during roadmap creation.
 ---
 
 _Requirements defined: 2026-03-07_
+_Last updated: 2026-06-19 — PERF-01..04 directly verified in 18-VERIFICATION.md (PERF-03 via accepted override: Kubo v0.34 emits no libp2p metrics upstream); previously orphaned in the v1.1 milestone audit, now closed. 66/66 satisfied._
 _Last updated: 2026-06-11 by milestone audit (IPNS-02/03, SDK-08/09 checkboxes reconciled with phase verifications)_

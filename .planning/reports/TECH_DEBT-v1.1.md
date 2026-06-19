@@ -64,12 +64,17 @@ Promoted to **`.planning/todos/pending/2026-06-18-web-logger-redaction-and-faro-
 
 ## 5. GSD verification / process gaps (🆕 new)
 
-The 2026-06-11 milestone audit flagged these; the verification-ledger close-out commits (#512/#513) covered phases 19.2/23/27/47–49 but **not** 18/31/32. Verified 2026-06-18: still missing.
-Promoted to **`.planning/todos/pending/2026-06-18-gsd-verification-gaps-phases-18-31-32.md`**.
+The 2026-06-11 milestone audit flagged these; the verification-ledger close-out commits (#512/#513) covered phases 19.2/23/27/47–49 but **not** 18/31/32. **All three closed 2026-06-19** — VERIFICATION.md authored (goal-backward, each adversarially spot-checked); audit verdict flipped to `passed` (66/66, 20/20).
 
-- [ ] **[P18·med]** No `VERIFICATION.md` → requirements **PERF-01..04** remain technically orphaned (histograms wired & relied on by phases 22/26, but never directly verified). Run `/gsd:validate-phase 18`.
-- [ ] **[P32·med]** No `VERIFICATION.md` **and** no `VALIDATION.md` (only phase lacking both). Run `/gsd:validate-phase 32`.
-- [ ] **[P31·med]** Only `31-VALIDATION.md` (status draft, approval pending); no `VERIFICATION.md` for the structural decomposition. Run `/gsd:validate-phase 31`.
+- [x] **[P18·med]** ~~No `VERIFICATION.md` → PERF-01..04 orphaned~~ — **Closed 2026-06-19:** `18-VERIFICATION.md` (passed). PERF-01/02/04 directly verified with file:line evidence; PERF-03 satisfied via accepted override (Kubo v0.34 emits no libp2p metrics upstream — scrape/panels correctly wired, not a code defect).
+- [x] **[P32·med]** ~~No `VERIFICATION.md` and no `VALIDATION.md`~~ — **Closed 2026-06-19:** `32-VERIFICATION.md` (passed) — SC1/SC3 verified statically, SC2/SC4 confirmed by maintainer macOS UAT (Finder no longer hangs). `32-VALIDATION.md` also authored (Nyquist `partial`: E2E covers the async path on main-push; drain/dedup + poll-wait/EIO unit tier documented as Wave-0 gaps — reaching compliant needs Rust unit tests, a code change).
+- [x] **[P31·med]** ~~Only `31-VALIDATION.md`; no `VERIFICATION.md`~~ — **Closed 2026-06-19:** `31-VERIFICATION.md` (passed). SC4/SC5 verified; SC1-SC3 size/decomposition deviations accepted as tracked tech-debt (large-file refactor survey todo, 2026-06-19).
+
+**Nyquist VALIDATION.md gap closed 2026-06-19:** the 4 in-scope phases lacking a validation contract (28/29/30/32) now have one (34 was already validated 2026-06-12 — stale in the audit's "missing" list). No in-scope phase is missing a VALIDATION.md (9 compliant / 11 partial / 0 missing). Overall Nyquist stays `partial` — reaching compliant on the 11 partial phases needs automated-test backfill (a code change, out of scope for this docs pass). The new contracts document each gap; two overlap existing todos:
+
+- [ ] **[P29·med]** Nyquist `partial` — `fireAndForgetUnenroll` delete-wiring + `collectSubtreeIpnsNames` recursion ship with zero unit tests. Overlaps §4 / the unenroll-subtree todo. Test backfill needed for compliance.
+- [ ] **[P30·med]** Nyquist `partial` — privacy scrubber (`scrubObject`/`beforeSend`) has zero tests, and `registerFaroTransport` is dead code (logger has no `transports` array). Same gap as §3 / the logger-redaction + Faro-transport todo. Test backfill + wiring fix needed.
+- [ ] **[P32·low]** Nyquist `partial` — FUSE drain/dedup + poll-wait/EIO unit tier missing (E2E covers the path on main-push only). Rust unit tests needed for compliance.
 
 ## 6. Operational / known limitations (🆕 documented, mostly runbook)
 
