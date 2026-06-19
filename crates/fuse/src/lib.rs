@@ -1635,6 +1635,36 @@ async fn resolve_folder_key(
         let resolve = cipherbox_api_client::ipns::resolve_ipns(api, &current_ipns)
             .await
             .map_err(|e| format!("resolve IPNS {}: {}", current_ipns, e))?;
+
+        // S2/D-04: verify the IPNS signed-record signature before trusting the CID.
+        // D-03: absent signature fields → warn and continue (DB CID authoritative,
+        //   backward-compatible with legacy records that predate signedRecord).
+        // D-02: present but invalid → fail closed (compromised-server defense).
+        match cipherbox_api_client::ipns::verify_ipns_resolve_signature(&resolve, &current_ipns) {
+            Ok(None) => {
+                log::warn!(
+                    "resolve_folder_key: IPNS {} resolved without signature fields — \
+                     proceeding (D-03, DB CID authoritative)",
+                    current_ipns
+                );
+            }
+            Ok(Some(true)) => {
+                // Signature valid and IPNS name matches — proceed.
+            }
+            Ok(Some(false)) => {
+                return Err(format!(
+                    "IPNS {} signature verification failed — refusing to use CID (D-02)",
+                    current_ipns
+                ));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "IPNS {} signature verification error: {} — refusing to use CID",
+                    current_ipns, e
+                ));
+            }
+        }
+
         let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolve.cid)
             .await
             .map_err(|e| format!("fetch metadata for {}: {}", current_ipns, e))?;
