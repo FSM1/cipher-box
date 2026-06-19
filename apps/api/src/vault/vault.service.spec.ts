@@ -621,27 +621,8 @@ describe('VaultService', () => {
     });
   });
 
-  describe('recordUnpin', () => {
-    it('should delete pin by userId and cid', async () => {
-      const testCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
-      mockPinnedCidRepo.delete.mockResolvedValue({ affected: 1 });
-
-      await service.recordUnpin(testUserId, testCid);
-
-      expect(mockPinnedCidRepo.delete).toHaveBeenCalledWith({
-        userId: testUserId,
-        cid: testCid,
-      });
-    });
-
-    it('should not throw if pin not found (idempotent)', async () => {
-      const testCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
-      mockPinnedCidRepo.delete.mockResolvedValue({ affected: 0 }); // No rows deleted
-
-      // Should not throw - idempotent behavior
-      await expect(service.recordUnpin(testUserId, testCid)).resolves.toBeUndefined();
-    });
-  });
+  // IN-03: recordUnpin test block removed — the method was deleted from VaultService
+  // (zero production callers; all unpin paths go through guardedUnpin).
 
   describe('markInitialized', () => {
     it('should update vault with initializedAt timestamp', async () => {
@@ -928,6 +909,8 @@ describe('VaultService', () => {
       expect(mockManagerPendingUnpinRepo.createQueryBuilder).not.toHaveBeenCalled();
       expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
       expect(mockMetricsService.unpinCrossUserAttempts.inc).not.toHaveBeenCalled();
+      // IN-01: no row deleted — metric must NOT fire on no-op paths
+      expect(mockMetricsService.fileUnpins.inc).not.toHaveBeenCalled();
     });
 
     it('no-row, cross-user: calls unpinCrossUserAttempts.inc and logger.warn, no delete, no Kubo', async () => {
@@ -941,6 +924,8 @@ describe('VaultService', () => {
       expect(mockMetricsService.unpinCrossUserAttempts.inc).toHaveBeenCalledTimes(1);
       expect(mockManagerPinnedCidRepo.delete).not.toHaveBeenCalled();
       expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
+      // IN-01: no row deleted — metric must NOT fire on cross-user no-op paths
+      expect(mockMetricsService.fileUnpins.inc).not.toHaveBeenCalled();
     });
 
     it('no-row, cross-user, suppressCrossUserAudit: does NOT increment counter (internal rollback)', async () => {
@@ -970,6 +955,8 @@ describe('VaultService', () => {
       });
       expect(mockManagerQueryBuilder.execute).not.toHaveBeenCalled();
       expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
+      // IN-01: row was deleted → metric fires even when refcount > 0 (caller's row removed)
+      expect(mockMetricsService.fileUnpins.inc).toHaveBeenCalledTimes(1);
     });
 
     it('owned, refcount === 0: inserts outbox row inside transaction, then calls Kubo and deletes outbox row post-commit', async () => {
@@ -987,6 +974,8 @@ describe('VaultService', () => {
       expect(mockManagerQueryBuilder.execute).toHaveBeenCalled();
       expect(mockIpfsProvider.unpinFile).toHaveBeenCalledWith(testCid);
       expect(mockPendingUnpinRepository.delete).toHaveBeenCalledWith({ cid: testCid });
+      // IN-01: row was deleted → metric fires
+      expect(mockMetricsService.fileUnpins.inc).toHaveBeenCalledTimes(1);
     });
 
     it('owned, refcount === 0, Kubo throws: guardedUnpin still resolves, outbox row left (for worker)', async () => {
@@ -998,6 +987,8 @@ describe('VaultService', () => {
 
       expect(mockIpfsProvider.unpinFile).toHaveBeenCalledWith(testCid);
       expect(mockPendingUnpinRepository.delete).not.toHaveBeenCalled();
+      // IN-01: row was deleted → metric fires even when Kubo fails
+      expect(mockMetricsService.fileUnpins.inc).toHaveBeenCalledTimes(1);
     });
 
     it('WR-01: advisory lock query must not use abs(int4) form (INT_MIN CID stays deletable)', async () => {
