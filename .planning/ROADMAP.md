@@ -843,7 +843,7 @@ Plans:
 **Goal:** Close the three deferred IPNS signed-record findings (S1/S2/S3) from the PR #448 security review under HARD-02 — publish-time embedded-vs-DTO validation (S1), fail-closed signature verification across web + sdk-core + Rust with callers honoring signatureVerified (S2), and an exhaustive caller-owns-key zeroization convention across the TS SDK and Rust crates with an enforcement guard (S3). Server stays zero-knowledge; DB remains the authoritative CID source.
 **Requirements**: HARD-02
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 4 plans
+**Plans:** 2/4 plans executed
 
 Scope (captured todos):
 
@@ -855,8 +855,8 @@ Deferred from this phase:
 
 Plans:
 
-- [ ] 51-01-PLAN.md — S1: publish-time embedded-vs-DTO CID + offset-aware sequence validation (api)
-- [ ] 51-02-PLAN.md — S2 web: fail-closed resolveIpnsRecord (throw on invalid, allow+flag on absent)
+- [x] 51-01-PLAN.md — S1: publish-time embedded-vs-DTO CID + offset-aware sequence validation (api)
+- [x] 51-02-PLAN.md — S2 web: fail-closed resolveIpnsRecord (throw on invalid, allow+flag on absent)
 - [ ] 51-03-PLAN.md — S2/S3 Rust: IpnsResolveResponse sig fields + verify fn + FUSE callers honor it; Zeroizing key paths
 - [ ] 51-04-PLAN.md — S3 TS: sdk-core ipns/vault/folder zeroization sweep + enforcement guard tests
 
@@ -966,7 +966,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 48. SDK Self-Bootstrap + Shared Metadata  | v1.1      | 7/7            | Complete | 2026-06-17 |
 | 49. Shared-Folder Move (Intra-Share)      | v1.1      | 5/5            | Complete | 2026-06-18 |
 | 50. IPFS/IPNS Data-Integrity Fixes        | v1.1-hardening | 5/5 | Complete    | 2026-06-19 |
-| 51. Crypto-Signature & Secret-Leak Hardening | v1.1-hardening | -      | Planned  | -          |
+| 51. Crypto-Signature & Secret-Leak Hardening | v1.1-hardening | 2/4 | In Progress|  |
 | 52. Desktop FUSE Durability & At-Rest Safety | v1.1-hardening | -      | Planned  | -          |
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
 | 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |
