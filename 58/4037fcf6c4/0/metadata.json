@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "584037fcf6c4",
+  "session_id": "23b28342-e76c-41da-872a-14e0f4fbc9ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T15:47:38.3617Z",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4bdfeb110c40",
+  "checkpoint_transcript_start": 276,
+  "transcript_lines_at_start": 276,
+  "token_usage": {
+    "input_tokens": 147,
+    "cache_creation_tokens": 15418,
+    "cache_read_tokens": 2170581,
+    "output_tokens": 12543,
+    "api_call_count": 9
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01XWNxPn9Y2eDALMFaCnVhv6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 36,
+        "end": 37,
+        "entry_ids": [
+          "0ec3006c-056a-4fa5-a4e1-81bf4c70bbd6"
+        ],
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Complete phase 50 (IPFS/IPNS data integrity fixes) by executing and merging all 5 plans across 2 waves, then verify the integrated result.",
+    "outcome": "All 5 plans (50-01 through 50-05) merged successfully; 68/68 api tests pass, typecheck clean; quota-decrement-on-delete fix landed with IN-01/IN-03/IN-06/WR-04/WR-07/IN-05 dispositions complete.",
+    "learnings": {
+      "repo": [
+        "50-01 fixed INT_MIN overflow by dropping abs() from guardedUnpin advisory lock: pg_advisory_xact_lock(hashtext($1)::bigint)",
+        "50-02 added refcount-aware pending-unpin drain that skips physical unpin when file is re-pinned (lines 55-59 of relevant service)",
+        "recordUnpin in vault.service.ts had zero callers and was deleted in 50-04 (IN-03); its 2 spec tests were also removed",
+        "fileUnpins.inc() now gated by rowDeleted flag (IN-01) — quota no longer leaks on delete/no-op paths",
+        "outboxRowInserted was renamed to shouldAttemptPhysicalUnpin (IN-06) for clarity",
+        "CAPACITY.md section 7 documents BYO retention consequence (WR-07 accepted as comment + docs)",
+        "dbCids comment explains BYO rows included to mirror refcount semantics (IN-05, consistent with WR-07)"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "line": 55,
+          "end_line": 59,
+          "finding": "Refcount guard from 50-02: skips physical unpin when refcount shows file is re-pinned"
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "outboxRowInserted renamed to shouldAttemptPhysicalUnpin; fileUnpins.inc() now gated by rowDeleted flag"
+        },
+        {
+          "path": "docs/CAPACITY.md",
+          "finding": "Section 7 added documenting BYO retention consequence and dbCids semantics"
+        }
+      ],
+      "workflow": [
+        "Key-link parser treats embedded quotes in path strings (e.g., 'vault.service.ts guardedUnpin') as literal file paths, producing false 'Source file not found' errors — forward-reference key-links to the upcoming wave's own deliverables should be skipped per step 7b",
+        "GSD commit helper may report commit_failed even when git log confirms the commit landed — always verify with git log before retrying",
+        "Worktree-based subagent execution: base commit must equal current HEAD for a clean fast-forward merge; spot-check for FAILED markers and husky stubs before merging",
+        "Post-merge gate scope can be narrowed to only the packages touched by that wave (api tests + api typecheck when only apps/api + docs changed)",
+        "api typecheck exit code can be masked in compound bash commands — confirm with a standalone tsc invocation"
+      ]
+    },
+    "friction": [
+      "Key-link checker produced a false 'Source file not found' error by treating a quoted identifier ('vault.service.ts guardedUnpin') as a literal file path",
+      "Key-link checker also flagged 50-04's own deliverable as a missing dependency (forward-reference artifact), requiring manual reasoning to confirm it was not a real gap",
+      "GSD commit helper reported commit_failed for the wave 1 tracking commit even though git log confirmed it landed (51c19cab9)"
+    ],
+    "open_items": [
+      "Phase-level verification steps still pending at transcript end: code review → verifier → phase completion",
+      "Wave 2 tracking commit update was in progress but not yet confirmed committed at transcript end"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
