@@ -681,7 +681,7 @@ Step 2.6: SKIPPED — this phase is purely code changes with no new external CLI
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **S1 sequence check: does `updateFolderMetadataAndPublish` → `publishWithCas` send `expectedSequenceNumber = currentSeq` (the old DB value) and sign with `currentSeq + 1n`?**
    - What we know: `buildFolderIpnsRecord` in `folder/index.ts:424` sets `expectedSequenceNumber: params.sequenceNumber.toString()` and calls `createIpnsRecord` with `newSeq = params.sequenceNumber + 1n`.
@@ -691,7 +691,7 @@ Step 2.6: SKIPPED — this phase is purely code changes with no new external CLI
 2. **S3 — should `updateFolderMetadataAndPublish` zero `params.ipnsPrivateKey`?**
    - What we know: `updateFileMetadata` (file sibling) zeros `fileIpnsPrivateKey` because `client.ts` explicitly documents "do NOT zero it here" for outer callers. The folder case: `client.ts` lines reference T-47-01 for file but not folder. `publishWithCas` in `cas.ts` notes keys must be zeroed by the caller (`T-47-01` in the `cas.ts` docstring).
    - What's unclear: whether `client.ts` reuses `ipnsPrivateKey` after `updateFolderMetadataAndPublish` returns.
-   - Recommendation: Search `client.ts` for `updateFolderMetadataAndPublish` call sites; if the key is not reused after the call, add the `finally { params.ipnsPrivateKey.fill(0) }`. This should be confirmed during implementation (Wave 0/1).
+   - **Resolved:** Decision is delegated to an execution-time call-site audit (per assumption A2). Plan 51-04 Task 3 implements the deterministic rule: audit the `client.ts` `updateFolderMetadataAndPublish` call sites (notably the move source/dest paths) — if the key buffer is NOT reused after the call, add `finally { params.ipnsPrivateKey.fill(0) }`; if it IS reused (shared buffer), document the skip with a matching guard test. Either branch is covered by a test, so the convention is enforced regardless of the audit outcome. This is an acceptable deferred-to-task resolution: the analysis is fully scoped, only the binary buffer-ownership fact requires reading current `client.ts` source, and both outcomes are pre-specified.
 
 3. **S2 Rust — does `derive_ipns_name` exist in cipherbox_crypto or only in cipherbox_core?**
    - What we know: `crates/core/src/ipns.rs:20` has `pub use cipherbox_crypto::ipns_name::derive_ipns_name`. So it is available via `cipherbox_crypto` directly.

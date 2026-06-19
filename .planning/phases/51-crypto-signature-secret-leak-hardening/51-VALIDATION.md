@@ -1,9 +1,9 @@
 ---
 phase: 51
 slug: crypto-signature-secret-leak-hardening
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: ready
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-06-19
 ---
 
@@ -57,9 +57,11 @@ _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ## Wave 0 Requirements
 
-- [ ] `apps/web/src/services/__tests__/ipns.service.test.ts` — new file covering S2 web fail-closed (present-but-invalid throws; absent fields → signatureVerified=false)
-- [ ] `crates/api-client/src/ipns.rs` `#[cfg(test)]` module (or `ipns_tests.rs`) — Rust sig-field deserialization + `verify_ipns_resolve_signature` cases (absent → None, invalid → Some(false), valid → Some(true))
-- [ ] S3 enforcement guard — regression test and/or lint asserting caller-owns-key on the touched sdk-core paths (D-05)
+> Resolved inline via TDD Task 1 (RED step) in the owning Wave 1 plans — test-first within each plan satisfies the Wave 0 dependency.
+
+- [x] `apps/web/src/services/__tests__/ipns.service.test.ts` — new file covering S2 web fail-closed (present-but-invalid throws; absent fields → signatureVerified=false) — owned by plan 51-02
+- [x] `crates/api-client/src/ipns.rs` `#[cfg(test)]` module (or `ipns_tests.rs`) — Rust sig-field deserialization + `verify_ipns_resolve_signature` cases (absent → None, invalid → Some(false), valid → Some(true)) — owned by plan 51-03
+- [x] S3 enforcement guard — regression test and/or lint asserting caller-owns-key on the touched sdk-core paths (D-05) — owned by plan 51-04
 
 _Existing `ipns.service.spec.ts` (api) covers S1 after extension. Existing `sdk-core/__tests__/ipns.test.ts` covers sdk-core S2/S3 after extension._
 
@@ -77,11 +79,11 @@ _All phase behaviors have automated verification (unit + compile-time)._
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (web ipns test, Rust verify test, S3 guard)
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s (quick)
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (web ipns test, Rust verify test, S3 guard)
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s (quick)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-19
