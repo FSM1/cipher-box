@@ -21,6 +21,7 @@ describe('PendingUnpinProcessor', () => {
   const mockPinnedCidRepository = {
     find: jest.fn(),
     query: jest.fn(),
+    count: jest.fn(),
   };
 
   const mockIpfsProvider = {
@@ -44,6 +45,10 @@ describe('PendingUnpinProcessor', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+
+    // Default: CID has no active pins — drain proceeds normally.
+    // WR-03: individual tests override this to simulate a re-pinned CID.
+    mockPinnedCidRepository.count.mockResolvedValue(0);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -228,6 +233,28 @@ describe('PendingUnpinProcessor', () => {
       await expect(processor.process(makeJob('unknown-job'))).resolves.toBeUndefined();
       expect(mockPendingUnpinRepository.find).not.toHaveBeenCalled();
       expect(mockPinnedCidRepository.find).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---- WR-03: drain skips unpin when CID is re-pinned ----
+  describe('drain: skips unpin when CID is re-pinned (WR-03)', () => {
+    it('does NOT call unpinFile when pinnedCidRepository.count > 0', async () => {
+      const row = { id: 'uuid-wr03', cid: 'cidRePinned', createdAt: new Date() } as PendingUnpin;
+      // One outbox row whose CID has been re-pinned
+      mockPendingUnpinRepository.find.mockResolvedValue([row]);
+      // pinnedCidRepository.count returns 1 — CID is still live
+      mockPinnedCidRepository.count.mockResolvedValue(1);
+      // delete should still be called to clear the stale outbox row
+      mockPendingUnpinRepository.delete.mockResolvedValue({ affected: 1 });
+      // Gauge query: remaining outbox depth (inert for this test)
+      mockPendingUnpinRepository.count.mockResolvedValue(0);
+
+      await processor.process(makeJob('drain-pending-unpins'));
+
+      // Physical unpin MUST be skipped — CID is still live
+      expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
+      // Stale outbox row MUST still be cleaned up
+      expect(mockPendingUnpinRepository.delete).toHaveBeenCalledWith({ cid: row.cid });
     });
   });
 });
