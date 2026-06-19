@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "0eac3545f3ce",
+  "session_id": "fdde1651-b516-4cb7-ba0f-5e5195775c8e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T14:29:22.044639Z",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-RESEARCH.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "42edd405f3ef",
+  "checkpoint_transcript_start": 102,
+  "transcript_lines_at_start": 102,
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 3107,
+    "cache_read_tokens": 468465,
+    "output_tokens": 4198,
+    "api_call_count": 4
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01P2zVWRvuDCZ9hqLyKvt9J9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "42edd405f3ef",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 54,
+        "end": 55,
+        "entry_ids": [
+          "5c34e935-fefb-4556-9750-51e0358b404b"
+        ],
+        "tool_use_id": "toolu_01P2zVWRvuDCZ9hqLyKvt9J9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P2zVWRvuDCZ9hqLyKvt9J9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Fix bugs in an IPFS/IPNS data integrity phase (Phase 50) by first committing context, then spawning a research subagent to map the codebase and produce structured research for the phase.",
+    "outcome": "CONTEXT.md was committed successfully (commit 6bd964fb4), and a research subagent was spawned that produced .planning/phases/50-ipfs-ipns-data-integrity-fixes/50-RESEARCH.md.",
+    "learnings": {
+      "repo": [
+        "Phase 50 focuses on IPFS/IPNS data integrity bug fixes",
+        "Research artifacts are stored at .planning/phases/<phase-dir>/<phase>-RESEARCH.md"
+      ],
+      "code": [],
+      "workflow": [
+        "The GSD commit helper reports 'commit_failed' as a known false negative even when the commit lands — always verify with git log rather than trusting the helper's return value",
+        "Research phase is valuable before bug-fix phases to pin current line numbers (code review line numbers go stale) and map fetch/decrypt paths"
+      ]
+    },
+    "friction": [
+      "GSD commit helper false negative ('commit_failed') requires a manual git verification step every time to confirm the commit actually landed"
+    ],
+    "open_items": [
+      "50-RESEARCH.md was just produced — implementation of the actual Phase 50 bug fixes has not yet begun",
+      "On-demand traversal path for issue #14 (persisted-metadata fetch/decrypt) needs to be addressed in implementation",
+      "Validation Architecture for VALIDATION.md (needed by Nyquist) is deferred to implementation phase"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T14:29:09.574941Z",
+    "agent_lines": 541,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 541,
+    "total_lines_changed": 541,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
