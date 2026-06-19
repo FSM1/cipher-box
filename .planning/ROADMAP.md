@@ -913,11 +913,18 @@ Scope (captured todos):
 - [ ] **[#17]** Large source-file refactor candidates (split/dedup survey of 26 files) — `2026-06-19-large-file-refactor-candidates.md`
 
 Plans:
+**Wave 1**
 
 - [ ] 55-01-PLAN.md — lib.rs 6-module decomposition (runtime/events/publish/metadata/fs/replay)
-- [ ] 55-02-PLAN.md — remaining Tier-1 Rust: write_ops directory module + commands/auth.rs refactor
-- [ ] 55-03-PLAN.md — Tier-2 cross-platform dedup: content_ops, content_fetch, poll, prepopulate
 - [ ] 55-04-PLAN.md — Tier-1 TS/web: folder barrel split, ipns-record codec extract, DetailsDialog split
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 55-02-PLAN.md — remaining Tier-1 Rust: write_ops directory module + commands/auth.rs refactor
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 55-03-PLAN.md — Tier-2 cross-platform dedup: content_ops, content_fetch, poll, prepopulate
 
 ---
 
