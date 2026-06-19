@@ -1,0 +1,169 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9d63305a9c79",
+  "session_id": "23b28342-e76c-41da-872a-14e0f4fbc9ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T16:18:37.694205Z",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4bdfeb110c40",
+  "token_usage": {
+    "input_tokens": 26573,
+    "cache_creation_tokens": 557683,
+    "cache_read_tokens": 19042100,
+    "output_tokens": 117530,
+    "api_call_count": 90
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01XWNxPn9Y2eDALMFaCnVhv6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 36,
+        "end": 37,
+        "entry_ids": [
+          "0ec3006c-056a-4fa5-a4e1-81bf4c70bbd6"
+        ],
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A67zEtU8W6i7yf84Hses7n",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 328,
+        "end": 329,
+        "entry_ids": [
+          "ef3aabff-921f-4f81-8539-b95d6c03715d"
+        ],
+        "tool_use_id": "toolu_01A67zEtU8W6i7yf84Hses7n"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A67zEtU8W6i7yf84Hses7n"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute Phase 50 (IPFS/IPNS Data-Integrity Fixes) of the CipherBox project using the GSD manager workflow, completing all 5 plans via wave-based parallel worktree execution, then running code review, fixes, and verification to mark the phase complete.",
+    "outcome": "All 5 plans executed and merged (50-01 through 50-05), code review blockers CR-01/CR-02 and warnings WR-01/WR-03/WR-04 fixed with regression tests, verification passed 3/3 must-haves, and phase 50 marked complete. Post-phase tasks (simplify, security review, CodeRabbit, PR ship) were queued but not yet executed.",
+    "learnings": {
+      "repo": [
+        "pnpm api:generate (132 files) leaks generated output into the main checkout working tree when run inside a worktree, because worktrees share the repo's node_modules and orval resolves to the workspace root, not the worktree root",
+        "Husky auto-regenerates .husky/_/* stubs when npm/pnpm operations run inside a worktree, leaving untracked files that block cleanup-wave",
+        "The pre-commit hook runs check-api-client.sh + pnpm lint-staged (eslint+prettier on ~131 api-client files), which can silently time out or stall the GSD cleanup-wave helper's internal commit step",
+        "The GSD commit helper has a known false-negative: reports commit_failed but the commit actually lands — always verify with git log before retrying",
+        "Dependency strings like 'Phase 49 (v1.1 baseline)' are mis-parsed by init.manager into a phantom phase '1.1', marking deps unsatisfied even when the real dep (phase 49) is complete",
+        "5 REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) are missing from the REQUIREMENTS traceability table — pre-existing doc-sync debt surfaced by phase.complete gate",
+        "Two orphaned worktree-agent-* branches (a92edd36, abd7998d) from a prior session exist with no worktrees attached; they were left in place to avoid scope creep"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 272,
+          "end_line": 341,
+          "finding": "collectSubtreeIpnsNamesAsync had no visited set / cycle guard despite its docstring claiming to mirror the ensureFolderLoaded DFS pattern. Its sibling ensureFolderLoaded (line 549) and the shared walker (line 2526) both carry visited sets. A folder cycle would cause unbounded recursion. Fixed by adding a visited param (line 286), guard (lines 293-294), and child-skip (lines 327-341)."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 220,
+          "end_line": 316,
+          "finding": "Four fire-and-forget unenroll dispatch sites (.then() with no .catch()) meant errors during subtree unenrollment were silently swallowed. All four callers of collectSubtreeIpnsNamesAsync used this pattern. Fixed by adding .catch() handlers at each dispatch site."
+        },
+        {
+          "path": "apps/api/src/ipfs/pending-unpin/pending-unpin.processor.ts",
+          "line": 59,
+          "end_line": 59,
+          "finding": "Refcount recheck and physical unpin were originally performed outside the advisory lock, creating a data-loss race (another request could re-pin between the check and the physical unpin). Fixed to hold the advisory lock across the Kubo network call in the drain path — low-frequency batched path, but routed to security review for latency impact assessment."
+        },
+        {
+          "path": "apps/api/src/ipfs/vault/vault.service.ts",
+          "finding": "outboxRowInserted was renamed to shouldAttemptPhysicalUnpin (IN-06) for clarity. fileUnpins.inc() was previously firing on no-op paths; now gated by a rowDeleted flag (IN-01). Dead method recordUnpin had zero callers and was deleted along with its 2 spec tests (IN-03)."
+        }
+      ],
+      "workflow": [
+        "When cleanup-wave reports merge_failed with empty stderr and MERGE_HEAD is set, the merge content is already staged cleanly — completing the merge manually (git commit with hooks) is the correct recovery path rather than re-running the helper",
+        "Worktree leak detection: after merging worktrees that ran pnpm operations, verify the orchestrator working tree isn't dirty with regenerated files before attempting subsequent merges; files can be safely discarded if their blob hashes match what the worktree committed",
+        "The GSD key-link parser treats paths with embedded quotes or ellipsis as literal file paths, producing false 'source file not found' failures for forward references to the wave's own deliverables — these can be safely ignored",
+        "For phases with large generated-file changesets (100+ files), the post-merge gate should run targeted tests on changed packages rather than the full monorepo to avoid RAM exhaustion and infra-dependent integration tests",
+        "TDD RED→GREEN commit pairs are only required for plans with type:tdd in their frontmatter; disposition plans (accepting/documenting findings) are exempt from the TDD gate"
+      ]
+    },
+    "friction": [
+      "pnpm api:generate in worktrees leaked 131 generated api-client files into the main checkout, blocking cleanup-wave's git merge for 50-05 with a misleading 'uncommitted changes would be overwritten' error",
+      "cleanup-wave reported opaque merge_failed (empty stderr) for 50-05 because its internal commit timed out or failed under lint-staged's 131-file eslint+prettier pass — no actionable error surfaced",
+      "Husky .husky/_/* stubs regenerated as untracked files in the 50-05 worktree, causing the first cleanup-wave pass to block before even attempting the merge",
+      "GSD commit helper's false-negative (reports commit_failed, commit actually lands) required a git log verification step after every tracking commit to confirm success",
+      "init.manager mis-parsed the phase 49 dependency string 'Phase 49 (v1.1 baseline)' as phantom phase '1.1', causing Phase 50 to show as dep-unsatisfied in the dashboard even though it was ready to execute"
+    ],
+    "open_items": [
+      "WR-02: RegisterCidDto CID regex validation — deferred as a todo; file not touched by phase 50",
+      "WR-05: LocalProvider unescaped CID path — deferred as a todo; file not touched by phase 50",
+      "WR-01 caveat: advisory lock is now held across a Kubo network call in the drain path — potential latency/lock-hold-time concern queued for security review",
+      "Security review of phase 50 unpin/IPNS changes (cryptography/security skill + branch security-review) — task created, not yet executed",
+      "CodeRabbit structured review scoped to phase 50 diff — task created, not yet executed",
+      "Simplify pass on phase 50 changed code for reuse/efficiency cleanups — task created, not yet executed",
+      "PR creation (gsd:ship) — task created, not yet executed; reminder to escape bare #NN refs and avoid parens in PR title for commitlint/pr-title CI",
+      "Resolve PR reviews after CodeRabbit GitHub review lands — CodeRabbit nitpicks live in review BODY not threads",
+      "Close pending todos #12 (unpin-integrity D-01..D-04/WR-*) and #14 (unenroll-subtrees D-03) from .planning/todos/pending/ — task created, not yet executed",
+      "5 REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) missing from REQUIREMENTS traceability table — pre-existing debt, tracked for /gsd:progress",
+      "Two orphaned worktree-agent-* branches (a92edd36, abd7998d) with no attached worktrees should be investigated and pruned",
+      "Phase 51 (Crypto-Signature & ...) is next: currently in 'Ready to discuss' state"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T16:17:23.763613Z",
+    "agent_lines": 113,
+    "agent_removed": 0,
+    "human_added": 9,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 122,
+    "total_lines_changed": 131,
+    "agent_percentage": 86.25954198473282,
+    "metric_version": 2
+  }
+}
