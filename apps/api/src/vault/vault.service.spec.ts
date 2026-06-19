@@ -66,6 +66,7 @@ describe('VaultService', () => {
   };
   let mockManagerPendingUnpinRepo: {
     createQueryBuilder: jest.Mock;
+    delete: jest.Mock;
   };
   let mockManagerQueryBuilder: {
     select: jest.Mock;
@@ -175,6 +176,7 @@ describe('VaultService', () => {
 
     mockManagerPendingUnpinRepo = {
       createQueryBuilder: jest.fn().mockReturnValue(mockManagerQueryBuilder),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
     mockManager = {
@@ -973,9 +975,43 @@ describe('VaultService', () => {
       expect(mockManagerQueryBuilder.orIgnore).toHaveBeenCalled();
       expect(mockManagerQueryBuilder.execute).toHaveBeenCalled();
       expect(mockIpfsProvider.unpinFile).toHaveBeenCalledWith(testCid);
-      expect(mockPendingUnpinRepository.delete).toHaveBeenCalledWith({ cid: testCid });
+      // WR-03: outbox-row delete is now serialized under the advisory lock via a
+      // post-commit transaction (manager-scoped repo), not the bare service repo.
+      expect(mockManagerPendingUnpinRepo.delete).toHaveBeenCalledWith({ cid: testCid });
       // IN-01: row was deleted → metric fires
       expect(mockMetricsService.fileUnpins.inc).toHaveBeenCalledTimes(1);
+    });
+
+    it('WR-03: post-commit outbox delete is serialized under the advisory lock (lock taken around delete)', async () => {
+      mockManagerPinnedCidRepo.findOne.mockResolvedValue(mockPinnedRow);
+      mockManagerQueryBuilder.getRawOne.mockResolvedValue({ count: '0' });
+      mockIpfsProvider.unpinFile.mockResolvedValue(undefined);
+
+      const callOrder: string[] = [];
+      mockManager.query.mockImplementation((sql: string) => {
+        if (sql.includes('pg_advisory_xact_lock')) {
+          callOrder.push('advisory_lock');
+          return Promise.resolve([]);
+        }
+        if (sql.includes('hashtext')) return Promise.resolve([{ h: '123456789' }]);
+        return Promise.resolve([]);
+      });
+      mockManagerPendingUnpinRepo.delete.mockImplementation(() => {
+        callOrder.push('outbox_delete');
+        return Promise.resolve({ affected: 1 });
+      });
+
+      await service.guardedUnpin(testUserId, testCid);
+
+      // Two transactions run: the main guardedUnpin txn and the post-commit
+      // outbox-delete txn. The last advisory_lock must precede the outbox delete.
+      const deleteIdx = callOrder.indexOf('outbox_delete');
+      expect(deleteIdx).toBeGreaterThan(-1);
+      const lockBeforeDelete = callOrder.lastIndexOf('advisory_lock', deleteIdx);
+      expect(lockBeforeDelete).toBeGreaterThan(-1);
+      expect(lockBeforeDelete).toBeLessThan(deleteIdx);
+      // The bare service-level repo must NOT be used for the delete anymore.
+      expect(mockPendingUnpinRepository.delete).not.toHaveBeenCalled();
     });
 
     it('owned, refcount === 0, Kubo throws: guardedUnpin still resolves, outbox row left (for worker)', async () => {

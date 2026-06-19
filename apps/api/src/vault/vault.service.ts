@@ -34,8 +34,6 @@ export class VaultService {
     private readonly folderIpnsRepository: Repository<FolderIpns>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectRepository(PendingUnpin)
-    private readonly pendingUnpinRepository: Repository<PendingUnpin>,
     private readonly teeKeyStateService: TeeKeyStateService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
@@ -314,7 +312,16 @@ export class VaultService {
     if (shouldAttemptPhysicalUnpin) {
       try {
         await this.ipfsProvider.unpinFile(cid);
-        await this.pendingUnpinRepository.delete({ cid });
+        // WR-03: serialize the outbox-row delete with the per-CID refcount decision by
+        // re-taking the same advisory lock used above before deleting. Without the lock,
+        // this delete races a concurrent guardedUnpin/drain that re-inserted the outbox
+        // row as its retry safety net, and could remove the row out from under it. The
+        // Kubo call stays outside the lock/transaction (D-03 ordering, Pitfall 3); only
+        // the row delete is serialized.
+        await this.dataSource.transaction(async (manager) => {
+          await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [cid]);
+          await manager.getRepository(PendingUnpin).delete({ cid });
+        });
       } catch {
         // Leave outbox row for BullMQ retry worker — Kubo failure is not a request failure
       }
