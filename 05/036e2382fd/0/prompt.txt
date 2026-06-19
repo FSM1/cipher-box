@@ -1,0 +1,21 @@
+/gsd:capture --list
+
+---
+
+ok, can you look at the items listed between 5-17 and propose a coherent structure to group these items in to one or more phases to be appended to this milestone
+
+---
+
+I feel that since there is already a M4 defined, it makes sense to reopen M3 and append the necessary phases to the current milestone
+
+---
+
+While you are at it could you update the @.planning/ROADMAP.md progress table with phases 40-55
+
+---
+
+ok great, lets commit, push and PR
+
+---
+
+/resolve-pr-reviews

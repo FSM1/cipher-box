@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "05036e2382fd",
+  "session_id": "749b15c9-2a46-459e-b881-6078a254515e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T13:52:05.673856Z",
+  "branch": "docs/reopen-m3-hardening-phases",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "1294b4ff3eef",
+  "token_usage": {
+    "input_tokens": 41062,
+    "cache_creation_tokens": 418021,
+    "cache_read_tokens": 20406692,
+    "output_tokens": 154909,
+    "api_call_count": 107
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
