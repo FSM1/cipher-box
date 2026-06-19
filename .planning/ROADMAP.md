@@ -903,10 +903,10 @@ Plans:
 
 ### Phase 55: Large Source-File Refactor
 
-**Goal:** [To be planned]
+**Goal:** Split/dedup the Tier-1 + Tier-2 oversized source files (lib.rs, write_ops, folder barrel, ipns codec, DetailsDialog, commands/auth, plus the cross-platform FUSE dedup) into cohesive modules with the public surface frozen — no `pnpm api:generate`, consumers compile untouched, existing test suites stay green on both Rust feature sets.
 **Requirements**: HARD-06
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Scope (captured todos):
 
@@ -914,7 +914,10 @@ Scope (captured todos):
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 55 to break down)
+- [ ] 55-01-PLAN.md — lib.rs 6-module decomposition (runtime/events/publish/metadata/fs/replay)
+- [ ] 55-02-PLAN.md — remaining Tier-1 Rust: write_ops directory module + commands/auth.rs refactor
+- [ ] 55-03-PLAN.md — Tier-2 cross-platform dedup: content_ops, content_fetch, poll, prepopulate
+- [ ] 55-04-PLAN.md — Tier-1 TS/web: folder barrel split, ipns-record codec extract, DetailsDialog split
 
 ---
 
