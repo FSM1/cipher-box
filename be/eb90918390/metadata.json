@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "beeb90918390",
+  "strategy": "manual-commit",
+  "branch": "feat/crypto-signature-secret-leak-hardening",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/commands/vault.rs",
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "apps/desktop/src-tauri/src/fuse/windows/mod.rs",
+    "crates/fuse/src/lib.rs",
+    "crates/sdk/src/state.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/be/eb90918390/0/metadata.json",
+      "transcript": "/be/eb90918390/0/full.jsonl",
+      "content_hash": "/be/eb90918390/0/content_hash.txt",
+      "prompt": "/be/eb90918390/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 49252,
+    "cache_creation_tokens": 652388,
+    "cache_read_tokens": 43214144,
+    "output_tokens": 294353,
+    "api_call_count": 162
+  }
+}
