@@ -1,6 +1,7 @@
 # Testing Patterns
 
 **Analysis Date:** 2026-03-30
+**Drift review:** 2026-06-19
 
 ## Test Framework
 
@@ -20,7 +21,7 @@
 | `tests/load`          | Vitest 3                        | `tests/load/vitest.config.ts`          |
 | `tests/desktop-e2e`   | Shell scripts (bash/PowerShell) | `tests/desktop-e2e/scripts/run-all.sh` |
 | `crates/*` (Rust)     | cargo test                      | `Cargo.toml` workspace                 |
-| `tee-worker`          | Vitest 3                        | Inline (single test file)              |
+| `apps/tee-worker`     | Vitest 4                        | `apps/tee-worker/vitest.config.ts`     |
 
 **Assertion Libraries:**
 
@@ -332,7 +333,7 @@ vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
 
 **Config:** `codecov.yml` at project root
 
-**Coverage flags:** `api`, `crypto`, `core`, `sdk-core`, `sdk`, `api-client`, `desktop`
+**Coverage flags:** `api`, `crypto`, `core`, `sdk-core`, `sdk`, `api-client`, `desktop`, `rust`
 
 **Coverage upload:** CI uploads lcov files after test runs. Base branch coverage uploaded via `codecov-base.yml` workflow on push to `main`.
 
@@ -379,13 +380,13 @@ cargo llvm-cov --workspace --lcov             # Rust coverage (cargo-llvm-cov)
 
 **Services:** PostgreSQL 16, Kubo IPFS v0.40.0, Redis 7
 
-### `e2e.yml` -- Web E2E Tests (runs on push to `main`)
+### `web-e2e.yml` -- Web E2E Tests (reusable workflow)
 
-Runs Playwright tests against full stack. Uploads trace/screenshot artifacts on failure.
+Runs Playwright tests against full stack. Invoked by `ci-e2e.yml` on push to `main` (and via manual dispatch). Uploads the Playwright report (traces/screenshots) on failure.
 
-### `desktop-e2e.yml` -- Desktop E2E Tests (runs on push to `main`)
+### `desktop-e2e.yml` -- Desktop E2E Tests (reusable workflow)
 
-Matrix build on macOS/Windows/Linux. Builds debug Tauri binary, starts full backend, runs shell-script test suite (FUSE operations, API round-trip, conflict detection, recycle bin).
+Invoked by `ci-e2e.yml` on push to `main` when desktop files change (and via manual dispatch). Matrix build on macOS/Windows/Linux. Builds debug Tauri binary, starts full backend, runs shell-script test suite (FUSE operations, API round-trip, conflict detection, recycle bin).
 
 ### `load-test.yml` -- Load Tests (manual dispatch only)
 
@@ -403,15 +404,15 @@ Downloads coverage artifacts from latest successful CI run, re-uploads tagged to
 
 ### Unit Tests
 
-- **API:** 40 `.spec.ts` files covering all services, controllers, guards, strategies, and pipes. Uses NestJS testing module with mocked repositories.
-- **Crypto:** 7 test files covering AES-GCM, AES-CTR, ECIES, Ed25519, HKDF, key hierarchy, vault IPNS.
+- **API:** 44 `.spec.ts` files covering all services, controllers, guards, strategies, and pipes. Uses NestJS testing module with mocked repositories.
+- **Crypto:** 9 test files covering AES-GCM, AES-CTR, ECIES, Ed25519, HKDF, key hierarchy, IPNS record, rewrap, vault IPNS, vault settings IPNS.
 - **Core:** 10 test files covering folder metadata, IPNS records, vault blob, bin metadata, file IPNS, registry.
-- **SDK-Core:** 13 test files covering download, encryption-mode, folder, IPFS, IPNS, performance, pinning (5 providers), upload, vault. `upload.test.ts` covers `uploadFile()` including `encryptFn` injection, buffer-detachment safety, and `teeKeys` propagation.
-- **SDK:** 13 test files covering client operations, bin operations, context, error handling, events, integration, key-cache, share operations, shared-write, pinning, upload concurrency, and batch upload. `upload-batch.test.ts` (Phase 37) covers the `uploadFiles()` orchestration: p-limit concurrency pool, single-publish, partial failure, per-file callbacks, event emission, key cleanup, BYO pinFn, and share re-wrap.
+- **SDK-Core:** 18 test files covering CAS, download, encryption-mode, file, folder, folder-merge, tree (2 files), IPFS, IPNS, performance, pinning (5 providers), upload, vault. `upload.test.ts` covers `uploadFile()` including `encryptFn` injection, buffer-detachment safety, and `teeKeys` propagation.
+- **SDK:** 21 test files covering client operations, client file ops, load/reconcile, move/re-encrypt, bin operations, context, ensure-folder-loaded, enumerate-shared-subtree, move-in-shared-folder, error handling, events, integration, key-cache, share operations, shared-folder tree, shared-write, pinning, upload concurrency, and batch upload. `upload-batch.test.ts` (Phase 37) covers the `uploadFiles()` orchestration: p-limit concurrency pool, single-publish, partial failure, per-file callbacks, event emission, key cleanup, BYO pinFn, and share re-wrap.
 - **API Client:** 1 test file (`instance.test.ts`).
-- **Web:** 3 test files (sync store, upload error recovery, logout security).
-- **TEE Worker:** 1 test file (`ssrf-validation.test.ts`).
-- **Rust (inline):** 19 Rust source files with `#[cfg(test)]` modules containing 158+ tests total across crypto, core, fuse, and sdk crates.
+- **Web:** 7 test files (sync store, upload error recovery, logout security, folder store, delete service, shared-write ops hook, share item name).
+- **TEE Worker:** 5 test files (`ssrf-validation`, `key-manager`, `auth`, `tee-keys`, `republish`).
+- **Rust (inline):** 24 Rust source files with `#[cfg(test)]` modules containing 260+ tests total across crypto, core, fuse, and sdk crates.
 
 **Coverage intentional gaps:**
 
@@ -445,7 +446,7 @@ Full API-backed tests running against real Postgres + IPFS + Redis. 11 suites to
 
 ### Web E2E Tests (Playwright)
 
-14 suites total. All use `test.describe.serial` and manage their own browser context + account lifecycle.
+18 suites total. All use `test.describe.serial` and manage their own browser context + account lifecycle.
 
 | Spec               | File                                               | Coverage                                                                                    |
 | ------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------------- |

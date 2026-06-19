@@ -1,6 +1,7 @@
 # Technology Stack
 
-**Analysis Date:** 2026-03-29
+**Analysis Date:** 2026-06-19
+**Drift review:** 2026-06-19
 
 ## Languages
 
@@ -19,7 +20,7 @@
 **Environment:**
 
 - Node.js 22+ (CI uses `node-version: '22'`)
-- Rust stable 1.93+ (desktop and crate workspace)
+- Rust stable 1.88+ (desktop and crate workspace; pinned via `rust-toolchain.toml`)
 - Browser (Chrome/Firefox/Safari) - Web app
 - Tauri v2 (WebView + Rust) - Desktop app (macOS, Windows, Linux)
 
@@ -41,17 +42,17 @@ packages:
   - 'tests/*'
 ```
 
-**Current version:** 0.30.1 (unified across all packages via Release Please)
+**Versioning:** packages and crates are versioned independently via Release Please. Current versions live in `.release-please-manifest.json` (the source of truth) and each `package.json`/`Cargo.toml` — not duplicated here, since they bump on nearly every release.
 
 ### TypeScript SDK Packages (`packages/`)
 
-| Package               | Name                    | Version | Build Tool   | Purpose                                                                  |
-| --------------------- | ----------------------- | ------- | ------------ | ------------------------------------------------------------------------ |
-| `packages/crypto`     | `@cipherbox/crypto`     | 0.29.0  | tsup         | Cryptographic primitives: AES-GCM, ECIES, Ed25519, HKDF, IPNS            |
-| `packages/core`       | `@cipherbox/core`       | 0.29.0  | tsup         | Domain types, metadata schemas, vault blob structures                    |
-| `packages/api-client` | `@cipherbox/api-client` | 0.30.0  | tsup + orval | Auto-generated typed HTTP client from OpenAPI spec                       |
-| `packages/sdk-core`   | `@cipherbox/sdk-core`   | 0.30.0  | tsup         | Stateful SDK core: vault operations, key management                      |
-| `packages/sdk`        | `@cipherbox/sdk`        | 0.30.0  | tsup         | High-level SDK facade re-exporting crypto + core + api-client + sdk-core |
+| Package               | Name                    | Build Tool   | Purpose                                                                  |
+| --------------------- | ----------------------- | ------------ | ------------------------------------------------------------------------ |
+| `packages/crypto`     | `@cipherbox/crypto`     | tsup         | Cryptographic primitives: AES-GCM, ECIES, Ed25519, HKDF, IPNS            |
+| `packages/core`       | `@cipherbox/core`       | tsup         | Domain types, metadata schemas, vault blob structures                    |
+| `packages/api-client` | `@cipherbox/api-client` | tsup + orval | Auto-generated typed HTTP client from OpenAPI spec                       |
+| `packages/sdk-core`   | `@cipherbox/sdk-core`   | tsup         | Stateful SDK core: vault operations, key management                      |
+| `packages/sdk`        | `@cipherbox/sdk`        | tsup         | High-level SDK facade re-exporting crypto + core + api-client + sdk-core |
 
 **Dependency chain:** `crypto` <- `core` <- `api-client` <- `sdk-core` <- `sdk`
 
@@ -70,13 +71,13 @@ defineConfig({
 
 ### Rust Crates (`crates/`)
 
-| Crate               | Name                   | Version | Purpose                                                            |
-| ------------------- | ---------------------- | ------- | ------------------------------------------------------------------ |
-| `crates/crypto`     | `cipherbox-crypto`     | 0.4.0   | Crypto primitives: AES-GCM, ECIES, Ed25519, HKDF                   |
-| `crates/core`       | `cipherbox-core`       | 0.4.0   | Domain types, metadata schemas, IPNS records, vault blob           |
-| `crates/api-client` | `cipherbox-api-client` | 0.4.0   | Typed HTTP client for CipherBox API via reqwest                    |
-| `crates/fuse`       | `cipherbox-fuse`       | 0.4.0   | FUSE filesystem with platform-specific mount implementations       |
-| `crates/sdk`        | `cipherbox-sdk`        | 0.4.0   | Stateful SDK: sync daemon, write queue, key state, device registry |
+| Crate               | Name                   | Purpose                                                            |
+| ------------------- | ---------------------- | ------------------------------------------------------------------ |
+| `crates/crypto`     | `cipherbox-crypto`     | Crypto primitives: AES-GCM, ECIES, Ed25519, HKDF                   |
+| `crates/core`       | `cipherbox-core`       | Domain types, metadata schemas, IPNS records, vault blob           |
+| `crates/api-client` | `cipherbox-api-client` | Typed HTTP client for CipherBox API via reqwest                    |
+| `crates/fuse`       | `cipherbox-fuse`       | FUSE filesystem with platform-specific mount implementations       |
+| `crates/sdk`        | `cipherbox-sdk`        | Stateful SDK: sync daemon, write queue, key state, device registry |
 
 **Dependency chain:** `crypto` <- `core` <- `api-client` <- `fuse`, `sdk`
 
@@ -160,7 +161,7 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 - tsup ^8.5.0 - TypeScript library bundler (all `packages/*`)
 - NestJS CLI ^11.0.0 - API build and dev (`apps/api`)
 - tsx ^4.21.0 - TypeScript execution for scripts, tee-worker dev, mock-ipns-routing dev
-- Cargo / rustc 1.93+ - Rust compilation (all `crates/*`, `apps/desktop/src-tauri`)
+- Cargo / rustc 1.88+ - Rust compilation (all `crates/*`, `apps/desktop/src-tauri`)
 
 **Deployment:**
 
@@ -224,7 +225,7 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 
 **HTTP & State:**
 
-- `axios` ^1.13.2 - HTTP client (used by api-client)
+- `axios` 1.13.2 - HTTP client (used by api-client; pinned, no caret)
 - `zustand` ^5.0.10 - Client state management
 - `@tanstack/react-query` ^5.62.0 - Server state and caching
 
@@ -316,6 +317,8 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 - `@phala/dstack-sdk` ^0.5.7 - Hardware-backed key derivation inside Phala Cloud CVM
 - `@noble/secp256k1` ^2.2.3 - secp256k1 key operations (simulator mode fallback)
 - `@noble/hashes` ^1.7.0 - HKDF hash functions (simulator mode fallback)
+- `multiformats` ^13.4.2 - CID parsing/encoding for migration
+- `undici` ^7.24.6 - SSRF-hardened HTTP Agent (apps/tee-worker/src/services/ssrf-validation.ts)
 - `prom-client` ^15.1.3 - Prometheus metrics (GET /metrics endpoint)
 
 **Removed (now provided by shared packages):**
@@ -324,7 +327,6 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 - ~~`@noble/ed25519`~~ - replaced by `@cipherbox/crypto` Ed25519
 - ~~`ipns`~~ - replaced by `@cipherbox/core` IPNS
 - ~~`@libp2p/crypto`~~ - replaced by `@cipherbox/crypto`
-- ~~`multiformats`~~ - replaced by `@cipherbox/core`
 
 ## Configuration
 
@@ -369,7 +371,7 @@ Used by both TypeScript (`@cipherbox/crypto`) and Rust (`cipherbox-crypto`) to v
 **Git Hooks:** `.husky/`
 
 - `pre-commit` - Runs lint-staged (ESLint + Prettier on staged TS/JS/JSON/YAML/MD)
-- `commit-msg` - Runs commitlint
+- `commit-msg` - Entire CLI hook wrapper (commitlint is no longer run locally; enforced via PR-title CI)
 
 **Vite (Web):** `apps/web/vite.config.ts`
 
@@ -466,7 +468,7 @@ pnpm --filter @cipherbox/api migration:generate   # Generate migration from enti
 **Development (macOS):**
 
 - Node.js 22+, pnpm 10+
-- Rust stable 1.93+
+- Rust stable 1.88+
 - FUSE-T (for desktop FUSE mount, `brew install --cask fuse-t`)
 - PostgreSQL 16, IPFS Kubo v0.40.0, Redis 7 (local or remote host)
 
@@ -498,20 +500,20 @@ pnpm --filter @cipherbox/api migration:generate   # Generate migration from enti
 
 - Config: `release-please-config.json`
 - Manifest: `.release-please-manifest.json`
-- All packages share unified root version (0.30.1); individual packages/crates also tracked
+- Packages and crates are versioned independently; current versions are tracked in `.release-please-manifest.json`
 - Conventional Commits drive version bumps (feat = minor, fix = patch)
 - Root tag format: `cipher-box-vX.Y.Z` (uses `include-component-in-tag: true`)
-- Staging deploy tags: `staging-v<version>-rc-<N>` (triggers `deploy-staging.yml`)
+- Staging deploy tags: `staging-YYYYMMDD-release-N` (triggers `deploy-staging.yml`)
 
 **CI Workflows (`/.github/workflows/`):**
 
 | Workflow             | Trigger                              | Purpose                                                                                                              |
 | -------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `ci.yml`             | PR to main                           | Lint, typecheck, test, build, API spec verify, migration drift check, Cargo check/test on 3 platforms, vector parity |
-| `e2e.yml`            | Push to main, dispatch               | Web E2E tests with Playwright                                                                                        |
+| `ci-e2e.yml`         | Push to main, dispatch               | Detects changes and dispatches Web/Desktop E2E (`web-e2e.yml`, `desktop-e2e.yml`)                                    |
 | `release-please.yml` | Push to main                         | Create/update release PR, publish GitHub Releases                                                                    |
-| `deploy-staging.yml` | Push `staging-v*` tag, workflow_call | Build Docker images, deploy API/web/TEE worker to staging VPS                                                        |
-| `build-desktop.yml`  | -                                    | Desktop app build                                                                                                    |
+| `deploy-staging.yml` | Push `staging-*` tag, workflow_call  | Build Docker images, deploy API/web/TEE worker to staging VPS                                                        |
+| `desktop-staging-release.yml` | Push `cipherbox-desktop-v*` tag      | Desktop app build (macOS/Windows/Linux) and staging release                                                          |
 | `desktop-e2e.yml`    | -                                    | Desktop E2E tests                                                                                                    |
 | `load-test.yml`      | -                                    | Load test runs                                                                                                       |
 | `pr-title.yml`       | -                                    | PR title validation                                                                                                  |

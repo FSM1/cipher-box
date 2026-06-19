@@ -1,6 +1,7 @@
 # Codebase Structure
 
 **Analysis Date:** 2026-03-29
+**Drift review:** 2026-06-19
 
 ## Directory Layout
 
@@ -21,7 +22,7 @@ cipher-box/
 │   │   │   ├── device-approval/   # Cross-device MFA bulletin board
 │   │   │   ├── health/            # Health check endpoint
 │   │   │   ├── ipfs/              # IPFS upload/download relay
-│   │   │   │   └── providers/     # Local (Kubo), PSA, Pinata, DualPin provider implementations
+│   │   │   │   └── providers/     # Local (Kubo) provider implementation (BYO providers live in sdk-core/pinning)
 │   │   │   ├── ipns/              # IPNS publish/resolve relay (delegated routing)
 │   │   │   │   └── __tests__/     # Integration and security specs
 │   │   │   ├── metrics/           # Prometheus metrics (prom-client)
@@ -94,14 +95,12 @@ cipher-box/
 │           │   ├── Login.tsx
 │           │   └── index.tsx      # React Router route definitions
 │           ├── services/          # Business logic (stateless, SDK-calling functions)
-│           │   ├── bin.service.ts           # Bin/restore operations (~971 lines)
 │           │   ├── delete.service.ts        # File/folder deletion
 │           │   ├── device-approval.service.ts
 │           │   ├── device-registry.service.ts
 │           │   ├── download.service.ts      # File download orchestration
 │           │   ├── file-crypto.service.ts   # Client-side file encryption/decryption
-│           │   ├── file-metadata.service.ts # File metadata CRUD (~509 lines)
-│           │   ├── folder.service.ts        # Folder navigation and mutations (~1059 lines)
+│           │   ├── file-metadata.service.ts # File metadata CRUD (~460 lines)
 │           │   ├── invite.service.ts        # Share invite handling (~332 lines)
 │           │   ├── ipns.service.ts          # IPNS publish/resolve
 │           │   ├── search-index.service.ts  # Client-side search index (~356 lines)
@@ -109,7 +108,7 @@ cipher-box/
 │           │   ├── streaming-crypto.service.ts # Streaming AES-CTR encryption
 │           │   ├── upload.service.ts        # File upload orchestration
 │           │   └── index.ts                 # Barrel export
-│           ├── stores/            # Zustand stores (12 stores)
+│           ├── stores/            # Zustand stores (13 stores)
 │           │   ├── auth.store.ts
 │           │   ├── bin.store.ts
 │           │   ├── device-registry.store.ts
@@ -220,13 +219,11 @@ cipher-box/
 │   ├── DATABASE_EVOLUTION_PROTOCOL.md, METADATA_EVOLUTION_PROTOCOL.md
 │   ├── METADATA_SCHEMAS.md
 │   └── VAULT_EXPORT_FORMAT.md
-├── designs/                       # Pencil design files (.pen) — read via Pencil MCP only
+├── designs/                       # Pencil design files (.pen) — parse directly (no Pencil MCP configured)
 ├── scripts/                       # Root-level utility scripts
 │   ├── generate-test-vectors.ts
 │   ├── check-api-client.sh
 │   └── check-vector-parity.sh
-├── 00-Preliminary-R&D/            # Finalized specifications v1.11.1 (DO NOT MODIFY)
-│   └── Documentation/             # PRD, Technical Architecture, API Spec, Data Flows, etc.
 ├── .planning/                     # GSD planning artifacts
 │   ├── codebase/                  # Codebase analysis documents (this file)
 │   ├── phases/                    # Phase planning documents
@@ -238,7 +235,7 @@ cipher-box/
 ├── .github/workflows/             # CI/CD pipelines (ci, e2e, deploy-staging, release-please, etc.)
 ├── Cargo.toml                     # Rust workspace root
 ├── package.json                   # Root package.json (scripts, devDeps)
-├── pnpm-workspace.yaml            # pnpm workspace config (apps/*, packages/*, tests/*, tools/*)
+├── pnpm-workspace.yaml            # pnpm workspace config (apps/*, packages/*, tests/*)
 └── tsconfig.base.json             # Root TypeScript config
 ```
 
@@ -309,7 +306,7 @@ cipher-box/
 
 **`apps/tee-worker/`:**
 
-- Purpose: Standalone TEE worker for automatic IPNS republishing every 3 hours (Docker simulator on the staging VPS since PR #472; Phala Cloud CVM in production)
+- Purpose: Standalone TEE worker for automatic IPNS republishing every 6 hours (Docker simulator on the staging VPS since PR #472; Phala Cloud CVM in production)
 - Contains: Express routes, IPNS signer, key manager, SSRF validation, migration worker, Prometheus metrics
 - Uses shared workspace packages: `@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/sdk-core`
 - Uses `@phala/dstack-sdk` for hardware-backed key derivation inside CVM
@@ -336,7 +333,7 @@ cipher-box/
 **Configuration:**
 
 - `package.json`: Root workspace scripts and devDeps
-- `pnpm-workspace.yaml`: Workspace package locations (`apps/*`, `packages/*`, `tests/*`, `tools/*`)
+- `pnpm-workspace.yaml`: Workspace package locations (`apps/*`, `packages/*`, `tests/*`)
 - `Cargo.toml`: Rust workspace members and shared dependencies
 - `apps/api/src/data-source.ts`: TypeORM database configuration
 - `apps/api/src/app.module.ts`: NestJS module registration
@@ -400,16 +397,16 @@ Phase 31 decomposed the original monolithic `useSharedNavigation.ts` (1199 lines
 | Hook File                       | Lines | Responsibility                                            |
 | ------------------------------- | ----- | --------------------------------------------------------- |
 | `useAuth.ts`                    | 723   | Auth lifecycle, Web3Auth, device registration             |
-| `useFileOperations.ts`          | 515   | File rename, delete, move, copy operations                |
-| `useSharedNavigationActions.ts` | 484   | Shared folder navigation action handlers                  |
+| `useFileOperations.ts`          | 185   | File rename, delete, move, copy operations                |
+| `useSharedNavigationActions.ts` | 579   | Shared folder navigation action handlers                  |
 | `useFolderMutations.ts`         | 445   | Folder create/rename/delete mutations                     |
 | `useDeviceApproval.ts`          | 461   | Device approval flow                                      |
-| `useSharedNavigation.ts`        | 378   | Shared folder navigation state                            |
-| `useSharedWriteOps.ts`          | 377   | Write operations on shared folders                        |
+| `useSharedNavigation.ts`        | 414   | Shared folder navigation state                            |
+| `useSharedWriteOps.ts`          | 260   | Write operations on shared folders                        |
 | `useFolderNavigation.ts`        | 312   | Folder tree navigation state                              |
 | `useSearch.ts`                  | ~200  | Client-side search                                        |
 | `useSyncPolling.ts`             | ~150  | Background IPNS sync polling                              |
-| `useFileUpload.ts`              | ~130  | Upload state management                                   |
+| `useDropUpload.ts`              | 282   | Upload state management / drop handling                   |
 | `useFileDownload.ts`            | ~120  | Download orchestration                                    |
 | `useFileDelete.ts`              | ~100  | Delete confirmation flow                                  |
 | `folder-helpers.ts`             | 107   | Pure utility functions for folder navigation (not a hook) |
@@ -518,13 +515,6 @@ Phase 31 decomposed the original monolithic `useSharedNavigation.ts` (1199 lines
 - Generated: No (manually authored)
 - Committed: Yes
 - Run parity check: `scripts/check-vector-parity.sh`
-
-**`00-Preliminary-R&D/Documentation/`:**
-
-- Purpose: Finalized v1.11.1 specification documents
-- Generated: No
-- Committed: Yes
-- DO NOT MODIFY — create implementation docs in `.planning/` or `docs/` instead
 
 **`.planning/`:**
 

@@ -1,6 +1,7 @@
 # External Integrations
 
 **Analysis Date:** 2026-03-27
+**Drift review:** 2026-06-19
 
 ## APIs & External Services
 
@@ -29,7 +30,7 @@
   - Location: `apps/web/src/lib/web3auth/`
   - Auth methods: Email OTP, Google OAuth, Magic Link, External Wallet
   - JWKS endpoint: `https://api-auth.web3auth.io/jwks`
-  - Backend validation: `apps/api/src/auth/strategies/web3auth-jwt.strategy.ts`
+  - Backend validation: `apps/api/src/auth/services/web3auth-verifier.service.ts`
   - Env (web): `VITE_WEB3AUTH_CLIENT_ID`
   - Env (desktop): `VITE_WEB3AUTH_CLIENT_ID`, `VITE_GOOGLE_CLIENT_ID`
   - Key feature: MPC-based deterministic keypair derivation with device factor MFA
@@ -112,7 +113,7 @@
 
 **Auth strategies (backend):**
 
-- `apps/api/src/auth/strategies/web3auth-jwt.strategy.ts` - Web3Auth JWT validation
+- `apps/api/src/auth/strategies/jwt.strategy.ts` - CipherBox access token (JWT_SECRET) validation; `apps/api/src/auth/services/web3auth-verifier.service.ts` - Web3Auth ID token validation via JWKS
 - JWT signing: `JWT_SECRET` env var, RS256 identity tokens via `IDENTITY_JWT_PRIVATE_KEY`
 
 **Test Authentication (Dev/Staging Only):**
@@ -151,13 +152,13 @@
 **CI Pipeline:** GitHub Actions (`.github/workflows/`)
 
 - `ci.yml` - PR checks: lint, typecheck, unit tests, build, API spec verification, migration drift check, Cargo check/test (Linux/macOS/Windows), cross-language vector parity
-- `e2e.yml` - Web E2E tests with Playwright (on push to main)
+- `web-e2e.yml` - Web E2E tests with Playwright (reusable; run on push to main via `ci-e2e.yml`)
 - `desktop-e2e.yml` - Desktop E2E tests
 - `load-test.yml` - Load test runs
 
 **Staging Deployment:**
 
-- Triggered by pushing `staging-v*` tags
+- Triggered by pushing `staging-*` tags
 - `deploy-staging.yml` builds Docker images, pushes to GHCR, deploys to VPS
 - API image: `ghcr.io/<owner>/cipherbox-api`
 - TEE image: `ghcr.io/<owner>/cipherbox-tee-worker`

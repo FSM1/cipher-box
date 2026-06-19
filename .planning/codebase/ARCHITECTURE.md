@@ -1,6 +1,7 @@
 # Architecture
 
 **Analysis Date:** 2026-03-27
+**Drift review:** 2026-06-19
 
 ## Pattern Overview
 
@@ -37,7 +38,7 @@ The SDK is organized as a strict dependency chain. Each layer adds exactly one c
 **Dependency rules (enforced by package.json):**
 
 - `@cipherbox/crypto` (`packages/crypto/`) -- depends on: `@noble/ed25519`, `@noble/hashes`, `eciesjs`, `@libp2p/crypto`, `ipns`, `multiformats`
-- `@cipherbox/core` (`packages/core/`) -- depends on: `@cipherbox/crypto`
+- `@cipherbox/core` (`packages/core/`) -- depends on: `@cipherbox/crypto`, `@libp2p/crypto`, `@noble/ed25519`, `ipns`
 - `@cipherbox/api-client` (`packages/api-client/`) -- depends on: `axios` (generated code, no crypto deps)
 - `@cipherbox/sdk-core` (`packages/sdk-core/`) -- depends on: `@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/api-client`
 - `@cipherbox/sdk` (`packages/sdk/`) -- depends on: `@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/api-client`, `@cipherbox/sdk-core`
@@ -78,7 +79,7 @@ The TypeScript and Rust SDKs implement the same data model and crypto operations
 
 **Framework:** React 18 + Vite + TypeScript
 
-**State management:** Zustand stores (12 stores in `apps/web/src/stores/`):
+**State management:** Zustand stores (13 stores in `apps/web/src/stores/`):
 
 - `auth.store.ts` -- access token, vault keypair (memory-only), TEE keys
 - `vault.store.ts` -- decrypted rootFolderKey, rootIpnsKeypair, rootIpnsName
@@ -92,6 +93,7 @@ The TypeScript and Rust SDKs implement the same data model and crypto operations
 - `mfa.store.ts` -- MFA challenge state
 - `notification.store.ts` -- toast notifications
 - `quota.store.ts` -- storage quota tracking
+- `vault-settings.store.ts` -- user-configurable vault parameters (retention, delete behavior, versioning limits, cooldown)
 
 **SDK integration:** Singleton `CipherBoxClient` managed by `apps/web/src/lib/sdk-provider.ts`. Created after vault load, destroyed on logout. Hooks call client methods; stores subscribe to client events.
 
@@ -131,11 +133,12 @@ The TypeScript and Rust SDKs implement the same data model and crypto operations
 | `MetricsModule`        | `apps/api/src/metrics/`               | Prometheus metrics via prom-client                                                                                                |
 | `HealthModule`         | `apps/api/src/health/`                | Health check endpoint via @nestjs/terminus                                                                                        |
 | `RedisModule`          | `apps/api/src/common/redis.module.ts` | Shared Redis/ioredis connection                                                                                                   |
+| `PendingUnpinModule`   | `apps/api/src/ipfs/pending-unpin/`    | Deferred IPFS unpin drain worker (BullMQ, every 5 min) and hourly Kubo-vs-DB pin-drift report                                      |
 
-**Database entities** (14 entities, PostgreSQL):
+**Database entities** (15 entities, PostgreSQL):
 
 - `User`, `RefreshToken`, `AuthMethod` (auth)
-- `Vault`, `PinnedCid` (vault)
+- `Vault`, `PinnedCid`, `PendingUnpin` (vault)
 - `FolderIpns` (IPNS sequence tracking)
 - `TeeKeyState`, `TeeKeyRotationLog` (TEE)
 - `IpnsRepublishSchedule` (republish)
@@ -197,6 +200,7 @@ The TypeScript and Rust SDKs implement the same data model and crypto operations
 - `POST /republish` -- Batch IPNS signing (auth required)
 - `POST /migrate` -- CID migration between providers (auth required)
 - `POST /connection-test` -- IPFS endpoint connection test (auth required)
+- `GET /metrics` -- Prometheus metrics (public, no auth)
 
 **Security model:** Receives ECIES-encrypted IPNS private keys, decrypts with epoch-derived keys inside enclave, signs IPNS records, returns signed records. Keys exist in enclave memory only during signing, then zeroed.
 
