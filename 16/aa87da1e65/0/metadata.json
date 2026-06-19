@@ -1,0 +1,174 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "16aa87da1e65",
+  "session_id": "23b28342-e76c-41da-872a-14e0f4fbc9ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T15:56:06.085773Z",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/50-ipfs-ipns-data-integrity-fixes/50-REVIEW.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4bdfeb110c40",
+  "token_usage": {
+    "input_tokens": 26193,
+    "cache_creation_tokens": 261313,
+    "cache_read_tokens": 11599025,
+    "output_tokens": 98235,
+    "api_call_count": 64
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01XWNxPn9Y2eDALMFaCnVhv6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 36,
+        "end": 37,
+        "entry_ids": [
+          "0ec3006c-056a-4fa5-a4e1-81bf4c70bbd6"
+        ],
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A67zEtU8W6i7yf84Hses7n",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4bdfeb110c40",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 328,
+        "end": 329,
+        "entry_ids": [
+          "ef3aabff-921f-4f81-8539-b95d6c03715d"
+        ],
+        "tool_use_id": "toolu_01A67zEtU8W6i7yf84Hses7n"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A67zEtU8W6i7yf84Hses7n"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute all 5 plans in Phase 50 (IPFS/IPNS Data-Integrity Fixes) of the CipherBox project using wave-based parallel worktree execution via the GSD manager workflow.",
+    "outcome": "All 5 plans executed and merged across 2 waves with post-merge gates passing (build/typecheck clean, 93/93 targeted tests green). Code review was spawned at the end and found 2 blockers in Phase 50's own new code (50-03 regressions) — session ends before those are resolved.",
+    "learnings": {
+      "repo": [
+        "Worktrees share node_modules via pnpm workspace root — any worktree running `pnpm api:generate` or `pnpm install` leaks regenerated/modified files into the orchestrator's main checkout working tree",
+        "Husky generates untracked `.husky/_/*` hook stubs whenever pnpm install/generate runs in a worktree — these block cleanup-wave's dirty-tree check",
+        "The cleanup-wave helper's `merge_failed` is opaque and can mean: (a) dirty working tree blocks git merge, or (b) the helper's internal merge commit was blocked by lint-staged timing out on 131 api-client files via pre-commit hook",
+        "GSD dep parsing fails on strings like 'Phase 49 (v1.1 baseline)' — it creates a phantom phase '1.1' and marks deps unsatisfied; the actual dependency was complete",
+        "GSD `gsd_run query commit` (tracking updates) reports `commit_failed` false-negatives — the commits actually succeed and are confirmed via `git log`",
+        "The api-client regen (orval) produces 132 files including `openapi.json`; all must be staged together for the pre-commit `check-api-client.sh` hook to pass",
+        "IpfsModule → VaultModule has a circular import — extraction is deferred with an explicit cycle-reason comment in all three module files (IpfsModule, PendingUnpinModule, VaultModule)",
+        "Phase execution uses baseref-head (fork off current HEAD, not main) so PLAN.md files written during the plan phase are available in worktree executors without extra setup"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipfs/vault/vault.service.ts",
+          "finding": "Advisory lock hash changed from `pg_advisory_xact_lock(abs(hashtext($1)::bigint))` to `pg_advisory_xact_lock(hashtext($1)::bigint)` — abs() caused INT_MIN overflow since hashtext returns signed int4"
+        },
+        {
+          "path": "apps/api/src/ipfs/pending-unpin/pending-unpin.processor.ts",
+          "line": 55,
+          "end_line": 59,
+          "finding": "Added refcount guard: skips physical unpin during drain when CID is re-pinned (WR-03 fix); guard reads live refcount before issuing Kubo unpin call"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "New `collectSubtreeIpnsNamesAsync` replaces synchronous version — performs on-demand fetch+decrypt for unloaded folders; 4 deletion call-sites updated to async callers"
+        },
+        {
+          "path": "apps/api/src/ipfs/ipfs.controller.ts",
+          "finding": "Upload compensation catch block now calls `ipfsProvider.unpinFile(result.cid)` directly (bypassing `guardedUnpin`) to ensure physical Kubo pin removal even when no `pinned_cids` row exists (WR-02)"
+        },
+        {
+          "path": "apps/api/src/ipfs/pending-unpin/pending-unpin.dto.ts",
+          "finding": "UnpinDto.cid now enforces `@MaxLength(255)` and `@Matches` regex for CIDv0/CIDv1 format validation (IN-02)"
+        },
+        {
+          "path": "apps/api/src/ipfs/pending-unpin/pending-unpin.processor.ts",
+          "finding": "Backfill candidate query now excludes rows newer than 1 hour (`pinned_at < NOW() - INTERVAL '1 hour'`) to prevent in-flight uploads from being treated as phantom pins (WR-05)"
+        },
+        {
+          "path": "apps/api/src/ipfs/vault/vault.service.ts",
+          "finding": "`outboxRowInserted` renamed to `shouldAttemptPhysicalUnpin`; `fileUnpins.inc()` now gated by `rowDeleted` flag so it doesn't fire on no-op paths (IN-06, IN-01); `recordUnpin` deleted entirely — had zero callers (IN-03)"
+        }
+      ],
+      "workflow": [
+        "When cleanup-wave fails with empty stderr and `merge_failed`, the root cause is usually a mid-merge state left by its internal commit failing due to pre-commit hooks — completing the merge manually (`git merge --continue` equivalent after verifying no conflicts) is the correct recovery path",
+        "For api-client leak recovery: verify all dirty files in main checkout match the worktree's committed state (hash comparison), then `git checkout --` them before re-attempting merge",
+        "Wave 2 key-link validation can produce false failures when the link references the current wave's own deliverable file — parser treats the artifact description as a literal file path; confirm the source file exists independently",
+        "Running `pnpm --filter apps/api run test --testPathPattern` is faster and safer than full parallel monorepo test runs for post-merge gate validation; full parallel suites risk RAM starvation",
+        "TDD gate verification requires distinct RED commit (`test(N-NN): ...`) before GREEN commit (`fix/feat(N-NN): ...`) per plan — the commit message prefix convention is the machine-readable signal"
+      ]
+    },
+    "friction": [
+      "cleanup-wave helper fails opaquely (`merge_failed`, empty stderr) when its internal commit is blocked by pre-commit hooks (lint-staged on 131 api-client files) — required manual merge completion as recovery",
+      "pnpm api:generate leaks regenerated api-client files (132 files) from worktrees into the orchestrator main checkout — detected only when the next worktree merge was attempted and git refused to overwrite them",
+      "Husky `.husky/_/*` untracked stubs in worktrees (generated by pnpm install) blocked cleanup-wave's dirty-tree check, requiring manual cleanup before retry",
+      "GSD dep string parsing failed on 'Phase 49 (v1.1 baseline)' — created phantom phase '1.1', incorrectly marked Phase 50 as blocked despite all real deps being satisfied",
+      "GSD `gsd_run query commit` reports `commit_failed` false-negatives consistently — requires `git log` verification after every tracking commit to confirm success",
+      "Bash pipe masked exit codes in the initial typecheck run — required a separate clean-exit-code capture pass",
+      "cleanup-wave removed 50-01/50-02 worktrees in the first pass but left 50-05/50-03 in a stalled state, requiring manual merge completion for each remaining worktree"
+    ],
+    "open_items": [
+      "Code review found 2 BLOCKER findings in 50-03's `collectSubtreeIpnsNamesAsync` (regressions against the data-integrity goal) — must be resolved before phase can be verified and closed",
+      "Security review recommended (`/gsd:secure-phase 50`) — non-blocking gate but not yet run",
+      "Phase verification (verifier agent → phase complete) not yet done — session ended after code review spawn",
+      "Phase 51 (Crypto-Signature & Auth hardening) is 'Ready to discuss' — next phase in sequence",
+      "Two orphaned `worktree-agent-a92edd36` and `worktree-agent-abd7998d` branches remain from a prior session with no attached worktrees — should be pruned",
+      "IpfsModule → VaultModule circular import accepted as tech debt with cycle-reason comments — extraction deferred but noted"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T15:54:56.128349Z",
+    "agent_lines": 287,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 287,
+    "total_lines_changed": 287,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
