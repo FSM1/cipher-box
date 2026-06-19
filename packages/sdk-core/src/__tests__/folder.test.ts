@@ -409,3 +409,52 @@ describe('updateFolderMetadataAndPublish conflict handling', () => {
     expect(publishedIds).toContain('remote-3');
   });
 });
+
+// ---------------------------------------------------------------------------
+// S3 zeroization guard for updateFolderMetadataAndPublish (D-05 / T-47-01)
+//
+// Decision: SKIP zeroing — caller retains ownership of keys (see folder/index.ts comment).
+// Guard test: assert keys are UNCHANGED after the call returns, documenting the deliberate
+// non-zeroing and preventing accidental future fill(0) from breaking live-session callers.
+// ---------------------------------------------------------------------------
+
+describe('updateFolderMetadataAndPublish zeroization decision guard (S3/D-05)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmGuardCid' });
+    mockFns.encryptFolderMetadata.mockResolvedValue({ iv: 'iv', data: 'data' });
+  });
+
+  it('SKIP guard: does NOT zero ipnsPrivateKey or folderKey (caller retains ownership)', async () => {
+    const ctx = createMockContext();
+
+    // Use distinctly non-zero buffers so zeroing would be detectable
+    const ipnsKey = new Uint8Array(64).fill(0x77);
+    const folderKey = new Uint8Array(32).fill(0x88);
+
+    // Snapshot initial values to compare after the call
+    const ipnsKeySnapshot = new Uint8Array(ipnsKey);
+    const folderKeySnapshot = new Uint8Array(folderKey);
+
+    mockFns.createAndPublishIpnsRecord.mockResolvedValueOnce({
+      success: true,
+      sequenceNumber: '1',
+      ipnsName: 'k51guard',
+    });
+
+    await updateFolderMetadataAndPublish({
+      children: [],
+      baseChildren: [],
+      folderKey,
+      ipnsPrivateKey: ipnsKey,
+      ipnsName: 'k51guard',
+      sequenceNumber: 0n,
+      ctx,
+    });
+
+    // Keys must be UNCHANGED — caller (sdk/client.ts) stores them in live folderTree state
+    // and reuses them across subsequent operations. Zeroing here would corrupt session state.
+    expect(ipnsKey).toEqual(ipnsKeySnapshot);
+    expect(folderKey).toEqual(folderKeySnapshot);
+  });
+});
