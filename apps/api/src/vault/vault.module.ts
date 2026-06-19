@@ -18,8 +18,12 @@ import { IPFS_PROVIDER, LocalProvider } from '../ipfs/providers';
   controllers: [VaultController],
   providers: [
     VaultService,
-    // Provide IPFS_PROVIDER locally to avoid a circular import with IpfsModule
-    // (IpfsModule imports VaultModule — re-importing IpfsModule here would create a cycle)
+    // IN-04 (accepted): IPFS_PROVIDER useFactory is duplicated across VaultModule,
+    // IpfsModule, and PendingUnpinModule. This instance avoids a circular import:
+    // IpfsModule imports VaultModule, so re-importing IpfsModule here would create
+    // a cycle. Each module self-provides to break the cycle. Extraction into a shared
+    // IpfsProviderCoreModule is deferred — it would require restructuring the full
+    // import graph. Accepted with this comment.
     {
       provide: IPFS_PROVIDER,
       useFactory: (configService: ConfigService) => {

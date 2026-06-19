@@ -17,8 +17,11 @@ import { PendingUnpinProcessor } from './pending-unpin.processor';
   providers: [
     PendingUnpinProcessor,
     {
-      // Provide IPFS_PROVIDER locally to avoid importing IpfsModule
-      // (IpfsModule imports VaultModule — circular if pending-unpin imports it)
+      // IN-04 (accepted): IPFS_PROVIDER useFactory is duplicated across IpfsModule,
+      // VaultModule, and PendingUnpinModule. This instance exists to avoid importing
+      // IpfsModule (IpfsModule → VaultModule → circular). Each module self-provides
+      // to break the cycle. Extraction into a shared module would not eliminate the
+      // cycle without restructuring the import graph. Accepted with this comment.
       provide: IPFS_PROVIDER,
       useFactory: (configService: ConfigService) => {
         const apiUrl = configService.get<string>('IPFS_LOCAL_API_URL', 'http://localhost:5001');

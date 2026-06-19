@@ -128,16 +128,27 @@ async function run(): Promise<void> {
     // JOIN pinned_cids to vaults on user_id = owner_id and filter
     // vaults.is_byo_user = false. BYO rows are excluded at query level;
     // selectRowsToDelete re-asserts isByoUser === false defensively.
+    //
+    // WR-05: add age cutoff (pinned_at < NOW() - INTERVAL '1 hour') so in-flight
+    // uploads inside the active-upload race window are never selected as phantom rows.
+    // Without this a row written less than a second ago (upload just completed, but
+    // Kubo pin list not yet refreshed) would be deleted as a phantom.
+    //
+    // WR-06: project the real v.is_byo_user instead of the hardcoded false::boolean
+    // so the defensive !row.isByoUser re-assert in selectRowsToDelete is meaningful.
+    // The WHERE v.is_byo_user = false query-level guard is kept; the projection fix
+    // ensures the in-code re-assert sees the actual vault value, not a constant.
     // -------------------------------------------------------------------
     const candidateRows = (await dataSource.query(`
       SELECT
-        pc.id            AS "id",
-        pc.user_id       AS "userId",
-        pc.cid           AS "cid",
-        false::boolean   AS "isByoUser"
+        pc.id              AS "id",
+        pc.user_id         AS "userId",
+        pc.cid             AS "cid",
+        v.is_byo_user      AS "isByoUser"
       FROM pinned_cids pc
       JOIN vaults v ON v.owner_id = pc.user_id
       WHERE v.is_byo_user = false
+        AND pc.pinned_at < NOW() - INTERVAL '1 hour'
     `)) as BackfillRow[];
 
     console.log(`Candidate rows (non-BYO pinned_cids): ${candidateRows.length}`);
