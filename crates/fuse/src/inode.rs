@@ -307,17 +307,21 @@ impl InodeTable {
         merge_only: bool,
     ) -> Result<(), String> {
         // Build set of new child names for detecting removals
-        let new_names: std::collections::HashSet<String> = metadata.children.iter().map(|c| {
-            match c {
+        let new_names: std::collections::HashSet<String> = metadata
+            .children
+            .iter()
+            .map(|c| match c {
                 FolderChild::Folder(f) => f.name.clone(),
                 FolderChild::File(f) => f.name.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         // Build stable-ID lookup maps for existing children so we can match
         // renamed items by their IPNS name (folders) or file_meta_ipns_name
         // (files) instead of only by display name.
-        let old_child_inos: Vec<u64> = self.inodes.get(&parent_ino)
+        let old_child_inos: Vec<u64> = self
+            .inodes
+            .get(&parent_ino)
             .and_then(|p| p.children.as_ref())
             .cloned()
             .unwrap_or_default();
@@ -330,7 +334,10 @@ impl InodeTable {
                     InodeKind::Folder { ipns_name, .. } => {
                         ipns_to_ino.insert(ipns_name.clone(), child_ino);
                     }
-                    InodeKind::File { file_meta_ipns_name: Some(name), .. } => {
+                    InodeKind::File {
+                        file_meta_ipns_name: Some(name),
+                        ..
+                    } => {
                         file_ipns_to_ino.insert(name.clone(), child_ino);
                     }
                     _ => {}
@@ -339,12 +346,14 @@ impl InodeTable {
         }
 
         // Build set of remote IPNS names to detect true removals vs renames
-        let new_ipns_names: std::collections::HashSet<String> = metadata.children.iter().filter_map(|c| {
-            match c {
+        let new_ipns_names: std::collections::HashSet<String> = metadata
+            .children
+            .iter()
+            .filter_map(|c| match c {
                 FolderChild::Folder(f) => Some(f.ipns_name.clone()),
                 FolderChild::File(f) => Some(f.file_meta_ipns_name.clone()),
-            }
-        }).collect();
+            })
+            .collect();
 
         // Remove children not in remote metadata (only during initial mount, not refresh).
         // Match by IPNS name (stable ID) instead of display name to correctly
@@ -355,10 +364,14 @@ impl InodeTable {
                 if let Some(old_child) = self.inodes.get(old_ino) {
                     let stable_id = match &old_child.kind {
                         InodeKind::Folder { ipns_name, .. } => Some(ipns_name.clone()),
-                        InodeKind::File { file_meta_ipns_name: Some(name), .. } => Some(name.clone()),
+                        InodeKind::File {
+                            file_meta_ipns_name: Some(name),
+                            ..
+                        } => Some(name.clone()),
                         _ => None,
                     };
-                    let in_remote = stable_id.as_ref()
+                    let in_remote = stable_id
+                        .as_ref()
                         .map(|id| new_ipns_names.contains(id))
                         .unwrap_or(false);
                     // Fall back to name only when no stable ID exists
@@ -370,7 +383,8 @@ impl InodeTable {
                     if !in_remote {
                         let name = old_child.name.clone();
                         self.inodes.remove(old_ino);
-                        self.name_to_ino.remove(&(parent_ino, normalize_name(&name)));
+                        self.name_to_ino
+                            .remove(&(parent_ino, normalize_name(&name)));
                     }
                 }
             }
@@ -382,7 +396,9 @@ impl InodeTable {
             match child {
                 FolderChild::Folder(folder) => {
                     // Reuse existing ino: prefer stable IPNS name, fall back to display name
-                    let existing_ino = ipns_to_ino.get(&folder.ipns_name).copied()
+                    let existing_ino = ipns_to_ino
+                        .get(&folder.ipns_name)
+                        .copied()
                         .or_else(|| self.find_child(parent_ino, &folder.name));
 
                     // If matched by IPNS name (rename), clean up old name index entry
@@ -392,7 +408,8 @@ impl InodeTable {
                             // Remove old name-to-ino entry so insert() won't leave stale mapping.
                             if let Some(old_inode) = self.inodes.get(&matched_ino) {
                                 let old_name = old_inode.name.clone();
-                                self.name_to_ino.remove(&(parent_ino, normalize_name(&old_name)));
+                                self.name_to_ino
+                                    .remove(&(parent_ino, normalize_name(&old_name)));
                                 log::debug!(
                                     "Folder rename detected via IPNS match (ipns={})",
                                     folder.ipns_name
@@ -404,34 +421,39 @@ impl InodeTable {
                     let ino = existing_ino.unwrap_or_else(|| self.allocate_ino());
 
                     // Decrypt folder key (ECIES unwrap)
-                    let encrypted_folder_key_bytes =
-                        hex::decode(&folder.folder_key_encrypted)
-                            .map_err(|_| format!(
+                    let encrypted_folder_key_bytes = hex::decode(&folder.folder_key_encrypted)
+                        .map_err(|_| {
+                            format!(
                                 "Invalid folderKeyEncrypted hex for folder '{}'",
                                 folder.name
-                            ))?;
-                    let folder_key = Zeroizing::new(
-                        cipherbox_crypto::ecies::unwrap_key(&encrypted_folder_key_bytes, private_key)
-                            .map_err(|e| format!(
-                                "Failed to decrypt folder key for '{}': {}",
-                                folder.name, e
-                            ))?
-                    );
+                            )
+                        })?;
+                    // unwrap_key now returns Zeroizing<Vec<u8>> directly (S3/D-05).
+                    let folder_key = cipherbox_crypto::ecies::unwrap_key(
+                        &encrypted_folder_key_bytes,
+                        private_key,
+                    )
+                    .map_err(|e| {
+                        format!("Failed to decrypt folder key for '{}': {}", folder.name, e)
+                    })?;
 
                     // Decrypt IPNS private key (ECIES unwrap)
-                    let encrypted_ipns_key_bytes =
-                        hex::decode(&folder.ipns_private_key_encrypted)
-                            .map_err(|_| format!(
+                    let encrypted_ipns_key_bytes = hex::decode(&folder.ipns_private_key_encrypted)
+                        .map_err(|_| {
+                            format!(
                                 "Invalid ipnsPrivateKeyEncrypted hex for folder '{}'",
                                 folder.name
-                            ))?;
-                    let ipns_private_key = Zeroizing::new(
+                            )
+                        })?;
+                    // unwrap_key now returns Zeroizing<Vec<u8>> directly (S3/D-05).
+                    let ipns_private_key =
                         cipherbox_crypto::ecies::unwrap_key(&encrypted_ipns_key_bytes, private_key)
-                            .map_err(|e| format!(
-                                "Failed to decrypt IPNS private key for '{}': {}",
-                                folder.name, e
-                            ))?
-                    );
+                            .map_err(|e| {
+                                format!(
+                                    "Failed to decrypt IPNS private key for '{}': {}",
+                                    folder.name, e
+                                )
+                            })?;
 
                     let created = UNIX_EPOCH + Duration::from_millis(folder.created_at);
                     let modified = UNIX_EPOCH + Duration::from_millis(folder.modified_at);
@@ -440,7 +462,17 @@ impl InodeTable {
                     let (existing_children, was_loaded) = if existing_ino.is_some() {
                         let old = self.inodes.get(&ino);
                         let ch = old.and_then(|o| o.children.clone());
-                        let loaded = old.map(|o| matches!(&o.kind, InodeKind::Folder { children_loaded: true, .. })).unwrap_or(false);
+                        let loaded = old
+                            .map(|o| {
+                                matches!(
+                                    &o.kind,
+                                    InodeKind::Folder {
+                                        children_loaded: true,
+                                        ..
+                                    }
+                                )
+                            })
+                            .unwrap_or(false);
                         (ch, loaded)
                     } else {
                         (Some(vec![]), false)
@@ -480,7 +512,9 @@ impl InodeTable {
                 }
                 FolderChild::File(file_pointer) => {
                     // Reuse existing ino: prefer stable file IPNS name, fall back to display name
-                    let existing_ino = file_ipns_to_ino.get(&file_pointer.file_meta_ipns_name).copied()
+                    let existing_ino = file_ipns_to_ino
+                        .get(&file_pointer.file_meta_ipns_name)
+                        .copied()
                         .or_else(|| self.find_child(parent_ino, &file_pointer.name));
 
                     // If matched by file IPNS name (rename), clean up old name index entry
@@ -488,7 +522,8 @@ impl InodeTable {
                         if self.find_child(parent_ino, &file_pointer.name).is_none() {
                             if let Some(old_inode) = self.inodes.get(&matched_ino) {
                                 let old_name = old_inode.name.clone();
-                                self.name_to_ino.remove(&(parent_ino, normalize_name(&old_name)));
+                                self.name_to_ino
+                                    .remove(&(parent_ino, normalize_name(&old_name)));
                                 log::debug!(
                                     "File rename detected via IPNS match (ipns={})",
                                     file_pointer.file_meta_ipns_name
@@ -509,11 +544,14 @@ impl InodeTable {
                     // timestamp for the FilePointer.  If we detect a newer timestamp,
                     // we mark the file as unresolved so that its per-file IPNS
                     // record is re-fetched, picking up the new CID.
-                    let (was_resolved, existing_kind) = if let Some(existing) = existing_ino
-                        .and_then(|ino| self.inodes.get(&ino))
+                    let (was_resolved, existing_kind) = if let Some(existing) =
+                        existing_ino.and_then(|ino| self.inodes.get(&ino))
                     {
                         match &existing.kind {
-                            InodeKind::File { file_meta_resolved: true, .. } => {
+                            InodeKind::File {
+                                file_meta_resolved: true,
+                                ..
+                            } => {
                                 // Compare the incoming modified_at with the
                                 // existing inode's mtime to detect remote edits.
                                 // Use != rather than > to handle clock skew
@@ -551,25 +589,26 @@ impl InodeTable {
                         // keys from existing inode but mark as unresolved, unless
                         // the FilePointer identity (IPNS name) changed, which
                         // means this is a different file reusing the same name.
-                        let existing = existing_ino
-                            .and_then(|ino| self.inodes.get(&ino));
-                        let (prev_ipns_key, prev_ipns_key_enc_hex, prev_ipns_name, same_pointer) = match existing.map(|e| &e.kind) {
-                            Some(InodeKind::File {
-                                file_ipns_private_key,
-                                file_ipns_key_encrypted_hex,
-                                file_meta_ipns_name,
-                                ..
-                            }) => {
-                                let same = file_meta_ipns_name.as_deref() == Some(file_pointer.file_meta_ipns_name.as_str());
-                                (
-                                    file_ipns_private_key.clone(),
-                                    file_ipns_key_encrypted_hex.clone(),
-                                    file_meta_ipns_name.clone(),
-                                    same,
-                                )
-                            }
-                            _ => (None, None, None, false),
-                        };
+                        let existing = existing_ino.and_then(|ino| self.inodes.get(&ino));
+                        let (prev_ipns_key, prev_ipns_key_enc_hex, prev_ipns_name, same_pointer) =
+                            match existing.map(|e| &e.kind) {
+                                Some(InodeKind::File {
+                                    file_ipns_private_key,
+                                    file_ipns_key_encrypted_hex,
+                                    file_meta_ipns_name,
+                                    ..
+                                }) => {
+                                    let same = file_meta_ipns_name.as_deref()
+                                        == Some(file_pointer.file_meta_ipns_name.as_str());
+                                    (
+                                        file_ipns_private_key.clone(),
+                                        file_ipns_key_encrypted_hex.clone(),
+                                        file_meta_ipns_name.clone(),
+                                        same,
+                                    )
+                                }
+                                _ => (None, None, None, false),
+                            };
                         InodeKind::File {
                             cid: String::new(),
                             encrypted_file_key: String::new(),
@@ -594,11 +633,17 @@ impl InodeTable {
                         // Decrypt file IPNS private key from FilePointer if available,
                         // falling back to HKDF derivation for legacy files only.
                         let has_encrypted_key = file_pointer.ipns_private_key_encrypted.is_some();
-                        let file_ipns_key = if let Some(ref encrypted_hex) = file_pointer.ipns_private_key_encrypted {
+                        let file_ipns_key = if let Some(ref encrypted_hex) =
+                            file_pointer.ipns_private_key_encrypted
+                        {
                             match hex::decode(encrypted_hex) {
                                 Ok(encrypted_bytes) => {
-                                    match cipherbox_crypto::ecies::unwrap_key(&encrypted_bytes, private_key) {
-                                        Ok(key) => Some(Zeroizing::new(key)),
+                                    // unwrap_key returns Zeroizing<Vec<u8>> directly (S3/D-05).
+                                    match cipherbox_crypto::ecies::unwrap_key(
+                                        &encrypted_bytes,
+                                        private_key,
+                                    ) {
+                                        Ok(key) => Some(key),
                                         Err(e) => {
                                             log::error!(
                                                 "File '{}': failed to decrypt ipnsPrivateKeyEncrypted: {}. Cannot use HKDF for random-key files.",
@@ -627,7 +672,10 @@ impl InodeTable {
                             file_ipns_key
                         } else if !has_encrypted_key {
                             if let Ok(pk_arr) = <[u8; 32]>::try_from(private_key) {
-                                match cipherbox_crypto::hkdf::derive_file_ipns_keypair(&pk_arr, &file_pointer.id) {
+                                match cipherbox_crypto::hkdf::derive_file_ipns_keypair(
+                                    &pk_arr,
+                                    &file_pointer.id,
+                                ) {
                                     Ok((derived_key, _, _)) => {
                                         log::debug!(
                                             "File '{}': derived IPNS key via HKDF fallback (legacy file).",
@@ -657,7 +705,10 @@ impl InodeTable {
                         // Cache the ECIES-wrapped hex for build_folder_metadata.
                         // For legacy files (HKDF fallback), wrap the derived key now so
                         // the next folder publish persists it -- lazy migration to random keys.
-                        let cached_encrypted_hex = if file_pointer.ipns_private_key_encrypted.is_some() {
+                        let cached_encrypted_hex = if file_pointer
+                            .ipns_private_key_encrypted
+                            .is_some()
+                        {
                             file_pointer.ipns_private_key_encrypted.clone()
                         } else if let Some(ref key) = file_ipns_key {
                             match cipherbox_crypto::ecies::wrap_key(key, public_key) {
@@ -741,8 +792,8 @@ impl InodeTable {
         // Set parent's children list
         if let Some(parent) = self.inodes.get_mut(&parent_ino) {
             let old_children = parent.children.as_ref().cloned().unwrap_or_default();
-            let children_changed = old_children.len() != child_inos.len()
-                || old_children != child_inos;
+            let children_changed =
+                old_children.len() != child_inos.len() || old_children != child_inos;
             if children_changed {
                 let now = SystemTime::now();
                 parent.attr.mtime = now;
@@ -752,7 +803,9 @@ impl InodeTable {
             parent.children = Some(child_inos);
             match &mut parent.kind {
                 InodeKind::Root { .. } => {}
-                InodeKind::Folder { children_loaded, .. } => {
+                InodeKind::Folder {
+                    children_loaded, ..
+                } => {
                     *children_loaded = true;
                 }
                 _ => {}
@@ -784,16 +837,25 @@ impl InodeTable {
                 size,
                 encryption_mode,
                 file_meta_ipns_name: match &inode.kind {
-                    InodeKind::File { file_meta_ipns_name, .. } => file_meta_ipns_name.clone(),
+                    InodeKind::File {
+                        file_meta_ipns_name,
+                        ..
+                    } => file_meta_ipns_name.clone(),
                     _ => None,
                 },
                 file_meta_resolved: true,
                 file_ipns_private_key: match &inode.kind {
-                    InodeKind::File { file_ipns_private_key, .. } => file_ipns_private_key.clone(),
+                    InodeKind::File {
+                        file_ipns_private_key,
+                        ..
+                    } => file_ipns_private_key.clone(),
                     _ => None,
                 },
                 file_ipns_key_encrypted_hex: match &inode.kind {
-                    InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
+                    InodeKind::File {
+                        file_ipns_key_encrypted_hex,
+                        ..
+                    } => file_ipns_key_encrypted_hex.clone(),
                     _ => None,
                 },
                 versions,
@@ -808,35 +870,39 @@ impl InodeTable {
     /// Returns Vec of (ino, file_meta_ipns_name).
     #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn get_unresolved_file_pointers(&self) -> Vec<(u64, String)> {
-        self.inodes.values().filter_map(|inode| {
-            match &inode.kind {
+        self.inodes
+            .values()
+            .filter_map(|inode| match &inode.kind {
                 InodeKind::File {
                     file_meta_ipns_name: Some(ipns_name),
                     file_meta_resolved: false,
                     ..
                 } => Some((inode.ino, ipns_name.clone())),
                 _ => None,
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Get unresolved FilePointer inodes scoped to a specific parent folder.
     /// Avoids retrying root-level or other-folder pointers with the wrong folder key.
     #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn get_unresolved_file_pointers_for_parent(&self, parent_ino: u64) -> Vec<(u64, String)> {
-        self.inodes.values().filter_map(|inode| {
-            if inode.parent_ino != parent_ino {
-                return None;
-            }
-            match &inode.kind {
-                InodeKind::File {
-                    file_meta_ipns_name: Some(ipns_name),
-                    file_meta_resolved: false,
-                    ..
-                } => Some((inode.ino, ipns_name.clone())),
-                _ => None,
-            }
-        }).collect()
+        self.inodes
+            .values()
+            .filter_map(|inode| {
+                if inode.parent_ino != parent_ino {
+                    return None;
+                }
+                match &inode.kind {
+                    InodeKind::File {
+                        file_meta_ipns_name: Some(ipns_name),
+                        file_meta_resolved: false,
+                        ..
+                    } => Some((inode.ino, ipns_name.clone())),
+                    _ => None,
+                }
+            })
+            .collect()
     }
 }
 
@@ -1042,16 +1108,15 @@ mod tests {
 
         let metadata = FolderMetadata {
             version: "v2".to_string(),
-            children: vec![
-                FolderChild::File(cipherbox_core::folder::FilePointer {
-                    id: "file-1".to_string(),
-                    name: "hello.txt".to_string(),
-                    file_meta_ipns_name: "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx".to_string(),
-                    ipns_private_key_encrypted: None,
-                    created_at: 1700000000000,
-                    modified_at: 1700000000000,
-                }),
-            ],
+            children: vec![FolderChild::File(cipherbox_core::folder::FilePointer {
+                id: "file-1".to_string(),
+                name: "hello.txt".to_string(),
+                file_meta_ipns_name:
+                    "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx".to_string(),
+                ipns_private_key_encrypted: None,
+                created_at: 1700000000000,
+                modified_at: 1700000000000,
+            })],
         };
 
         // For FilePointer children without ipnsPrivateKeyEncrypted, HKDF derivation
@@ -1069,14 +1134,29 @@ mod tests {
         let child = table.get(child_ino).unwrap();
         assert_eq!(child.name, "hello.txt");
         match &child.kind {
-            InodeKind::File { file_meta_ipns_name, file_meta_resolved, file_ipns_key_encrypted_hex, file_ipns_private_key, .. } => {
+            InodeKind::File {
+                file_meta_ipns_name,
+                file_meta_resolved,
+                file_ipns_key_encrypted_hex,
+                file_ipns_private_key,
+                ..
+            } => {
                 assert_eq!(
                     file_meta_ipns_name.as_deref(),
                     Some("k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx")
                 );
-                assert!(!file_meta_resolved, "FilePointer should not be resolved yet");
-                assert!(file_ipns_key_encrypted_hex.is_none(), "Legacy FilePointer should have no cached encrypted hex");
-                assert!(file_ipns_private_key.is_none(), "Legacy FilePointer with zeroed key should have no derived private key");
+                assert!(
+                    !file_meta_resolved,
+                    "FilePointer should not be resolved yet"
+                );
+                assert!(
+                    file_ipns_key_encrypted_hex.is_none(),
+                    "Legacy FilePointer should have no cached encrypted hex"
+                );
+                assert!(
+                    file_ipns_private_key.is_none(),
+                    "Legacy FilePointer with zeroed key should have no derived private key"
+                );
             }
             _ => panic!("Expected File kind"),
         }
@@ -1097,35 +1177,33 @@ mod tests {
 
         // Create a 32-byte folder key and wrap it with ECIES
         let folder_key_raw = vec![42u8; 32];
-        let folder_key_encrypted_hex = hex::encode(
-            cipherbox_crypto::ecies::wrap_key(&folder_key_raw, &public_key).unwrap()
-        );
+        let folder_key_encrypted_hex =
+            hex::encode(cipherbox_crypto::ecies::wrap_key(&folder_key_raw, &public_key).unwrap());
 
         // Create a 32-byte IPNS private key and wrap it
         let ipns_key_raw = vec![7u8; 32];
-        let ipns_key_encrypted_hex = hex::encode(
-            cipherbox_crypto::ecies::wrap_key(&ipns_key_raw, &public_key).unwrap()
-        );
+        let ipns_key_encrypted_hex =
+            hex::encode(cipherbox_crypto::ecies::wrap_key(&ipns_key_raw, &public_key).unwrap());
 
         let ipns_name = "k51qzi5uqu5dFOLDERipnsNAMEstableAcross_renames";
 
         // Initial population: folder named "OldName"
         let metadata_v1 = FolderMetadata {
             version: "v2".to_string(),
-            children: vec![
-                FolderChild::Folder(cipherbox_core::folder::FolderEntry {
-                    id: "folder-1".to_string(),
-                    name: "OldName".to_string(),
-                    ipns_name: ipns_name.to_string(),
-                    folder_key_encrypted: folder_key_encrypted_hex.clone(),
-                    ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
-                    created_at: 1700000000000,
-                    modified_at: 1700000000000,
-                }),
-            ],
+            children: vec![FolderChild::Folder(cipherbox_core::folder::FolderEntry {
+                id: "folder-1".to_string(),
+                name: "OldName".to_string(),
+                ipns_name: ipns_name.to_string(),
+                folder_key_encrypted: folder_key_encrypted_hex.clone(),
+                ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
+                created_at: 1700000000000,
+                modified_at: 1700000000000,
+            })],
         };
 
-        table.populate_folder(ROOT_INO, &metadata_v1, &private_key, &public_key, false).unwrap();
+        table
+            .populate_folder(ROOT_INO, &metadata_v1, &private_key, &public_key, false)
+            .unwrap();
 
         let root = table.get(ROOT_INO).unwrap();
         assert_eq!(root.children.as_ref().unwrap().len(), 1);
@@ -1136,47 +1214,64 @@ mod tests {
         // Now rename folder in remote metadata: same ipns_name, new name
         let metadata_v2 = FolderMetadata {
             version: "v2".to_string(),
-            children: vec![
-                FolderChild::Folder(cipherbox_core::folder::FolderEntry {
-                    id: "folder-1".to_string(),
-                    name: "NewName".to_string(),
-                    ipns_name: ipns_name.to_string(),
-                    folder_key_encrypted: folder_key_encrypted_hex.clone(),
-                    ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
-                    created_at: 1700000000000,
-                    modified_at: 1700001000000,
-                }),
-            ],
+            children: vec![FolderChild::Folder(cipherbox_core::folder::FolderEntry {
+                id: "folder-1".to_string(),
+                name: "NewName".to_string(),
+                ipns_name: ipns_name.to_string(),
+                folder_key_encrypted: folder_key_encrypted_hex.clone(),
+                ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
+                created_at: 1700000000000,
+                modified_at: 1700001000000,
+            })],
         };
 
         // merge_only=true (background sync)
-        table.populate_folder(ROOT_INO, &metadata_v2, &private_key, &public_key, true).unwrap();
+        table
+            .populate_folder(ROOT_INO, &metadata_v2, &private_key, &public_key, true)
+            .unwrap();
 
         let root = table.get(ROOT_INO).unwrap();
         // Should have exactly 1 child, not 2 (the old folder should be reused, not duplicated)
         assert_eq!(
-            root.children.as_ref().unwrap().len(), 1,
+            root.children.as_ref().unwrap().len(),
+            1,
             "Renamed folder should not create duplicate -- expected 1 child, got {}",
             root.children.as_ref().unwrap().len()
         );
 
         // The ino should be reused
         let child_ino = root.children.as_ref().unwrap()[0];
-        assert_eq!(child_ino, original_ino, "Inode should be reused after rename");
+        assert_eq!(
+            child_ino, original_ino,
+            "Inode should be reused after rename"
+        );
 
         // Name should be updated
         let child = table.get(child_ino).unwrap();
-        assert_eq!(child.name, "NewName", "Folder name should be updated to new name");
+        assert_eq!(
+            child.name, "NewName",
+            "Folder name should be updated to new name"
+        );
 
         // Old name should NOT be findable
-        assert!(table.find_child(ROOT_INO, "OldName").is_none(), "Old name should not be findable");
+        assert!(
+            table.find_child(ROOT_INO, "OldName").is_none(),
+            "Old name should not be findable"
+        );
 
         // New name should be findable
-        assert_eq!(table.find_child(ROOT_INO, "NewName"), Some(original_ino), "New name should map to same ino");
+        assert_eq!(
+            table.find_child(ROOT_INO, "NewName"),
+            Some(original_ino),
+            "New name should map to same ino"
+        );
 
         // IPNS name should be unchanged
         match &child.kind {
-            InodeKind::Folder { ipns_name: stored_ipns, .. } => {
+            InodeKind::Folder {
+                ipns_name: stored_ipns,
+                ..
+            } => {
                 assert_eq!(stored_ipns, ipns_name, "IPNS name should be preserved");
             }
             _ => panic!("Expected Folder kind"),
@@ -1189,63 +1284,71 @@ mod tests {
 
         let (private_key, public_key) = generate_test_keypair();
         let folder_key_raw = vec![42u8; 32];
-        let folder_key_encrypted_hex = hex::encode(
-            cipherbox_crypto::ecies::wrap_key(&folder_key_raw, &public_key).unwrap()
-        );
+        let folder_key_encrypted_hex =
+            hex::encode(cipherbox_crypto::ecies::wrap_key(&folder_key_raw, &public_key).unwrap());
         let ipns_key_raw = vec![7u8; 32];
-        let ipns_key_encrypted_hex = hex::encode(
-            cipherbox_crypto::ecies::wrap_key(&ipns_key_raw, &public_key).unwrap()
-        );
+        let ipns_key_encrypted_hex =
+            hex::encode(cipherbox_crypto::ecies::wrap_key(&ipns_key_raw, &public_key).unwrap());
 
         let ipns_name = "k51qzi5uqu5dFOLDERstableID";
 
         // Initial: folder named "Alpha"
         let metadata_v1 = FolderMetadata {
             version: "v2".to_string(),
-            children: vec![
-                FolderChild::Folder(cipherbox_core::folder::FolderEntry {
-                    id: "folder-1".to_string(),
-                    name: "Alpha".to_string(),
-                    ipns_name: ipns_name.to_string(),
-                    folder_key_encrypted: folder_key_encrypted_hex.clone(),
-                    ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
-                    created_at: 1700000000000,
-                    modified_at: 1700000000000,
-                }),
-            ],
+            children: vec![FolderChild::Folder(cipherbox_core::folder::FolderEntry {
+                id: "folder-1".to_string(),
+                name: "Alpha".to_string(),
+                ipns_name: ipns_name.to_string(),
+                folder_key_encrypted: folder_key_encrypted_hex.clone(),
+                ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
+                created_at: 1700000000000,
+                modified_at: 1700000000000,
+            })],
         };
 
-        table.populate_folder(ROOT_INO, &metadata_v1, &private_key, &public_key, false).unwrap();
+        table
+            .populate_folder(ROOT_INO, &metadata_v1, &private_key, &public_key, false)
+            .unwrap();
         let original_ino = table.get(ROOT_INO).unwrap().children.as_ref().unwrap()[0];
 
         // Non-merge (initial mount) with renamed folder
         let metadata_v2 = FolderMetadata {
             version: "v2".to_string(),
-            children: vec![
-                FolderChild::Folder(cipherbox_core::folder::FolderEntry {
-                    id: "folder-1".to_string(),
-                    name: "Beta".to_string(),
-                    ipns_name: ipns_name.to_string(),
-                    folder_key_encrypted: folder_key_encrypted_hex.clone(),
-                    ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
-                    created_at: 1700000000000,
-                    modified_at: 1700001000000,
-                }),
-            ],
+            children: vec![FolderChild::Folder(cipherbox_core::folder::FolderEntry {
+                id: "folder-1".to_string(),
+                name: "Beta".to_string(),
+                ipns_name: ipns_name.to_string(),
+                folder_key_encrypted: folder_key_encrypted_hex.clone(),
+                ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
+                created_at: 1700000000000,
+                modified_at: 1700001000000,
+            })],
         };
 
         // merge_only=false (initial mount / full refresh)
-        table.populate_folder(ROOT_INO, &metadata_v2, &private_key, &public_key, false).unwrap();
+        table
+            .populate_folder(ROOT_INO, &metadata_v2, &private_key, &public_key, false)
+            .unwrap();
 
         let root = table.get(ROOT_INO).unwrap();
-        assert_eq!(root.children.as_ref().unwrap().len(), 1, "Should have exactly 1 child");
+        assert_eq!(
+            root.children.as_ref().unwrap().len(),
+            1,
+            "Should have exactly 1 child"
+        );
 
         let child_ino = root.children.as_ref().unwrap()[0];
-        assert_eq!(child_ino, original_ino, "Inode should be reused after rename");
+        assert_eq!(
+            child_ino, original_ino,
+            "Inode should be reused after rename"
+        );
 
         let child = table.get(child_ino).unwrap();
         assert_eq!(child.name, "Beta", "Name should be updated");
-        assert!(table.find_child(ROOT_INO, "Alpha").is_none(), "Old name should not exist");
+        assert!(
+            table.find_child(ROOT_INO, "Alpha").is_none(),
+            "Old name should not exist"
+        );
         assert_eq!(table.find_child(ROOT_INO, "Beta"), Some(original_ino));
     }
 
@@ -1258,21 +1361,21 @@ mod tests {
         // Initial population with a FilePointer
         let metadata_v1 = FolderMetadata {
             version: "v2".to_string(),
-            children: vec![
-                FolderChild::File(cipherbox_core::folder::FilePointer {
-                    id: "file-1".to_string(),
-                    name: "hello.txt".to_string(),
-                    file_meta_ipns_name: ipns_name.to_string(),
-                    ipns_private_key_encrypted: None,
-                    created_at: 1700000000000,
-                    modified_at: 1700000000000,
-                }),
-            ],
+            children: vec![FolderChild::File(cipherbox_core::folder::FilePointer {
+                id: "file-1".to_string(),
+                name: "hello.txt".to_string(),
+                file_meta_ipns_name: ipns_name.to_string(),
+                ipns_private_key_encrypted: None,
+                created_at: 1700000000000,
+                modified_at: 1700000000000,
+            })],
         };
 
         let private_key = vec![0u8; 32];
         let public_key = vec![0u8; 33];
-        table.populate_folder(ROOT_INO, &metadata_v1, &private_key, &public_key, false).unwrap();
+        table
+            .populate_folder(ROOT_INO, &metadata_v1, &private_key, &public_key, false)
+            .unwrap();
 
         let child_ino = table.get(ROOT_INO).unwrap().children.as_ref().unwrap()[0];
 
@@ -1294,7 +1397,8 @@ mod tests {
                 ref mut file_ipns_private_key,
                 ref mut file_ipns_key_encrypted_hex,
                 ..
-            } = inode.kind {
+            } = inode.kind
+            {
                 *file_ipns_private_key = Some(Zeroizing::new(vec![1u8; 32]));
                 *file_ipns_key_encrypted_hex = Some("abcdef1234".to_string());
             }
@@ -1303,22 +1407,40 @@ mod tests {
         // Verify it's resolved with keys
         let child = table.get(child_ino).unwrap();
         match &child.kind {
-            InodeKind::File { file_meta_resolved, cid, file_ipns_private_key, file_ipns_key_encrypted_hex, .. } => {
+            InodeKind::File {
+                file_meta_resolved,
+                cid,
+                file_ipns_private_key,
+                file_ipns_key_encrypted_hex,
+                ..
+            } => {
                 assert!(file_meta_resolved);
                 assert_eq!(cid, "bafyOLDcid");
-                assert!(file_ipns_private_key.is_some(), "IPNS private key should be set");
+                assert!(
+                    file_ipns_private_key.is_some(),
+                    "IPNS private key should be set"
+                );
                 assert_eq!(file_ipns_key_encrypted_hex.as_deref(), Some("abcdef1234"));
             }
             _ => panic!("Expected File kind"),
         }
 
         // Now re-populate with SAME modified_at -- should keep existing resolved data
-        table.populate_folder(ROOT_INO, &metadata_v1, &private_key, &public_key, true).unwrap();
+        table
+            .populate_folder(ROOT_INO, &metadata_v1, &private_key, &public_key, true)
+            .unwrap();
 
         let child = table.get(child_ino).unwrap();
         match &child.kind {
-            InodeKind::File { file_meta_resolved, cid, .. } => {
-                assert!(file_meta_resolved, "File should remain resolved when modified_at unchanged");
+            InodeKind::File {
+                file_meta_resolved,
+                cid,
+                ..
+            } => {
+                assert!(
+                    file_meta_resolved,
+                    "File should remain resolved when modified_at unchanged"
+                );
                 assert_eq!(cid, "bafyOLDcid", "CID should be unchanged");
             }
             _ => panic!("Expected File kind"),
@@ -1328,36 +1450,47 @@ mod tests {
         // to unresolved but preserve IPNS keys since it's the same file pointer.
         let metadata_v2 = FolderMetadata {
             version: "v2".to_string(),
-            children: vec![
-                FolderChild::File(cipherbox_core::folder::FilePointer {
-                    id: "file-1".to_string(),
-                    name: "hello.txt".to_string(),
-                    file_meta_ipns_name: ipns_name.to_string(),
-                    ipns_private_key_encrypted: None,
-                    created_at: 1700000000000,
-                    modified_at: 1700001000000, // 1000s later
-                }),
-            ],
+            children: vec![FolderChild::File(cipherbox_core::folder::FilePointer {
+                id: "file-1".to_string(),
+                name: "hello.txt".to_string(),
+                file_meta_ipns_name: ipns_name.to_string(),
+                ipns_private_key_encrypted: None,
+                created_at: 1700000000000,
+                modified_at: 1700001000000, // 1000s later
+            })],
         };
 
-        table.populate_folder(ROOT_INO, &metadata_v2, &private_key, &public_key, true).unwrap();
+        table
+            .populate_folder(ROOT_INO, &metadata_v2, &private_key, &public_key, true)
+            .unwrap();
 
         let child = table.get(child_ino).unwrap();
         match &child.kind {
             InodeKind::File {
-                file_meta_resolved, cid, file_meta_ipns_name,
-                file_ipns_private_key, file_ipns_key_encrypted_hex, ..
+                file_meta_resolved,
+                cid,
+                file_meta_ipns_name,
+                file_ipns_private_key,
+                file_ipns_key_encrypted_hex,
+                ..
             } => {
-                assert!(!file_meta_resolved, "File should be unresolved after modified_at change");
+                assert!(
+                    !file_meta_resolved,
+                    "File should be unresolved after modified_at change"
+                );
                 assert!(cid.is_empty(), "CID should be cleared for re-resolution");
                 assert_eq!(
                     file_meta_ipns_name.as_deref(),
                     Some(ipns_name),
                     "IPNS name should be preserved for re-resolution"
                 );
-                assert!(file_ipns_private_key.is_some(), "IPNS private key should be preserved for same pointer");
+                assert!(
+                    file_ipns_private_key.is_some(),
+                    "IPNS private key should be preserved for same pointer"
+                );
                 assert_eq!(
-                    file_ipns_key_encrypted_hex.as_deref(), Some("abcdef1234"),
+                    file_ipns_key_encrypted_hex.as_deref(),
+                    Some("abcdef1234"),
                     "IPNS encrypted key hex should be preserved for same pointer"
                 );
             }
@@ -1369,16 +1502,14 @@ mod tests {
         let new_ipns_name = "k51qzi5uqu5dREPLACEDfileDIFFERENTipnsNAMEabcdef123456789";
         let metadata_v3 = FolderMetadata {
             version: "v2".to_string(),
-            children: vec![
-                FolderChild::File(cipherbox_core::folder::FilePointer {
-                    id: "file-2".to_string(),
-                    name: "hello.txt".to_string(),
-                    file_meta_ipns_name: new_ipns_name.to_string(),
-                    ipns_private_key_encrypted: Some("newencryptedkey".to_string()),
-                    created_at: 1700000000000,
-                    modified_at: 1700002000000, // even later
-                }),
-            ],
+            children: vec![FolderChild::File(cipherbox_core::folder::FilePointer {
+                id: "file-2".to_string(),
+                name: "hello.txt".to_string(),
+                file_meta_ipns_name: new_ipns_name.to_string(),
+                ipns_private_key_encrypted: Some("newencryptedkey".to_string()),
+                created_at: 1700000000000,
+                modified_at: 1700002000000, // even later
+            })],
         };
 
         // First resolve the inode again so we enter the was_resolved path
@@ -1392,21 +1523,32 @@ mod tests {
             None,
         );
 
-        table.populate_folder(ROOT_INO, &metadata_v3, &private_key, &public_key, true).unwrap();
+        table
+            .populate_folder(ROOT_INO, &metadata_v3, &private_key, &public_key, true)
+            .unwrap();
 
         let child = table.get(child_ino).unwrap();
         match &child.kind {
             InodeKind::File {
-                file_meta_resolved, file_meta_ipns_name,
-                file_ipns_private_key, file_ipns_key_encrypted_hex, ..
+                file_meta_resolved,
+                file_meta_ipns_name,
+                file_ipns_private_key,
+                file_ipns_key_encrypted_hex,
+                ..
             } => {
-                assert!(!file_meta_resolved, "File should be unresolved after pointer replacement");
+                assert!(
+                    !file_meta_resolved,
+                    "File should be unresolved after pointer replacement"
+                );
                 assert_eq!(
                     file_meta_ipns_name.as_deref(),
                     Some(new_ipns_name),
                     "IPNS name should be updated to new pointer's name"
                 );
-                assert!(file_ipns_private_key.is_none(), "IPNS private key should be cleared for different pointer");
+                assert!(
+                    file_ipns_private_key.is_none(),
+                    "IPNS private key should be cleared for different pointer"
+                );
                 assert_eq!(
                     file_ipns_key_encrypted_hex.as_deref(),
                     Some("newencryptedkey"),

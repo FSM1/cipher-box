@@ -8,8 +8,8 @@
 #[cfg(feature = "fuse")]
 pub(crate) mod implementation {
     use fuser::{
-        Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
-        ReplyEntry, ReplyEmpty, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request,
+        Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
+        ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request,
     };
     use std::ffi::OsStr;
     use std::time::{Duration, SystemTime};
@@ -23,7 +23,11 @@ pub(crate) mod implementation {
     pub const DIR_TTL: Duration = Duration::from_secs(0);
 
     pub fn ttl_for_is_dir(is_dir: bool) -> Duration {
-        if is_dir { DIR_TTL } else { FILE_TTL }
+        if is_dir {
+            DIR_TTL
+        } else {
+            FILE_TTL
+        }
     }
 
     pub fn current_uid() -> u32 {
@@ -65,23 +69,32 @@ pub(crate) mod implementation {
 
         block_with_timeout(&rt, async {
             let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(&api, &cid_owned)
-                .await.map_err(|e| format!("{}", e))?;
-            let encrypted_file_key = hex::decode(&key_hex).map_err(|_| "Invalid file key hex".to_string())?;
-            let file_key = zeroize::Zeroizing::new(
-                cipherbox_crypto::unwrap_key(&encrypted_file_key, &private_key)
-                    .map_err(|e| format!("File key unwrap failed: {}", e))?,
-            );
-            let file_key_arr: [u8; 32] = file_key.as_slice().try_into()
+                .await
+                .map_err(|e| format!("{}", e))?;
+            let encrypted_file_key =
+                hex::decode(&key_hex).map_err(|_| "Invalid file key hex".to_string())?;
+            // unwrap_key returns Zeroizing<Vec<u8>> (S3/D-05).
+            let file_key = cipherbox_crypto::unwrap_key(&encrypted_file_key, &private_key)
+                .map_err(|e| format!("File key unwrap failed: {}", e))?;
+            let file_key_arr: [u8; 32] = file_key
+                .as_slice()
+                .try_into()
                 .map_err(|_| "Invalid file key length".to_string())?;
 
             let plaintext = if mode == "CTR" {
-                let iv = hex::decode(&iv_hex_owned).map_err(|_| "Invalid file IV hex".to_string())?;
-                let iv_arr: [u8; 16] = iv.try_into().map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
+                let iv =
+                    hex::decode(&iv_hex_owned).map_err(|_| "Invalid file IV hex".to_string())?;
+                let iv_arr: [u8; 16] = iv
+                    .try_into()
+                    .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
                 cipherbox_crypto::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
                     .map_err(|e| format!("CTR file decryption failed: {}", e))?
             } else {
-                let iv = hex::decode(&iv_hex_owned).map_err(|_| "Invalid file IV hex".to_string())?;
-                let iv_arr: [u8; 12] = iv.try_into().map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
+                let iv =
+                    hex::decode(&iv_hex_owned).map_err(|_| "Invalid file IV hex".to_string())?;
+                let iv_arr: [u8; 12] = iv
+                    .try_into()
+                    .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
                 cipherbox_crypto::decrypt_aes_gcm(&encrypted_bytes, &file_key_arr, &iv_arr)
                     .map_err(|e| format!("GCM file decryption failed: {}", e))?
             };
@@ -98,24 +111,30 @@ pub(crate) mod implementation {
         private_key: &[u8],
     ) -> Result<Vec<u8>, String> {
         let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(api, cid)
-            .await.map_err(|e| format!("{}", e))?;
-        let encrypted_file_key = hex::decode(encrypted_file_key_hex)
-            .map_err(|_| "Invalid file key hex".to_string())?;
-        let file_key = zeroize::Zeroizing::new(
-            cipherbox_crypto::unwrap_key(&encrypted_file_key, private_key)
-                .map_err(|e| format!("File key unwrap failed: {}", e))?,
-        );
-        let file_key_arr: [u8; 32] = file_key.as_slice().try_into()
+            .await
+            .map_err(|e| format!("{}", e))?;
+        let encrypted_file_key =
+            hex::decode(encrypted_file_key_hex).map_err(|_| "Invalid file key hex".to_string())?;
+        // unwrap_key returns Zeroizing<Vec<u8>> (S3/D-05).
+        let file_key = cipherbox_crypto::unwrap_key(&encrypted_file_key, private_key)
+            .map_err(|e| format!("File key unwrap failed: {}", e))?;
+        let file_key_arr: [u8; 32] = file_key
+            .as_slice()
+            .try_into()
             .map_err(|_| "Invalid file key length".to_string())?;
 
         let plaintext = if encryption_mode == "CTR" {
             let iv = hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
-            let iv_arr: [u8; 16] = iv.try_into().map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
+            let iv_arr: [u8; 16] = iv
+                .try_into()
+                .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
             cipherbox_crypto::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
                 .map_err(|e| format!("CTR decryption failed: {}", e))?
         } else {
             let iv = hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
-            let iv_arr: [u8; 12] = iv.try_into().map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
+            let iv_arr: [u8; 12] = iv
+                .try_into()
+                .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
             cipherbox_crypto::decrypt_aes_gcm(&encrypted_bytes, &file_key_arr, &iv_arr)
                 .map_err(|e| format!("GCM decryption failed: {}", e))?
         };
@@ -133,7 +152,8 @@ pub(crate) mod implementation {
         tee_key_epoch: Option<u32>,
         is_first_publish: bool,
     ) -> Result<(), String> {
-        let folder_key_arr: [u8; 32] = folder_key.try_into()
+        let folder_key_arr: [u8; 32] = folder_key
+            .try_into()
             .map_err(|_| "Invalid folder key length for FileMetadata encryption".to_string())?;
 
         let sealed = cipherbox_core::folder::encrypt_file_metadata(file_meta, &folder_key_arr)
@@ -147,7 +167,8 @@ pub(crate) mod implementation {
             .map_err(|e| format!("FileMetadata JSON serialization failed: {}", e))?;
 
         let file_meta_cid = cipherbox_api_client::ipfs::upload_content(api, &json_bytes)
-            .await.map_err(|e| format!("{}", e))?;
+            .await
+            .map_err(|e| format!("{}", e))?;
 
         let current_seq = if is_first_publish {
             None
@@ -155,7 +176,9 @@ pub(crate) mod implementation {
             Some(coordinator.resolve_sequence(api, file_ipns_name).await?)
         };
 
-        let ipns_key_arr: [u8; 32] = file_ipns_private_key.as_slice().try_into()
+        let ipns_key_arr: [u8; 32] = file_ipns_private_key
+            .as_slice()
+            .try_into()
             .map_err(|_| "Invalid file IPNS private key length".to_string())?;
         let new_seq = crate::next_file_publish_sequence(is_first_publish, current_seq)?;
         let value = format!("/ipfs/{}", file_meta_cid);
@@ -167,18 +190,19 @@ pub(crate) mod implementation {
         let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
 
         // TEE enrollment on first publish only (same pattern as folder creation in write_ops.rs)
-        let (encrypted_ipns_for_tee, tee_epoch) = match (is_first_publish, tee_public_key, tee_key_epoch) {
-            (true, Some(tee_key), Some(epoch)) => {
-                let wrapped = cipherbox_crypto::wrap_key(
-                    file_ipns_private_key.as_slice(), tee_key
-                ).map_err(|e| format!("TEE key wrapping failed: {}", e))?;
-                (Some(hex::encode(&wrapped)), Some(epoch))
-            }
-            (true, Some(_), None) => {
-                return Err("TEE public key present but key_epoch missing".to_string());
-            }
-            _ => (None, None),
-        };
+        let (encrypted_ipns_for_tee, tee_epoch) =
+            match (is_first_publish, tee_public_key, tee_key_epoch) {
+                (true, Some(tee_key), Some(epoch)) => {
+                    let wrapped =
+                        cipherbox_crypto::wrap_key(file_ipns_private_key.as_slice(), tee_key)
+                            .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
+                    (Some(hex::encode(&wrapped)), Some(epoch))
+                }
+                (true, Some(_), None) => {
+                    return Err("TEE public key present but key_epoch missing".to_string());
+                }
+                _ => (None, None),
+            };
 
         let req = cipherbox_api_client::IpnsPublishRequest {
             ipns_name: file_ipns_name.to_string(),
@@ -188,10 +212,16 @@ pub(crate) mod implementation {
             key_epoch: tee_epoch,
             expected_sequence_number: None,
         };
-        match cipherbox_api_client::ipns::publish_ipns(api, &req).await.map_err(|e| format!("{}", e))? {
+        match cipherbox_api_client::ipns::publish_ipns(api, &req)
+            .await
+            .map_err(|e| format!("{}", e))?
+        {
             cipherbox_api_client::PublishResult::Success => {}
             cipherbox_api_client::PublishResult::Conflict { .. } => {
-                log::warn!("Unexpected conflict on per-file IPNS publish for {}", file_ipns_name);
+                log::warn!(
+                    "Unexpected conflict on per-file IPNS publish for {}",
+                    file_ipns_name
+                );
             }
         }
 
@@ -201,7 +231,11 @@ pub(crate) mod implementation {
     }
 
     impl Filesystem for CipherBoxFS {
-        fn init(&mut self, _req: &Request<'_>, config: &mut fuser::KernelConfig) -> Result<(), libc::c_int> {
+        fn init(
+            &mut self,
+            _req: &Request<'_>,
+            config: &mut fuser::KernelConfig,
+        ) -> Result<(), libc::c_int> {
             crate::read_ops::implementation::handle_init(self, config)
         }
 
@@ -217,15 +251,48 @@ pub(crate) mod implementation {
             crate::read_ops::implementation::handle_getattr(self, ino, reply);
         }
 
-        fn setattr(&mut self, _req: &Request<'_>, ino: u64, _mode: Option<u32>, _uid: Option<u32>, _gid: Option<u32>, size: Option<u64>, _atime: Option<fuser::TimeOrNow>, _mtime: Option<fuser::TimeOrNow>, _ctime: Option<SystemTime>, fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, _flags: Option<u32>, reply: ReplyAttr) {
+        fn setattr(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            _mode: Option<u32>,
+            _uid: Option<u32>,
+            _gid: Option<u32>,
+            size: Option<u64>,
+            _atime: Option<fuser::TimeOrNow>,
+            _mtime: Option<fuser::TimeOrNow>,
+            _ctime: Option<SystemTime>,
+            fh: Option<u64>,
+            _crtime: Option<SystemTime>,
+            _chgtime: Option<SystemTime>,
+            _bkuptime: Option<SystemTime>,
+            _flags: Option<u32>,
+            reply: ReplyAttr,
+        ) {
             crate::write_ops::implementation::handle_setattr(self, ino, size, fh, reply);
         }
 
-        fn readdir(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64, reply: ReplyDirectory) {
+        fn readdir(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            _fh: u64,
+            offset: i64,
+            reply: ReplyDirectory,
+        ) {
             crate::dir_ops::implementation::handle_readdir(self, ino, offset, reply);
         }
 
-        fn create(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, _mode: u32, _umask: u32, flags: i32, reply: ReplyCreate) {
+        fn create(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            _mode: u32,
+            _umask: u32,
+            flags: i32,
+            reply: ReplyCreate,
+        ) {
             crate::write_ops::implementation::handle_create(self, parent, name, flags, reply);
         }
 
@@ -233,19 +300,56 @@ pub(crate) mod implementation {
             crate::read_ops::implementation::handle_open(self, ino, flags, reply);
         }
 
-        fn write(&mut self, _req: &Request<'_>, ino: u64, fh: u64, offset: i64, data: &[u8], _write_flags: u32, _flags: i32, _lock_owner: Option<u64>, reply: ReplyWrite) {
+        fn write(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            fh: u64,
+            offset: i64,
+            data: &[u8],
+            _write_flags: u32,
+            _flags: i32,
+            _lock_owner: Option<u64>,
+            reply: ReplyWrite,
+        ) {
             crate::write_ops::implementation::handle_write(self, ino, fh, offset, data, reply);
         }
 
-        fn read(&mut self, _req: &Request<'_>, ino: u64, fh: u64, offset: i64, size: u32, _flags: i32, _lock: Option<u64>, reply: ReplyData) {
+        fn read(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            fh: u64,
+            offset: i64,
+            size: u32,
+            _flags: i32,
+            _lock: Option<u64>,
+            reply: ReplyData,
+        ) {
             crate::read_ops::implementation::handle_read(self, ino, fh, offset, size, reply);
         }
 
-        fn release(&mut self, _req: &Request<'_>, ino: u64, fh: u64, _flags: i32, _lock_owner: Option<u64>, _flush: bool, reply: ReplyEmpty) {
+        fn release(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            fh: u64,
+            _flags: i32,
+            _lock_owner: Option<u64>,
+            _flush: bool,
+            reply: ReplyEmpty,
+        ) {
             crate::read_ops::implementation::handle_release(self, ino, fh, reply);
         }
 
-        fn flush(&mut self, _req: &Request<'_>, _ino: u64, _fh: u64, _lock_owner: u64, reply: ReplyEmpty) {
+        fn flush(
+            &mut self,
+            _req: &Request<'_>,
+            _ino: u64,
+            _fh: u64,
+            _lock_owner: u64,
+            reply: ReplyEmpty,
+        ) {
             crate::read_ops::implementation::handle_flush(reply);
         }
 
@@ -253,7 +357,15 @@ pub(crate) mod implementation {
             crate::write_ops::implementation::handle_unlink(self, parent, name, reply);
         }
 
-        fn mkdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, _mode: u32, _umask: u32, reply: ReplyEntry) {
+        fn mkdir(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            _mode: u32,
+            _umask: u32,
+            reply: ReplyEntry,
+        ) {
             crate::write_ops::implementation::handle_mkdir(self, parent, name, reply);
         }
 
@@ -261,8 +373,19 @@ pub(crate) mod implementation {
             crate::write_ops::implementation::handle_rmdir(self, parent, name, reply);
         }
 
-        fn rename(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, newparent: u64, newname: &OsStr, _flags: u32, reply: ReplyEmpty) {
-            crate::write_ops::implementation::handle_rename(self, parent, name, newparent, newname, reply);
+        fn rename(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            newparent: u64,
+            newname: &OsStr,
+            _flags: u32,
+            reply: ReplyEmpty,
+        ) {
+            crate::write_ops::implementation::handle_rename(
+                self, parent, name, newparent, newname, reply,
+            );
         }
 
         fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
@@ -273,7 +396,14 @@ pub(crate) mod implementation {
             crate::read_ops::implementation::handle_access(self, ino, mask, reply);
         }
 
-        fn getxattr(&mut self, _req: &Request<'_>, _ino: u64, _name: &OsStr, _size: u32, reply: ReplyXattr) {
+        fn getxattr(
+            &mut self,
+            _req: &Request<'_>,
+            _ino: u64,
+            _name: &OsStr,
+            _size: u32,
+            reply: ReplyXattr,
+        ) {
             crate::read_ops::implementation::handle_getxattr(reply);
         }
 
@@ -285,7 +415,14 @@ pub(crate) mod implementation {
             crate::dir_ops::implementation::handle_opendir(self, ino, reply);
         }
 
-        fn releasedir(&mut self, _req: &Request<'_>, _ino: u64, _fh: u64, _flags: i32, reply: ReplyEmpty) {
+        fn releasedir(
+            &mut self,
+            _req: &Request<'_>,
+            _ino: u64,
+            _fh: u64,
+            _flags: i32,
+            reply: ReplyEmpty,
+        ) {
             crate::dir_ops::implementation::handle_releasedir(reply);
         }
     }
