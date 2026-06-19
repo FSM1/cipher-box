@@ -1,0 +1,156 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "916e8907cf2c",
+  "session_id": "749b15c9-2a46-459e-b881-6078a254515e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T01:37:53.740872Z",
+  "branch": "docs/codebase-docs-drift-review",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/codebase/ARCHITECTURE.md",
+    ".planning/codebase/CONCERNS.md",
+    ".planning/codebase/CONVENTIONS.md",
+    ".planning/codebase/INTEGRATIONS.md",
+    ".planning/codebase/STACK.md",
+    ".planning/codebase/STRUCTURE.md",
+    ".planning/codebase/TESTING.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f8ec4b26cff2",
+  "token_usage": {
+    "input_tokens": 10327,
+    "cache_creation_tokens": 75372,
+    "cache_read_tokens": 1726185,
+    "output_tokens": 30898,
+    "api_call_count": 24
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Review all 7 project docs in .planning/codebase/ for stale content accumulated since their March 2026 generation, and update them against the live codebase. Then push the changes as a focused PR.",
+    "outcome": "A multi-agent audit-verify-apply workflow fixed 87 confirmed drift items across all 7 docs. The user then decided to remove internal package/crate version columns from STACK.md entirely (they churn too fast), obsoleting ~13 of the workflow's own fixes. Changes were committed on a fresh branch off origin/main; the session ended mid-PR-creation.",
+    "learnings": {
+      "repo": [
+        "Internal package/crate versions in planning docs are too volatile to maintain; .release-please-manifest.json is the authoritative source and should be referenced instead of inlining versions.",
+        "Rust toolchain pin is channel=1.88 (not 1.93+), lives at apps/desktop/src-tauri/rust-toolchain.toml — there is no root-level rust-toolchain.toml.",
+        "multiformats ^13.4.2 is a direct TEE worker dependency again (not replaced by @cipherbox/core as a stale doc claimed).",
+        "commit-msg git hook is now an Entire CLI wrapper — commitlint is no longer run locally and is enforced via PR-title CI only.",
+        "Staging deploy tags format: staging-YYYYMMDD-release-N (not staging-v<version>-rc-N).",
+        "e2e.yml was split into ci-e2e.yml (dispatcher) → web-e2e.yml / desktop-e2e.yml; build-desktop.yml became desktop-staging-release.yml triggered by cipherbox-desktop-v* tags.",
+        "axios is pinned exactly at 1.13.2 (no caret) in both web and api-client.",
+        "Prettier config now lives in prettier.config.js (es5 trailing commas, 100-char width).",
+        "markdownlint runs with --ignore .planning flag.",
+        "TEE worker IPNS republish interval is 6h (was 3h in docs).",
+        "FUSE mkdir-retry concern in CONCERNS.md was resolved with a landed PR and regression test."
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/package.json",
+          "line": 21,
+          "end_line": 21,
+          "finding": "multiformats ^13.4.2 is a direct dependency — it was incorrectly removed from the stack doc as 'replaced by @cipherbox/core'"
+        },
+        {
+          "path": "apps/tee-worker/src/services/migration-worker.ts",
+          "line": 19,
+          "end_line": 19,
+          "finding": "Imports CID from multiformats/cid, confirming it is still a live direct dependency"
+        },
+        {
+          "path": "apps/tee-worker/src/routes/migrate.ts",
+          "line": 18,
+          "end_line": 18,
+          "finding": "Also imports CID from multiformats/cid"
+        },
+        {
+          "path": "apps/desktop/src-tauri/rust-toolchain.toml",
+          "line": 1,
+          "end_line": 1,
+          "finding": "channel = \"1.88\" — this is the sole Rust toolchain pin; no root-level rust-toolchain.toml exists"
+        }
+      ],
+      "workflow": [
+        "Three-phase multi-agent doc review (audit → adversarial verify → apply) with conservative bias is effective for catching drift without introducing bad edits.",
+        "Adversarial verification before applying is critical — it prevented incorrect changes from landing.",
+        "Running prettier after doc edits as a final hygiene step is important to avoid formatting noise in diffs.",
+        "When a current branch has already been squash-merged, branch fresh off origin/main rather than reusing the stale local branch.",
+        "1Password commit signing requires running git commit outside the sandbox with a timeout guard.",
+        "Workflow applied ~13 version-column fixes that were immediately made obsolete by the user's follow-up decision — front-loading a design conversation about doc structure could save wasted agent cycles."
+      ]
+    },
+    "friction": [
+      "The workflow cited a root-level rust-toolchain.toml that does not exist; required a separate manual verification step to find the actual pin location.",
+      "~13 of the workflow's 23 STACK.md fixes (all per-package/crate version bumps) were immediately obsoleted when the user decided to remove version columns — the design question should have been asked before the workflow ran.",
+      "1Password signer adds commit latency and requires unsandboxed bash execution with a timeout guard, complicating the commit step.",
+      "Current local branch (v1.1 closeout work) had already been squash-merged via PR #524 but was not on remote, creating an ambiguous state that required investigation before branching."
+    ],
+    "open_items": [
+      "PR creation was in progress at end of session — not confirmed as successfully opened.",
+      "External dependency versions in STACK.md are still inlined; user was offered the option to strip those too but did not decide.",
+      "CONCERNS.md keeps resolved items under '(RESOLVED)' headings for historical context — user was asked whether to strip them entirely but did not decide.",
+      "undici ^7.24.6 was added to TEE-specific deps in STACK.md as an SSRF-hardened HTTP agent — worth verifying this is correctly documented alongside the multiformats restoration."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T01:37:01.905812Z",
+    "agent_lines": 0,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 91,
+    "total_committed": 4,
+    "total_lines_changed": 95,
+    "agent_percentage": 4.2105263157894735,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 92,
+      "user_lines_removed": 91,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/codebase/ARCHITECTURE.md": 8,
+        ".planning/codebase/CONCERNS.md": 18,
+        ".planning/codebase/CONVENTIONS.md": 7,
+        ".planning/codebase/INTEGRATIONS.md": 5,
+        ".planning/codebase/STACK.md": 25,
+        ".planning/codebase/STRUCTURE.md": 13,
+        ".planning/codebase/TESTING.md": 15
+      },
+      "user_removed_per_file": {
+        ".planning/codebase/ARCHITECTURE.md": 4,
+        ".planning/codebase/CONCERNS.md": 17,
+        ".planning/codebase/CONVENTIONS.md": 6,
+        ".planning/codebase/INTEGRATIONS.md": 4,
+        ".planning/codebase/STACK.md": 23,
+        ".planning/codebase/STRUCTURE.md": 23,
+        ".planning/codebase/TESTING.md": 14
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 91,
+      "agent_lines_removed": 91,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 95,
+      "agent_lines_removed": 95,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "916e8907cf2c",
+  "strategy": "manual-commit",
+  "branch": "docs/codebase-docs-drift-review",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/codebase/ARCHITECTURE.md",
+    ".planning/codebase/CONCERNS.md",
+    ".planning/codebase/CONVENTIONS.md",
+    ".planning/codebase/INTEGRATIONS.md",
+    ".planning/codebase/STACK.md",
+    ".planning/codebase/STRUCTURE.md",
+    ".planning/codebase/TESTING.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/91/6e8907cf2c/0/metadata.json",
+      "transcript": "/91/6e8907cf2c/0/full.jsonl",
+      "content_hash": "/91/6e8907cf2c/0/content_hash.txt",
+      "prompt": "/91/6e8907cf2c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10327,
+    "cache_creation_tokens": 75372,
+    "cache_read_tokens": 1726185,
+    "output_tokens": 30898,
+    "api_call_count": 24
+  }
+}
