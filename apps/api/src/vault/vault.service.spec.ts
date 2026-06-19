@@ -961,6 +961,24 @@ describe('VaultService', () => {
       expect(mockMetricsService.fileUnpins.inc).toHaveBeenCalledTimes(1);
     });
 
+    it('IN-01: owned but delete affects 0 rows (lost race): does NOT increment fileUnpins', async () => {
+      // Ownership findOne succeeds, but the actual DELETE affects no rows (e.g. the row
+      // was removed by a concurrent unpin between the findOne and the delete). The metric
+      // must be gated on DeleteResult.affected, NOT on reaching the delete statement.
+      mockManagerPinnedCidRepo.findOne.mockResolvedValue(mockPinnedRow);
+      mockManagerPinnedCidRepo.delete.mockResolvedValue({ affected: 0 });
+      mockManagerQueryBuilder.getRawOne.mockResolvedValue({ count: '1' });
+
+      await expect(service.guardedUnpin(testUserId, testCid)).resolves.toBeUndefined();
+
+      expect(mockManagerPinnedCidRepo.delete).toHaveBeenCalledWith({
+        userId: testUserId,
+        cid: testCid,
+      });
+      // IN-01 regression: no row actually deleted → metric must NOT fire
+      expect(mockMetricsService.fileUnpins.inc).not.toHaveBeenCalled();
+    });
+
     it('owned, refcount === 0: inserts outbox row inside transaction, then calls Kubo and deletes outbox row post-commit', async () => {
       mockManagerPinnedCidRepo.findOne.mockResolvedValue(mockPinnedRow);
       mockManagerQueryBuilder.getRawOne.mockResolvedValue({ count: '0' });

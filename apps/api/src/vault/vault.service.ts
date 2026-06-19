@@ -278,8 +278,8 @@ export class VaultService {
       }
 
       // 3. Delete caller's row — this IS the quota decrement (D-03)
-      await pinnedCidRepo.delete({ userId, cid });
-      rowDeleted = true; // IN-01: row confirmed deleted; gate the metric below
+      const deleteResult = await pinnedCidRepo.delete({ userId, cid });
+      rowDeleted = (deleteResult.affected ?? 0) > 0; // IN-01: only true on an actual row deletion
 
       // 4. Refcount across all users (D-05, D-07: no origin filtering)
       // WR-07 disposition: BYO advisory rows intentionally count toward the hosted
