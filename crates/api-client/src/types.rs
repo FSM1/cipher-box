@@ -134,6 +134,12 @@ pub struct IpnsResolveResponse {
     pub cid: String,
     /// Current sequence number as a string (bigint from backend).
     pub sequence_number: String,
+    /// Base64-encoded Ed25519 signature over "ipns-signature:" || data (optional, absent on legacy records).
+    pub signature_v2: Option<String>,
+    /// Base64-encoded CBOR-encoded IPNS record data that was signed (optional).
+    pub data: Option<String>,
+    /// Base64-encoded Ed25519 public key that produced the signature (optional).
+    pub pub_key: Option<String>,
 }
 
 /// IPNS publish request body matching the backend PublishIpnsDto.
