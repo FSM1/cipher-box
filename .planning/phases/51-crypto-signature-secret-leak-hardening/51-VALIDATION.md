@@ -1,10 +1,11 @@
 ---
 phase: 51
 slug: crypto-signature-secret-leak-hardening
-status: ready
+status: validated
 nyquist_compliant: true
 wave_0_complete: true
 created: 2026-06-19
+validated: 2026-06-19
 ---
 
 # Phase 51 — Validation Strategy
@@ -40,16 +41,16 @@ created: 2026-06-19
 
 | Task ID | Plan | Wave | Requirement | Threat Ref       | Secure Behavior                                                       | Test Type   | Automated Command                                                            | File Exists | Status     |
 | ------- | ---- | ---- | ----------- | ---------------- | -------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------- | ----------- | ---------- |
-| TBD     | TBD  | 1    | HARD-02     | S1 / T-tampering | S1: 400 on embedded-CID vs metadataCid mismatch                      | unit        | `pnpm --filter @cipherbox/api test -- --testPathPattern ipns.service.spec`  | ✅          | ⬜ pending |
-| TBD     | TBD  | 1    | HARD-02     | S1 / T-tampering | S1: 400 on embedded-seq vs expectedSeq mismatch (non-first publish)  | unit        | `pnpm --filter @cipherbox/api test -- --testPathPattern ipns.service.spec`  | ✅ extend   | ⬜ pending |
-| TBD     | TBD  | 1    | HARD-02     | S1               | S1: first-publish seq tolerance (0n or 1n accepted), valid passes    | unit        | `pnpm --filter @cipherbox/api test -- --testPathPattern ipns.service.spec`  | ✅ extend   | ⬜ pending |
-| TBD     | TBD  | 1    | HARD-02     | S2 / T-tampering | S2: web resolve throws on present-but-invalid signature             | unit        | `pnpm --filter @cipherbox/web test`                                          | ❌ W0       | ⬜ pending |
-| TBD     | TBD  | 1    | HARD-02     | S2 / D-03        | S2: web resolve returns signatureVerified=false on absent fields    | unit        | `pnpm --filter @cipherbox/web test`                                          | ❌ W0       | ⬜ pending |
-| TBD     | TBD  | 1    | HARD-02     | S2               | S2: sdk-core resolve already throws (regression)                    | unit        | `pnpm --filter @cipherbox/sdk-core test -- ipns`                             | ✅          | ⬜ pending |
-| TBD     | TBD  | 1    | HARD-02     | S2 / D-04        | S2: Rust IpnsResolveResponse deserializes sig fields; verify_* cases | unit (Rust) | `cargo test -p cipherbox-api-client`                                         | ❌ W0       | ⬜ pending |
-| TBD     | TBD  | 1    | HARD-02     | S3 / Info-Disc   | S3: sdk-core ipns/vault/folder zero key after return                | unit        | `pnpm --filter @cipherbox/sdk-core test -- ipns vault folder`               | ✅ extend   | ⬜ pending |
-| TBD     | TBD  | 1    | HARD-02     | S3 / Info-Disc   | S3: Rust BFS queue + get_folder_key are Zeroizing (compile-time)    | compile     | `cargo build -p cipherbox-fuse`                                             | ✅          | ⬜ pending |
-| TBD     | TBD  | 1    | HARD-02     | S3 / D-05        | S3: enforcement guard (regression test/lint) asserts caller-owns-key | unit/lint   | `pnpm --filter @cipherbox/sdk-core test` / lint                             | ❌ W0       | ⬜ pending |
+| TBD     | TBD  | 1    | HARD-02     | S1 / T-tampering | S1: 400 on embedded-CID vs metadataCid mismatch                      | unit        | `pnpm --filter @cipherbox/api test -- --testPathPattern ipns.service.spec`  | ✅          | ✅ green   |
+| TBD     | TBD  | 1    | HARD-02     | S1 / T-tampering | S1: 400 on embedded-seq vs expectedSeq mismatch (non-first publish)  | unit        | `pnpm --filter @cipherbox/api test -- --testPathPattern ipns.service.spec`  | ✅          | ✅ green   |
+| TBD     | TBD  | 1    | HARD-02     | S1               | S1: first-publish seq tolerance (0n or 1n accepted), valid passes    | unit        | `pnpm --filter @cipherbox/api test -- --testPathPattern ipns.service.spec`  | ✅          | ✅ green   |
+| TBD     | TBD  | 1    | HARD-02     | S2 / T-tampering | S2: web resolve throws on present-but-invalid signature             | unit        | `pnpm --filter @cipherbox/web test`                                          | ✅          | ✅ green   |
+| TBD     | TBD  | 1    | HARD-02     | S2 / D-03        | S2: web resolve returns signatureVerified=false on absent fields    | unit        | `pnpm --filter @cipherbox/web test`                                          | ✅          | ✅ green   |
+| TBD     | TBD  | 1    | HARD-02     | S2               | S2: sdk-core resolve already throws (regression)                    | unit        | `pnpm --filter @cipherbox/sdk-core test -- ipns`                             | ✅          | ✅ green   |
+| TBD     | TBD  | 1    | HARD-02     | S2 / D-04        | S2: Rust IpnsResolveResponse deserializes sig fields; verify_* cases | unit (Rust) | `cargo test -p cipherbox-api-client`                                         | ✅          | ✅ green   |
+| TBD     | TBD  | 1    | HARD-02     | S3 / Info-Disc   | S3: sdk-core ipns/vault/folder zero key after return                | unit        | `pnpm --filter @cipherbox/sdk-core test -- ipns vault folder`               | ✅          | ✅ green   |
+| TBD     | TBD  | 1    | HARD-02     | S3 / Info-Disc   | S3: Rust BFS queue + get_folder_key are Zeroizing (compile-time)    | compile     | `cargo build -p cipherbox-fuse`                                             | ✅          | ✅ green   |
+| TBD     | TBD  | 1    | HARD-02     | S3 / D-05        | S3: enforcement guard (regression test/lint) asserts caller-owns-key | unit/lint   | `pnpm --filter @cipherbox/sdk-core test` / lint                             | ✅          | ✅ green   |
 
 _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
@@ -87,3 +88,22 @@ _All phase behaviors have automated verification (unit + compile-time)._
 - [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** approved 2026-06-19
+
+---
+
+## Validation Audit 2026-06-19
+
+Post-execution audit (State A). All 10 per-task behaviors cross-referenced against tests on disk —
+every Wave-0 test file exists and was driven green during execution (TDD RED commits
+`acc397b63`/`df35c5bdc`/`3fb891a21`/`f242a08da` → GREEN). Suites: 79 jest (api S1) + 60 vitest
+(web S2, 6 new) + 71 cargo (Rust S2/S3) + 209 vitest (sdk-core S3). Workspace `cargo check` green
+after the desktop `unwrap_key` `.to_vec()` build hotfix (`11c1b5516`).
+
+| Metric     | Count |
+| ---------- | ----- |
+| Gaps found | 0     |
+| Resolved   | 0     |
+| Escalated  | 0     |
+
+No auditor spawn needed — zero gaps. Phase 51 is Nyquist-compliant; all behaviors have automated
+verification (unit + compile-time), no manual-only items.
