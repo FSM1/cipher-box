@@ -1,0 +1,65 @@
+there will be a bit of a delay before coderabbit and greptile post their reviews on the pr, so
+
+---
+
+<task-notification>
+<task-id>bf50zvq6d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/bf50zvq6d.output</output-file>
+<status>completed</status>
+<summary>Background command "Run CodeRabbit CLI review on phase-50 diff" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bkcmy3892</task-id>
+<tool-use-id>toolu_01FtNk1DbFHDWUhQxLsada1n</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/bkcmy3892.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll CodeRabbit review until complete on PR 527" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7acff5802e55accb</task-id>
+<tool-use-id>toolu_01R5WumaoBw8xsxf2SQxWT6G</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/a7acff5802e55accb.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply CodeRabbit PR #527 findings" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both commits landed cleanly (hooks ran, no `--no-verify`). All three findings applied and verified.
+
+## Summary
+
+All 3 CodeRabbit findings applied cleanly against live code. Two commits made.
+
+### Fix 1 — api correctness (commit `ba3d4ea0`)
+`apps/api/src/vault/vault.service.ts` (~line 281):
+```ts
+-      await pinnedCidRepo.delete({ userId, cid });
+-      rowDeleted = true; // IN-01: row confirmed deleted; gate the metric below
++      const deleteResult = await pinnedCidRepo.delete({ userId, cid });
++      rowDeleted = (deleteResult.affected ?? 0) &gt; 0; // IN-01: only true on an actual row deletion
+```
+`vault.service.spec.ts`: the existing `mockManagerPinnedCidRepo.delete` mock already resolves `{ affected: 1 }`, so the "metric fires" tests stayed green. Added one regression case — `IN-01: owned but delete affects 0 rows (lost race)` — that sets `delete` to resolve `{ affected: 0 }` (ownership findOne still succeeds) and asserts `fileUnpins.inc` is NOT called. The line-323 `PendingUnpin` delete was left untouched.
+
+### Fix 2 + 3 — test quality (commit `4e95256`)
+`packages/sdk/src/__tests__/collect-subtree-ipns-names.test.ts`:
+- Added `vi.spyOn(console, 'warn').mockImplementation(() =&gt; {})` in `beforeEach` and a new `afterEach` with `vi.restoreAllMocks()` (imported `afterEach`).
+- In Test B (the per-child SIBLING_B fetch-failure case) asserted the warning is intentional: `expect(console.warn).toHaveBeenCalledWith(expect.stringContaining(\`could not load metadata for ${SIBLING_B}\`))`. Verified against the source — the warn at `client.ts:336` is a single-string-arg call, so the matcher is single-arg (my first draft incorrectly assumed a second error arg and was corrected before testing).
+- Replaced all four `await new Promise((r) =&gt; setTimeout(r, 100))` sleeps with `await vi.waitFor(() =&gt; expect(ipnsControllerUnenrollBatch).toHaveBeenCalled())` — that's the side-effect mock each test's following assertions check (Test C waits on the same call as its traversal-completion signal before asserting folderTree state).
+
+### Verification (all green)
+- `pnpm --filter @cipherbox/api exec jest vault.service.spec` → 60 passed, 60 total (incl. new IN-01 regression case)
+- `pnpm --filter @cipherbox/sdk exec vitest run collect-subtree-ipns-names` → 4 passed, no stderr noise
+- `pnpm --filter @cipherbox/api exec tsc --noEmit -p tsconfig.build.json` → clean, no output
+
+### Commit hashes
+- `ba3d4ea074e342ecdbad3e207be20c1b74128ed6` — `fix(api): gate fileUnpins metric on actual pinned_cids row deletion`
+- `4e9525668abdf0de6b975553f6875997c62c0164` — `test(sdk): assert expected warnings and replace fixed sleeps with condition waits`
+
+No findings needed forcing — all applied as specified.</result>
+<usage><subagent_tokens>55202</subagent_tokens><tool_uses>25</tool_uses><duration_ms>305669</duration_ms></usage>
+</task-notification>
