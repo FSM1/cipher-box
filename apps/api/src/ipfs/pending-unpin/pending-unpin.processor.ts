@@ -94,6 +94,11 @@ export class PendingUnpinProcessor extends WorkerHost {
     }
 
     // Build DB accounted set: pinned_cids ∪ pending_unpins
+    // IN-05 disposition: dbCids intentionally includes ALL pinned_cids rows — including
+    // BYO advisory rows — to mirror the guardedUnpin refcount semantics (WR-07 accepted:
+    // BYO advisory rows block physical unpin, so they must also be counted as "accounted"
+    // by the drift report; filtering them out would make the report report false orphans
+    // for CIDs that are intentionally retained by a BYO advisory row).
     const [pinnedCidRows, pendingUnpinRows] = await Promise.all([
       this.pinnedCidRepository.find({ select: { cid: true } }),
       this.pendingUnpinRepository.find({ select: { cid: true } }),
@@ -107,6 +112,12 @@ export class PendingUnpinProcessor extends WorkerHost {
     // Report pins that Kubo knows about but our DB does not
     for (const cid of kuboPins) {
       if (!dbCids.has(cid)) {
+        // WR-04 disposition: Counter is intentional here, not a Gauge. Each drift run
+        // appends orphan events to a cumulative total so operators can track how many
+        // orphan detections have occurred since the process started. A Gauge would
+        // require resetting between runs and tracking ephemeral per-run state; cumulative
+        // counts are more useful for alerting and trend analysis. (WR-04 accepted per
+        // 42-REVIEW author judgement.)
         this.metricsService.driftOrphanedPinsTotal.inc();
         this.logger.warn(`Drift: unaccounted Kubo pin cid=${cid}`);
       }
