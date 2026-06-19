@@ -204,6 +204,37 @@
         "label": "Skill: security-review",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01DPwCUBKMqorEbvZM4LRQP8",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:ship"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2982d1acd78b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 698,
+        "end": 699,
+        "entry_ids": [
+          "2bc66e6f-83f1-4511-a37d-6182439c8b7b"
+        ],
+        "tool_use_id": "toolu_01DPwCUBKMqorEbvZM4LRQP8"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01DPwCUBKMqorEbvZM4LRQP8"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:ship",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
