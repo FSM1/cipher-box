@@ -171,36 +171,28 @@ export async function resolveIpnsRecord(
     }
 
     // Verify IPNS signature if all signature fields are present.
-    // Verification failures are logged as warnings but do not block resolve —
-    // the CID comes from the server's DB cache and is already trusted.
+    // D-02: present-but-invalid → throw (fail closed; mirrors sdk-core behavior)
+    // D-03: absent fields → allow + flag (signatureVerified=false); legacy records
+    //        are allowed because the DB CID is authoritative.
     let signatureVerified = false;
     if (response.signatureV2 && response.data && response.pubKey) {
-      try {
-        const valid = await verifyIpnsSignature(
-          response.signatureV2,
-          response.data,
-          response.pubKey
-        );
-        if (!valid) {
-          logger.warn('[IPNS] Signature verification failed for', ipnsName);
-        } else {
-          // Verify the returned public key derives to the requested IPNS name
-          const pubKeyBytes = Uint8Array.from(atob(response.pubKey), (c) => c.charCodeAt(0));
-          const derivedName = await deriveIpnsName(pubKeyBytes);
-          if (derivedName !== ipnsName) {
-            logger.warn('[IPNS] Public key does not derive to requested IPNS name:', ipnsName);
-          } else {
-            signatureVerified = true;
-          }
-        }
-      } catch (verifyError) {
-        logger.warn(
-          '[IPNS] Signature verification error for',
-          ipnsName,
-          verifyError instanceof Error ? verifyError.message : String(verifyError)
+      const valid = await verifyIpnsSignature(response.signatureV2, response.data, response.pubKey);
+      if (!valid) {
+        throw new Error('IPNS signature verification failed - record may be tampered');
+      }
+
+      // Verify the returned public key derives to the requested IPNS name
+      const pubKeyBytes = Uint8Array.from(atob(response.pubKey), (c) => c.charCodeAt(0));
+      const derivedName = await deriveIpnsName(pubKeyBytes);
+      if (derivedName !== ipnsName) {
+        throw new Error(
+          'IPNS public key does not match requested name - possible key substitution'
         );
       }
+
+      signatureVerified = true;
     } else {
+      // D-03: absent signature fields (legacy record) — allow + flag
       logger.warn('[IPNS] IPNS resolve returned without signature data, skipping verification');
     }
 
