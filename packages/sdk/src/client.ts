@@ -209,6 +209,19 @@ export class CipherBoxClient {
   }
 
   /**
+   * Fire-and-forget IPNS unenrollment for a set of bin entries.
+   * Collects each entry's subtree IPNS names with a bounded concurrency limit
+   * (WR-04), then dispatches the flattened batch. Failures are logged but never
+   * block the caller.
+   */
+  private fireAndForgetUnenrollEntries(entries: BinEntry[]): void {
+    const collectLimit = pLimit(UNENROLL_COLLECT_CONCURRENCY);
+    Promise.all(entries.map((entry) => collectLimit(() => this.collectBinEntryIpnsNames(entry))))
+      .then((nameArrays) => this.fireAndForgetUnenroll(nameArrays.flat()))
+      .catch((err) => console.warn('[CipherBox] IPNS unenroll collection failed:', err));
+  }
+
+  /**
    * Extract IPNS names from a removed FolderChild (file or folder subtree).
    *
    * For folder items, unwraps the folder's key from its encrypted form (present
@@ -220,18 +233,32 @@ export class CipherBoxClient {
       return [(item as FilePointer).fileMetaIpnsName];
     } else if (item.type === 'folder') {
       const entry = item as FolderEntry;
-      try {
-        const folderKey = await unwrapKey(
-          hexToBytes(entry.folderKeyEncrypted),
-          this.internalVaultKeypair.privateKey
-        );
-        return this.collectSubtreeIpnsNamesAsync(entry.ipnsName, folderKey);
-      } catch {
-        // Key unwrap failed — return only the folder's own IPNS name
-        return [entry.ipnsName];
-      }
+      return this.collectFolderSubtree(entry.ipnsName, entry.folderKeyEncrypted);
     }
     return [];
+  }
+
+  /**
+   * Unwrap a folder's key and collect its full subtree of IPNS names.
+   *
+   * Shared by the removed-item and bin-entry collectors. On unwrap or fetch
+   * failure, falls back to returning only the folder's own IPNS name so the
+   * caller never aborts on a single bad node.
+   */
+  private async collectFolderSubtree(
+    ipnsName: string,
+    folderKeyEncrypted: string
+  ): Promise<string[]> {
+    try {
+      const folderKey = await unwrapKey(
+        hexToBytes(folderKeyEncrypted),
+        this.internalVaultKeypair.privateKey
+      );
+      return await this.collectSubtreeIpnsNamesAsync(ipnsName, folderKey);
+    } catch {
+      // Key unwrap or subtree fetch failed — return only the folder's own IPNS name
+      return [ipnsName];
+    }
   }
 
   /**
@@ -246,18 +273,12 @@ export class CipherBoxClient {
       names.push(entry.filePointer.fileMetaIpnsName);
     }
     if (entry.folderEntry?.ipnsName) {
-      try {
-        const folderKey = await unwrapKey(
-          hexToBytes(entry.folderEntry.folderKeyEncrypted),
-          this.internalVaultKeypair.privateKey
-        );
-        names.push(
-          ...(await this.collectSubtreeIpnsNamesAsync(entry.folderEntry.ipnsName, folderKey))
-        );
-      } catch {
-        // Key unwrap failed — add only the folder's own IPNS name
-        names.push(entry.folderEntry.ipnsName);
-      }
+      names.push(
+        ...(await this.collectFolderSubtree(
+          entry.folderEntry.ipnsName,
+          entry.folderEntry.folderKeyEncrypted
+        ))
+      );
     }
     return names;
   }
@@ -1970,9 +1991,7 @@ export class CipherBoxClient {
 
       // Fire-and-forget IPNS unenrollment for permanently deleted bin entry
       if (entry) {
-        this.collectBinEntryIpnsNames(entry)
-          .then((names) => this.fireAndForgetUnenroll(names))
-          .catch((err) => console.warn('[CipherBox] IPNS unenroll collection failed:', err));
+        this.fireAndForgetUnenrollEntries([entry]);
       }
     });
   }
@@ -1996,13 +2015,7 @@ export class CipherBoxClient {
       this.emitter.emit({ type: 'bin:updated', entries: [] });
 
       // Fire-and-forget IPNS unenrollment: collect async (on-demand subtree fetch) then dispatch.
-      // Bound the per-entry subtree fan-out with a concurrency limit (WR-04).
-      const collectLimit = pLimit(UNENROLL_COLLECT_CONCURRENCY);
-      Promise.all(
-        entriesToUnenroll.map((entry) => collectLimit(() => this.collectBinEntryIpnsNames(entry)))
-      )
-        .then((nameArrays) => this.fireAndForgetUnenroll(nameArrays.flat()))
-        .catch((err) => console.warn('[CipherBox] IPNS unenroll collection failed:', err));
+      this.fireAndForgetUnenrollEntries(entriesToUnenroll);
     });
   }
 
@@ -2037,13 +2050,7 @@ export class CipherBoxClient {
         this.binState = updatedState;
         this.emitter.emit({ type: 'bin:updated', entries: updatedState.entries });
         // Fire-and-forget IPNS unenrollment: collect async (on-demand subtree fetch) then dispatch.
-        // Bound the per-entry subtree fan-out with a concurrency limit (WR-04).
-        const collectLimit = pLimit(UNENROLL_COLLECT_CONCURRENCY);
-        Promise.all(
-          purgedEntries.map((entry) => collectLimit(() => this.collectBinEntryIpnsNames(entry)))
-        )
-          .then((nameArrays) => this.fireAndForgetUnenroll(nameArrays.flat()))
-          .catch((err) => console.warn('[CipherBox] IPNS unenroll collection failed:', err));
+        this.fireAndForgetUnenrollEntries(purgedEntries);
       }
 
       return purgedCount;
