@@ -1,0 +1,36 @@
+<task-notification>
+<task-id>a195a9cea7597e3bb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/a195a9cea7597e3bb.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 50-05 of phase 50" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 50-05
+**Tasks:** 3/3
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a195a9cea7597e3bb/.planning/phases/50-ipfs-ipns-data-integrity-fixes/50-05-SUMMARY.md`
+
+**Commits:**
+
+- `ded892a57`: fix(api): WR-02 physically unpin leaked Kubo pin on no-row compensation path
+- `ace5fe2d3`: fix(api): IN-02 add CID format and length validation to UnpinDto
+- `2b6213244`: fix(api): WR-05 WR-06 backfill query fixes and IN-04 module disposition
+- `bd5d4dc3d`: docs(50-05): complete D-04 unpin integrity fixes plan
+
+**Duration:** ~15 min
+
+**Key outcomes:**
+
+- **WR-02**: The upload compensation catch now calls `ipfsProvider.unpinFile(result.cid)` directly, ensuring the Kubo pin is physically removed even when no `pinned_cids` row exists. `guardedUnpin` bypassed (it returns early with no DB row). Cross-user audit never fired. 20 controller tests pass including the updated WR-02 test.
+
+- **IN-02**: `UnpinDto.cid` now enforces `@MaxLength(255)` and `@Matches` (CIDv0/CIDv1 regex). api-client regenerated and committed alongside the DTO change (132 files). Pre-commit hook satisfied.
+
+- **WR-05**: Backfill candidate query now excludes rows newer than 1 hour (`pinned_at &lt; NOW() - INTERVAL '1 hour'`), preventing in-flight uploads from being deleted as phantoms.
+
+- **WR-06**: Backfill projects `v.is_byo_user AS "isByoUser"` instead of the hardcoded `false::boolean`, making the `selectRowsToDelete` defensive re-assert meaningful.
+
+- **IN-04**: Accepted with explicit cycle-reason comment in all three module files (IpfsModule, PendingUnpinModule, VaultModule). Extraction deferred due to `IpfsModule → VaultModule` circular import.</result>
+<usage><subagent_tokens>108624</subagent_tokens><tool_uses>78</tool_uses><duration_ms>449748</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a195a9cea7597e3bb</worktreePath><worktreeBranch>worktree-agent-a195a9cea7597e3bb</worktreeBranch></worktree>
+</task-notification>

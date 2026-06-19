@@ -1,0 +1,140 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "7807e58cb1b5",
+  "session_id": "23b28342-e76c-41da-872a-14e0f4fbc9ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T15:29:50.791717Z",
+  "branch": "feat/ipfs-ipns-data-integrity-fixes",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "1116b1e20395",
+  "token_usage": {
+    "input_tokens": 25627,
+    "cache_creation_tokens": 192191,
+    "cache_read_tokens": 5675638,
+    "output_tokens": 61827,
+    "api_call_count": 39
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01XWNxPn9Y2eDALMFaCnVhv6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "1116b1e20395",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 36,
+        "end": 37,
+        "entry_ids": [
+          "0ec3006c-056a-4fa5-a4e1-81bf4c70bbd6"
+        ],
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XWNxPn9Y2eDALMFaCnVhv6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute Phase 50 (IPFS/IPNS Data-Integrity Fixes) of the CipherBox milestone using wave-based parallel worktree execution across 5 plans, with Wave 1 running 4 plans concurrently and Wave 2 following after.",
+    "outcome": "All four Wave 1 plans (50-01, 50-02, 50-03, 50-05) completed with TDD RED→GREEN cycles, but the merge phase stalled due to worktree-generated file leakage into the orchestrator working tree and a silent mid-commit failure from the pre-commit hook. The session ended while manually recovering the 50-05 merge commit.",
+    "learnings": {
+      "repo": [
+        "Worktrees share the repo's workspace node_modules root, so running `pnpm api:generate` (orval) inside a worktree leaks 131+ generated api-client files and modified sdk/client.ts into the orchestrator's main working tree",
+        "init.manager mis-parses the dependency string 'Phase 49 (v1.1 baseline)' as a phantom phase '1.1', causing recommended_actions to show empty even when the real dep (Phase 49) is complete",
+        "Husky auto-generates untracked `.husky/_/` hook stubs inside worktrees whenever npm/pnpm install or generate scripts run, blocking cleanup-wave merge",
+        "The pre-commit hook runs check-api-client.sh + pnpm lint-staged (eslint --fix + prettier) over ~131 generated api-client files — slow enough to silently stall the cleanup-wave merge helper, leaving orphaned MERGE_HEAD state",
+        "Post-commit/post-rewrite hooks (or merge hooks) triggered by the first two worktree merges re-ran api-client generation into the main working tree, dirtying it and blocking subsequent merges",
+        "IN-04 IpfsModule → VaultModule circular import is a known structural issue; extraction is deferred and documented with explicit cycle-reason comments in all three module files"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipfs/pending-unpin/pending-unpin.processor.ts",
+          "line": 59,
+          "end_line": 59,
+          "finding": "Refcount guard added here for WR-03: skip physical unpin in drain when CID is actively re-pinned, preventing double-free during concurrent re-pin-during-drain races"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "collectSubtreeIpnsNamesAsync added (async on-demand fetch+decrypt for unloaded folders) replacing synchronous collectSubtreeIpnsNames; 4 deletion call-sites updated to await the new async form"
+        },
+        {
+          "path": "apps/api/src/ipfs/ipfs.controller.ts",
+          "finding": "WR-02 fix: upload compensation catch now calls ipfsProvider.unpinFile(result.cid) directly to physically remove the Kubo pin even when no pinned_cids row exists — guardedUnpin is intentionally bypassed here"
+        }
+      ],
+      "workflow": [
+        "cleanup-wave can silently leave MERGE_HEAD if the pre-commit hook stalls or times out mid-commit; recovery path is: detect MERGE_HEAD, verify no unmerged paths with `git ls-files -u`, then manually run `git commit` with a generous timeout",
+        "Before discarding 'leaked' working-tree files from worktree side-effects, verify they are byte-identical to the worktree branch's committed versions using git rev-parse / diff — they almost always are and can be safely restored with git checkout",
+        "Wave manifests should track which worktrees are already merged so re-runs of cleanup-wave don't attempt to re-process removed worktrees"
+      ]
+    },
+    "friction": [
+      "init.manager phantom-phase mis-parse: 'Phase 49 (v1.1 baseline)' parsed as phase '1.1', suppressing all recommended_actions despite Phase 50 being fully planned and ready",
+      "Worktree orval/pnpm api:generate leaked 131 api-client files and sdk/client.ts into the orchestrator's main working tree after Wave 1 completed, blocking the cleanup-wave merge for 50-05 and 50-03",
+      "Husky `.husky/_/` stubs generated as untracked files in the 50-05 worktree, causing cleanup-wave to report the worktree as dirty and refuse to merge it",
+      "cleanup-wave merge helper silently failed mid-commit for 50-05 (no error output, no exit code surface), leaving MERGE_HEAD orphaned and requiring manual diagnosis and recovery",
+      "After merging 50-01 and 50-02, the orchestrator working tree became dirty with api-client regeneration (131 files), blocking all subsequent cleanup-wave invocations"
+    ],
+    "open_items": [
+      "Wave 2 (plan 50-04, depends on 50-01 + 50-02) not yet dispatched — session ended during merge recovery; must dispatch 50-04 once merge is complete",
+      "50-05 merge commit in progress at session end — pre-commit hook (lint-staged over 131 files) still running; needs to complete before 50-03 can merge",
+      "IN-04 circular import (IpfsModule → VaultModule) accepted with comments but module extraction explicitly deferred to a future phase",
+      "init.manager dep-string parser should handle 'Phase N (description)' format without mis-parsing the description as a version number",
+      "cleanup-wave helper should surface pre-commit hook output/exit code rather than silently failing and leaving MERGE_HEAD state"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/intel/API-SURFACE.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 20,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".husky/_/commit-msg": 4,
+        ".husky/_/post-commit": 4,
+        ".husky/_/post-rewrite": 4,
+        ".husky/_/pre-push": 5,
+        ".husky/_/prepare-commit-msg": 3
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 20,
+      "agent_lines_removed": 0
+    }
+  ]
+}
