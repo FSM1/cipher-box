@@ -888,10 +888,10 @@ Plans:
 
 ### Phase 54: E2E Test-Infra Typing
 
-**Goal:** [To be planned]
+**Goal:** All 7 untyped .mjs E2E helper scripts are migrated to TypeScript (entrypoint imports, shared typed auth/ctx helper, dedicated tsconfig wired into typecheck + eslint, all runners switched node→tsx in lockstep), so SDK/crypto/api-client contract drift is caught at tsc/eslint time instead of mid-E2E-run; behavior-preserving.
 **Requirements**: HARD-05
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Scope (captured todos):
 
@@ -899,7 +899,10 @@ Scope (captured todos):
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 54 to break down)
+- [ ] 54-01-PLAN.md — Foundation: tsconfig.scripts.json (D-03) + shared tests/e2e-helpers/auth.ts (D-04) + root typecheck ordering (D-02) + eslint scope (D-03)
+- [ ] 54-02-PLAN.md — Migrate sdk-core trio (edit-filepointer, rename-folder, verify-filepointer) to .ts (D-02/D-04/D-05/D-07)
+- [ ] 54-03-PLAN.md — Migrate desktop-e2e pair + web-perf + generate-test-vectors (@cipherbox/core gap, tsx child-spawn) (D-02/D-04/D-05/D-07)
+- [ ] 54-04-PLAN.md — Update all 8 runners node→tsx in lockstep + delete 7 .mjs (D-05/D-06/D-07)
 
 ### Phase 55: Large Source-File Refactor
 
