@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CipherBoxClient } from '../client';
 import { createTestConfig } from './helpers';
 import type { FolderEntry, FolderMetadata } from '@cipherbox/core';
@@ -97,6 +97,10 @@ const rootIpnsKeypair = {
 describe('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The failure-path tests intentionally exercise console.warn (e.g. "could not
+    // load metadata ... skipping children"). Silence it to keep CI stderr clean;
+    // the test(s) that trigger it assert on the call explicitly below.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     // Restore defaults after clearAllMocks
     vi.mocked(ipnsControllerUnenrollBatch).mockResolvedValue(undefined as never);
     // Default deleteItem publish mock: returns updated children list, seq number, and cid
@@ -105,6 +109,10 @@ describe('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal', () => {
       publishedChildren: [],
       cid: 'cid-new',
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   /**
@@ -148,7 +156,7 @@ describe('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal', () => {
     await client.deleteItem(PARENT, `id-${SUBFOLDER}`);
 
     // Wait for fire-and-forget async traversal to complete
-    await new Promise((r) => setTimeout(r, 100));
+    await vi.waitFor(() => expect(ipnsControllerUnenrollBatch).toHaveBeenCalled());
 
     // Collect all names passed to unenrollBatch across all calls
     const allNames = vi
@@ -217,7 +225,13 @@ describe('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal', () => {
     await expect(client.deleteItem(GRANDPARENT, `id-${PARENT}`)).resolves.not.toThrow();
 
     // Wait for fire-and-forget async traversal to complete
-    await new Promise((r) => setTimeout(r, 100));
+    await vi.waitFor(() => expect(ipnsControllerUnenrollBatch).toHaveBeenCalled());
+
+    // SIBLING_B's fetch failure is intentional — assert the warning was emitted so it
+    // is asserted-intentional noise, not silent. The spy in beforeEach swallows it.
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`could not load metadata for ${SIBLING_B}`)
+    );
 
     const allNames = vi
       .mocked(ipnsControllerUnenrollBatch)
@@ -266,8 +280,9 @@ describe('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal', () => {
 
     await client.deleteItem(PARENT, `id-${SUBFOLDER}`);
 
-    // Wait for fire-and-forget async traversal to complete
-    await new Promise((r) => setTimeout(r, 100));
+    // Wait for fire-and-forget async traversal to complete (signalled by the
+    // unenroll call that fires once collection finishes).
+    await vi.waitFor(() => expect(ipnsControllerUnenrollBatch).toHaveBeenCalled());
 
     // SUBFOLDER was fetched on demand but must NOT be written to folderTree.
     // The async traversal keeps fetched metadata locally — NOT in this.folderTree.
@@ -318,7 +333,7 @@ describe('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal', () => {
     await expect(client.deleteItem(PARENT, `id-${FOLDER_A}`)).resolves.not.toThrow();
 
     // Wait for fire-and-forget async traversal to complete
-    await new Promise((r) => setTimeout(r, 100));
+    await vi.waitFor(() => expect(ipnsControllerUnenrollBatch).toHaveBeenCalled());
 
     const allNames = vi
       .mocked(ipnsControllerUnenrollBatch)
