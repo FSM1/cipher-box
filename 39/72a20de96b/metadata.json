@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3972a20de96b",
+  "strategy": "manual-commit",
+  "branch": "feat/crypto-signature-secret-leak-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    ".planning/phases/51-crypto-signature-secret-leak-hardening/51-CONTEXT.md",
+    ".planning/phases/51-crypto-signature-secret-leak-hardening/51-DISCUSSION-LOG.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/39/72a20de96b/0/metadata.json",
+      "transcript": "/39/72a20de96b/0/full.jsonl",
+      "content_hash": "/39/72a20de96b/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 391,
+    "cache_creation_tokens": 14553,
+    "cache_read_tokens": 2170172,
+    "output_tokens": 11253,
+    "api_call_count": 16
+  }
+}

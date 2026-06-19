@@ -1,0 +1,110 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3972a20de96b",
+  "session_id": "ca575d75-db2f-4c2d-8294-09d1af4240cb",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T18:20:01.884655Z",
+  "branch": "feat/crypto-signature-secret-leak-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/51-crypto-signature-secret-leak-hardening/51-CONTEXT.md",
+    ".planning/ROADMAP.md",
+    ".planning/REQUIREMENTS.md",
+    ".planning/phases/51-crypto-signature-secret-leak-hardening/51-DISCUSSION-LOG.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "b991e336997d",
+  "checkpoint_transcript_start": 121,
+  "transcript_lines_at_start": 121,
+  "token_usage": {
+    "input_tokens": 391,
+    "cache_creation_tokens": 14553,
+    "cache_read_tokens": 2170172,
+    "output_tokens": 11253,
+    "api_call_count": 16
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Lz5h1zNHMx7SqG233yqYKN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b991e336997d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 42,
+        "end": 43,
+        "entry_ids": [
+          "ee10835c-b9e7-42df-8e82-7648bbee013c"
+        ],
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:discuss-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Scope Phase 51 ('Crypto-Signature Secret-Leak Hardening') down to only IPNS crypto-signature work (S1/S2/S3), removing the Faro transport wiring and logger redact() interceptor (todo #15) which were bundled in the original phase definition.",
+    "outcome": "Todo #15 dropped entirely from Phase 51; CONTEXT.md, ROADMAP.md, REQUIREMENTS.md, and DISCUSSION-LOG.md all updated and committed to reflect the narrowed scope.",
+    "learnings": {
+      "repo": [
+        "Phase 51 originally bundled two unrelated concerns: IPNS crypto-signature hardening and Faro/monitoring secret-leak prevention — they were split after discussion.",
+        "The logger redact() interceptor (HARD-02 in REQUIREMENTS.md) only has security value with a remote transport; without Faro it only protects the browser console, making it effectively a no-op for the threat model.",
+        "Acceptance criteria for the redact() interceptor explicitly require Faro to verify, so dropping Faro forces dropping the interceptor too.",
+        "The project uses a .planning/ directory with per-phase CONTEXT.md, ROADMAP.md, REQUIREMENTS.md, and DISCUSSION-LOG.md files as the planning artifact structure."
+      ],
+      "code": [
+        {
+          "path": ".planning/ROADMAP.md",
+          "line": 64,
+          "end_line": 64,
+          "finding": "Phase 51 one-liner entry that was updated to reflect narrowed scope"
+        },
+        {
+          "path": ".planning/REQUIREMENTS.md",
+          "line": 111,
+          "end_line": 111,
+          "finding": "HARD-02 requirement (logger redact interceptor) removed as part of scope reduction"
+        }
+      ],
+      "workflow": [
+        "When a todo bundles an infrastructure prerequisite (Faro transport) with a dependent feature (redact interceptor), removing the prerequisite forces removing the dependent too — check acceptance criteria before deciding.",
+        "The session used AskUserQuestion to gate the scope decision before making any edits, keeping the planning files in sync with the agreed scope."
+      ]
+    },
+    "friction": [
+      "Todo #15 silently bundled two concerns (monitoring transport + secret-leak interceptor) under a single item, requiring a discussion to untangle before planning files could be updated correctly."
+    ],
+    "open_items": [
+      "Faro transport wiring (registerFaroTransport) deferred to a future phase — end-user monitoring not yet planned.",
+      "Logger redact() interceptor (HARD-02) deferred until Faro transport exists, since its acceptance criteria require Faro to verify and its security value is marginal without a remote transport."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T18:19:46.364289Z",
+    "agent_lines": 35,
+    "agent_removed": 41,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 35,
+    "total_lines_changed": 76,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
