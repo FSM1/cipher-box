@@ -1,0 +1,11 @@
+there will be a bit of a delay before coderabbit and greptile post their reviews on the pr, so
+
+---
+
+<task-notification>
+<task-id>bf50zvq6d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/bf50zvq6d.output</output-file>
+<status>completed</status>
+<summary>Background command "Run CodeRabbit CLI review on phase-50 diff" completed (exit code 0)</summary>
+</task-notification>
