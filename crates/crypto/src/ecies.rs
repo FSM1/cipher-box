@@ -4,6 +4,7 @@
 //! (same author: ecies/rs and ecies/js). Format: ephemeral_pubkey(65) || nonce(16) || tag(16) || ciphertext.
 
 use crate::error::CryptoError;
+use zeroize::Zeroizing;
 
 /// secp256k1 uncompressed public key size in bytes (04 prefix + x + y coordinates).
 pub const SECP256K1_PUBLIC_KEY_SIZE: usize = 65;
@@ -32,7 +33,9 @@ pub fn wrap_key(data: &[u8], recipient_public_key: &[u8]) -> Result<Vec<u8>, Cry
 }
 
 /// Unwrap (decrypt) data using ECIES with secp256k1.
-pub fn unwrap_key(wrapped: &[u8], private_key: &[u8]) -> Result<Vec<u8>, CryptoError> {
+///
+/// Returns the decrypted bytes wrapped in `Zeroizing` so they are zeroed on drop.
+pub fn unwrap_key(wrapped: &[u8], private_key: &[u8]) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     // Validate private key size
     if private_key.len() != SECP256K1_PRIVATE_KEY_SIZE {
         return Err(CryptoError::InvalidPrivateKey);
@@ -43,7 +46,9 @@ pub fn unwrap_key(wrapped: &[u8], private_key: &[u8]) -> Result<Vec<u8>, CryptoE
         return Err(CryptoError::EciesUnwrappingFailed);
     }
 
-    ecies::decrypt(private_key, wrapped).map_err(|_| CryptoError::EciesUnwrappingFailed)
+    ecies::decrypt(private_key, wrapped)
+        .map(Zeroizing::new)
+        .map_err(|_| CryptoError::EciesUnwrappingFailed)
 }
 
 #[cfg(test)]
@@ -64,7 +69,7 @@ mod tests {
 
         let wrapped = wrap_key(data, &pk).unwrap();
         let unwrapped = unwrap_key(&wrapped, &sk).unwrap();
-        assert_eq!(unwrapped, data);
+        assert_eq!(unwrapped.as_slice(), data);
     }
 
     #[test]

@@ -48,6 +48,19 @@ export async function createAndPublishIpnsRecord(params: {
   ctx?: SdkContext;
 }): Promise<{ success: boolean; sequenceNumber: bigint }> {
   return withPerf('ipns:publish', async () => {
+    // T-47-01 / D-05: caller-owns-key convention. This is a CALLEE that receives a
+    // caller-owned `ipnsPrivateKey` buffer — it MUST NOT zero it. Callers reuse the
+    // same buffer across operations (the SDK client caches per-folder IPNS keys in
+    // its folderTree and passes them on every mutation; publishWithCas reuses the
+    // buffer across CAS retries). Zeroing here corrupted those long-lived buffers,
+    // so the next publish derived the public key from all-zero bytes and the server
+    // rejected it (400 "publicKey does not correspond to the given ipnsName").
+    // Terminal owners zero the key themselves: the client on destroy(), transient
+    // unwrapped keys via clearBytes()/finally, publishVaultKeyBlob / shared-write on
+    // their freshly-derived keypairs. This matches publishWithCas's documented
+    // contract ("NEVER zeroes key material — callers are responsible") and
+    // updateFolderMetadataAndPublish ("CALLER RETAINS OWNERSHIP").
+
     // 1. Create IPNS record pointing to /ipfs/{metadataCid}
     // 24 hour lifetime (will be republished by TEE every 3 hours)
     const record = await createIpnsRecord(
@@ -192,20 +205,29 @@ export async function resolveIpnsRecord(
         return null;
       }
 
-      // Verify IPNS signature if all signature fields are present
+      // Verify IPNS signature. D-02: present-but-invalid → throw (fail closed).
+      // D-03: ALL fields absent → allow + flag (legacy record; DB CID is authoritative).
+      // Partial fields (some but not all three) → fail closed: unverifiable signature
+      // material must not be downgraded to the legacy allow path (field-stripping bypass).
       let signatureVerified = false;
-      if (response.signatureV2 && response.data && response.pubKey) {
-        const valid = await verifyIpnsSignature(
-          response.signatureV2,
-          response.data,
-          response.pubKey
-        );
+      const { signatureV2, data, pubKey } = response;
+      const hasSignatureV2 = signatureV2 != null;
+      const hasData = data != null;
+      const hasPubKey = pubKey != null;
+      if (hasSignatureV2 || hasData || hasPubKey) {
+        if (!hasSignatureV2 || !hasData || !hasPubKey || !signatureV2 || !data || !pubKey) {
+          throw new Error(
+            'IPNS resolve returned incomplete signature data - record cannot be verified'
+          );
+        }
+
+        const valid = await verifyIpnsSignature(signatureV2, data, pubKey);
         if (!valid) {
           throw new Error('IPNS signature verification failed - record may be tampered');
         }
 
         // Verify the returned public key derives to the requested IPNS name
-        const pubKeyBytes = Uint8Array.from(atob(response.pubKey), (c) => c.charCodeAt(0));
+        const pubKeyBytes = Uint8Array.from(atob(pubKey), (c) => c.charCodeAt(0));
         const derivedName = await deriveIpnsName(pubKeyBytes);
         if (derivedName !== ipnsName) {
           throw new Error(

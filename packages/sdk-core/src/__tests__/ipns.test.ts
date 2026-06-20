@@ -197,5 +197,101 @@ describe('IPNS operations', () => {
         'IPNS signature verification failed'
       );
     });
+
+    // S2 regression guard (D-02): PARTIAL signature fields must fail closed.
+    // A record with some-but-not-all of {signatureV2, data, pubKey} carries
+    // unverifiable signature material and must NOT be downgraded to the legacy
+    // allow path (an attacker could strip fields to bypass verification). Only
+    // an all-absent record is treated as legacy (signatureVerified=false).
+    it('S2: throws on partial signature fields (only signatureV2 present)', async () => {
+      const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+      const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+      vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+        success: true,
+        cid: 'QmPartial',
+        sequenceNumber: '3',
+        signatureV2: btoa('only-sig'),
+        // data and pubKey omitted → partial → fail closed
+      });
+
+      await expect(resolveIpnsRecord('k51partial')).rejects.toThrow('incomplete signature data');
+      // Must fail BEFORE attempting verification or name derivation.
+      expect(verifyEd25519).not.toHaveBeenCalled();
+      expect(deriveIpnsName).not.toHaveBeenCalled();
+    });
+
+    it('S2: throws on empty-string signature fields (all present but empty)', async () => {
+      const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+      const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+      vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+        success: true,
+        cid: 'QmEmptySig',
+        sequenceNumber: '3',
+        signatureV2: '',
+        data: '',
+        pubKey: '',
+      });
+      await expect(resolveIpnsRecord('k51empty')).rejects.toThrow('incomplete signature data');
+      expect(verifyEd25519).not.toHaveBeenCalled();
+      expect(deriveIpnsName).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S3 caller-owns-key guard tests (D-05 / T-47-01)
+// createAndPublishIpnsRecord is a CALLEE: it must NOT zero the caller-passed
+// ipnsPrivateKey buffer. Callers reuse the same buffer across operations (the SDK
+// client caches per-folder IPNS keys; publishWithCas reuses it across CAS retries),
+// so zeroing here corrupts long-lived key material and breaks every subsequent
+// publish (server rejects with 400 "publicKey does not correspond to the given
+// ipnsName"). Terminal owners zero their own keys (client.destroy(), clearBytes(),
+// publishVaultKeyBlob / shared-write on their freshly-derived keypairs).
+// These tests guard against re-introducing the zeroization regression.
+// ---------------------------------------------------------------------------
+
+describe('createAndPublishIpnsRecord caller-owns-key (S3/D-05)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Test A: key is PRESERVED on the success path (callee does not own it)
+  it('A: does NOT zero the ipnsPrivateKey buffer after a successful publish', async () => {
+    const { ipnsControllerPublishRecord } = await import('@cipherbox/api-client');
+    vi.mocked(ipnsControllerPublishRecord).mockResolvedValue({
+      success: true,
+      sequenceNumber: '1',
+      ipnsName: 'k51zeroize',
+    });
+
+    const key = new Uint8Array(32).fill(5);
+    await createAndPublishIpnsRecord({
+      ipnsPrivateKey: key,
+      ipnsName: 'k51zeroize',
+      metadataCid: 'QmCid',
+      sequenceNumber: 0n,
+    });
+
+    // T-47-01: caller-owned buffer must be left intact so it can be reused.
+    expect(key.every((b) => b === 5)).toBe(true);
+  });
+
+  // Test B: key is PRESERVED even when the publish rejects (no finally-zero)
+  it('B: does NOT zero the ipnsPrivateKey buffer when publish throws', async () => {
+    const { ipnsControllerPublishRecord } = await import('@cipherbox/api-client');
+    vi.mocked(ipnsControllerPublishRecord).mockRejectedValue(new Error('publish failed'));
+
+    const key = new Uint8Array(32).fill(9);
+    await expect(
+      createAndPublishIpnsRecord({
+        ipnsPrivateKey: key,
+        ipnsName: 'k51zeroize-throw',
+        metadataCid: 'QmCid',
+        sequenceNumber: 0n,
+      })
+    ).rejects.toThrow('publish failed');
+
+    // Buffer must survive the throw — the caller owns and zeroes it.
+    expect(key.every((b) => b === 9)).toBe(true);
   });
 });

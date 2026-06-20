@@ -45,7 +45,7 @@ pub struct KeyState {
     pub public_key: RwLock<Option<Vec<u8>>>,
 
     /// 32-byte AES-256 root folder encryption key.
-    pub root_folder_key: RwLock<Option<Vec<u8>>>,
+    pub root_folder_key: RwLock<Option<zeroize::Zeroizing<Vec<u8>>>>,
 
     /// Root folder IPNS name (base36 CIDv1 string, e.g., k51...).
     pub root_ipns_name: RwLock<Option<String>>,
@@ -166,7 +166,7 @@ mod tests {
 
         *state.private_key.write().await = Some(vec![1, 2, 3]);
         *state.public_key.write().await = Some(vec![4, 5, 6]);
-        *state.root_folder_key.write().await = Some(vec![7, 8, 9]);
+        *state.root_folder_key.write().await = Some(zeroize::Zeroizing::new(vec![7, 8, 9]));
         *state.root_ipns_name.write().await = Some("k51test".to_string());
         *state.root_ipns_private_key.write().await = Some(vec![10, 11, 12]);
         *state.user_id.write().await = Some("user-123".to_string());
@@ -174,7 +174,10 @@ mod tests {
 
         assert_eq!(*state.private_key.read().await, Some(vec![1, 2, 3]));
         assert_eq!(*state.public_key.read().await, Some(vec![4, 5, 6]));
-        assert_eq!(*state.root_folder_key.read().await, Some(vec![7, 8, 9]));
+        assert_eq!(
+            *state.root_folder_key.read().await,
+            Some(zeroize::Zeroizing::new(vec![7, 8, 9]))
+        );
         assert_eq!(*state.root_ipns_name.read().await, Some("k51test".to_string()));
         assert_eq!(*state.root_ipns_private_key.read().await, Some(vec![10, 11, 12]));
         assert_eq!(*state.user_id.read().await, Some("user-123".to_string()));
@@ -188,7 +191,7 @@ mod tests {
         // Populate sensitive fields with non-zero bytes.
         *state.private_key.write().await = Some(vec![0xFF; 32]);
         *state.public_key.write().await = Some(vec![0xAA; 65]);
-        *state.root_folder_key.write().await = Some(vec![0xBB; 32]);
+        *state.root_folder_key.write().await = Some(zeroize::Zeroizing::new(vec![0xBB; 32]));
         *state.root_ipns_private_key.write().await = Some(vec![0xCC; 32]);
         *state.root_ipns_name.write().await = Some("k51name".to_string());
         *state.user_id.write().await = Some("user-abc".to_string());
