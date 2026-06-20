@@ -9,11 +9,15 @@ on:
         required: false
         type: string
 
+permissions: {}
+
 jobs:
   desktop-e2e:
     name: Desktop E2E (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:

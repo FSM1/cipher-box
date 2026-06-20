@@ -5,8 +5,7 @@ on:
     tags:
       - 'cipherbox-desktop-v*'
 
-permissions:
-  contents: write
+permissions: {}
 
 env:
   DESKTOP_TAG: ${{ github.ref_name }}
@@ -16,6 +15,8 @@ jobs:
     name: Build Desktop (macOS)
     runs-on: macos-latest
     environment: staging
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -80,6 +81,8 @@ jobs:
     name: Build Desktop (Windows)
     runs-on: windows-latest
     environment: staging
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -168,6 +171,8 @@ jobs:
     name: Build Desktop (Linux)
     runs-on: ubuntu-22.04
     environment: staging
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -243,6 +248,8 @@ jobs:
     name: Mark Desktop Release as Latest
     needs: [build-desktop-macos, build-desktop-windows, build-desktop-linux]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Mark as latest release
         env:

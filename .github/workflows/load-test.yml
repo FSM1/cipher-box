@@ -51,12 +51,16 @@ concurrency:
   group: load-test-${{ inputs.environment }}
   cancel-in-progress: false
 
+permissions: {}
+
 jobs:
   load-test:
     name: 'Load Test: ${{ inputs.scenario }} (${{ inputs.client_count }} clients)'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment == 'staging' && 'staging' || '' }}
     timeout-minutes: 60
+    permissions:
+      contents: read
 
     services:
       postgres:

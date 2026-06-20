@@ -1,0 +1,34 @@
+name: GitHub Actions Security Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+jobs:
+  zizmor:
+    name: zizmor static audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install zizmor
+        run: pip install zizmor
+
+      # CLI plain mode via `pip install zizmor` — deliberately NOT the SARIF
+      # GitHub Action wrapper, whose SARIF upload mode exits 0 on findings and is
+      # useless as a hard gate. The plain CLI exits non-zero on any finding.
+      # The audit scope is narrowed to unpinned-uses + excessive-permissions via
+      # .github/zizmor.yml (the two Phase 53 supply-chain invariants); any future
+      # un-pinned `uses:` ref or over-broad job token fails this gate.
+      - name: Run zizmor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: zizmor .github/workflows/

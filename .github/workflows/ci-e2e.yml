@@ -5,10 +5,14 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       web: ${{ steps.manual.outputs.web || steps.filter.outputs.web }}
       desktop: ${{ steps.manual.outputs.desktop || steps.filter.outputs.desktop }}
@@ -72,6 +76,8 @@ jobs:
     name: Web E2E
     needs: detect-changes
     if: needs.detect-changes.outputs.web == 'true' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
     uses: ./.github/workflows/web-e2e.yml
     secrets: inherit
 
@@ -79,6 +85,8 @@ jobs:
     name: Desktop E2E
     needs: detect-changes
     if: needs.detect-changes.outputs.desktop == 'true' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
     uses: ./.github/workflows/desktop-e2e.yml
     secrets: inherit
 

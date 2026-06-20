@@ -12,10 +12,14 @@ concurrency:
   group: tag-staging
   cancel-in-progress: false
 
+permissions: {}
+
 jobs:
   resolve-main:
     name: Resolve main SHA
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       sha: ${{ steps.main.outputs.sha }}
     steps:
@@ -35,6 +39,8 @@ jobs:
   web-e2e:
     needs: resolve-main
     name: Web E2E
+    permissions:
+      contents: read
     uses: ./.github/workflows/web-e2e.yml
     with:
       ref: ${{ needs.resolve-main.outputs.sha }}
@@ -43,6 +49,8 @@ jobs:
   desktop-e2e:
     needs: resolve-main
     name: Desktop E2E
+    permissions:
+      contents: read
     uses: ./.github/workflows/desktop-e2e.yml
     with:
       ref: ${{ needs.resolve-main.outputs.sha }}

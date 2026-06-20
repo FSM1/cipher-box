@@ -15,6 +15,8 @@ env:
   # Resolve tag: workflow_call passes it as input, push trigger uses ref_name
   DEPLOY_TAG: ${{ inputs.staging_tag || github.ref_name }}
 
+permissions: {}
+
 jobs:
   build-api:
     name: Build & Push API Image
@@ -92,6 +94,8 @@ jobs:
     name: Build Web App
     runs-on: ubuntu-latest
     environment: staging
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:

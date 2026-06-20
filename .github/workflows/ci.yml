@@ -4,6 +4,8 @@ on:
   pull_request:
     branches: [main]
 
+permissions: {}
+
 jobs:
   changes:
     name: Detect Changes
@@ -43,6 +45,8 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -64,6 +68,8 @@ jobs:
     needs: [changes, lint]
     if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -85,6 +91,8 @@ jobs:
     needs: [changes, lint]
     if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:16-alpine
@@ -170,6 +178,8 @@ jobs:
     needs: [changes, lint]
     if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:16-alpine
@@ -257,6 +267,8 @@ jobs:
     needs: [changes, lint]
     if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:16-alpine
@@ -358,6 +370,8 @@ jobs:
     if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
 
     services:
       postgres:
@@ -493,6 +507,8 @@ jobs:
     needs: [changes, lint]
     if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -523,6 +539,8 @@ jobs:
       !failure() && !cancelled() &&
       needs.changes.outputs.desktop == 'true'
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -566,6 +584,8 @@ jobs:
       !failure() && !cancelled() &&
       needs.changes.outputs.desktop == 'true'
     runs-on: macos-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -613,6 +633,8 @@ jobs:
       !failure() && !cancelled() &&
       needs.changes.outputs.desktop == 'true'
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -682,6 +704,8 @@ jobs:
       !failure() && !cancelled() &&
       (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.src == 'true')
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
