@@ -3,6 +3,11 @@
   "compilerOptions": {
     "noEmit": true,
     "moduleResolution": "bundler",
+    "types": ["node"],
+    "typeRoots": [
+      "./node_modules/@types",
+      "./node_modules/.pnpm/@types+node@22.19.7/node_modules/@types"
+    ],
     "paths": {
       "@cipherbox/sdk-core": ["./packages/sdk-core/dist/index.d.ts"],
       "@cipherbox/crypto": ["./packages/crypto/dist/index.d.ts"],
