@@ -122,3 +122,30 @@ None — no new network endpoints, auth paths, file access patterns, or schema c
 - `__tests__/vault.test.ts` contains S3 zeroization guard test C ✓
 - `__tests__/folder.test.ts` contains SKIP guard test asserting unchanged buffer ✓
 - Commits: `f242a08da` (test/RED), `f6319af9f` (feat/GREEN), `df58bac56` (feat/folder) ✓
+
+## Post-Merge Correction: createAndPublishIpnsRecord must NOT zero (caller-owns-key)
+
+The SDK E2E suite (full-stack, not run in this phase's local checks) failed 48/89 after
+this change. Root cause: `createAndPublishIpnsRecord`'s `finally { params.ipnsPrivateKey.fill(0) }`
+zeroed a **caller-owned buffer that callers reuse**. The SDK client caches per-folder IPNS
+keys in its `folderTree` (zeroed only on `destroy()`) and passes the same buffer on every
+mutation; `publishWithCas` reuses the buffer across CAS retries. After the first publish the
+buffer was all-zero, so the next publish derived the wrong public key and the API rejected it
+(400 "publicKey does not correspond to the given ipnsName"), cascading "Child not found"
+failures across every publish-dependent suite.
+
+This is the exact reuse pitfall the plan flagged for `updateFolderMetadataAndPublish`
+(51-04-PLAN.md: "zeroize its terminal keys ONLY if client.ts callers do not reuse them") but
+did not apply to `createAndPublishIpnsRecord`, which is equally reused.
+
+Fix: `createAndPublishIpnsRecord` is a CALLEE and no longer zeros `params.ipnsPrivateKey`,
+matching `publishWithCas`'s contract ("NEVER zeroes key material — callers are responsible").
+No key leak: terminal owners still zero — `client.destroy()` (cached folderTree keys),
+`clearBytes()`/`finally` (transient unwrapped keys), and `publishVaultKeyBlob` /
+`shared-write.ts` (freshly-derived keypairs). Guard tests A/B in `__tests__/ipns.test.ts`
+were inverted to assert the buffer is preserved. Verified: full SDK E2E 89/89 green locally,
+sdk-core 209/209, api 893/893.
+
+Process gap: this phase's checks (`cargo test -p cipherbox-fuse`, sdk-core/api units) never
+exercised the real cross-package publish round-trip; the S1 spec also mocked `parseIpnsRecord`.
+The SDK E2E suite is the gate that caught it.

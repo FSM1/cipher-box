@@ -223,18 +223,24 @@ describe('IPNS operations', () => {
 });
 
 // ---------------------------------------------------------------------------
-// S3 zeroization guard tests (D-05 enforcement: T-47-01 caller-owns-key)
-// These tests assert that createAndPublishIpnsRecord zeroes its caller-passed
-// ipnsPrivateKey on all exit paths (success and throw).
+// S3 caller-owns-key guard tests (D-05 / T-47-01)
+// createAndPublishIpnsRecord is a CALLEE: it must NOT zero the caller-passed
+// ipnsPrivateKey buffer. Callers reuse the same buffer across operations (the SDK
+// client caches per-folder IPNS keys; publishWithCas reuses it across CAS retries),
+// so zeroing here corrupts long-lived key material and breaks every subsequent
+// publish (server rejects with 400 "publicKey does not correspond to the given
+// ipnsName"). Terminal owners zero their own keys (client.destroy(), clearBytes(),
+// publishVaultKeyBlob / shared-write on their freshly-derived keypairs).
+// These tests guard against re-introducing the zeroization regression.
 // ---------------------------------------------------------------------------
 
-describe('createAndPublishIpnsRecord zeroization (S3/D-05)', () => {
+describe('createAndPublishIpnsRecord caller-owns-key (S3/D-05)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  // Test A: key is zeroed on the success path
-  it('A: zeroes the ipnsPrivateKey buffer after successful publish', async () => {
+  // Test A: key is PRESERVED on the success path (callee does not own it)
+  it('A: does NOT zero the ipnsPrivateKey buffer after a successful publish', async () => {
     const { ipnsControllerPublishRecord } = await import('@cipherbox/api-client');
     vi.mocked(ipnsControllerPublishRecord).mockResolvedValue({
       success: true,
@@ -250,12 +256,12 @@ describe('createAndPublishIpnsRecord zeroization (S3/D-05)', () => {
       sequenceNumber: 0n,
     });
 
-    // T-47-01: buffer must be all zeroes after the owning function returns
-    expect(key.every((b) => b === 0)).toBe(true);
+    // T-47-01: caller-owned buffer must be left intact so it can be reused.
+    expect(key.every((b) => b === 5)).toBe(true);
   });
 
-  // Test B: key is zeroed even when the publish rejects (finally path)
-  it('B: zeroes the ipnsPrivateKey buffer even when publish throws', async () => {
+  // Test B: key is PRESERVED even when the publish rejects (no finally-zero)
+  it('B: does NOT zero the ipnsPrivateKey buffer when publish throws', async () => {
     const { ipnsControllerPublishRecord } = await import('@cipherbox/api-client');
     vi.mocked(ipnsControllerPublishRecord).mockRejectedValue(new Error('publish failed'));
 
@@ -271,7 +277,7 @@ describe('createAndPublishIpnsRecord zeroization (S3/D-05)', () => {
       // expected
     }
 
-    // finally block must have run regardless of throw
-    expect(key.every((b) => b === 0)).toBe(true);
+    // Buffer must survive the throw — the caller owns and zeroes it.
+    expect(key.every((b) => b === 9)).toBe(true);
   });
 });

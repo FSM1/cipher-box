@@ -52,9 +52,10 @@ export async function publishVaultKeyBlob(params: {
     return { ipnsName: vaultKeyKeypair.ipnsName };
   } finally {
     // T-47-01 / D-05: caller-owns-key convention — this function derives vaultKeyKeypair
-    // and is its terminal owner; zero the private key on all exit paths.
-    // Note: createAndPublishIpnsRecord already zeroes its received ipnsPrivateKey param
-    // (the same buffer), but we zero here explicitly as the buffer-owning boundary.
+    // and is its terminal owner, so it zeroes the private key on all exit paths.
+    // createAndPublishIpnsRecord is a callee and does NOT zero the buffer it receives
+    // (callers own their key material), so this is the only place the vault key blob's
+    // IPNS private key is wiped.
     vaultKeyKeypair.privateKey.fill(0);
   }
 }

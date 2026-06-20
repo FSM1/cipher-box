@@ -48,59 +48,65 @@ export async function createAndPublishIpnsRecord(params: {
   ctx?: SdkContext;
 }): Promise<{ success: boolean; sequenceNumber: bigint }> {
   return withPerf('ipns:publish', async () => {
-    try {
-      // 1. Create IPNS record pointing to /ipfs/{metadataCid}
-      // 24 hour lifetime (will be republished by TEE every 3 hours)
-      const record = await createIpnsRecord(
-        params.ipnsPrivateKey,
-        `/ipfs/${params.metadataCid}`,
-        params.sequenceNumber,
-        24 * 60 * 60 * 1000 // 24 hours in ms
-      );
+    // T-47-01 / D-05: caller-owns-key convention. This is a CALLEE that receives a
+    // caller-owned `ipnsPrivateKey` buffer — it MUST NOT zero it. Callers reuse the
+    // same buffer across operations (the SDK client caches per-folder IPNS keys in
+    // its folderTree and passes them on every mutation; publishWithCas reuses the
+    // buffer across CAS retries). Zeroing here corrupted those long-lived buffers,
+    // so the next publish derived the public key from all-zero bytes and the server
+    // rejected it (400 "publicKey does not correspond to the given ipnsName").
+    // Terminal owners zero the key themselves: the client on destroy(), transient
+    // unwrapped keys via clearBytes()/finally, publishVaultKeyBlob / shared-write on
+    // their freshly-derived keypairs. This matches publishWithCas's documented
+    // contract ("NEVER zeroes key material — callers are responsible") and
+    // updateFolderMetadataAndPublish ("CALLER RETAINS OWNERSHIP").
 
-      // 2. Marshal to bytes for transport
-      const recordBytes = marshalIpnsRecord(record);
-      const publicKeyBytes = params.ipnsPublicKey ?? deriveEd25519PublicKey(params.ipnsPrivateKey);
+    // 1. Create IPNS record pointing to /ipfs/{metadataCid}
+    // 24 hour lifetime (will be republished by TEE every 3 hours)
+    const record = await createIpnsRecord(
+      params.ipnsPrivateKey,
+      `/ipfs/${params.metadataCid}`,
+      params.sequenceNumber,
+      24 * 60 * 60 * 1000 // 24 hours in ms
+    );
 
-      // 3. Base64 encode for API transmission (loop-based to avoid call stack overflow on large records)
-      let binary = '';
-      for (let i = 0; i < recordBytes.length; i++) {
-        binary += String.fromCharCode(recordBytes[i]);
-      }
-      const recordBase64 = btoa(binary);
-      binary = '';
-      for (let i = 0; i < publicKeyBytes.length; i++) {
-        binary += String.fromCharCode(publicKeyBytes[i]);
-      }
-      const publicKey = btoa(binary);
+    // 2. Marshal to bytes for transport
+    const recordBytes = marshalIpnsRecord(record);
+    const publicKeyBytes = params.ipnsPublicKey ?? deriveEd25519PublicKey(params.ipnsPrivateKey);
 
-      // 4. Call backend API to relay to IPFS network
-      const apiOptions = params.ctx?.axiosInstance
-        ? { _axiosInstance: params.ctx.axiosInstance }
-        : undefined;
-      const response = await ipnsControllerPublishRecord(
-        {
-          ipnsName: params.ipnsName,
-          record: recordBase64,
-          publicKey,
-          metadataCid: params.metadataCid,
-          encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
-          keyEpoch: params.keyEpoch,
-          expectedSequenceNumber: params.expectedSequenceNumber,
-        },
-        apiOptions
-      );
-
-      return {
-        success: response.success,
-        sequenceNumber: BigInt(response.sequenceNumber),
-      };
-    } finally {
-      // T-47-01 / D-05: caller-owns-key convention — zero the private key on all exit paths
-      // (success and throw). publishWithCas / callee functions must NOT zero; only the
-      // buffer-owning boundary (this function) does.
-      params.ipnsPrivateKey.fill(0);
+    // 3. Base64 encode for API transmission (loop-based to avoid call stack overflow on large records)
+    let binary = '';
+    for (let i = 0; i < recordBytes.length; i++) {
+      binary += String.fromCharCode(recordBytes[i]);
     }
+    const recordBase64 = btoa(binary);
+    binary = '';
+    for (let i = 0; i < publicKeyBytes.length; i++) {
+      binary += String.fromCharCode(publicKeyBytes[i]);
+    }
+    const publicKey = btoa(binary);
+
+    // 4. Call backend API to relay to IPFS network
+    const apiOptions = params.ctx?.axiosInstance
+      ? { _axiosInstance: params.ctx.axiosInstance }
+      : undefined;
+    const response = await ipnsControllerPublishRecord(
+      {
+        ipnsName: params.ipnsName,
+        record: recordBase64,
+        publicKey,
+        metadataCid: params.metadataCid,
+        encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+        keyEpoch: params.keyEpoch,
+        expectedSequenceNumber: params.expectedSequenceNumber,
+      },
+      apiOptions
+    );
+
+    return {
+      success: response.success,
+      sequenceNumber: BigInt(response.sequenceNumber),
+    };
   });
 }
 
