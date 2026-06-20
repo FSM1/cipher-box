@@ -51,7 +51,21 @@ jobs:
           key: ${{ secrets.STAGING_SSH_KEY }}
           capture_stdout: true
           script: |
-            CID=$(ipfs add -Qr --pin /tmp/cipherbox-landing)
+            set -euo pipefail
+            # Kubo runs as a Docker container on the staging host (compose service
+            # "ipfs", image ipfs/kubo:v0.40.0) — there is no host-level ipfs CLI, so a
+            # bare `ipfs` here fails with "command not found". Run it inside the container.
+            KUBO=$(docker ps -q --filter ancestor=ipfs/kubo:v0.40.0 | head -1)
+            if [ -z "${KUBO}" ]; then
+              echo "::error::No running ipfs/kubo container found on staging host"
+              exit 1
+            fi
+            # The SCP step landed the build at host /tmp/cipherbox-landing; the container
+            # has no /tmp bind-mount, so copy it in before adding. Redirect docker cp's
+            # stdout to stderr so capture_stdout returns ONLY the CID.
+            docker cp /tmp/cipherbox-landing "${KUBO}:/tmp/cipherbox-landing" 1>&2
+            CID=$(docker exec "${KUBO}" ipfs add -Qr --pin /tmp/cipherbox-landing)
+            docker exec "${KUBO}" rm -rf /tmp/cipherbox-landing
             rm -rf /tmp/cipherbox-landing
             echo "${CID}"
 
