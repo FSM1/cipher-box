@@ -154,7 +154,27 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.lock
           git commit -m "chore(ci): sync Cargo.lock for released crates"
-          git push
+
+          # Push with a small retry/rebase loop: main can move while this job
+          # runs, so a single push may be rejected non-fast-forward and leave
+          # Cargo.lock unsynced despite a successful release. Rebase the lock
+          # commit onto the moved branch and retry before failing.
+          BRANCH="${GITHUB_REF_NAME:-main}"
+          PUSHED=0
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:${BRANCH}"; then
+              PUSHED=1
+              break
+            fi
+            echo "Push attempt ${attempt} rejected — rebasing onto origin/${BRANCH} and retrying."
+            git fetch origin "${BRANCH}"
+            git rebase "origin/${BRANCH}"
+            sleep $((attempt * 3))
+          done
+          if [ "$PUSHED" -ne 1 ]; then
+            echo "::error::Failed to push Cargo.lock sync after 3 attempts"
+            exit 1
+          fi
 
           # Post-commit guard: the working tree must now be clean against the
           # committed lock. A residual diff means the sync is still stale.

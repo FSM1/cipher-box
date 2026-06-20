@@ -63,6 +63,15 @@ jobs:
       - name: Run linter
         run: pnpm lint
 
+      # Stale release-as guard (T-53-05): fail CI if any release-as pin in
+      # release-please-config.json equals its shipped manifest version, which
+      # would make release-please self-compare (vX..vX). Runs the pure-function
+      # unit suite, then the guard against the committed config/manifest.
+      - name: Check for stale release-as pins
+        run: |
+          node --test .github/scripts/check-stale-release-as.test.js
+          node .github/scripts/check-stale-release-as.js
+
   typecheck:
     name: Typecheck
     needs: [changes, lint]
