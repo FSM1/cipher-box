@@ -20,7 +20,9 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Install zizmor
-        run: pip install zizmor
+        # Pin the scanner version so the supply-chain gate is itself reproducible
+        # and not exposed to a malicious/broken upstream zizmor release.
+        run: pip install zizmor==1.25.2
 
       # CLI plain mode via `pip install zizmor` — deliberately NOT the SARIF
       # GitHub Action wrapper, whose SARIF upload mode exits 0 on findings and is

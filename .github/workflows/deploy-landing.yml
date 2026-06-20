@@ -8,6 +8,8 @@ on:
       - '.github/workflows/deploy-landing.yml'
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   build-and-deploy:
     name: Build & Pin to IPFS
