@@ -7,7 +7,10 @@ on:
 
 concurrency:
   group: release-preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Do NOT cancel an in-flight preview run: a force-push/rebase that clobbers the
+  # bot `chore(release): set release targets` commit must be able to self-heal by
+  # letting the queued recompute finish (D-06 safety-net for T-53-04).
+  cancel-in-progress: false
 
 permissions:
   contents: write
