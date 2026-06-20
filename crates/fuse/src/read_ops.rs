@@ -816,19 +816,24 @@ pub(crate) mod implementation {
 
                 // Off-thread durable write + bounded durable-ack (D-01).
                 let build_result = match build_result {
-                    Ok(result) => {
+                    Ok(mut result) => {
                         // Stream the ciphertext sidecar + fsync the entry on a separate OS
                         // thread (NOT a tokio task — put_with_sidecar is synchronous, and a
                         // plain std::sync::mpsc recv_timeout works whether or not the caller
                         // is inside a tokio runtime, avoiding a nested-runtime panic on the
                         // single FS callback thread).
-                        let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+                        //
+                        // The ciphertext (up to the 2 GiB cap) is MOVED into the writer thread
+                        // rather than cloned, then handed back through the channel so the later
+                        // upload thread can reuse it without a second multi-GB allocation.
+                        let (tx, rx) =
+                            std::sync::mpsc::channel::<(Result<(), String>, Vec<u8>)>();
                         let put_journal = fs.journal.clone();
                         let put_entry = result.entry.clone();
-                        let put_ciphertext = result.ciphertext.clone();
+                        let put_ciphertext = std::mem::take(&mut result.ciphertext);
                         std::thread::spawn(move || {
                             let r = put_journal.put_with_sidecar(&put_entry, &put_ciphertext);
-                            let _ = tx.send(r);
+                            let _ = tx.send((r, put_ciphertext));
                         });
 
                         // Block the callback thread on a BOUNDED recv. A sidecar fsync that
@@ -836,8 +841,13 @@ pub(crate) mod implementation {
                         // success then would violate the durable-ack contract, and blocking
                         // forever would hang the whole FS — the DoS this phase removes.
                         match rx.recv_timeout(crate::NETWORK_TIMEOUT * 18) {
-                            Ok(Ok(())) => Ok(result),
-                            Ok(Err(e)) => Err(format!("journal sidecar write failed: {}", e)),
+                            Ok((Ok(()), ciphertext)) => {
+                                result.ciphertext = ciphertext;
+                                Ok(result)
+                            }
+                            Ok((Err(e), _)) => {
+                                Err(format!("journal sidecar write failed: {}", e))
+                            }
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
                                 "journal sidecar write timed out after {}s",
                                 (crate::NETWORK_TIMEOUT * 18).as_secs()

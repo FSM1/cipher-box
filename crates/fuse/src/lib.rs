@@ -1544,6 +1544,7 @@ pub async fn replay_for_vault(
             cipherbox_sdk::JournalOp::UploadFile {
                 sidecar_path,
                 sidecar_sha256,
+                legacy_ciphertext_b64,
                 wrapped_key_hex,
                 iv_hex,
                 file_meta_ipns_name,
@@ -1569,6 +1570,7 @@ pub async fn replay_for_vault(
                         coordinator.clone(),
                         sidecar_path,
                         sidecar_sha256,
+                        legacy_ciphertext_b64,
                         wrapped_key_hex,
                         iv_hex,
                         file_meta_ipns_name.as_deref(),
@@ -2183,6 +2185,9 @@ async fn replay_upload_entry(
     // D-01: ciphertext is read from the sidecar .bin (path + sha256), not an inline blob.
     sidecar_path: &std::path::Path,
     sidecar_sha256: &str,
+    // Compat-only: pre-Phase-52 inline base64 ciphertext, present only on legacy entries that
+    // have no sidecar. Used for a one-time passthrough replay so the upload is not lost.
+    legacy_ciphertext_b64: &str,
     wrapped_key_hex: &str,
     iv_hex: &str,
     file_meta_ipns_name: Option<&str>,
@@ -2232,26 +2237,40 @@ async fn replay_upload_entry(
     // A missing sidecar (legacy in-flight entry, or an already-cleaned happy-path entry) or a
     // hash mismatch returns Err so the entry is RETAINED (record_failure) — never re-upload
     // corrupted or absent ciphertext, and never publish a bad CID.
-    if sidecar_path.as_os_str().is_empty() {
-        return Err(
-            "UploadFile entry has no sidecar path (legacy inline-ciphertext entry) — retaining entry"
-                .to_string(),
-        );
-    }
-    let ciphertext = std::fs::read(sidecar_path)
-        .map_err(|e| format!("read ciphertext sidecar {:?}: {} — retaining entry", sidecar_path, e))?;
-    let actual_sha256 = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(&ciphertext);
-        hex::encode(hasher.finalize())
+    let ciphertext = if sidecar_path.as_os_str().is_empty() {
+        // Legacy pre-Phase-52 entry: no sidecar, ciphertext stored inline as base64. Honor it
+        // for a one-time passthrough replay so the pending upload is not lost at upgrade. The
+        // entry is removed (not re-persisted) once replay succeeds, so this only runs once.
+        if legacy_ciphertext_b64.is_empty() {
+            return Err(
+                "UploadFile entry has no sidecar and no legacy inline ciphertext — retaining entry"
+                    .to_string(),
+            );
+        }
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(legacy_ciphertext_b64)
+            .map_err(|e| format!("decode legacy inline ciphertext: {} — retaining entry", e))?
+    } else {
+        // D-01: read the ciphertext from the sidecar .bin and verify its SHA-256 before re-upload.
+        // The sidecar path is NOT included in the error (it can leak host directories through
+        // logs / record_failure — the scrubbing this phase adds, D-05).
+        let ciphertext = std::fs::read(sidecar_path)
+            .map_err(|e| format!("read ciphertext sidecar: {} — retaining entry", e))?;
+        let actual_sha256 = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&ciphertext);
+            hex::encode(hasher.finalize())
+        };
+        if actual_sha256 != sidecar_sha256 {
+            return Err(format!(
+                "sidecar hash mismatch (expected {}, got {}) — retaining entry",
+                sidecar_sha256, actual_sha256
+            ));
+        }
+        ciphertext
     };
-    if actual_sha256 != sidecar_sha256 {
-        return Err(format!(
-            "sidecar hash mismatch for {:?} (expected {}, got {}) — retaining entry",
-            sidecar_path, sidecar_sha256, actual_sha256
-        ));
-    }
     let file_cid = cipherbox_api_client::ipfs::upload_content(api, &ciphertext)
         .await
         .map_err(|e| format!("upload ciphertext: {}", e))?;
@@ -2502,6 +2521,7 @@ mod tests {
             op: JournalOp::UploadFile {
                 sidecar_path: std::path::PathBuf::from("/tmp/failed-t4506.bin"),
                 sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: Some("k51filemeta45t06".to_string()),
@@ -2787,6 +2807,7 @@ mod tests {
             op: JournalOp::UploadFile {
                 sidecar_path: std::path::PathBuf::from("/tmp/legacy-none-name.bin"),
                 sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: None,
@@ -2877,6 +2898,7 @@ mod tests {
             op: JournalOp::UploadFile {
                 sidecar_path: std::path::PathBuf::from("/tmp/transient-retain.bin"),
                 sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: Some(file_meta.to_string()),
@@ -3011,6 +3033,7 @@ mod tests {
             op: JournalOp::UploadFile {
                 sidecar_path: std::path::PathBuf::from("/tmp/f2entry.bin"),
                 sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: Some("k51filemeta".to_string()),
@@ -3398,6 +3421,7 @@ mod durability_characterization_tests {
             op: cipherbox_sdk::JournalOp::UploadFile {
                 sidecar_path: sidecar_path.clone(),
                 sidecar_sha256: sidecar_sha256.clone(),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: "deadbeef".to_string(),
                 iv_hex: "00112233445566778899aabb".to_string(),
                 file_meta_ipns_name: None,

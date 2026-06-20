@@ -65,6 +65,18 @@ pub enum JournalOp {
         /// passthrough replay (it is never re-persisted in the legacy shape).
         #[serde(default)]
         sidecar_sha256: String,
+        /// Compat-only: the pre-Phase-52 inline base64 ciphertext (`ciphertext_b64`).
+        ///
+        /// Newer entries stream their ciphertext to a `.bin` sidecar and never set this. A
+        /// pre-Phase-52 entry that was still pending at upgrade time has no sidecar but does
+        /// carry its ciphertext inline here; the replay path decodes it for a one-time
+        /// passthrough replay so the durable journal is honored instead of parking the upload.
+        ///
+        /// `#[serde(default)]` lets newer entries (no `ciphertext_b64`) deserialize, and
+        /// `#[serde(skip_serializing)]` ensures it is NEVER written back to disk — once an
+        /// entry is re-`put`, it persists in the sidecar shape with this field empty.
+        #[serde(default, alias = "ciphertext_b64", skip_serializing)]
+        legacy_ciphertext_b64: String,
         /// ECIES-wrapped file key, hex-encoded.
         wrapped_key_hex: String,
         /// AES-GCM IV, hex-encoded.
@@ -274,6 +286,21 @@ impl WriteQueue {
         let id = &entry.id;
         let bin_path = self.sidecar_path_for(id);
 
+        // Validate the entry's recorded sidecar path matches the canonical path we are about to
+        // write/fsync, so replay reads exactly the file persisted here (not a stale/foreign path).
+        match &entry.op {
+            JournalOp::UploadFile { sidecar_path, .. } if sidecar_path == &bin_path => {}
+            JournalOp::UploadFile { sidecar_path, .. } => {
+                return Err(format!(
+                    "Journal sidecar path mismatch: entry points to {:?}, expected {:?}",
+                    sidecar_path, bin_path
+                ));
+            }
+            JournalOp::MkdirPublish { .. } => {
+                return Err("put_with_sidecar requires an UploadFile entry".to_string());
+            }
+        }
+
         // Remove any stale sidecar from a prior aborted write before re-writing (Pitfall 2).
         if let Err(e) = std::fs::remove_file(&bin_path) {
             if e.kind() != std::io::ErrorKind::NotFound {
@@ -291,14 +318,24 @@ impl WriteQueue {
             .map_err(|e| format!("Journal sidecar open failed: {}", e))?;
 
         const CHUNK: usize = 1024 * 1024; // 1 MiB
-        for chunk in ciphertext.chunks(CHUNK) {
+        // On any write/fsync failure, remove the partial sidecar before returning so no orphan
+        // `.bin` is left for a later GC pass (Pitfall 2).
+        let sidecar_write = (|| -> Result<(), String> {
+            for chunk in ciphertext.chunks(CHUNK) {
+                bin_file
+                    .write_all(chunk)
+                    .map_err(|e| format!("Journal sidecar write failed: {}", e))?;
+            }
             bin_file
-                .write_all(chunk)
-                .map_err(|e| format!("Journal sidecar write failed: {}", e))?;
+                .sync_all()
+                .map_err(|e| format!("Journal sidecar fsync failed: {}", e))?;
+            Ok(())
+        })();
+        if let Err(e) = sidecar_write {
+            drop(bin_file);
+            let _ = std::fs::remove_file(&bin_path);
+            return Err(e);
         }
-        bin_file
-            .sync_all()
-            .map_err(|e| format!("Journal sidecar fsync failed: {}", e))?;
         drop(bin_file);
 
         // Write the JSON entry with the same fsync + parent-dir barrier as `put`. On any
@@ -322,26 +359,31 @@ impl WriteQueue {
         let json_path = self.journal_dir.join(format!("{}.json", id));
         let bin_path = self.sidecar_path_for(id);
 
-        // Remove the sidecar first (NotFound is fine — not every entry has one).
-        if let Err(e) = std::fs::remove_file(&bin_path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                return Err(format!("Journal sidecar remove failed: {}", e));
-            }
+        // Remove the `.json` (the replay trigger) FIRST so a crash between the two unlinks
+        // leaves at most an orphan `.bin` — harmless, GC pass 3 reaps it without replaying.
+        // The reverse order would leave a live `.json` pointing at a now-missing `.bin`, which
+        // replay reads as a corrupt entry and parks as Failed (spurious "upload failed").
+        let removed_json = match std::fs::remove_file(&json_path) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(format!("Journal remove failed: {}", e)),
+        };
+        if removed_json {
+            // WR-03b: fsync parent dir so the `.json` removal is durable before unlinking `.bin`.
+            let _ = std::fs::File::open(&self.journal_dir).and_then(|d| d.sync_all());
         }
 
-        match std::fs::remove_file(&json_path) {
-            Ok(()) => {
-                // WR-03b: fsync parent dir after removal.
-                let _ = std::fs::File::open(&self.journal_dir).and_then(|d| d.sync_all());
-                Ok(())
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // The `.json` was already gone; still fsync since we may have removed a `.bin`.
-                let _ = std::fs::File::open(&self.journal_dir).and_then(|d| d.sync_all());
-                Ok(())
-            }
-            Err(e) => Err(format!("Journal remove failed: {}", e)),
+        // Remove the sidecar (NotFound is fine — not every entry has one).
+        let removed_bin = match std::fs::remove_file(&bin_path) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(format!("Journal sidecar remove failed: {}", e)),
+        };
+        if removed_bin {
+            let _ = std::fs::File::open(&self.journal_dir).and_then(|d| d.sync_all());
         }
+
+        Ok(())
     }
 
     /// Load all journal entries belonging to `vault_root_ipns`.
@@ -403,9 +445,17 @@ impl WriteQueue {
     pub fn purge_vault(&self, vault_root_ipns: &str) -> Result<usize, String> {
         let entries = self.load_all_for_vault(vault_root_ipns)?;
         let mut removed = 0usize;
+        // Best-effort: attempt EVERY entry even if one removal fails (e.g. EACCES on a `.bin`),
+        // matching `gc_failed_entries`. A fail-fast `?` here would leave later entries' `.json`
+        // and `.bin` files on disk, only partially honoring the Information Disclosure guarantee
+        // this function exists to provide (T-52-15). The caller treats the purge as best-effort.
         for entry in &entries {
-            self.remove(&entry.id)?;
-            removed += 1;
+            match self.remove(&entry.id) {
+                Ok(()) => removed += 1,
+                Err(e) => {
+                    log::warn!("purge_vault: failed to remove entry {}: {}", entry.id, e);
+                }
+            }
         }
         Ok(removed)
     }
@@ -558,6 +608,17 @@ impl WriteQueue {
         entry: &JournalEntry,
         error: &str,
     ) -> Result<JournalEntryStatus, String> {
+        // A detached upload worker holds an in-memory snapshot of its entry and may call this
+        // long after `purge_vault` (logout) deleted the on-disk `.json`. Re-`put`ting it here
+        // would resurrect a purged entry — and without its also-deleted `.bin` sidecar, replay
+        // would only park it as Failed. If the entry file is already gone, treat the failure as
+        // a no-op rather than recreating it.
+        let json_path = self.journal_dir.join(format!("{}.json", entry.id));
+        if !json_path.exists() {
+            return Ok(JournalEntryStatus::Failed {
+                last_error: error.to_string(),
+            });
+        }
         if entry.retries >= self.max_retries {
             // Park: transition to Failed, keep on disk (D-09).
             let status = JournalEntryStatus::Failed {
@@ -629,6 +690,7 @@ mod tests {
             op: JournalOp::UploadFile {
                 sidecar_path: std::path::PathBuf::from(format!("/tmp/{}.bin", id)),
                 sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wrappedkey"),
                 iv_hex: hex::encode(b"iv123456"),
                 file_meta_ipns_name: Some("k51filemetaipns".to_string()),
@@ -901,6 +963,7 @@ mod tests {
             op: JournalOp::UploadFile {
                 sidecar_path: std::path::PathBuf::from("/tmp/pk-upload.bin"),
                 sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: Some("k51file".to_string()),
@@ -1027,6 +1090,7 @@ mod tests {
             op: JournalOp::UploadFile {
                 sidecar_path: std::path::PathBuf::from("/tmp/noplain2.bin"),
                 sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: Some("k51file".to_string()),
@@ -1192,6 +1256,7 @@ mod tests {
             op: JournalOp::UploadFile {
                 sidecar_path: std::path::PathBuf::from("/tmp/t4504-none.bin"),
                 sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: None,
@@ -1399,6 +1464,7 @@ mod tests {
         if let JournalOp::UploadFile {
             filename_encrypted_hex,
             sidecar_path,
+            legacy_ciphertext_b64,
             ..
         } = &entry.op
         {
@@ -1406,6 +1472,8 @@ mod tests {
             assert_eq!(filename_encrypted_hex, "report.txt");
             // No sidecar on a legacy entry → default (empty) path.
             assert_eq!(sidecar_path, &std::path::PathBuf::new());
+            // The old inline ciphertext is captured for a one-time passthrough replay.
+            assert_eq!(legacy_ciphertext_b64, "Y3Q=");
         } else {
             panic!("Expected UploadFile");
         }

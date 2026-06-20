@@ -132,19 +132,21 @@ impl crate::CipherBoxFS {
         handle: &crate::file_handle::OpenFileHandle,
         is_new_file: bool,
     ) -> Result<UploadJournalResult, String> {
-        let plaintext = handle.read_all()?;
-
-        // D-01 (WR-06): reject oversized files BEFORE any key generation or encryption so
-        // the release path replies EIO instead of allocating/streaming a multi-GB sidecar
-        // and stalling the shared FS thread. Checked first — nothing sensitive to zeroize yet.
-        let file_size = plaintext.len() as u64;
-        if file_size > cipherbox_sdk::MAX_JOURNAL_PAYLOAD_BYTES {
+        // D-01 (WR-06): reject oversized files BEFORE reading the temp file into memory so the
+        // release path replies EIO instead of allocating a multi-GB buffer and stalling the
+        // shared FS thread. The size is read from the temp file's on-disk metadata — checking
+        // after `read_all()` would defeat the guard (the allocation already happened).
+        let size_on_disk = handle.get_size()?;
+        if size_on_disk > cipherbox_sdk::MAX_JOURNAL_PAYLOAD_BYTES {
             return Err(format!(
                 "File too large for journal ({} bytes > {} byte cap); refusing to write",
-                file_size,
+                size_on_disk,
                 cipherbox_sdk::MAX_JOURNAL_PAYLOAD_BYTES
             ));
         }
+
+        let plaintext = handle.read_all()?;
+        let file_size = plaintext.len() as u64;
 
         let mut file_key = cipherbox_crypto::utils::generate_file_key();
         let iv = cipherbox_crypto::utils::generate_iv();
@@ -338,6 +340,8 @@ impl crate::CipherBoxFS {
             op: cipherbox_sdk::JournalOp::UploadFile {
                 sidecar_path,
                 sidecar_sha256,
+                // Compat-only field; new entries always use the sidecar, never inline ciphertext.
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: encrypted_file_key_hex.clone(),
                 iv_hex: iv_hex.clone(),
                 file_meta_ipns_name: file_meta_ipns_name.clone(),

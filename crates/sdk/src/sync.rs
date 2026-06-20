@@ -276,9 +276,13 @@ fn regex_replace_paths(input: &str) -> String {
                 || input[i..].starts_with("/var/")
                 || input[i..].starts_with("/tmp/")
                 || input[i..].starts_with("/private/")))
-            || (c.is_ascii_uppercase()
+            // Windows drive-letter paths, case-insensitive: c:\users\, C:\Users\, etc. Third-party
+            // tools and user-entered paths can use lowercase, so match any ASCII letter drive and
+            // both \Users\ / \users\ to avoid a host-path-leak gap.
+            || (c.is_ascii_alphabetic()
                 && i + 2 < input.len()
-                && input[i + 1..].starts_with(":\\Users\\"));
+                && (input[i + 1..].starts_with(":\\Users\\")
+                    || input[i + 1..].starts_with(":\\users\\")));
 
         if is_path_start {
             result.push_str("[path]");
@@ -376,6 +380,16 @@ mod tests {
         );
         assert_eq!(
             sanitize_error("open D:\\Users\\dave\\thing failed"),
+            "open [path] failed"
+        );
+
+        // Case-insensitive Windows paths: lowercase drive letter, and lowercase `users` dir.
+        assert_eq!(
+            sanitize_error("open c:\\Users\\alice\\file failed"),
+            "open [path] failed"
+        );
+        assert_eq!(
+            sanitize_error("open C:\\users\\bob\\file failed"),
             "open [path] failed"
         );
 
