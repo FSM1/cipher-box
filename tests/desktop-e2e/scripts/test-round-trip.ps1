@@ -73,9 +73,9 @@ Write-Host ""
 Ensure-VerifierRuntime
 
 function Invoke-FilePointerVerifier {
-    $verifierPath = Join-Path $RepoRoot "packages/sdk-core/scripts/verify-filepointer.mjs"
+    $verifierPath = Join-Path $RepoRoot "packages/sdk-core/scripts/verify-filepointer.ts"
     $env:TEST_SECRET = $TestSecret
-    $output = & node $verifierPath `
+    $output = & pnpm exec tsx $verifierPath `
         --api-url $ApiUrl `
         --email $TestEmail `
         --file-name $TestFile `
