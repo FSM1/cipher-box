@@ -273,20 +273,42 @@ pub async fn mount_filesystem(
         coord
     };
 
-    // Replay journal entries for this vault before mounting (D-06, D-07, D-08).
-    // Errors are logged but never fail the mount — partial replay is better than no mount.
-    cipherbox_fuse::replay_for_vault(
-        &journal,
-        state.sdk.api.clone(),
-        &private_key,
-        &public_key,
-        &root_folder_key,
-        &root_ipns_name,
-        publish_coordinator.clone(),
-        tee_public_key.as_deref(),
-        tee_key_epoch,
-    )
-    .await;
+    // Replay journal entries for this vault CONCURRENTLY with mount (D-03 / WR-07).
+    // Previously this blocked the mount with `.await` — a hung IPNS/upload call could stall
+    // the mount indefinitely. Now replay runs on a background tokio task (each entry's network
+    // ops are individually bounded by `tokio::time::timeout` inside replay_for_vault), and the
+    // mount proceeds immediately. Errors are logged but never fail the mount.
+    //
+    // Clone every borrowed argument into owned values BEFORE `private_key`/`public_key`/
+    // `root_folder_key` are moved into CipherBoxFS (wrapped in Zeroizing) below — so both the
+    // replay task and the FS own their own copies (no move-then-borrow). Replay sends no
+    // FsEvent::UploadComplete, so spawning before CipherBoxFS construction is race-free.
+    {
+        let replay_journal = journal.clone();
+        let replay_api = state.sdk.api.clone();
+        let replay_private_key = private_key.clone();
+        let replay_public_key = public_key.clone();
+        let replay_root_folder_key = root_folder_key.clone();
+        let replay_root_ipns_name = root_ipns_name.clone();
+        let replay_coordinator = publish_coordinator.clone();
+        let replay_tee_public_key = tee_public_key.clone();
+        let replay_tee_key_epoch = tee_key_epoch;
+        rt.spawn(async move {
+            cipherbox_fuse::replay_for_vault(
+                &replay_journal,
+                replay_api,
+                &replay_private_key,
+                &replay_public_key,
+                &replay_root_folder_key,
+                &replay_root_ipns_name,
+                replay_coordinator,
+                replay_tee_public_key.as_deref(),
+                replay_tee_key_epoch,
+            )
+            .await;
+            log::info!("Background replay_for_vault complete");
+        });
+    }
 
     let fs = CipherBoxFS {
         inodes, metadata_cache,
