@@ -268,9 +268,25 @@ fn regex_replace_paths(input: &str) -> String {
     let mut chars = input.char_indices().peekable();
 
     while let Some((i, c)) = chars.next() {
-        if c == '/' && (input[i..].starts_with("/Users/") || input[i..].starts_with("/home/")) {
+        // Unix absolute paths (/Users, /home, /var, /tmp, /private) or Windows drive-letter
+        // paths (C:\Users\ ...). Both are scrubbed to [path] by skipping to the next boundary.
+        let is_path_start = (c == '/'
+            && (input[i..].starts_with("/Users/")
+                || input[i..].starts_with("/home/")
+                || input[i..].starts_with("/var/")
+                || input[i..].starts_with("/tmp/")
+                || input[i..].starts_with("/private/")))
+            // Windows drive-letter paths, case-insensitive: c:\users\, C:\Users\, etc. Third-party
+            // tools and user-entered paths can use lowercase, so match any ASCII letter drive and
+            // both \Users\ / \users\ to avoid a host-path-leak gap.
+            || (c.is_ascii_alphabetic()
+                && i + 2 < input.len()
+                && (input[i + 1..].starts_with(":\\Users\\")
+                    || input[i + 1..].starts_with(":\\users\\")));
+
+        if is_path_start {
             result.push_str("[path]");
-            // Skip until whitespace or end
+            // Skip until the next whitespace or quote boundary (or end of input).
             while let Some(&(_, next_c)) = chars.peek() {
                 if next_c.is_whitespace() || next_c == '"' || next_c == '\'' {
                     break;
@@ -328,4 +344,65 @@ fn is_network_error(error: &str) -> bool {
     ];
     let lower = error.to_lowercase();
     network_patterns.iter().any(|p| lower.contains(p))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_error_extended_paths() {
+        // Existing behavior preserved: /Users and /home are scrubbed.
+        assert_eq!(
+            sanitize_error("open /Users/alice/secret.txt failed"),
+            "open [path] failed"
+        );
+        assert_eq!(sanitize_error("read /home/bob/x denied"), "read [path] denied");
+
+        // New Unix prefixes (D-05).
+        assert_eq!(
+            sanitize_error("stat /var/folders/zz/foo nope"),
+            "stat [path] nope"
+        );
+        assert_eq!(
+            sanitize_error("write /tmp/cb-journal/abc oops"),
+            "write [path] oops"
+        );
+        assert_eq!(
+            sanitize_error("link /private/var/foo bad"),
+            "link [path] bad"
+        );
+
+        // Windows drive-letter paths (any ASCII uppercase letter).
+        assert_eq!(
+            sanitize_error("open C:\\Users\\carol\\AppData\\file failed"),
+            "open [path] failed"
+        );
+        assert_eq!(
+            sanitize_error("open D:\\Users\\dave\\thing failed"),
+            "open [path] failed"
+        );
+
+        // Case-insensitive Windows paths: lowercase drive letter, and lowercase `users` dir.
+        assert_eq!(
+            sanitize_error("open c:\\Users\\alice\\file failed"),
+            "open [path] failed"
+        );
+        assert_eq!(
+            sanitize_error("open C:\\users\\bob\\file failed"),
+            "open [path] failed"
+        );
+
+        // No path prefix → unchanged.
+        assert_eq!(
+            sanitize_error("generic error with no path"),
+            "generic error with no path"
+        );
+
+        // Scrub stops at the first whitespace/quote boundary, not the whole message.
+        assert_eq!(
+            sanitize_error("a /Users/eve/x and /home/frank/y end"),
+            "a [path] and [path] end"
+        );
+    }
 }

@@ -676,7 +676,12 @@ pub(crate) mod implementation {
                                 let _ = cipherbox_api_client::ipfs::unpin_content(&api, &old).await;
                             }
                             // Remove journal entry now that parent publish is confirmed (D-11b).
-                            let _ = journal_for_mkdir.remove(&mkdir_journal_entry_id);
+                            if let Err(e) = journal_for_mkdir.remove(&mkdir_journal_entry_id) {
+                                log::warn!(
+                                    "mkdir parent-publish: failed to remove journal entry {} after success: {}; entry may replay again on next mount",
+                                    mkdir_journal_entry_id, e
+                                );
+                            }
                             log::info!("Parent metadata published after mkdir");
                         }
                         cipherbox_api_client::PublishResult::Conflict { current_sequence_number } => {

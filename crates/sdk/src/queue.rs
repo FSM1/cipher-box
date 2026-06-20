@@ -12,6 +12,20 @@ use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
+/// Maximum per-entry plaintext payload size accepted into the journal (D-01, WR-06).
+///
+/// Above this size even an off-thread streaming sidecar write + `F_FULLFSYNC` stalls
+/// long enough to be a denial-of-service risk on the shared FS thread, so the write-side
+/// (`build_upload_journal_entry`) rejects the file with EIO rather than journaling it.
+pub const MAX_JOURNAL_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+
+/// Age window beyond which a parked `Failed` journal entry is GC'd (D-02).
+pub const JOURNAL_GC_MAX_AGE_DAYS: u64 = 30;
+
+/// Total on-disk byte budget for parked `Failed` entries; GC trims oldest-first
+/// past this (D-02). Sums each entry's `.json` + `.bin` sidecar bytes.
+pub const JOURNAL_GC_MAX_SIZE_BYTES: u64 = 500 * 1024 * 1024; // 500 MiB
+
 /// Serde compat deserializer for `Option<String>` fields that were previously stored
 /// as `String` with an empty-string sentinel.
 ///
@@ -32,8 +46,37 @@ fn deser_opt_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Str
 pub enum JournalOp {
     /// A file upload awaiting IPFS pin + folder metadata update.
     UploadFile {
-        /// Base64-encoded AES-256-GCM ciphertext.
-        ciphertext_b64: String,
+        /// Absolute path to the ciphertext sidecar `<journal_dir>/<id>.bin` (D-01).
+        ///
+        /// Replaces the former in-JSON `ciphertext_b64` blob: the AES-256-GCM ciphertext
+        /// is streamed to a 0600 sidecar file rather than embedded as base64 in the JSON
+        /// entry, eliminating the ~2.7 GB `serde_json` allocation + multi-GB write on the
+        /// shared FS thread (WR-06, HIGH).
+        #[serde(default)]
+        sidecar_path: PathBuf,
+        /// Hex-encoded SHA-256 of the sidecar ciphertext, for integrity verification at
+        /// replay time before re-upload (D-01). A mismatch means the sidecar is corrupt and
+        /// the entry must be retained rather than re-uploaded.
+        ///
+        /// `#[serde(default)]` on both sidecar fields lets a pre-Phase-52 entry (which
+        /// stored its ciphertext inline as `ciphertext_b64` and had no sidecar) still
+        /// deserialize: such an entry loads with an empty `sidecar_path`, and the replay
+        /// side detects the empty path + legacy inline ciphertext to drive a one-time
+        /// passthrough replay (it is never re-persisted in the legacy shape).
+        #[serde(default)]
+        sidecar_sha256: String,
+        /// Compat-only: the pre-Phase-52 inline base64 ciphertext (`ciphertext_b64`).
+        ///
+        /// Newer entries stream their ciphertext to a `.bin` sidecar and never set this. A
+        /// pre-Phase-52 entry that was still pending at upgrade time has no sidecar but does
+        /// carry its ciphertext inline here; the replay path decodes it for a one-time
+        /// passthrough replay so the durable journal is honored instead of parking the upload.
+        ///
+        /// `#[serde(default)]` lets newer entries (no `ciphertext_b64`) deserialize, and
+        /// `#[serde(skip_serializing)]` ensures it is NEVER written back to disk — once an
+        /// entry is re-`put`, it persists in the sidecar shape with this field empty.
+        #[serde(default, alias = "ciphertext_b64", skip_serializing)]
+        legacy_ciphertext_b64: String,
         /// ECIES-wrapped file key, hex-encoded.
         wrapped_key_hex: String,
         /// AES-GCM IV, hex-encoded.
@@ -58,8 +101,18 @@ pub enum JournalOp {
         /// replay time. Never raw, never TEE-wrapped. Required for CR-01 (replay must
         /// sign and publish the parent IPNS record). Part of the D-04 zero-knowledge family.
         parent_ipns_key_hex: String,
-        /// Original filename.
-        filename: String,
+        /// ECIES-encrypted original filename, hex-encoded (D-04, IN-03).
+        ///
+        /// The filename is wrapped with the user's EC public key
+        /// (`cipherbox_crypto::ecies::wrap_key`) at write time and decrypted only
+        /// transiently at replay — no plaintext filename persists at rest.
+        ///
+        /// `#[serde(alias = "filename")]` lets pre-Phase-52 entries (which stored the
+        /// plaintext `filename`) still deserialize: such a value is NOT valid hex, so the
+        /// replay name-decrypt helper detects it as legacy plaintext and uses it once
+        /// (passthrough-once), never re-persisting it.
+        #[serde(alias = "filename")]
+        filename_encrypted_hex: String,
         /// File size in bytes.
         size: u64,
         /// Creation timestamp, milliseconds since Unix epoch (serializable; replaces Instant).
@@ -85,8 +138,14 @@ pub enum JournalOp {
         /// Same semantics as `UploadFile::parent_ipns_key_hex`: unwrappable only with
         /// the user's private key at replay time. Required for CR-01. Part of D-04 family.
         parent_ipns_key_hex: String,
-        /// Directory name.
-        name: String,
+        /// ECIES-encrypted directory name, hex-encoded (D-04, IN-03).
+        ///
+        /// Same semantics as `UploadFile::filename_encrypted_hex`: wrapped with the user's
+        /// EC public key at write time, decrypted only transiently at replay.
+        /// `#[serde(alias = "name")]` lets pre-Phase-52 entries (plaintext `name`)
+        /// deserialize and replay once via the passthrough-once legacy-compat path.
+        #[serde(alias = "name")]
+        name_encrypted_hex: String,
         /// Creation timestamp, milliseconds since Unix epoch.
         created_at_ms: u64,
     },
@@ -200,22 +259,131 @@ impl WriteQueue {
         Ok(())
     }
 
-    /// Remove an entry file from disk.
+    /// Resolve the ciphertext sidecar path `<journal_dir>/<id>.bin` for an entry id (D-01).
     ///
-    /// Returns `Ok(())` if the file did not exist (idempotent).
-    /// After a successful removal, syncs the parent journal directory so the
-    /// deleted dirent is durable on crash (WR-03b).
-    pub fn remove(&self, id: &str) -> Result<(), String> {
-        let path = self.journal_dir.join(format!("{}.json", id));
-        match std::fs::remove_file(&path) {
-            Ok(()) => {
-                // WR-03b: fsync parent dir after removal.
-                let _ = std::fs::File::open(&self.journal_dir).and_then(|d| d.sync_all());
-                Ok(())
+    /// This is the canonical path `put_with_sidecar` writes and `remove` deletes; the
+    /// write-side (`build_upload_journal_entry`) uses it to populate `UploadFile.sidecar_path`
+    /// so the entry references exactly the file that will be written.
+    pub fn sidecar_path_for(&self, id: &str) -> PathBuf {
+        self.journal_dir.join(format!("{}.bin", id))
+    }
+
+    /// Persist a `UploadFile` entry plus its ciphertext sidecar with fsync barriers (D-01).
+    ///
+    /// The ciphertext is streamed to `<journal_dir>/<id>.bin` (0600, fsync'd) in fixed-size
+    /// chunks — never allocated as a single `String` — then the `<id>.json` entry (which must
+    /// already carry `sidecar_path` + `sidecar_sha256`) is written via the same fsync barrier
+    /// as `put`. If the `.json` write/fsync fails, the `.bin` is removed before returning `Err`
+    /// so no orphaned ciphertext is left behind (Pitfall 2).
+    ///
+    /// This is synchronous; the FUSE release path calls it from a background tokio task and
+    /// blocks on a bounded oneshot for durability before acking (Plan 52-03).
+    ///
+    /// The caller owns the `sidecar_sha256` value (computed at entry-construction time);
+    /// `put_with_sidecar` writes the bytes and verifies the byte length is non-empty, but does
+    /// not recompute the hash (the replay side verifies it before re-upload).
+    pub fn put_with_sidecar(&self, entry: &JournalEntry, ciphertext: &[u8]) -> Result<(), String> {
+        let id = &entry.id;
+        let bin_path = self.sidecar_path_for(id);
+
+        // Validate the entry's recorded sidecar path matches the canonical path we are about to
+        // write/fsync, so replay reads exactly the file persisted here (not a stale/foreign path).
+        match &entry.op {
+            JournalOp::UploadFile { sidecar_path, .. } if sidecar_path == &bin_path => {}
+            JournalOp::UploadFile { sidecar_path, .. } => {
+                return Err(format!(
+                    "Journal sidecar path mismatch: entry points to {:?}, expected {:?}",
+                    sidecar_path, bin_path
+                ));
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(format!("Journal remove failed: {}", e)),
+            JournalOp::MkdirPublish { .. } => {
+                return Err("put_with_sidecar requires an UploadFile entry".to_string());
+            }
         }
+
+        // Remove any stale sidecar from a prior aborted write before re-writing (Pitfall 2).
+        if let Err(e) = std::fs::remove_file(&bin_path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(format!("Journal sidecar pre-clean failed: {}", e));
+            }
+        }
+
+        // Stream ciphertext to the 0600 sidecar in fixed-size chunks (never a full String).
+        let mut open_opts = std::fs::OpenOptions::new();
+        open_opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        open_opts.mode(0o600);
+        let mut bin_file = open_opts
+            .open(&bin_path)
+            .map_err(|e| format!("Journal sidecar open failed: {}", e))?;
+
+        const CHUNK: usize = 1024 * 1024; // 1 MiB
+        // On any write/fsync failure, remove the partial sidecar before returning so no orphan
+        // `.bin` is left for a later GC pass (Pitfall 2).
+        let sidecar_write = (|| -> Result<(), String> {
+            for chunk in ciphertext.chunks(CHUNK) {
+                bin_file
+                    .write_all(chunk)
+                    .map_err(|e| format!("Journal sidecar write failed: {}", e))?;
+            }
+            bin_file
+                .sync_all()
+                .map_err(|e| format!("Journal sidecar fsync failed: {}", e))?;
+            Ok(())
+        })();
+        if let Err(e) = sidecar_write {
+            drop(bin_file);
+            let _ = std::fs::remove_file(&bin_path);
+            return Err(e);
+        }
+        drop(bin_file);
+
+        // Write the JSON entry with the same fsync + parent-dir barrier as `put`. On any
+        // failure, remove the orphaned sidecar before returning the error (atomic cleanup).
+        if let Err(e) = self.put(entry) {
+            let _ = std::fs::remove_file(&bin_path);
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    /// Remove an entry file (and its ciphertext sidecar) from disk.
+    ///
+    /// Returns `Ok(())` if neither file existed (idempotent). Deletes BOTH the `<id>.json`
+    /// entry and the `<id>.bin` sidecar so no orphaned ciphertext is left behind (D-01).
+    /// A MkdirPublish entry has no sidecar; its `.bin` absence is normal (NotFound → Ok).
+    /// After removal, syncs the parent journal directory so the deleted dirents are durable
+    /// on crash (WR-03b).
+    pub fn remove(&self, id: &str) -> Result<(), String> {
+        let json_path = self.journal_dir.join(format!("{}.json", id));
+        let bin_path = self.sidecar_path_for(id);
+
+        // Remove the `.json` (the replay trigger) FIRST so a crash between the two unlinks
+        // leaves at most an orphan `.bin` — harmless, GC pass 3 reaps it without replaying.
+        // The reverse order would leave a live `.json` pointing at a now-missing `.bin`, which
+        // replay reads as a corrupt entry and parks as Failed (spurious "upload failed").
+        let removed_json = match std::fs::remove_file(&json_path) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(format!("Journal remove failed: {}", e)),
+        };
+        if removed_json {
+            // WR-03b: fsync parent dir so the `.json` removal is durable before unlinking `.bin`.
+            let _ = std::fs::File::open(&self.journal_dir).and_then(|d| d.sync_all());
+        }
+
+        // Remove the sidecar (NotFound is fine — not every entry has one).
+        let removed_bin = match std::fs::remove_file(&bin_path) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(format!("Journal sidecar remove failed: {}", e)),
+        };
+        if removed_bin {
+            let _ = std::fs::File::open(&self.journal_dir).and_then(|d| d.sync_all());
+        }
+
+        Ok(())
     }
 
     /// Load all journal entries belonging to `vault_root_ipns`.
@@ -263,6 +431,181 @@ impl WriteQueue {
         Ok(entries)
     }
 
+    /// Remove every journal entry (`.json` + `.bin`) belonging to a single vault (D-02).
+    ///
+    /// The journal directory is shared across vaults and `load_all_for_vault` only filters
+    /// at read time, so a departing vault's entries (including their ciphertext sidecars)
+    /// would otherwise persist forever into another session (T-52-15, Information Disclosure).
+    /// `purge_vault` removes ALL entries for `vault_root_ipns` regardless of status (logout
+    /// means the session is over), deleting both the `.json` and its `.bin` sidecar via the
+    /// sidecar-aware [`remove`](Self::remove). Returns the number of entries removed.
+    ///
+    /// This is the reusable purge interface a future `switch_account` / `delete_account`
+    /// command must call for the departing vault. It is wired at `logout()` today.
+    pub fn purge_vault(&self, vault_root_ipns: &str) -> Result<usize, String> {
+        let entries = self.load_all_for_vault(vault_root_ipns)?;
+        let mut removed = 0usize;
+        // Best-effort: attempt EVERY entry even if one removal fails (e.g. EACCES on a `.bin`),
+        // matching `gc_failed_entries`. A fail-fast `?` here would leave later entries' `.json`
+        // and `.bin` files on disk, only partially honoring the Information Disclosure guarantee
+        // this function exists to provide (T-52-15). The caller treats the purge as best-effort.
+        for entry in &entries {
+            match self.remove(&entry.id) {
+                Ok(()) => removed += 1,
+                Err(e) => {
+                    log::warn!("purge_vault: failed to remove entry {}: {}", entry.id, e);
+                }
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Garbage-collect parked `Failed` journal entries and orphaned sidecars (D-02).
+    ///
+    /// Parked `Failed` entries are kept on disk for manual intervention (D-09) and would
+    /// otherwise grow without bound, exhausting disk (T-52-16, Denial of Service). This
+    /// runs once per mount and is best-effort — per-file errors are logged and skipped,
+    /// never fatal. Three passes, all touching ONLY `Failed` entries (in-flight
+    /// `Pending`/`InProgress` are never GC'd):
+    ///
+    /// 1. **Age purge** — remove any `Failed` entry whose `created_at_ms` is older than
+    ///    `age_days` (compared against the same ms-since-epoch clock entries are stamped with).
+    /// 2. **Size purge** — sum each surviving `Failed` entry's on-disk size (`.json` bytes
+    ///    plus its `.bin` sidecar bytes); if the total exceeds `total_size_budget`, remove
+    ///    oldest-first (by `created_at_ms`) until under budget.
+    /// 3. **Orphan cleanup** — delete any `.bin` sidecar with no matching `<id>.json`
+    ///    (a sidecar left behind by an aborted write, RESEARCH Pitfall 2).
+    ///
+    /// Returns the total number of entries + orphan sidecars removed.
+    pub fn gc_failed_entries(
+        &self,
+        age_days: u64,
+        total_size_budget: u64,
+    ) -> Result<usize, String> {
+        let read_dir = std::fs::read_dir(&self.journal_dir)
+            .map_err(|e| format!("Journal GC dir read failed: {}", e))?;
+
+        // Scan all `.json` entries across ALL vaults (GC is global) and keep only `Failed`.
+        let mut failed: Vec<JournalEntry> = Vec::new();
+        // Stems (`<id>`) of `.json` files that PARSED successfully — the set of entries that
+        // could ever own a live sidecar. A torn/truncated `.json` (e.g. crash mid-write of the
+        // JSON after the `.bin` was already fsynced) is unparseable, so its stem is absent here
+        // and pass 3 treats its sidecar as orphaned even though the `.json` exists on disk
+        // (T-52-16 disk DoS / T-52-15 at-rest info-disclosure).
+        let mut parseable_stems: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for dir_entry in read_dir {
+            let dir_entry = match dir_entry {
+                Ok(d) => d,
+                Err(e) => {
+                    log::warn!("Journal GC: dir entry error: {} — skipping", e);
+                    continue;
+                }
+            };
+            let path = dir_entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(e) => {
+                    log::warn!("Journal GC: failed to read {:?}: {} — skipping", path, e);
+                    continue;
+                }
+            };
+            match serde_json::from_slice::<JournalEntry>(&bytes) {
+                Ok(entry) => {
+                    // Record EVERY well-formed entry's stem (regardless of status) so its
+                    // sidecar is recognized as live in pass 3.
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        parseable_stems.insert(stem.to_string());
+                    }
+                    if matches!(entry.status, JournalEntryStatus::Failed { .. }) {
+                        failed.push(entry);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Journal GC: malformed entry at {:?}: {} — skipping", path, e);
+                }
+            }
+        }
+
+        let mut removed = 0usize;
+
+        // Pass 1: age purge.
+        let now = now_ms();
+        let max_age_ms = age_days.saturating_mul(86_400_000);
+        let age_cutoff = now.saturating_sub(max_age_ms);
+        let mut survivors: Vec<JournalEntry> = Vec::new();
+        for entry in failed {
+            if entry.op.created_at_ms() < age_cutoff {
+                match self.remove(&entry.id) {
+                    Ok(()) => removed += 1,
+                    Err(e) => log::warn!("Journal GC: age-remove {} failed: {}", entry.id, e),
+                }
+            } else {
+                survivors.push(entry);
+            }
+        }
+
+        // Pass 2: size purge — oldest-first until under budget.
+        survivors.sort_by_key(|e| e.op.created_at_ms());
+        let mut total_size: u64 = survivors.iter().map(|e| self.entry_on_disk_size(&e.id)).sum();
+        let mut idx = 0;
+        while total_size > total_size_budget && idx < survivors.len() {
+            let entry = &survivors[idx];
+            let entry_size = self.entry_on_disk_size(&entry.id);
+            match self.remove(&entry.id) {
+                Ok(()) => {
+                    removed += 1;
+                    total_size = total_size.saturating_sub(entry_size);
+                }
+                Err(e) => log::warn!("Journal GC: size-remove {} failed: {}", entry.id, e),
+            }
+            idx += 1;
+        }
+
+        // Pass 3: orphan `.bin` cleanup — sidecars with no LIVE owning `.json` (Pitfall 2).
+        //
+        // Liveness is "the sibling `.json` parsed successfully" (in `parseable_stems`), NOT
+        // mere file existence: a torn/truncated `.json` still exists on disk but is never
+        // replayed (load_all_for_vault skips it), so its sidecar would otherwise persist
+        // forever. Reap when the `.json` is physically absent OR present-but-unparseable.
+        if let Ok(read_dir) = std::fs::read_dir(&self.journal_dir) {
+            for dir_entry in read_dir.flatten() {
+                let path = dir_entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("bin") {
+                    continue;
+                }
+                let json_path = path.with_extension("json");
+                let stem = path.file_stem().and_then(|s| s.to_str());
+                let orphaned = !json_path.exists()
+                    || !stem.map(|s| parseable_stems.contains(s)).unwrap_or(false);
+                if orphaned {
+                    match std::fs::remove_file(&path) {
+                        Ok(()) => removed += 1,
+                        Err(e) => {
+                            log::warn!("Journal GC: orphan remove {:?} failed: {}", path, e)
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(removed)
+    }
+
+    /// On-disk byte size of an entry: its `.json` plus its `.bin` sidecar (if present).
+    ///
+    /// Missing files contribute 0 (used only by GC's size accounting, never fatal).
+    fn entry_on_disk_size(&self, id: &str) -> u64 {
+        let json_path = self.journal_dir.join(format!("{}.json", id));
+        let bin_path = self.sidecar_path_for(id);
+        let json_size = std::fs::metadata(&json_path).map(|m| m.len()).unwrap_or(0);
+        let bin_size = std::fs::metadata(&bin_path).map(|m| m.len()).unwrap_or(0);
+        json_size + bin_size
+    }
+
     /// Overwrite the status of an entry on disk.
     pub fn update_status(&self, id: &str, status: JournalEntryStatus) -> Result<(), String> {
         let path = self.journal_dir.join(format!("{}.json", id));
@@ -285,6 +628,44 @@ impl WriteQueue {
         entry: &JournalEntry,
         error: &str,
     ) -> Result<JournalEntryStatus, String> {
+        // A detached upload worker holds an in-memory snapshot of its entry and may call this
+        // long after `purge_vault` (logout) deleted the on-disk `.json`. Re-`put`ting it here
+        // would resurrect a purged entry — and without its also-deleted `.bin` sidecar, replay
+        // would only park it as Failed. If the entry file is already gone, treat the failure as
+        // a no-op rather than recreating it.
+        let json_path = self.journal_dir.join(format!("{}.json", entry.id));
+        if !json_path.exists() {
+            return Ok(JournalEntryStatus::Failed {
+                last_error: error.to_string(),
+            });
+        }
+
+        // A pre-Phase-52 UploadFile entry loads with an empty `sidecar_path` and its only
+        // payload in the in-memory `legacy_ciphertext_b64` field (which is `skip_serializing`).
+        // Re-persisting it via `put`/`update_status` would write a JSON with NO ciphertext and
+        // still no sidecar, leaving an unreplayable missing-payload entry that parks forever
+        // (data loss). Migrate the inline bytes to the canonical `.bin` sidecar BEFORE any
+        // re-persist so the payload is durable and the next mount replays via the sidecar branch.
+        if let Some((migrated, decoded)) = self.migrate_legacy_inline(entry) {
+            let status = if entry.retries >= self.max_retries {
+                JournalEntryStatus::Failed {
+                    last_error: error.to_string(),
+                }
+            } else {
+                JournalEntryStatus::Pending
+            };
+            let mut migrated = migrated;
+            migrated.status = status.clone();
+            if entry.retries < self.max_retries {
+                migrated.retries += 1;
+            }
+            // Route BOTH the retry and the park case through put_with_sidecar so the legacy
+            // inline payload becomes a durable, fsync'd sidecar (never update_status, whose
+            // read-modify-write would re-drop the skip_serializing legacy field).
+            self.put_with_sidecar(&migrated, &decoded)?;
+            return Ok(status);
+        }
+
         if entry.retries >= self.max_retries {
             // Park: transition to Failed, keep on disk (D-09).
             let status = JournalEntryStatus::Failed {
@@ -300,6 +681,59 @@ impl WriteQueue {
             self.put(&updated)?;
             Ok(JournalEntryStatus::Pending)
         }
+    }
+
+    /// Migrate a pre-Phase-52 legacy `UploadFile` entry (inline base64 ciphertext, empty
+    /// `sidecar_path`) to the canonical `.bin` sidecar shape (D-01).
+    ///
+    /// Returns `Some((migrated_entry, decoded_ciphertext))` when `entry` is a legacy
+    /// UploadFile (empty `sidecar_path` + non-empty `legacy_ciphertext_b64`) whose inline
+    /// bytes decode cleanly. The migrated clone points `sidecar_path` at
+    /// `sidecar_path_for(id)`, records the SHA-256 of the decoded ciphertext in
+    /// `sidecar_sha256`, and clears `legacy_ciphertext_b64`, so `put_with_sidecar` accepts it
+    /// (its path-validation requires `sidecar_path == sidecar_path_for(id)`).
+    ///
+    /// Returns `None` for a non-legacy entry, a non-UploadFile op, or an empty/undecodable
+    /// legacy blob (the caller falls through to the normal re-put — an undecodable blob was
+    /// unreplayable anyway, so no recoverable bytes are lost).
+    fn migrate_legacy_inline(&self, entry: &JournalEntry) -> Option<(JournalEntry, Vec<u8>)> {
+        let JournalOp::UploadFile {
+            sidecar_path,
+            legacy_ciphertext_b64,
+            ..
+        } = &entry.op
+        else {
+            return None;
+        };
+        if !sidecar_path.as_os_str().is_empty() || legacy_ciphertext_b64.is_empty() {
+            return None;
+        }
+
+        use base64::Engine;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(legacy_ciphertext_b64)
+            .ok()?;
+
+        let sha256 = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&decoded);
+            hex::encode(hasher.finalize())
+        };
+
+        let mut migrated = entry.clone();
+        if let JournalOp::UploadFile {
+            sidecar_path,
+            sidecar_sha256,
+            legacy_ciphertext_b64,
+            ..
+        } = &mut migrated.op
+        {
+            *sidecar_path = self.sidecar_path_for(&entry.id);
+            *sidecar_sha256 = sha256;
+            legacy_ciphertext_b64.clear();
+        }
+        Some((migrated, decoded))
     }
 
     /// Return entries re-ordered for safe replay.
@@ -332,6 +766,17 @@ impl WriteQueue {
     }
 }
 
+/// Current wall-clock time as milliseconds since the Unix epoch.
+///
+/// Matches the clock journal entries are stamped with (`created_at_ms`); used by
+/// `gc_failed_entries` for the age comparison. Mirrors `registry::now_ms`.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,17 +788,17 @@ mod tests {
             id: id.to_string(),
             vault_root_ipns: vault.to_string(),
             op: JournalOp::UploadFile {
-                ciphertext_b64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"ciphertext",
-                ),
+                sidecar_path: std::path::PathBuf::from(format!("/tmp/{}.bin", id)),
+                sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wrappedkey"),
                 iv_hex: hex::encode(b"iv123456"),
                 file_meta_ipns_name: Some("k51filemetaipns".to_string()),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parentfolder".to_string(),
                 parent_ipns_key_hex: hex::encode(b"ecies-wrapped-parent-ipns-key"),
-                filename: "test.txt".to_string(),
+                // Hex ciphertext (D-04 at-rest encryption); not the plaintext "test.txt".
+                filename_encrypted_hex: hex::encode(b"enc-test.txt"),
                 size: 42,
                 created_at_ms: 1_700_000_000_000,
             },
@@ -372,7 +817,7 @@ mod tests {
                 child_ipns_key_hex: hex::encode(b"ipnskey"),
                 parent_folder_ipns_name: "k51parentfolder".to_string(),
                 parent_ipns_key_hex: hex::encode(b"ecies-wrapped-parent-ipns-key"),
-                name: "my_dir".to_string(),
+                name_encrypted_hex: hex::encode(b"enc-my_dir"),
                 created_at_ms: 1_700_000_000_001,
             },
             retries: 0,
@@ -407,8 +852,13 @@ mod tests {
         assert_eq!(back.id, entry.id);
         assert_eq!(back.vault_root_ipns, entry.vault_root_ipns);
         assert_eq!(back.retries, entry.retries);
-        if let JournalOp::UploadFile { filename, size, .. } = &back.op {
-            assert_eq!(filename, "test.txt");
+        if let JournalOp::UploadFile {
+            filename_encrypted_hex,
+            size,
+            ..
+        } = &back.op
+        {
+            assert_eq!(filename_encrypted_hex, &hex::encode(b"enc-test.txt"));
             assert_eq!(*size, 42);
         } else {
             panic!("Expected UploadFile op");
@@ -422,8 +872,11 @@ mod tests {
         let back: JournalEntry = serde_json::from_slice(&json).expect("deserialize");
         assert_eq!(back.id, entry.id);
         assert_eq!(back.vault_root_ipns, entry.vault_root_ipns);
-        if let JournalOp::MkdirPublish { name, .. } = &back.op {
-            assert_eq!(name, "my_dir");
+        if let JournalOp::MkdirPublish {
+            name_encrypted_hex, ..
+        } = &back.op
+        {
+            assert_eq!(name_encrypted_hex, &hex::encode(b"enc-my_dir"));
         } else {
             panic!("Expected MkdirPublish op");
         }
@@ -608,17 +1061,16 @@ mod tests {
             id: "pk-upload".to_string(),
             vault_root_ipns: "k51vault".to_string(),
             op: JournalOp::UploadFile {
-                ciphertext_b64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"ct",
-                ),
+                sidecar_path: std::path::PathBuf::from("/tmp/pk-upload.bin"),
+                sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: Some("k51file".to_string()),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parent".to_string(),
                 parent_ipns_key_hex: parent_key_hex.clone(),
-                filename: "f.txt".to_string(),
+                filename_encrypted_hex: hex::encode(b"enc-f.txt"),
                 size: 1,
                 created_at_ms: 1_000,
             },
@@ -654,7 +1106,7 @@ mod tests {
                 child_ipns_key_hex: hex::encode(b"ck"),
                 parent_folder_ipns_name: "k51parent".to_string(),
                 parent_ipns_key_hex: parent_key_hex.clone(),
-                name: "newdir".to_string(),
+                name_encrypted_hex: hex::encode(b"enc-newdir"),
                 created_at_ms: 2_000,
             },
             retries: 0,
@@ -736,17 +1188,16 @@ mod tests {
             id: "noplain2".to_string(),
             vault_root_ipns: "k51vault".to_string(),
             op: JournalOp::UploadFile {
-                ciphertext_b64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"ct",
-                ),
+                sidecar_path: std::path::PathBuf::from("/tmp/noplain2.bin"),
+                sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: Some("k51file".to_string()),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parent".to_string(),
                 parent_ipns_key_hex: wrapped_hex.clone(),
-                filename: "g.txt".to_string(),
+                filename_encrypted_hex: hex::encode(b"enc-g.txt"),
                 size: 1,
                 created_at_ms: 1,
             },
@@ -903,17 +1354,16 @@ mod tests {
             id: "t4504-none".to_string(),
             vault_root_ipns: "k51vault4504".to_string(),
             op: JournalOp::UploadFile {
-                ciphertext_b64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"ct",
-                ),
+                sidecar_path: std::path::PathBuf::from("/tmp/t4504-none.bin"),
+                sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: None,
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parent4504".to_string(),
                 parent_ipns_key_hex: hex::encode(b"ecies-parent"),
-                filename: "t4504.txt".to_string(),
+                filename_encrypted_hex: hex::encode(b"enc-t4504.txt"),
                 size: 0,
                 created_at_ms: 1_000,
             },
@@ -1074,5 +1524,435 @@ mod tests {
             matches!(after[0].status, JournalEntryStatus::Failed { .. }),
             "on-disk status must be Failed"
         );
+    }
+
+    // ---- Phase 52 Plan 02: sidecar + encrypted-name journal shape (D-01, D-04) ----
+
+    fn generate_test_keypair() -> (Vec<u8>, Vec<u8>) {
+        let (sk, pk) = ecies::utils::generate_keypair();
+        (sk.serialize().to_vec(), pk.serialize().to_vec())
+    }
+
+    /// D-04 compat: a pre-Phase-52 entry that stored a plaintext `"filename"` (and inline
+    /// `"ciphertext_b64"`, no sidecar) must still deserialize via the `#[serde(alias)]` +
+    /// `#[serde(default)]` shims so it can replay once (passthrough-once).
+    #[test]
+    fn legacy_plaintext_filename_compat() {
+        // Old UploadFile shape: inline ciphertext_b64, plaintext filename, no sidecar fields.
+        let old_upload = r#"{
+            "id": "legacy-upload",
+            "vault_root_ipns": "k51legacy",
+            "op": {
+                "UploadFile": {
+                    "ciphertext_b64": "Y3Q=",
+                    "wrapped_key_hex": "776b",
+                    "iv_hex": "6976",
+                    "file_meta_ipns_name": "k51file",
+                    "file_ipns_key_hex": null,
+                    "parent_folder_ipns_name": "k51parent",
+                    "parent_ipns_key_hex": "6563696573",
+                    "filename": "report.txt",
+                    "size": 1,
+                    "created_at_ms": 1000
+                }
+            },
+            "retries": 0,
+            "status": "Pending"
+        }"#;
+        let entry: JournalEntry =
+            serde_json::from_str(old_upload).expect("legacy UploadFile must deserialize");
+        if let JournalOp::UploadFile {
+            filename_encrypted_hex,
+            sidecar_path,
+            legacy_ciphertext_b64,
+            ..
+        } = &entry.op
+        {
+            // The old plaintext value is carried into the renamed field for one-time replay.
+            assert_eq!(filename_encrypted_hex, "report.txt");
+            // No sidecar on a legacy entry → default (empty) path.
+            assert_eq!(sidecar_path, &std::path::PathBuf::new());
+            // The old inline ciphertext is captured for a one-time passthrough replay.
+            assert_eq!(legacy_ciphertext_b64, "Y3Q=");
+        } else {
+            panic!("Expected UploadFile");
+        }
+
+        // Old MkdirPublish shape: plaintext name.
+        let old_mkdir = r#"{
+            "id": "legacy-mkdir",
+            "vault_root_ipns": "k51legacy",
+            "op": {
+                "MkdirPublish": {
+                    "child_ipns_name": "k51child",
+                    "child_folder_key_hex": "666b",
+                    "child_ipns_key_hex": "636b",
+                    "parent_folder_ipns_name": "k51parent",
+                    "parent_ipns_key_hex": "6563696573",
+                    "name": "folder1",
+                    "created_at_ms": 1000
+                }
+            },
+            "retries": 0,
+            "status": "Pending"
+        }"#;
+        let mentry: JournalEntry =
+            serde_json::from_str(old_mkdir).expect("legacy MkdirPublish must deserialize");
+        if let JournalOp::MkdirPublish {
+            name_encrypted_hex, ..
+        } = &mentry.op
+        {
+            assert_eq!(name_encrypted_hex, "folder1");
+        } else {
+            panic!("Expected MkdirPublish");
+        }
+    }
+
+    /// D-04: a serialized UploadFile entry whose `filename_encrypted_hex` is hex ciphertext
+    /// must NOT contain the plaintext filename and must NOT carry a `ciphertext_b64` key.
+    #[test]
+    fn journal_no_plaintext_filename() {
+        let mut entry = make_upload_entry("noplainname", "k51vault");
+        if let JournalOp::UploadFile {
+            filename_encrypted_hex,
+            ..
+        } = &mut entry.op
+        {
+            // Simulate a real ECIES-wrapped filename: hex of some ciphertext bytes.
+            *filename_encrypted_hex = hex::encode(b"\x00\x01wrapped-ciphertext-of-report.txt");
+        }
+        let json = String::from_utf8(serde_json::to_vec(&entry).unwrap()).unwrap();
+        assert!(
+            !json.contains("report.txt"),
+            "serialized journal must not contain the plaintext filename"
+        );
+        assert!(
+            !json.contains("ciphertext_b64"),
+            "serialized journal must not carry a ciphertext_b64 key"
+        );
+        assert!(
+            json.contains("filename_encrypted_hex"),
+            "serialized journal must carry filename_encrypted_hex"
+        );
+    }
+
+    /// D-04 (VALIDATION row D-04-b): the write-side filename encryption shape is decryptable
+    /// by the replay side — `wrap_key` → hex → store → hex::decode → `unwrap_key` round-trips.
+    #[test]
+    fn filename_encryption_round_trips() {
+        let (private_key, public_key) = generate_test_keypair();
+        let name = b"report.txt";
+
+        let filename_encrypted_hex =
+            hex::encode(cipherbox_crypto::ecies::wrap_key(name, &public_key).unwrap());
+
+        let decoded = hex::decode(&filename_encrypted_hex).unwrap();
+        let unwrapped = cipherbox_crypto::ecies::unwrap_key(&decoded, &private_key).unwrap();
+        assert_eq!(
+            String::from_utf8(unwrapped.to_vec()).unwrap(),
+            "report.txt",
+            "filename must survive wrap→hex→decode→unwrap"
+        );
+    }
+
+    /// D-01: `put_with_sidecar` streams ciphertext to a 0600 `<id>.bin`, writes a
+    /// ciphertext-free `.json`, and `remove` deletes both files idempotently.
+    #[test]
+    fn sidecar_ciphertext_not_in_json() {
+        let (q, dir) = make_temp_queue();
+        let id = "sidecar-test";
+        let ciphertext = b"this-is-the-secret-ciphertext-blob";
+
+        let mut entry = make_upload_entry(id, "k51vault");
+        if let JournalOp::UploadFile {
+            ref mut sidecar_path,
+            ..
+        } = entry.op
+        {
+            *sidecar_path = q.sidecar_path_for(id);
+        }
+
+        q.put_with_sidecar(&entry, ciphertext).expect("put_with_sidecar");
+
+        let bin_path = dir.join(format!("{}.bin", id));
+        let json_path = dir.join(format!("{}.json", id));
+        assert!(bin_path.exists(), "sidecar .bin must exist");
+        assert!(json_path.exists(), ".json entry must exist");
+
+        // Ciphertext round-trips from the sidecar.
+        assert_eq!(std::fs::read(&bin_path).unwrap(), ciphertext);
+
+        // The .json must NOT contain the ciphertext bytes.
+        let json_bytes = std::fs::read(&json_path).unwrap();
+        let needle = b"this-is-the-secret-ciphertext-blob";
+        assert!(
+            !json_bytes
+                .windows(needle.len())
+                .any(|w| w == needle),
+            ".json must not contain the raw ciphertext"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&bin_path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "sidecar must be 0600");
+        }
+
+        // remove deletes BOTH files, idempotently.
+        q.remove(id).expect("remove");
+        assert!(!bin_path.exists(), "remove must delete the .bin");
+        assert!(!json_path.exists(), "remove must delete the .json");
+        q.remove(id).expect("second remove is idempotent");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D-01 Pitfall 2: a stale `.bin` from a prior aborted write is cleaned up before
+    /// `put_with_sidecar` re-writes, so no orphaned ciphertext lingers.
+    #[test]
+    fn put_with_sidecar_cleans_stale_bin() {
+        let (q, dir) = make_temp_queue();
+        let id = "stale-bin-test";
+        let bin_path = q.sidecar_path_for(id);
+
+        // Pre-seed a stale sidecar with different content.
+        std::fs::write(&bin_path, b"STALE-LEFTOVER-CIPHERTEXT").unwrap();
+
+        let mut entry = make_upload_entry(id, "k51vault");
+        if let JournalOp::UploadFile {
+            ref mut sidecar_path,
+            ..
+        } = entry.op
+        {
+            *sidecar_path = bin_path.clone();
+        }
+        let fresh = b"fresh-ciphertext";
+        q.put_with_sidecar(&entry, fresh).expect("put_with_sidecar");
+
+        assert_eq!(
+            std::fs::read(&bin_path).unwrap(),
+            fresh,
+            "stale sidecar must be overwritten with fresh ciphertext"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Task 1 & 2 (D-02): purge_vault + gc_failed_entries ----
+
+    /// Build an UploadFile entry whose `sidecar_path` points at the queue's real `.bin`
+    /// path, with caller-controlled status and `created_at_ms` (for GC age/size tests).
+    fn make_sidecar_entry(
+        q: &WriteQueue,
+        id: &str,
+        vault: &str,
+        status: JournalEntryStatus,
+        created_at_ms: u64,
+    ) -> JournalEntry {
+        let mut entry = make_upload_entry(id, vault);
+        if let JournalOp::UploadFile {
+            sidecar_path,
+            created_at_ms: cam,
+            ..
+        } = &mut entry.op
+        {
+            *sidecar_path = q.sidecar_path_for(id);
+            *cam = created_at_ms;
+        }
+        entry.status = status;
+        entry
+    }
+
+    /// D-02: `purge_vault` removes every `.json`+`.bin` for the target vault only.
+    #[test]
+    fn purge_vault_removes_all() {
+        let (q, dir) = make_temp_queue();
+
+        let a1 = make_sidecar_entry(&q, "purge-a1", "vault-A", JournalEntryStatus::Pending, 1_000);
+        let a2 = make_sidecar_entry(&q, "purge-a2", "vault-A", JournalEntryStatus::Pending, 2_000);
+        let b1 = make_sidecar_entry(&q, "purge-b1", "vault-B", JournalEntryStatus::Pending, 3_000);
+        q.put_with_sidecar(&a1, b"a1-cipher").expect("put a1");
+        q.put_with_sidecar(&a2, b"a2-cipher").expect("put a2");
+        q.put_with_sidecar(&b1, b"b1-cipher").expect("put b1");
+
+        let removed = q.purge_vault("vault-A").expect("purge vault A");
+        assert_eq!(removed, 2, "two vault-A entries removed");
+
+        for id in ["purge-a1", "purge-a2"] {
+            assert!(!dir.join(format!("{}.json", id)).exists(), "{}.json gone", id);
+            assert!(!dir.join(format!("{}.bin", id)).exists(), "{}.bin gone", id);
+        }
+        assert!(dir.join("purge-b1.json").exists(), "vault-B .json survives");
+        assert!(dir.join("purge-b1.bin").exists(), "vault-B .bin survives");
+
+        // Purging a vault with no entries is a no-op returning 0.
+        let none = q.purge_vault("vault-EMPTY").expect("purge empty vault");
+        assert_eq!(none, 0, "empty vault purge returns 0");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D-02: `gc_failed_entries` ages out old Failed entries, leaving recent Failed and
+    /// non-Failed entries untouched.
+    #[test]
+    fn gc_purges_old_failed() {
+        let (q, dir) = make_temp_queue();
+        let now = now_ms();
+        let day_ms = 86_400_000u64;
+        let failed = JournalEntryStatus::Failed {
+            last_error: "x".to_string(),
+        };
+
+        // Old Failed (40 days old), recent Failed (1 day old), and a Pending (old but not Failed).
+        let old = make_sidecar_entry(&q, "gc-old", "v", failed.clone(), now - 40 * day_ms);
+        let recent = make_sidecar_entry(&q, "gc-recent", "v", failed.clone(), now - day_ms);
+        let pending =
+            make_sidecar_entry(&q, "gc-pending", "v", JournalEntryStatus::Pending, now - 40 * day_ms);
+        q.put_with_sidecar(&old, b"old-cipher").expect("put old");
+        q.put_with_sidecar(&recent, b"recent-cipher").expect("put recent");
+        q.put_with_sidecar(&pending, b"pending-cipher").expect("put pending");
+
+        let removed = q
+            .gc_failed_entries(JOURNAL_GC_MAX_AGE_DAYS, u64::MAX)
+            .expect("gc");
+        assert_eq!(removed, 1, "only the old Failed entry is removed");
+
+        assert!(!dir.join("gc-old.json").exists(), "old Failed .json gone");
+        assert!(!dir.join("gc-old.bin").exists(), "old Failed .bin gone");
+        assert!(dir.join("gc-recent.json").exists(), "recent Failed survives");
+        assert!(dir.join("gc-pending.json").exists(), "Pending never GC'd");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D-02: `gc_failed_entries` trims oldest-first to the size budget (counting `.bin`),
+    /// and removes `.bin` orphans with no matching `.json`.
+    #[test]
+    fn gc_purges_to_size_budget() {
+        let (q, dir) = make_temp_queue();
+        let now = now_ms();
+        let failed = JournalEntryStatus::Failed {
+            last_error: "x".to_string(),
+        };
+
+        // Three recent Failed entries, each with a ~1 KiB sidecar. Measure one entry's actual
+        // on-disk size (.json + .bin) and set the budget to hold exactly one, so the two oldest
+        // must be trimmed regardless of the exact JSON length.
+        let blob = vec![0u8; 1024];
+        let e1 = make_sidecar_entry(&q, "sz-1", "v", failed.clone(), now - 3_000);
+        let e2 = make_sidecar_entry(&q, "sz-2", "v", failed.clone(), now - 2_000);
+        let e3 = make_sidecar_entry(&q, "sz-3", "v", failed.clone(), now - 1_000);
+        q.put_with_sidecar(&e1, &blob).expect("put e1");
+        q.put_with_sidecar(&e2, &blob).expect("put e2");
+        q.put_with_sidecar(&e3, &blob).expect("put e3");
+
+        // Orphan sidecar with no matching .json.
+        let orphan = q.sidecar_path_for("sz-orphan");
+        std::fs::write(&orphan, b"orphaned-ciphertext").expect("write orphan");
+
+        // Budget = 1.5x a single entry: holds exactly one (the newest); two oldest trimmed.
+        let one_entry_size = q.entry_on_disk_size("sz-3");
+        let budget = one_entry_size + one_entry_size / 2;
+        let removed = q.gc_failed_entries(36_500, budget).expect("gc");
+
+        // 2 oldest entries + 1 orphan removed = 3.
+        assert_eq!(removed, 3, "two oldest entries + orphan removed");
+        assert!(!dir.join("sz-1.json").exists(), "oldest sz-1 trimmed");
+        assert!(!dir.join("sz-2.json").exists(), "sz-2 trimmed");
+        assert!(dir.join("sz-3.json").exists(), "newest sz-3 survives");
+        assert!(!orphan.exists(), "orphan .bin removed");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// T-52-16 / T-52-15: a `.bin` whose sibling `.json` exists but is torn/truncated
+    /// (a crash mid-JSON-write after the `.bin` fsync) is never replayable, so GC pass 3
+    /// must treat it as orphaned and reap the live `.bin` instead of keeping it forever.
+    #[test]
+    fn gc_reaps_bin_with_malformed_json() {
+        let (q, dir) = make_temp_queue();
+        let now = now_ms();
+        let failed = JournalEntryStatus::Failed {
+            last_error: "x".to_string(),
+        };
+
+        // A well-formed Failed entry whose .bin must be PRESERVED (its .json parses).
+        let live = make_sidecar_entry(&q, "gc-live", "v", failed, now - 1_000);
+        q.put_with_sidecar(&live, b"live-cipher").expect("put live");
+
+        // A live, durable .bin whose sibling .json exists but is corrupt (unparseable).
+        let bad_bin = q.sidecar_path_for("gc-torn");
+        std::fs::write(&bad_bin, b"durable-ciphertext").expect("write torn .bin");
+        std::fs::write(dir.join("gc-torn.json"), b"{ this is not valid json")
+            .expect("write torn .json");
+
+        let removed = q.gc_failed_entries(JOURNAL_GC_MAX_AGE_DAYS, u64::MAX).expect("gc");
+
+        assert_eq!(removed, 1, "only the orphaned (malformed-json) sidecar is reaped");
+        assert!(!bad_bin.exists(), "sidecar with unparseable .json must be reaped");
+        assert!(dir.join("gc-torn.json").exists(), "the malformed .json itself is left in place");
+        assert!(dir.join("gc-live.json").exists(), "well-formed entry survives");
+        assert!(dir.join("gc-live.bin").exists(), "well-formed entry's sidecar is preserved");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D-01 data-loss guard: a pre-Phase-52 legacy UploadFile entry (empty `sidecar_path`,
+    /// ciphertext only in the in-memory `legacy_ciphertext_b64` field) must have its inline
+    /// bytes migrated to a durable `.bin` sidecar by `record_failure` BEFORE any re-persist,
+    /// so the next mount replays via the sidecar branch instead of parking a missing payload.
+    #[test]
+    fn record_failure_migrates_legacy_inline_to_sidecar() {
+        use base64::Engine;
+        let (q, dir) = make_temp_queue();
+
+        // Build a legacy entry: empty sidecar_path, ciphertext only inline (base64).
+        let ciphertext = b"legacy-inline-ciphertext-bytes".to_vec();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&ciphertext);
+        let mut entry = make_upload_entry("legacy-mig", "v");
+        if let JournalOp::UploadFile {
+            sidecar_path,
+            sidecar_sha256,
+            legacy_ciphertext_b64,
+            ..
+        } = &mut entry.op
+        {
+            *sidecar_path = std::path::PathBuf::new(); // legacy: no sidecar
+            sidecar_sha256.clear();
+            *legacy_ciphertext_b64 = b64;
+        }
+        // Persist the JSON (skip_serializing drops legacy_ciphertext_b64 on disk, exactly
+        // as a real pre-52 entry behaves once reloaded).
+        q.put(&entry).expect("put legacy entry");
+        assert!(!dir.join("legacy-mig.bin").exists(), "no sidecar before migration");
+
+        // A transient replay failure: record_failure must migrate the inline bytes first.
+        let status = q.record_failure(&entry, "transient upload error").expect("record_failure");
+        assert!(matches!(status, JournalEntryStatus::Pending), "below max → Pending retry");
+
+        // The canonical sidecar now exists with the exact ciphertext, and the reloaded
+        // entry carries the derived path + hash (so the next mount uses the sidecar branch).
+        let bin_path = q.sidecar_path_for("legacy-mig");
+        assert!(bin_path.exists(), "inline ciphertext must be migrated to the .bin sidecar");
+        assert_eq!(std::fs::read(&bin_path).unwrap(), ciphertext, "sidecar bytes must round-trip");
+
+        let reloaded = q.load_all_for_vault("v").expect("reload");
+        let mig = reloaded.iter().find(|e| e.id == "legacy-mig").expect("entry present");
+        assert_eq!(mig.retries, 1, "retry counter advanced");
+        if let JournalOp::UploadFile { sidecar_path, sidecar_sha256, .. } = &mig.op {
+            assert_eq!(sidecar_path, &bin_path, "persisted sidecar_path is the canonical path");
+            let expected = {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(&ciphertext);
+                hex::encode(h.finalize())
+            };
+            assert_eq!(sidecar_sha256, &expected, "persisted sha256 matches the ciphertext");
+        } else {
+            panic!("expected UploadFile op");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
