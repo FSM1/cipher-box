@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9c2f65da077e",
+  "session_id": "93dbeffd-9377-4876-8074-3412d9fee111",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-20T23:53:18.874784Z",
+  "branch": "chore/ci-gate-stale-release-as-on-release-pr",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f9dc91530582",
+  "checkpoint_transcript_start": 392,
+  "transcript_lines_at_start": 392,
+  "token_usage": {
+    "input_tokens": 2076,
+    "cache_creation_tokens": 29083,
+    "cache_read_tokens": 1798440,
+    "output_tokens": 18013,
+    "api_call_count": 10
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Fix a false-positive CI failure where the stale `release-as` pin guard was incorrectly flagging the release-please PR (#528) as having stale version pins.",
+    "outcome": "Confirmed that the guard false-positives on the release PR because release-please bumps manifest versions to match `release-as` (making them equal, which the guard treats as stale). Fixed by gating the live check off `release-please--*` branch PRs in ci.yml while keeping the unit tests unconditional.",
+    "learnings": {
+      "repo": [
+        "The stale-pin guard (`check-stale-release-as.js`) compares `release-as` in `release-please-config.json` against the current manifest version; equal values signal a forgotten/stale pin on normal PRs but are expected on the release-please PR itself.",
+        "The release-please PR always uses branch name `release-please--branches--main` with author `cipherbox-release-bot` and `separate-pull-requests: false` (single PR).",
+        "The stale-pin guard is invoked exclusively in `.github/workflows/ci.yml` lint job (lines 71-74) and only triggers on `pull_request` to main — never on push.",
+        "On main, `release-as` values are always strictly ahead of manifest versions (pending targets); on the release PR they become equal after release-please bumps the manifest.",
+        "Phases 52 (FUSE durability/at-rest safety) and 54 (E2E test infra typing — migrating .mjs helpers to .ts) were merged in this pull."
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 67,
+          "end_line": 81,
+          "finding": "Lint job stale-pin steps split into two: unit test step (always runs) and live check step gated with `if: \"!startsWith(github.head_ref, 'release-please--')\"`"
+        }
+      ],
+      "workflow": [
+        "When a guard compares config-vs-manifest state, it can't distinguish 'about to ship' from 'already shipped and forgotten' without context about the branch — the branch name is the right discriminator.",
+        "Gating the live check (not the unit tests) off the release branch preserves coverage: stale pins on feature PRs still surface, but the release PR is not false-flagged.",
+        "actionlint pre-existing warnings (lines 459, 485) were noted but intentionally left out of scope to keep the change minimal."
+      ]
+    },
+    "friction": [
+      "The guard had no mechanism to distinguish a legitimate in-flight release (release-as == manifest is expected) from a genuinely stale forgotten pin — both produce the same equality condition."
+    ],
+    "open_items": [
+      "Two pre-existing actionlint warnings in ci.yml (lines 459, 485) were identified but not addressed — left as known tech debt.",
+      "Two pending todos added in this pull: `2026-06-20-e2e-helper-scripts-zeroize-userprivatekey.md` and `2026-06-20-tsconfig-scripts-hardcoded-types-node-version.md` are unresolved."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-20T23:52:56.553794Z",
+    "agent_lines": 12,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 12,
+    "total_lines_changed": 17,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
