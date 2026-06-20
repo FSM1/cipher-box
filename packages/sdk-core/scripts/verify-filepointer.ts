@@ -1,0 +1,162 @@
+import {
+  downloadAndDecrypt,
+  resolveFileMetadata,
+  loadFolderMetadata,
+  loadVaultKeyBlob,
+  type SdkContext,
+} from '@cipherbox/sdk-core';
+import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
+import { authenticate, buildSdkContext, parseCliArgs } from '../../../tests/e2e-helpers/auth';
+
+interface VerifyFilePointerArgs {
+  apiUrl: string;
+  secret: string;
+  email: string;
+  fileName: string;
+  folderName?: string;
+  expectedContent?: string;
+}
+
+function parseArgs(argv: string[]): VerifyFilePointerArgs {
+  const values = parseCliArgs(argv);
+
+  const apiUrl = values['api-url'];
+  const secret = process.env.TEST_SECRET;
+  const email = values['email'];
+  const fileName = values['file-name'];
+
+  if (!apiUrl || !email || !fileName || !secret) {
+    throw new Error(
+      'Usage: verify-filepointer.mjs --api-url <url> --email <email> --file-name <name> [--folder-name <subfolder>] [--expected-content <text>] (requires TEST_SECRET env var)'
+    );
+  }
+
+  return {
+    apiUrl,
+    secret,
+    email,
+    fileName,
+    // Optional: a single subfolder (at root level) to look in instead of root.
+    // Used to verify a file after it has been moved into a subfolder.
+    folderName: values['folder-name'],
+    expectedContent: values['expected-content'],
+  };
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  const auth = await authenticate(args.apiUrl, args.email, args.secret);
+  const accessToken = auth.accessToken;
+  const userPrivateKey = Uint8Array.from(Buffer.from(auth.privateKeyHex, 'hex'));
+
+  const ctx: SdkContext = buildSdkContext(args.apiUrl, accessToken);
+  const axiosInstance = ctx.axiosInstance;
+  if (!axiosInstance) {
+    throw new Error('SdkContext missing axiosInstance');
+  }
+
+  const vaultResponse = await axiosInstance.get('/vault');
+  const rootIpnsName = vaultResponse.data.rootIpnsName;
+  if (!rootIpnsName) {
+    throw new Error('Vault response missing rootIpnsName');
+  }
+
+  const vaultKeyBlob = await loadVaultKeyBlob({ userPrivateKey, ctx });
+  if (!vaultKeyBlob) {
+    throw new Error('Vault key blob not found');
+  }
+
+  const folder = await loadFolderMetadata({
+    ipnsName: rootIpnsName,
+    folderKey: vaultKeyBlob.rootFolderKey,
+    ctx,
+  });
+  if (!folder) {
+    throw new Error(`Root folder metadata not found for ${rootIpnsName}`);
+  }
+
+  // Resolve which folder to search in, and the folderKey the file's metadata is
+  // encrypted under. Default: root. With --folder-name, descend one level into
+  // that subfolder (its folderKey is ECIES-wrapped for the vault on its
+  // FolderEntry), so a file moved into a subfolder can be verified — and read
+  // back under the destination folderKey, which is exactly what the
+  // move/restore re-encryption must produce.
+  let searchChildren = folder.metadata.children;
+  let fileFolderKey = vaultKeyBlob.rootFolderKey;
+
+  if (args.folderName) {
+    const subEntry = folder.metadata.children.find(
+      (child) => child.type === 'folder' && child.name === args.folderName
+    );
+    if (!subEntry || subEntry.type !== 'folder') {
+      throw new Error(`Subfolder not found at root: ${args.folderName}`);
+    }
+    const subFolderKey = await unwrapKey(hexToBytes(subEntry.folderKeyEncrypted), userPrivateKey);
+    const subFolder = await loadFolderMetadata({
+      ipnsName: subEntry.ipnsName,
+      folderKey: subFolderKey,
+      ctx,
+    });
+    if (!subFolder) {
+      throw new Error(`Subfolder metadata not found for ${args.folderName}`);
+    }
+    searchChildren = subFolder.metadata.children;
+    fileFolderKey = subFolderKey;
+  }
+
+  const filePointer = searchChildren.find(
+    (child) => child.type === 'file' && child.name === args.fileName
+  );
+
+  if (!filePointer || filePointer.type !== 'file') {
+    throw new Error(`FilePointer not found for ${args.fileName}`);
+  }
+
+  if (!filePointer.fileMetaIpnsName) {
+    throw new Error(`FilePointer for ${args.fileName} is missing fileMetaIpnsName`);
+  }
+
+  const { metadata, metadataCid } = await resolveFileMetadata(
+    filePointer.fileMetaIpnsName,
+    fileFolderKey,
+    ctx
+  );
+
+  let contentVerified = false;
+  if (args.expectedContent !== undefined) {
+    const plaintext = await downloadAndDecrypt({
+      cid: metadata.cid,
+      fileKeyEncrypted: metadata.fileKeyEncrypted,
+      fileIv: metadata.fileIv,
+      userPrivateKey,
+      encryptionMode: metadata.encryptionMode,
+      ctx,
+    });
+
+    const decoded = new TextDecoder().decode(plaintext);
+    if (decoded !== args.expectedContent) {
+      throw new Error(
+        `Downloaded content mismatch for ${args.fileName}: expected ${JSON.stringify(args.expectedContent)}, got ${JSON.stringify(decoded)}`
+      );
+    }
+    contentVerified = true;
+  }
+
+  console.log(
+    JSON.stringify({
+      rootIpnsName,
+      rootMetadataCid: folder.cid,
+      fileName: args.fileName,
+      fileMetaIpnsName: filePointer.fileMetaIpnsName,
+      fileMetadataCid: metadataCid,
+      fileCid: metadata.cid,
+      contentVerified,
+    })
+  );
+}
+
+main().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+});
