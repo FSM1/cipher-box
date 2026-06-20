@@ -27,7 +27,7 @@ function parseArgs(argv: string[]): VerifyFilePointerArgs {
 
   if (!apiUrl || !email || !fileName || !secret) {
     throw new Error(
-      'Usage: verify-filepointer.mjs --api-url <url> --email <email> --file-name <name> [--folder-name <subfolder>] [--expected-content <text>] (requires TEST_SECRET env var)'
+      'Usage: verify-filepointer.ts --api-url <url> --email <email> --file-name <name> [--folder-name <subfolder>] [--expected-content <text>] (requires TEST_SECRET env var)'
     );
   }
 

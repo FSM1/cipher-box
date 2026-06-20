@@ -56,7 +56,7 @@ function parseArgs(argv: string[]): EditFilePointerArgs {
 
   if (!apiUrl || !email || !fileName || !secret || newContent === undefined) {
     throw new Error(
-      'Usage: edit-filepointer.mjs --api-url <url> --email <email> --file-name <name> --new-content <text> (requires TEST_SECRET env var)'
+      'Usage: edit-filepointer.ts --api-url <url> --email <email> --file-name <name> --new-content <text> (requires TEST_SECRET env var)'
     );
   }
 

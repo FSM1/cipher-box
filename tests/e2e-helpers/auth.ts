@@ -2,7 +2,7 @@
  * Shared, typed auth/ctx/arg-parsing helpers for the E2E helper scripts (D-04).
  *
  * Extracted verbatim (behavior-preserving, D-07) from
- * `packages/sdk-core/scripts/edit-filepointer.mjs` so every migrated `.ts`
+ * `packages/sdk-core/scripts/edit-filepointer.ts` so every migrated `.ts`
  * helper imports a single typed contract instead of re-deriving auth/ctx.
  *
  * Security: never log or print `accessToken` or `privateKeyHex`. The CLI

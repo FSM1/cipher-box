@@ -43,7 +43,7 @@ function parseArgs(argv: string[]): RenameFolderArgs {
 
   if (!apiUrl || !email || !folderName || !secret || !newName) {
     throw new Error(
-      'Usage: rename-folder.mjs --api-url <url> --email <email> --folder-name <name> --new-name <name> (requires TEST_SECRET env var)'
+      'Usage: rename-folder.ts --api-url <url> --email <email> --folder-name <name> --new-name <name> (requires TEST_SECRET env var)'
     );
   }
 
