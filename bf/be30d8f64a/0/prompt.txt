@@ -263,3 +263,13 @@ Note: `git verify-commit` reports an `allowedSignersFile` warning locally — th
 ---
 
 ok quota is reset, please resume the workflow
+
+---
+
+<task-notification>
+<task-id>b5of39j6h</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/b5of39j6h.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until CodeRabbit review completes" completed (exit code 0)</summary>
+</task-notification>
