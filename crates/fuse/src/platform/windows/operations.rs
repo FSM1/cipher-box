@@ -19,11 +19,10 @@ pub mod implementation {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use winfsp::filesystem::{
-        DirMarker, FileInfo, FileSystemContext, FileSecurity, OpenFileInfo,
-    };
     use widestring::U16CStr;
+    use winfsp::filesystem::{DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo};
     use winfsp::FspError;
+    use zeroize::Zeroizing;
 
     use crate::inode::{FileAttrs, ROOT_INO};
     use crate::CipherBoxFS;
@@ -31,16 +30,42 @@ pub mod implementation {
     // Re-export is_windows_special so sub-modules can import from here
     pub use crate::helpers::is_windows_special;
 
+    /// Build a `Zeroizing<[u8; 32]>` from a slice without ever materializing a
+    /// plain `[u8; 32]` temporary (preallocate-then-copy). A `try_into()` would
+    /// briefly leave an un-zeroed copy of sensitive key material on the stack.
+    fn zeroizing_32_from_slice(bytes: &[u8], message: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+        if bytes.len() != 32 {
+            return Err(message.to_string());
+        }
+        let mut out = Zeroizing::new([0_u8; 32]);
+        out.copy_from_slice(bytes);
+        Ok(out)
+    }
+
     // ── NTSTATUS error helpers ─────────────────────────────────────────
     // FspError::IO cannot be used in const context since ErrorKind may not be
     // const-constructible, so we use inline functions.
-    pub fn status_object_name_not_found() -> FspError { FspError::NTSTATUS(0xC0000034_u32 as i32) }
-    pub fn status_invalid_parameter() -> FspError { FspError::NTSTATUS(0xC000000D_u32 as i32) }
-    pub fn status_object_name_collision() -> FspError { FspError::NTSTATUS(0xC0000035_u32 as i32) }
-    pub fn status_directory_not_empty() -> FspError { FspError::NTSTATUS(0xC0000101_u32 as i32) }
-    pub fn status_invalid_handle() -> FspError { FspError::NTSTATUS(0xC0000008_u32 as i32) }
-    pub fn status_io_device_error() -> FspError { FspError::IO(std::io::ErrorKind::Other) }
-    pub fn status_device_not_ready() -> FspError { FspError::NTSTATUS(0xC00000A3_u32 as i32) }
+    pub fn status_object_name_not_found() -> FspError {
+        FspError::NTSTATUS(0xC0000034_u32 as i32)
+    }
+    pub fn status_invalid_parameter() -> FspError {
+        FspError::NTSTATUS(0xC000000D_u32 as i32)
+    }
+    pub fn status_object_name_collision() -> FspError {
+        FspError::NTSTATUS(0xC0000035_u32 as i32)
+    }
+    pub fn status_directory_not_empty() -> FspError {
+        FspError::NTSTATUS(0xC0000101_u32 as i32)
+    }
+    pub fn status_invalid_handle() -> FspError {
+        FspError::NTSTATUS(0xC0000008_u32 as i32)
+    }
+    pub fn status_io_device_error() -> FspError {
+        FspError::IO(std::io::ErrorKind::Other)
+    }
+    pub fn status_device_not_ready() -> FspError {
+        FspError::NTSTATUS(0xC00000A3_u32 as i32)
+    }
 
     /// Permissive self-relative security descriptor granting FILE_ALL_ACCESS
     /// to Everyone (S-1-1-0). CipherBox is single-user; encryption is the real
@@ -53,36 +78,32 @@ pub mod implementation {
     /// which prevents directory deletion via `Remove-Item` / `RemoveDirectory()`.
     pub static PERMISSIVE_SD: [u8; 72] = [
         // ── SECURITY_DESCRIPTOR header (20 bytes) ──
-        0x01,                   // Revision
-        0x00,                   // Sbz1
-        0x04, 0x80,             // Control: SE_SELF_RELATIVE | SE_DACL_PRESENT
+        0x01, // Revision
+        0x00, // Sbz1
+        0x04, 0x80, // Control: SE_SELF_RELATIVE | SE_DACL_PRESENT
         0x30, 0x00, 0x00, 0x00, // OwnerOffset = 48
         0x3C, 0x00, 0x00, 0x00, // GroupOffset = 60
         0x00, 0x00, 0x00, 0x00, // SaclOffset = 0 (none)
         0x14, 0x00, 0x00, 0x00, // DaclOffset = 20
         // ── ACL header (8 bytes) ──
-        0x02,                   // AclRevision
-        0x00,                   // Sbz1
-        0x1C, 0x00,             // AclSize = 28
-        0x01, 0x00,             // AceCount = 1
-        0x00, 0x00,             // Sbz2
+        0x02, // AclRevision
+        0x00, // Sbz1
+        0x1C, 0x00, // AclSize = 28
+        0x01, 0x00, // AceCount = 1
+        0x00, 0x00, // Sbz2
         // ── ACCESS_ALLOWED_ACE (20 bytes) ──
-        0x00,                   // AceType = ACCESS_ALLOWED
-        0x00,                   // AceFlags
-        0x14, 0x00,             // AceSize = 20
+        0x00, // AceType = ACCESS_ALLOWED
+        0x00, // AceFlags
+        0x14, 0x00, // AceSize = 20
         0xFF, 0x01, 0x1F, 0x00, // Mask = FILE_ALL_ACCESS (0x001F01FF)
         // SID: S-1-1-0 (Everyone)
-        0x01, 0x01,             // Revision, SubAuthorityCount
+        0x01, 0x01, // Revision, SubAuthorityCount
         0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // IdentifierAuthority
         0x00, 0x00, 0x00, 0x00, // SubAuthority[0]
         // ── Owner SID: S-1-1-0 (12 bytes) ──
-        0x01, 0x01,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-        0x00, 0x00, 0x00, 0x00,
+        0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
         // ── Group SID: S-1-1-0 (12 bytes) ──
-        0x01, 0x01,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-        0x00, 0x00, 0x00, 0x00,
+        0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
     ];
 
     // ── WinFsp Context Types ───────────────────────────────────────────────
@@ -206,43 +227,33 @@ pub mod implementation {
         let rt = fs.rt.clone();
 
         crate::block_with_timeout(&rt, async {
-            let encrypted_bytes =
-                cipherbox_api_client::ipfs::fetch_content(&api, &cid_owned).await.map_err(|e| e.to_string())?;
-            let encrypted_file_key = hex::decode(&key_hex)
-                .map_err(|_| "Invalid file key hex".to_string())?;
-            let file_key = zeroize::Zeroizing::new(
-                cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
-                    .map_err(|e| format!("File key unwrap failed: {}", e))?,
-            );
-            let file_key_arr: [u8; 32] = file_key
-                .as_slice()
-                .try_into()
-                .map_err(|_| "Invalid file key length".to_string())?;
+            let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(&api, &cid_owned)
+                .await
+                .map_err(|e| e.to_string())?;
+            let encrypted_file_key =
+                hex::decode(&key_hex).map_err(|_| "Invalid file key hex".to_string())?;
+            // unwrap_key returns Zeroizing<Vec<u8>> (S3/D-05).
+            let file_key = cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
+                .map_err(|e| format!("File key unwrap failed: {}", e))?;
+            let file_key_arr =
+                zeroizing_32_from_slice(file_key.as_slice(), "Invalid file key length")?;
 
             let plaintext = if mode == "CTR" {
-                let iv = hex::decode(&iv_hex_owned)
-                    .map_err(|_| "Invalid file IV hex".to_string())?;
+                let iv =
+                    hex::decode(&iv_hex_owned).map_err(|_| "Invalid file IV hex".to_string())?;
                 let iv_arr: [u8; 16] = iv
                     .try_into()
                     .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
-                cipherbox_crypto::aes_ctr::decrypt_aes_ctr(
-                    &encrypted_bytes,
-                    &file_key_arr,
-                    &iv_arr,
-                )
-                .map_err(|e| format!("CTR file decryption failed: {}", e))?
+                cipherbox_crypto::aes_ctr::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
+                    .map_err(|e| format!("CTR file decryption failed: {}", e))?
             } else {
-                let iv = hex::decode(&iv_hex_owned)
-                    .map_err(|_| "Invalid file IV hex".to_string())?;
+                let iv =
+                    hex::decode(&iv_hex_owned).map_err(|_| "Invalid file IV hex".to_string())?;
                 let iv_arr: [u8; 12] = iv
                     .try_into()
                     .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
-                cipherbox_crypto::aes::decrypt_aes_gcm(
-                    &encrypted_bytes,
-                    &file_key_arr,
-                    &iv_arr,
-                )
-                .map_err(|e| format!("GCM file decryption failed: {}", e))?
+                cipherbox_crypto::aes::decrypt_aes_gcm(&encrypted_bytes, &file_key_arr, &iv_arr)
+                    .map_err(|e| format!("GCM file decryption failed: {}", e))?
             };
 
             Ok(plaintext)
@@ -258,42 +269,30 @@ pub mod implementation {
         encryption_mode: &str,
         private_key: &[u8],
     ) -> Result<Vec<u8>, String> {
-        let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(api, cid).await.map_err(|e| e.to_string())?;
-        let encrypted_file_key = hex::decode(encrypted_file_key_hex)
-            .map_err(|_| "Invalid file key hex".to_string())?;
-        let file_key = zeroize::Zeroizing::new(
-            cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, private_key)
-                .map_err(|e| format!("File key unwrap failed: {}", e))?,
-        );
-        let file_key_arr: [u8; 32] = file_key
-            .as_slice()
-            .try_into()
-            .map_err(|_| "Invalid file key length".to_string())?;
+        let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(api, cid)
+            .await
+            .map_err(|e| e.to_string())?;
+        let encrypted_file_key =
+            hex::decode(encrypted_file_key_hex).map_err(|_| "Invalid file key hex".to_string())?;
+        // unwrap_key returns Zeroizing<Vec<u8>> (S3/D-05).
+        let file_key = cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, private_key)
+            .map_err(|e| format!("File key unwrap failed: {}", e))?;
+        let file_key_arr = zeroizing_32_from_slice(file_key.as_slice(), "Invalid file key length")?;
 
         let plaintext = if encryption_mode == "CTR" {
-            let iv =
-                hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
+            let iv = hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
             let iv_arr: [u8; 16] = iv
                 .try_into()
                 .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
-            cipherbox_crypto::aes_ctr::decrypt_aes_ctr(
-                &encrypted_bytes,
-                &file_key_arr,
-                &iv_arr,
-            )
-            .map_err(|e| format!("CTR decryption failed: {}", e))?
+            cipherbox_crypto::aes_ctr::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
+                .map_err(|e| format!("CTR decryption failed: {}", e))?
         } else {
-            let iv =
-                hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
+            let iv = hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
             let iv_arr: [u8; 12] = iv
                 .try_into()
                 .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
-            cipherbox_crypto::aes::decrypt_aes_gcm(
-                &encrypted_bytes,
-                &file_key_arr,
-                &iv_arr,
-            )
-            .map_err(|e| format!("GCM decryption failed: {}", e))?
+            cipherbox_crypto::aes::decrypt_aes_gcm(&encrypted_bytes, &file_key_arr, &iv_arr)
+                .map_err(|e| format!("GCM decryption failed: {}", e))?
         };
 
         Ok(plaintext)
@@ -311,27 +310,27 @@ pub mod implementation {
         tee_key_epoch: Option<u32>,
         is_first_publish: bool,
     ) -> Result<(), String> {
-        let folder_key_arr: [u8; 32] = folder_key.try_into().map_err(|_| {
-            "Invalid folder key length for FileMetadata encryption".to_string()
-        })?;
+        let folder_key_arr = zeroizing_32_from_slice(
+            folder_key,
+            "Invalid folder key length for FileMetadata encryption",
+        )?;
 
         // Encrypt FileMetadata with parent folder key
-        let sealed =
-            cipherbox_core::folder::encrypt_file_metadata(file_meta, &folder_key_arr)
-                .map_err(|e| format!("FileMetadata encryption failed: {}", e))?;
+        let sealed = cipherbox_core::folder::encrypt_file_metadata(file_meta, &folder_key_arr)
+            .map_err(|e| format!("FileMetadata encryption failed: {}", e))?;
 
         // Package as JSON envelope: { "iv": hex, "data": base64 }
         let iv_hex = hex::encode(&sealed[..12]);
         use base64::Engine;
-        let data_base64 =
-            base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
+        let data_base64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
         let json = serde_json::json!({ "iv": iv_hex, "data": data_base64 });
         let json_bytes = serde_json::to_vec(&json)
             .map_err(|e| format!("FileMetadata JSON serialization failed: {}", e))?;
 
         // Upload encrypted file metadata to IPFS
-        let file_meta_cid =
-            cipherbox_api_client::ipfs::upload_content(api, &json_bytes).await.map_err(|e| e.to_string())?;
+        let file_meta_cid = cipherbox_api_client::ipfs::upload_content(api, &json_bytes)
+            .await
+            .map_err(|e| e.to_string())?;
 
         // Resolve current IPNS sequence number
         let current_seq = if is_first_publish {
@@ -341,38 +340,34 @@ pub mod implementation {
         };
 
         // Create and sign IPNS record
-        let ipns_key_arr: [u8; 32] = file_ipns_private_key
-            .as_slice()
-            .try_into()
-            .map_err(|_| "Invalid file IPNS private key length".to_string())?;
+        let ipns_key_arr = zeroizing_32_from_slice(
+            file_ipns_private_key.as_slice(),
+            "Invalid file IPNS private key length",
+        )?;
         let new_seq = crate::next_file_publish_sequence(is_first_publish, current_seq)?;
         let value = format!("/ipfs/{}", file_meta_cid);
-        let record = cipherbox_core::ipns::create_ipns_record(
-            &ipns_key_arr,
-            &value,
-            new_seq,
-            86_400_000,
-        )
-        .map_err(|e| format!("File IPNS record creation failed: {}", e))?;
+        let record =
+            cipherbox_core::ipns::create_ipns_record(&ipns_key_arr, &value, new_seq, 86_400_000)
+                .map_err(|e| format!("File IPNS record creation failed: {}", e))?;
         let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
             .map_err(|e| format!("File IPNS record marshal failed: {}", e))?;
 
-        let record_b64 =
-            base64::engine::general_purpose::STANDARD.encode(&marshaled);
+        let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
 
         // TEE enrollment on first publish only (same pattern as folder creation in write_ops.rs)
-        let (encrypted_ipns_for_tee, tee_epoch) = match (is_first_publish, tee_public_key, tee_key_epoch) {
-            (true, Some(tee_key), Some(epoch)) => {
-                let wrapped = cipherbox_crypto::wrap_key(
-                    file_ipns_private_key.as_slice(), tee_key
-                ).map_err(|e| format!("TEE key wrapping failed: {}", e))?;
-                (Some(hex::encode(&wrapped)), Some(epoch))
-            }
-            (true, Some(_), None) => {
-                return Err("TEE public key present but key_epoch missing".to_string());
-            }
-            _ => (None, None),
-        };
+        let (encrypted_ipns_for_tee, tee_epoch) =
+            match (is_first_publish, tee_public_key, tee_key_epoch) {
+                (true, Some(tee_key), Some(epoch)) => {
+                    let wrapped =
+                        cipherbox_crypto::wrap_key(file_ipns_private_key.as_slice(), tee_key)
+                            .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
+                    (Some(hex::encode(&wrapped)), Some(epoch))
+                }
+                (true, Some(_), None) => {
+                    return Err("TEE public key present but key_epoch missing".to_string());
+                }
+                _ => (None, None),
+            };
 
         // Per-file IPNS publishes do not use conflict detection -- file metadata
         // is owned by the file's own IPNS keypair and conflicts are inherently
@@ -385,10 +380,16 @@ pub mod implementation {
             key_epoch: tee_epoch,
             expected_sequence_number: None,
         };
-        match cipherbox_api_client::ipns::publish_ipns(api, &req).await.map_err(|e| e.to_string())? {
+        match cipherbox_api_client::ipns::publish_ipns(api, &req)
+            .await
+            .map_err(|e| e.to_string())?
+        {
             cipherbox_api_client::PublishResult::Success => {}
             cipherbox_api_client::PublishResult::Conflict { .. } => {
-                log::warn!("Unexpected conflict on per-file IPNS publish for {}", file_ipns_name);
+                log::warn!(
+                    "Unexpected conflict on per-file IPNS publish for {}",
+                    file_ipns_name
+                );
             }
         }
 
@@ -407,9 +408,7 @@ pub mod implementation {
             &self,
             volume_info: &mut winfsp::filesystem::VolumeInfo,
         ) -> Result<(), FspError> {
-            super::super::read_ops::implementation::handle_get_volume_info(
-                self, volume_info,
-            )
+            super::super::read_ops::implementation::handle_get_volume_info(self, volume_info)
         }
 
         fn get_security_by_name(
@@ -419,7 +418,9 @@ pub mod implementation {
             _find_reparse_point: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
         ) -> Result<FileSecurity, FspError> {
             super::super::read_ops::implementation::handle_get_security_by_name(
-                self, file_name, security_descriptor,
+                self,
+                file_name,
+                security_descriptor,
             )
         }
 
@@ -431,7 +432,11 @@ pub mod implementation {
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
             super::super::read_ops::implementation::handle_open(
-                self, file_name, create_options, granted_access, file_info,
+                self,
+                file_name,
+                create_options,
+                granted_access,
+                file_info,
             )
         }
 
@@ -444,15 +449,11 @@ pub mod implementation {
             _extra_buffer: Option<&[u8]>,
             file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
-            super::super::write_ops::implementation::handle_overwrite(
-                self, context, file_info,
-            )
+            super::super::write_ops::implementation::handle_overwrite(self, context, file_info)
         }
 
         fn close(&self, context: Self::FileContext) {
-            super::super::read_ops::implementation::handle_close(
-                self, context,
-            );
+            super::super::read_ops::implementation::handle_close(self, context);
         }
 
         fn read(
@@ -461,9 +462,7 @@ pub mod implementation {
             buffer: &mut [u8],
             offset: u64,
         ) -> Result<u32, FspError> {
-            super::super::read_ops::implementation::handle_read(
-                self, context, buffer, offset,
-            )
+            super::super::read_ops::implementation::handle_read(self, context, buffer, offset)
         }
 
         fn write(
@@ -476,7 +475,12 @@ pub mod implementation {
             file_info: &mut FileInfo,
         ) -> Result<u32, FspError> {
             super::super::write_ops::implementation::handle_write(
-                self, context, buffer, offset, write_to_end_of_file, file_info,
+                self,
+                context,
+                buffer,
+                offset,
+                write_to_end_of_file,
+                file_info,
             )
         }
 
@@ -493,9 +497,7 @@ pub mod implementation {
             context: &Self::FileContext,
             file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
-            super::super::read_ops::implementation::handle_get_file_info(
-                self, context, file_info,
-            )
+            super::super::read_ops::implementation::handle_get_file_info(self, context, file_info)
         }
 
         fn get_security(
@@ -503,9 +505,7 @@ pub mod implementation {
             _context: &Self::FileContext,
             security_descriptor: Option<&mut [c_void]>,
         ) -> Result<u64, FspError> {
-            super::super::read_ops::implementation::handle_get_security(
-                security_descriptor,
-            )
+            super::super::read_ops::implementation::handle_get_security(security_descriptor)
         }
 
         fn set_basic_info(
@@ -519,8 +519,13 @@ pub mod implementation {
             file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
             super::super::write_ops::implementation::handle_set_basic_info(
-                self, context, creation_time, last_access_time, last_write_time,
-                change_time, file_info,
+                self,
+                context,
+                creation_time,
+                last_access_time,
+                last_write_time,
+                change_time,
+                file_info,
             )
         }
 
@@ -532,19 +537,16 @@ pub mod implementation {
             file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
             super::super::write_ops::implementation::handle_set_file_size(
-                self, context, new_size, set_allocation_size, file_info,
+                self,
+                context,
+                new_size,
+                set_allocation_size,
+                file_info,
             )
         }
 
-        fn cleanup(
-            &self,
-            context: &Self::FileContext,
-            _file_name: Option<&U16CStr>,
-            flags: u32,
-        ) {
-            super::super::write_ops::implementation::handle_cleanup(
-                self, context, flags,
-            );
+        fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, flags: u32) {
+            super::super::write_ops::implementation::handle_cleanup(self, context, flags);
         }
 
         fn read_directory(
@@ -572,9 +574,16 @@ pub mod implementation {
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
             super::super::write_ops::implementation::handle_create(
-                self, file_name, create_options, granted_access,
-                _file_attributes, _security_descriptor, _allocation_size,
-                _extra_buffer, _extra_buffer_is_reparse_point, file_info,
+                self,
+                file_name,
+                create_options,
+                granted_access,
+                _file_attributes,
+                _security_descriptor,
+                _allocation_size,
+                _extra_buffer,
+                _extra_buffer_is_reparse_point,
+                file_info,
             )
         }
 
@@ -586,7 +595,10 @@ pub mod implementation {
             replace_if_exists: bool,
         ) -> Result<(), FspError> {
             super::super::write_ops::implementation::handle_rename(
-                self, file_name, new_file_name, replace_if_exists,
+                self,
+                file_name,
+                new_file_name,
+                replace_if_exists,
             )
         }
 
@@ -597,7 +609,9 @@ pub mod implementation {
             delete_file: bool,
         ) -> Result<(), FspError> {
             super::super::write_ops::implementation::handle_set_delete(
-                context, file_name, delete_file,
+                context,
+                file_name,
+                delete_file,
             )
         }
     }

@@ -31,24 +31,33 @@ export async function publishVaultKeyBlob(params: {
 }): Promise<{ ipnsName: string }> {
   const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(params.userPrivateKey);
 
-  const encryptedRootFolderKey = await wrapKey(params.rootFolderKey, params.userPublicKey);
-  const v2Blob = serializeVaultBlobV2(encryptedRootFolderKey);
+  try {
+    const encryptedRootFolderKey = await wrapKey(params.rootFolderKey, params.userPublicKey);
+    const v2Blob = serializeVaultBlobV2(encryptedRootFolderKey);
 
-  const { cid } = await addToIpfs(params.ctx, new Uint8Array(v2Blob));
-  const result = await createAndPublishIpnsRecord({
-    ipnsPrivateKey: vaultKeyKeypair.privateKey,
-    ipnsPublicKey: vaultKeyKeypair.publicKey,
-    ipnsName: vaultKeyKeypair.ipnsName,
-    metadataCid: cid,
-    sequenceNumber: 0n,
-    ctx: params.ctx,
-  });
+    const { cid } = await addToIpfs(params.ctx, new Uint8Array(v2Blob));
+    const result = await createAndPublishIpnsRecord({
+      ipnsPrivateKey: vaultKeyKeypair.privateKey,
+      ipnsPublicKey: vaultKeyKeypair.publicKey,
+      ipnsName: vaultKeyKeypair.ipnsName,
+      metadataCid: cid,
+      sequenceNumber: 0n,
+      ctx: params.ctx,
+    });
 
-  if (!result.success) {
-    throw new Error('Failed to publish vault key blob to IPNS');
+    if (!result.success) {
+      throw new Error('Failed to publish vault key blob to IPNS');
+    }
+
+    return { ipnsName: vaultKeyKeypair.ipnsName };
+  } finally {
+    // T-47-01 / D-05: caller-owns-key convention — this function derives vaultKeyKeypair
+    // and is its terminal owner, so it zeroes the private key on all exit paths.
+    // createAndPublishIpnsRecord is a callee and does NOT zero the buffer it receives
+    // (callers own their key material), so this is the only place the vault key blob's
+    // IPNS private key is wiped.
+    vaultKeyKeypair.privateKey.fill(0);
   }
-
-  return { ipnsName: vaultKeyKeypair.ipnsName };
 }
 
 /**

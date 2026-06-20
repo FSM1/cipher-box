@@ -174,6 +174,24 @@ export async function createSubfolder(params: {
  *
  * @returns New CID and sequence number
  */
+// T-47-01 / D-05 zeroization decision for updateFolderMetadataAndPublish:
+//
+// CALLER RETAINS OWNERSHIP — do NOT zero params.ipnsPrivateKey or params.folderKey here.
+//
+// Rationale (client.ts audit, A2): every call site passes live session keys from
+// the `folderTree` state (folder.ipnsKeypair.privateKey, folder.folderKey). These
+// keys are reused across the full session lifetime — the same folder may receive
+// many sequential publish calls (renameItem, deleteItem, uploadFile, moveItem, etc.).
+// Zeroing here would corrupt the in-memory session state and break all subsequent
+// operations on the same folder.
+//
+// Contrast with updateFileMetadata (sdk-core/file/index.ts:369-373), which DOES
+// zero because per-file IPNS keys are unwrapped fresh for each use and not stored
+// in long-lived state — that function IS the terminal consumer.
+//
+// The caller (sdk/src/client.ts) must own zeroing when it is safe to do so.
+// A guard test in __tests__/folder.test.ts asserts this documented non-zeroing
+// behavior so it cannot be accidentally changed.
 export async function updateFolderMetadataAndPublish(params: {
   children: FolderChild[];
   baseChildren?: FolderChild[];
