@@ -795,26 +795,64 @@ pub(crate) mod implementation {
                 );
 
                 // Build the journal entry via the shared helper (journal_helpers.rs),
-                // then fsync + apply in-memory mutations.
+                // then write the ciphertext sidecar + entry OFF the FUSE callback thread,
+                // blocking on a bounded durable-ack before applying in-memory mutations.
                 //
-                // CR-04: all in-memory mutations (inode kind/attr, pending_content,
-                // queued publish) are deferred until AFTER the journal entry is fsynced.
-                // If the helper or journal.put fails, the Err arm replies EIO having
-                // mutated nothing, so the debounced publisher never emits metadata for a
-                // write the OS was told failed.
+                // D-01 (WR-06): the heavy sidecar write + F_FULLFSYNC no longer runs on the
+                // single FS callback thread — it runs on a background tokio task. The callback
+                // thread blocks on a BOUNDED oneshot (NETWORK_TIMEOUT * 18 ≈ 180s) so a wedged
+                // writer cannot hang the whole filesystem forever.
+                //
+                // CR-04: all in-memory mutations (inode kind/attr, pending_content, queued
+                // publish) are still deferred until AFTER the journal entry is durable. If the
+                // build, the size cap, or the durable write fails/times out, the Err arm replies
+                // EIO having mutated nothing — no false durability ack (Pitfall 1).
                 let build_result =
                     (|| -> Result<crate::journal_helpers::UploadJournalResult, String> {
-                        // Steps 1-7: encrypt, wrap, resolve parent IPNS, build JournalEntry.
-                        let result = fs.build_upload_journal_entry(ino, &handle, is_new_file)?;
+                        // Steps 1-7: size cap, encrypt, wrap, encrypt name, sidecar fields.
+                        // build_upload_journal_entry returns Err for oversized files (EIO).
+                        fs.build_upload_journal_entry(ino, &handle, is_new_file)
+                    })();
 
-                        // CR-07: clone the entry before put() so the snapshot can be carried
-                        // into the spawn closure for record_failure on upload failure.
-                        let entry_snapshot = result.entry.clone();
+                // Off-thread durable write + bounded durable-ack (D-01).
+                let build_result = match build_result {
+                    Ok(result) => {
+                        // Stream the ciphertext sidecar + fsync the entry on a separate OS
+                        // thread (NOT a tokio task — put_with_sidecar is synchronous, and a
+                        // plain std::sync::mpsc recv_timeout works whether or not the caller
+                        // is inside a tokio runtime, avoiding a nested-runtime panic on the
+                        // single FS callback thread).
+                        let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+                        let put_journal = fs.journal.clone();
+                        let put_entry = result.entry.clone();
+                        let put_ciphertext = result.ciphertext.clone();
+                        std::thread::spawn(move || {
+                            let r = put_journal.put_with_sidecar(&put_entry, &put_ciphertext);
+                            let _ = tx.send(r);
+                        });
 
-                        // D-04: fsync journal entry to disk BEFORE acking the OS.
-                        fs.journal.put(&result.entry)?;
+                        // Block the callback thread on a BOUNDED recv. A sidecar fsync that
+                        // genuinely needs >3 minutes means a wedged/failing disk; acking
+                        // success then would violate the durable-ack contract, and blocking
+                        // forever would hang the whole FS — the DoS this phase removes.
+                        match rx.recv_timeout(crate::NETWORK_TIMEOUT * 18) {
+                            Ok(Ok(())) => Ok(result),
+                            Ok(Err(e)) => Err(format!("journal sidecar write failed: {}", e)),
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+                                "journal sidecar write timed out after {}s",
+                                (crate::NETWORK_TIMEOUT * 18).as_secs()
+                            )),
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                Err("journal sidecar writer dropped before durability".to_string())
+                            }
+                        }
+                    }
+                    Err(e) => Err(e),
+                };
 
-                        // CR-04: journal is durably committed — now apply the in-memory write.
+                // CR-04: journal is durably committed — now apply the in-memory write.
+                let build_result = match build_result {
+                    Ok(result) => {
                         if let Some(inode) = fs.inodes.get_mut(ino) {
                             let cached_hex = match &inode.kind {
                                 InodeKind::File {
@@ -844,12 +882,10 @@ pub(crate) mod implementation {
 
                         fs.queue_publish(result.parent_ino, true);
 
-                        // Return the full result + snapshot for the spawn block.
-                        // We smuggle the snapshot by storing it in a wrapper; the
-                        // spawn block will destructure it from there.
-                        let _ = entry_snapshot; // consumed above via .clone(); held in result.entry
                         Ok(result)
-                    })();
+                    }
+                    Err(e) => Err(e),
+                };
 
                 match build_result {
                     Ok(result) => {

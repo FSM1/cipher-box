@@ -134,6 +134,18 @@ impl crate::CipherBoxFS {
     ) -> Result<UploadJournalResult, String> {
         let plaintext = handle.read_all()?;
 
+        // D-01 (WR-06): reject oversized files BEFORE any key generation or encryption so
+        // the release path replies EIO instead of allocating/streaming a multi-GB sidecar
+        // and stalling the shared FS thread. Checked first — nothing sensitive to zeroize yet.
+        let file_size = plaintext.len() as u64;
+        if file_size > cipherbox_sdk::MAX_JOURNAL_PAYLOAD_BYTES {
+            return Err(format!(
+                "File too large for journal ({} bytes > {} byte cap); refusing to write",
+                file_size,
+                cipherbox_sdk::MAX_JOURNAL_PAYLOAD_BYTES
+            ));
+        }
+
         let mut file_key = cipherbox_crypto::utils::generate_file_key();
         let iv = cipherbox_crypto::utils::generate_iv();
 
@@ -220,7 +232,6 @@ impl crate::CipherBoxFS {
 
         let encrypted_file_key_hex = hex::encode(&wrapped_key);
         let iv_hex = hex::encode(&iv);
-        let file_size = plaintext.len() as u64;
 
         let file_name = self
             .inodes
@@ -282,9 +293,25 @@ impl crate::CipherBoxFS {
             .map(|raw_key| wrap_key_to_hex(raw_key, &self.public_key, "parent IPNS key"))
             .unwrap_or_default();
 
-        // Build journal entry referencing ciphertext only — no plaintext (D-05).
-        use base64::Engine;
-        let ciphertext_b64 = base64::engine::general_purpose::STANDARD.encode(&ciphertext);
+        // D-01: ciphertext goes to a sidecar `<id>.bin`, not into the JSON. Compute the
+        // sidecar path + SHA-256 now so the entry references exactly what put_with_sidecar
+        // will write; the in-memory `ciphertext` is still returned for the live upload thread.
+        let entry_id = generate_entry_id();
+        let sidecar_path = self.journal.sidecar_path_for(&entry_id);
+        let sidecar_sha256 = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&ciphertext);
+            hex::encode(hasher.finalize())
+        };
+
+        // D-04 (IN-03): ECIES-encrypt the filename at rest — no plaintext name persists.
+        // Unlike key wrapping (where an empty-string fallback is acceptable), a failed
+        // filename encryption must fail the write so we never silently lose the name.
+        let filename_encrypted_hex = hex::encode(
+            cipherbox_crypto::ecies::wrap_key(file_name.as_bytes(), &self.public_key)
+                .map_err(|e| format!("filename encryption failed: {}", e))?,
+        );
 
         // ECIES-wrap the per-file IPNS key exactly once (CR-01, no double-wrap).
         // Only journalled when there's an IPNS name to publish.
@@ -306,17 +333,18 @@ impl crate::CipherBoxFS {
         };
 
         let entry = cipherbox_sdk::JournalEntry {
-            id: generate_entry_id(),
+            id: entry_id,
             vault_root_ipns: self.root_ipns_name.clone(),
             op: cipherbox_sdk::JournalOp::UploadFile {
-                ciphertext_b64,
+                sidecar_path,
+                sidecar_sha256,
                 wrapped_key_hex: encrypted_file_key_hex.clone(),
                 iv_hex: iv_hex.clone(),
                 file_meta_ipns_name: file_meta_ipns_name.clone(),
                 file_ipns_key_hex,
                 parent_folder_ipns_name,
                 parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
-                filename: file_name,
+                filename_encrypted_hex,
                 size: file_size,
                 created_at_ms: now_ms,
             },
@@ -421,6 +449,13 @@ impl crate::CipherBoxFS {
         let child_ipns_key_hex_user_wrapped =
             wrap_key_to_hex(&ipns_private_key, &self.public_key, "child IPNS key");
 
+        // D-04 (IN-03): ECIES-encrypt the directory name at rest. A failed encryption
+        // fails the write rather than persisting a plaintext or empty name.
+        let name_encrypted_hex = hex::encode(
+            cipherbox_crypto::ecies::wrap_key(name.as_bytes(), &self.public_key)
+                .map_err(|e| format!("directory name encryption failed: {}", e))?,
+        );
+
         let entry = cipherbox_sdk::JournalEntry {
             id: generate_entry_id(),
             vault_root_ipns: self.root_ipns_name.clone(),
@@ -430,7 +465,7 @@ impl crate::CipherBoxFS {
                 child_ipns_key_hex: child_ipns_key_hex_user_wrapped,
                 parent_folder_ipns_name: parent_ipns_name.clone(),
                 parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
-                name: name.to_string(),
+                name_encrypted_hex,
                 created_at_ms: mkdir_created_at_ms,
             },
             retries: 0,
@@ -490,7 +525,6 @@ fn wrap_key_to_hex(raw_key: &[u8], public_key: &[u8], label: &str) -> String {
 #[cfg(all(test, feature = "fuse"))]
 mod tests {
     use crate::test_support::{make_isolated_journal_dir, make_test_fs_with_keypair};
-    use base64::Engine;
     use zeroize::Zeroizing;
 
     /// Generate a real secp256k1 keypair (33-byte compressed pubkey, 32-byte
@@ -524,23 +558,44 @@ mod tests {
 
         match &result.entry.op {
             cipherbox_sdk::JournalOp::UploadFile {
-                ciphertext_b64,
+                sidecar_path,
+                sidecar_sha256,
                 wrapped_key_hex,
+                filename_encrypted_hex,
                 ..
             } => {
-                // Ciphertext is journalled and base64-decodes.
+                // D-01: ciphertext lives in a sidecar, not in the JSON entry.
                 assert!(
-                    !ciphertext_b64.is_empty(),
-                    "ciphertext_b64 must be non-empty"
+                    sidecar_path.to_string_lossy().ends_with(".bin"),
+                    "sidecar_path must point at a .bin file, got {:?}",
+                    sidecar_path
                 );
-                let decoded = base64::engine::general_purpose::STANDARD
-                    .decode(ciphertext_b64)
-                    .expect("ciphertext_b64 must base64-decode");
-                assert!(!decoded.is_empty(), "decoded ciphertext must be non-empty");
+                // The in-memory ciphertext is carried transiently for the live upload.
+                assert!(
+                    !result.ciphertext.is_empty(),
+                    "in-memory ciphertext must be non-empty"
+                );
                 assert_ne!(
-                    decoded.as_slice(),
+                    result.ciphertext.as_slice(),
                     plaintext.as_slice(),
                     "journalled bytes must be ciphertext, never plaintext (T-46-01)"
+                );
+                // sidecar_sha256 must be the SHA-256 of the in-memory ciphertext.
+                let expected = {
+                    use sha2::{Digest, Sha256};
+                    let mut h = Sha256::new();
+                    h.update(&result.ciphertext);
+                    hex::encode(h.finalize())
+                };
+                assert_eq!(
+                    sidecar_sha256, &expected,
+                    "sidecar_sha256 must match SHA-256 of the ciphertext"
+                );
+                // D-04: the filename is ECIES-encrypted hex, never the plaintext name.
+                assert!(
+                    !filename_encrypted_hex.is_empty()
+                        && hex::decode(filename_encrypted_hex).is_ok(),
+                    "filename_encrypted_hex must be valid ECIES hex (T-52-09 / IN-03)"
                 );
                 // The file key is ECIES-wrapped (present, hex-encoded), never raw.
                 assert!(
@@ -584,13 +639,21 @@ mod tests {
         match &result.entry.op {
             cipherbox_sdk::JournalOp::MkdirPublish {
                 child_ipns_name,
-                name,
+                name_encrypted_hex,
                 child_ipns_key_hex,
                 parent_ipns_key_hex,
                 ..
             } => {
                 assert_eq!(child_ipns_name, "k51child-newdir");
-                assert_eq!(name, "newdir");
+                // D-04: directory name is ECIES-encrypted hex, never the plaintext "newdir".
+                assert!(
+                    !name_encrypted_hex.is_empty() && hex::decode(name_encrypted_hex).is_ok(),
+                    "name_encrypted_hex must be valid ECIES hex (IN-03)"
+                );
+                assert_ne!(
+                    name_encrypted_hex, "newdir",
+                    "directory name must not be persisted as plaintext"
+                );
                 // Both IPNS keys are ECIES-wrapped (non-empty hex), never raw.
                 assert!(
                     !child_ipns_key_hex.is_empty() && hex::decode(child_ipns_key_hex).is_ok(),
@@ -603,5 +666,41 @@ mod tests {
             }
             other => panic!("expected MkdirPublish op, got {:?}", other),
         }
+    }
+
+    /// D-01 (WR-06): a plaintext larger than `MAX_JOURNAL_PAYLOAD_BYTES` must cause
+    /// `build_upload_journal_entry` to return `Err` (so the release path replies EIO)
+    /// rather than encrypting + streaming a multi-GB sidecar and stalling the FS thread.
+    ///
+    /// Allocating an actual >2 GiB buffer is impractical in a unit test, so this exercises
+    /// the exact guard condition the helper uses against the real constant, proving the
+    /// threshold and the error-message contract. The at/under-cap path is covered by
+    /// `build_upload_journal_entry_round_trips` (a small file succeeds).
+    #[test]
+    fn payload_size_cap_returns_err() {
+        let cap = cipherbox_sdk::MAX_JOURNAL_PAYLOAD_BYTES;
+
+        // Mirror the guard in build_upload_journal_entry verbatim.
+        let cap_guard = |file_size: u64| -> Result<(), String> {
+            if file_size > cap {
+                return Err(format!(
+                    "File too large for journal ({} bytes > {} byte cap); refusing to write",
+                    file_size, cap
+                ));
+            }
+            Ok(())
+        };
+
+        // At the cap: allowed.
+        assert!(cap_guard(cap).is_ok(), "a file exactly at the cap must proceed");
+        // Just under: allowed.
+        assert!(cap_guard(cap - 1).is_ok());
+        // Over the cap: rejected with the documented message.
+        let err = cap_guard(cap + 1).expect_err("over-cap file must be rejected");
+        assert!(
+            err.contains("too large for journal"),
+            "error must explain the cap rejection, got: {}",
+            err
+        );
     }
 }

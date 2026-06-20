@@ -56,7 +56,7 @@ use cipherbox_api_client::ApiClient;
 
 /// Timeout for network I/O in filesystem callbacks to prevent blocking the mount thread.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Run an async future with a timeout on the tokio runtime.
 /// Prevents filesystem thread hangs from indefinite network I/O.
