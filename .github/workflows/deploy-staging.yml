@@ -23,7 +23,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
@@ -36,13 +36,13 @@ jobs:
           API_VERSION=$(node -e "console.log(require('./apps/api/package.json').version)")
           echo "api=${API_VERSION}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           file: apps/api/Dockerfile
@@ -59,7 +59,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
@@ -72,13 +72,13 @@ jobs:
           TEE_VERSION=$(node -e "console.log(require('./apps/tee-worker/package.json').version)")
           echo "tee=${TEE_VERSION}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           file: apps/tee-worker/Dockerfile
@@ -93,13 +93,13 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '22'
           cache: 'pnpm'
@@ -127,7 +127,7 @@ jobs:
           GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
 
       - name: Upload web dist as artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: web-dist
           path: apps/web/dist/
@@ -162,7 +162,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
@@ -172,9 +172,9 @@ jobs:
           sudo mkdir -p /usr/local/lib/pkgconfig
           sudo ln -sf "/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc" /usr/local/lib/pkgconfig/fuse.pc
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '22'
           cache: 'pnpm'
@@ -190,7 +190,7 @@ jobs:
           pnpm --filter @cipherbox/sdk-core build
           pnpm --filter @cipherbox/sdk build
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -220,7 +220,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
@@ -259,7 +259,7 @@ jobs:
       - name: Install Rust toolchain
         run: rustup default stable
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry
@@ -268,9 +268,9 @@ jobs:
           key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '22'
           cache: 'pnpm'
@@ -286,7 +286,7 @@ jobs:
           pnpm --filter @cipherbox/sdk-core build
           pnpm --filter @cipherbox/sdk build
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -317,7 +317,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
@@ -337,7 +337,7 @@ jobs:
       - name: Install Rust toolchain
         run: rustup default stable
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry
@@ -346,9 +346,9 @@ jobs:
           key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: linux-cargo-
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '22'
           cache: 'pnpm'
@@ -364,7 +364,7 @@ jobs:
           pnpm --filter @cipherbox/sdk-core build
           pnpm --filter @cipherbox/sdk build
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -396,12 +396,12 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
       - name: Download web dist artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: web-dist
           path: web-dist/
@@ -452,7 +452,7 @@ jobs:
           echo "TEE_VERSION=${TEE_VER}" >> .env.staging
 
       - name: Copy files to VPS
-        uses: appleboy/scp-action@v1.0.0
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
@@ -462,7 +462,7 @@ jobs:
           strip_components: 0
 
       - name: Arrange files on VPS
-        uses: appleboy/ssh-action@v1.2.5
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
@@ -483,7 +483,7 @@ jobs:
             ln -sf /opt/cipherbox/certs /opt/cipherbox/docker/certs
 
       - name: Deploy web app files to VPS
-        uses: appleboy/scp-action@v1.0.0
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
@@ -494,7 +494,7 @@ jobs:
           rm: true
 
       - name: Deploy services
-        uses: appleboy/ssh-action@v1.2.5
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
@@ -537,7 +537,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
