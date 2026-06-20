@@ -211,8 +211,11 @@ export async function resolveIpnsRecord(
       // material must not be downgraded to the legacy allow path (field-stripping bypass).
       let signatureVerified = false;
       const { signatureV2, data, pubKey } = response;
-      if (signatureV2 || data || pubKey) {
-        if (!signatureV2 || !data || !pubKey) {
+      const hasSignatureV2 = signatureV2 != null;
+      const hasData = data != null;
+      const hasPubKey = pubKey != null;
+      if (hasSignatureV2 || hasData || hasPubKey) {
+        if (!hasSignatureV2 || !hasData || !hasPubKey || !signatureV2 || !data || !pubKey) {
           throw new Error(
             'IPNS resolve returned incomplete signature data - record cannot be verified'
           );

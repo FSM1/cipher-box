@@ -94,7 +94,12 @@ describe('vault key blob operations', () => {
         publicKey: new Uint8Array(32).fill(1),
         privateKey: privateKeyBuf,
       });
-      vi.mocked(addToIpfs).mockRejectedValueOnce(new Error('upload failed'));
+      vi.mocked(addToIpfs).mockResolvedValueOnce({
+        cid: 'QmVaultKeyBlob',
+        size: 64,
+        recorded: true,
+      });
+      vi.mocked(createAndPublishIpnsRecord).mockRejectedValueOnce(new Error('publish failed'));
 
       await expect(
         publishVaultKeyBlob({
@@ -103,7 +108,7 @@ describe('vault key blob operations', () => {
           rootFolderKey: new Uint8Array(32).fill(0x03),
           ctx: mockCtx,
         })
-      ).rejects.toThrow('upload failed');
+      ).rejects.toThrow('publish failed');
 
       // T-47-01: terminal owner must zero the buffer on the failure path too.
       expect(privateKeyBuf.every((b) => b === 0)).toBe(true);

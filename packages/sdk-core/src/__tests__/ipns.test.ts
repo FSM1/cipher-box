@@ -219,6 +219,22 @@ describe('IPNS operations', () => {
       expect(verifyEd25519).not.toHaveBeenCalled();
       expect(deriveIpnsName).not.toHaveBeenCalled();
     });
+
+    it('S2: throws on empty-string signature fields (all present but empty)', async () => {
+      const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+      const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+      vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+        success: true,
+        cid: 'QmEmptySig',
+        sequenceNumber: '3',
+        signatureV2: '',
+        data: '',
+        pubKey: '',
+      });
+      await expect(resolveIpnsRecord('k51empty')).rejects.toThrow('incomplete signature data');
+      expect(verifyEd25519).not.toHaveBeenCalled();
+      expect(deriveIpnsName).not.toHaveBeenCalled();
+    });
   });
 });
 

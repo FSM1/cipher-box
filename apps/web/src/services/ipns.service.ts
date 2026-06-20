@@ -179,8 +179,11 @@ export async function resolveIpnsRecord(
     // allow path, or an attacker could strip fields to bypass D-02.
     let signatureVerified = false;
     const { signatureV2, data, pubKey } = response;
-    if (signatureV2 || data || pubKey) {
-      if (!signatureV2 || !data || !pubKey) {
+    const hasSignatureV2 = signatureV2 != null;
+    const hasData = data != null;
+    const hasPubKey = pubKey != null;
+    if (hasSignatureV2 || hasData || hasPubKey) {
+      if (!hasSignatureV2 || !hasData || !hasPubKey || !signatureV2 || !data || !pubKey) {
         throw new Error(
           'IPNS resolve returned incomplete signature data - record cannot be verified'
         );
@@ -214,8 +217,14 @@ export async function resolveIpnsRecord(
   } catch (error) {
     // 404 means IPNS name not found - return null
     // Other errors (network, API) should propagate
-    if (error instanceof Error && (error as Error & { status?: number }).status === 404) {
-      return null;
+    // axios errors from the api-client customInstance surface HTTP status at
+    // error.response?.status; some paths set error.status directly. Check both.
+    if (error instanceof Error) {
+      const anyError = error as Error & { status?: number; response?: { status?: number } };
+      const status = anyError.status ?? anyError.response?.status;
+      if (status === 404) {
+        return null;
+      }
     }
     throw error;
   }

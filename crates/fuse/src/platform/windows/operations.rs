@@ -30,6 +30,18 @@ pub mod implementation {
     // Re-export is_windows_special so sub-modules can import from here
     pub use crate::helpers::is_windows_special;
 
+    /// Build a `Zeroizing<[u8; 32]>` from a slice without ever materializing a
+    /// plain `[u8; 32]` temporary (preallocate-then-copy). A `try_into()` would
+    /// briefly leave an un-zeroed copy of sensitive key material on the stack.
+    fn zeroizing_32_from_slice(bytes: &[u8], message: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+        if bytes.len() != 32 {
+            return Err(message.to_string());
+        }
+        let mut out = Zeroizing::new([0_u8; 32]);
+        out.copy_from_slice(bytes);
+        Ok(out)
+    }
+
     // ── NTSTATUS error helpers ─────────────────────────────────────────
     // FspError::IO cannot be used in const context since ErrorKind may not be
     // const-constructible, so we use inline functions.
@@ -223,12 +235,8 @@ pub mod implementation {
             // unwrap_key returns Zeroizing<Vec<u8>> (S3/D-05).
             let file_key = cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
                 .map_err(|e| format!("File key unwrap failed: {}", e))?;
-            let file_key_arr: Zeroizing<[u8; 32]> = Zeroizing::new(
-                file_key
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| "Invalid file key length".to_string())?,
-            );
+            let file_key_arr =
+                zeroizing_32_from_slice(file_key.as_slice(), "Invalid file key length")?;
 
             let plaintext = if mode == "CTR" {
                 let iv =
@@ -269,12 +277,7 @@ pub mod implementation {
         // unwrap_key returns Zeroizing<Vec<u8>> (S3/D-05).
         let file_key = cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, private_key)
             .map_err(|e| format!("File key unwrap failed: {}", e))?;
-        let file_key_arr: Zeroizing<[u8; 32]> = Zeroizing::new(
-            file_key
-                .as_slice()
-                .try_into()
-                .map_err(|_| "Invalid file key length".to_string())?,
-        );
+        let file_key_arr = zeroizing_32_from_slice(file_key.as_slice(), "Invalid file key length")?;
 
         let plaintext = if encryption_mode == "CTR" {
             let iv = hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
@@ -307,11 +310,10 @@ pub mod implementation {
         tee_key_epoch: Option<u32>,
         is_first_publish: bool,
     ) -> Result<(), String> {
-        let folder_key_arr: Zeroizing<[u8; 32]> = Zeroizing::new(
-            folder_key
-                .try_into()
-                .map_err(|_| "Invalid folder key length for FileMetadata encryption".to_string())?,
-        );
+        let folder_key_arr = zeroizing_32_from_slice(
+            folder_key,
+            "Invalid folder key length for FileMetadata encryption",
+        )?;
 
         // Encrypt FileMetadata with parent folder key
         let sealed = cipherbox_core::folder::encrypt_file_metadata(file_meta, &folder_key_arr)
@@ -338,12 +340,10 @@ pub mod implementation {
         };
 
         // Create and sign IPNS record
-        let ipns_key_arr: Zeroizing<[u8; 32]> = Zeroizing::new(
-            file_ipns_private_key
-                .as_slice()
-                .try_into()
-                .map_err(|_| "Invalid file IPNS private key length".to_string())?,
-        );
+        let ipns_key_arr = zeroizing_32_from_slice(
+            file_ipns_private_key.as_slice(),
+            "Invalid file IPNS private key length",
+        )?;
         let new_seq = crate::next_file_publish_sequence(is_first_publish, current_seq)?;
         let value = format!("/ipfs/{}", file_meta_cid);
         let record =

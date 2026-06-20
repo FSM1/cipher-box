@@ -117,7 +117,17 @@ describe('resolveIpnsRecord', () => {
     expect(result!.sequenceNumber).toBe(7n);
   });
 
-  it('returns null on 404 error (narrow outer catch preserved)', async () => {
+  it('returns null on 404 error (axios shape: error.response.status)', async () => {
+    const error = new Error('Not found') as Error & { response: { status: number } };
+    error.response = { status: 404 };
+    vi.mocked(apiClient.ipnsControllerResolveRecord).mockRejectedValue(error);
+
+    const result = await resolveIpnsRecord('k51notfound');
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null on 404 error (fallback shape: error.status)', async () => {
     const error = new Error('Not found') as Error & { status: number };
     error.status = 404;
     vi.mocked(apiClient.ipnsControllerResolveRecord).mockRejectedValue(error);
@@ -146,6 +156,22 @@ describe('resolveIpnsRecord', () => {
     });
 
     await expect(resolveIpnsRecord('k51partial')).rejects.toThrow('incomplete signature data');
+    expect(crypto.verifyEd25519).not.toHaveBeenCalled();
+    expect(crypto.deriveIpnsName).not.toHaveBeenCalled();
+  });
+
+  // S2: present-but-empty-string fields are treated as present and rejected
+  // (nullish presence check), not silently allowed through the legacy path.
+  it('throws on empty-string signature fields (all present but empty)', async () => {
+    vi.mocked(apiClient.ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: 'QmEmptySig',
+      sequenceNumber: '3',
+      signatureV2: '',
+      data: '',
+      pubKey: '',
+    });
+    await expect(resolveIpnsRecord('k51empty')).rejects.toThrow('incomplete signature data');
     expect(crypto.verifyEd25519).not.toHaveBeenCalled();
     expect(crypto.deriveIpnsName).not.toHaveBeenCalled();
   });
