@@ -268,27 +268,21 @@ fn regex_replace_paths(input: &str) -> String {
     let mut chars = input.char_indices().peekable();
 
     while let Some((i, c)) = chars.next() {
-        if c == '/'
+        // Unix absolute paths (/Users, /home, /var, /tmp, /private) or Windows drive-letter
+        // paths (C:\Users\ ...). Both are scrubbed to [path] by skipping to the next boundary.
+        let is_path_start = (c == '/'
             && (input[i..].starts_with("/Users/")
                 || input[i..].starts_with("/home/")
                 || input[i..].starts_with("/var/")
                 || input[i..].starts_with("/tmp/")
-                || input[i..].starts_with("/private/"))
-        {
+                || input[i..].starts_with("/private/")))
+            || (c.is_ascii_uppercase()
+                && i + 2 < input.len()
+                && input[i + 1..].starts_with(":\\Users\\"));
+
+        if is_path_start {
             result.push_str("[path]");
-            // Skip until whitespace or end
-            while let Some(&(_, next_c)) = chars.peek() {
-                if next_c.is_whitespace() || next_c == '"' || next_c == '\'' {
-                    break;
-                }
-                chars.next();
-            }
-        } else if c.is_ascii_uppercase()
-            && i + 2 < input.len()
-            && input[i + 1..].starts_with(":\\Users\\")
-        {
-            // Windows drive-letter paths: C:\Users\...  D:\Users\...  etc.
-            result.push_str("[path]");
+            // Skip until the next whitespace or quote boundary (or end of input).
             while let Some(&(_, next_c)) = chars.peek() {
                 if next_c.is_whitespace() || next_c == '"' || next_c == '\'' {
                     break;

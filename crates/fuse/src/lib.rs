@@ -2151,31 +2151,18 @@ async fn replay_mkdir_entry(
 /// never re-persisted (the entry is removed on successful replay).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 fn decrypt_journal_name(encrypted_hex: &str, private_key: &[u8]) -> String {
-    let decoded = match hex::decode(encrypted_hex) {
-        Ok(b) => b,
-        Err(_) => {
-            log::warn!(
-                "replay: legacy plaintext journal name — replaying once, not re-persisting"
-            );
-            return encrypted_hex.to_string();
-        }
+    // Passthrough-once legacy fallback: any decode/unwrap/UTF-8 failure means the value is a
+    // pre-Phase-52 plaintext name — warn once and replay it verbatim (never re-persisted).
+    let legacy = || {
+        log::warn!("replay: legacy plaintext journal name — replaying once, not re-persisting");
+        encrypted_hex.to_string()
+    };
+    let Ok(decoded) = hex::decode(encrypted_hex) else {
+        return legacy();
     };
     match cipherbox_crypto::ecies::unwrap_key(&decoded, private_key) {
-        Ok(plaintext) => match String::from_utf8(plaintext.to_vec()) {
-            Ok(name) => name,
-            Err(_) => {
-                log::warn!(
-                    "replay: legacy plaintext journal name — replaying once, not re-persisting"
-                );
-                encrypted_hex.to_string()
-            }
-        },
-        Err(_) => {
-            log::warn!(
-                "replay: legacy plaintext journal name — replaying once, not re-persisting"
-            );
-            encrypted_hex.to_string()
-        }
+        Ok(plaintext) => String::from_utf8(plaintext.to_vec()).unwrap_or_else(|_| legacy()),
+        Err(_) => legacy(),
     }
 }
 
