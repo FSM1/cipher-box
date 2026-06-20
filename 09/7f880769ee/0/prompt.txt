@@ -1,0 +1,5 @@
+ok, now remove the PR 532 worktree (e2e tests) and switch to that branch in main
+
+---
+
+/resolve-pr-reviews
