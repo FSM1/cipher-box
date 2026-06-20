@@ -76,3 +76,86 @@ jobs:
               exit 1
             fi
           done
+
+      # Cargo.lock sync (D-05 fallback path). release-please bumps each crate's
+      # Cargo.toml version but does NOT update the workspace Cargo.lock's
+      # [[package]] version lines, leaving main stale-on-first-cargo after a
+      # release. The native cargo-workspace plugin is deliberately NOT enabled
+      # (open bug googleapis/release-please#2517 skips Cargo.lock and manifest
+      # updates in monorepo mode). Instead we cargo update --precise each bumped
+      # first-party crate, guard with git diff --exit-code, and push the synced
+      # lock. First-party crates ONLY — no transitive re-resolution.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        if: steps.release.outputs.releases_created == 'true'
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Update Cargo.lock for released crates
+        id: cargo-lock-sync
+        if: steps.release.outputs.releases_created == 'true'
+        env:
+          RELEASES_OUTPUT: ${{ toJSON(steps.release.outputs) }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          # Map release-please package paths to their cargo package names.
+          # The 5 crates/* are release-type rust; apps/desktop is release-type
+          # node but bumps src-tauri/Cargo.toml (cipherbox-desktop) via extra-files.
+          declare -A PKG_BY_PATH=(
+            ["crates/api-client"]="cipherbox-api-client"
+            ["crates/core"]="cipherbox-core"
+            ["crates/crypto"]="cipherbox-crypto"
+            ["crates/fuse"]="cipherbox-fuse"
+            ["crates/sdk"]="cipherbox-sdk"
+            ["apps/desktop"]="cipherbox-desktop"
+          )
+
+          # In manifest mode release-please emits "<path>--version" keys
+          # alongside the path-less root "version". Pull every "<path>--version"
+          # entry and update the matching first-party crate to that exact version.
+          UPDATED=0
+          while IFS=$'\t' read -r KEY VER; do
+            # KEY looks like "crates/core--version"; strip the suffix.
+            PATH_KEY="${KEY%--version}"
+            PKG="${PKG_BY_PATH[$PATH_KEY]:-}"
+            if [ -z "$PKG" ]; then
+              continue
+            fi
+            if [ -z "$VER" ] || [ "$VER" = "null" ]; then
+              continue
+            fi
+            echo "Syncing Cargo.lock: $PKG -> $VER (released path: $PATH_KEY)"
+            cargo update -p "$PKG" --precise "$VER"
+            UPDATED=$((UPDATED + 1))
+          done < <(echo "$RELEASES_OUTPUT" | jq -r '
+            to_entries
+            | map(select(.key | endswith("--version")))
+            | .[]
+            | "\(.key)\t\(.value)"
+          ')
+
+          if [ "$UPDATED" -eq 0 ]; then
+            echo "No first-party crate versions released — Cargo.lock sync skipped."
+          fi
+
+          # Stale-lock guard: fail loudly if cargo left the lock out of sync with
+          # itself (e.g. cargo update reported success but the lock did not change
+          # while a manifest version did). An empty diff is a no-op success;
+          # a non-empty diff is committed and pushed so main is never stale.
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already in sync — nothing to commit."
+            exit 0
+          fi
+
+          echo "Cargo.lock changed — committing synced lock."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "chore(ci): sync Cargo.lock for released crates"
+          git push
+
+          # Post-commit guard: the working tree must now be clean against the
+          # committed lock. A residual diff means the sync is still stale.
+          git diff --exit-code Cargo.lock
