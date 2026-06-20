@@ -47,7 +47,8 @@ pub struct UploadJournalResult {
     /// IPNS name for the per-file metadata record (if present).
     pub file_meta_ipns_name: Option<String>,
     /// Folder key used to encrypt the per-file IPNS record (if present).
-    pub folder_key_for_file_meta: Option<Vec<u8>>,
+    /// Zeroized on drop (S3/D-05).
+    pub folder_key_for_file_meta: Option<zeroize::Zeroizing<Vec<u8>>>,
     /// ECIES-hex-encoded file key, as stored in the inode and journal.
     pub encrypted_file_key_hex: String,
     /// Hex-encoded AES-GCM IV.
@@ -528,7 +529,10 @@ mod tests {
                 ..
             } => {
                 // Ciphertext is journalled and base64-decodes.
-                assert!(!ciphertext_b64.is_empty(), "ciphertext_b64 must be non-empty");
+                assert!(
+                    !ciphertext_b64.is_empty(),
+                    "ciphertext_b64 must be non-empty"
+                );
                 let decoded = base64::engine::general_purpose::STANDARD
                     .decode(ciphertext_b64)
                     .expect("ciphertext_b64 must base64-decode");
@@ -569,10 +573,10 @@ mod tests {
                 parent_ino,
                 child_ino,
                 "newdir",
-                &[5u8; 32],          // folder_key
-                "k51child-newdir",   // child ipns name
+                &[5u8; 32],        // folder_key
+                "k51child-newdir", // child ipns name
                 child_ipns_private_key,
-                "deadbeef",          // encrypted_folder_key_hex
+                "deadbeef", // encrypted_folder_key_hex
             )
             .expect("mkdir builder must succeed against the root parent");
 

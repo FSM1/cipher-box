@@ -155,7 +155,7 @@ fn ecies_cross_language() {
         // Unwrap TypeScript-wrapped ciphertext
         let unwrapped = cipherbox_crypto::unwrap_key(&wrapped, &private_key).unwrap();
         assert_eq!(
-            hex::encode(&unwrapped),
+            hex::encode(unwrapped.as_slice()),
             v.plaintext,
             "ECIES unwrap mismatch for: {}",
             v.description
@@ -165,7 +165,8 @@ fn ecies_cross_language() {
         let re_wrapped = cipherbox_crypto::wrap_key(&plaintext, &public_key).unwrap();
         let re_unwrapped = cipherbox_crypto::unwrap_key(&re_wrapped, &private_key).unwrap();
         assert_eq!(
-            re_unwrapped, plaintext,
+            re_unwrapped.as_slice(),
+            plaintext.as_slice(),
             "ECIES round-trip failed for: {}",
             v.description
         );
@@ -198,9 +199,7 @@ fn hkdf_cross_language() {
 
         // Route to the correct derivation function based on info string
         let (derived_priv, derived_pub, ipns_name) = match v.info.as_str() {
-            "cipherbox-vault-ipns-v1" => {
-                cipherbox_crypto::derive_vault_ipns_keypair(&pk).unwrap()
-            }
+            "cipherbox-vault-ipns-v1" => cipherbox_crypto::derive_vault_ipns_keypair(&pk).unwrap(),
             "cipherbox-vault-key-ipns-v1" => {
                 cipherbox_crypto::derive_vault_key_ipns_keypair(&pk).unwrap()
             }
