@@ -55,7 +55,11 @@ jobs:
             # Kubo runs as a Docker container on the staging host (compose service
             # "ipfs", image ipfs/kubo:v0.40.0) — there is no host-level ipfs CLI, so a
             # bare `ipfs` here fails with "command not found". Run it inside the container.
-            KUBO=$(docker ps -q --filter ancestor=ipfs/kubo:v0.40.0 | head -1)
+            # Capture the container list first, THEN take the first line: piping
+            # `docker ps` straight into `head` can SIGPIPE docker ps (exit 141) under
+            # `pipefail` and abort before the empty-KUBO guard runs.
+            KUBO_IDS=$(docker ps -q --filter ancestor=ipfs/kubo:v0.40.0)
+            KUBO=$(printf '%s\n' "${KUBO_IDS}" | head -n1)
             if [ -z "${KUBO}" ]; then
               echo "::error::No running ipfs/kubo container found on staging host"
               exit 1
@@ -65,9 +69,12 @@ jobs:
             # stdout to stderr so capture_stdout returns ONLY the CID.
             docker cp /tmp/cipherbox-landing "${KUBO}:/tmp/cipherbox-landing" 1>&2
             CID=$(docker exec "${KUBO}" ipfs add -Qr --pin /tmp/cipherbox-landing)
-            docker exec "${KUBO}" rm -rf /tmp/cipherbox-landing
-            rm -rf /tmp/cipherbox-landing
+            # Emit the CID immediately — the pin is already committed to Kubo, so a failure
+            # in the best-effort cleanup below must never drop it from stdout (that would
+            # fail the step and leave DNSLink pointing at the now-stale CID).
             echo "${CID}"
+            docker exec "${KUBO}" rm -rf /tmp/cipherbox-landing || true
+            rm -rf /tmp/cipherbox-landing || true
 
       - name: Validate CID
         run: |
