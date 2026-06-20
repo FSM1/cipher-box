@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "96fed8429b5d",
+  "session_id": "93dbeffd-9377-4876-8074-3412d9fee111",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-20T23:03:18.45383Z",
+  "branch": "chore/ci-fix-landing-ipfs-pin",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/deploy-landing.yml"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "718d591ca57f",
+  "token_usage": {
+    "input_tokens": 11315,
+    "cache_creation_tokens": 106969,
+    "cache_read_tokens": 4205568,
+    "output_tokens": 56780,
+    "api_call_count": 51
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-20T23:02:43.612715Z",
+    "agent_lines": 21,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 21,
+    "total_lines_changed": 26,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "96fed8429b5d",
+  "strategy": "manual-commit",
+  "branch": "chore/ci-fix-landing-ipfs-pin",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/deploy-landing.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/96/fed8429b5d/0/metadata.json",
+      "transcript": "/96/fed8429b5d/0/full.jsonl",
+      "content_hash": "/96/fed8429b5d/0/content_hash.txt",
+      "prompt": "/96/fed8429b5d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11315,
+    "cache_creation_tokens": 106969,
+    "cache_read_tokens": 4205568,
+    "output_tokens": 56780,
+    "api_call_count": 51
+  }
+}
