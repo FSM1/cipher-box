@@ -97,7 +97,9 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## Landing Page Deployed" >> $GITHUB_STEP_SUMMARY
-          echo "- **CID:** ${CID}" >> $GITHUB_STEP_SUMMARY
-          echo "- **IPFS Gateway:** https://ipfs.io/ipfs/${CID}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Landing Page Deployed"
+            echo "- **CID:** ${CID}"
+            echo "- **IPFS Gateway:** https://ipfs.io/ipfs/${CID}"
+            echo "- **Commit:** ${{ github.sha }}"
+          } >> "$GITHUB_STEP_SUMMARY"
