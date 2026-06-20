@@ -1555,6 +1555,19 @@ pub async fn replay_for_vault(
                 size,
                 created_at_ms,
             } => {
+                // D-02: never trust the persisted JSON `sidecar_path` for a non-legacy entry —
+                // re-derive the canonical <journal_dir>/<id>.bin from the journal id so an
+                // out-of-band-edited/redirected path cannot make replay read an attacker-chosen
+                // file. The empty-path branch (legacy/inline ciphertext) is preserved verbatim.
+                // `derived_sidecar_path` is bound here so the derived owned PathBuf outlives the
+                // borrow passed into the (awaited) replay call below.
+                let derived_sidecar_path: std::path::PathBuf;
+                let replay_sidecar_path: &std::path::Path = if sidecar_path.as_os_str().is_empty() {
+                    sidecar_path
+                } else {
+                    derived_sidecar_path = journal.sidecar_path_for(&entry.id);
+                    &derived_sidecar_path
+                };
                 // D-03 (WR-07): bound the replay network ops. upload may re-stream a multi-GB
                 // sidecar → 18× (~180s). Idempotent re-upload means a timeout safely retains
                 // the entry via record_failure.
@@ -1568,7 +1581,7 @@ pub async fn replay_for_vault(
                         root_ipns_name,
                         &mut folder_key_cache,
                         coordinator.clone(),
-                        sidecar_path,
+                        replay_sidecar_path,
                         sidecar_sha256,
                         legacy_ciphertext_b64,
                         wrapped_key_hex,
@@ -2027,8 +2040,9 @@ async fn replay_mkdir_entry(
     tee_public_key: Option<&[u8]>,
     tee_key_epoch: Option<u32>,
 ) -> Result<(), String> {
-    // D-04: decrypt the directory name transiently (passthrough-once for legacy plaintext).
-    let name = decrypt_journal_name(name_encrypted_hex, private_key);
+    // D-04: decrypt the directory name transiently (legacy plaintext passes through; a
+    // corrupt ECIES name returns Err so the entry is retained, never replayed as garbage).
+    let name = decrypt_journal_name(name_encrypted_hex, private_key)?;
 
     let parent_folder_key = resolve_folder_key_cached(
         folder_key_cache,
@@ -2146,26 +2160,31 @@ async fn replay_mkdir_entry(
 /// write-side by `cipherbox_crypto::ecies::wrap_key`. This helper hex-decodes then
 /// `ecies::unwrap_key`s it with the user private key and returns the plaintext name.
 ///
-/// If ANY step fails (not valid hex, not a valid ECIES ciphertext, not UTF-8), the value
-/// is treated as a pre-Phase-52 legacy plaintext name: a `log::warn!` is emitted once and
-/// the input is returned verbatim for this single replay. The decrypted/passthrough name is
-/// transient — it is only used to populate `FolderEntry.name` / `FilePointer.name` and is
-/// never re-persisted (the entry is removed on successful replay).
+/// Failure handling distinguishes the legacy signal from genuine corruption:
+///
+/// * **Not valid hex** → treated as a pre-Phase-52 legacy plaintext name: a `log::warn!`
+///   is emitted once and the input is returned verbatim (`Ok`) for this single replay.
+///   Phase-52+ writes always ECIES-wrap the name, producing even-length hex, so a
+///   non-hex value can only be an old plaintext name.
+/// * **Valid hex but ECIES-unwrap fails, or unwraps to non-UTF-8** → the at-rest
+///   ciphertext is corrupt (e.g. bit-rot). Returning the raw hex as a filename would
+///   publish a garbage name AND discard the original write (a successful replay removes
+///   the entry). Instead return `Err` so the caller retains/parks the entry for retry.
+///   The error message deliberately leaks neither the name nor any host path (D-04).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-fn decrypt_journal_name(encrypted_hex: &str, private_key: &[u8]) -> String {
-    // Passthrough-once legacy fallback: any decode/unwrap/UTF-8 failure means the value is a
-    // pre-Phase-52 plaintext name — warn once and replay it verbatim (never re-persisted).
-    let legacy = || {
-        log::warn!("replay: legacy plaintext journal name — replaying once, not re-persisting");
-        encrypted_hex.to_string()
-    };
+fn decrypt_journal_name(encrypted_hex: &str, private_key: &[u8]) -> Result<String, String> {
+    // Legacy passthrough applies ONLY to the non-hex case (the pre-Phase-52 plaintext
+    // signal). Phase-52+ names are always ECIES-wrapped even-length hex.
     let Ok(decoded) = hex::decode(encrypted_hex) else {
-        return legacy();
+        log::warn!("replay: legacy plaintext journal name — replaying once, not re-persisting");
+        return Ok(encrypted_hex.to_string());
     };
-    match cipherbox_crypto::ecies::unwrap_key(&decoded, private_key) {
-        Ok(plaintext) => String::from_utf8(plaintext.to_vec()).unwrap_or_else(|_| legacy()),
-        Err(_) => legacy(),
-    }
+    // Valid hex: it must decrypt. A failure here is corruption, not a legacy name —
+    // do NOT pass the raw hex through as a filename; retain the entry instead.
+    let plaintext = cipherbox_crypto::ecies::unwrap_key(&decoded, private_key)
+        .map_err(|_| "corrupt encrypted journal name — retaining entry".to_string())?;
+    String::from_utf8(plaintext.to_vec())
+        .map_err(|_| "corrupt encrypted journal name — retaining entry".to_string())
 }
 
 /// Replay a single `UploadFile` journal entry.
@@ -2204,8 +2223,9 @@ async fn replay_upload_entry(
     tee_public_key: Option<&[u8]>,
     tee_key_epoch: Option<u32>,
 ) -> Result<(), String> {
-    // D-04: decrypt the filename transiently (passthrough-once for legacy plaintext).
-    let filename = decrypt_journal_name(filename_encrypted_hex, private_key);
+    // D-04: decrypt the filename transiently (legacy plaintext passes through; a corrupt
+    // ECIES name returns Err so the entry is retained, never replayed as garbage).
+    let filename = decrypt_journal_name(filename_encrypted_hex, private_key)?;
 
     // REQ-4: park legacy entries with no per-file IPNS name rather than publishing an
     // empty, unresolvable FilePointer (id "replay-", file_meta_ipns_name ""). Returning
@@ -3484,47 +3504,28 @@ mod durability_characterization_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let journal = WriteQueue::new(dir.clone(), 5);
 
-        // Lay down a journal `.json` file directly (no JournalEntry shape coupling).
-        let id = "remove-fail-t5201";
-        let json_path = dir.join(format!("{}.json", id));
-        std::fs::write(&json_path, b"{}").unwrap();
-
         // `remove` of a non-existent id is idempotent (NotFound -> Ok).
         assert!(
             journal.remove("nonexistent-id").is_ok(),
             "remove of a missing entry must be Ok (idempotent NotFound path)"
         );
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            // Make the parent dir read-only so removing the `.json` fails with EACCES,
-            // driving the genuine-error branch (not NotFound).
-            let mut perms = std::fs::metadata(&dir).unwrap().permissions();
-            let original_mode = perms.mode();
-            perms.set_mode(0o500); // r-x------ : cannot unlink children
-            std::fs::set_permissions(&dir, perms).unwrap();
+        // Drive the genuine (non-NotFound) error branch deterministically and
+        // root-independently: place a DIRECTORY at `<id>.json`. `WriteQueue::remove`
+        // unlinks the `.json` first via `remove_file`, which on a directory returns
+        // EISDIR (Unix) / ACCESS_DENIED (Windows) — never NotFound — regardless of
+        // CAP_DAC_OVERRIDE/root (unlink() cannot remove a directory). This avoids the
+        // permission-chmod approach, which 0o500 does not enforce for privileged CI runners.
+        let id = "remove-fail-t5201";
+        let json_path = dir.join(format!("{}.json", id));
+        std::fs::create_dir(&json_path).unwrap();
 
-            let result = journal.remove(id);
+        assert!(
+            journal.remove(id).is_err(),
+            "removing an entry whose .json is a directory must return Err (the `if let Err` logging shape)"
+        );
 
-            // Restore permissions so cleanup can proceed regardless of the assertion.
-            let mut restore = std::fs::metadata(&dir).unwrap().permissions();
-            restore.set_mode(original_mode);
-            let _ = std::fs::set_permissions(&dir, restore);
-
-            assert!(
-                result.is_err(),
-                "removal of an unlinkable entry must return Err (the `if let Err` logging shape)"
-            );
-        }
-
-        #[cfg(not(unix))]
-        {
-            // On non-unix, the genuine-error branch is exercised differently; at minimum the
-            // NotFound idempotency path must return Ok.
-            assert!(journal.remove("another-missing-id").is_ok());
-        }
-
+        // `remove_dir_all` handles the leftover `<id>.json` directory.
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3551,8 +3552,9 @@ mod durability_characterization_tests {
         );
     }
 
-    /// D-04: the replay name-decrypt helper round-trips an ECIES-wrapped name and falls back
-    /// to passthrough-once for a legacy plaintext (non-hex / undecryptable) value.
+    /// D-04: the replay name-decrypt helper round-trips an ECIES-wrapped name, passes a
+    /// non-hex legacy plaintext through once, but RETAINS (Err) a valid-hex-but-corrupt
+    /// ECIES name rather than replaying it verbatim as a garbage filename.
     #[test]
     fn decrypt_journal_name_round_trip_and_legacy_compat() {
         let (private_key, public_key) = real_keypair();
@@ -3561,24 +3563,32 @@ mod durability_characterization_tests {
         let encrypted_hex =
             hex::encode(cipherbox_crypto::ecies::wrap_key(b"report.txt", &public_key).unwrap());
         assert_eq!(
-            super::decrypt_journal_name(&encrypted_hex, &private_key),
+            super::decrypt_journal_name(&encrypted_hex, &private_key).unwrap(),
             "report.txt",
             "ECIES-encrypted name must decrypt back to the plaintext"
         );
 
-        // Legacy passthrough-once: a non-hex plaintext value is returned verbatim.
+        // Legacy passthrough-once: a non-hex plaintext value is returned verbatim (Ok).
         assert_eq!(
-            super::decrypt_journal_name("legacy-plain.txt", &private_key),
+            super::decrypt_journal_name("legacy-plain.txt", &private_key).unwrap(),
             "legacy-plain.txt",
             "a non-hex legacy plaintext name must pass through unchanged"
         );
 
-        // Valid hex that is not a valid ECIES ciphertext also passes through (one-time).
+        // Valid hex that is NOT a valid ECIES ciphertext is corruption, not a legacy
+        // name: it must return Err so the entry is retained, never replayed as garbage.
         let not_ecies = hex::encode(b"not an ecies blob");
-        assert_eq!(
-            super::decrypt_journal_name(&not_ecies, &private_key),
-            not_ecies,
-            "valid-hex-but-not-ECIES must pass through as legacy plaintext"
+        let err = super::decrypt_journal_name(&not_ecies, &private_key)
+            .expect_err("valid-hex-but-corrupt ECIES name must be retained, not passed through");
+        assert!(
+            err.contains("retaining entry"),
+            "corruption error must signal retention, got: {}",
+            err
+        );
+        // The error must not leak the (raw hex) name or any path (D-04).
+        assert!(
+            !err.contains(&not_ecies),
+            "corruption error must not embed the name"
         );
     }
 }

@@ -487,6 +487,13 @@ impl WriteQueue {
 
         // Scan all `.json` entries across ALL vaults (GC is global) and keep only `Failed`.
         let mut failed: Vec<JournalEntry> = Vec::new();
+        // Stems (`<id>`) of `.json` files that PARSED successfully — the set of entries that
+        // could ever own a live sidecar. A torn/truncated `.json` (e.g. crash mid-write of the
+        // JSON after the `.bin` was already fsynced) is unparseable, so its stem is absent here
+        // and pass 3 treats its sidecar as orphaned even though the `.json` exists on disk
+        // (T-52-16 disk DoS / T-52-15 at-rest info-disclosure).
+        let mut parseable_stems: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for dir_entry in read_dir {
             let dir_entry = match dir_entry {
                 Ok(d) => d,
@@ -508,6 +515,11 @@ impl WriteQueue {
             };
             match serde_json::from_slice::<JournalEntry>(&bytes) {
                 Ok(entry) => {
+                    // Record EVERY well-formed entry's stem (regardless of status) so its
+                    // sidecar is recognized as live in pass 3.
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        parseable_stems.insert(stem.to_string());
+                    }
                     if matches!(entry.status, JournalEntryStatus::Failed { .. }) {
                         failed.push(entry);
                     }
@@ -553,7 +565,12 @@ impl WriteQueue {
             idx += 1;
         }
 
-        // Pass 3: orphan `.bin` cleanup — sidecars with no matching `.json` (Pitfall 2).
+        // Pass 3: orphan `.bin` cleanup — sidecars with no LIVE owning `.json` (Pitfall 2).
+        //
+        // Liveness is "the sibling `.json` parsed successfully" (in `parseable_stems`), NOT
+        // mere file existence: a torn/truncated `.json` still exists on disk but is never
+        // replayed (load_all_for_vault skips it), so its sidecar would otherwise persist
+        // forever. Reap when the `.json` is physically absent OR present-but-unparseable.
         if let Ok(read_dir) = std::fs::read_dir(&self.journal_dir) {
             for dir_entry in read_dir.flatten() {
                 let path = dir_entry.path();
@@ -561,7 +578,10 @@ impl WriteQueue {
                     continue;
                 }
                 let json_path = path.with_extension("json");
-                if !json_path.exists() {
+                let stem = path.file_stem().and_then(|s| s.to_str());
+                let orphaned = !json_path.exists()
+                    || !stem.map(|s| parseable_stems.contains(s)).unwrap_or(false);
+                if orphaned {
                     match std::fs::remove_file(&path) {
                         Ok(()) => removed += 1,
                         Err(e) => {
@@ -619,6 +639,33 @@ impl WriteQueue {
                 last_error: error.to_string(),
             });
         }
+
+        // A pre-Phase-52 UploadFile entry loads with an empty `sidecar_path` and its only
+        // payload in the in-memory `legacy_ciphertext_b64` field (which is `skip_serializing`).
+        // Re-persisting it via `put`/`update_status` would write a JSON with NO ciphertext and
+        // still no sidecar, leaving an unreplayable missing-payload entry that parks forever
+        // (data loss). Migrate the inline bytes to the canonical `.bin` sidecar BEFORE any
+        // re-persist so the payload is durable and the next mount replays via the sidecar branch.
+        if let Some((migrated, decoded)) = self.migrate_legacy_inline(entry) {
+            let status = if entry.retries >= self.max_retries {
+                JournalEntryStatus::Failed {
+                    last_error: error.to_string(),
+                }
+            } else {
+                JournalEntryStatus::Pending
+            };
+            let mut migrated = migrated;
+            migrated.status = status.clone();
+            if entry.retries < self.max_retries {
+                migrated.retries += 1;
+            }
+            // Route BOTH the retry and the park case through put_with_sidecar so the legacy
+            // inline payload becomes a durable, fsync'd sidecar (never update_status, whose
+            // read-modify-write would re-drop the skip_serializing legacy field).
+            self.put_with_sidecar(&migrated, &decoded)?;
+            return Ok(status);
+        }
+
         if entry.retries >= self.max_retries {
             // Park: transition to Failed, keep on disk (D-09).
             let status = JournalEntryStatus::Failed {
@@ -634,6 +681,59 @@ impl WriteQueue {
             self.put(&updated)?;
             Ok(JournalEntryStatus::Pending)
         }
+    }
+
+    /// Migrate a pre-Phase-52 legacy `UploadFile` entry (inline base64 ciphertext, empty
+    /// `sidecar_path`) to the canonical `.bin` sidecar shape (D-01).
+    ///
+    /// Returns `Some((migrated_entry, decoded_ciphertext))` when `entry` is a legacy
+    /// UploadFile (empty `sidecar_path` + non-empty `legacy_ciphertext_b64`) whose inline
+    /// bytes decode cleanly. The migrated clone points `sidecar_path` at
+    /// `sidecar_path_for(id)`, records the SHA-256 of the decoded ciphertext in
+    /// `sidecar_sha256`, and clears `legacy_ciphertext_b64`, so `put_with_sidecar` accepts it
+    /// (its path-validation requires `sidecar_path == sidecar_path_for(id)`).
+    ///
+    /// Returns `None` for a non-legacy entry, a non-UploadFile op, or an empty/undecodable
+    /// legacy blob (the caller falls through to the normal re-put — an undecodable blob was
+    /// unreplayable anyway, so no recoverable bytes are lost).
+    fn migrate_legacy_inline(&self, entry: &JournalEntry) -> Option<(JournalEntry, Vec<u8>)> {
+        let JournalOp::UploadFile {
+            sidecar_path,
+            legacy_ciphertext_b64,
+            ..
+        } = &entry.op
+        else {
+            return None;
+        };
+        if !sidecar_path.as_os_str().is_empty() || legacy_ciphertext_b64.is_empty() {
+            return None;
+        }
+
+        use base64::Engine;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(legacy_ciphertext_b64)
+            .ok()?;
+
+        let sha256 = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&decoded);
+            hex::encode(hasher.finalize())
+        };
+
+        let mut migrated = entry.clone();
+        if let JournalOp::UploadFile {
+            sidecar_path,
+            sidecar_sha256,
+            legacy_ciphertext_b64,
+            ..
+        } = &mut migrated.op
+        {
+            *sidecar_path = self.sidecar_path_for(&entry.id);
+            *sidecar_sha256 = sha256;
+            legacy_ciphertext_b64.clear();
+        }
+        Some((migrated, decoded))
     }
 
     /// Return entries re-ordered for safe replay.
@@ -1762,6 +1862,96 @@ mod tests {
         assert!(!dir.join("sz-2.json").exists(), "sz-2 trimmed");
         assert!(dir.join("sz-3.json").exists(), "newest sz-3 survives");
         assert!(!orphan.exists(), "orphan .bin removed");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// T-52-16 / T-52-15: a `.bin` whose sibling `.json` exists but is torn/truncated
+    /// (a crash mid-JSON-write after the `.bin` fsync) is never replayable, so GC pass 3
+    /// must treat it as orphaned and reap the live `.bin` instead of keeping it forever.
+    #[test]
+    fn gc_reaps_bin_with_malformed_json() {
+        let (q, dir) = make_temp_queue();
+        let now = now_ms();
+        let failed = JournalEntryStatus::Failed {
+            last_error: "x".to_string(),
+        };
+
+        // A well-formed Failed entry whose .bin must be PRESERVED (its .json parses).
+        let live = make_sidecar_entry(&q, "gc-live", "v", failed, now - 1_000);
+        q.put_with_sidecar(&live, b"live-cipher").expect("put live");
+
+        // A live, durable .bin whose sibling .json exists but is corrupt (unparseable).
+        let bad_bin = q.sidecar_path_for("gc-torn");
+        std::fs::write(&bad_bin, b"durable-ciphertext").expect("write torn .bin");
+        std::fs::write(dir.join("gc-torn.json"), b"{ this is not valid json")
+            .expect("write torn .json");
+
+        let removed = q.gc_failed_entries(JOURNAL_GC_MAX_AGE_DAYS, u64::MAX).expect("gc");
+
+        assert_eq!(removed, 1, "only the orphaned (malformed-json) sidecar is reaped");
+        assert!(!bad_bin.exists(), "sidecar with unparseable .json must be reaped");
+        assert!(dir.join("gc-torn.json").exists(), "the malformed .json itself is left in place");
+        assert!(dir.join("gc-live.json").exists(), "well-formed entry survives");
+        assert!(dir.join("gc-live.bin").exists(), "well-formed entry's sidecar is preserved");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D-01 data-loss guard: a pre-Phase-52 legacy UploadFile entry (empty `sidecar_path`,
+    /// ciphertext only in the in-memory `legacy_ciphertext_b64` field) must have its inline
+    /// bytes migrated to a durable `.bin` sidecar by `record_failure` BEFORE any re-persist,
+    /// so the next mount replays via the sidecar branch instead of parking a missing payload.
+    #[test]
+    fn record_failure_migrates_legacy_inline_to_sidecar() {
+        use base64::Engine;
+        let (q, dir) = make_temp_queue();
+
+        // Build a legacy entry: empty sidecar_path, ciphertext only inline (base64).
+        let ciphertext = b"legacy-inline-ciphertext-bytes".to_vec();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&ciphertext);
+        let mut entry = make_upload_entry("legacy-mig", "v");
+        if let JournalOp::UploadFile {
+            sidecar_path,
+            sidecar_sha256,
+            legacy_ciphertext_b64,
+            ..
+        } = &mut entry.op
+        {
+            *sidecar_path = std::path::PathBuf::new(); // legacy: no sidecar
+            sidecar_sha256.clear();
+            *legacy_ciphertext_b64 = b64;
+        }
+        // Persist the JSON (skip_serializing drops legacy_ciphertext_b64 on disk, exactly
+        // as a real pre-52 entry behaves once reloaded).
+        q.put(&entry).expect("put legacy entry");
+        assert!(!dir.join("legacy-mig.bin").exists(), "no sidecar before migration");
+
+        // A transient replay failure: record_failure must migrate the inline bytes first.
+        let status = q.record_failure(&entry, "transient upload error").expect("record_failure");
+        assert!(matches!(status, JournalEntryStatus::Pending), "below max → Pending retry");
+
+        // The canonical sidecar now exists with the exact ciphertext, and the reloaded
+        // entry carries the derived path + hash (so the next mount uses the sidecar branch).
+        let bin_path = q.sidecar_path_for("legacy-mig");
+        assert!(bin_path.exists(), "inline ciphertext must be migrated to the .bin sidecar");
+        assert_eq!(std::fs::read(&bin_path).unwrap(), ciphertext, "sidecar bytes must round-trip");
+
+        let reloaded = q.load_all_for_vault("v").expect("reload");
+        let mig = reloaded.iter().find(|e| e.id == "legacy-mig").expect("entry present");
+        assert_eq!(mig.retries, 1, "retry counter advanced");
+        if let JournalOp::UploadFile { sidecar_path, sidecar_sha256, .. } = &mig.op {
+            assert_eq!(sidecar_path, &bin_path, "persisted sidecar_path is the canonical path");
+            let expected = {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(&ciphertext);
+                hex::encode(h.finalize())
+            };
+            assert_eq!(sidecar_sha256, &expected, "persisted sha256 matches the ciphertext");
+        } else {
+            panic!("expected UploadFile op");
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

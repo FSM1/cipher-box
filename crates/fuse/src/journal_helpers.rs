@@ -672,35 +672,44 @@ mod tests {
         }
     }
 
-    /// D-01 (WR-06): a plaintext larger than `MAX_JOURNAL_PAYLOAD_BYTES` must cause
+    /// D-01 (WR-06): a file larger than `MAX_JOURNAL_PAYLOAD_BYTES` must cause
     /// `build_upload_journal_entry` to return `Err` (so the release path replies EIO)
     /// rather than encrypting + streaming a multi-GB sidecar and stalling the FS thread.
     ///
-    /// Allocating an actual >2 GiB buffer is impractical in a unit test, so this exercises
-    /// the exact guard condition the helper uses against the real constant, proving the
-    /// threshold and the error-message contract. The at/under-cap path is covered by
-    /// `build_upload_journal_entry_round_trips` (a small file succeeds).
-    #[test]
-    fn payload_size_cap_returns_err() {
-        let cap = cipherbox_sdk::MAX_JOURNAL_PAYLOAD_BYTES;
+    /// This drives the *real* helper against an oversized handle so the guard's
+    /// ordering (it must run BEFORE `read_all()`) is actually covered: a regression
+    /// that moved the check after the read, or removed it, would fail here. We avoid
+    /// allocating real bytes by `set_len`-ing the temp file to a sparse logical size
+    /// past the cap — `get_size()` reads `fs::metadata().len()`, so the guard fires
+    /// on the logical length without any multi-GB allocation. The at/under-cap path
+    /// is covered by `build_upload_journal_entry_round_trips` (a small file succeeds).
+    ///
+    /// Async only because `make_test_fs_with_keypair` captures `Handle::current()`; the
+    /// helper under test is synchronous and the guard runs before any `.await`.
+    #[tokio::test]
+    async fn payload_size_cap_returns_err() {
+        let (private_key, public_key) = real_keypair();
+        let fs = make_test_fs_with_keypair(private_key, public_key);
 
-        // Mirror the guard in build_upload_journal_entry verbatim.
-        let cap_guard = |file_size: u64| -> Result<(), String> {
-            if file_size > cap {
-                return Err(format!(
-                    "File too large for journal ({} bytes > {} byte cap); refusing to write",
-                    file_size, cap
-                ));
-            }
-            Ok(())
+        // A fresh write handle backed by a temp file. ino is deliberately absent
+        // from the inode table so the helper treats it as a brand-new file.
+        let temp_dir = make_isolated_journal_dir();
+        let ino = 9999u64;
+        let handle =
+            crate::file_handle::OpenFileHandle::new_write(ino, &temp_dir, None).unwrap();
+
+        // Make the temp file sparse and one byte past the cap. No real allocation:
+        // set_len produces a logical size that get_size() reports verbatim.
+        handle
+            .truncate(cipherbox_sdk::MAX_JOURNAL_PAYLOAD_BYTES + 1)
+            .expect("truncate to oversize must succeed (sparse file)");
+
+        // The real helper must reject before reading the file into memory.
+        // `UploadJournalResult` does not derive Debug, so match instead of `expect_err`.
+        let err = match fs.build_upload_journal_entry(ino, &handle, /* is_new_file */ true) {
+            Ok(_) => panic!("over-cap file must be rejected by the real helper"),
+            Err(e) => e,
         };
-
-        // At the cap: allowed.
-        assert!(cap_guard(cap).is_ok(), "a file exactly at the cap must proceed");
-        // Just under: allowed.
-        assert!(cap_guard(cap - 1).is_ok());
-        // Over the cap: rejected with the documented message.
-        let err = cap_guard(cap + 1).expect_err("over-cap file must be rejected");
         assert!(
             err.contains("too large for journal"),
             "error must explain the cap rejection, got: {}",
