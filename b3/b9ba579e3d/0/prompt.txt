@@ -1,0 +1,279 @@
+is the 51 plan agent working in its own worktree?
+
+---
+
+please continue and restart the phase 51 agent if it got interrupted
+
+---
+
+can we not go on discussing 53?
+
+---
+
+discuss 54 while they run
+
+---
+
+<task-notification>
+<task-id>a20910673c24630a9</task-id>
+<tool-use-id>toolu_01Xk2XFsDCzHR2ENutRucbnw</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/a20910673c24630a9.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 53 in worktree" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all artifacts committed. 
+
+Step 13e (post-planning gap analysis) is non-blocking; step 15 (auto-advance) would launch execute-phase — but this is an explicitly planning-only worktree run (no builds/codegen), so I'm stopping here as instructed rather than auto-advancing.
+
+Planning pipeline complete. Here's the summary.
+
+---
+
+## Phase 53 Plan-Phase Complete
+
+**Pipeline ran with all gates:** research (sonnet) → pattern-mapping (sonnet) → planning (opus) → independent plan-checker (sonnet) → coverage gates. All sub-agents ran in separate contexts; nothing collapsed inline.
+
+### Plans created — 4 plans, 3 waves (all `requirements: [HARD-04]`)
+
+| Plan | Wave | Scope |
+|------|------|-------|
+| 53-01 | 1 | SHA-pin all ~111 third-party `uses:` refs via `pinact` (all-at-once, D-01/D-02); verify the pre-existing Dependabot `github-actions` block (D-03, no-change) |
+| 53-02 | 2 | zizmor CLI hard gate (`pip install zizmor`, not SARIF action) failing `unpinned-uses`; least-privilege `permissions:` on 11 ci.yml jobs + workflow-level on ~5 unscoped workflows (D-04) |
+| 53-03 | 2 | Cargo.lock sync on release PR via fallback (`cargo update --precise` + `git diff --exit-code` guard); native `cargo-workspace` plugin explicitly rejected per bug #2517 (D-05) |
+| 53-04 | 3 | Stale-pin guard script `check-stale-release-as.js` (TDD); remove exactly 3 stale `release-as` pins; `cancel-in-progress: true→false` safety-net; fetch+rebase discipline codified in docs (D-06/D-07) |
+
+Wave 2 plans (53-02/53-03) have non-overlapping `files_modified`; #13 and #16 release-please changes are sequenced across waves so they don't collide on a release PR.
+
+### Key research findings that shaped the plan
+- **D-03 already satisfied** — Dependabot `github-actions` block exists; treated as verify-only (no duplicate)
+- **D-05 = fallback path** — native cargo-workspace updater is bugged (issue #2517), correctly rejected
+- **#16 user-corrected framing honored** — primary fix is fetch+rebase discipline + `cancel-in-progress: false`; the clear-satisfied-pins auto-clearing machinery is explicitly NOT adopted
+- **3 stale `release-as` entries** (not ~8): `packages/core`, `packages/crypto`, `crates/core`
+- Implementation commits / phase PR convention `chore(ci):` baked into every plan
+
+### Plan-checker findings (independent)
+- **PASS on all substantive dimensions** — D-01..D-07 fidelity, HARD-04 coverage, wave sequencing, threat models (T-53-01..05), artifacts sections, Nyquist/Dimension 8, commit convention all verified.
+- **1 blocker + 1 warning, both doc-marker hygiene only** (no plan-content revision): RESEARCH.md `## Open Questions` needed `(RESOLVED)` suffix; VALIDATION.md `nyquist_compliant: false` needed flipping. Both fixed directly (checker explicitly directed the flip). No revision-loop iteration was needed.
+
+### Commits (on `feat/release-supply-chain-engineering`)
+- `ebe582ee9` — docs(53): research
+- `9c00ba700` — docs(53): validation strategy
+- `e7827956e` — docs(53): create phase plan (4 PLANs + PATTERNS + marker fixes + STATE + ROADMAP)
+
+Working tree clean. Stopped after planning per the planning-only constraint — did **not** auto-advance to execute-phase (no builds/codegen run). Ready for `/gsd-execute-phase 53` when desired.</result>
+<usage><subagent_tokens>119627</subagent_tokens><tool_uses>33</tool_uses><duration_ms>2019533</duration_ms></usage>
+</task-notification>
+
+---
+
+want to start executing 51 in a worktree?
+
+---
+
+<task-notification>
+<task-id>a019e06d11629f43c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/a019e06d11629f43c.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 54 in worktree" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All gates green: HARD-05 covered, D-05/D-06/D-07 covered (D-01..D-04 tracked by the decision-coverage gate, all 3/3). Working tree clean.
+
+Per my instructions this is PLANNING ONLY — I will NOT auto-advance to execute-phase despite `auto_advance=true` in config. Planning is complete.
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PHASE 54 PLANNED ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+## Phase 54 plan-phase complete
+
+**Pipeline:** research → pattern-mapping → planner (opus) → independent plan-checker (sonnet). All ran as separate subagents. PASSED on the first checker iteration — zero blockers, zero warnings.
+
+**Plans: 4 in 3 waves** (all `requirements: [HARD-05]`, autonomous)
+
+| Plan | Wave | Scope | D-IDs |
+|------|------|-------|-------|
+| 54-01 | 1 | Foundation — `tsconfig.scripts.json` (extends tsconfig.base), shared `tests/e2e-helpers/auth.ts`+`types.ts`, append `tsc -p tsconfig.scripts.json --noEmit` to root typecheck after dep build, verify eslint global `**/*.ts` glob already covers scripts | D-01,02,03,04,05,07 |
+| 54-02 | 2 | Migrate sdk-core trio (edit/rename/verify-filepointer) → .ts | D-02,04,05,07 |
+| 54-03 | 2 | Migrate desktop-e2e pair + web-perf + generate-test-vectors | D-02,04,05,07 |
+| 54-04 | 3 | Switch all 8 runners node→tsx in lockstep, delete the 7 .mjs | D-05,06,07 |
+
+**Key findings encoded by the planner (verified by the checker):**
+- **D-02 highest-risk gap fixed** — `generate-test-vectors` was importing `createIpnsRecord`/`marshalIpnsRecord` from `@cipherbox/crypto` dist, but they live in `@cipherbox/core`; plan 54-03 corrects the import, swaps `ed.getPublicKey`→`deriveEd25519PublicKey`, and adds an explicit `@noble/secp256k1` devDep. The existing `scripts/generate-test-vectors.ts` analog uses a dist-relative import and was explicitly flagged "do not copy."
+- **tsx child-spawn** — `test-move-content` spawns `verify-filepointer` via tsx (not node) so a `.ts` child runs.
+- **Runner lockstep broader than expected (D-06)** — 8 runner files total (run-all + 6 sub-scripts × sh/ps1), all updated together; the intentional `test-cross-client-sync.ps1` rename-folder omission is preserved.
+- **eslint needs no change** — flat config already lints `**/*.ts`; D-03's eslint-scope intent is satisfied by the global glob (stated explicitly).
+- **TDD correctly suppressed** — no fake RED/GREEN; validation = tsc + eslint + tsx-run smoke (Nyquist VALIDATION.md filled, `nyquist_compliant: true`). Desktop/web E2E behavioral parity is flagged manual (web-e2e only runs on main push).
+
+**Coverage gates:** requirements 1/1, decision-coverage 3/3, post-planning gap-analysis 4/4 — all covered.
+
+**Did NOT auto-advance** to execute despite `auto_advance=true` — planning-only per instructions.
+
+**Commits on `feat/e2e-test-infra-typing`:**
+- `8389ba6ca` research
+- `60d0401ab` validation strategy
+- `01109bc0c` pattern map
+- `32da6bd86` 4 PLAN.md files + filled VALIDATION.md (planner)
+- `cecf3b02a` STATE.md + ROADMAP wave annotations (final, HEAD)</result>
+<usage><subagent_tokens>113608</subagent_tokens><tool_uses>27</tool_uses><duration_ms>1598242</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa3862e036be15324</task-id>
+<tool-use-id>toolu_01PGG5sLjqqMz3bhqdWqtiKX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/aa3862e036be15324.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 55 in worktree" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The pipeline is complete. STATE.md shows "Ready to execute", all artifacts present, working tree clean, and I have correctly NOT auto-advanced to execute-phase (planning-only, per orchestrator instructions).
+
+## Phase 55 plan-phase pipeline complete
+
+Ran the full GSD plan-phase pipeline (research → pattern-mapping → planner → independent plan-checker → revision → re-check) in the dedicated worktree. All sub-agents ran as separate Agent calls; nothing was collapsed inline.
+
+### Plans created (4 plans, 3 waves) — Tier 1 + Tier 2 ONLY, Tier 3 excluded
+
+| Plan | Wave | Scope |
+|------|------|-------|
+| 55-01 | 1 | lib.rs 6-module decomposition (runtime/events/publish/metadata/fs/replay); lib.rs → ~120 LoC re-exports |
+| 55-04 | 1 (parallel) | TS/web Tier-1: sdk-core folder barrel split, apps/api ipns-record.codec extract, apps/web DetailsDialog details/ split |
+| 55-02 | 2 | Rust Tier-1 remainder: write_ops directory module + commands/auth.rs → vault.rs |
+| 55-03 | 3 | All Tier-2 cross-platform dedup: content_ops, content_fetch, read_ops shared poll module, prepopulate |
+
+Sequencing honors D-06 (lib.rs first → rest of Tier-1 → Tier-2); batching honors D-04 (coherent groups, not per-item). TS/web parallelized with Wave 1 (no shared files). HARD-06 in all 4 plans.
+
+### Scope confirmed
+- Tier 3 fully excluded (no client.ts, inode.rs, ShareDialog, etc.). Leave-as-is set untouched (share.service.ts, shared-write.ts, queue.rs, journal_helpers.rs).
+- Hard invariants in must_haves: `read_ops.rs::handle_release` NOT relocated; public surface byte-identical; no `pnpm api:generate`; both Rust feature sets gate every Rust item (`cargo test -p cipherbox-fuse` + `--features winfsp` build).
+- Research found zero LoC drift vs the survey (all 12 files match exactly).
+
+### Plan-checker findings
+Iteration 1: 0 blockers, 2 warnings — (1) RESEARCH Open Questions heading lacked `(RESOLVED)`, (2) Plan 01 Tasks 1-2 lacked the winfsp gate per-task. Both fixed via targeted revision. Iteration 2 re-check: VERIFICATION PASSED, no regression. Open Question A2 (block_with_timeout 3s vs 10s for content_ops) is correctly surfaced as an execution-time deviation-check in Plan 55-03, not a silent assumption.
+
+### Gates passed
+Requirements coverage (HARD-06), decision coverage 3/3 (BLOCKING gate), post-planning gap analysis 4/4 covered. STATE.md → "Ready to execute" (4 plans), ROADMAP annotated with 3 waves.
+
+### Did NOT auto-advance to execute-phase (planning-only, per instructions).
+
+### Commits on `feat/large-source-file-refactor`
+- `de3b86ecf` docs(55): add research and validation strategy
+- `b982cd624` docs(55): create phase plan (planner self-committed the 4 plans + PATTERNS)
+- `72c64e37a` docs(55): apply plan-checker revisions
+- `92a142f58` docs(55): record planning completion and roadmap annotations (final HEAD)</result>
+<usage><subagent_tokens>130254</subagent_tokens><tool_uses>28</tool_uses><duration_ms>2143461</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4553176ea0de8750</task-id>
+<tool-use-id>toolu_011D5Qi2tszDPsouWb9wxEgh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/a4553176ea0de8750.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute phase 51 in worktree" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verification report committed (`7144016f7`). The working tree is clean except `.planning/intel/` (pre-existing untracked, out of scope — it was already present at session start per the initial git status).
+
+Phase 51 execute-phase is complete. Stopping here per the execute-only instruction — not advancing to ship/PR/next phase despite `auto_advance: true`.
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PHASE 51 COMPLETE ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+## Phase 51 Execute-Phase Summary
+
+**Phase:** 51 — crypto-signature-secret-leak-hardening (requirement HARD-02)
+**Branch:** `feat/crypto-signature-secret-leak-hardening` (worktree `cipher-box-p51`)
+**Execution mode:** Sequential — worktree isolation auto-degraded (HEAD diverged from origin/HEAD, #683), as expected. All 4 plans ran one-at-a-time in this worktree via `gsd-executor` agents.
+
+### Plans executed — all 4/4 PASS
+
+| Plan | Scope | Tasks | Tests |
+|------|-------|-------|-------|
+| 51-01 | S1: API publish-time embedded-vs-DTO validation (apps/api ipns.service.ts) | 3/3 | 79/79 jest |
+| 51-02 | S2 web: fail-closed `resolveIpnsRecord` (apps/web) | 3/3 | 60/60 vitest (6 new) |
+| 51-03 | S2+S3 Rust: fail-closed verify + Zeroizing keys (crates/api-client, crypto, fuse) | 4/4 | 71 cargo |
+| 51-04 | S3 TS: sdk-core key zeroization sweep (ipns/vault; folder audited → documented SKIP) | 3/3 | 209/209 vitest |
+
+### Verifier verdict: PASSED (10/10 must-haves)
+All four S1/S2/S3 deliverables confirmed present in source, no gaps, no human-verification items. Report at `.planning/phases/51-crypto-signature-secret-leak-hardening/51-VERIFICATION.md`.
+
+### Deviations (all reasonable, handled per executor protocol)
+- 51-01: CAS 409 reordered before S1 400 check (preserves existing conflict semantics); aligned 3 pre-existing tests' mock CIDs.
+- 51-02: built missing `@cipherbox/api-client`/`@cipherbox/core` dists; switched test imports to top-level namespace for vitest mock hoisting.
+- 51-03: `unwrap_key`→`Zeroizing` return-type change cascaded to 7 in-crate call sites (fixed); `cargo fmt` drift in 39 out-of-scope files restored via `git checkout --`.
+- 51-04: `updateFolderMetadataAndPublish` correctly SKIPPED zeroization (live session keys reused) with documented comment + guard test.
+- Orchestrator cleanup: committed stranded `cargo fmt` reformatting of the two in-scope 51-03 files (`crates/api-client/src/ipns.rs`, `types.rs`) that a later pre-commit hook left uncommitted.
+
+### Commits (final HEAD: `7144016f7`)
+13 plan commits (acc397b63 → 6581a0ca5) + `c0d7d4b7c` (fmt fixup) + `7144016f7` (verification report).
+
+### No failing tests. Working tree clean (only pre-existing untracked `.planning/intel/`).
+
+Stopped after execute + verification per the execute-only instruction. Not advancing to ship/PR/next phase.</result>
+<usage><subagent_tokens>82364</subagent_tokens><tool_uses>21</tool_uses><duration_ms>2814596</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a90d3106a84e3cfc3</task-id>
+<tool-use-id>toolu_01KywUYyv9vL7NwD4uPMNEDc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/a90d3106a84e3cfc3.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply CodeRabbit zeroization fixes" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The commit is signed (`gpgsig -----BEGIN SSH SIGNATURE-----` present). The `N` / verify error is purely a local trust-config issue (no `allowedSignersFile`), not a missing signature — CI/GitHub will verify it fine. All done.
+
+## Summary
+
+All 3 CodeRabbit zeroization findings applied on `feat/crypto-signature-secret-leak-hardening`. Commit: **`6220f6103`** (signed via 1Password SSH).
+
+### FIX 1 (#3) — SDK-state root key downgraded to plain Vec
+- `crates/sdk/src/state.rs:48` — field is now `RwLock&lt;Option&lt;zeroize::Zeroizing&lt;Vec&lt;u8&gt;&gt;&gt;&gt;`. Tests at lines 169/177/191 updated to wrap in `Zeroizing::new`.
+- `apps/desktop/src-tauri/src/commands/vault.rs:210-212` — stores the `unwrap_key` `Zeroizing` directly (dropped `.to_vec()`, fixed stale comment).
+- Readers: `commands/auth.rs:240` `.clone()` now yields `Zeroizing&lt;Vec&lt;u8&gt;&gt;` and flows unchanged into `mount_filesystem`, whose param became `Zeroizing&lt;Vec&lt;u8&gt;&gt;` in **both** `fuse/mod.rs:79` (macOS/Linux) and `fuse/windows/mod.rs:41` (winfsp); the now-redundant `Zeroizing::new(...)` wrap at each `CipherBoxFS` construction site (mod.rs:297, windows/mod.rs:380) was removed. The windows file change keeps the Windows build coherent with the changed caller (it's winfsp-gated, not in the DO-NOT-TOUCH list which covered `crates/fuse/.../windows/operations.rs`).
+- `root_ipns_private_key` left as-is (out of scope, HKDF-derived) — no compile error.
+
+### FIX 2 (#6) — folder-key cache stored raw Vec
+- `crates/fuse/src/lib.rs` — cache type changed to `HashMap&lt;String, Zeroizing&lt;Vec&lt;u8&gt;&gt;&gt;` at: `resolve_folder_key_cached` param (~1712) + body (stores `key.clone()`, single clone, fixed misleading comment), creation site in `replay_for_vault` (~1447), both helper param decls (~1971, ~2109), and the test (~2477). Added `#[cfg(any(feature="fuse",feature="winfsp"))] use zeroize::Zeroizing;` to the `mod tests` at line ~2321. Function still returns `Vec&lt;u8&gt;` to callers.
+
+### FIX 3 (#7) — reencrypt worker raw [u8;32] copies
+- `crates/fuse/src/lib.rs` (`spawn_file_meta_reencrypt`, ~759/768) — both `source_key_arr`/`dest_key_arr` are now `Zeroizing&lt;[u8; 32]&gt;`. The two decrypt call sites pass `&amp;source_key_arr`/`&amp;dest_key_arr`, which deref-coerce to `&amp;[u8; 32]` for `decrypt_file_metadata_from_ipfs_public`.
+
+### Validation
+- `cargo check --workspace --all-targets`: green (only pre-existing vendored-`fuser` dead-code warnings).
+- `cargo test -p cipherbox-fuse`: 60 passed, 0 failed (incl. `resolve_folder_key_cache_resolves_shared_parent_once`).
+- `cargo build -p cipherbox-desktop`: clean.
+- Bonus: `cargo test -p cipherbox-sdk state::` — 5 passed (state field-type tests).
+
+### Skipped
+- Nothing. All 3 fixes landed. The DO-NOT-TOUCH items (`crates/fuse/src/operations.rs`, `crates/fuse/src/platform/windows/operations.rs` `[u8;32]` arrays #1/#2, and the `PublishResult::Conflict` branches #4/#5) were left untouched.
+
+Note: `git verify-commit` reports an `allowedSignersFile` warning locally — that's a missing local trust config, not a missing signature; the commit carries a valid `BEGIN SSH SIGNATURE` block and will verify on GitHub.</result>
+<usage><subagent_tokens>75854</subagent_tokens><tool_uses>65</tool_uses><duration_ms>570786</duration_ms></usage>
+</task-notification>
+
+---
+
+ok quota is reset, please resume the workflow
+
+---
+
+<task-notification>
+<task-id>b5of39j6h</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/b5of39j6h.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until CodeRabbit review completes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+I think some of the threads are still not marked as resolved

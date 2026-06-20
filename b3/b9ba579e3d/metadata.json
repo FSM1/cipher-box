@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b3b9ba579e3d",
+  "strategy": "manual-commit",
+  "branch": "feat/crypto-signature-secret-leak-hardening",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/services/__tests__/ipns.service.test.ts",
+    "apps/web/src/services/ipns.service.ts",
+    "crates/fuse/src/operations.rs",
+    "crates/fuse/src/platform/windows/operations.rs",
+    "packages/sdk-core/src/__tests__/ipns.test.ts",
+    "packages/sdk-core/src/__tests__/vault.test.ts",
+    "packages/sdk-core/src/ipns/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b3/b9ba579e3d/0/metadata.json",
+      "transcript": "/b3/b9ba579e3d/0/full.jsonl",
+      "content_hash": "/b3/b9ba579e3d/0/content_hash.txt",
+      "prompt": "/b3/b9ba579e3d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 104881,
+    "cache_creation_tokens": 2129904,
+    "cache_read_tokens": 98889680,
+    "output_tokens": 538707,
+    "api_call_count": 400
+  }
+}
