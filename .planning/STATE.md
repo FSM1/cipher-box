@@ -20,7 +20,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 51 — crypto-signature-secret-leak-hardening
+**Current focus:** Phase 52 — desktop-fuse-durability-at-rest-safety (complete, shipping); next Phase 53 release & supply-chain engineering
 
 ## Phase 52 COMPLETE (2026-06-20): all 5 plans committed, unsigned
 

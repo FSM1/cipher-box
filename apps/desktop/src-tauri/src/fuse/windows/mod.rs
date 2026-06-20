@@ -354,6 +354,20 @@ mod mount_impl {
             coord
         };
 
+        // D-02: GC parked Failed journal entries + orphaned sidecars at mount, mirroring the
+        // Unix path in apps/desktop/src-tauri/src/fuse/mod.rs. Synchronous, fast (dir scan),
+        // Failed-only, and non-fatal so it never blocks/fails the mount (T-52-16, DoS).
+        match journal.gc_failed_entries(
+            cipherbox_sdk::JOURNAL_GC_MAX_AGE_DAYS,
+            cipherbox_sdk::JOURNAL_GC_MAX_SIZE_BYTES,
+        ) {
+            Ok(n) if n > 0 => {
+                log::info!("Mount GC: removed {} parked/orphaned journal item(s)", n)
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("Mount GC failed (will continue mount): {}", e),
+        }
+
         // CR-06 / D-03 (WR-07): replay journal entries for this vault CONCURRENTLY with mount.
         // Previously this blocked the mount with `.await`; now replay runs on a background
         // tokio task (each entry's network ops are bounded by tokio::time::timeout inside
