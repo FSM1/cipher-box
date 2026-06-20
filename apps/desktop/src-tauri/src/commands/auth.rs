@@ -526,7 +526,11 @@ pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result
                 crate::fuse::JOURNAL_MAX_RETRIES,
             );
             match journal.purge_vault(&ipns) {
-                Ok(n) => log::info!("Logout: purged {} journal entr{} for vault", n, if n == 1 { "y" } else { "ies" }),
+                Ok(n) => log::info!(
+                    "Logout: purged {} journal entr{} for vault",
+                    n,
+                    if n == 1 { "y" } else { "ies" }
+                ),
                 Err(e) => log::warn!("Logout: journal purge failed (will continue logout): {}", e),
             }
         }
