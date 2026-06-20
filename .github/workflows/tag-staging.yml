@@ -12,14 +12,18 @@ concurrency:
   group: tag-staging
   cancel-in-progress: false
 
+permissions: {}
+
 jobs:
   resolve-main:
     name: Resolve main SHA
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       sha: ${{ steps.main.outputs.sha }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: main
           fetch-depth: 0
@@ -35,6 +39,8 @@ jobs:
   web-e2e:
     needs: resolve-main
     name: Web E2E
+    permissions:
+      contents: read
     uses: ./.github/workflows/web-e2e.yml
     with:
       ref: ${{ needs.resolve-main.outputs.sha }}
@@ -43,6 +49,8 @@ jobs:
   desktop-e2e:
     needs: resolve-main
     name: Desktop E2E
+    permissions:
+      contents: read
     uses: ./.github/workflows/desktop-e2e.yml
     with:
       ref: ${{ needs.resolve-main.outputs.sha }}
@@ -58,7 +66,7 @@ jobs:
     outputs:
       staging_tag: ${{ steps.tag.outputs.staging_tag }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve-main.outputs.sha }}
           fetch-depth: 0
