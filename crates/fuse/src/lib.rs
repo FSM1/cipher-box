@@ -2164,23 +2164,36 @@ async fn replay_mkdir_entry(
 ///
 /// * **Not valid hex** → treated as a pre-Phase-52 legacy plaintext name: a `log::warn!`
 ///   is emitted once and the input is returned verbatim (`Ok`) for this single replay.
-///   Phase-52+ writes always ECIES-wrap the name, producing even-length hex, so a
-///   non-hex value can only be an old plaintext name.
-/// * **Valid hex but ECIES-unwrap fails, or unwraps to non-UTF-8** → the at-rest
-///   ciphertext is corrupt (e.g. bit-rot). Returning the raw hex as a filename would
+/// * **Valid hex but too short to be an ECIES ciphertext** (fewer than
+///   `ECIES_MIN_CIPHERTEXT_SIZE` decoded bytes) → also a legacy plaintext name. Hex-validity
+///   alone does NOT prove a Phase-52 name: a pre-Phase-52 filename can itself be pure
+///   even-length hex (a hyphen-less UUID, a SHA-1/SHA-256 digest, a git object id, …). A
+///   genuine ECIES name is always `ephemeral_pubkey(65) || nonce(16) || tag(16) ||
+///   ciphertext`, and bit-rot flips bytes in place without shrinking it, so anything below
+///   the unwrap floor cannot be one. Pass it through verbatim rather than parking it for a
+///   retry it can never pass — a parked entry is age-purged by `gc_failed_entries` (sidecar
+///   `.bin` and all), which would destroy the captured write.
+/// * **Valid hex, long enough, but ECIES-unwrap fails or unwraps to non-UTF-8** → the
+///   at-rest ciphertext is corrupt (e.g. bit-rot). Returning the raw hex as a filename would
 ///   publish a garbage name AND discard the original write (a successful replay removes
 ///   the entry). Instead return `Err` so the caller retains/parks the entry for retry.
 ///   The error message deliberately leaks neither the name nor any host path (D-04).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 fn decrypt_journal_name(encrypted_hex: &str, private_key: &[u8]) -> Result<String, String> {
-    // Legacy passthrough applies ONLY to the non-hex case (the pre-Phase-52 plaintext
-    // signal). Phase-52+ names are always ECIES-wrapped even-length hex.
-    let Ok(decoded) = hex::decode(encrypted_hex) else {
-        log::warn!("replay: legacy plaintext journal name — replaying once, not re-persisting");
-        return Ok(encrypted_hex.to_string());
+    // Legacy passthrough applies to any value that cannot be a Phase-52 ECIES name: a
+    // non-hex value, OR hex that decodes to fewer bytes than the minimum ECIES ciphertext
+    // (a hex-shaped legacy plaintext filename — UUID, SHA digest, etc.).
+    let decoded = match hex::decode(encrypted_hex) {
+        Ok(bytes) if bytes.len() >= cipherbox_crypto::ecies::ECIES_MIN_CIPHERTEXT_SIZE => bytes,
+        _ => {
+            log::warn!(
+                "replay: legacy plaintext journal name — replaying once, not re-persisting"
+            );
+            return Ok(encrypted_hex.to_string());
+        }
     };
-    // Valid hex: it must decrypt. A failure here is corruption, not a legacy name —
-    // do NOT pass the raw hex through as a filename; retain the entry instead.
+    // Long enough to be an ECIES ciphertext: it must decrypt. A failure here is corruption,
+    // not a legacy name — do NOT pass the raw hex through as a filename; retain the entry.
     let plaintext = cipherbox_crypto::ecies::unwrap_key(&decoded, private_key)
         .map_err(|_| "corrupt encrypted journal name — retaining entry".to_string())?;
     String::from_utf8(plaintext.to_vec())
@@ -3575,9 +3588,26 @@ mod durability_characterization_tests {
             "a non-hex legacy plaintext name must pass through unchanged"
         );
 
-        // Valid hex that is NOT a valid ECIES ciphertext is corruption, not a legacy
-        // name: it must return Err so the entry is retained, never replayed as garbage.
-        let not_ecies = hex::encode(b"not an ecies blob");
+        // Hex-SHAPED legacy plaintext names: a pre-Phase-52 filename can itself be pure
+        // even-length hex (hyphen-less UUID, SHA-1, SHA-256, …). Such a name hex-decodes
+        // but is far shorter than ECIES_MIN_CIPHERTEXT_SIZE, so it must pass through
+        // verbatim — NOT be mistaken for a corrupt ciphertext, parked, and GC-purged.
+        for legacy_hex in [
+            "550e8400e29b41d4a716446655440000",                         // UUID, no hyphens (16 bytes)
+            "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3",                 // SHA-1 (20 bytes)
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // SHA-256 (32 bytes)
+        ] {
+            assert_eq!(
+                super::decrypt_journal_name(legacy_hex, &private_key).unwrap(),
+                legacy_hex,
+                "hex-decodable legacy name below the ECIES floor must pass through, not park"
+            );
+        }
+
+        // Valid hex, long enough to be an ECIES ciphertext, but NOT a valid one is
+        // corruption (e.g. in-place bit-rot of a real ECIES name keeps its length): it must
+        // return Err so the entry is retained, never replayed as a garbage filename.
+        let not_ecies = hex::encode([0xABu8; cipherbox_crypto::ecies::ECIES_MIN_CIPHERTEXT_SIZE]);
         let err = super::decrypt_journal_name(&not_ecies, &private_key)
             .expect_err("valid-hex-but-corrupt ECIES name must be retained, not passed through");
         assert!(
