@@ -57,7 +57,7 @@ ensure_runtime() {
 }
 
 run_verify() {
-  TEST_SECRET="$SECRET" node "$REPO_ROOT/packages/sdk-core/scripts/verify-filepointer.mjs" \
+  TEST_SECRET="$SECRET" pnpm exec tsx "$REPO_ROOT/packages/sdk-core/scripts/verify-filepointer.ts" \
     --api-url "$API_URL" \
     --email "$TEST_EMAIL" \
     --file-name "$TEST_FILE" \
@@ -65,7 +65,7 @@ run_verify() {
 }
 
 run_edit() {
-  TEST_SECRET="$SECRET" node "$REPO_ROOT/packages/sdk-core/scripts/edit-filepointer.mjs" \
+  TEST_SECRET="$SECRET" pnpm exec tsx "$REPO_ROOT/packages/sdk-core/scripts/edit-filepointer.ts" \
     --api-url "$API_URL" \
     --email "$TEST_EMAIL" \
     --file-name "$TEST_FILE" \
@@ -73,7 +73,7 @@ run_edit() {
 }
 
 run_rename_folder() {
-  TEST_SECRET="$SECRET" node "$REPO_ROOT/packages/sdk-core/scripts/rename-folder.mjs" \
+  TEST_SECRET="$SECRET" pnpm exec tsx "$REPO_ROOT/packages/sdk-core/scripts/rename-folder.ts" \
     --api-url "$API_URL" \
     --email "$TEST_EMAIL" \
     --folder-name "$1" \
@@ -291,7 +291,7 @@ rm -rf "$MP/$RENAMED_DIR" 2>/dev/null || true
 rm -rf "$MP/$RENAME_DIR" 2>/dev/null || true
 
 # Note: cross-folder move content is exercised by the cross-platform
-# test-move-content.mjs (run as its own suite step), not here.
+# test-move-content.ts (run as its own suite step), not here.
 
 # ---- Cleanup ----
 echo "--- Cleanup ---"

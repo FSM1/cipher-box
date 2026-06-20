@@ -1,5 +1,5 @@
 /**
- * edit-filepointer.mjs -- Edit a file's content via the SDK.
+ * edit-filepointer.ts -- Edit a file's content via the SDK.
  *
  * Authenticates via test-login, finds the target file in the vault,
  * encrypts new content, uploads to IPFS, updates the file's IPNS
@@ -8,21 +8,22 @@
  * the change.
  *
  * Usage:
- *   TEST_SECRET=<secret> node edit-filepointer.mjs \
+ *   TEST_SECRET=<secret> tsx edit-filepointer.ts \
  *     --api-url http://localhost:3000 \
  *     --email dev-key@cipherbox.local \
  *     --file-name hello.txt \
  *     --new-content "Updated content from SDK"
  */
 
-import { createAxiosInstance } from '../../api-client/dist/index.mjs';
 import {
   loadVaultKeyBlob,
   loadFolderMetadata,
   resolveFileMetadata,
   updateFileMetadata,
   updateFolderMetadataAndPublish,
-} from '../dist/index.mjs';
+  addToIpfs,
+  type SdkContext,
+} from '@cipherbox/sdk-core';
 import {
   encryptAesGcm,
   generateFileKey,
@@ -33,85 +34,50 @@ import {
   hexToBytes,
   deriveVaultIpnsKeypair,
   clearBytes,
-} from '../../crypto/dist/index.mjs';
-import { addToIpfs } from '../dist/index.mjs';
+} from '@cipherbox/crypto';
+import { authenticate, buildSdkContext, parseCliArgs } from '../../../tests/e2e-helpers/auth';
 
-function parseArgs(argv) {
-  const values = new Map();
+interface EditFilePointerArgs {
+  apiUrl: string;
+  secret: string;
+  email: string;
+  fileName: string;
+  newContent: string;
+}
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (!token.startsWith('--')) {
-      throw new Error(`Unexpected argument: ${token}`);
-    }
+function parseArgs(argv: string[]): EditFilePointerArgs {
+  const values = parseCliArgs(argv);
 
-    const key = token.slice(2);
-    const value = argv[i + 1];
-    if (value === undefined || value.startsWith('--')) {
-      throw new Error(`Missing value for --${key}`);
-    }
-
-    values.set(key, value);
-    i += 1;
-  }
-
-  if (values.has('secret')) {
-    throw new Error('Do not pass --secret on CLI. Set TEST_SECRET in environment.');
-  }
-
-  const apiUrl = values.get('api-url');
+  const apiUrl = values['api-url'];
   const secret = process.env.TEST_SECRET;
-  const email = values.get('email');
-  const fileName = values.get('file-name');
-  const newContent = values.get('new-content');
+  const email = values['email'];
+  const fileName = values['file-name'];
+  const newContent = values['new-content'];
 
   if (!apiUrl || !email || !fileName || !secret || newContent === undefined) {
     throw new Error(
-      'Usage: edit-filepointer.mjs --api-url <url> --email <email> --file-name <name> --new-content <text> (requires TEST_SECRET env var)'
+      'Usage: edit-filepointer.ts --api-url <url> --email <email> --file-name <name> --new-content <text> (requires TEST_SECRET env var)'
     );
   }
 
   return { apiUrl, secret, email, fileName, newContent };
 }
 
-async function authenticate(apiUrl, email, secret) {
-  const response = await fetch(`${apiUrl}/auth/test-login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, secret }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`test-login failed (${response.status}): ${body}`);
-  }
-
-  const payload = await response.json();
-
-  if (!payload.accessToken || !payload.privateKeyHex || !payload.publicKeyHex) {
-    throw new Error('test-login response missing accessToken, privateKeyHex, or publicKeyHex');
-  }
-
-  return payload;
-}
-
-async function main() {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const auth = await authenticate(args.apiUrl, args.email, args.secret);
+  if (!auth.publicKeyHex) {
+    throw new Error('test-login response missing publicKeyHex');
+  }
   const accessToken = auth.accessToken;
   const userPrivateKey = Uint8Array.from(Buffer.from(auth.privateKeyHex, 'hex'));
   const userPublicKey = Uint8Array.from(Buffer.from(auth.publicKeyHex, 'hex'));
 
-  const axiosInstance = createAxiosInstance({
-    baseUrl: args.apiUrl,
-    getAccessToken: async () => accessToken,
-  });
-
-  const ctx = {
-    apiUrl: args.apiUrl,
-    getAccessToken: async () => accessToken,
-    axiosInstance,
-  };
+  const ctx: SdkContext = buildSdkContext(args.apiUrl, accessToken);
+  const axiosInstance = ctx.axiosInstance;
+  if (!axiosInstance) {
+    throw new Error('SdkContext missing axiosInstance');
+  }
 
   // 1. Load vault key blob to get rootFolderKey
   const vaultKeyBlob = await loadVaultKeyBlob({ userPrivateKey, ctx });
@@ -143,6 +109,9 @@ async function main() {
   if (!filePointer) {
     throw new Error(`FilePointer not found for ${args.fileName}`);
   }
+  if (filePointer.type !== 'file') {
+    throw new Error(`FilePointer not found for ${args.fileName}`);
+  }
   if (!filePointer.fileMetaIpnsName) {
     throw new Error(`FilePointer for ${args.fileName} is missing fileMetaIpnsName`);
   }
@@ -167,9 +136,9 @@ async function main() {
   const plaintext = new TextEncoder().encode(args.newContent);
   const fileKey = generateFileKey();
   const iv = generateIv();
-  let newCid;
-  let wrappedKeyHex;
-  let ivHex;
+  let newCid: string;
+  let wrappedKeyHex: string;
+  let ivHex: string;
 
   try {
     const ciphertext = await encryptAesGcm(plaintext, fileKey, iv);

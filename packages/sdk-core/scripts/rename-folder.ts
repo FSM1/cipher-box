@@ -1,5 +1,5 @@
 /**
- * rename-folder.mjs -- Rename a folder in the vault via the SDK.
+ * rename-folder.ts -- Rename a folder in the vault via the SDK.
  *
  * Authenticates via test-login, finds the target folder in the root
  * folder metadata, renames it using renameInFolder, and republishes
@@ -7,97 +7,60 @@
  * the change.
  *
  * Usage:
- *   TEST_SECRET=<secret> node rename-folder.mjs \
+ *   TEST_SECRET=<secret> tsx rename-folder.ts \
  *     --api-url http://localhost:3000 \
  *     --email dev-key@cipherbox.local \
  *     --folder-name "OldName" \
  *     --new-name "NewName"
  */
 
-import { createAxiosInstance } from '../../api-client/dist/index.mjs';
 import {
   loadVaultKeyBlob,
   loadFolderMetadata,
   renameInFolder,
   updateFolderMetadataAndPublish,
-} from '../dist/index.mjs';
-import { deriveVaultIpnsKeypair, clearBytes } from '../../crypto/dist/index.mjs';
+  type SdkContext,
+} from '@cipherbox/sdk-core';
+import { deriveVaultIpnsKeypair, clearBytes } from '@cipherbox/crypto';
+import { authenticate, buildSdkContext, parseCliArgs } from '../../../tests/e2e-helpers/auth';
 
-function parseArgs(argv) {
-  const values = new Map();
+interface RenameFolderArgs {
+  apiUrl: string;
+  secret: string;
+  email: string;
+  folderName: string;
+  newName: string;
+}
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (!token.startsWith('--')) {
-      throw new Error(`Unexpected argument: ${token}`);
-    }
+function parseArgs(argv: string[]): RenameFolderArgs {
+  const values = parseCliArgs(argv);
 
-    const key = token.slice(2);
-    const value = argv[i + 1];
-    if (value === undefined || value.startsWith('--')) {
-      throw new Error(`Missing value for --${key}`);
-    }
-
-    values.set(key, value);
-    i += 1;
-  }
-
-  if (values.has('secret')) {
-    throw new Error('Do not pass --secret on CLI. Set TEST_SECRET in environment.');
-  }
-
-  const apiUrl = values.get('api-url');
+  const apiUrl = values['api-url'];
   const secret = process.env.TEST_SECRET;
-  const email = values.get('email');
-  const folderName = values.get('folder-name');
-  const newName = values.get('new-name');
+  const email = values['email'];
+  const folderName = values['folder-name'];
+  const newName = values['new-name'];
 
   if (!apiUrl || !email || !folderName || !secret || !newName) {
     throw new Error(
-      'Usage: rename-folder.mjs --api-url <url> --email <email> --folder-name <name> --new-name <name> (requires TEST_SECRET env var)'
+      'Usage: rename-folder.ts --api-url <url> --email <email> --folder-name <name> --new-name <name> (requires TEST_SECRET env var)'
     );
   }
 
   return { apiUrl, secret, email, folderName, newName };
 }
 
-async function authenticate(apiUrl, email, secret) {
-  const response = await fetch(`${apiUrl}/auth/test-login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, secret }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`test-login failed (${response.status}): ${body}`);
-  }
-
-  const payload = await response.json();
-
-  if (!payload.accessToken || !payload.privateKeyHex || !payload.publicKeyHex) {
-    throw new Error('test-login response missing accessToken, privateKeyHex, or publicKeyHex');
-  }
-
-  return payload;
-}
-
-async function main() {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const auth = await authenticate(args.apiUrl, args.email, args.secret);
   const accessToken = auth.accessToken;
   const userPrivateKey = Uint8Array.from(Buffer.from(auth.privateKeyHex, 'hex'));
 
-  const axiosInstance = createAxiosInstance({
-    baseUrl: args.apiUrl,
-    getAccessToken: async () => accessToken,
-  });
-
-  const ctx = {
-    apiUrl: args.apiUrl,
-    getAccessToken: async () => accessToken,
-    axiosInstance,
-  };
+  const ctx: SdkContext = buildSdkContext(args.apiUrl, accessToken);
+  const axiosInstance = ctx.axiosInstance;
+  if (!axiosInstance) {
+    throw new Error('SdkContext missing axiosInstance');
+  }
 
   // 1. Load vault key blob to get rootFolderKey
   const vaultKeyBlob = await loadVaultKeyBlob({ userPrivateKey, ctx });
@@ -141,7 +104,7 @@ async function main() {
   const rootIpnsKeypair = await deriveVaultIpnsKeypair(userPrivateKey);
 
   // 7. Republish folder metadata with the renamed entry
-  let newSequenceNumber;
+  let newSequenceNumber: bigint;
   try {
     ({ newSequenceNumber } = await updateFolderMetadataAndPublish({
       children: updatedChildren,
