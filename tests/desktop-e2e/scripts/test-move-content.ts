@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// test-move-content.mjs -- Cross-platform desktop E2E: moving a file between
+// test-move-content.ts -- Cross-platform desktop E2E: moving a file between
 // folders must preserve its decrypted content.
 //
 // A file's FileMetadata is AES-256-GCM sealed with its PARENT folder's key, so a
@@ -11,10 +11,10 @@
 // fails if the re-encryption is missing (the staging "Decryption failed" bug).
 //
 // One implementation for every platform: each run-all runner just invokes
-// `node` on this file. Strict on all platforms; generous retries absorb IPNS
+// `tsx` on this file. Strict on all platforms; generous retries absorb IPNS
 // propagation / FUSE-T SMB cache timing.
 //
-// Usage: node test-move-content.mjs --mount <path> --api-url <url>
+// Usage: tsx test-move-content.ts --mount <path> --api-url <url>
 // Env:   TEST_SECRET (required) -- shared secret for /auth/test-login.
 
 import { mkdirSync, writeFileSync, readdirSync, statSync, rmSync, renameSync } from 'node:fs';
@@ -24,14 +24,14 @@ import { spawnSync } from 'node:child_process';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '../../..');
-const VERIFY_SCRIPT = join(REPO_ROOT, 'packages/sdk-core/scripts/verify-filepointer.mjs');
+const VERIFY_SCRIPT = join(REPO_ROOT, 'packages/sdk-core/scripts/verify-filepointer.ts');
 
 // The desktop launches with --dev-key, which maps to this fixed test identity;
-// verify-filepointer.mjs authenticates as the same user via /auth/test-login.
+// verify-filepointer.ts authenticates as the same user via /auth/test-login.
 const TEST_EMAIL = 'dev-key@cipherbox.local';
 
-function parseArgs(argv) {
-  const values = new Map();
+function parseArgs(argv: string[]): Map<string, string> {
+  const values = new Map<string, string>();
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (!token.startsWith('--')) throw new Error(`Unexpected argument: ${token}`);
@@ -50,13 +50,17 @@ const args = parseArgs(process.argv.slice(2));
 const mount =
   args.get('mount') || join(process.env.HOME || process.env.USERPROFILE || '', 'CipherBox');
 const apiUrl = args.get('api-url') || 'http://localhost:3000';
-const secret = process.env.TEST_SECRET || 'e2e-test-secret-ci-only';
+const secret = process.env.TEST_SECRET;
+if (!secret) {
+  console.error('TEST_SECRET environment variable is required');
+  process.exit(1);
+}
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 // Nudge the mount so the FUSE/WinFsp layer re-resolves metadata (mirrors the
 // `ls`/`stat` the shell harness used between polls). Best-effort.
-function nudge(...paths) {
+function nudge(...paths: string[]): void {
   for (const p of paths) {
     try {
       statSync(p);
@@ -72,9 +76,17 @@ function nudge(...paths) {
 }
 
 // Read a file back via a FRESH SDK client and assert its decrypted content.
-// Returns true only when verify-filepointer.mjs exits 0 (content matched under
+// Returns true only when verify-filepointer.ts exits 0 (content matched under
 // the resolved folderKey).
-function verify({ fileName, folderName, content }) {
+function verify({
+  fileName,
+  folderName,
+  content,
+}: {
+  fileName: string;
+  folderName?: string;
+  content: string;
+}): boolean {
   const cliArgs = [
     VERIFY_SCRIPT,
     '--api-url',
@@ -89,7 +101,9 @@ function verify({ fileName, folderName, content }) {
   if (folderName) {
     cliArgs.push('--folder-name', folderName);
   }
-  const result = spawnSync(process.execPath, cliArgs, {
+  // process.execPath (node) cannot run a .ts file directly, so spawn the tsx
+  // shim from node_modules/.bin as the interpreter for verify-filepointer.ts.
+  const result = spawnSync('node', [join(REPO_ROOT, 'node_modules/.bin/tsx'), ...cliArgs], {
     env: { ...process.env, TEST_SECRET: secret },
     encoding: 'utf8',
     // Bound the child: a stalled verify must not hang the whole suite — pollVerify
@@ -105,7 +119,11 @@ function verify({ fileName, folderName, content }) {
   return result.status === 0;
 }
 
-async function pollVerify(label, opts, nudgePaths) {
+async function pollVerify(
+  label: string,
+  opts: { fileName: string; folderName?: string; content: string },
+  nudgePaths: string[]
+): Promise<boolean> {
   const ATTEMPTS = 24;
   const DELAY_MS = 5000;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
@@ -119,7 +137,7 @@ async function pollVerify(label, opts, nudgePaths) {
   return false;
 }
 
-async function main() {
+async function main(): Promise<void> {
   // Math.random/Date are fine here (this is a plain Node script, not a workflow).
   const tag = `${process.pid}-${Date.now()}`;
   const moveFile = `move-reencrypt-${tag}.txt`;

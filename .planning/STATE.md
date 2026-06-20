@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Phase 52 COMPLETE — all 5 plans committed (unsigned), shipping PR
-last_updated: "2026-06-20T05:10:00Z"
+status: Executing Phase 54
+last_updated: "2026-06-20T01:54:50.316Z"
 last_activity: 2026-06-20
 progress:
   total_phases: 40
   completed_phases: 36
-  total_plans: 160
-  completed_plans: 160
-  percent: 89
+  total_plans: 164
+  completed_plans: 164
+  percent: 92
 ---
 
 # Project State
@@ -20,47 +20,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 52 — desktop-fuse-durability-at-rest-safety (complete, shipping); next Phase 53 release & supply-chain engineering
-
-## Phase 52 COMPLETE (2026-06-20): all 5 plans committed, unsigned
-
-The earlier 1Password SSH-signing blocker is resolved by switching this run to UNSIGNED commits
-(`commit.gpgsign` is `false` repo-wide). All Phase 52 plans are now committed on
-`feat/desktop-fuse-durability-at-rest-safety`:
-
-- Merge of `origin/main` (Phase 51): `f93b72598`. Baseline green (sdk 48, fuse 60).
-- 52-01 `a1174446e` — D-05 path scrub + D-06 removal logging.
-- 52-02 `955bd161a` — sidecar + encrypted-name journal shape.
-- 52-03 `935a39084` — write-path size cap, filename encryption, off-thread durable-ack.
-- 52-04 `275f97d19` — replay from sidecar with name decryption, timeout, concurrent mount.
-- 52-05 `9c8ed33ac` — purge_vault on logout + gc_failed_entries at mount (D-02).
-
-Attribution note: the `NETWORK_TIMEOUT` `pub(crate)` one-liner in `lib.rs` belongs to 52-03 (its
-SUMMARY claims it and `read_ops.rs` uses `crate::NETWORK_TIMEOUT`); it was split out of the unstaged
-52-04 `lib.rs` diff and committed with 52-03. The Wave-2 commits (52-02..04) are NOT individually
-compilable — 52-02 broke the `JournalOp::UploadFile` shape and the consumers are migrated across
-52-03 (producer) + 52-04 (lib.rs replay). The crate compiles + 64/64 green only on the combined tree.
-
-Verification (combined tree): `cargo test -p cipherbox-fuse` = 64/64; `cargo test -p cipherbox-sdk`
-= 57/57 (54 baseline + 3 new GC/purge tests); `cargo check -p cipherbox-desktop --features fuse`
-clean; `--features winfsp` fails ONLY in upstream `windows_core` (`IMarshal`/`marshaler`) on macOS —
-zero errors in our code; CI's Windows runner validates it. `cargo clippy -p cipherbox-sdk` clean on
-the new `queue.rs` code.
-
-Rust reconciliations preserved: NETWORK_TIMEOUT `pub(crate)`; durable-ack uses
-`std::thread::spawn` + `mpsc::recv_timeout` (NOT `rt.block_on`, nested-runtime panic);
-`sidecar_path`/`sidecar_sha256` `#[serde(default)]` for legacy entries; `unwrap_key`'s Phase-51
-`Zeroizing<Vec<u8>>` consumed via `.to_vec()`; all Phase-51 zeroization/`clear_bytes`/fail-closed
-signature paths intact (verified no `-` removals in the 52-05 diff).
-
-Next: ship-phase opened the PR; commits are UNSIGNED and may need re-signing before merge if branch
-protection requires signatures.
+**Current focus:** Phase 54 — e2e-test-infra-typing
 
 ## Current Position
 
-Phase: 52 (desktop-fuse-durability-at-rest-safety) — COMPLETE, shipping
-Plan: 5 of 5 — COMPLETE
-Milestone v1.1 reopened 2026-06-19 with a hardening block (Phases 50–55). Phases 18–49 complete and verified (151 plans). Next after 52 ships: Phase 53 release & supply-chain engineering.
+Phase: 54 (e2e-test-infra-typing) — EXECUTING
+Plan: 4 of 4 (all plans executed; awaiting phase verification)
+Milestone v1.1 reopened 2026-06-19 with a hardening block (Phases 50–55). Phases 18–49 complete and verified (151 plans). Next: run /gsd:plan-phase 50 (recommended risk order: 50 data-integrity → 51 crypto/secret hardening → 52 FUSE → 53 release-eng → 54 test-infra → 55 refactor).
 
 ## Performance Metrics
 
@@ -322,7 +288,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-06-19
+Last activity: 2026-06-20
 
 Last session: 2026-06-19T23:48:07.982Z
 

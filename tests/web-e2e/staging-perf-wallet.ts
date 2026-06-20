@@ -12,7 +12,7 @@ const account = privateKeyToAccount(
 );
 
 const localTransport = custom({
-  async request({ method }) {
+  async request({ method }: { method: string }) {
     switch (method) {
       case 'eth_chainId':
         return '0x1';
@@ -28,7 +28,16 @@ const localTransport = custom({
   },
 });
 
-async function run() {
+interface ApiCall {
+  t: number;
+  method: string;
+  status: number;
+  ms: number;
+  url: string;
+  size?: string;
+}
+
+async function run(): Promise<void> {
   console.log('=== Staging Vault Login Path — E2E Performance Baseline ===');
   console.log(`Date: ${new Date().toISOString()}`);
   console.log(`Wallet address: ${account.address}`);
@@ -39,8 +48,11 @@ async function run() {
   const page = await context.newPage();
 
   // Track API calls via Playwright's native request/response events
-  const apiCalls = [];
-  const pendingRequests = new Map();
+  const apiCalls: ApiCall[] = [];
+  const pendingRequests = new Map<
+    import('@playwright/test').Request,
+    { start: number; url: string; method: string }
+  >();
   const t0 = Date.now();
 
   page.on('request', (req) => {
@@ -57,7 +69,7 @@ async function run() {
       const elapsed = Date.now() - pending.start;
       const since = pending.start - t0;
       const path = new URL(pending.url).pathname;
-      let size = resp.headers()['content-length'] || '?';
+      const size = resp.headers()['content-length'] || '?';
       apiCalls.push({
         t: since,
         method: pending.method,
@@ -89,7 +101,7 @@ async function run() {
   await page.waitForFunction(
     () => {
       const btn = document.querySelector('[data-testid="wallet-login-button"]');
-      return btn && !btn.disabled;
+      return btn && !(btn as HTMLButtonElement).disabled;
     },
     { timeout: 20_000 }
   );
@@ -125,7 +137,7 @@ async function run() {
       console.log(`  Vault ready (files visible): ${Date.now() - loginStart}ms`);
     }
   } catch (e) {
-    console.log(`  Login failed: ${e.message}`);
+    console.log(`  Login failed: ${e instanceof Error ? e.message : String(e)}`);
     await page.screenshot({ path: '/tmp/staging-perf-fail.png' });
   }
 
@@ -162,8 +174,11 @@ async function run() {
   console.log('  Note: Core Kit re-initializes on reload in headless mode.');
 
   // Clear tracking for this phase
-  const restoreCalls = [];
-  const restorePending = new Map();
+  const restoreCalls: ApiCall[] = [];
+  const restorePending = new Map<
+    import('@playwright/test').Request,
+    { start: number; url: string; method: string }
+  >();
   const rt0 = Date.now();
 
   // Swap listeners for this phase
@@ -205,7 +220,7 @@ async function run() {
     ]);
     console.log(`  Session restored (files visible): ${Date.now() - restoreStart}ms`);
   } catch (e) {
-    console.log(`  Session restore failed: ${e.message}`);
+    console.log(`  Session restore failed: ${e instanceof Error ? e.message : String(e)}`);
     // Maybe it went back to login
     const currentUrl = page.url();
     console.log(`  Current URL: ${currentUrl}`);
@@ -224,7 +239,7 @@ async function run() {
   console.log('=== Done ===');
 }
 
-function printWaterfall(calls) {
+function printWaterfall(calls: ApiCall[]): void {
   if (calls.length > 0) {
     console.log(
       `${'T(ms)'.padStart(7)} | ${'Method'.padEnd(6)} | ${'Status'.padEnd(6)} | ${'Dur'.padEnd(6)} | Path`
@@ -242,7 +257,7 @@ function printWaterfall(calls) {
   }
 }
 
-function printSummary(calls) {
+function printSummary(calls: ApiCall[]): void {
   console.log('--- Summary ---');
   const authCalls = calls.filter((c) => c.url.includes('/auth'));
   const vaultCalls = calls.filter((c) => c.url.includes('/vault'));

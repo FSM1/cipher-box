@@ -1,43 +1,33 @@
-import { createAxiosInstance } from '../../api-client/dist/index.mjs';
 import {
   downloadAndDecrypt,
   resolveFileMetadata,
   loadFolderMetadata,
   loadVaultKeyBlob,
-} from '../dist/index.mjs';
-import { unwrapKey, hexToBytes } from '../../crypto/dist/index.mjs';
+  type SdkContext,
+} from '@cipherbox/sdk-core';
+import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
+import { authenticate, buildSdkContext, parseCliArgs } from '../../../tests/e2e-helpers/auth';
 
-function parseArgs(argv) {
-  const values = new Map();
+interface VerifyFilePointerArgs {
+  apiUrl: string;
+  secret: string;
+  email: string;
+  fileName: string;
+  folderName?: string;
+  expectedContent?: string;
+}
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (!token.startsWith('--')) {
-      throw new Error(`Unexpected argument: ${token}`);
-    }
+function parseArgs(argv: string[]): VerifyFilePointerArgs {
+  const values = parseCliArgs(argv);
 
-    const key = token.slice(2);
-    const value = argv[i + 1];
-    if (!value || value.startsWith('--')) {
-      throw new Error(`Missing value for --${key}`);
-    }
-
-    values.set(key, value);
-    i += 1;
-  }
-
-  if (values.has('secret')) {
-    throw new Error('Do not pass --secret on CLI. Set TEST_SECRET in environment.');
-  }
-
-  const apiUrl = values.get('api-url');
+  const apiUrl = values['api-url'];
   const secret = process.env.TEST_SECRET;
-  const email = values.get('email');
-  const fileName = values.get('file-name');
+  const email = values['email'];
+  const fileName = values['file-name'];
 
   if (!apiUrl || !email || !fileName || !secret) {
     throw new Error(
-      'Usage: verify-filepointer.mjs --api-url <url> --email <email> --file-name <name> [--folder-name <subfolder>] [--expected-content <text>] (requires TEST_SECRET env var)'
+      'Usage: verify-filepointer.ts --api-url <url> --email <email> --file-name <name> [--folder-name <subfolder>] [--expected-content <text>] (requires TEST_SECRET env var)'
     );
   }
 
@@ -48,48 +38,22 @@ function parseArgs(argv) {
     fileName,
     // Optional: a single subfolder (at root level) to look in instead of root.
     // Used to verify a file after it has been moved into a subfolder.
-    folderName: values.get('folder-name'),
-    expectedContent: values.get('expected-content'),
+    folderName: values['folder-name'],
+    expectedContent: values['expected-content'],
   };
 }
 
-async function authenticate(apiUrl, email, secret) {
-  const response = await fetch(`${apiUrl}/auth/test-login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, secret }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`test-login failed (${response.status}): ${body}`);
-  }
-
-  const payload = await response.json();
-
-  if (!payload.accessToken || !payload.privateKeyHex) {
-    throw new Error('test-login response missing accessToken or privateKeyHex');
-  }
-
-  return payload;
-}
-
-async function main() {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const auth = await authenticate(args.apiUrl, args.email, args.secret);
   const accessToken = auth.accessToken;
   const userPrivateKey = Uint8Array.from(Buffer.from(auth.privateKeyHex, 'hex'));
 
-  const axiosInstance = createAxiosInstance({
-    baseUrl: args.apiUrl,
-    getAccessToken: async () => accessToken,
-  });
-
-  const ctx = {
-    apiUrl: args.apiUrl,
-    getAccessToken: async () => accessToken,
-    axiosInstance,
-  };
+  const ctx: SdkContext = buildSdkContext(args.apiUrl, accessToken);
+  const axiosInstance = ctx.axiosInstance;
+  if (!axiosInstance) {
+    throw new Error('SdkContext missing axiosInstance');
+  }
 
   const vaultResponse = await axiosInstance.get('/vault');
   const rootIpnsName = vaultResponse.data.rootIpnsName;
@@ -124,7 +88,7 @@ async function main() {
     const subEntry = folder.metadata.children.find(
       (child) => child.type === 'folder' && child.name === args.folderName
     );
-    if (!subEntry) {
+    if (!subEntry || subEntry.type !== 'folder') {
       throw new Error(`Subfolder not found at root: ${args.folderName}`);
     }
     const subFolderKey = await unwrapKey(hexToBytes(subEntry.folderKeyEncrypted), userPrivateKey);
@@ -144,7 +108,7 @@ async function main() {
     (child) => child.type === 'file' && child.name === args.fileName
   );
 
-  if (!filePointer) {
+  if (!filePointer || filePointer.type !== 'file') {
     throw new Error(`FilePointer not found for ${args.fileName}`);
   }
 

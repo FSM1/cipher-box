@@ -103,16 +103,16 @@ Write-Host ""
 # Advances the vault's root IPNS sequence with a REAL, validly-signed record.
 # The server is signature-gated (it rejects records whose Ed25519 SignatureV2
 # does not verify against the name's key), so a dummy unsigned record can no
-# longer fake a bump. bump-ipns-sequence.mjs derives the deterministic vault IPNS
+# longer fake a bump. bump-ipns-sequence.ts derives the deterministic vault IPNS
 # keypair and republishes the current root metadata UNCHANGED at sequence+1 --
 # exactly what a legitimate second device does -- making the desktop's cached
 # sequence stale.
 function Invoke-BumpServerSequence {
     param([string]$IpnsName)  # informational; the helper bumps the vault root via /vault
 
-    $BumpScript = Join-Path $PSScriptRoot "bump-ipns-sequence.mjs"
+    $BumpScript = Join-Path $PSScriptRoot "bump-ipns-sequence.ts"
     $env:TEST_SECRET = $TestSecret
-    & node $BumpScript --api-url $ApiUrl --email $TestEmail
+    & pnpm exec tsx $BumpScript --api-url $ApiUrl --email $TestEmail
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to bump server sequence for ${IpnsName} (exit $LASTEXITCODE)"
     }

@@ -80,10 +80,7 @@
       "component": "cipherbox-desktop",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "extra-files": [
-        "src-tauri/tauri.conf.json",
-        "src-tauri/Cargo.toml"
-      ],
+      "extra-files": ["src-tauri/tauri.conf.json", "src-tauri/Cargo.toml"],
       "release-as": "0.43.0"
     },
     "apps/tee-worker": {
@@ -97,15 +94,13 @@
       "release-type": "node",
       "component": "@cipherbox/core",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "release-as": "0.31.0"
+      "bump-minor-pre-major": true
     },
     "packages/crypto": {
       "release-type": "node",
       "component": "@cipherbox/crypto",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "release-as": "0.33.0"
+      "bump-minor-pre-major": true
     },
     "packages/api-client": {
       "release-type": "node",
