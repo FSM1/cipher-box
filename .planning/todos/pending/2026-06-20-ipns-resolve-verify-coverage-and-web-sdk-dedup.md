@@ -43,8 +43,25 @@ are correctness bugs given "DB CID is authoritative; signature verification is d
    shared JSON vector (one valid, one tampered, one name-mismatch) consumed by both, mirroring
    `crates/crypto/tests/cross_language.rs`.
 
+## Update (PR #529 CodeRabbit review)
+
+CodeRabbit flagged two additional, related items on the Rust verifier
+(`verify_ipns_resolve_signature`, `crates/api-client/src/ipns.rs`):
+
+- **DONE in PR #529:** partial signature fields now fail closed — `Ok(None)` is returned ONLY when
+  all three of `signatureV2`/`data`/`pubKey` are absent; any partial subset returns `Ok(Some(false))`.
+  The same partial-fields fail-closed tightening was applied to the JS resolve paths
+  (`apps/web/src/services/ipns.service.ts` and `packages/sdk-core/src/ipns/index.ts`) for consistency.
+- **STILL DEFERRED (heavy lift):** bind the verified record to `resp.cid` / `resp.sequence_number`.
+  The verifier can return `Some(true)` for a valid signature/name pair even if the JSON `cid` or
+  `sequenceNumber` was swapped, because the signed CBOR `data` is never decoded and compared back to
+  `resp.cid` / `resp.sequence_number`. Decoding the CBOR and comparing is the proper fix; it pairs
+  naturally with item #1 below (folding verification into a `resolve_ipns_verified` chokepoint). Add
+  tests for a valid signature paired with a mismatched cid/sequence.
+
 ## Solution
 
 Address in a future hardening/refactor pass (candidates for Phase 55 Tier-3 follow-ups or a
-dedicated IPNS-verify-consolidation todo). #1 has the most security value (coverage); #2 the most
-maintainability value; #3 is cheap insurance.
+dedicated IPNS-verify-consolidation todo). #1 has the most security value (coverage); the CBOR
+cid-binding above is the highest-value correctness item; #2 the most maintainability value; #3 is
+cheap insurance.

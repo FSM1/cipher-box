@@ -133,4 +133,20 @@ describe('resolveIpnsRecord', () => {
 
     await expect(resolveIpnsRecord('k51networkerror')).rejects.toThrow('Network connection failed');
   });
+
+  // D-02: partial signature fields must fail closed, not be downgraded to the legacy
+  // allow path (an attacker could strip fields to bypass verification).
+  it('throws on partial signature fields (only signatureV2 present)', async () => {
+    vi.mocked(apiClient.ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: 'QmPartial',
+      sequenceNumber: '3',
+      signatureV2: btoa('only-sig'),
+      // data and pubKey omitted → partial → fail closed
+    });
+
+    await expect(resolveIpnsRecord('k51partial')).rejects.toThrow('incomplete signature data');
+    expect(crypto.verifyEd25519).not.toHaveBeenCalled();
+    expect(crypto.deriveIpnsName).not.toHaveBeenCalled();
+  });
 });

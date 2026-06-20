@@ -438,7 +438,7 @@ describe('updateFolderMetadataAndPublish zeroization decision guard (S3/D-05)', 
 
     mockFns.createAndPublishIpnsRecord.mockResolvedValueOnce({
       success: true,
-      sequenceNumber: '1',
+      sequenceNumber: 1n,
       ipnsName: 'k51guard',
     });
 

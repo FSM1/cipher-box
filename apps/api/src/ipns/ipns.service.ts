@@ -260,12 +260,14 @@ export class IpnsService {
     if (incomingParsed === null) {
       incomingParsed = await parseIpnsRecord(signedRecord);
     }
-    // S1 CID check: the embedded signed-record CID must strictly equal metadataCid.
-    const embeddedCidMatch = incomingParsed.value.match(/\/ipfs\/([a-zA-Z0-9]+)/);
-    const embeddedCid = embeddedCidMatch?.[1];
-    if (embeddedCid !== metadataCid) {
+    // S1 CID check: the FULL embedded signed-record value must strictly equal
+    // `/ipfs/${metadataCid}`. Anchoring the whole value (not just the first CID
+    // substring) prevents a record like `/ipfs/<metadataCid>/extra` from passing
+    // a substring match while delegated routing publishes a divergent raw value.
+    const expectedIpfsValue = `/ipfs/${metadataCid}`;
+    if (incomingParsed.value !== expectedIpfsValue) {
       throw new BadRequestException(
-        `signedRecord embedded CID does not match metadataCid: embedded=${embeddedCid}, dto=${metadataCid}`
+        `signedRecord value does not match metadataCid: embedded=${incomingParsed.value}, expected=${expectedIpfsValue}`
       );
     }
     // S1 sequence check (offset-aware for the first-publish pre-increment convention):

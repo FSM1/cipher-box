@@ -1720,9 +1720,9 @@ async fn resolve_folder_key_cached(
     root_folder_key: &[u8],
     root_ipns_name: &str,
     folder_ipns_name: &str,
-) -> Result<Vec<u8>, String> {
+) -> Result<Zeroizing<Vec<u8>>, String> {
     if let Some(key) = cache.get(folder_ipns_name) {
-        return Ok(key.to_vec());
+        return Ok(key.clone());
     }
     let key = resolve_folder_key(
         api,
@@ -1738,7 +1738,7 @@ async fn resolve_folder_key_cached(
     let cached = cache
         .entry(folder_ipns_name.to_string())
         .or_insert_with(|| key.clone());
-    Ok(cached.to_vec())
+    Ok(cached.clone())
 }
 
 /// Fetch, decrypt, merge, and CAS-publish a parent folder update.
@@ -2530,8 +2530,8 @@ mod tests {
         );
         // The returned value is the root folder key (root-shortcut / cache-seeded invariant).
         assert_eq!(
-            key1,
-            root_folder_key.to_vec(),
+            key1.as_slice(),
+            root_folder_key.as_slice(),
             "cached resolve must return root_folder_key unchanged"
         );
     }

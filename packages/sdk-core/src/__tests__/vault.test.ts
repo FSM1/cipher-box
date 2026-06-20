@@ -82,6 +82,32 @@ describe('vault key blob operations', () => {
       // T-47-01: terminal owner must zero the buffer after returning
       expect(privateKeyBuf.every((b) => b === 0)).toBe(true);
     });
+
+    // Test D: the derived privateKey buffer is zeroed even when publish fails
+    // (the finally block runs on the rejection path).
+    it('D: zeroes the derived vaultKeyKeypair.privateKey when publish fails', async () => {
+      const { deriveVaultKeyIpnsKeypair } = await import('@cipherbox/crypto');
+
+      const privateKeyBuf = new Uint8Array(32).fill(0xcd);
+      vi.mocked(deriveVaultKeyIpnsKeypair).mockResolvedValueOnce({
+        ipnsName: 'k51vaultkey-fail',
+        publicKey: new Uint8Array(32).fill(1),
+        privateKey: privateKeyBuf,
+      });
+      vi.mocked(addToIpfs).mockRejectedValueOnce(new Error('upload failed'));
+
+      await expect(
+        publishVaultKeyBlob({
+          userPrivateKey: new Uint8Array(32).fill(0x01),
+          userPublicKey: new Uint8Array(33).fill(0x02),
+          rootFolderKey: new Uint8Array(32).fill(0x03),
+          ctx: mockCtx,
+        })
+      ).rejects.toThrow('upload failed');
+
+      // T-47-01: terminal owner must zero the buffer on the failure path too.
+      expect(privateKeyBuf.every((b) => b === 0)).toBe(true);
+    });
   });
 
   describe('publishVaultKeyBlob', () => {

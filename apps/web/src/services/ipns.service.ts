@@ -172,17 +172,27 @@ export async function resolveIpnsRecord(
 
     // Verify IPNS signature if all signature fields are present.
     // D-02: present-but-invalid → throw (fail closed; mirrors sdk-core behavior)
-    // D-03: absent fields → allow + flag (signatureVerified=false); legacy records
+    // D-03: ALL fields absent → allow + flag (signatureVerified=false); legacy records
     //        are allowed because the DB CID is authoritative.
+    // Partial signature fields (some but not all three present) → fail closed: a record
+    // that carries unverifiable signature material must not be downgraded to the legacy
+    // allow path, or an attacker could strip fields to bypass D-02.
     let signatureVerified = false;
-    if (response.signatureV2 && response.data && response.pubKey) {
-      const valid = await verifyIpnsSignature(response.signatureV2, response.data, response.pubKey);
+    const { signatureV2, data, pubKey } = response;
+    if (signatureV2 || data || pubKey) {
+      if (!signatureV2 || !data || !pubKey) {
+        throw new Error(
+          'IPNS resolve returned incomplete signature data - record cannot be verified'
+        );
+      }
+
+      const valid = await verifyIpnsSignature(signatureV2, data, pubKey);
       if (!valid) {
         throw new Error('IPNS signature verification failed - record may be tampered');
       }
 
       // Verify the returned public key derives to the requested IPNS name
-      const pubKeyBytes = Uint8Array.from(atob(response.pubKey), (c) => c.charCodeAt(0));
+      const pubKeyBytes = Uint8Array.from(atob(pubKey), (c) => c.charCodeAt(0));
       const derivedName = await deriveIpnsName(pubKeyBytes);
       if (derivedName !== ipnsName) {
         throw new Error(
@@ -192,7 +202,7 @@ export async function resolveIpnsRecord(
 
       signatureVerified = true;
     } else {
-      // D-03: absent signature fields (legacy record) — allow + flag
+      // D-03: all signature fields absent (legacy record) — allow + flag
       logger.warn('[IPNS] IPNS resolve returned without signature data, skipping verification');
     }
 

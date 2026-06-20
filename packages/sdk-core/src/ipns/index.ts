@@ -205,20 +205,26 @@ export async function resolveIpnsRecord(
         return null;
       }
 
-      // Verify IPNS signature if all signature fields are present
+      // Verify IPNS signature. D-02: present-but-invalid → throw (fail closed).
+      // D-03: ALL fields absent → allow + flag (legacy record; DB CID is authoritative).
+      // Partial fields (some but not all three) → fail closed: unverifiable signature
+      // material must not be downgraded to the legacy allow path (field-stripping bypass).
       let signatureVerified = false;
-      if (response.signatureV2 && response.data && response.pubKey) {
-        const valid = await verifyIpnsSignature(
-          response.signatureV2,
-          response.data,
-          response.pubKey
-        );
+      const { signatureV2, data, pubKey } = response;
+      if (signatureV2 || data || pubKey) {
+        if (!signatureV2 || !data || !pubKey) {
+          throw new Error(
+            'IPNS resolve returned incomplete signature data - record cannot be verified'
+          );
+        }
+
+        const valid = await verifyIpnsSignature(signatureV2, data, pubKey);
         if (!valid) {
           throw new Error('IPNS signature verification failed - record may be tampered');
         }
 
         // Verify the returned public key derives to the requested IPNS name
-        const pubKeyBytes = Uint8Array.from(atob(response.pubKey), (c) => c.charCodeAt(0));
+        const pubKeyBytes = Uint8Array.from(atob(pubKey), (c) => c.charCodeAt(0));
         const derivedName = await deriveIpnsName(pubKeyBytes);
         if (derivedName !== ipnsName) {
           throw new Error(

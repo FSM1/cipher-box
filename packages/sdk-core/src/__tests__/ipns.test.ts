@@ -198,26 +198,26 @@ describe('IPNS operations', () => {
       );
     });
 
-    // S2 regression guard (D-02): present-but-invalid signature must throw (fail-closed).
-    // This test locks in the already-correct sdk-core behavior so a future edit cannot
-    // silently regress it.
-    it('S2 regression: throws on present-but-invalid signature (fail-closed)', async () => {
+    // S2 regression guard (D-02): PARTIAL signature fields must fail closed.
+    // A record with some-but-not-all of {signatureV2, data, pubKey} carries
+    // unverifiable signature material and must NOT be downgraded to the legacy
+    // allow path (an attacker could strip fields to bypass verification). Only
+    // an all-absent record is treated as legacy (signatureVerified=false).
+    it('S2: throws on partial signature fields (only signatureV2 present)', async () => {
       const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
-      const { verifyEd25519 } = await import('@cipherbox/crypto');
+      const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
       vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
         success: true,
-        cid: 'QmS2Test',
+        cid: 'QmPartial',
         sequenceNumber: '3',
-        signatureV2: btoa('invalid-sig'),
-        data: btoa('cbor-data'),
-        pubKey: btoa('pubkey'),
+        signatureV2: btoa('only-sig'),
+        // data and pubKey omitted → partial → fail closed
       });
-      // Signature fields are present but verification returns false — must throw, not warn+continue
-      vi.mocked(verifyEd25519).mockResolvedValue(false);
 
-      await expect(resolveIpnsRecord('k51s2-regression')).rejects.toThrow(
-        'IPNS signature verification failed'
-      );
+      await expect(resolveIpnsRecord('k51partial')).rejects.toThrow('incomplete signature data');
+      // Must fail BEFORE attempting verification or name derivation.
+      expect(verifyEd25519).not.toHaveBeenCalled();
+      expect(deriveIpnsName).not.toHaveBeenCalled();
     });
   });
 });
@@ -266,16 +266,14 @@ describe('createAndPublishIpnsRecord caller-owns-key (S3/D-05)', () => {
     vi.mocked(ipnsControllerPublishRecord).mockRejectedValue(new Error('publish failed'));
 
     const key = new Uint8Array(32).fill(9);
-    try {
-      await createAndPublishIpnsRecord({
+    await expect(
+      createAndPublishIpnsRecord({
         ipnsPrivateKey: key,
         ipnsName: 'k51zeroize-throw',
         metadataCid: 'QmCid',
         sequenceNumber: 0n,
-      });
-    } catch {
-      // expected
-    }
+      })
+    ).rejects.toThrow('publish failed');
 
     // Buffer must survive the throw — the caller owns and zeroes it.
     expect(key.every((b) => b === 9)).toBe(true);

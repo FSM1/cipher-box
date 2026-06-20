@@ -52,13 +52,15 @@ pub async fn resolve_ipns(
 
 /// Verify an IPNS resolve response signature.
 ///
-/// Implements D-03 (absent fields → None, allow+warn), D-02 (invalid → Some(false)),
+/// Implements D-03 (all fields absent → None, allow+warn), D-02 (invalid → Some(false)),
 /// and D-04 (valid + name binding → Some(true)).
 ///
 /// Returns:
-/// - `Ok(None)` when any signature field is absent (legacy record, backward-compat).
-/// - `Ok(Some(false))` when signature fields are present but verification fails or
-///   the derived IPNS name does not match `ipns_name`.
+/// - `Ok(None)` ONLY when ALL THREE signature fields (signatureV2, data, pubKey) are
+///   absent — a true legacy record (backward-compat allow path).
+/// - `Ok(Some(false))` when SOME but not all three fields are present (partial/downgrade
+///   record — fail closed), when signature verification fails, or when the derived IPNS
+///   name does not match `ipns_name`.
 /// - `Ok(Some(true))` when the signature is valid and the public key derives to `ipns_name`.
 /// - `Err` when base64 decoding or IPNS name derivation fails on present fields.
 pub fn verify_ipns_resolve_signature(
@@ -68,13 +70,23 @@ pub fn verify_ipns_resolve_signature(
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
 
-    // D-03: absent fields → allow + flag (caller should warn and continue).
+    let sig_present = resp.signature_v2.is_some();
+    let data_present = resp.data.is_some();
+    let pub_key_present = resp.pub_key.is_some();
+
+    // D-03: ALL fields absent → true legacy record, allow + flag (caller warns and continues).
+    if !sig_present && !data_present && !pub_key_present {
+        return Ok(None);
+    }
+
+    // Partial fields (some but not all present) → fail closed. A record carrying 1 or 2
+    // of the 3 fields is a downgrade vector, not a legacy record.
     let (Some(sig_b64), Some(data_b64), Some(pub_key_b64)) = (
         resp.signature_v2.as_ref(),
         resp.data.as_ref(),
         resp.pub_key.as_ref(),
     ) else {
-        return Ok(None);
+        return Ok(Some(false));
     };
 
     let decode_field = |label: &str, s: &str| -> Result<Vec<u8>, crate::error::ApiError> {
@@ -217,12 +229,33 @@ mod tests {
         assert_eq!(resp.pub_key, None);
     }
 
-    /// Test 2: absent sig fields → Ok(None) — D-03 allow+flag.
+    /// Test 2: all sig fields absent → Ok(None) — D-03 allow+flag (true legacy record).
     #[test]
     fn absent_fields_returns_none() {
         let resp = make_resolve_response_no_sig();
         let result = verify_ipns_resolve_signature(&resp, "k51anyname");
         assert_eq!(result.unwrap(), None);
+    }
+
+    /// Test 2b: only signatureV2 present (1 of 3) → Ok(Some(false)) — fail closed on partial.
+    #[test]
+    fn partial_fields_only_signature_returns_some_false() {
+        let mut resp = make_resolve_response_no_sig();
+        resp.signature_v2 = Some("AAAA".to_string());
+        let result = verify_ipns_resolve_signature(&resp, "k51anyname");
+        assert_eq!(result.unwrap(), Some(false));
+    }
+
+    /// Test 2c: two of three fields present (signatureV2 + data, no pubKey) →
+    /// Ok(Some(false)) — fail closed on partial/downgrade record.
+    #[test]
+    fn partial_fields_two_of_three_returns_some_false() {
+        let mut resp = make_resolve_response_no_sig();
+        resp.signature_v2 = Some("AAAA".to_string());
+        resp.data = Some("BBBB".to_string());
+        // pub_key intentionally left None.
+        let result = verify_ipns_resolve_signature(&resp, "k51anyname");
+        assert_eq!(result.unwrap(), Some(false));
     }
 
     /// Test 3: invalid Ed25519 signature → Ok(Some(false)) — D-02.

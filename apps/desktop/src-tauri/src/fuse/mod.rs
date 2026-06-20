@@ -198,7 +198,7 @@ pub async fn mount_filesystem(
                         // Resolve root FilePointers
                         let unresolved = inodes.get_unresolved_file_pointers();
                         if !unresolved.is_empty() {
-                            if let Ok(fk) = <[u8; 32]>::try_from(root_folder_key.as_slice()) {
+                            if let Ok(fk) = <[u8; 32]>::try_from(root_folder_key.as_slice()).map(Zeroizing::new) {
                                 for (fp_ino, fp_ipns) in &unresolved {
                                     let fp_result: Result<Vec<u8>, String> = async {
                                         let resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, fp_ipns).await.map_err(|e| format!("{}", e))?;
@@ -236,7 +236,7 @@ pub async fn mount_filesystem(
                                     metadata_cache.set(sub_ipns, sub_meta.clone(), sub_cid);
                                     if let Ok(()) = inodes.populate_folder(*sub_ino, &sub_meta, &private_key, &public_key, false) {
                                         let sub_unresolved = inodes.get_unresolved_file_pointers();
-                                        if let Ok(sk) = <[u8; 32]>::try_from(sub_key.as_slice()) {
+                                        if let Ok(sk) = <[u8; 32]>::try_from(sub_key.as_slice()).map(Zeroizing::new) {
                                             for (fp_ino, fp_ipns) in &sub_unresolved {
                                                 let fp_result: Result<Vec<u8>, String> = async {
                                                     let resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, fp_ipns).await.map_err(|e| format!("{}", e))?;

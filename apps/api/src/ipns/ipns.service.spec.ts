@@ -1488,15 +1488,16 @@ describe('IpnsService', () => {
         sequenceNumber: '1',
       }));
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
-      // S1 sequence check for folder: expects embedded = 5 + 1 = 6n
-      // File record (no expectedSequenceNumber): default mock sequence 0n is fine (no S1 seq check)
-      // But since these run concurrently we use mockImplementation to disambiguate by call order:
-      // Both calls use testMetadataCid for CID (default mock satisfies), but folder needs seq 6n.
-      // Use mockResolvedValueOnce for the file's call, then the folder's call.
-      // Note: Promise.allSettled order matches records array order.
-      mockParseIpnsRecord
-        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 0n }) // file record
-        .mockResolvedValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 6n }); // folder (seq=expectedSeq+1)
+      // S1 sequence check for the folder expects embedded = 5 + 1 = 6n. The file record
+      // has no expectedSequenceNumber, so its S1 seq check is skipped and any sequence is
+      // fine. Both records share `testRecord` bytes and the records publish concurrently —
+      // `Promise.allSettled` preserves RESULT order, not the order each call reaches
+      // parseIpnsRecord — so an order-keyed mock would flake. Return a single value that
+      // satisfies both (CID matches; sequence 6n satisfies the folder, ignored by the file).
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 6n,
+      });
 
       const batchDto: BatchPublishIpnsDto = {
         records: [
