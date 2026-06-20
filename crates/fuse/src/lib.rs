@@ -1500,7 +1500,12 @@ pub async fn replay_for_vault(
                             "replay_for_vault: MkdirPublish {} replayed successfully",
                             entry.id
                         );
-                        let _ = journal.remove(&entry.id);
+                        if let Err(e) = journal.remove(&entry.id) {
+                            log::warn!(
+                                "replay_for_vault: MkdirPublish {} failed to remove journal entry after success: {}; entry may replay again on next mount",
+                                entry.id, e
+                            );
+                        }
                     }
                     Err(e) => {
                         // F2: record the failure so retries accumulate across mounts and the
@@ -1564,7 +1569,12 @@ pub async fn replay_for_vault(
                             entry.id,
                             filename
                         );
-                        let _ = journal.remove(&entry.id);
+                        if let Err(e) = journal.remove(&entry.id) {
+                            log::warn!(
+                                "replay_for_vault: UploadFile {} failed to remove journal entry after success: {}; entry may replay again on next mount",
+                                entry.id, e
+                            );
+                        }
                     }
                     Err(e) => {
                         // F2: record the failure so retries accumulate across mounts and the
@@ -3323,5 +3333,63 @@ mod durability_characterization_tests {
             original_ciphertext,
             "replay must recover the exact journalled ciphertext bytes"
         );
+    }
+
+    /// D-06: a genuine `journal.remove` I/O failure must be an `Err` (the shape the
+    /// `if let Err(e) = journal.remove(...)` logging path in `replay_for_vault` handles),
+    /// not a silently-swallowed `let _`. This proves that logging path is not dead code.
+    #[test]
+    fn remove_failure_is_logged() {
+        use cipherbox_sdk::WriteQueue;
+
+        let dir = std::env::temp_dir()
+            .join("cb-t52-01-remove-failure")
+            .join(format!("{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = WriteQueue::new(dir.clone(), 5);
+
+        // Lay down a journal `.json` file directly (no JournalEntry shape coupling).
+        let id = "remove-fail-t5201";
+        let json_path = dir.join(format!("{}.json", id));
+        std::fs::write(&json_path, b"{}").unwrap();
+
+        // `remove` of a non-existent id is idempotent (NotFound -> Ok).
+        assert!(
+            journal.remove("nonexistent-id").is_ok(),
+            "remove of a missing entry must be Ok (idempotent NotFound path)"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Make the parent dir read-only so removing the `.json` fails with EACCES,
+            // driving the genuine-error branch (not NotFound).
+            let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+            let original_mode = perms.mode();
+            perms.set_mode(0o500); // r-x------ : cannot unlink children
+            std::fs::set_permissions(&dir, perms).unwrap();
+
+            let result = journal.remove(id);
+
+            // Restore permissions so cleanup can proceed regardless of the assertion.
+            let mut restore = std::fs::metadata(&dir).unwrap().permissions();
+            restore.set_mode(original_mode);
+            let _ = std::fs::set_permissions(&dir, restore);
+
+            assert!(
+                result.is_err(),
+                "removal of an unlinkable entry must return Err (the `if let Err` logging shape)"
+            );
+        }
+
+        #[cfg(not(unix))]
+        {
+            // On non-unix, the genuine-error branch is exercised differently; at minimum the
+            // NotFound idempotency path must return Ok.
+            assert!(journal.remove("another-missing-id").is_ok());
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
