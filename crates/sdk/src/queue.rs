@@ -389,6 +389,153 @@ impl WriteQueue {
         Ok(entries)
     }
 
+    /// Remove every journal entry (`.json` + `.bin`) belonging to a single vault (D-02).
+    ///
+    /// The journal directory is shared across vaults and `load_all_for_vault` only filters
+    /// at read time, so a departing vault's entries (including their ciphertext sidecars)
+    /// would otherwise persist forever into another session (T-52-15, Information Disclosure).
+    /// `purge_vault` removes ALL entries for `vault_root_ipns` regardless of status (logout
+    /// means the session is over), deleting both the `.json` and its `.bin` sidecar via the
+    /// sidecar-aware [`remove`](Self::remove). Returns the number of entries removed.
+    ///
+    /// This is the reusable purge interface a future `switch_account` / `delete_account`
+    /// command must call for the departing vault. It is wired at `logout()` today.
+    pub fn purge_vault(&self, vault_root_ipns: &str) -> Result<usize, String> {
+        let entries = self.load_all_for_vault(vault_root_ipns)?;
+        let mut removed = 0usize;
+        for entry in &entries {
+            self.remove(&entry.id)?;
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
+    /// Garbage-collect parked `Failed` journal entries and orphaned sidecars (D-02).
+    ///
+    /// Parked `Failed` entries are kept on disk for manual intervention (D-09) and would
+    /// otherwise grow without bound, exhausting disk (T-52-16, Denial of Service). This
+    /// runs once per mount and is best-effort — per-file errors are logged and skipped,
+    /// never fatal. Three passes, all touching ONLY `Failed` entries (in-flight
+    /// `Pending`/`InProgress` are never GC'd):
+    ///
+    /// 1. **Age purge** — remove any `Failed` entry whose `created_at_ms` is older than
+    ///    `age_days` (compared against the same ms-since-epoch clock entries are stamped with).
+    /// 2. **Size purge** — sum each surviving `Failed` entry's on-disk size (`.json` bytes
+    ///    plus its `.bin` sidecar bytes); if the total exceeds `total_size_budget`, remove
+    ///    oldest-first (by `created_at_ms`) until under budget.
+    /// 3. **Orphan cleanup** — delete any `.bin` sidecar with no matching `<id>.json`
+    ///    (a sidecar left behind by an aborted write, RESEARCH Pitfall 2).
+    ///
+    /// Returns the total number of entries + orphan sidecars removed.
+    pub fn gc_failed_entries(
+        &self,
+        age_days: u64,
+        total_size_budget: u64,
+    ) -> Result<usize, String> {
+        let read_dir = std::fs::read_dir(&self.journal_dir)
+            .map_err(|e| format!("Journal GC dir read failed: {}", e))?;
+
+        // Scan all `.json` entries across ALL vaults (GC is global) and keep only `Failed`.
+        let mut failed: Vec<JournalEntry> = Vec::new();
+        for dir_entry in read_dir {
+            let dir_entry = match dir_entry {
+                Ok(d) => d,
+                Err(e) => {
+                    log::warn!("Journal GC: dir entry error: {} — skipping", e);
+                    continue;
+                }
+            };
+            let path = dir_entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(e) => {
+                    log::warn!("Journal GC: failed to read {:?}: {} — skipping", path, e);
+                    continue;
+                }
+            };
+            match serde_json::from_slice::<JournalEntry>(&bytes) {
+                Ok(entry) => {
+                    if matches!(entry.status, JournalEntryStatus::Failed { .. }) {
+                        failed.push(entry);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Journal GC: malformed entry at {:?}: {} — skipping", path, e);
+                }
+            }
+        }
+
+        let mut removed = 0usize;
+
+        // Pass 1: age purge.
+        let now = now_ms();
+        let max_age_ms = age_days.saturating_mul(86_400_000);
+        let age_cutoff = now.saturating_sub(max_age_ms);
+        let mut survivors: Vec<JournalEntry> = Vec::new();
+        for entry in failed {
+            if entry.op.created_at_ms() < age_cutoff {
+                match self.remove(&entry.id) {
+                    Ok(()) => removed += 1,
+                    Err(e) => log::warn!("Journal GC: age-remove {} failed: {}", entry.id, e),
+                }
+            } else {
+                survivors.push(entry);
+            }
+        }
+
+        // Pass 2: size purge — oldest-first until under budget.
+        survivors.sort_by_key(|e| e.op.created_at_ms());
+        let mut total_size: u64 = survivors.iter().map(|e| self.entry_on_disk_size(&e.id)).sum();
+        let mut idx = 0;
+        while total_size > total_size_budget && idx < survivors.len() {
+            let entry = &survivors[idx];
+            let entry_size = self.entry_on_disk_size(&entry.id);
+            match self.remove(&entry.id) {
+                Ok(()) => {
+                    removed += 1;
+                    total_size = total_size.saturating_sub(entry_size);
+                }
+                Err(e) => log::warn!("Journal GC: size-remove {} failed: {}", entry.id, e),
+            }
+            idx += 1;
+        }
+
+        // Pass 3: orphan `.bin` cleanup — sidecars with no matching `.json` (Pitfall 2).
+        if let Ok(read_dir) = std::fs::read_dir(&self.journal_dir) {
+            for dir_entry in read_dir.flatten() {
+                let path = dir_entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("bin") {
+                    continue;
+                }
+                let json_path = path.with_extension("json");
+                if !json_path.exists() {
+                    match std::fs::remove_file(&path) {
+                        Ok(()) => removed += 1,
+                        Err(e) => {
+                            log::warn!("Journal GC: orphan remove {:?} failed: {}", path, e)
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(removed)
+    }
+
+    /// On-disk byte size of an entry: its `.json` plus its `.bin` sidecar (if present).
+    ///
+    /// Missing files contribute 0 (used only by GC's size accounting, never fatal).
+    fn entry_on_disk_size(&self, id: &str) -> u64 {
+        let json_path = self.journal_dir.join(format!("{}.json", id));
+        let bin_path = self.sidecar_path_for(id);
+        let json_size = std::fs::metadata(&json_path).map(|m| m.len()).unwrap_or(0);
+        let bin_size = std::fs::metadata(&bin_path).map(|m| m.len()).unwrap_or(0);
+        json_size + bin_size
+    }
+
     /// Overwrite the status of an entry on disk.
     pub fn update_status(&self, id: &str, status: JournalEntryStatus) -> Result<(), String> {
         let path = self.journal_dir.join(format!("{}.json", id));
@@ -456,6 +603,17 @@ impl WriteQueue {
         mkdir_entries.extend(upload_entries);
         mkdir_entries
     }
+}
+
+/// Current wall-clock time as milliseconds since the Unix epoch.
+///
+/// Matches the clock journal entries are stamped with (`created_at_ms`); used by
+/// `gc_failed_entries` for the age comparison. Mirrors `registry::now_ms`.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1409,6 +1567,133 @@ mod tests {
             fresh,
             "stale sidecar must be overwritten with fresh ciphertext"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Task 1 & 2 (D-02): purge_vault + gc_failed_entries ----
+
+    /// Build an UploadFile entry whose `sidecar_path` points at the queue's real `.bin`
+    /// path, with caller-controlled status and `created_at_ms` (for GC age/size tests).
+    fn make_sidecar_entry(
+        q: &WriteQueue,
+        id: &str,
+        vault: &str,
+        status: JournalEntryStatus,
+        created_at_ms: u64,
+    ) -> JournalEntry {
+        let mut entry = make_upload_entry(id, vault);
+        if let JournalOp::UploadFile {
+            sidecar_path,
+            created_at_ms: cam,
+            ..
+        } = &mut entry.op
+        {
+            *sidecar_path = q.sidecar_path_for(id);
+            *cam = created_at_ms;
+        }
+        entry.status = status;
+        entry
+    }
+
+    /// D-02: `purge_vault` removes every `.json`+`.bin` for the target vault only.
+    #[test]
+    fn purge_vault_removes_all() {
+        let (q, dir) = make_temp_queue();
+
+        let a1 = make_sidecar_entry(&q, "purge-a1", "vault-A", JournalEntryStatus::Pending, 1_000);
+        let a2 = make_sidecar_entry(&q, "purge-a2", "vault-A", JournalEntryStatus::Pending, 2_000);
+        let b1 = make_sidecar_entry(&q, "purge-b1", "vault-B", JournalEntryStatus::Pending, 3_000);
+        q.put_with_sidecar(&a1, b"a1-cipher").expect("put a1");
+        q.put_with_sidecar(&a2, b"a2-cipher").expect("put a2");
+        q.put_with_sidecar(&b1, b"b1-cipher").expect("put b1");
+
+        let removed = q.purge_vault("vault-A").expect("purge vault A");
+        assert_eq!(removed, 2, "two vault-A entries removed");
+
+        for id in ["purge-a1", "purge-a2"] {
+            assert!(!dir.join(format!("{}.json", id)).exists(), "{}.json gone", id);
+            assert!(!dir.join(format!("{}.bin", id)).exists(), "{}.bin gone", id);
+        }
+        assert!(dir.join("purge-b1.json").exists(), "vault-B .json survives");
+        assert!(dir.join("purge-b1.bin").exists(), "vault-B .bin survives");
+
+        // Purging a vault with no entries is a no-op returning 0.
+        let none = q.purge_vault("vault-EMPTY").expect("purge empty vault");
+        assert_eq!(none, 0, "empty vault purge returns 0");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D-02: `gc_failed_entries` ages out old Failed entries, leaving recent Failed and
+    /// non-Failed entries untouched.
+    #[test]
+    fn gc_purges_old_failed() {
+        let (q, dir) = make_temp_queue();
+        let now = now_ms();
+        let day_ms = 86_400_000u64;
+        let failed = JournalEntryStatus::Failed {
+            last_error: "x".to_string(),
+        };
+
+        // Old Failed (40 days old), recent Failed (1 day old), and a Pending (old but not Failed).
+        let old = make_sidecar_entry(&q, "gc-old", "v", failed.clone(), now - 40 * day_ms);
+        let recent = make_sidecar_entry(&q, "gc-recent", "v", failed.clone(), now - day_ms);
+        let pending =
+            make_sidecar_entry(&q, "gc-pending", "v", JournalEntryStatus::Pending, now - 40 * day_ms);
+        q.put_with_sidecar(&old, b"old-cipher").expect("put old");
+        q.put_with_sidecar(&recent, b"recent-cipher").expect("put recent");
+        q.put_with_sidecar(&pending, b"pending-cipher").expect("put pending");
+
+        let removed = q
+            .gc_failed_entries(JOURNAL_GC_MAX_AGE_DAYS, u64::MAX)
+            .expect("gc");
+        assert_eq!(removed, 1, "only the old Failed entry is removed");
+
+        assert!(!dir.join("gc-old.json").exists(), "old Failed .json gone");
+        assert!(!dir.join("gc-old.bin").exists(), "old Failed .bin gone");
+        assert!(dir.join("gc-recent.json").exists(), "recent Failed survives");
+        assert!(dir.join("gc-pending.json").exists(), "Pending never GC'd");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D-02: `gc_failed_entries` trims oldest-first to the size budget (counting `.bin`),
+    /// and removes `.bin` orphans with no matching `.json`.
+    #[test]
+    fn gc_purges_to_size_budget() {
+        let (q, dir) = make_temp_queue();
+        let now = now_ms();
+        let failed = JournalEntryStatus::Failed {
+            last_error: "x".to_string(),
+        };
+
+        // Three recent Failed entries, each with a ~1 KiB sidecar. Measure one entry's actual
+        // on-disk size (.json + .bin) and set the budget to hold exactly one, so the two oldest
+        // must be trimmed regardless of the exact JSON length.
+        let blob = vec![0u8; 1024];
+        let e1 = make_sidecar_entry(&q, "sz-1", "v", failed.clone(), now - 3_000);
+        let e2 = make_sidecar_entry(&q, "sz-2", "v", failed.clone(), now - 2_000);
+        let e3 = make_sidecar_entry(&q, "sz-3", "v", failed.clone(), now - 1_000);
+        q.put_with_sidecar(&e1, &blob).expect("put e1");
+        q.put_with_sidecar(&e2, &blob).expect("put e2");
+        q.put_with_sidecar(&e3, &blob).expect("put e3");
+
+        // Orphan sidecar with no matching .json.
+        let orphan = q.sidecar_path_for("sz-orphan");
+        std::fs::write(&orphan, b"orphaned-ciphertext").expect("write orphan");
+
+        // Budget = 1.5x a single entry: holds exactly one (the newest); two oldest trimmed.
+        let one_entry_size = q.entry_on_disk_size("sz-3");
+        let budget = one_entry_size + one_entry_size / 2;
+        let removed = q.gc_failed_entries(36_500, budget).expect("gc");
+
+        // 2 oldest entries + 1 orphan removed = 3.
+        assert_eq!(removed, 3, "two oldest entries + orphan removed");
+        assert!(!dir.join("sz-1.json").exists(), "oldest sz-1 trimmed");
+        assert!(!dir.join("sz-2.json").exists(), "sz-2 trimmed");
+        assert!(dir.join("sz-3.json").exists(), "newest sz-3 survives");
+        assert!(!orphan.exists(), "orphan .bin removed");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -510,6 +510,28 @@ pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result
         let _ = keychain::delete_refresh_token(user_id);
     }
 
+    // D-02: purge this vault's journal entries (.json + .bin) so they do not persist past
+    // the session into another login. The shared journal dir is only filtered at read time,
+    // so without this the departing vault's entries (incl. ciphertext sidecars) would leak
+    // across sessions (T-52-15, Information Disclosure). Must run BEFORE clear_keys() because
+    // it reads the current vault IPNS from sdk state, which clear_keys() zeroes to None.
+    //
+    // FUTURE: a `switch_account` / `delete_account` command (none exists today — RESEARCH
+    // Open Q2) must likewise call `WriteQueue::purge_vault` for the departing vault.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    {
+        if let Some(ipns) = state.sdk.root_ipns_name.read().await.clone() {
+            let journal = cipherbox_sdk::WriteQueue::new(
+                crate::fuse::default_journal_dir(),
+                crate::fuse::JOURNAL_MAX_RETRIES,
+            );
+            match journal.purge_vault(&ipns) {
+                Ok(n) => log::info!("Logout: purged {} journal entr{} for vault", n, if n == 1 { "y" } else { "ies" }),
+                Err(e) => log::warn!("Logout: journal purge failed (will continue logout): {}", e),
+            }
+        }
+    }
+
     // Zero all sensitive keys in memory
     state.clear_keys().await;
 

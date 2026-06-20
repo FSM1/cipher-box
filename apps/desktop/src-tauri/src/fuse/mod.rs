@@ -273,6 +273,19 @@ pub async fn mount_filesystem(
         coord
     };
 
+    // D-02: GC parked Failed journal entries + orphaned sidecars at mount. No background
+    // scheduler exists for the journal, so mount is the natural sweep point (mirrors where
+    // replay runs). This is synchronous and fast (a directory scan), only touches Failed
+    // entries, and must never fail the mount — best-effort, non-fatal on Err (T-52-16, DoS).
+    match journal.gc_failed_entries(
+        cipherbox_sdk::JOURNAL_GC_MAX_AGE_DAYS,
+        cipherbox_sdk::JOURNAL_GC_MAX_SIZE_BYTES,
+    ) {
+        Ok(n) if n > 0 => log::info!("Mount GC: removed {} parked/orphaned journal item(s)", n),
+        Ok(_) => {}
+        Err(e) => log::warn!("Mount GC failed (will continue mount): {}", e),
+    }
+
     // Replay journal entries for this vault CONCURRENTLY with mount (D-03 / WR-07).
     // Previously this blocked the mount with `.await` — a hung IPNS/upload call could stall
     // the mount indefinitely. Now replay runs on a background tokio task (each entry's network
