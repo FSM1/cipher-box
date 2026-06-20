@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ee58bdddc293",
+  "strategy": "manual-commit",
+  "branch": "chore/ship-phase-command",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ee/58bdddc293/0/metadata.json",
+      "transcript": "/ee/58bdddc293/0/full.jsonl",
+      "content_hash": "/ee/58bdddc293/0/content_hash.txt",
+      "prompt": "/ee/58bdddc293/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 106165,
+    "cache_creation_tokens": 2159475,
+    "cache_read_tokens": 107081220,
+    "output_tokens": 561302,
+    "api_call_count": 421
+  }
+}
