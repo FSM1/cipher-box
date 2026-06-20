@@ -50,7 +50,11 @@ const args = parseArgs(process.argv.slice(2));
 const mount =
   args.get('mount') || join(process.env.HOME || process.env.USERPROFILE || '', 'CipherBox');
 const apiUrl = args.get('api-url') || 'http://localhost:3000';
-const secret = process.env.TEST_SECRET || 'e2e-test-secret-ci-only';
+const secret = process.env.TEST_SECRET;
+if (!secret) {
+  console.error('TEST_SECRET environment variable is required');
+  process.exit(1);
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
