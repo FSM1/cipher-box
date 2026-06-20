@@ -1,0 +1,321 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "a91dbc72b885",
+  "session_id": "ca575d75-db2f-4c2d-8294-09d1af4240cb",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-20T00:53:51.091476Z",
+  "branch": "feat/crypto-signature-secret-leak-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-20-ipns-resolve-verify-coverage-and-web-sdk-dedup.md",
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "crates/api-client/src/ipns.rs",
+    "crates/fuse/src/lib.rs",
+    "packages/sdk-core/src/__tests__/ipns.test.ts",
+    "packages/sdk-core/src/ipns/index.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "601add5c265e",
+  "token_usage": {
+    "input_tokens": 94190,
+    "cache_creation_tokens": 2055309,
+    "cache_read_tokens": 87000183,
+    "output_tokens": 497148,
+    "api_call_count": 364
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Lz5h1zNHMx7SqG233yqYKN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "601add5c265e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 42,
+        "end": 43,
+        "entry_ids": [
+          "ee10835c-b9e7-42df-8e82-7648bbee013c"
+        ],
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:discuss-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01MVTunGUz94VxUj4msoYPsE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "601add5c265e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 625,
+        "end": 626,
+        "entry_ids": [
+          "63acba58-0d06-4d20-a29a-32d54cea19ec"
+        ],
+        "tool_use_id": "toolu_01MVTunGUz94VxUj4msoYPsE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01MVTunGUz94VxUj4msoYPsE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:verify-work",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01ByiBknFKy13fpgCWLGK5kw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "601add5c265e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 681,
+        "end": 682,
+        "entry_ids": [
+          "fc53b1a7-4d6c-4e70-93d4-bcf3f356f047"
+        ],
+        "tool_use_id": "toolu_01ByiBknFKy13fpgCWLGK5kw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01ByiBknFKy13fpgCWLGK5kw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PpumQQM2AYJrC3um2SqPvT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "601add5c265e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 719,
+        "end": 720,
+        "entry_ids": [
+          "261a523d-6718-44ae-974d-a87575075fee"
+        ],
+        "tool_use_id": "toolu_01PpumQQM2AYJrC3um2SqPvT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PpumQQM2AYJrC3um2SqPvT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:validate-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015bMYgLLFUznv2NzbevUSN9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "601add5c265e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 776,
+        "end": 777,
+        "entry_ids": [
+          "164d623c-cd8c-458e-9a89-6596725ed67e"
+        ],
+        "tool_use_id": "toolu_015bMYgLLFUznv2NzbevUSN9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015bMYgLLFUznv2NzbevUSN9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_012GfoRTYrjkRhzpZepPUXo1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:ship"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "601add5c265e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 945,
+        "end": 946,
+        "entry_ids": [
+          "7fc0c2d0-008e-4cf3-98f5-1e92d7f851fa"
+        ],
+        "tool_use_id": "toolu_012GfoRTYrjkRhzpZepPUXo1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_012GfoRTYrjkRhzpZepPUXo1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:ship",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Run the GSD manager to discuss, plan, and ship all 5 v1.1 hardening phases (51-55: crypto-signature, FUSE durability, supply-chain, E2E typing, large-file refactor) in parallel using git worktrees. Ship Phase 51 first through the full verify/secure/validate/simplify/CodeRabbit/ship/resolve-pr-reviews loop before touching other phases.",
+    "outcome": "All 5 phases discussed and planned (21 total plans across phases, each in an isolated worktree). Phase 51 executed, verified (caught a cross-crate build break), secured (15/15 threats closed), validated (Nyquist-compliant), simplified, CodeRabbit-reviewed (fixed 5 of 7 zeroization findings), shipped as PR #529 — including diagnosing and fixing a critical S3 zeroization regression that caused 48/89 SDK E2E failures in CI.",
+    "learnings": {
+      "repo": [
+        "GSD executor's commit style (`feat 51-03: …`) is non-conventional and systematically fails the repo's `pr-release-preview` required CI check on any PR touching versioned packages. Requires `git filter-branch --msg-filter` reword before the PR can merge.",
+        "`required_signatures: false` on main, so filter-branch rewrites that drop SSH signatures are safe.",
+        "Background GSD agents on this Claude Code harness DO have `Tools: *` and CAN nest sub-agents — the manager.md blanket 'no nesting in background on Claude Code' guardrail is stale/wrong for this session.",
+        "`winfsp` cannot compile on macOS (build script + `windows_core` errors). Windows-only changes must ride CI for correctness gating.",
+        "Per-worktree `pnpm i` is the correct approach for dependencies in isolated git worktrees — symlinking node_modules causes hook/merge failures.",
+        "The GSD commit helper reports `commit_failed` as a false negative even when the commit lands. Always verify with `git log --oneline -1`.",
+        "CodeRabbit bundles all nitpicks in the PR review body, not inline threads — `/resolve-pr-reviews` searching for threads finds 0; must parse `pulls/{N}/reviews[].body`.",
+        "Phase 51's `cargo test -p cipherbox-fuse` executor gate never compiles the `cipherbox-desktop` crate, so cross-crate type-change cascades (e.g. `unwrap_key` return type) can break desktop consumers silently."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "finding": "S3 added a `finally { params.ipnsPrivateKey.fill(0) }` block to `createAndPublishIpnsRecord`, but the client caches `folder.ipnsKeypair.privateKey` in `folderTree` and passes that same long-lived buffer to every publish. Zeroing a caller-owned buffer caused every 2nd+ folder operation to derive the public key from zeros → wrong IPNS name → 400 from the API. Fix: remove the `finally` zeroization; `cas.ts` documents 'callers are responsible'."
+        },
+        {
+          "path": "packages/sdk-core/src/cas.ts",
+          "line": 87,
+          "end_line": 87,
+          "finding": "Reuses the same `params.ipnsPrivateKey` buffer across retries. The caller-owns-key contract is documented here but was violated by the callee's `finally` zeroization added in Phase 51 S3."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 210,
+          "end_line": 212,
+          "finding": "S3 changed `unwrap_key` to return `Zeroizing<Vec<u8>>`, cascading to this desktop consumer which the executor's `cargo test -p cipherbox-fuse` gate never compiled. Initial hotfix used `.to_vec()` (loses Zeroizing); final fix changed the SDK state field type to `RwLock<Option<Zeroizing<Vec<u8>>>>` and stores the value directly."
+        },
+        {
+          "path": "crates/sdk/src/state.rs",
+          "line": 48,
+          "end_line": 48,
+          "finding": "Field `root_folder_key` changed from `RwLock<Option<Vec<u8>>>` to `RwLock<Option<zeroize::Zeroizing<Vec<u8>>>>` as part of CodeRabbit finding #3 fix. `root_ipns_private_key` was left as plain `Vec` (HKDF-derived, deferred)."
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "finding": "Folder-key cache changed from `HashMap<String, Vec<u8>>` to `HashMap<String, Zeroizing<Vec<u8>>>` (CodeRabbit #6). `spawn_file_meta_reencrypt` worker's `[u8;32]` key arrays wrapped in `Zeroizing` (CodeRabbit #7). `resolve_folder_key_cached` return type kept as `Vec<u8>` to callers but stores zeroizing internally."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "finding": "S1 value-anchoring strengthened to verify `/ipfs/` prefix in `record.value`. S2 partial-fields fail-closed: rejects records missing `signatureV2`, `data`, or `pubKey` fields instead of silently skipping verification."
+        },
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "finding": "S2 partial-fields fail-closed applied (mirrors API change). Simplify: three identical base64-decode-and-map-err blocks deduped into a local closure `decode_field`."
+        },
+        {
+          "path": ".planning/phases/51-crypto-signature-secret-leak-hardening/51-04-PLAN.md",
+          "line": 52,
+          "end_line": 52,
+          "finding": "Plan correctly flagged buffer-reuse risk for `updateFolderMetadataAndPublish` but missed the identical risk for `createAndPublishIpnsRecord`, which caused the S3 regression. Mock-based unit test for this callee masked the real round-trip behavior."
+        }
+      ],
+      "workflow": [
+        "Git worktree isolation per phase (`git worktree add <path> <branch>` + `pnpm i`) is the correct pattern for parallel GSD background planning agents to avoid `index.lock` collisions and branch-switch interference.",
+        "The `git filter-branch --msg-filter 'sed -E ...'` approach enables non-interactive bulk commit message rewrites without `git rebase -i` (which requires interactive input). Drops signatures but safe when `required_signatures: false`.",
+        "Mock-based unit tests for security-critical paths can pass while the real implementation regresses. The S1 spec mocked `parseIpnsRecord`, hiding the fact that the S3 `finally` zeroization would break real cross-package key reuse patterns.",
+        "When a background agent is cut off by a session limit, check `git log` and worktree state before restarting — agents often commit their final work before terminating.",
+        "For Rust cross-crate type changes, run `cargo check --workspace` (not just `-p <one-crate>`) as a final gate before committing — executor-scoped tests miss downstream consumers.",
+        "CodeRabbit CLI (`coderabbit review --agent --base main --type committed`) returning 0 findings after fixes is reliable confirmation, but the PR-level review (triggered on push) provides additional findings not in the CLI scope.",
+        "When doing a comprehensive security zeroization sweep, audit every public function's ownership contract at the boundary, not just the crates under test — the regression came from a callee overstepping a documented caller-owns-key contract in a different package."
+      ]
+    },
+    "friction": [
+      "Two session limit interruptions required context reconstruction and agent restart mid-workflow.",
+      "GSD executor commit style (`feat 51-03:`) systematically breaks the repo's Release Preview CI check — required discovering this only after the PR was open, then manually rewording 13 commits via filter-branch and force-pushing.",
+      "Phase 51 planning agent initially launched without worktree isolation, sharing the main working tree. Had to stop the agent, create a proper worktree, and restart.",
+      "Background bash poll for CodeRabbit completion exited immediately after force-push before CI had registered new checks — required manual re-arm.",
+      "The default `/gsd:ship` PR title format (`Phase 51: <slug>`) is non-conventional and would fail `lint-pr-title` CI — had to construct a conventional title manually.",
+      "Rust `cargo fmt` reformatted entire `apps/desktop/src-tauri/src/fuse/mod.rs` (279 lines) when touching two lines — had to revert and apply minimal surgical edits to avoid polluting the PR diff.",
+      "CodeRabbit's PR review findings require parsing the review body text (not inline threads), making automated resolution non-obvious.",
+      "The S3 zeroization regression (48/89 E2E failures) required extensive local reproduction infrastructure: rebuilding full package chain, restarting API, adding temporary diagnostic interceptors across three files, running multiple cargo check invocations."
+    ],
+    "open_items": [
+      "Phases 52-55 are all planned (worktrees p52-p55) but not executed. Phase 55 must wait for Phase 51 AND 52 to merge to main before executing (both touch `crates/fuse/src/lib.rs`).",
+      "GSD executor commit style is systemically non-conventional — should fix GSD's commit format or add a reword step to `/gsd:pr-branch`/ship workflow so future phase PRs (52-55) don't need manual filter-branch rewrites.",
+      "Deferred CodeRabbit finding: FUSE per-file IPNS publish records Conflict as success (pre-existing since PR #352, Phase 52 / HARD-03 domain). Todo captured.",
+      "Deferred CodeRabbit finding: FUSE inode stable-id identity reset (pre-existing, Phase 52 domain). Todo captured.",
+      "Deferred CodeRabbit finding: IPNS embedded sequence validation when `expectedSequenceNumber` is None (non-CAS paths) — risky to change without auditing all non-CAS callers. Todo captured.",
+      "SDK-state `root_ipns_private_key` field still plain `Vec<u8>` (HKDF-derived); candidate for `Zeroizing` parity in a future pass (noted in SECURITY.md audit trail).",
+      "Transient `[u8;32]` arrays in FUSE `operations.rs` / `platform/windows/operations.rs` (#1/#2 CodeRabbit findings) — committed and gated by CI Windows build since winfsp cannot compile on macOS.",
+      "Todo #15 (Faro logger redaction + transport wiring) dropped from Phase 51 scope and re-deferred to a future observability phase across CONTEXT.md, ROADMAP.md, and REQUIREMENTS.md.",
+      "CBOR cid-binding in IPNS records (would let verifier check the embedded CID directly from CBOR without round-trip) — deferred, heavy change, captured in existing todo.",
+      "IPNS resolve verify coverage: web/sdk-core resolve functions are hand-kept in lockstep rather than sharing implementation — deferred cleanup, captured in todo (partial-fields part now done)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-20T00:51:44.806212Z",
+    "agent_lines": 10,
+    "agent_removed": 14,
+    "human_added": 32,
+    "human_modified": 253,
+    "human_removed": 0,
+    "total_committed": 295,
+    "total_lines_changed": 324,
+    "agent_percentage": 7.4074074074074066,
+    "metric_version": 2
+  }
+}
