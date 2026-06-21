@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.42.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-v0.41.0...@cipherbox/api-v0.42.0) (2026-06-21)
+
+
+### Bug Fixes
+
+* IPFS/IPNS data-integrity fixes for unpin and folder unenroll ([#527](https://github.com/FSM1/cipher-box/issues/527)) ([b7acb57](https://github.com/FSM1/cipher-box/commit/b7acb570ced77f43f35eecd65a7f9f15fdd29afc))
+
 ## [0.41.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-v0.40.0...@cipherbox/api-v0.41.0) (2026-06-18)
 
 
