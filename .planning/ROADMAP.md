@@ -943,7 +943,7 @@ Plans:
 **Goal:** Split/dedup the Tier-1 + Tier-2 oversized source files (lib.rs, write_ops, folder barrel, ipns codec, DetailsDialog, commands/auth, plus the cross-platform FUSE dedup) into cohesive modules with the public surface frozen — no `pnpm api:generate`, consumers compile untouched, existing test suites stay green on both Rust feature sets.
 **Requirements**: HARD-06
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Scope (captured todos):
 
@@ -957,7 +957,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 55-02-PLAN.md — remaining Tier-1 Rust: write_ops directory module + commands/auth.rs refactor
+- [x] 55-02-PLAN.md — remaining Tier-1 Rust: write_ops directory module + commands/auth.rs refactor
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -1011,7 +1011,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 52. Desktop FUSE Durability & At-Rest Safety | v1.1-hardening | -      | Planned  | -          |
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
 | 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |
-| 55. Large Source-File Refactor            | v1.1-hardening | 2/4 | In Progress|  |
+| 55. Large Source-File Refactor            | v1.1-hardening | 3/4 | In Progress|  |
 
 _Roadmap created: 2026-03-07_
 _Last updated: 2026-06-18 — added phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation; closes todos #8 + #7, builds on phase 48 shared-folder ownership)_
