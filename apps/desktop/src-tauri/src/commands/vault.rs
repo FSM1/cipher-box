@@ -2,6 +2,61 @@
 
 use crate::state::AppState;
 
+/// Load user-configurable vault settings from encrypted IPNS entry.
+///
+/// Pattern: derive IPNS keypair -> resolve IPNS -> fetch IPFS -> ECIES unwrap -> parse JSON -> validate.
+/// Returns default settings on any failure (IPNS not found, decrypt error, parse error).
+/// Per D-03 and D-05: graceful fallback, desktop is read-only for settings.
+pub(crate) async fn load_vault_settings(
+    api: &std::sync::Arc<cipherbox_api_client::ApiClient>,
+    private_key: &[u8; 32],
+) -> cipherbox_core::VaultSettings {
+    let result: Result<cipherbox_core::VaultSettings, String> = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        async {
+            let (_priv_key, _pub_key, ipns_name) =
+                cipherbox_crypto::hkdf::derive_vault_settings_ipns_keypair(private_key)
+                    .map_err(|e| format!("HKDF derivation failed: {:?}", e))?;
+
+            let resolved = cipherbox_api_client::ipns::resolve_ipns(api, &ipns_name)
+                .await
+                .map_err(|e| format!("IPNS resolve failed: {}", e))?;
+
+            let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &resolved.cid)
+                .await
+                .map_err(|e| format!("IPFS fetch failed: {}", e))?;
+
+            // NOT AES-GCM — vault settings use ECIES wrapKey
+            let plaintext = cipherbox_crypto::ecies::unwrap_key(&encrypted, private_key)
+                .map_err(|e| format!("ECIES unwrap failed: {:?}", e))?;
+
+            let parsed: serde_json::Value = serde_json::from_slice(&plaintext)
+                .map_err(|e| format!("JSON parse failed: {}", e))?;
+
+            Ok(cipherbox_core::validate_vault_settings(&parsed))
+        },
+    )
+    .await
+    .unwrap_or_else(|_| Err("vault settings load timed out after 10s".to_string()));
+
+    match result {
+        Ok(settings) => {
+            log::info!(
+                "Vault settings loaded: maxVersions={}, cooldown={}min, retention={}d, delete={:?}",
+                settings.max_versions_per_file,
+                settings.version_cooldown_minutes,
+                settings.recycle_bin_retention_days,
+                settings.delete_behavior
+            );
+            settings
+        }
+        Err(e) => {
+            log::warn!("Vault settings load failed (using defaults): {}", e);
+            cipherbox_core::default_vault_settings()
+        }
+    }
+}
+
 /// Initialize a new vault for a first-time user.
 ///
 /// Generates a root folder AES-256 key and derives a deterministic Ed25519 IPNS

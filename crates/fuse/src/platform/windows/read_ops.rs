@@ -13,7 +13,6 @@ pub mod implementation {
     use widestring::U16CStr;
     use winfsp::FspError;
 
-    use crate::constants::CONTENT_DOWNLOAD_TIMEOUT;
     use crate::file_handle::OpenFileHandle;
     use crate::inode::InodeKind;
     use super::super::operations::implementation::{
@@ -22,10 +21,11 @@ pub mod implementation {
         status_invalid_handle, status_io_device_error,
         status_device_not_ready,
         resolve_path, fill_file_info, PERMISSIVE_SD,
-        fetch_and_decrypt_file_content, fetch_and_decrypt_content_async,
+        fetch_and_decrypt_file_content,
         is_windows_special,
     };
     use crate::constants::QUOTA_BYTES;
+    use super::super::content_fetch::spawn_content_prefetch;
 
     /// get_volume_info handler
     pub fn handle_get_volume_info(
@@ -212,42 +212,14 @@ pub mod implementation {
                 && fs.content_cache.get(&cid).is_none()
                 && !fs.prefetching.contains(&cid)
             {
-                let api = fs.api.clone();
-                let rt = fs.rt.clone();
-                let tx = fs.content_tx.clone();
-                let cid_clone = cid.clone();
-                let efk = encrypted_file_key.clone();
-                let iv_clone = iv.clone();
-                let enc_mode = encryption_mode.clone();
-                let pk = fs.private_key.clone();
-                fs.prefetching.insert(cid.clone());
-
-                rt.spawn(async move {
-                    let result = tokio::time::timeout(
-                        CONTENT_DOWNLOAD_TIMEOUT,
-                        fetch_and_decrypt_content_async(
-                            &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
-                        ),
-                    )
-                    .await;
-
-                    match result {
-                        Ok(Ok(plaintext)) => {
-                            let _ = tx.send(crate::PendingContent::Success {
-                                cid: cid_clone,
-                                data: plaintext,
-                            });
-                        }
-                        Ok(Err(e)) => {
-                            log::error!("Prefetch failed for CID {}: {}", cid_clone, e);
-                            let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
-                        }
-                        Err(_) => {
-                            log::error!("Prefetch timed out for CID {}", cid_clone);
-                            let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
-                        }
-                    }
-                });
+                spawn_content_prefetch(
+                    &mut fs,
+                    cid.clone(),
+                    encrypted_file_key.clone(),
+                    iv.clone(),
+                    encryption_mode.clone(),
+                    "Prefetch failed",
+                );
             }
 
             let fh = fs.next_fh.fetch_add(1, Ordering::SeqCst);
@@ -395,41 +367,14 @@ pub mod implementation {
 
         // Content not cached: start prefetch and poll
         if !fs.prefetching.contains(&cid) {
-            let api = fs.api.clone();
-            let rt = fs.rt.clone();
-            let tx = fs.content_tx.clone();
-            let cid_clone = cid.clone();
-            let efk = encrypted_file_key_hex.clone();
-            let iv_clone = iv_hex.clone();
-            let enc_mode = encryption_mode.clone();
-            let pk = fs.private_key.clone();
-            fs.prefetching.insert(cid.clone());
-
-            rt.spawn(async move {
-                let result = tokio::time::timeout(
-                    CONTENT_DOWNLOAD_TIMEOUT,
-                    fetch_and_decrypt_content_async(
-                        &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
-                    ),
-                )
-                .await;
-
-                match result {
-                    Ok(Ok(plaintext)) => {
-                        let _ = tx.send(crate::PendingContent::Success {
-                            cid: cid_clone,
-                            data: plaintext,
-                        });
-                    }
-                    Ok(Err(e)) => {
-                        log::error!("Read prefetch failed for CID {}: {}", cid_clone, e);
-                        let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
-                    }
-                    Err(_) => {
-                        let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
-                    }
-                }
-            });
+            spawn_content_prefetch(
+                &mut fs,
+                cid.clone(),
+                encrypted_file_key_hex.clone(),
+                iv_hex.clone(),
+                encryption_mode.clone(),
+                "Read prefetch failed",
+            );
         }
 
         // Poll for content (up to 5s)

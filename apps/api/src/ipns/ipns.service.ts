@@ -22,6 +22,7 @@ import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { deriveIpnsName, parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
+import { parseIpnsRecordBytes, parseCachedRecord, withCachedPublicKey } from './ipns-record.codec';
 
 @Injectable()
 export class IpnsService {
@@ -457,7 +458,7 @@ export class IpnsService {
       try {
         const recordBytes = await this.delegatedRouting.resolve(ipnsName);
         if (recordBytes) {
-          result = await this.parseIpnsRecordBytes(recordBytes);
+          result = await parseIpnsRecordBytes(recordBytes, this.logger);
           this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${result.cid}`);
         }
       } catch (error) {
@@ -477,10 +478,10 @@ export class IpnsService {
       const cached = await this.folderIpnsRepository.findOne({
         where: { ipnsName },
       });
-      const cachedResult = await this.parseCachedRecord(cached);
+      const cachedResult = await parseCachedRecord(cached, this.logger);
 
       if (result && cached?.publicKey) {
-        result = this.withCachedPublicKey(result, cached.publicKey);
+        result = withCachedPublicKey(result, cached.publicKey);
       }
 
       if (result && cachedResult) {
@@ -536,109 +537,5 @@ export class IpnsService {
         this.metricsService.ipnsResolveDuration.observe({ source, outcome: timerResult }, elapsed);
       }
     }
-  }
-
-  /**
-   * Parse an IPNS record to extract CID and sequence number.
-   * Backed by the `ipns` package via @cipherbox/crypto (parseIpnsRecord).
-   */
-  private async parseIpnsRecordBytes(recordBytes: Uint8Array): Promise<{
-    cid: string;
-    sequenceNumber: string;
-    signatureV2?: string;
-    data?: string;
-    pubKey?: string;
-  }> {
-    try {
-      const record = await parseIpnsRecord(recordBytes);
-
-      // Extract CID from the Value field (format: /ipfs/<cid>)
-      const valuePath = record.value;
-      const cidMatch = valuePath.match(/\/ipfs\/([a-zA-Z0-9]+)/);
-      if (!cidMatch) {
-        this.logger.error('Failed to extract CID from IPNS record value');
-        throw new HttpException('Invalid IPNS record format', HttpStatus.BAD_GATEWAY);
-      }
-
-      const cid = cidMatch[1];
-      const sequenceNumber = String(record.sequence ?? 0n);
-
-      // Base64-encode signature fields if present
-      const signatureV2 = record.signatureV2
-        ? Buffer.from(record.signatureV2).toString('base64')
-        : undefined;
-      const data = record.data ? Buffer.from(record.data).toString('base64') : undefined;
-      const pubKey = record.pubKey ? Buffer.from(record.pubKey).toString('base64') : undefined;
-
-      this.logger.debug(`Parsed IPNS record: cid=${cid}, sequenceNumber=${sequenceNumber}`);
-      return { cid, sequenceNumber, signatureV2, data, pubKey };
-    } catch (error) {
-      if (error instanceof HttpException) {
-        throw error;
-      }
-      this.logger.error(`Failed to parse IPNS record: ${error}`);
-      throw new HttpException('Invalid IPNS record format', HttpStatus.BAD_GATEWAY);
-    }
-  }
-
-  private async parseCachedRecord(cached: FolderIpns | null): Promise<{
-    cid: string;
-    sequenceNumber: string;
-    signatureV2?: string;
-    data?: string;
-    pubKey?: string;
-  } | null> {
-    if (!cached?.latestCid) {
-      return null;
-    }
-
-    if (cached.signedRecord) {
-      try {
-        const parsed = this.withCachedPublicKey(
-          await this.parseIpnsRecordBytes(cached.signedRecord),
-          cached.publicKey ?? undefined
-        );
-        // Use the DB columns as authoritative — sequenceNumber is always
-        // incremented by upsertFolderIpns, while the record bytes may contain
-        // the client's pre-increment value (e.g. sequence 0 on first publish).
-        if (parsed.cid !== cached.latestCid) {
-          this.logger.warn(
-            `Cached signed record CID mismatch for ${cached.ipnsName}: signedRecord=${parsed.cid}, latestCid=${cached.latestCid}`
-          );
-        }
-        return { ...parsed, cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn(`Failed to parse cached signed record for ${cached.ipnsName}: ${message}`);
-      }
-    }
-
-    return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
-  }
-
-  private withCachedPublicKey(
-    result: {
-      cid: string;
-      sequenceNumber: string;
-      signatureV2?: string;
-      data?: string;
-      pubKey?: string;
-    },
-    publicKey?: Buffer
-  ): {
-    cid: string;
-    sequenceNumber: string;
-    signatureV2?: string;
-    data?: string;
-    pubKey?: string;
-  } {
-    if (result.pubKey || !result.signatureV2 || !result.data || !publicKey) {
-      return result;
-    }
-
-    return {
-      ...result,
-      pubKey: publicKey.toString('base64'),
-    };
   }
 }

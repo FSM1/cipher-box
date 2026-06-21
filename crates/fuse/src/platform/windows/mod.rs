@@ -5,6 +5,8 @@
 //! since it depends on Tauri AppState.
 
 #[cfg(feature = "winfsp")]
+mod content_fetch;
+#[cfg(feature = "winfsp")]
 mod read_ops;
 #[cfg(feature = "winfsp")]
 mod write_ops;

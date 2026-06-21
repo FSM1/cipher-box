@@ -6,7 +6,15 @@ import {
   addFilePointerToFolder,
   moveItem,
   updateFolderMetadataAndPublish,
+  loadFolderMetadata,
+  fetchAndDecryptMetadata,
+  createSubfolder,
+  addFileToFolder,
+  addFilesToFolder,
+  replaceFileInFolder,
 } from '../folder';
+import type { FileIpnsRecordPayload } from '../file';
+import type { TeeKeys } from '../types';
 import { isConflictExhausted } from '../errors';
 import { createMockContext } from './helpers';
 
@@ -18,28 +26,37 @@ import { createMockContext } from './helpers';
 
 const mockFns = vi.hoisted(() => ({
   createAndPublishIpnsRecord: vi.fn(),
+  batchPublishIpnsRecords: vi.fn(),
   resolveIpnsRecord: vi.fn(),
   addToIpfs: vi.fn(),
   fetchFromIpfs: vi.fn(),
   encryptFolderMetadata: vi.fn(),
   decryptFolderMetadata: vi.fn(),
-}));
-
-vi.mock('@cipherbox/crypto', () => ({
+  createIpnsRecord: vi.fn(),
+  marshalIpnsRecord: vi.fn(),
   generateEd25519Keypair: vi.fn(),
   deriveIpnsName: vi.fn(),
-  deriveEd25519PublicKey: vi.fn().mockReturnValue(new Uint8Array(32).fill(7)),
   generateRandomBytes: vi.fn(),
   wrapKey: vi.fn(),
   bytesToHex: vi.fn(),
   hexToBytes: vi.fn(),
 }));
 
+vi.mock('@cipherbox/crypto', () => ({
+  generateEd25519Keypair: mockFns.generateEd25519Keypair,
+  deriveIpnsName: mockFns.deriveIpnsName,
+  deriveEd25519PublicKey: vi.fn().mockReturnValue(new Uint8Array(32).fill(7)),
+  generateRandomBytes: mockFns.generateRandomBytes,
+  wrapKey: mockFns.wrapKey,
+  bytesToHex: mockFns.bytesToHex,
+  hexToBytes: mockFns.hexToBytes,
+}));
+
 vi.mock('@cipherbox/core', () => ({
   encryptFolderMetadata: mockFns.encryptFolderMetadata,
   decryptFolderMetadata: mockFns.decryptFolderMetadata,
-  createIpnsRecord: vi.fn(),
-  marshalIpnsRecord: vi.fn(),
+  createIpnsRecord: mockFns.createIpnsRecord,
+  marshalIpnsRecord: mockFns.marshalIpnsRecord,
 }));
 
 vi.mock('../ipfs', () => ({
@@ -49,7 +66,7 @@ vi.mock('../ipfs', () => ({
 
 vi.mock('../ipns', () => ({
   createAndPublishIpnsRecord: mockFns.createAndPublishIpnsRecord,
-  batchPublishIpnsRecords: vi.fn(),
+  batchPublishIpnsRecords: mockFns.batchPublishIpnsRecords,
   resolveIpnsRecord: mockFns.resolveIpnsRecord,
 }));
 
@@ -456,5 +473,432 @@ describe('updateFolderMetadataAndPublish zeroization decision guard (S3/D-05)', 
     // and reuses them across subsequent operations. Zeroing here would corrupt session state.
     expect(ipnsKey).toEqual(ipnsKeySnapshot);
     expect(folderKey).toEqual(folderKeySnapshot);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// load.ts — fetchAndDecryptMetadata + loadFolderMetadata
+// fetchFromIpfs / resolveIpnsRecord / decryptFolderMetadata are mocked above.
+// ---------------------------------------------------------------------------
+
+describe('fetchAndDecryptMetadata', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fetches the encrypted blob, JSON-parses it, and decrypts with the folder key', async () => {
+    const ctx = createMockContext();
+    const folderKey = new Uint8Array(32).fill(9);
+    const encryptedBlob = { iv: 'the-iv', data: 'the-data' };
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify(encryptedBlob))
+    );
+    const decrypted = { version: 'v2' as const, children: [makeFile('x', 'a.txt')] };
+    mockFns.decryptFolderMetadata.mockResolvedValue(decrypted);
+
+    const result = await fetchAndDecryptMetadata('QmCid123', folderKey, ctx);
+
+    expect(mockFns.fetchFromIpfs).toHaveBeenCalledWith(ctx, 'QmCid123');
+    // The parsed encrypted object and the folder key must be passed to decrypt
+    expect(mockFns.decryptFolderMetadata).toHaveBeenCalledWith(encryptedBlob, folderKey);
+    expect(result).toBe(decrypted);
+  });
+});
+
+describe('loadFolderMetadata', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns null when IPNS resolution finds no record', async () => {
+    const ctx = createMockContext();
+    mockFns.resolveIpnsRecord.mockResolvedValue(null);
+
+    const result = await loadFolderMetadata({
+      ipnsName: 'k51missing',
+      folderKey: new Uint8Array(32),
+      ctx,
+    });
+
+    expect(result).toBeNull();
+    // Must short-circuit before attempting an IPFS fetch
+    expect(mockFns.fetchFromIpfs).not.toHaveBeenCalled();
+  });
+
+  it('resolves IPNS, fetches+decrypts, and surfaces metadata, sequenceNumber and cid', async () => {
+    const ctx = createMockContext();
+    const folderKey = new Uint8Array(32).fill(3);
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      sequenceNumber: 42n,
+      cid: 'QmResolved',
+      ipnsName: 'k51found',
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify({ iv: 'i', data: 'd' }))
+    );
+    const metadata = { version: 'v2' as const, children: [makeFolder('sub', 'Sub')] };
+    mockFns.decryptFolderMetadata.mockResolvedValue(metadata);
+
+    const result = await loadFolderMetadata({ ipnsName: 'k51found', folderKey, ctx });
+
+    expect(mockFns.resolveIpnsRecord).toHaveBeenCalledWith('k51found', ctx);
+    expect(mockFns.fetchFromIpfs).toHaveBeenCalledWith(ctx, 'QmResolved');
+    expect(result).toEqual({ metadata, sequenceNumber: 42n, cid: 'QmResolved' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registration.ts — createSubfolder
+// crypto primitives are mocked above; we assert the wrapped-key wiring and the
+// shape of the returned FolderEntry + decrypted keys.
+// ---------------------------------------------------------------------------
+
+describe('createSubfolder', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Deterministic crypto stubs
+    mockFns.generateEd25519Keypair.mockResolvedValue({
+      publicKey: new Uint8Array(32).fill(1),
+      privateKey: new Uint8Array(64).fill(2),
+    });
+    mockFns.deriveIpnsName.mockResolvedValue('k51-derived-name');
+    mockFns.generateRandomBytes.mockReturnValue(new Uint8Array(32).fill(3));
+    // wrapKey returns a tagged buffer; bytesToHex turns it into a stable hex token
+    mockFns.wrapKey.mockImplementation(async (key: Uint8Array) => key);
+    mockFns.bytesToHex.mockReturnValue('hex-wrapped');
+    mockFns.hexToBytes.mockReturnValue(new Uint8Array(32).fill(8));
+  });
+
+  it('generates keys, derives the ipnsName, and builds a folder entry without TEE keys', async () => {
+    const userPublicKey = new Uint8Array(32).fill(5);
+
+    const result = await createSubfolder({ name: 'NewFolder', userPublicKey });
+
+    expect(mockFns.generateEd25519Keypair).toHaveBeenCalled();
+    // deriveIpnsName is called with the generated keypair public key
+    expect(mockFns.deriveIpnsName).toHaveBeenCalledWith(new Uint8Array(32).fill(1));
+    expect(result.folder.type).toBe('folder');
+    expect(result.folder.name).toBe('NewFolder');
+    expect(result.folder.ipnsName).toBe('k51-derived-name');
+    expect(result.folder.ipnsPrivateKeyEncrypted).toBe('hex-wrapped');
+    expect(result.folder.folderKeyEncrypted).toBe('hex-wrapped');
+    expect(typeof result.folder.id).toBe('string');
+    // Decrypted keys returned to caller
+    expect(result.folderKey).toEqual(new Uint8Array(32).fill(3));
+    expect(result.ipnsPrivateKey).toEqual(new Uint8Array(64).fill(2));
+    // No TEE keys → no encrypted republish key / epoch
+    expect(result.encryptedIpnsPrivateKey).toBeUndefined();
+    expect(result.keyEpoch).toBeUndefined();
+    // The user public key must be used to wrap both private/folder keys
+    expect(mockFns.wrapKey).toHaveBeenCalledWith(expect.anything(), userPublicKey);
+  });
+
+  it('encrypts the IPNS private key for the TEE when teeKeys are provided', async () => {
+    const userPublicKey = new Uint8Array(32).fill(5);
+    const teeKeys: TeeKeys = { currentPublicKey: 'aabbcc', currentEpoch: 7 };
+
+    const result = await createSubfolder({ name: 'TeeFolder', userPublicKey, teeKeys });
+
+    expect(mockFns.hexToBytes).toHaveBeenCalledWith('aabbcc');
+    expect(result.encryptedIpnsPrivateKey).toBe('hex-wrapped');
+    expect(result.keyEpoch).toBe(7);
+  });
+
+  it('zeros key material and rethrows if TEE wrapping fails', async () => {
+    const userPublicKey = new Uint8Array(32).fill(5);
+    const teeKeys: TeeKeys = { currentPublicKey: 'deadbeef', currentEpoch: 1 };
+
+    // First two wrapKey calls succeed (private + folder key for user pubkey),
+    // the third (TEE wrap) rejects → triggers the catch/zero branch.
+    const ipnsPriv = new Uint8Array(64).fill(2);
+    const folderKey = new Uint8Array(32).fill(3);
+    mockFns.generateEd25519Keypair.mockResolvedValue({
+      publicKey: new Uint8Array(32).fill(1),
+      privateKey: ipnsPriv,
+    });
+    mockFns.generateRandomBytes.mockReturnValue(folderKey);
+    mockFns.wrapKey
+      .mockResolvedValueOnce(new Uint8Array([1]))
+      .mockResolvedValueOnce(new Uint8Array([2]))
+      .mockRejectedValueOnce(new Error('tee wrap failed'));
+
+    await expect(createSubfolder({ name: 'Boom', userPublicKey, teeKeys })).rejects.toThrow(
+      'tee wrap failed'
+    );
+
+    // Both buffers must be zeroed on the error path
+    expect(ipnsPriv.every((b) => b === 0)).toBe(true);
+    expect(folderKey.every((b) => b === 0)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registration.ts — addFileToFolder / addFilesToFolder / replaceFileInFolder
+// These drive buildFolderIpnsRecord + batchPublishIpnsRecords.
+// ---------------------------------------------------------------------------
+
+const makeFileIpnsRecord = (ipnsName: string): FileIpnsRecordPayload => ({
+  ipnsName,
+  recordBase64: 'cmVjb3Jk',
+  publicKey: 'cHVi',
+  metadataCid: `Qm-${ipnsName}`,
+});
+
+describe('addFileToFolder', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.encryptFolderMetadata.mockResolvedValue({ iv: 'iv', data: 'data' });
+    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmFolderBlob' });
+    mockFns.createIpnsRecord.mockResolvedValue({ signed: true });
+    mockFns.marshalIpnsRecord.mockReturnValue(new Uint8Array([1, 2, 3]));
+    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 0, results: [] });
+  });
+
+  it('creates a file pointer, builds the folder record, and batch-publishes file+folder', async () => {
+    const ctx = createMockContext();
+    const fileIpnsRecord = makeFileIpnsRecord('k51-file-aaa');
+
+    const result = await addFileToFolder({
+      children: [makeFolder('f1', 'Docs')],
+      folderKey: new Uint8Array(32).fill(1),
+      ipnsPrivateKey: new Uint8Array(64).fill(2),
+      ipnsName: 'k51-parent',
+      sequenceNumber: 4n,
+      fileId: 'file-new',
+      name: 'doc.pdf',
+      fileIpnsRecord,
+      ipnsPrivateKeyEncrypted: 'wrapped',
+      ctx,
+    });
+
+    expect(result.filePointer.id).toBe('file-new');
+    expect(result.filePointer.name).toBe('doc.pdf');
+    expect(result.filePointer.fileMetaIpnsName).toBe('k51-file-aaa');
+    // buildFolderIpnsRecord increments the sequence number by one
+    expect(result.newSequenceNumber).toBe(5n);
+
+    // Batch publish must include both the file record (recordType file) and a folder record
+    const published = mockFns.batchPublishIpnsRecords.mock.calls[0][0];
+    expect(published).toHaveLength(2);
+    expect(published[0].recordType).toBe('file');
+    expect(published[1].recordType).toBe('folder');
+    expect(published[1].expectedSequenceNumber).toBe('4');
+  });
+
+  it('throws on name collision and never publishes', async () => {
+    const ctx = createMockContext();
+    await expect(
+      addFileToFolder({
+        children: [makeFile('f1', 'doc.pdf')],
+        folderKey: new Uint8Array(32),
+        ipnsPrivateKey: new Uint8Array(64),
+        ipnsName: 'k51-parent',
+        sequenceNumber: 0n,
+        fileId: 'file-2',
+        name: 'doc.pdf',
+        fileIpnsRecord: makeFileIpnsRecord('k51-file-bbb'),
+        ipnsPrivateKeyEncrypted: 'wrapped',
+        ctx,
+      })
+    ).rejects.toThrow('A file with this name already exists');
+    expect(mockFns.batchPublishIpnsRecords).not.toHaveBeenCalled();
+  });
+
+  it('throws when the batch publish reports failures', async () => {
+    const ctx = createMockContext();
+    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 1, results: [] });
+
+    await expect(
+      addFileToFolder({
+        children: [],
+        folderKey: new Uint8Array(32),
+        ipnsPrivateKey: new Uint8Array(64),
+        ipnsName: 'k51-parent',
+        sequenceNumber: 0n,
+        fileId: 'file-3',
+        name: 'x.txt',
+        fileIpnsRecord: makeFileIpnsRecord('k51-file-ccc'),
+        ipnsPrivateKeyEncrypted: 'wrapped',
+        ctx,
+      })
+    ).rejects.toThrow('Failed to publish one or more IPNS records');
+  });
+});
+
+describe('addFilesToFolder', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.encryptFolderMetadata.mockResolvedValue({ iv: 'iv', data: 'data' });
+    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmFolderBlob' });
+    mockFns.createIpnsRecord.mockResolvedValue({ signed: true });
+    mockFns.marshalIpnsRecord.mockReturnValue(new Uint8Array([1, 2, 3]));
+    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 0, results: [] });
+  });
+
+  it('creates N file pointers and publishes N file records + 1 folder record', async () => {
+    const ctx = createMockContext();
+
+    const result = await addFilesToFolder({
+      children: [makeFolder('f1', 'Docs')],
+      folderKey: new Uint8Array(32).fill(1),
+      ipnsPrivateKey: new Uint8Array(64).fill(2),
+      ipnsName: 'k51-parent',
+      sequenceNumber: 10n,
+      files: [
+        {
+          fileId: 'a',
+          name: 'a.txt',
+          fileIpnsRecord: makeFileIpnsRecord('k51-a'),
+          ipnsPrivateKeyEncrypted: 'wa',
+        },
+        {
+          fileId: 'b',
+          name: 'b.txt',
+          fileIpnsRecord: makeFileIpnsRecord('k51-b'),
+          ipnsPrivateKeyEncrypted: 'wb',
+        },
+      ],
+      ctx,
+    });
+
+    expect(result.filePointers).toHaveLength(2);
+    expect(result.filePointers.map((p) => p.name)).toEqual(['a.txt', 'b.txt']);
+    expect(result.newSequenceNumber).toBe(11n);
+
+    const published = mockFns.batchPublishIpnsRecords.mock.calls[0][0];
+    expect(published).toHaveLength(3); // 2 files + 1 folder
+    expect(published.filter((r: { recordType: string }) => r.recordType === 'file')).toHaveLength(
+      2
+    );
+    expect(published[2].recordType).toBe('folder');
+  });
+
+  it('throws when two of the incoming files share a name', async () => {
+    const ctx = createMockContext();
+    await expect(
+      addFilesToFolder({
+        children: [],
+        folderKey: new Uint8Array(32),
+        ipnsPrivateKey: new Uint8Array(64),
+        ipnsName: 'k51-parent',
+        sequenceNumber: 0n,
+        files: [
+          {
+            fileId: 'a',
+            name: 'dup.txt',
+            fileIpnsRecord: makeFileIpnsRecord('k51-a'),
+            ipnsPrivateKeyEncrypted: 'wa',
+          },
+          {
+            fileId: 'b',
+            name: 'dup.txt',
+            fileIpnsRecord: makeFileIpnsRecord('k51-b'),
+            ipnsPrivateKeyEncrypted: 'wb',
+          },
+        ],
+        ctx,
+      })
+    ).rejects.toThrow('A file with name "dup.txt" already exists');
+    expect(mockFns.batchPublishIpnsRecords).not.toHaveBeenCalled();
+  });
+
+  it('throws when an incoming file collides with an existing child', async () => {
+    const ctx = createMockContext();
+    await expect(
+      addFilesToFolder({
+        children: [makeFile('existing', 'taken.txt')],
+        folderKey: new Uint8Array(32),
+        ipnsPrivateKey: new Uint8Array(64),
+        ipnsName: 'k51-parent',
+        sequenceNumber: 0n,
+        files: [
+          {
+            fileId: 'a',
+            name: 'taken.txt',
+            fileIpnsRecord: makeFileIpnsRecord('k51-a'),
+            ipnsPrivateKeyEncrypted: 'wa',
+          },
+        ],
+        ctx,
+      })
+    ).rejects.toThrow('A file with name "taken.txt" already exists');
+  });
+
+  it('throws when the batch publish reports failures', async () => {
+    const ctx = createMockContext();
+    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 2, results: [] });
+
+    await expect(
+      addFilesToFolder({
+        children: [],
+        folderKey: new Uint8Array(32),
+        ipnsPrivateKey: new Uint8Array(64),
+        ipnsName: 'k51-parent',
+        sequenceNumber: 0n,
+        files: [
+          {
+            fileId: 'a',
+            name: 'a.txt',
+            fileIpnsRecord: makeFileIpnsRecord('k51-a'),
+            ipnsPrivateKeyEncrypted: 'wa',
+          },
+        ],
+        ctx,
+      })
+    ).rejects.toThrow('Failed to publish one or more IPNS records');
+  });
+});
+
+describe('replaceFileInFolder', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 0, results: [] });
+  });
+
+  it('publishes ONLY the file record (folder metadata untouched) when the file exists', async () => {
+    const ctx = createMockContext();
+    const fileIpnsRecord = makeFileIpnsRecord('k51-file-existing');
+
+    await replaceFileInFolder({
+      children: [makeFile('file-1', 'report.pdf'), makeFolder('f2', 'Docs')],
+      fileId: 'file-1',
+      fileIpnsRecord,
+      ctx,
+    });
+
+    const published = mockFns.batchPublishIpnsRecords.mock.calls[0][0];
+    expect(published).toHaveLength(1);
+    expect(published[0].recordType).toBe('file');
+    expect(published[0].ipnsName).toBe('k51-file-existing');
+    // Folder metadata must NOT be encrypted/uploaded for a content replace
+    expect(mockFns.encryptFolderMetadata).not.toHaveBeenCalled();
+    expect(mockFns.addToIpfs).not.toHaveBeenCalled();
+  });
+
+  it('throws when the file id is not present in the folder children', async () => {
+    const ctx = createMockContext();
+    await expect(
+      replaceFileInFolder({
+        children: [makeFolder('f1', 'Docs')],
+        fileId: 'missing-file',
+        fileIpnsRecord: makeFileIpnsRecord('k51-file-x'),
+        ctx,
+      })
+    ).rejects.toThrow('File not found');
+    expect(mockFns.batchPublishIpnsRecords).not.toHaveBeenCalled();
+  });
+
+  it('throws when the file IPNS publish fails', async () => {
+    const ctx = createMockContext();
+    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 1, results: [] });
+
+    await expect(
+      replaceFileInFolder({
+        children: [makeFile('file-1', 'report.pdf')],
+        fileId: 'file-1',
+        fileIpnsRecord: makeFileIpnsRecord('k51-file-existing'),
+        ctx,
+      })
+    ).rejects.toThrow('Failed to publish file IPNS record');
   });
 });
