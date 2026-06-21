@@ -19,8 +19,11 @@ pub fn next_file_publish_sequence(
     }
 
     current_sequence
-        .map(|seq| seq + 1)
         .ok_or_else(|| "Missing current sequence for existing file IPNS record".to_string())
+        .and_then(|seq| {
+            seq.checked_add(1)
+                .ok_or_else(|| "IPNS sequence number overflow".to_string())
+        })
 }
 
 /// Classifies an IPNS resolve result into a typed [`crate::error::IpnsResolveOutcome`].
@@ -182,6 +185,29 @@ mod tests {
     #[test]
     fn next_file_publish_sequence_rejects_missing_existing_sequence() {
         assert!(next_file_publish_sequence(false, None).is_err());
+    }
+
+    #[test]
+    fn next_file_publish_sequence_normal_increment_unchanged() {
+        assert_eq!(next_file_publish_sequence(false, Some(5)).unwrap(), 6);
+    }
+
+    #[test]
+    fn next_file_publish_sequence_overflow_returns_err() {
+        let result = next_file_publish_sequence(false, Some(u64::MAX));
+        assert!(result.is_err(), "expected Err on u64::MAX overflow, got Ok");
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("overflow"),
+            "error message must contain 'overflow', got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn next_file_publish_sequence_missing_sequence_error_preserved() {
+        let result = next_file_publish_sequence(false, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing current sequence"));
     }
 
     // T-45-05b: classify_resolve_outcome pins the #19 substring contract directly
