@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "0af58f226314",
+  "strategy": "manual-commit",
+  "branch": "docs/explore-agent-native-milestone",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0a/f58f226314/0/metadata.json",
+      "transcript": "/0a/f58f226314/0/full.jsonl",
+      "content_hash": "/0a/f58f226314/0/content_hash.txt",
+      "prompt": "/0a/f58f226314/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 41123,
+    "cache_creation_tokens": 333961,
+    "cache_read_tokens": 16536845,
+    "output_tokens": 175561,
+    "api_call_count": 86
+  }
+}

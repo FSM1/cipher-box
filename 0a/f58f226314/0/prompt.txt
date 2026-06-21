@@ -1,0 +1,101 @@
+/gsd:explore
+
+---
+
+I want to discuss the next milestone scope (instead of the already proposed M4 scope). There has been a new new idea that I want to flesh out (as well as challenge me on parts of it that do not make sense).
+
+---
+
+<task-notification>
+<task-id>abed7af5b3983c27f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/abed7af5b3983c27f.output</output-file>
+<status>completed</status>
+<summary>Agent "Map proposed M4 scope and backlog" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Perfect. Now I have enough information to compile the milestone-scoping summary. Let me create the final report:
+
+## Proposed M4/v2.0 Scope
+
+### Proposed Milestone 4 (v2.0) Features
+
+**Explicitly documented in `.planning/research/m4/` and `.planning/PROJECT.md`:**
+
+- Encrypted Productivity Suite (billing, team accounts, document editors, document signing) — `.planning/PROJECT.md` and `.planning/MILESTONES.md`
+- Mobile apps (iOS/Android) — `.planning/PROJECT.md`
+- Real-time collaborative editing — `.planning/PROJECT.md`
+- Offline write queue / selective sync — `.planning/PROJECT.md`
+- AWS Nitro TEE (as alternative to Phala Cloud) — `.planning/research/m4/SUMMARY.md`
+
+**Core M4 research output** (`.planning/research/m4/SUMMARY.md` proposes four-phase execution):
+1. **Phase 1:** Billing infrastructure — Stripe + optional NOWPayments crypto payments, subscription tiers, quota enforcement
+2. **Phase 2:** Team accounts — organization CRUD, member invitation, role-based permissions (owner/admin/editor/viewer), ECIES-wrapped Per-Team Keys
+3. **Phase 3:** Document editors — TipTap (rich text docs), Univer (single-user spreadsheets), decrypt-edit-encrypt pipeline, autosave with debounced queue
+4. **Phase 4:** Document signing — ECDSA signatures via Web3Auth secp256k1, visual signature capture, multi-signer workflows
+
+---
+
+## Explicitly Out-of-Scope (Deferred to M4/v2.0+)
+
+From `CLAUDE.md` section "Out of Scope":
+- Billing/payments
+- Mobile apps (iOS/Android)
+- Real-time collaborative editing
+- Team accounts
+
+**Additional deferrals** from `REQUIREMENTS.md`:
+- Full-text content search (plaintext leakage risk)
+- CRDT-based IPNS inbox (research-only in v1.1, implement in future if viable)
+- eIDAS/QES compliance (requires certified CA)
+- SSO/LDAP (enterprise scope)
+
+**M4-Deferred features** from `SUMMARY.md`:
+- Real-time collaborative editing (deferred to M4+)
+- Spreadsheet real-time collaboration (Univer OT incompatible with ZK)
+- Slide/presentation editing (no mature open-source WYSIWYG editor)
+- Blockchain-timestamped signing (smart contract integration)
+- Zero-knowledge organization metadata (encrypted org structure on IPFS)
+- Cryptographic role enforcement (separate read/write key hierarchies)
+- Enterprise policy templates, hierarchical org trees
+
+---
+
+## Forward-Looking Seeds
+
+1. **blind-share-social-graph.md** — *Trigger:* A privacy-hardening milestone is scoped, or the sharing subsystem is reworked. *Idea:* Replace plaintext API social graph (`shares` table) with capability-based shares keyed by IPNS name instead of user ID; move recipient discovery to a CRDT-over-IPNS inbox. *Related:* ipns-write-auth-is-cryptographic.md.
+
+2. **SEED-001-phala-tee-on-demand-cost-reduction.md** — *Trigger:* When relevant (TEE/infra-cost milestone surfaces it). *Idea:* Reduce TEE always-on costs (~1% duty cycle) via Phala `cvms stop/start` lifecycle automation while preserving key continuity (app_id-bound key derivation remains stable). Option C (downsize CVM) is lowest-risk; Option A (stop/start automation) is moderate-complexity if key-continuity spike validates. Deferred pending cost justification.
+
+---
+
+## Milestone-Sized Pending Todos / Research Questions
+
+1. **2026-02-22-crdt-ipns-inbox-sharing.md** — Research CRDT-over-IPNS as decentralized share discovery mechanism (replace centralized `shares` table). Challenges: write-access control, IPNS reliability, revocation model, state size growth. *Area:* Architecture. Related to blind-share-social-graph seed.
+
+2. **Offline write queue / selective sync** — Deferred capability; no todo file yet. Mentioned in PROJECT.md and REQUIREMENTS.md as future.
+
+3. **Client-direct IPFS upload (BYO-08)** — Deferred to v1.2. Current v1.1 implements server-relay upload to user's node. Full client-direct bypass tracked in REQUIREMENTS.md but not filed as active todo.
+
+---
+
+## Project North-Star
+
+From `PROJECT.md`:
+
+**Core Value:** Zero-knowledge privacy — files are encrypted client-side before leaving the device, and encryption keys exist only in client memory. The server is cryptographically unable to access user data.
+
+**Current State:** CipherBox is a production-grade, privacy-first encrypted cloud storage platform. v1.0 (M2) shipped 2026-03-05 with user-to-user sharing, link sharing, client-side search, MFA, file versioning, and cross-platform desktop apps. v1.1 (M3, reopened 2026-06-19) is making the system IPFS-native while hardening security (phases 50–58 in progress). M4 transforms CipherBox from an encrypted file locker into an encrypted productivity suite, extending zero-knowledge guarantees to documents, teams, and signing workflows.
+
+---
+
+**Summary:** M4 is scoped to a four-phase productivity suite build (billing → teams → editors → signing), with spreadsheet editing and all real-time collaboration explicitly deferred. The critical architectural risk is maintaining zero-knowledge under team key distribution and encrypted document editing; research artifacts document the CRDT relay and Per-Team Key patterns required to preserve the guarantee. Two seeds capture future privacy hardening (blinded share graph via CRDT-IPNS inbox) and infrastructure cost optimization (TEE lifecycle automation).</result>
+<usage><subagent_tokens>64703</subagent_tokens><tool_uses>23</tool_uses><duration_ms>42583</duration_ms></usage>
+</task-notification>
+
+---
+
+The main idea came from the following train of thought: CipherBox should not be framed as a fresh attempt to beat Google Drive, OneDrive, or Proton Drive on their home turf (with much fewer resources)
+
+CipherBox already has the core ingredients of private storage infrastructure: zero-knowledge encryption, programmable SDK access, mountable remote vaults, sharing, and durable decentralized persistence. The opportunity is not to reinvent storage for agents, but to make this existing substrate economically native to agents through x402-based metering and automated payment.
+
+Part of this ask is definitely overlapping with the proposed billing integration work in M4 and obviously that part would still need to be implemented for normal users to pay for cipherbox services.
