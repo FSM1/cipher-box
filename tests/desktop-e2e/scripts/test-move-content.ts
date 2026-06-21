@@ -86,7 +86,7 @@ function verify({
   fileName: string;
   folderName?: string;
   content: string;
-}): boolean {
+}): { ok: boolean; output: string } {
   const cliArgs = [
     VERIFY_SCRIPT,
     '--api-url',
@@ -102,7 +102,7 @@ function verify({
     cliArgs.push('--folder-name', folderName);
   }
   // process.execPath (node) cannot run a .ts file directly, so spawn the tsx
-  // shim from node_modules/.bin as the interpreter for verify-filepointer.ts.
+  // shim from node_modules/.bin as the interpreter for verify-filepointer.mts.
   const result = spawnSync('node', [join(REPO_ROOT, 'node_modules/.bin/tsx'), ...cliArgs], {
     env: { ...process.env, TEST_SECRET: secret },
     encoding: 'utf8',
@@ -113,10 +113,12 @@ function verify({
     maxBuffer: 1024 * 1024,
   });
   if (result.error) {
-    console.error(`verify-filepointer failed to execute: ${result.error.message}`);
-    return false;
+    return { ok: false, output: `verify-filepointer failed to execute: ${result.error.message}` };
   }
-  return result.status === 0;
+  // The verifier never prints secrets (it refuses --secret; TEST_SECRET is env-only),
+  // so its stdout/stderr are safe to surface for diagnostics on final failure.
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+  return { ok: result.status === 0, output };
 }
 
 async function pollVerify(
@@ -126,14 +128,26 @@ async function pollVerify(
 ): Promise<boolean> {
   const ATTEMPTS = 24;
   const DELAY_MS = 5000;
+  let lastOutput = '';
   for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
     nudge(...nudgePaths);
     await sleep(DELAY_MS);
-    if (verify(opts)) {
+    const res = verify(opts);
+    if (res.ok) {
       return true;
     }
+    lastOutput = res.output;
   }
   console.error(`FAIL: ${label} did not verify after ${ATTEMPTS} attempts`);
+  // Surface the last verifier output so the failure is self-diagnosing instead of
+  // forcing a separate log-forensics pass (the child output was previously swallowed).
+  if (lastOutput) {
+    const indented = lastOutput
+      .split('\n')
+      .map((line) => `    ${line}`)
+      .join('\n');
+    console.error(`  last verifier output:\n${indented}`);
+  }
   return false;
 }
 
