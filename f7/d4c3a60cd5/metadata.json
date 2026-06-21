@@ -3,21 +3,31 @@
   "checkpoint_id": "f7d4c3a60cd5",
   "strategy": "manual-commit",
   "branch": "docs/planning-20260621",
-  "checkpoints_count": 5,
-  "files_touched": null,
+  "checkpoints_count": 6,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-06-21-fuse-ipns-robustness-findings-from-pr538-review.md",
+    ".planning/todos/pending/2026-06-21-zeroize-fuse-metadata-publish-key-params.md"
+  ],
   "sessions": [
     {
       "metadata": "/f7/d4c3a60cd5/0/metadata.json",
       "transcript": "/f7/d4c3a60cd5/0/full.jsonl",
       "content_hash": "/f7/d4c3a60cd5/0/content_hash.txt",
       "prompt": "/f7/d4c3a60cd5/0/prompt.txt"
+    },
+    {
+      "metadata": "/f7/d4c3a60cd5/1/metadata.json",
+      "transcript": "/f7/d4c3a60cd5/1/full.jsonl",
+      "content_hash": "/f7/d4c3a60cd5/1/content_hash.txt",
+      "prompt": "/f7/d4c3a60cd5/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 42479,
-    "cache_creation_tokens": 337053,
-    "cache_read_tokens": 10278970,
-    "output_tokens": 104007,
-    "api_call_count": 50
+    "input_tokens": 80223,
+    "cache_creation_tokens": 1181399,
+    "cache_read_tokens": 48580011,
+    "output_tokens": 417251,
+    "api_call_count": 234
   }
 }
