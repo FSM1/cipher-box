@@ -15,6 +15,13 @@ pub(crate) enum PollResult {
     NotInFlight,
 }
 
+/// Total deadline for polling an in-flight FilePointer resolution.
+///
+/// `pub(crate)` so the macOS read path (`read_ops.rs`) can report the timeout
+/// duration in its log messages without re-hardcoding the value.
+#[cfg(feature = "fuse")]
+pub(crate) const FILEPOINTER_POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Poll for an in-flight async FilePointer resolution to complete.
 ///
 /// Only blocks if an async resolution task is actually in-flight for `ino`.
@@ -28,7 +35,6 @@ pub(crate) fn poll_filepointer_resolution(
     ino: u64,
 ) -> PollResult {
     use std::time::Duration;
-    const FILEPOINTER_POLL_TIMEOUT: Duration = Duration::from_secs(5);
     const FILEPOINTER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
     if !fs.resolving_file_pointers.contains(&ino) {

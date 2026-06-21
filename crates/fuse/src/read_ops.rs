@@ -332,8 +332,9 @@ pub(crate) mod implementation {
                         }
                         PollResult::TimedOut => {
                             log::warn!(
-                                "open: ino={} timed out after 5s poll-wait, returning EIO",
-                                ino
+                                "open: ino={} timed out after {}s poll-wait, returning EIO",
+                                ino,
+                                crate::poll::FILEPOINTER_POLL_TIMEOUT.as_secs()
                             );
                         }
                         PollResult::NotInFlight => {
@@ -582,8 +583,9 @@ pub(crate) mod implementation {
                 }
                 match poll_result {
                     PollResult::TimedOut => log::warn!(
-                        "read: ino={} timed out after 5s poll-wait, returning EIO",
-                        ino
+                        "read: ino={} timed out after {}s poll-wait, returning EIO",
+                        ino,
+                        crate::poll::FILEPOINTER_POLL_TIMEOUT.as_secs()
                     ),
                     PollResult::NotInFlight => log::warn!(
                         "read: ino={} no in-flight resolution (previously failed?), returning EIO",
