@@ -33,6 +33,10 @@ pub use windows::mount_filesystem;
 #[cfg(feature = "winfsp")]
 pub use windows::unmount_filesystem;
 
+// Tier-2 dedup: shared IPNS pre-populate block extracted from macOS + Windows mount fns.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub mod prepopulate;
+
 #[cfg(feature = "fuse")]
 use fuser::MountOption;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
@@ -171,95 +175,19 @@ pub async fn mount_filesystem(
     let (filepointer_tx, filepointer_rx) = std::sync::mpsc::channel::<PendingFilePointer>();
     let (upload_tx, upload_rx) = std::sync::mpsc::channel::<cipherbox_fuse::FsEvent>();
 
-    // Pre-populate root folder
+    // Pre-populate root folder and subfolders via shared prepopulate helper.
+    // Returns initial_sequences for seeding the PublishCoordinator.
     let mut metadata_cache = cipherbox_fuse::cache::MetadataCache::new();
-    log::info!("Pre-populating root folder from IPNS...");
-    let fetch_result: Result<(Vec<u8>, String, u64), String> = async {
-        let resolve_resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, &root_ipns_name).await.map_err(|e| format!("{}", e))?;
-        let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resolve_resp.cid).await.map_err(|e| format!("{}", e))?;
-        let seq = resolve_resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
-            log::warn!("Failed to parse root IPNS sequence '{}': {}", resolve_resp.sequence_number, e);
-            0
-        });
-        Ok((encrypted_bytes, resolve_resp.cid, seq))
-    }.await;
-
-    // Track resolved sequence numbers to seed the PublishCoordinator after creation
-    let mut initial_sequences: Vec<(String, u64)> = Vec::new();
-
-    match fetch_result {
-        Ok((encrypted_bytes, cid, root_seq)) => {
-            initial_sequences.push((root_ipns_name.clone(), root_seq));
-            match cipherbox_core::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
-                Ok(metadata) => {
-                    metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
-                    if let Ok(()) = inodes.populate_folder(cipherbox_fuse::inode::ROOT_INO, &metadata, &private_key, &public_key, false) {
-                        log::info!("Root folder pre-populated successfully");
-                        // Resolve root FilePointers
-                        let unresolved = inodes.get_unresolved_file_pointers();
-                        if !unresolved.is_empty() {
-                            if let Ok(fk) = <[u8; 32]>::try_from(root_folder_key.as_slice()).map(Zeroizing::new) {
-                                for (fp_ino, fp_ipns) in &unresolved {
-                                    let fp_result: Result<Vec<u8>, String> = async {
-                                        let resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, fp_ipns).await.map_err(|e| format!("{}", e))?;
-                                        cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resp.cid).await.map_err(|e| format!("{}", e))
-                                    }.await;
-                                    if let Ok(enc_bytes) = fp_result {
-                                        if let Ok(fm) = cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk) {
-                                            inodes.resolve_file_pointer(*fp_ino, fm.cid, fm.file_key_encrypted, fm.file_iv, fm.size, fm.encryption_mode, fm.versions);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // Pre-populate subfolders
-                        let subfolder_infos: Vec<(u64, String, Zeroizing<Vec<u8>>)> = inodes.inodes.values()
-                            .filter_map(|inode| {
-                                if inode.parent_ino != cipherbox_fuse::inode::ROOT_INO { return None; }
-                                if let cipherbox_fuse::inode::InodeKind::Folder { ref ipns_name, ref folder_key, .. } = inode.kind {
-                                    Some((inode.ino, ipns_name.clone(), folder_key.clone()))
-                                } else { None }
-                            }).collect();
-                        for (sub_ino, sub_ipns, sub_key) in &subfolder_infos {
-                            let sub_result: Result<(Vec<u8>, String, u64), String> = async {
-                                let resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, sub_ipns).await.map_err(|e| format!("{}", e))?;
-                                let bytes = cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resp.cid).await.map_err(|e| format!("{}", e))?;
-                                let seq = resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
-                                    log::warn!("Failed to parse subfolder IPNS sequence '{}' for {}: {}", resp.sequence_number, sub_ipns, e);
-                                    0
-                                });
-                                Ok((bytes, resp.cid, seq))
-                            }.await;
-                            if let Ok((enc_bytes, sub_cid, sub_seq)) = sub_result {
-                                initial_sequences.push((sub_ipns.clone(), sub_seq));
-                                if let Ok(sub_meta) = cipherbox_core::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
-                                    metadata_cache.set(sub_ipns, sub_meta.clone(), sub_cid);
-                                    if let Ok(()) = inodes.populate_folder(*sub_ino, &sub_meta, &private_key, &public_key, false) {
-                                        let sub_unresolved = inodes.get_unresolved_file_pointers();
-                                        if let Ok(sk) = <[u8; 32]>::try_from(sub_key.as_slice()).map(Zeroizing::new) {
-                                            for (fp_ino, fp_ipns) in &sub_unresolved {
-                                                let fp_result: Result<Vec<u8>, String> = async {
-                                                    let resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, fp_ipns).await.map_err(|e| format!("{}", e))?;
-                                                    cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resp.cid).await.map_err(|e| format!("{}", e))
-                                                }.await;
-                                                if let Ok(enc_bytes) = fp_result {
-                                                    if let Ok(fm) = cipherbox_core::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
-                                                        inodes.resolve_file_pointer(*fp_ino, fm.cid, fm.file_key_encrypted, fm.file_iv, fm.size, fm.encryption_mode, fm.versions);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => log::warn!("Root metadata decryption failed: {}", e),
-            }
-        }
-        Err(e) => log::warn!("Root folder fetch failed (mount will show empty): {}", e),
-    }
+    let initial_sequences = crate::fuse::prepopulate::prepopulate_filesystem(
+        &state.sdk.api,
+        &mut inodes,
+        &mut metadata_cache,
+        &root_ipns_name,
+        root_folder_key.as_slice(),
+        &private_key,
+        &public_key,
+    )
+    .await;
 
     // Construct coordinator before replay so it can be seeded and shared.
     let publish_coordinator = {
