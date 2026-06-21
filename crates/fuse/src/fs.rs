@@ -249,12 +249,15 @@ impl CipherBoxFS {
             .insert(folder_ino, std::time::Instant::now());
         let (metadata, folder_key, ipns_private_key, ipns_name, old_cid) =
             self.build_folder_metadata(folder_ino)?;
+        // D-12: wrap owned clones in Zeroizing before passing to spawn_metadata_publish.
+        // build_folder_metadata returns .to_vec()/.clone() copies — the inode's own
+        // Zeroizing fields are NOT consumed. Ownership-transfer is safe here.
         spawn_metadata_publish(
             self.api.clone(),
             self.rt.clone(),
             metadata,
-            folder_key,
-            ipns_private_key,
+            Zeroizing::new(folder_key),
+            Zeroizing::new(ipns_private_key),
             ipns_name,
             old_cid,
             self.publish_coordinator.clone(),
@@ -338,8 +341,8 @@ impl CipherBoxFS {
                     self.api.clone(),
                     self.rt.clone(),
                     m,
-                    fk,
-                    ipk,
+                    Zeroizing::new(fk), // D-12: wrap owned clone in Zeroizing
+                    Zeroizing::new(ipk), // D-12: wrap owned clone in Zeroizing
                     in_,
                     oc,
                     self.publish_coordinator.clone(),
