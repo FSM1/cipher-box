@@ -87,61 +87,6 @@ pub async fn handle_auth_complete(
     .await
 }
 
-/// Load user-configurable vault settings from encrypted IPNS entry.
-///
-/// Pattern: derive IPNS keypair -> resolve IPNS -> fetch IPFS -> ECIES unwrap -> parse JSON -> validate.
-/// Returns default settings on any failure (IPNS not found, decrypt error, parse error).
-/// Per D-03 and D-05: graceful fallback, desktop is read-only for settings.
-async fn load_vault_settings(
-    api: &std::sync::Arc<cipherbox_api_client::ApiClient>,
-    private_key: &[u8; 32],
-) -> cipherbox_core::VaultSettings {
-    let result: Result<cipherbox_core::VaultSettings, String> = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        async {
-            let (_priv_key, _pub_key, ipns_name) =
-                cipherbox_crypto::hkdf::derive_vault_settings_ipns_keypair(private_key)
-                    .map_err(|e| format!("HKDF derivation failed: {:?}", e))?;
-
-            let resolved = cipherbox_api_client::ipns::resolve_ipns(api, &ipns_name)
-                .await
-                .map_err(|e| format!("IPNS resolve failed: {}", e))?;
-
-            let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &resolved.cid)
-                .await
-                .map_err(|e| format!("IPFS fetch failed: {}", e))?;
-
-            // NOT AES-GCM — vault settings use ECIES wrapKey
-            let plaintext = cipherbox_crypto::ecies::unwrap_key(&encrypted, private_key)
-                .map_err(|e| format!("ECIES unwrap failed: {:?}", e))?;
-
-            let parsed: serde_json::Value = serde_json::from_slice(&plaintext)
-                .map_err(|e| format!("JSON parse failed: {}", e))?;
-
-            Ok(cipherbox_core::validate_vault_settings(&parsed))
-        },
-    )
-    .await
-    .unwrap_or_else(|_| Err("vault settings load timed out after 10s".to_string()));
-
-    match result {
-        Ok(settings) => {
-            log::info!(
-                "Vault settings loaded: maxVersions={}, cooldown={}min, retention={}d, delete={:?}",
-                settings.max_versions_per_file,
-                settings.version_cooldown_minutes,
-                settings.recycle_bin_retention_days,
-                settings.delete_behavior
-            );
-            settings
-        }
-        Err(e) => {
-            log::warn!("Vault settings load failed (using defaults): {}", e);
-            cipherbox_core::default_vault_settings()
-        }
-    }
-}
-
 /// Shared post-auth setup used by both `handle_auth_complete` and `handle_test_login_complete`.
 ///
 /// Stores tokens and keys, initializes/fetches vault, registers device, mounts FUSE,
@@ -195,7 +140,7 @@ pub(crate) async fn complete_auth_setup(
 
     // 5b. Load vault settings (graceful fallback to defaults)
     if let Ok(pk_arr) = <[u8; 32]>::try_from(private_key_bytes.as_slice()) {
-        let settings = load_vault_settings(&state.sdk.api, &pk_arr).await;
+        let settings = super::vault::load_vault_settings(&state.sdk.api, &pk_arr).await;
         *state.sdk.vault_settings.write().await = settings;
     } else {
         log::warn!("Private key not 32 bytes, using default vault settings");
@@ -204,6 +149,26 @@ pub(crate) async fn complete_auth_setup(
     // 6. Mark as authenticated
     *state.sdk.is_authenticated.write().await = true;
 
+    // 7–9. Mount filesystem, register device, tear down login windows.
+    post_auth_finalize(app, state, &private_key_bytes, &public_key_bytes, &user_id).await?;
+
+    log::info!("Authentication complete for user {}", user_id);
+    Ok(())
+}
+
+/// Factor of `complete_auth_setup`'s mount/sync/device/teardown tail.
+///
+/// Mounts the filesystem (or marks synced when no FS feature is enabled), registers
+/// the device in the encrypted registry, and destroys OAuth popup windows / hides
+/// the main login webview.  Called only after vault keys are in state and
+/// `is_authenticated` is set to `true`.
+async fn post_auth_finalize(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    private_key_bytes: &Zeroizing<Vec<u8>>,
+    public_key_bytes: &[u8],
+    user_id: &str,
+) -> Result<(), String> {
     // 7. Mount filesystem (or just mark as synced if no filesystem feature enabled)
     // NOTE: Device registry spawn moved AFTER mount to avoid concurrent HTTP
     //       requests that cause reqwest connection pool starvation during pre-populate.
@@ -309,8 +274,8 @@ pub(crate) async fn complete_auth_setup(
     {
         let reg_api = state.sdk.api.clone();
         let reg_private_key = Zeroizing::new(private_key_bytes.to_vec());
-        let reg_public_key = public_key_bytes.clone();
-        let reg_user_id = user_id.clone();
+        let reg_public_key = public_key_bytes.to_vec();
+        let reg_user_id = user_id.to_string();
         tokio::spawn(async move {
             let pk_arr: [u8; 32] = match reg_private_key.as_slice().try_into() {
                 Ok(arr) => arr,
@@ -342,7 +307,6 @@ pub(crate) async fn complete_auth_setup(
         }
     }
 
-    log::info!("Authentication complete for user {}", user_id);
     Ok(())
 }
 
