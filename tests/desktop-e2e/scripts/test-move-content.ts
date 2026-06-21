@@ -24,10 +24,10 @@ import { spawnSync } from 'node:child_process';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '../../..');
-const VERIFY_SCRIPT = join(REPO_ROOT, 'packages/sdk-core/scripts/verify-filepointer.ts');
+const VERIFY_SCRIPT = join(REPO_ROOT, 'packages/sdk-core/scripts/verify-filepointer.mts');
 
 // The desktop launches with --dev-key, which maps to this fixed test identity;
-// verify-filepointer.ts authenticates as the same user via /auth/test-login.
+// verify-filepointer.mts authenticates as the same user via /auth/test-login.
 const TEST_EMAIL = 'dev-key@cipherbox.local';
 
 function parseArgs(argv: string[]): Map<string, string> {

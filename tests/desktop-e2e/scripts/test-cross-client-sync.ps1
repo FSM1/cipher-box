@@ -76,7 +76,7 @@ function Ensure-SdkRuntime {
 
 function Invoke-SdkVerify {
     param([string]$ExpectedContent)
-    $verifierPath = Join-Path $RepoRoot "packages/sdk-core/scripts/verify-filepointer.ts"
+    $verifierPath = Join-Path $RepoRoot "packages/sdk-core/scripts/verify-filepointer.mts"
     $env:TEST_SECRET = $TestSecret
     $output = & pnpm exec tsx $verifierPath `
         --api-url $ApiUrl `
@@ -88,7 +88,7 @@ function Invoke-SdkVerify {
 
 function Invoke-SdkEdit {
     param([string]$NewContent)
-    $editorPath = Join-Path $RepoRoot "packages/sdk-core/scripts/edit-filepointer.ts"
+    $editorPath = Join-Path $RepoRoot "packages/sdk-core/scripts/edit-filepointer.mts"
     $env:TEST_SECRET = $TestSecret
     $output = & pnpm exec tsx $editorPath `
         --api-url $ApiUrl `

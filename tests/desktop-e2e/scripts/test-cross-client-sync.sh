@@ -57,7 +57,7 @@ ensure_runtime() {
 }
 
 run_verify() {
-  TEST_SECRET="$SECRET" pnpm exec tsx "$REPO_ROOT/packages/sdk-core/scripts/verify-filepointer.ts" \
+  TEST_SECRET="$SECRET" pnpm exec tsx "$REPO_ROOT/packages/sdk-core/scripts/verify-filepointer.mts" \
     --api-url "$API_URL" \
     --email "$TEST_EMAIL" \
     --file-name "$TEST_FILE" \
@@ -65,7 +65,7 @@ run_verify() {
 }
 
 run_edit() {
-  TEST_SECRET="$SECRET" pnpm exec tsx "$REPO_ROOT/packages/sdk-core/scripts/edit-filepointer.ts" \
+  TEST_SECRET="$SECRET" pnpm exec tsx "$REPO_ROOT/packages/sdk-core/scripts/edit-filepointer.mts" \
     --api-url "$API_URL" \
     --email "$TEST_EMAIL" \
     --file-name "$TEST_FILE" \
@@ -73,7 +73,7 @@ run_edit() {
 }
 
 run_rename_folder() {
-  TEST_SECRET="$SECRET" pnpm exec tsx "$REPO_ROOT/packages/sdk-core/scripts/rename-folder.ts" \
+  TEST_SECRET="$SECRET" pnpm exec tsx "$REPO_ROOT/packages/sdk-core/scripts/rename-folder.mts" \
     --api-url "$API_URL" \
     --email "$TEST_EMAIL" \
     --folder-name "$1" \
