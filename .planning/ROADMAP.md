@@ -65,7 +65,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 52: Desktop FUSE Durability & At-Rest Safety** - Bound write-journal growth, stream large-file writes, add replay network timeouts, and scrub at-rest plaintext filenames
 - [ ] **Phase 53: Release & Supply-Chain Engineering** - Pin GitHub Actions to immutable SHAs, regenerate Cargo.lock on release, and harden release-please release-as pin automation
 - [ ] **Phase 54: E2E Test-Infra Typing** - Migrate untyped .mjs E2E helper scripts to TypeScript wired into typecheck and lint
-- [ ] **Phase 55: Large Source-File Refactor** - Split/dedup oversized source files (client.ts, lib.rs, etc.) tier-by-tier without public-API changes
+- [x] **Phase 55: Large Source-File Refactor** - Split/dedup oversized source files (client.ts, lib.rs, etc.) tier-by-tier without public-API changes (completed 2026-06-21)
 
 ## Phase Details
 
@@ -943,7 +943,7 @@ Plans:
 **Goal:** Split/dedup the Tier-1 + Tier-2 oversized source files (lib.rs, write_ops, folder barrel, ipns codec, DetailsDialog, commands/auth, plus the cross-platform FUSE dedup) into cohesive modules with the public surface frozen — no `pnpm api:generate`, consumers compile untouched, existing test suites stay green on both Rust feature sets.
 **Requirements**: HARD-06
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Scope (captured todos):
 
@@ -961,7 +961,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 55-03-PLAN.md — Tier-2 cross-platform dedup: content_ops, content_fetch, poll, prepopulate
+- [x] 55-03-PLAN.md — Tier-2 cross-platform dedup: content_ops, content_fetch, poll, prepopulate
 
 ---
 
@@ -1011,7 +1011,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 52. Desktop FUSE Durability & At-Rest Safety | v1.1-hardening | -      | Planned  | -          |
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
 | 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |
-| 55. Large Source-File Refactor            | v1.1-hardening | 3/4 | In Progress|  |
+| 55. Large Source-File Refactor            | v1.1-hardening | 4/4 | Complete   | 2026-06-21 |
 
 _Roadmap created: 2026-03-07_
 _Last updated: 2026-06-18 — added phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation; closes todos #8 + #7, builds on phase 48 shared-folder ownership)_
