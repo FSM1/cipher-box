@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9e72f45cf5c5",
+  "strategy": "manual-commit",
+  "branch": "feat/large-source-file-refactor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/55-large-source-file-refactor/55-VERIFICATION.md",
+    ".planning/todos/pending/2026-06-21-fuse-ipns-robustness-findings-from-pr538-review.md",
+    ".planning/todos/pending/2026-06-21-zeroize-fuse-metadata-publish-key-params.md",
+    "crates/fuse/src/platform/windows/read_ops.rs",
+    "crates/fuse/src/poll.rs",
+    "crates/fuse/src/read_ops.rs",
+    "packages/sdk-core/src/__tests__/folder.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9e/72f45cf5c5/0/metadata.json",
+      "transcript": "/9e/72f45cf5c5/0/full.jsonl",
+      "content_hash": "/9e/72f45cf5c5/0/content_hash.txt",
+      "prompt": "/9e/72f45cf5c5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 37742,
+    "cache_creation_tokens": 839223,
+    "cache_read_tokens": 38132392,
+    "output_tokens": 313065,
+    "api_call_count": 183
+  }
+}
