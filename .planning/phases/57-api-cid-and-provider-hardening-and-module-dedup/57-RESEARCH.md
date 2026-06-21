@@ -524,17 +524,19 @@ After adding `@MaxLength(255)`, NestJS/Swagger will emit `"maxLength": 255` on t
 
 **Verification path for A1:** Confirmed by analogy — `UnpinDto`'s `@MaxLength(255)` already appears as `"maxLength": 255` in the current `openapi.json` at line 2630. The pattern is established. Risk is LOW.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`refcountAndMaybeUnpin` at the post-commit site in `guardedUnpin`**
    - What we know: The post-commit delete (vault.service.ts:319-327) uses a second transaction that only acquires the lock and deletes the outbox row. It does NOT recheck the refcount (the Kubo unpin already ran outside). The drain's `drainRow` DOES recheck + unpin inside a single transaction.
    - What's unclear: Should `refcountAndMaybeUnpin` be used at the post-commit site? If so, the helper needs a `{ skipUnpin?: boolean }` option, or a separate helper (`deleteOutboxRow(manager, cid)`) is cleaner.
    - Recommendation: Extract `withCidLock` as shared (used at all three sites) and extract `refcountAndMaybeUnpin` only for `drainRow` (where Kubo is inside the lock). The post-commit delete site uses only `withCidLock` + inline `manager.getRepository(PendingUnpin).delete({ cid })`. This keeps the post-commit path's D-03 ordering clear.
+   - **RESOLVED (57-02 plan):** `refcountAndMaybeUnpin` is used ONLY at the `drainRow` site (`pending-unpin.processor.ts:95`). The `guardedUnpin` post-commit delete site (`vault.service.ts:319-327`) uses `withCidLock` alone with an inline outbox-row delete, keeping the Kubo unpin outside all transactions per D-03. No `skipUnpin` option is added.
 
 2. **`IpfsModule.forRootAsync()` export of `IPFS_PROVIDER`**
    - What we know: `IpfsController` is registered in `IpfsModule` and injects `IPFS_PROVIDER`. After the refactor, the token comes from `IpfsProviderModule` (imported by `IpfsModule`).
    - What's unclear: Does NestJS automatically re-export provider tokens from imported modules, or must `IpfsModule` explicitly list `IPFS_PROVIDER` in its `exports`?
    - Recommendation: Explicitly keep `exports: [IPFS_PROVIDER]` in `IpfsModule.forRootAsync()`. NestJS does allow exporting tokens from imported modules when they are explicitly re-exported, but implicit re-export is not guaranteed across all NestJS versions. The safe pattern is explicit.
+   - **RESOLVED (57-02 plan):** `IpfsModule` explicitly keeps `exports: [IPFS_PROVIDER]` after importing `IpfsProviderModule` — implicit re-export is not assumed. The `ipfs-provider.module.spec.ts` compile/provides-token test locks this invariant.
 
 ## Environment Availability
 
