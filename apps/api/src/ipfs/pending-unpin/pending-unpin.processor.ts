@@ -72,25 +72,7 @@ export class PendingUnpinProcessor extends WorkerHost {
    * guardedUnpin uses (vault.service.ts), serializing the refcount re-check +
    * physical unpin against concurrent recordPin/guardedUnpin for the same CID.
    *
-   * WR-01: Previously the count + unpinFile ran in autocommit with no lock, so the
-   * drain's refcount recheck and physical unpin were not serialized against a
-   * concurrent guardedUnpin for the same CID. Taking pg_advisory_xact_lock(hashtext(cid))
-   * as the first statement and holding it across the recheck + unpin serializes the
-   * drain against guardedUnpin (which takes the same lock), so the two unpin paths
-   * for one CID cannot interleave. The under-lock recheck also means we never unpin a
-   * CID whose re-pin has already committed (refs > 0 → skip).
-   *
-   * Precision (per review): recordPin does NOT take this lock, so a concurrent
-   * re-upload that re-pins the CID is not blocked by it. The residual drain↔recordPin
-   * window — a re-upload commits a fresh pinned_cids row in the gap between our recheck
-   * and the Kubo unpin — is therefore NOT closed by the lock; it is covered by D-13
-   * (colliding on the same CID requires re-uploading byte-identical ciphertext+IV,
-   * which is cryptographically negligible) and by the drift report. The unpin is
-   * idempotent (LocalProvider swallows "not pinned"), so holding the lock across the
-   * network call is acceptable for the drain's low-frequency, batched path.
-   */
-  /**
-   * D-02 / WR-01: Run refcount recheck + conditional unpin + outbox delete under
+   * WR-01: D-02 / WR-01: Run refcount recheck + conditional unpin + outbox delete under
    * the per-CID advisory lock via shared helpers (withCidLock + refcountAndMaybeUnpin).
    * The lock is the first transactional statement, mirroring guardedUnpin (D-04).
    */
