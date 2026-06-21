@@ -25,7 +25,7 @@ pub mod implementation {
         is_windows_special,
     };
     use crate::constants::QUOTA_BYTES;
-    use super::content_fetch::spawn_content_prefetch;
+    use super::super::content_fetch::spawn_content_prefetch;
 
     /// get_volume_info handler
     pub fn handle_get_volume_info(
