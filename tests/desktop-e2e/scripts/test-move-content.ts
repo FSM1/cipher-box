@@ -25,6 +25,11 @@ import { spawnSync } from 'node:child_process';
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '../../..');
 const VERIFY_SCRIPT = join(REPO_ROOT, 'packages/sdk-core/scripts/verify-filepointer.mts');
+// tsx's real JS CLI entry (the `bin` target). We invoke this with `node` rather
+// than node_modules/.bin/tsx because that .bin entry is a POSIX shell shim, and
+// `node <shell-shim>` fails with a SyntaxError. Pointing node at the .mjs CLI is
+// cross-platform (no shell shim, no PATH/pnpm dependency).
+const TSX_CLI = join(REPO_ROOT, 'node_modules/tsx/dist/cli.mjs');
 
 // The desktop launches with --dev-key, which maps to this fixed test identity;
 // verify-filepointer.mts authenticates as the same user via /auth/test-login.
@@ -101,9 +106,10 @@ function verify({
   if (folderName) {
     cliArgs.push('--folder-name', folderName);
   }
-  // process.execPath (node) cannot run a .ts file directly, so spawn the tsx
-  // shim from node_modules/.bin as the interpreter for verify-filepointer.mts.
-  const result = spawnSync('node', [join(REPO_ROOT, 'node_modules/.bin/tsx'), ...cliArgs], {
+  // node can't run a .mts file directly, so run it through tsx's JS CLI entry.
+  // process.execPath is the running node binary; TSX_CLI is tsx's .mjs CLI (not
+  // the node_modules/.bin/tsx shell shim, which node cannot parse).
+  const result = spawnSync(process.execPath, [TSX_CLI, ...cliArgs], {
     env: { ...process.env, TEST_SECRET: secret },
     encoding: 'utf8',
     // Bound the child: a stalled verify must not hang the whole suite — pollVerify
