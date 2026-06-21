@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "8f0313b8e2b4",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-ipns-cjs-esm-resolution",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/desktop-e2e/scripts/test-move-content.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8f/0313b8e2b4/0/metadata.json",
+      "transcript": "/8f/0313b8e2b4/0/full.jsonl",
+      "content_hash": "/8f/0313b8e2b4/0/content_hash.txt",
+      "prompt": "/8f/0313b8e2b4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 782,
+    "cache_creation_tokens": 67492,
+    "cache_read_tokens": 3277832,
+    "output_tokens": 44786,
+    "api_call_count": 18
+  }
+}
