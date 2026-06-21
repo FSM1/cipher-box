@@ -9,6 +9,20 @@ files:
   - crates/api-client/src/ipns.rs
 ---
 
+## Status: RESOLVED — closed by PR #529 (filed to completed 2026-06-21)
+
+S1/S2/S3 were substantively shipped in **PR #529 (`13f741e86`, "harden IPNS signedRecord
+validation, verification, and key zeroization")**, which merged AFTER this todo's 2026-06-19
+re-verification — so the file never reflected it. Verified against live code 2026-06-21:
+
+- **S1** publish embedded-vs-DTO CID + offset-aware sequence gate — DONE (`apps/api/src/ipns/ipns.service.ts:258-297`).
+- **S2** fail-closed verification — DONE on JS (web + sdk-core throw on invalid/partial, name-bound); the Rust client gained signature fields + `verify_ipns_resolve_signature`, but it is wired into only 1 of ~11 resolve sites and no CBOR cid-binding exists yet (residue below).
+- **S3** caller-owns-key zeroization — DONE (file-vs-folder contradiction now an intentional, test-guarded D-05 convention; Rust raw-`Vec` key paths converted to `Zeroizing`).
+
+Residue carried to **Phase 58 (IPNS Signature-Verify Coverage)** via
+`2026-06-20-ipns-resolve-verify-coverage-and-web-sdk-dedup.md` (S2-Rust chokepoint + CBOR cid-binding)
+and `2026-06-20-ipns-publish-validate-embedded-sequence-without-cas.md` (S1 non-CAS hardening).
+
 ## Problem
 
 Three deferred findings from `.planning/security/REVIEW-20260402-172126.md` (IPNS Signature Storage, PR #448), all confirmed **still open** against live code on 2026-06-13. They live only in the security review and the stale `.planning/BACKLOG.md` snapshot, so nothing currently actions them.

@@ -9,6 +9,14 @@ files:
   - crates/fuse/src/platform/windows/operations.rs
 ---
 
+## Status: SUPERSEDED — folded into the PR #538 robustness todo (filed to completed 2026-06-21)
+
+Phase 55 / PR #538 deduped the macOS (`operations.rs`) and Windows (`windows/operations.rs`) per-file
+publish paths into a single `content_ops.rs::publish_file_metadata`, so the two mirrored sites this
+todo named collapsed into ONE. This exact bug is now finding **#1** of
+`2026-06-21-fuse-ipns-robustness-findings-from-pr538-review.md` (live anchor `content_ops.rs:167-175`),
+scoped into **Phase 56**. The anchors below are pre-#538 and stale; tracked there now.
+
 ## Problem
 
 In the per-file IPNS publish path, the `PublishResult::Conflict` match arm only emits a
