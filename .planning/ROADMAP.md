@@ -943,7 +943,7 @@ Plans:
 **Goal:** Split/dedup the Tier-1 + Tier-2 oversized source files (lib.rs, write_ops, folder barrel, ipns codec, DetailsDialog, commands/auth, plus the cross-platform FUSE dedup) into cohesive modules with the public surface frozen — no `pnpm api:generate`, consumers compile untouched, existing test suites stay green on both Rust feature sets.
 **Requirements**: HARD-06
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 4 plans
+**Plans:** 2/4 plans executed
 
 Scope (captured todos):
 
@@ -952,8 +952,8 @@ Scope (captured todos):
 Plans:
 **Wave 1**
 
-- [ ] 55-01-PLAN.md — lib.rs 6-module decomposition (runtime/events/publish/metadata/fs/replay)
-- [ ] 55-04-PLAN.md — Tier-1 TS/web: folder barrel split, ipns-record codec extract, DetailsDialog split
+- [x] 55-01-PLAN.md — lib.rs 6-module decomposition (runtime/events/publish/metadata/fs/replay)
+- [x] 55-04-PLAN.md — Tier-1 TS/web: folder barrel split, ipns-record codec extract, DetailsDialog split
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -1011,7 +1011,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 52. Desktop FUSE Durability & At-Rest Safety | v1.1-hardening | -      | Planned  | -          |
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
 | 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |
-| 55. Large Source-File Refactor            | v1.1-hardening | -         | Planned  | -          |
+| 55. Large Source-File Refactor            | v1.1-hardening | 2/4 | In Progress|  |
 
 _Roadmap created: 2026-03-07_
 _Last updated: 2026-06-18 — added phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation; closes todos #8 + #7, builds on phase 48 shared-folder ownership)_
