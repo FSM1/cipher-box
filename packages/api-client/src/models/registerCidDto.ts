@@ -3,11 +3,15 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.41.0
+ * OpenAPI spec version: 0.42.0
  */
 
 export interface RegisterCidDto {
-  /** IPFS CID pinned to external provider (CIDv0 or CIDv1) */
+  /**
+   * IPFS CID pinned to external provider (CIDv0 or CIDv1)
+   * @maxLength 255
+   * @pattern ^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{58,})$
+   */
   cid: string;
   /** Size of the pinned content in bytes */
   sizeBytes: number;
