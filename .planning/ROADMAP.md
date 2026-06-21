@@ -860,6 +860,8 @@ Plans:
 - [ ] 51-03-PLAN.md — S2/S3 Rust: IpnsResolveResponse sig fields + verify fn + FUSE callers honor it; Zeroizing key paths
 - [ ] 51-04-PLAN.md — S3 TS: sdk-core ipns/vault/folder zeroization sweep + enforcement guard tests
 
+Note (2026-06-21): S1, S2 (JS web + sdk-core), and S3 shipped in PR #529 (`13f741e86`); the scope todo was filed to `completed/`. The 51-03 Rust resolve-chokepoint coverage + CBOR cid-binding remain and are carried forward to **Phase 58 (HARD-09)** via `2026-06-20-ipns-resolve-verify-coverage-and-web-sdk-dedup.md`.
+
 ### Phase 52: Desktop FUSE Durability & At-Rest Safety
 
 **Goal:** Bound and harden the desktop FUSE write-journal so large-file writes never block or OOM the filesystem, replay never stalls the mount, retention is bounded across vaults, and no plaintext filename or host path persists at rest.
@@ -963,12 +965,82 @@ Plans:
 
 - [x] 55-03-PLAN.md — Tier-2 cross-platform dedup: content_ops, content_fetch, poll, prepopulate
 
+### Phase 56: FUSE and IPNS Durability Hardening
+
+**Goal:** Close the pre-existing FUSE write-path and per-file IPNS durability gaps surfaced (byte-identical to main) by the PR #538 / Phase 55 refactor review: per-file and bin-entry IPNS `Conflict` re-resolves/retries instead of being recorded as a local success, write-path offset/size and duplicate-name (create/mkdir) operations are bounds- and existence-checked (EINVAL/EFBIG/EEXIST), key-wrap and metadata-decode failures propagate instead of silently corrupting state, the inode stable-ID lookup resets identity on a display-name-only fallback, and `spawn_metadata_publish` key params are zeroized — macOS and Windows (winfsp) paths in lockstep, no durability decision left to a swallowed warning.
+**Requirements**: HARD-07
+**Depends on:** Phase 55 (post-refactor module layout)
+**Plans:** 3 plans
+
+Scope (captured todos):
+
+- [ ] FUSE per-file/bin IPNS Conflict-as-success + 6 robustness gaps (content_ops/metadata/fs/events/publish + sdk-core load.ts) — `2026-06-21-fuse-ipns-robustness-findings-from-pr538-review.md` (absorbs the superseded `2026-06-20-fuse-per-file-ipns-publish-conflict-recorded-as-success.md`)
+- [ ] Second CodeRabbit pass: write-path overflow/EEXIST guards + sdk-core wrapKey-in-try + web copy/version-download UX — `2026-06-21-pr538-second-coderabbit-pass-preexisting-findings.md`
+- [ ] FUSE inode stable-ID identity reset on display-name fallback — `2026-06-20-fuse-inode-stable-id-identity-reset.md`
+- [ ] Zeroize `spawn_metadata_publish` key params (other 2 helpers already `Zeroizing`) — `2026-06-21-zeroize-fuse-metadata-publish-key-params.md`
+
+Plans:
+**Wave 1** *(all parallel-safe — disjoint files)*
+
+- [ ] 56-01-PLAN.md — Rust write-path safety: file_data.rs offset validation (EINVAL) + checked_add (EFBIG), create/mkdir duplicate-name EEXIST guards, publish.rs next-sequence checked/saturating_add
+- [ ] 56-02-PLAN.md — Rust IPNS/durability: per-file (content_ops) + bin (metadata) Conflict re-resolve/retry, fs.rs wrap_key error propagation + write_generation-guarded unpin + FilePointer-resolve continuation, events.rs refresh NETWORK_TIMEOUT, spawn_metadata_publish Zeroizing, inode identity-reset (macOS+Windows lockstep)
+- [ ] 56-03-PLAN.md — sdk-core/web spillovers: folder/load.ts decode try-catch (typed failure), folder/registration.ts wrapKey inside try (zeroize on throw), DetailsPrimitives copy-success gating, VersionHistory version-download error surfacing
+
+Verification gate: `cargo test` (fuse + winfsp feature sets), winfsp Windows CI, desktop E2E (dispatch-gated).
+
+### Phase 57: API CID and Provider Hardening and Module Dedup
+
+**Goal:** Make apps/api IPFS CID-handling defense-in-depth consistent and de-duplicate the IPFS/unpin module graph: a single shared CID regex + `@MaxLength(255)` governs both `RegisterCidDto` and `UnpinDto`, `LocalProvider` URL-encodes every CID interpolated into pin/cat query strings, the `IPFS_PROVIDER` factory lives in one leaf `IpfsProviderModule` (deleting the triplicated factory + the incorrect IN-04 circular-dependency comments), and the advisory-lock + refcount-recheck-then-unpin policy is a single shared `withCidLock`/`refcountAndMaybeUnpin` primitive used by all three unpin sites.
+**Requirements**: HARD-08
+**Depends on:** Phase 50 (unpin-integrity baseline)
+**Plans:** 2 plans
+
+Scope (captured todos):
+
+- [ ] RegisterCidDto CID validation diverges from UnpinDto (open regex, no MaxLength) — `2026-06-19-register-cid-dto-validation-inconsistency.md`
+- [ ] LocalProvider interpolates CID into pin/cat URLs without encoding — `2026-06-19-local-provider-unescaped-cid-in-pin-url.md`
+- [ ] Extract leaf IpfsProviderModule + fix misleading IN-04 circular-dep comments — `2026-06-19-extract-leaf-ipfs-provider-module.md`
+- [ ] Extract withCidLock + refcountAndMaybeUnpin shared unpin primitive — `2026-06-19-extract-withcidlock-shared-unpin-primitive.md`
+
+Plans:
+**Wave 1** *(parallel-safe — DTO/provider vs module graph)*
+
+- [ ] 57-01-PLAN.md — Data-integrity (coupled WR-02→WR-05): shared `CID_REGEX` + `@MaxLength(255)` on `RegisterCidDto`; `encodeURIComponent`/`URLSearchParams` in `LocalProvider` pin/rm + cat URLs (TDD). Run `pnpm api:generate` if the DTO change alters the OpenAPI spec.
+- [ ] 57-02-PLAN.md — apps/api module dedup: leaf `IpfsProviderModule` (imports ConfigModule, exports `IPFS_PROVIDER`) imported by Ipfs/Vault/PendingUnpin with IN-04 comments corrected; `withCidLock` + `refcountAndMaybeUnpin` helpers routing guardedUnpin (txn + post-commit) and drainRow
+
+Verification gate: apps/api jest specs; `pnpm api:generate` + commit regenerated client iff the `RegisterCidDto` change alters the OpenAPI spec.
+
+### Phase 58: IPNS Signature-Verify Coverage
+
+**Goal:** Finish the IPNS signed-record verification story left after Phase 51 / PR #529: bind every resolved record to its CID/sequence by decoding the signed CBOR and comparing (closing the swap gap on both Rust and JS), fold verification into a single Rust `resolve_ipns_verified` chokepoint so all ~11 resolve sites are safe-by-default (today only 1 verifies), validate the embedded publish sequence even when CAS is omitted without regressing the non-CAS publish paths, de-duplicate the web vs sdk-core resolve/verify copies, and add shared cross-language verify test vectors.
+**Requirements**: HARD-09
+**Depends on:** Phase 51 (S1/S2/S3 baseline), Phase 56 (overlapping FUSE resolve sites)
+**Plans:** 4 plans
+
+Scope (captured todos):
+
+- [ ] IPNS resolve signature-verify chokepoint coverage + CBOR cid-binding + web/sdk-core dedup + shared test vectors — `2026-06-20-ipns-resolve-verify-coverage-and-web-sdk-dedup.md` (carries the Phase 51 51-03 S2-Rust chokepoint residue)
+- [ ] IPNS publish validate embedded sequence even when expectedSequenceNumber (CAS) is omitted — `2026-06-20-ipns-publish-validate-embedded-sequence-without-cas.md`
+
+Plans:
+**Wave 1**
+
+- [ ] 58-01-PLAN.md — CBOR cid/sequence binding + Rust `resolve_ipns_verified` chokepoint: decode signed `data`, compare to `resp.cid`/`sequence`, route all FUSE/sdk resolve sites through the verified wrapper (Rust + JS parity)
+- [ ] 58-02-PLAN.md — Non-CAS embedded-sequence validation: enumerate every publish path that omits `expectedSequenceNumber` (vault init, per-file, file-pointer), enforce DB+1 / idempotent-equal without breaking them (full SDK E2E gate)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 58-03-PLAN.md — web/sdk-core resolve dedup: web imports sdk-core `resolveIpnsRecord` (ctx axios injection), delete the duplicated web `verifyIpnsSignature`/`resolveIpnsRecord`
+- [ ] 58-04-PLAN.md — shared cross-language IPNS verify test vectors (valid / tampered / name-mismatch / cid-swapped) consumed by Rust + TS
+
+Verification gate: full SDK E2E suite (local; redis 6380), apps/api specs, `cargo test`.
+
 ---
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33 -> 34 -> 35 -> 36 -> 37 -> 38 -> 39 -> 40 -> 41 -> 42 -> 43 -> 44 -> 45 -> 46 -> 47 -> 48 -> 49 -> 50 -> 51 -> 52 -> 53 -> 54 -> 55
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33 -> 34 -> 35 -> 36 -> 37 -> 38 -> 39 -> 40 -> 41 -> 42 -> 43 -> 44 -> 45 -> 46 -> 47 -> 48 -> 49 -> 50 -> 51 -> 52 -> 53 -> 54 -> 55 -> 56 -> 57 -> 58
 
 | Phase                                     | Milestone | Plans Complete | Status   | Completed  |
 | ----------------------------------------- | --------- | -------------- | -------- | ---------- |
@@ -1012,8 +1084,12 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
 | 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |
 | 55. Large Source-File Refactor            | v1.1-hardening | 4/4 | Complete    | 2026-06-21 |
+| 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | -   | Planned     | -          |
+| 57. API CID/Provider Hardening & Dedup     | v1.1-hardening | -   | Planned     | -          |
+| 58. IPNS Signature-Verify Coverage         | v1.1-hardening | -   | Planned     | -          |
 
 _Roadmap created: 2026-03-07_
 _Last updated: 2026-06-18 — added phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation; closes todos #8 + #7, builds on phase 48 shared-folder ownership)_
 _Last updated: 2026-06-19 — reopened v1.1 with hardening block; added phases 50–55 (HARD-01..06); backfilled progress table for phases 40–55; corrected phases 38/39 status to Complete_
 _Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 5 phases (36-40) | Gap closure: 3 phases (42-44) | Hardening block: 6 phases (50-55)_
+_Last updated: 2026-06-21 — added deferred-findings hardening Phases 56–58 (HARD-07..09): FUSE/IPNS durability, API CID/provider hardening, IPNS signature-verify coverage; sourced from the Phase 50–55 / PR #529 + #538 review backlog. Filed resolved todos #5 (IPNS S1/S2/S3 → #529) and #10 (Tier-1/2 refactor → #538) to completed/._

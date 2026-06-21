@@ -33,6 +33,18 @@ files:
   - crates/sdk/src/queue.rs
 ---
 
+## Status: Tier 1 + Tier 2 DONE in Phase 55 / PR #538 (filed to completed 2026-06-21)
+
+All 6 Tier-1 splits and all 4 Tier-2 cross-platform dedups shipped in **commit `db5691be7` (#538,
+Phase 55)** with the exact module layout prescribed below (`lib.rs` 3276→571 LoC + runtime/events/
+publish/metadata/fs/replay; `write_ops/` dir module; sdk-core folder split; `ipns-record.codec.ts`;
+`details/`; `content_ops.rs` / `content_fetch.rs` / `poll.rs` / `prepopulate.rs`). The phase simply
+never moved this file to `completed/`.
+
+The **14 Tier-3 items remain OPEN** (bigger/riskier, mostly untested — `client.ts` actually grew to
+2768 LoC) and are re-captured in `2026-06-21-large-file-refactor-tier3-residue.md`. The 4 "leave
+as-is" cohesive files were correctly left untouched.
+
 ## Problem
 
 Several production source files have grown large enough to hurt navigability and review.

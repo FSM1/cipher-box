@@ -103,7 +103,7 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [x] **SHARE-09**: Write-share recipients see upload/mkdir toolbar and full context menu (rename, delete) in shared folders
 - [x] **SHARE-10**: Write operations in shared folders use unwrapped IPNS key with 30s sync polling and withConflictRetry for multi-writer coordination
 
-## v1.1 Hardening Requirements (Phases 50–55)
+## v1.1 Hardening Requirements (Phases 50–58)
 
 Tech-debt, security, and reliability remediation surfaced during v1.1 verification and audits. Reopened into Milestone 3 (v1.1) on 2026-06-19.
 
@@ -113,6 +113,9 @@ Tech-debt, security, and reliability remediation surfaced during v1.1 verificati
 - **HARD-04**: Release & supply-chain engineering — pin GitHub Actions to immutable SHAs, regenerate Cargo.lock on release, and harden release-please release-as pin automation (Phase 53)
 - **HARD-05**: E2E test-infra typing — migrate untyped .mjs E2E helper scripts to TypeScript wired into typecheck and lint (Phase 54)
 - **HARD-06**: Large source-file refactor — split/dedup oversized source files (e.g. client.ts, lib.rs) tier-by-tier without public-API changes (Phase 55)
+- **HARD-07**: FUSE & IPNS durability hardening — per-file/bin IPNS `Conflict` re-resolve-and-retry (not record-as-success), write-path offset/size/duplicate-name guards (EINVAL/EFBIG/EEXIST), key-wrap/metadata-decode error propagation, inode stable-ID identity reset, and `spawn_metadata_publish` zeroization (macOS+Windows lockstep) — the pre-existing findings surfaced byte-identical by the Phase 55 / PR #538 review (Phase 56)
+- **HARD-08**: API CID/provider hardening & module dedup — one shared CID regex + MaxLength across RegisterCidDto/UnpinDto, URL-encoded CID interpolation in LocalProvider, a leaf IpfsProviderModule replacing the triplicated factory, and a shared withCidLock/refcountAndMaybeUnpin unpin primitive (Phase 57)
+- **HARD-09**: IPNS signature-verify coverage — CBOR cid/sequence binding + a Rust `resolve_ipns_verified` chokepoint covering all resolve sites, non-CAS embedded-sequence validation, web/sdk-core resolve dedup, and shared cross-language verify test vectors; the S1/S2 residue of Phase 51 / PR #529 (Phase 58)
 
 ## v1.2 Requirements
 
@@ -224,17 +227,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HARD-04     | Phase 53   | Planned  |
 | HARD-05     | Phase 54   | Planned  |
 | HARD-06     | Phase 55   | Planned  |
+| HARD-07     | Phase 56   | Planned  |
+| HARD-08     | Phase 57   | Planned  |
+| HARD-09     | Phase 58   | Planned  |
 
 **Coverage:**
 
-- v1.1 requirements: 66 total
-- Mapped to phases: 66
+- v1.1 requirements: 69 total
+- Mapped to phases: 69
 - Unmapped: 0
-- v1.1 hardening requirements: 6 total (HARD-01..06), mapped to Phases 50–55, all Planned
+- v1.1 hardening requirements: 9 total (HARD-01..09), mapped to Phases 50–58, all Planned
 
 ---
 
 _Requirements defined: 2026-03-07_
 _Last updated: 2026-06-19 — PERF-01..04 directly verified in 18-VERIFICATION.md (PERF-03 via accepted override: Kubo v0.34 emits no libp2p metrics upstream); previously orphaned in the v1.1 milestone audit, now closed. 66/66 satisfied._
 _Last updated: 2026-06-19 — v1.1 reopened with a hardening block; added HARD-01..06 mapped to Phases 50–55._
+_Last updated: 2026-06-21 — added HARD-07..09 (deferred-findings hardening from the Phase 50–55 / PR #529 + #538 reviews) mapped to Phases 56–58._
 _Last updated: 2026-06-11 by milestone audit (IPNS-02/03, SDK-08/09 checkboxes reconciled with phase verifications)_

@@ -23,5 +23,8 @@ Heed the existing zeroization rule in this codebase: a callee that receives a **
 
 ## Scope
 
-- `crates/fuse/src/metadata.rs`: `spawn_metadata_publish`, `spawn_bin_entry_publish`, `spawn_file_meta_reencrypt` (and any sibling taking raw key `Vec<u8>`).
+- **Verified 2026-06-21 — scope is now ONE helper:** only `spawn_metadata_publish`
+  (`crates/fuse/src/metadata.rs:85-86`) still takes plain `Vec<u8>` key params. `spawn_bin_entry_publish`
+  and `spawn_file_meta_reencrypt` ALREADY take `Zeroizing<Vec<u8>>`, and `events.rs` `spawn_metadata_refresh`
+  already wraps `folder_key` in `Zeroizing`. So the real remaining change is just `spawn_metadata_publish`.
 - Reconcile with the `Zeroizing` usage already in `events.rs`.
