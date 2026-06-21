@@ -35,6 +35,14 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
         return;
     }
 
+    // D-06: reject duplicate child names before mutating the inode table (EEXIST).
+    // This guard is placed before the closure to return EEXIST (not EIO), since
+    // the outer match maps all closure Err values to reply.error(libc::EIO).
+    if fs.inodes.find_child(parent, name_str).is_some() {
+        reply.error(libc::EEXIST);
+        return;
+    }
+
     log::debug!("mkdir: {} in parent {}", name_str, parent);
 
     let result = (|| -> Result<fuser::FileAttr, String> {

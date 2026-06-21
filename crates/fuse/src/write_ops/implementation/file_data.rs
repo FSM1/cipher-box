@@ -102,6 +102,21 @@ pub fn handle_write(
     data: &[u8],
     reply: ReplyWrite,
 ) {
+    // D-05: reject negative offsets before write_at (EINVAL)
+    if offset < 0 {
+        reply.error(libc::EINVAL);
+        return;
+    }
+    let offset_u64 = offset as u64;
+    // D-05: guard offset+len overflow before write_at (EFBIG)
+    let new_end = match offset_u64.checked_add(data.len() as u64) {
+        Some(end) => end,
+        None => {
+            reply.error(libc::EFBIG);
+            return;
+        }
+    };
+
     let handle = match fs.open_files.get_mut(&fh) {
         Some(h) => h,
         None => {
@@ -112,7 +127,6 @@ pub fn handle_write(
 
     match handle.write_at(offset, data) {
         Ok(written) => {
-            let new_end = offset as u64 + data.len() as u64;
             if let Some(inode) = fs.inodes.get_mut(ino) {
                 if new_end > inode.attr.size {
                     inode.attr.size = new_end;
@@ -158,6 +172,12 @@ pub fn handle_create(
     });
     if parent_exists != Some(true) {
         reply.error(libc::ENOENT);
+        return;
+    }
+
+    // D-06: reject duplicate child names before mutating the inode table (EEXIST)
+    if fs.inodes.find_child(parent, name_str).is_some() {
+        reply.error(libc::EEXIST);
         return;
     }
 
@@ -267,4 +287,107 @@ pub fn handle_create(
         fh
     );
     reply.created(&FILE_TTL, &fuse_attr, 0, fh, 0);
+}
+
+#[cfg(all(test, feature = "fuse"))]
+mod tests {
+    use super::*;
+    use crate::inode::{InodeData, InodeKind, FileAttrs, ROOT_INO};
+    use crate::test_support::{make_test_fs, reply_error_code, CaptureSender};
+    use std::sync::{Arc, Mutex};
+    use std::time::SystemTime;
+
+    // D-05 arithmetic: checked_add overflow predicate matches the guard logic
+    #[test]
+    fn d05_offset_overflow_predicate_at_boundary() {
+        let offset_u64: u64 = u64::MAX;
+        let len: u64 = 1;
+        assert!(
+            offset_u64.checked_add(len).is_none(),
+            "u64::MAX + 1 must overflow"
+        );
+    }
+
+    // D-05 arithmetic: no overflow within u64 range
+    #[test]
+    fn d05_offset_no_overflow_within_range() {
+        let offset_u64: u64 = 100;
+        let len: u64 = 200;
+        assert_eq!(offset_u64.checked_add(len), Some(300));
+    }
+
+    // D-06 existence: find_child returns Some for a known duplicate name
+    #[tokio::test]
+    async fn d06_find_child_detects_duplicate() {
+        let mut fs = make_test_fs();
+        let now = SystemTime::now();
+
+        // Insert a child folder under ROOT_INO
+        let child_ino = fs.inodes.allocate_ino();
+        let attr = FileAttrs {
+            ino: child_ino,
+            size: 0,
+            blocks: 0,
+            atime: now,
+            mtime: now,
+            ctime: now,
+            crtime: now,
+            is_dir: true,
+            perm: 0o777,
+            nlink: 2,
+        };
+        let inode = InodeData {
+            ino: child_ino,
+            parent_ino: ROOT_INO,
+            name: "dup".to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: "k51test-dup".to_string(),
+                encrypted_folder_key: String::new(),
+                folder_key: zeroize::Zeroizing::new(vec![0u8; 32]),
+                ipns_private_key: None,
+                children_loaded: false,
+            },
+            attr,
+            children: Some(vec![]),
+            write_generation: 0,
+        };
+        fs.inodes.insert(inode);
+        if let Some(root) = fs.inodes.get_mut(ROOT_INO) {
+            if let Some(ref mut children) = root.children {
+                children.push(child_ino);
+            }
+        }
+
+        // Guard predicate: find_child returns Some for "dup" → guard path taken
+        assert!(
+            fs.inodes.find_child(ROOT_INO, "dup").is_some(),
+            "find_child must return Some for existing child 'dup'"
+        );
+
+        // Guard predicate: find_child returns None for a non-existent name
+        assert!(
+            fs.inodes.find_child(ROOT_INO, "nonexistent").is_none(),
+            "find_child must return None for 'nonexistent'"
+        );
+    }
+
+    // D-05 end-to-end: handle_write returns EINVAL for negative offset
+    #[tokio::test]
+    async fn handle_write_rejects_negative_offset() {
+        use fuser::Reply;
+        let mut fs = make_test_fs();
+
+        // The EINVAL guard fires before the open_files lookup, so no setup needed.
+        let ino = 99u64;
+        let fh = 42u64;
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let sender = CaptureSender(buf.clone());
+        let reply = <fuser::ReplyWrite as Reply>::new(1, sender);
+        handle_write(&mut fs, ino, fh, -1i64, b"data", reply);
+        assert_eq!(
+            reply_error_code(&buf),
+            -libc::EINVAL,
+            "negative offset must return EINVAL"
+        );
+    }
 }
