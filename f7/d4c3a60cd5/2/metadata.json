@@ -1,0 +1,342 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f7d4c3a60cd5",
+  "session_id": "ca575d75-db2f-4c2d-8294-09d1af4240cb",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-21T21:36:20.14735Z",
+  "branch": "docs/planning-20260621",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    ".planning/todos/pending/2026-06-20-fuse-per-file-ipns-publish-conflict-recorded-as-success.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "2ce4825511c5",
+  "token_usage": {
+    "input_tokens": 106332,
+    "cache_creation_tokens": 2161965,
+    "cache_read_tokens": 108314732,
+    "output_tokens": 563415,
+    "api_call_count": 424
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Lz5h1zNHMx7SqG233yqYKN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2ce4825511c5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 42,
+        "end": 43,
+        "entry_ids": [
+          "ee10835c-b9e7-42df-8e82-7648bbee013c"
+        ],
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Lz5h1zNHMx7SqG233yqYKN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:discuss-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01MVTunGUz94VxUj4msoYPsE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2ce4825511c5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 625,
+        "end": 626,
+        "entry_ids": [
+          "63acba58-0d06-4d20-a29a-32d54cea19ec"
+        ],
+        "tool_use_id": "toolu_01MVTunGUz94VxUj4msoYPsE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01MVTunGUz94VxUj4msoYPsE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:verify-work",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01ByiBknFKy13fpgCWLGK5kw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2ce4825511c5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 681,
+        "end": 682,
+        "entry_ids": [
+          "fc53b1a7-4d6c-4e70-93d4-bcf3f356f047"
+        ],
+        "tool_use_id": "toolu_01ByiBknFKy13fpgCWLGK5kw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01ByiBknFKy13fpgCWLGK5kw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PpumQQM2AYJrC3um2SqPvT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2ce4825511c5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 719,
+        "end": 720,
+        "entry_ids": [
+          "261a523d-6718-44ae-974d-a87575075fee"
+        ],
+        "tool_use_id": "toolu_01PpumQQM2AYJrC3um2SqPvT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PpumQQM2AYJrC3um2SqPvT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:validate-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015bMYgLLFUznv2NzbevUSN9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2ce4825511c5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 776,
+        "end": 777,
+        "entry_ids": [
+          "164d623c-cd8c-458e-9a89-6596725ed67e"
+        ],
+        "tool_use_id": "toolu_015bMYgLLFUznv2NzbevUSN9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015bMYgLLFUznv2NzbevUSN9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_012GfoRTYrjkRhzpZepPUXo1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:ship"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2ce4825511c5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 945,
+        "end": 946,
+        "entry_ids": [
+          "7fc0c2d0-008e-4cf3-98f5-1e92d7f851fa"
+        ],
+        "tool_use_id": "toolu_012GfoRTYrjkRhzpZepPUXo1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_012GfoRTYrjkRhzpZepPUXo1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:ship",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Run the GSD manager to discuss, plan, execute, and ship all 5 remaining v1.1 hardening phases (51-55: IPNS crypto-signature hardening, FUSE durability, release supply-chain, E2E typing, large-file refactor), using parallel git worktrees to overlap discuss/plan/execute work, then ship Phase 51 through the full quality loop (verify → secure → validate → simplify → CodeRabbit → ship → resolve-pr-reviews).",
+    "outcome": "All 5 phases discussed and planned (21 plans total) in isolated parallel worktrees. Phase 51 executed, shipped as PR #529 (merged), with a real SDK E2E regression found and fixed (S3 zeroization wiped a caller-owned reused key buffer). A reusable `/ship-phase` command was created and merged via PR #530 to automate the post-execute quality loop.",
+    "learnings": {
+      "repo": [
+        "GSD executor commit style ('feat 51-03: …') is non-conventional and trips the Release Preview required CI check on any commit touching versioned packages — must reword with `git filter-branch --msg-filter 'sed -E \"1 s/^([a-z]+) [0-9][0-9A-Za-z.-]*: /\\1: /\"'` before shipping. Will recur on every phase PR.",
+        "git push needs dangerouslyDisableSandbox=true — the sandbox blocks git egress on port 443 while curl to github.com works fine.",
+        "`env -u GITHUB_TOKEN` prefix required for `gh` commands to avoid auth conflicts.",
+        "CodeRabbit PR nitpicks are bundled in the review body (gh api pulls/N/reviews[].body), not inline threads — /resolve-pr-reviews that hunts for threads will find 0.",
+        "GSD background agents on this harness DO have `Tools: *` including the Agent tool, so they can nest sub-agents for the full plan-phase pipeline (research → planner → checker). The manager workflow's 'no nesting in background on Claude Code' guard is stale/conservative.",
+        "GSD commit helper false-negatives: reports `commit_failed` while the commit lands — always verify with `git log --oneline -1`, never retry.",
+        "The #683 auto-degrade fires when worktree HEAD has diverged from origin/HEAD, running execute-phase sequentially in the current tree instead of spinning up per-plan nested worktrees. Means a worktree with `pnpm i` + deps installed is safe to execute in.",
+        "winfsp cannot compile on macOS (winfsp-sys + windows_core build scripts error). Windows-side Rust changes must rely on CI for correctness gating; editing blind is safe if CI is a required check.",
+        "`cargo test -p cipherbox-fuse` never compiles the desktop crate (`apps/desktop`) — cross-crate type cascades from SDK changes slip through that gate.",
+        "Release Preview CI uses `cancel-in-progress: true` which can orphan the bot's recompute commit on force-push; fix is fetch+rebase discipline + `cancel-in-progress: false` (Phase 53 scope).",
+        "Dependabot github-actions block already exists in the repo — Phase 53 plan 53-01 is verify-only for D-03, not a duplicate add.",
+        "Cargo.lock workspace updater plugin is bugged upstream (#2517); fallback is `cargo update --precise` + `git diff --exit-code` guard (Phase 53 plan 53-03).",
+        "Phase 55 (large-source-file refactor of crates/fuse/src/lib.rs) must execute AFTER Phases 51+52 land — executing 55 before rebases a 'split this file into 6' refactor over existing changes to that file, producing brutal merge conflicts.",
+        "cargo fmt can reflow entire previously-unformatted Rust files in a single command, polluting PR diffs with thousands of formatting lines. Always apply changes as minimal targeted edits and verify diff size before committing."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 102,
+          "end_line": 115,
+          "finding": "createAndPublishIpnsRecord must NOT zero params.ipnsPrivateKey — it's a callee receiving a caller-owned, long-lived buffer (the client caches per-folder IPNS keys in folderTree across mutations and CAS retries). Zeroing it here caused every 2nd+ publish to derive pubkey from zeros → 400 'publicKey does not correspond to ipnsName' → 48/89 SDK E2E failures. The cas.ts contract ('publishWithCas NEVER zeroes') makes the caller-ownership rule explicit. Terminal owners (vault, shared-write, bin) each zero their own transient keys independently."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 218,
+          "end_line": 218,
+          "finding": "S2 partial-field check `if (signatureV2 || data || pubKey)` treats empty-string fields as falsy — an all-empty-string record would downgrade to the legacy allow path. Must use nullish checks (`?? undefined`) so empty strings fail closed."
+        },
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "line": 45,
+          "end_line": 55,
+          "finding": "404 catch only checked error.status; real axios 404s arrive as error.response?.status. Must check both shapes, matching the sdk-core pattern."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 210,
+          "end_line": 212,
+          "finding": "S3's unwrap_key return-type change (→ Zeroizing<Vec<u8>>) cascaded to this desktop consumer, which the executor's `cargo test -p cipherbox-fuse` gate never compiled. The proper fix is typing the SDK-state field as Zeroizing<Vec<u8>> (crates/sdk/src/state.rs:48), not .to_vec() at the boundary."
+        },
+        {
+          "path": "crates/sdk/src/state.rs",
+          "line": 48,
+          "end_line": 48,
+          "finding": "root_folder_key field changed from Option<Vec<u8>> to Zeroizing<Vec<u8>> inside RwLock to ensure the long-lived vault key is zeroed on drop. root_ipns_private_key left as plain Vec (HKDF-derived, deferred)."
+        },
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "line": 1712,
+          "end_line": 1712,
+          "finding": "resolve_folder_key_cached cache changed from HashMap<String, Vec<u8>> to HashMap<String, Zeroizing<Vec<u8>>> so cached folder keys zeroize on eviction/drop."
+        },
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "line": 85,
+          "end_line": 115,
+          "finding": "Three byte-identical base64 decode-and-map-err blocks deduped into a local closure `decode_field`. Behavior identical, 6/6 tests pass."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 40,
+          "end_line": 75,
+          "finding": "S1 CID check uses record.value (from parseIpnsRecord round-trip). The round-trip preserves /ipfs/<cid> verbatim for both CIDv0 and CIDv1 — synthetic repro confirmed match. The S2 API-side signature check at line 86 is pre-existing, not new to Phase 51."
+        },
+        {
+          "path": "packages/sdk-core/src/cas.ts",
+          "line": 87,
+          "end_line": 87,
+          "finding": "publishWithCas passes the same params.ipnsPrivateKey buffer on every retry iteration and across multiple mutations. Contract comment explicitly states 'publishWithCas NEVER zeroes… callers are responsible'. Any callee receiving this buffer must not zero it."
+        }
+      ],
+      "workflow": [
+        "For parallel GSD phase work, each phase needs its own `git worktree add <path> <branch>` + `pnpm i` in the worktree. Symlinking node_modules is fragile (husky hooks need real deps); `pnpm i` is the correct approach.",
+        "When S3/security zeroization changes return type of a widely-called function, the executor's per-crate test gate (e.g. `cargo test -p cipherbox-fuse`) may never compile consumer crates. Always run `cargo check --workspace --all-targets` as a final gate before shipping.",
+        "The only cross-package E2E gate for SDK publish correctness is the full SDK E2E suite (89 tests). Per-package unit tests mock boundaries and miss cross-crate regressions. Run the full suite locally before every ship.",
+        "When a Phase 51 S3 'callee zeroization' appeared to work in unit tests (all mocked), only the full E2E revealed the reuse bug. Lesson: for callee-zeroization changes, explicitly audit all call sites for buffer reuse patterns before applying.",
+        "CodeRabbit re-reviews every commit you push — open threads from a prior review may still be unresolved on the new commit. After any fix push, re-fetch thread state before declaring done; some threads auto-resolve (outdated diff), others stay open with new findings on your own fixes.",
+        "When resolving GitHub review threads in bulk via GraphQL, the API can timeout intermittently. Check resolution state after the batch and resolve remaining ones idempotently with retries rather than assuming all succeeded.",
+        "The GSD plan-checker's blocker/warning findings are often doc-marker hygiene (RESEARCH.md 'Open Questions' needs RESOLVED suffix, VALIDATION.md nyquist_compliant needs flipping) — these are fixed directly without requiring a full planner revision iteration.",
+        "A workflow with adversarial verification (parallel fix agents + independent skeptic per finding) is effective for a batch of CodeRabbit follow-ups: fixes are applied in parallel on disjoint file sets, then independently verified by a separate agent prompted to refute.",
+        "`git filter-branch --msg-filter` with a sed pattern is the correct non-interactive bulk-reword approach (git rebase -i is not available); it drops signatures but `required_signatures: false` makes that safe on this repo."
+      ]
+    },
+    "friction": [
+      "Two session/quota limit interruptions mid-workflow (at 8:40pm and 1:40am Berlin), requiring careful state inspection and agent restarts to resume.",
+      "Phase 51 plan agent initially launched without worktree isolation — ran in the shared main tree, which would have caused branch-switching collision when Phase 52's context committed. Required stopping the agent, creating a worktree manually, and relaunching.",
+      "SDK E2E regression (S3 zeroization wiped caller-owned key buffer) caused 48/89 failures in CI — found only by the full E2E suite, not unit tests that mock boundaries. Required deep diagnosis (instrumented API, interceptors, cross-package round-trip testing) before root cause was clear.",
+      "git push blocked by sandbox egress restrictions — git on port 443 timed out while curl to github.com worked. Required dangerouslyDisableSandbox=true for every push.",
+      "Background CI poll exited prematurely on empty JSON response immediately after push (checks hadn't registered yet), requiring re-arming.",
+      "cargo fmt reformats entire previously-unformatted Rust files (lib.rs, mod.rs) on any touch, polluting diffs. Required reverting fmt changes and applying only minimal targeted edits.",
+      "GitHub API timeouts when resolving 7 review threads in bulk — some resolved, some failed silently, requiring idempotent retry logic.",
+      "Release Preview CI failed immediately after ship due to GSD's non-conventional commit style — required discovering the filter-branch reword approach, which is not documented in the GSD workflow.",
+      "gsd commit helper false-negative (`commit_failed`) on every third or fourth commit — adds unnecessary verification overhead.",
+      "The default /gsd:ship PR title format ('Phase N: slug') fails lint-pr-title CI — requires manual conventional-commits title every time.",
+      "winfsp compilation impossible on macOS means Windows-side Rust changes can only be validated via CI, adding a round-trip delay to discover any mistakes."
+    ],
+    "open_items": [
+      "Phases 52–55 are fully discussed and planned in their isolated worktrees (p52–p55) but not yet executed. Phase 55 must wait until Phases 51+52 are merged to main before executing (both touch crates/fuse/src/lib.rs).",
+      "TODO: fuse per-file IPNS publish records sequence as success on Conflict response — pre-existing bug from #352, Phase 52 domain (.planning/todos/pending/2026-06-20-fuse-per-file-ipns-publish-conflict-recorded-as-success.md).",
+      "TODO: FUSE inode stable-id identity reset on rename — pre-existing, Phase 52 domain (.planning/todos/pending/2026-06-20-fuse-inode-stable-id-identity-reset.md).",
+      "TODO: Validate embedded sequence number on non-CAS publish paths (per-file IPNS, vault) — deferred because the fix risks breaking non-CAS callers (.planning/todos/pending/2026-06-20-ipns-publish-validate-embedded-sequence-without-cas.md).",
+      "TODO: CBOR cid-binding in IPNS records and remaining IPNS resolve verify coverage (.planning/todos/pending/2026-06-20-ipns-resolve-verify-coverage-and-web-sdk-dedup.md).",
+      "GSD executor commit style ('feat 51-03:') will require the same filter-branch reword on every phase PR (52–55). Consider patching the GSD commit helper or adding the reword to /ship-phase.",
+      "crates/sdk/src/state.rs root_ipns_private_key field still plain Vec<u8> — not Zeroizing (HKDF-derived, deferred from S3 scope).",
+      "packages/sdk-core cas.test.ts has 12 pre-existing tsc --noEmit errors — unrelated to Phase 51 but unresolved.",
+      "IPNS resolve verify coverage: resolveIpnsRecord/verifyIpnsResolveSignature currently only runs on ~1 of ~10 resolve call sites (the folder-key descent path); remaining sites are defense-in-depth candidates.",
+      "Phase 53 plan notes the Dependabot github-actions block exists as verify-only — should be confirmed live before execution since the plan assumes it's already configured correctly."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-21T21:34:19.690959Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 534,
+    "human_modified": 74,
+    "human_removed": 0,
+    "total_committed": 534,
+    "total_lines_changed": 923,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
