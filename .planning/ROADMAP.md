@@ -970,7 +970,7 @@ Plans:
 **Goal:** Close the pre-existing FUSE write-path and per-file IPNS durability gaps surfaced (byte-identical to main) by the PR #538 / Phase 55 refactor review: per-file and bin-entry IPNS `Conflict` re-resolves/retries instead of being recorded as a local success, write-path offset/size and duplicate-name (create/mkdir) operations are bounds- and existence-checked (EINVAL/EFBIG/EEXIST), key-wrap and metadata-decode failures propagate instead of silently corrupting state, the inode stable-ID lookup resets identity on a display-name-only fallback, and `spawn_metadata_publish` key params are zeroized — macOS and Windows (winfsp) paths in lockstep, no durability decision left to a swallowed warning.
 **Requirements**: HARD-07
 **Depends on:** Phase 55 (post-refactor module layout)
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Scope (captured todos):
 
@@ -982,7 +982,7 @@ Scope (captured todos):
 Plans:
 **Wave 1** *(all parallel-safe — disjoint files)*
 
-- [ ] 56-01-PLAN.md — Rust write-path safety: file_data.rs offset validation (EINVAL) + checked_add (EFBIG), create/mkdir duplicate-name EEXIST guards, publish.rs next-sequence checked/saturating_add
+- [x] 56-01-PLAN.md — Rust write-path safety: file_data.rs offset validation (EINVAL) + checked_add (EFBIG), create/mkdir duplicate-name EEXIST guards, publish.rs next-sequence checked/saturating_add
 - [ ] 56-02-PLAN.md — Rust IPNS/durability: per-file (content_ops) + bin (metadata) Conflict re-resolve/retry, fs.rs wrap_key error propagation + write_generation-guarded unpin + FilePointer-resolve continuation, events.rs refresh NETWORK_TIMEOUT, spawn_metadata_publish Zeroizing, inode identity-reset (macOS+Windows lockstep)
 - [ ] 56-03-PLAN.md — sdk-core/web spillovers: folder/load.ts decode try-catch (typed failure), folder/registration.ts wrapKey inside try (zeroize on throw), DetailsPrimitives copy-success gating, VersionHistory version-download error surfacing
 
@@ -1084,7 +1084,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
 | 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |
 | 55. Large Source-File Refactor            | v1.1-hardening | 4/4 | Complete    | 2026-06-21 |
-| 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | -   | Planned     | -          |
+| 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | 1/3 | In Progress|  |
 | 57. API CID/Provider Hardening & Dedup     | v1.1-hardening | -   | Planned     | -          |
 | 58. IPNS Signature-Verify Coverage         | v1.1-hardening | -   | Planned     | -          |
 
