@@ -79,6 +79,12 @@ pub use replay::replay_for_vault;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub mod content_ops;
 
+// Tier-2 dedup: PollResult enum + poll_filepointer_resolution for read_ops.
+// PollResult is any(fuse,winfsp) so both feature sets can name the type;
+// poll_filepointer_resolution is fuse-only (takes &mut CipherBoxFS, macOS pattern).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub mod poll;
+
 
 // REQ-6: Sample handler tests proving the test_support harness works. Gated on
 // `feature = "fuse"` because they construct `fuser::Reply*` values and use the

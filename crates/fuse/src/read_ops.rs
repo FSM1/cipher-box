@@ -16,67 +16,10 @@ pub(crate) mod implementation {
     use crate::constants::CONTENT_DOWNLOAD_TIMEOUT;
     use crate::CipherBoxFS;
 
-    const FILEPOINTER_POLL_TIMEOUT: Duration = Duration::from_secs(5);
-    const FILEPOINTER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+    // PollResult and poll_filepointer_resolution are now in crate::poll (Tier-2
+    // dedup, Plan 55-03). Import them here for use by handle_open and handle_read.
+    use crate::poll::{poll_filepointer_resolution, PollResult};
 
-    /// Poll for an in-flight async FilePointer resolution to complete.
-    /// Poll result: why did we stop waiting?
-    enum PollResult {
-        Resolved,
-        TimedOut,
-        NotInFlight,
-    }
-
-    /// Poll for an in-flight async FilePointer resolution to complete.
-    /// Only blocks if an async resolution task is actually in-flight for this inode.
-    fn poll_filepointer_resolution(fs: &mut CipherBoxFS, ino: u64) -> PollResult {
-        if !fs.resolving_file_pointers.contains(&ino) {
-            log::debug!(
-                "poll_filepointer_resolution: ino={} has no in-flight resolution",
-                ino
-            );
-            return PollResult::NotInFlight;
-        }
-        let deadline = std::time::Instant::now() + FILEPOINTER_POLL_TIMEOUT;
-        while std::time::Instant::now() < deadline {
-            std::thread::sleep(FILEPOINTER_POLL_INTERVAL);
-            fs.drain_filepointer_completions();
-            // Break early if async task completed with Failure (ino removed from set)
-            if !fs.resolving_file_pointers.contains(&ino) {
-                if let Some(inode) = fs.inodes.get(ino) {
-                    if let crate::inode::InodeKind::File {
-                        file_meta_resolved: true,
-                        cid,
-                        ..
-                    } = &inode.kind
-                    {
-                        if !cid.is_empty() {
-                            return PollResult::Resolved;
-                        }
-                    }
-                }
-                log::debug!(
-                    "poll_filepointer_resolution: ino={} async task finished but resolution failed",
-                    ino
-                );
-                return PollResult::NotInFlight;
-            }
-            // Still in-flight — check if resolved yet
-            if let Some(inode) = fs.inodes.get(ino) {
-                if let crate::inode::InodeKind::File {
-                    cid,
-                    file_meta_resolved: true,
-                    ..
-                } = &inode.kind
-                {
-                    if !cid.is_empty() {
-                        return PollResult::Resolved;
-                    }
-                }
-            }
-        }
-        PollResult::TimedOut
-    }
     use crate::file_handle::OpenFileHandle;
     use crate::helpers::is_platform_special;
     use crate::inode::InodeKind;
@@ -84,6 +27,67 @@ pub(crate) mod implementation {
         current_gid, current_uid, fetch_and_decrypt_content_async, fetch_and_decrypt_file_content,
         publish_file_metadata, ttl_for_is_dir,
     };
+
+    /// Spawn a background content-prefetch task for a file CID.
+    ///
+    /// Dedupes the three identical prefetch-spawn blocks that appear in
+    /// handle_open (read path) and handle_read (two sites). The `label` parameter
+    /// is used in error log messages so callers retain their distinct context.
+    fn spawn_content_prefetch_fuse(
+        fs: &mut CipherBoxFS,
+        cid: String,
+        encrypted_file_key: String,
+        iv: String,
+        encryption_mode: String,
+        label: &'static str,
+    ) {
+        let api = fs.api.clone();
+        let rt = fs.rt.clone();
+        let tx = fs.content_tx.clone();
+        let cid_clone = cid.clone();
+        let efk = encrypted_file_key;
+        let iv_clone = iv;
+        let enc_mode = encryption_mode;
+        let pk = fs.private_key.clone();
+        fs.prefetching.insert(cid);
+
+        rt.spawn(async move {
+            let result = tokio::time::timeout(
+                CONTENT_DOWNLOAD_TIMEOUT,
+                fetch_and_decrypt_content_async(
+                    &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
+                ),
+            )
+            .await;
+
+            match result {
+                Ok(Ok(plaintext)) => {
+                    log::debug!(
+                        "prefetch: cached {} bytes for CID {}",
+                        plaintext.len(),
+                        &cid_clone[..cid_clone.len().min(12)]
+                    );
+                    let _ = tx.send(crate::PendingContent::Success {
+                        cid: cid_clone,
+                        data: plaintext,
+                    });
+                }
+                Ok(Err(e)) => {
+                    log::error!("{} for CID {}: {}", label, cid_clone, e);
+                    let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
+                }
+                Err(_) => {
+                    log::error!(
+                        "{} timed out for CID {} ({}s)",
+                        label,
+                        cid_clone,
+                        CONTENT_DOWNLOAD_TIMEOUT.as_secs()
+                    );
+                    let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
+                }
+            }
+        });
+    }
 
     /// Initialize the filesystem.
     pub fn handle_init(
@@ -328,9 +332,8 @@ pub(crate) mod implementation {
                         }
                         PollResult::TimedOut => {
                             log::warn!(
-                                "open: ino={} timed out after {}s poll-wait, returning EIO",
-                                ino,
-                                FILEPOINTER_POLL_TIMEOUT.as_secs()
+                                "open: ino={} timed out after 5s poll-wait, returning EIO",
+                                ino
                             );
                         }
                         PollResult::NotInFlight => {
@@ -421,51 +424,14 @@ pub(crate) mod implementation {
                 && fs.content_cache.get(&cid).is_none()
                 && !fs.prefetching.contains(&cid)
             {
-                let api = fs.api.clone();
-                let rt = fs.rt.clone();
-                let tx = fs.content_tx.clone();
-                let cid_clone = cid.clone();
-                let efk = encrypted_file_key.clone();
-                let iv_clone = iv.clone();
-                let enc_mode = encryption_mode.clone();
-                let pk = fs.private_key.clone();
-                fs.prefetching.insert(cid.clone());
-
-                rt.spawn(async move {
-                    let result = tokio::time::timeout(
-                        CONTENT_DOWNLOAD_TIMEOUT,
-                        fetch_and_decrypt_content_async(
-                            &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
-                        ),
-                    )
-                    .await;
-
-                    match result {
-                        Ok(Ok(plaintext)) => {
-                            log::debug!(
-                                "prefetch: cached {} bytes for CID {}",
-                                plaintext.len(),
-                                &cid_clone[..cid_clone.len().min(12)]
-                            );
-                            let _ = tx.send(crate::PendingContent::Success {
-                                cid: cid_clone,
-                                data: plaintext,
-                            });
-                        }
-                        Ok(Err(e)) => {
-                            log::error!("Prefetch failed for CID {}: {}", cid_clone, e);
-                            let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
-                        }
-                        Err(_) => {
-                            log::error!(
-                                "Prefetch timed out for CID {} ({}s)",
-                                cid_clone,
-                                CONTENT_DOWNLOAD_TIMEOUT.as_secs()
-                            );
-                            let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
-                        }
-                    }
-                });
+                spawn_content_prefetch_fuse(
+                    fs,
+                    cid.clone(),
+                    encrypted_file_key.clone(),
+                    iv.clone(),
+                    encryption_mode.clone(),
+                    "Prefetch failed",
+                );
             }
 
             let fh = fs.next_fh.fetch_add(1, Ordering::SeqCst);
@@ -599,37 +565,14 @@ pub(crate) mod implementation {
                                 }
                                 // Not cached yet -- trigger prefetch, NFS/SMB will retry
                                 if !fs.prefetching.contains(&new_cid) {
-                                    let api = fs.api.clone();
-                                    let rt = fs.rt.clone();
-                                    let tx = fs.content_tx.clone();
-                                    let cid_clone = new_cid.clone();
-                                    let efk = new_efk;
-                                    let iv_clone = new_iv;
-                                    let enc_mode = new_em;
-                                    let pk = fs.private_key.clone();
-                                    fs.prefetching.insert(new_cid);
-
-                                    rt.spawn(async move {
-                                        let result = tokio::time::timeout(
-                                            CONTENT_DOWNLOAD_TIMEOUT,
-                                            fetch_and_decrypt_content_async(
-                                                &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
-                                            ),
-                                        ).await;
-                                        match result {
-                                            Ok(Ok(plaintext)) => {
-                                                let _ = tx.send(crate::PendingContent::Success { cid: cid_clone, data: plaintext });
-                                            }
-                                            Ok(Err(e)) => {
-                                                log::error!("Read prefetch (post-FP-resolve) failed for CID {}: {}", cid_clone, e);
-                                                let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
-                                            }
-                                            Err(_) => {
-                                                log::error!("Read prefetch (post-FP-resolve) timed out for CID {}", cid_clone);
-                                                let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
-                                            }
-                                        }
-                                    });
+                                    spawn_content_prefetch_fuse(
+                                        fs,
+                                        new_cid,
+                                        new_efk,
+                                        new_iv,
+                                        new_em,
+                                        "Read prefetch (post-FP-resolve) failed",
+                                    );
                                 }
                                 reply.error(libc::EIO); // NFS/SMB will retry, prefetch will populate cache
                                 return;
@@ -639,9 +582,8 @@ pub(crate) mod implementation {
                 }
                 match poll_result {
                     PollResult::TimedOut => log::warn!(
-                        "read: ino={} timed out after {}s poll-wait, returning EIO",
-                        ino,
-                        FILEPOINTER_POLL_TIMEOUT.as_secs()
+                        "read: ino={} timed out after 5s poll-wait, returning EIO",
+                        ino
                     ),
                     PollResult::NotInFlight => log::warn!(
                         "read: ino={} no in-flight resolution (previously failed?), returning EIO",
@@ -698,47 +640,14 @@ pub(crate) mod implementation {
 
         // Content not in cache -- start prefetch and poll
         if !fs.prefetching.contains(&cid) {
-            let api = fs.api.clone();
-            let rt = fs.rt.clone();
-            let tx = fs.content_tx.clone();
-            let cid_clone = cid.clone();
-            let efk = encrypted_file_key_hex.clone();
-            let iv_clone = iv_hex.clone();
-            let enc_mode = encryption_mode.clone();
-            let pk = fs.private_key.clone();
-            fs.prefetching.insert(cid.clone());
-
-            rt.spawn(async move {
-                let result = tokio::time::timeout(
-                    CONTENT_DOWNLOAD_TIMEOUT,
-                    fetch_and_decrypt_content_async(
-                        &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
-                    ),
-                )
-                .await;
-
-                match result {
-                    Ok(Ok(plaintext)) => {
-                        log::debug!(
-                            "prefetch(read): cached {} bytes for CID {}",
-                            plaintext.len(),
-                            &cid_clone[..cid_clone.len().min(12)]
-                        );
-                        let _ = tx.send(crate::PendingContent::Success {
-                            cid: cid_clone,
-                            data: plaintext,
-                        });
-                    }
-                    Ok(Err(e)) => {
-                        log::error!("Read prefetch failed for CID {}: {}", cid_clone, e);
-                        let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
-                    }
-                    Err(_) => {
-                        log::error!("Read prefetch timed out for CID {}", cid_clone);
-                        let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
-                    }
-                }
-            });
+            spawn_content_prefetch_fuse(
+                fs,
+                cid.clone(),
+                encrypted_file_key_hex.clone(),
+                iv_hex.clone(),
+                encryption_mode.clone(),
+                "Read prefetch failed",
+            );
         }
 
         let poll_start = std::time::Instant::now();
