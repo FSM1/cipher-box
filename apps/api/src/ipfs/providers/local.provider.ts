@@ -84,7 +84,8 @@ export class LocalProvider implements IpfsProvider {
 
     try {
       // Kubo API uses POST for all operations including unpin
-      const response = await fetch(`${this.apiUrl}/api/v0/pin/rm?arg=${cid}`, {
+      const params = new URLSearchParams({ arg: cid });
+      const response = await fetch(`${this.apiUrl}/api/v0/pin/rm?${params}`, {
         method: 'POST',
       });
 
@@ -124,7 +125,8 @@ export class LocalProvider implements IpfsProvider {
 
     try {
       // Kubo API uses POST for cat operation
-      const response = await fetch(`${this.apiUrl}/api/v0/cat?arg=${cid}`, {
+      const params = new URLSearchParams({ arg: cid });
+      const response = await fetch(`${this.apiUrl}/api/v0/cat?${params}`, {
         method: 'POST',
       });
 
