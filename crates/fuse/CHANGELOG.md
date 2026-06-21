@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.6.1...cipherbox-fuse-v0.7.0) (2026-06-21)
+
+
+### Features
+
+* desktop FUSE journal durability and at-rest safety ([#533](https://github.com/FSM1/cipher-box/issues/533)) ([b3511af](https://github.com/FSM1/cipher-box/commit/b3511afbd7011a0a5f151d47f2ec9bd1069262c1))
+
 ## [0.6.1](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.6.0...cipherbox-fuse-v0.6.1) (2026-06-17)
 
 

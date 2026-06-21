@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.37.0...@cipherbox/sdk-v0.37.1) (2026-06-21)
+
+
+### Bug Fixes
+
+* IPFS/IPNS data-integrity fixes for unpin and folder unenroll ([#527](https://github.com/FSM1/cipher-box/issues/527)) ([b7acb57](https://github.com/FSM1/cipher-box/commit/b7acb570ced77f43f35eecd65a7f9f15fdd29afc))
+
 ## [0.37.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.36.0...@cipherbox/sdk-v0.37.0) (2026-06-18)
 
 

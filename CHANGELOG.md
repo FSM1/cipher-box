@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.43.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.42.0...cipher-box-v0.43.0) (2026-06-21)
+
+
+### Features
+
+* desktop FUSE journal durability and at-rest safety ([#533](https://github.com/FSM1/cipher-box/issues/533)) ([b3511af](https://github.com/FSM1/cipher-box/commit/b3511afbd7011a0a5f151d47f2ec9bd1069262c1))
+
+
+### Bug Fixes
+
+* **e2e:** make desktop e2e helper dirs workspace packages ([#536](https://github.com/FSM1/cipher-box/issues/536)) ([ac71fef](https://github.com/FSM1/cipher-box/commit/ac71fef0068a7da1393994a4c73e0b84956d8b13))
+* IPFS/IPNS data-integrity fixes for unpin and folder unenroll ([#527](https://github.com/FSM1/cipher-box/issues/527)) ([b7acb57](https://github.com/FSM1/cipher-box/commit/b7acb570ced77f43f35eecd65a7f9f15fdd29afc))
+
 ## [0.42.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.41.1...cipher-box-v0.42.0) (2026-06-18)
 
 

@@ -1,6 +1,6 @@
 {
   "name": "@cipherbox/sdk",
-  "version": "0.37.0",
+  "version": "0.37.1",
   "private": true,
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
