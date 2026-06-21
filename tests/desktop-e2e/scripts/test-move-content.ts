@@ -24,10 +24,15 @@ import { spawnSync } from 'node:child_process';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '../../..');
-const VERIFY_SCRIPT = join(REPO_ROOT, 'packages/sdk-core/scripts/verify-filepointer.ts');
+const VERIFY_SCRIPT = join(REPO_ROOT, 'packages/sdk-core/scripts/verify-filepointer.mts');
+// tsx's real JS CLI entry (the `bin` target). We invoke this with `node` rather
+// than node_modules/.bin/tsx because that .bin entry is a POSIX shell shim, and
+// `node <shell-shim>` fails with a SyntaxError. Pointing node at the .mjs CLI is
+// cross-platform (no shell shim, no PATH/pnpm dependency).
+const TSX_CLI = join(REPO_ROOT, 'node_modules/tsx/dist/cli.mjs');
 
 // The desktop launches with --dev-key, which maps to this fixed test identity;
-// verify-filepointer.ts authenticates as the same user via /auth/test-login.
+// verify-filepointer.mts authenticates as the same user via /auth/test-login.
 const TEST_EMAIL = 'dev-key@cipherbox.local';
 
 function parseArgs(argv: string[]): Map<string, string> {
@@ -86,7 +91,7 @@ function verify({
   fileName: string;
   folderName?: string;
   content: string;
-}): boolean {
+}): { ok: boolean; output: string } {
   const cliArgs = [
     VERIFY_SCRIPT,
     '--api-url',
@@ -101,9 +106,10 @@ function verify({
   if (folderName) {
     cliArgs.push('--folder-name', folderName);
   }
-  // process.execPath (node) cannot run a .ts file directly, so spawn the tsx
-  // shim from node_modules/.bin as the interpreter for verify-filepointer.ts.
-  const result = spawnSync('node', [join(REPO_ROOT, 'node_modules/.bin/tsx'), ...cliArgs], {
+  // node can't run a .mts file directly, so run it through tsx's JS CLI entry.
+  // process.execPath is the running node binary; TSX_CLI is tsx's .mjs CLI (not
+  // the node_modules/.bin/tsx shell shim, which node cannot parse).
+  const result = spawnSync(process.execPath, [TSX_CLI, ...cliArgs], {
     env: { ...process.env, TEST_SECRET: secret },
     encoding: 'utf8',
     // Bound the child: a stalled verify must not hang the whole suite — pollVerify
@@ -113,10 +119,12 @@ function verify({
     maxBuffer: 1024 * 1024,
   });
   if (result.error) {
-    console.error(`verify-filepointer failed to execute: ${result.error.message}`);
-    return false;
+    return { ok: false, output: `verify-filepointer failed to execute: ${result.error.message}` };
   }
-  return result.status === 0;
+  // The verifier never prints secrets (it refuses --secret; TEST_SECRET is env-only),
+  // so its stdout/stderr are safe to surface for diagnostics on final failure.
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+  return { ok: result.status === 0, output };
 }
 
 async function pollVerify(
@@ -126,14 +134,26 @@ async function pollVerify(
 ): Promise<boolean> {
   const ATTEMPTS = 24;
   const DELAY_MS = 5000;
+  let lastOutput = '';
   for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
     nudge(...nudgePaths);
     await sleep(DELAY_MS);
-    if (verify(opts)) {
+    const res = verify(opts);
+    if (res.ok) {
       return true;
     }
+    lastOutput = res.output;
   }
   console.error(`FAIL: ${label} did not verify after ${ATTEMPTS} attempts`);
+  // Surface the last verifier output so the failure is self-diagnosing instead of
+  // forcing a separate log-forensics pass (the child output was previously swallowed).
+  if (lastOutput) {
+    const indented = lastOutput
+      .split('\n')
+      .map((line) => `    ${line}`)
+      .join('\n');
+    console.error(`  last verifier output:\n${indented}`);
+  }
   return false;
 }
 
