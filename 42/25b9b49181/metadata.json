@@ -3,7 +3,7 @@
   "checkpoint_id": "4225b9b49181",
   "strategy": "manual-commit",
   "branch": "feat/large-source-file-refactor",
-  "checkpoints_count": 2,
+  "checkpoints_count": 0,
   "files_touched": null,
   "sessions": [
     {
@@ -14,10 +14,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 37120,
-    "cache_creation_tokens": 804784,
-    "cache_read_tokens": 35297181,
-    "output_tokens": 280857,
-    "api_call_count": 164
+    "input_tokens": 205,
+    "cache_creation_tokens": 5555,
+    "cache_read_tokens": 543724,
+    "output_tokens": 4140,
+    "api_call_count": 4
   }
 }

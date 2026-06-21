@@ -53,3 +53,71 @@ Neither finding is a false positive. Recommendation: fix the poll.rs comment (a)
 <status>completed</status>
 <summary>Background command "Watch re-run CI checks until settled" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>adb85aec5b31c3c22</task-id>
+<tool-use-id>toolu_019HzKkqZkHn9fosXkjmJvtE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/adb85aec5b31c3c22.output</output-file>
+<status>completed</status>
+<summary>Agent "Add sdk-core folder unit tests for coverage" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. All four coverage metrics now exceed the 80% threshold, and the only changed file is the test file.
+
+## Summary
+
+Phase 55's barrel split exposed previously-uncounted folder implementation. I added meaningful unit tests for the newly-counted functions in `load.ts` and `registration.ts`, bringing `@cipherbox/sdk-core` coverage back over threshold.
+
+### Final coverage (all 4 metrics ≥ 80%)
+- Statements: 94.87%
+- Branches: 91.25%
+- Functions: 100%
+- Lines: 94.87%
+
+`vitest run --coverage` (`pnpm run test:coverage`) exits 0 — thresholds pass. Per-file: `load.ts` and `registration.ts` went from 55%/24% to 100% lines (registration branches 97.22%).
+
+### Files changed
+Only `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/__tests__/folder.test.ts` (extended the existing folder test file — matching its established `vi.hoisted` + `vi.mock` style rather than creating a new file). Test count: 16 → 32 (added 16 tests across 7 new describe blocks):
+
+- `fetchAndDecryptMetadata` (1): fetch → JSON-parse → decrypt wiring
+- `loadFolderMetadata` (2): null on unresolved IPNS (no IPFS fetch); resolve→fetch→decrypt returns metadata/seq/cid
+- `createSubfolder` (3): no-TEE entry build + returned keys; TEE-wrap path (epoch/encryptedIpnsPrivateKey); error path zeros both key buffers and rethrows
+- `addFileToFolder` (3): file pointer + folder record built, seq+1, batch of file+folder records; name collision (no publish); publish-failure throw
+- `addFilesToFolder` (4): N files → N+1 records, seq+1; intra-batch name dup; collision with existing child; publish-failure throw
+- `replaceFileInFolder` (3): publishes only the file record (folder metadata untouched); file-not-found throw; publish-failure throw
+
+### vitest.config.ts
+Not touched — the existing thresholds (80) and `src/**/index.ts` exclusion were left as-is. No source logic was modified. Changes left uncommitted as requested.
+
+Note: the two remaining sub-80% files (`pinning/connection-test.ts`, `psa-provider.ts`) are pre-existing and unrelated to phase 55; global coverage clears threshold regardless.</result>
+<usage><subagent_tokens>74438</subagent_tokens><tool_uses>25</tool_uses><duration_ms>405085</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b26w6u0ph</task-id>
+<tool-use-id>toolu_01Qoh44wDgcs3X64ySuTYMGh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/b26w6u0ph.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch CI after both fixes until settled" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+the macos e2e test is failing https://github.com/FSM1/cipher-box/actions/runs/27903297731/job/82567415568
+
+---
+
+<task-notification>
+<task-id>bt2vruawt</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/bt2vruawt.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll macOS re-run job until complete" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/resolve-pr-reviews
