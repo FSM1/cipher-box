@@ -7,6 +7,7 @@ import { Job } from 'bullmq';
 import { PendingUnpin } from '../../vault/entities/pending-unpin.entity';
 import { PinnedCid } from '../../vault/entities/pinned-cid.entity';
 import { IPFS_PROVIDER, IpfsProvider } from '../providers';
+import { withCidLock, refcountAndMaybeUnpin } from './unpin-helpers';
 import { MetricsService } from '../../metrics/metrics.service';
 
 const BATCH_SIZE = 50;
@@ -88,32 +89,16 @@ export class PendingUnpinProcessor extends WorkerHost {
    * idempotent (LocalProvider swallows "not pinned"), so holding the lock across the
    * network call is acceptable for the drain's low-frequency, batched path.
    */
+  /**
+   * D-02 / WR-01: Run refcount recheck + conditional unpin + outbox delete under
+   * the per-CID advisory lock via shared helpers (withCidLock + refcountAndMaybeUnpin).
+   * The lock is the first transactional statement, mirroring guardedUnpin (D-04).
+   */
   private async drainRow(cid: string): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
-      // Advisory xact lock — MUST be the first transactional statement, mirroring
-      // guardedUnpin (D-04). Released automatically when the transaction ends.
-      await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [cid]);
-
-      // D-02 / WR-01: Re-check refcount UNDER the lock before unpinning. A concurrent
-      // re-upload or pin-migration may have re-pinned this CID while it sat in the
-      // outbox. Unpinning a live pin would cause Kubo GC → data loss. Skip the
-      // physical unpin but still delete the stale outbox row so it is not retried.
-      const refs = await manager.getRepository(PinnedCid).count({ where: { cid } });
-      if (refs > 0) {
-        await manager.getRepository(PendingUnpin).delete({ cid });
-        this.logger.log(
-          `Drain: skipped unpin for cid=${cid} — CID is re-pinned (refs=${refs}); stale outbox row discarded`
-        );
-        return;
-      }
-
-      // D-05: Call through provider so "not pinned" is treated as success
-      // (LocalProvider.unpinFile swallows "not pinned" at local.provider.ts:94).
-      // Inside the lock so a racing guardedUnpin cannot re-pin between recheck and unpin.
-      await this.ipfsProvider.unpinFile(cid);
-      await manager.getRepository(PendingUnpin).delete({ cid });
-      this.logger.log(`Drained cid=${cid}`);
+      await withCidLock(manager, cid, () => refcountAndMaybeUnpin(manager, cid, this.ipfsProvider));
     });
+    this.logger.log(`Drained cid=${cid}`);
   }
 
   private async runDriftReport(): Promise<void> {
