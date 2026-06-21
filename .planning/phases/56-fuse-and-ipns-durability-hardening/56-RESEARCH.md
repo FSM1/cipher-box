@@ -11,7 +11,8 @@
 ### Locked Decisions
 
 - **D-01:** Split failure handling by failure class:
-  - **Transient** (per-file/bin IPNS `Conflict`): bounded re-resolve + retry with the server's resolved sequence as `expected_sequence_number`. On **retry exhaustion**, enqueue to the existing **Phase 43/46 persisted out-of-callback journal** and ack — data is durable (survives crash, replays), the FS thread is not blocked, and nothing is silently dropped.
+  - **Transient** (per-file/bin IPNS `Conflict`): bounded re-resolve + retry with the server's resolved sequence as `expected_sequence_number`. On **retry exhaustion**, surface the failure — never record-as-success, never warn-and-ack.
+  - **D-01a (AMENDED 2026-06-22):** The per-file/bin journal-on-exhaustion path is NOT available — the `JournalOp` enum (`crates/sdk/src/queue.rs`) has only `UploadFile` and `MkdirPublish` variants; adding `JournalOp::FilePublish`/`BinPublish` is a deferred 3–5 task cross-crate change (see CONTEXT.md Deferred Ideas). For Phase 56, per-file/bin retry exhaustion → return `Err` → `EIO` for the blocking/sync paths (surfaced, non-swallowed). This honors D-01's intent ("nothing silently dropped") with the substrate that exists today.
   - **Hard** failures (`wrap_key` cannot encrypt — finding #3; decode of our own metadata fails — finding #8; a doomed/non-recoverable publish): **return `EIO`** to the OS immediately. No false success ack. A doomed op must surface, not loop forever in the journal.
 - **D-02:** Fixes findings #1 (`content_ops.rs:175` per-file Conflict-as-success) and #2 (`metadata.rs:348` bin Conflict-as-success): the `Conflict` arm must re-resolve + retry, never `record_publish` with `expected_sequence_number: None`.
 - **D-03:** Extract a single shared `publish_with_cas_retry` helper in `crates/fuse` and route three sequence-CAS publish sites through it: per-file (`content_ops.rs` `publish_file_metadata`), bin (`metadata.rs:~340`), folder metadata (`metadata.rs:~136-214`, which already has the correct re-resolve+retry loop — that loop is the template).
@@ -592,20 +593,18 @@ Every Rust fix that touches a macOS-only path has a winfsp counterpart. This tab
 
 Not applicable — this is a behavior-correctness hardening phase. No renames, migrations, or database state changes. No stored data, live service config, OS-registered state, secrets, or build artifacts are modified.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Where does `build_folder_metadata` get its `folder_key` from?**
+1. **Where does `build_folder_metadata` get its `folder_key` from?** RESOLVED.
    - What we know: it returns `(metadata, folder_key, ipns_private_key, ipns_name, old_cid)` at `fs.rs:244`; `spawn_metadata_publish` receives `folder_key` from this return value.
-   - What's unclear: whether `folder_key` is a clone of the inode's key or a move (which would leave the inode field zeroed after D-12).
-   - Recommendation: read `fs.rs:120-165` (`build_folder_metadata` body) before implementing D-12. If it clones the key, `Zeroizing` is safe. If it moves from the inode field, the inode field must be left `Zeroizing::new(vec![])` or the inode data invalidated.
+   - Resolution (Assumption A1): `build_folder_metadata` (`fs.rs:~244-261`) returns an owned clone of the key, not a move from the inode field — the inode retains its own `folder_key` (it is pattern-matched/cloned, not moved out). Wrapping the `spawn_metadata_publish` param in `Zeroizing<Vec<u8>>` (D-12) is therefore safe: the callee owns the buffer and zeroes its own copy on drop without invalidating the inode. The executor still reads `fs.rs:~244-261` (in 56-02 Task `<read_first>`) and asserts the call site transfers an owned copy before changing the type, per the callee-must-not-zero-a-reused-buffer rule.
 
-2. **Does `drain_upload_completions` exist in the winfsp CipherBoxFS?**
+2. **Does `drain_upload_completions` exist in the winfsp CipherBoxFS?** RESOLVED.
    - What we know: `fs.rs:265` has `drain_upload_completions` for the macOS/fuse side. `platform/windows/write_ops.rs` does not appear to call it directly.
-   - What's unclear: whether the winfsp `CipherBoxFS` has a parallel drain loop or if D-08 is macOS-only.
-   - Recommendation: grep for `drain_upload_completions` in `platform/windows/` before writing the winfsp D-08 note. If absent, D-08 is macOS-only and D-15 does not require a winfsp mirror for it.
+   - Resolution (Assumption A3): the winfsp side has no parallel `drain_upload_completions` loop, so D-08's stale-completion unpin guard is macOS/fuse-only. D-15 does NOT require a winfsp mirror for D-08; the 56-02 task documents this in SUMMARY rather than editing a non-existent winfsp drain. Executor confirms by grepping `platform/windows/` for `drain_upload_completions` before writing the note.
 
-3. **Does pending_fp_resolves need a winfsp counterpart?**
-   - `CipherBoxFS` is a shared struct (`fs.rs`). Adding a field there affects both platforms. The continuation queue logic in `tick()` / the FP-resolve section should compile under both feature flags since `resolving_file_pointers` is already a shared field.
+3. **Does pending_fp_resolves need a winfsp counterpart?** RESOLVED.
+   - Resolution: `CipherBoxFS` is a shared struct (`fs.rs`) gated `#[cfg(any(feature = "fuse", feature = "winfsp"))]`. The FP-resolve continuation queue (D-09) reuses the already-shared `resolving_file_pointers` field, so adding the continuation logic compiles under both feature flags with no separate winfsp constructor — no winfsp-specific counterpart needed.
 
 ## Environment Availability
 
