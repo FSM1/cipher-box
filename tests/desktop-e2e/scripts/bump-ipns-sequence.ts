@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// bump-ipns-sequence.mjs -- Advance a vault's root IPNS sequence with a REAL,
+// bump-ipns-sequence.ts -- Advance a vault's root IPNS sequence with a REAL,
 // validly-signed record, simulating another device publishing to the same vault.
 //
 // Why this exists: CipherBox's IPNS cache is signature-gated and keyed by
@@ -17,87 +17,47 @@
 // publish then sees a stale sequence, hits a 409, re-syncs, and retries, which is
 // the conflict-resolution behavior test-conflict-detection exercises.
 //
-// Usage: node bump-ipns-sequence.mjs --api-url <url> [--email <email>]
+// Usage: tsx bump-ipns-sequence.ts --api-url <url> [--email <email>]
 // Env:   TEST_SECRET (required) -- shared secret for /auth/test-login.
 
-import { createAxiosInstance } from '../../../packages/api-client/dist/index.mjs';
 import {
   loadVaultKeyBlob,
   loadFolderMetadata,
   updateFolderMetadataAndPublish,
-} from '../../../packages/sdk-core/dist/index.mjs';
-import { deriveVaultIpnsKeypair, clearBytes } from '../../../packages/crypto/dist/index.mjs';
+} from '@cipherbox/sdk-core';
+import { deriveVaultIpnsKeypair, clearBytes } from '@cipherbox/crypto';
+import { authenticate, buildSdkContext, parseCliArgs } from '../../e2e-helpers/auth';
 
 // The desktop launches with --dev-key, which maps to this fixed test identity.
 const DEFAULT_EMAIL = 'dev-key@cipherbox.local';
 
-function parseArgs(argv) {
-  const values = new Map();
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (!token.startsWith('--')) {
-      throw new Error(`Unexpected argument: ${token}`);
-    }
-    const key = token.slice(2);
-    const value = argv[i + 1];
-    if (value === undefined || value.startsWith('--')) {
-      throw new Error(`Missing value for --${key}`);
-    }
-    values.set(key, value);
-    i += 1;
-  }
+function parseArgs(argv: string[]): { apiUrl: string; secret: string; email: string } {
+  const values = parseCliArgs(argv);
 
-  if (values.has('secret')) {
-    throw new Error('Do not pass --secret on CLI. Set TEST_SECRET in environment.');
-  }
-
-  const apiUrl = values.get('api-url');
+  const apiUrl = values['api-url'];
   const secret = process.env.TEST_SECRET;
-  const email = values.get('email') || DEFAULT_EMAIL;
+  const email = values['email'] || DEFAULT_EMAIL;
 
   if (!apiUrl || !secret) {
     throw new Error(
-      'Usage: bump-ipns-sequence.mjs --api-url <url> [--email <email>] (requires TEST_SECRET env var)'
+      'Usage: bump-ipns-sequence.ts --api-url <url> [--email <email>] (requires TEST_SECRET env var)'
     );
   }
 
   return { apiUrl, secret, email };
 }
 
-async function authenticate(apiUrl, email, secret) {
-  const response = await fetch(`${apiUrl}/auth/test-login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, secret }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`test-login failed (${response.status}): ${body}`);
-  }
-
-  const payload = await response.json();
-  if (!payload.accessToken || !payload.privateKeyHex) {
-    throw new Error('test-login response missing accessToken or privateKeyHex');
-  }
-  return payload;
-}
-
-async function main() {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const auth = await authenticate(args.apiUrl, args.email, args.secret);
   const accessToken = auth.accessToken;
   const userPrivateKey = Uint8Array.from(Buffer.from(auth.privateKeyHex, 'hex'));
 
-  const axiosInstance = createAxiosInstance({
-    baseUrl: args.apiUrl,
-    getAccessToken: async () => accessToken,
-  });
-  const ctx = {
-    apiUrl: args.apiUrl,
-    getAccessToken: async () => accessToken,
-    axiosInstance,
-  };
+  const ctx = buildSdkContext(args.apiUrl, accessToken);
+  const axiosInstance = ctx.axiosInstance;
+  if (!axiosInstance) {
+    throw new Error('SDK context missing axios instance');
+  }
 
   // 1. Vault key blob (rootFolderKey) + root IPNS name.
   const vaultKeyBlob = await loadVaultKeyBlob({ userPrivateKey, ctx });
@@ -123,7 +83,7 @@ async function main() {
   // 3. Republish the SAME children at sequence+1 with a valid signature. Passing
   //    baseChildren === children makes the 3-way merge a no-op (no resurrection).
   const rootIpnsKeypair = await deriveVaultIpnsKeypair(userPrivateKey);
-  let newSequenceNumber;
+  let newSequenceNumber: bigint;
   try {
     ({ newSequenceNumber } = await updateFolderMetadataAndPublish({
       children: folder.metadata.children,
@@ -143,6 +103,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(`bump-ipns-sequence failed: ${err?.message || err}`);
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`bump-ipns-sequence failed: ${message}`);
   process.exit(1);
 });

@@ -676,7 +676,12 @@ pub(crate) mod implementation {
                                 let _ = cipherbox_api_client::ipfs::unpin_content(&api, &old).await;
                             }
                             // Remove journal entry now that parent publish is confirmed (D-11b).
-                            let _ = journal_for_mkdir.remove(&mkdir_journal_entry_id);
+                            if let Err(e) = journal_for_mkdir.remove(&mkdir_journal_entry_id) {
+                                log::warn!(
+                                    "mkdir parent-publish: failed to remove journal entry {} after success: {}; entry may replay again on next mount",
+                                    mkdir_journal_entry_id, e
+                                );
+                            }
                             log::info!("Parent metadata published after mkdir");
                         }
                         cipherbox_api_client::PublishResult::Conflict { current_sequence_number } => {
@@ -967,39 +972,43 @@ pub(crate) mod implementation {
         // destination folderKey (it is sealed with the parent folderKey). Capture
         // the inputs now, before any inode mutation. Folder moves need nothing — a
         // folder keeps its own key, as do the files inside it.
-        let reencrypt_inputs: Option<(String, zeroize::Zeroizing<Vec<u8>>, Vec<u8>, Vec<u8>)> =
-            if parent != newparent {
-                match fs.inodes.get(source_ino).map(|i| &i.kind) {
-                    Some(InodeKind::File {
-                        file_meta_ipns_name: Some(meta_ipns),
-                        file_ipns_private_key: Some(key),
-                        ..
-                    }) if !meta_ipns.is_empty() => {
-                        match (fs.get_folder_key(parent), fs.get_folder_key(newparent)) {
-                            (Some(src_key), Some(dst_key)) => {
-                                Some((meta_ipns.clone(), key.clone(), src_key, dst_key))
-                            }
-                            _ => {
-                                log::warn!(
+        let reencrypt_inputs: Option<(
+            String,
+            zeroize::Zeroizing<Vec<u8>>,
+            zeroize::Zeroizing<Vec<u8>>,
+            zeroize::Zeroizing<Vec<u8>>,
+        )> = if parent != newparent {
+            match fs.inodes.get(source_ino).map(|i| &i.kind) {
+                Some(InodeKind::File {
+                    file_meta_ipns_name: Some(meta_ipns),
+                    file_ipns_private_key: Some(key),
+                    ..
+                }) if !meta_ipns.is_empty() => {
+                    match (fs.get_folder_key(parent), fs.get_folder_key(newparent)) {
+                        (Some(src_key), Some(dst_key)) => {
+                            Some((meta_ipns.clone(), key.clone(), src_key, dst_key))
+                        }
+                        _ => {
+                            log::warn!(
                                     "rename: cross-folder move missing folder key(s) for ino {}; skipping metadata re-encrypt",
                                     source_ino
                                 );
-                                None
-                            }
+                            None
                         }
                     }
-                    Some(InodeKind::File { .. }) => {
-                        log::warn!(
+                }
+                Some(InodeKind::File { .. }) => {
+                    log::warn!(
                             "rename: cross-folder file move for ino {} missing IPNS name/key; skipping metadata re-encrypt",
                             source_ino
                         );
-                        None
-                    }
-                    _ => None,
+                    None
                 }
-            } else {
-                None
-            };
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         // If destination exists, handle replacement
         if let Some(dest_ino) = fs.inodes.find_child(newparent, newname_str) {

@@ -61,7 +61,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **v1.1 Hardening Block (reopened 2026-06-19):**
 
 - [x] **Phase 50: IPFS/IPNS Data-Integrity Fixes** - Resolve Phase 42 unpin-integrity data-loss findings and unenroll nested IPNS records under unloaded subtrees (completed 2026-06-19)
-- [ ] **Phase 51: Crypto-Signature & Secret-Leak Hardening** - Enforce IPNS signedRecord validation/verification and key zeroization; add web logger redaction interceptor and wire the Faro transport
+- [ ] **Phase 51: Crypto-Signature & Secret-Leak Hardening** - Enforce IPNS signedRecord validation/verification and key zeroization (web logger redaction + Faro transport deferred with end-user monitoring)
 - [ ] **Phase 52: Desktop FUSE Durability & At-Rest Safety** - Bound write-journal growth, stream large-file writes, add replay network timeouts, and scrub at-rest plaintext filenames
 - [ ] **Phase 53: Release & Supply-Chain Engineering** - Pin GitHub Actions to immutable SHAs, regenerate Cargo.lock on release, and harden release-please release-as pin automation
 - [ ] **Phase 54: E2E Test-Infra Typing** - Migrate untyped .mjs E2E helper scripts to TypeScript wired into typecheck and lint
@@ -840,41 +840,58 @@ Plans:
 
 ### Phase 51: Crypto-Signature & Secret-Leak Hardening
 
-**Goal:** [To be planned]
+**Goal:** Close the three deferred IPNS signed-record findings (S1/S2/S3) from the PR #448 security review under HARD-02 — publish-time embedded-vs-DTO validation (S1), fail-closed signature verification across web + sdk-core + Rust with callers honoring signatureVerified (S2), and an exhaustive caller-owns-key zeroization convention across the TS SDK and Rust crates with an enforcement guard (S3). Server stays zero-knowledge; DB remains the authoritative CID source.
 **Requirements**: HARD-02
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 0 plans
+**Plans:** 2/4 plans executed
 
 Scope (captured todos):
 
 - [ ] **[#5]** IPNS signature storage review: enforce signedRecord validation, verification, and key zeroization (S1, S2, S3) — `2026-06-13-ipns-signature-storage-review-deferred.md`
-- [ ] **[#15]** Web logger redaction interceptor missing and Faro transport never wired — `2026-06-18-web-logger-redaction-and-faro-transport-unwired.md`
+
+Deferred from this phase:
+
+- **[#15]** Web logger redaction interceptor + Faro transport (`2026-06-18-web-logger-redaction-and-faro-transport-unwired.md`) — deferred with end-user logging/monitoring (not being implemented yet); folds into a future observability phase.
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 51 to break down)
+- [x] 51-01-PLAN.md — S1: publish-time embedded-vs-DTO CID + offset-aware sequence validation (api)
+- [x] 51-02-PLAN.md — S2 web: fail-closed resolveIpnsRecord (throw on invalid, allow+flag on absent)
+- [ ] 51-03-PLAN.md — S2/S3 Rust: IpnsResolveResponse sig fields + verify fn + FUSE callers honor it; Zeroizing key paths
+- [ ] 51-04-PLAN.md — S3 TS: sdk-core ipns/vault/folder zeroization sweep + enforcement guard tests
 
 ### Phase 52: Desktop FUSE Durability & At-Rest Safety
 
-**Goal:** [To be planned]
+**Goal:** Bound and harden the desktop FUSE write-journal so large-file writes never block or OOM the filesystem, replay never stalls the mount, retention is bounded across vaults, and no plaintext filename or host path persists at rest.
 **Requirements**: HARD-03
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Scope (captured todos):
 
 - [ ] **[#9]** FUSE write-journal unbounded growth + ciphertext-in-JSON, and replay has no network timeout — `2026-06-18-fuse-journal-growth-and-replay-timeout.md`
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd:plan-phase 52 to break down)
+- [ ] 52-01-PLAN.md — D-05 sanitize_error scrub + D-06 logged journal.remove failures (trivials, Wave 1)
+- [ ] 52-02-PLAN.md — D-01/D-04 journal entry shape: sidecar fields, put_with_sidecar, GC/cap constants, compat deserializer (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 52-03-PLAN.md — D-01/D-04 write-side: size cap, ECIES filename encryption, off-thread sidecar write with bounded durable-ack oneshot (Wave 2)
+- [ ] 52-04-PLAN.md — D-03/D-04 replay-side: sidecar read+verify, name decryption, per-entry timeouts, replay concurrent with mount (Unix+Windows) (Wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 52-05-PLAN.md — D-02 retention: purge_vault on logout + gc_failed_entries at mount (Wave 3)
 
 ### Phase 53: Release & Supply-Chain Engineering
 
-**Goal:** [To be planned]
+**Goal:** Harden the CI/release supply chain (HARD-04): SHA-pin all third-party GitHub Actions with a zizmor regression gate and least-privilege permissions, sync Cargo.lock with release-please crate bumps, and make the release-please pin recompute resilient to force-push clobber.
 **Requirements**: HARD-04
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Scope (captured todos):
 
@@ -883,23 +900,43 @@ Scope (captured todos):
 - [ ] **[#16]** Harden release-please release-as pin automation against force-push clobber and stale pins — `2026-06-19-harden-release-please-pin-automation.md`
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd:plan-phase 53 to break down)
+- [ ] 53-01-PLAN.md — SHA-pin all third-party action refs via pinact (all 14 workflows) + verify Dependabot github-actions block [wave 1]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 53-02-PLAN.md — zizmor CI hard gate (CLI mode) + least-privilege permissions blocks on all unscoped jobs/workflows [wave 2]
+- [ ] 53-03-PLAN.md — Cargo.lock sync on release (cargo update --precise + stale-lock guard; cargo-workspace plugin rejected) [wave 2]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 53-04-PLAN.md — release-please pin-automation resilience: stale-pin guard script (TDD), remove 3 stale release-as pins, cancel-in-progress safety-net, fetch+rebase discipline docs [wave 3]
 
 ### Phase 54: E2E Test-Infra Typing
 
-**Goal:** [To be planned]
+**Goal:** All 7 untyped .mjs E2E helper scripts are migrated to TypeScript (entrypoint imports, shared typed auth/ctx helper, dedicated tsconfig wired into typecheck + eslint, all runners switched node→tsx in lockstep), so SDK/crypto/api-client contract drift is caught at tsc/eslint time instead of mid-E2E-run; behavior-preserving.
 **Requirements**: HARD-05
 **Depends on:** Phase 49 (v1.1 baseline)
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Scope (captured todos):
 
 - [ ] **[#11]** Migrate untyped .mjs E2E helper scripts to TypeScript — `2026-06-18-migrate-mjs-e2e-helper-scripts-to-typescript.md`
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd:plan-phase 54 to break down)
+- [ ] 54-01-PLAN.md — Foundation: tsconfig.scripts.json (D-03) + shared tests/e2e-helpers/auth.ts (D-04) + root typecheck ordering (D-02) + eslint scope (D-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 54-02-PLAN.md — Migrate sdk-core trio (edit-filepointer, rename-folder, verify-filepointer) to .ts (D-02/D-04/D-05/D-07)
+- [ ] 54-03-PLAN.md — Migrate desktop-e2e pair + web-perf + generate-test-vectors (@cipherbox/core gap, tsx child-spawn) (D-02/D-04/D-05/D-07)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 54-04-PLAN.md — Update all 8 runners node→tsx in lockstep + delete 7 .mjs (D-05/D-06/D-07)
 
 ### Phase 55: Large Source-File Refactor
 
@@ -970,7 +1007,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 48. SDK Self-Bootstrap + Shared Metadata  | v1.1      | 7/7            | Complete | 2026-06-17 |
 | 49. Shared-Folder Move (Intra-Share)      | v1.1      | 5/5            | Complete | 2026-06-18 |
 | 50. IPFS/IPNS Data-Integrity Fixes        | v1.1-hardening | 5/5 | Complete    | 2026-06-19 |
-| 51. Crypto-Signature & Secret-Leak Hardening | v1.1-hardening | -      | Planned  | -          |
+| 51. Crypto-Signature & Secret-Leak Hardening | v1.1-hardening | 2/4 | In Progress|  |
 | 52. Desktop FUSE Durability & At-Rest Safety | v1.1-hardening | -      | Planned  | -          |
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
 | 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |

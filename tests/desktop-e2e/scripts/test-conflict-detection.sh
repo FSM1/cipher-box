@@ -84,7 +84,7 @@ echo ""
 # Advances the vault's root IPNS sequence with a REAL, validly-signed record.
 # The server is signature-gated (it rejects records whose Ed25519 SignatureV2
 # does not verify against the name's key), so a dummy unsigned record can no
-# longer fake a bump. bump-ipns-sequence.mjs derives the deterministic vault IPNS
+# longer fake a bump. bump-ipns-sequence.ts derives the deterministic vault IPNS
 # keypair and republishes the current root metadata UNCHANGED at sequence+1 --
 # exactly what a legitimate second device does -- making the desktop's cached
 # sequence stale.
@@ -92,7 +92,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bump_server_sequence() {
   local ipns_name="$1"  # informational; the helper bumps the vault root via /vault
 
-  if TEST_SECRET="$SECRET" node "$SCRIPT_DIR/bump-ipns-sequence.mjs" \
+  if TEST_SECRET="$SECRET" pnpm exec tsx "$SCRIPT_DIR/bump-ipns-sequence.ts" \
     --api-url "$API_URL" --email "$TEST_EMAIL"; then
     : # bump succeeded; sequence advanced for $ipns_name
   else

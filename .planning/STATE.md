@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-06-19T19:51:30.122Z"
-last_activity: 2026-06-19
+last_updated: "2026-06-20T01:54:50.316Z"
+last_activity: 2026-06-20
 progress:
   total_phases: 40
-  completed_phases: 35
-  total_plans: 156
-  completed_plans: 156
-  percent: 88
+  completed_phases: 36
+  total_plans: 164
+  completed_plans: 164
+  percent: 92
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 50 — ipfs-ipns-data-integrity-fixes
+**Current focus:** Phase 54 — e2e-test-infra-typing
 
 ## Current Position
 
-Phase: 51
-Plan: Not started
+Phase: 54 (e2e-test-infra-typing) — EXECUTING
+Plan: 4 of 4 (all plans executed; awaiting phase verification)
 Milestone v1.1 reopened 2026-06-19 with a hardening block (Phases 50–55). Phases 18–49 complete and verified (151 plans). Next: run /gsd:plan-phase 50 (recommended risk order: 50 data-integrity → 51 crypto/secret hardening → 52 FUSE → 53 release-eng → 54 test-infra → 55 refactor).
 
 ## Performance Metrics
@@ -151,6 +151,9 @@ Milestone v1.1 reopened 2026-06-19 with a hardening block (Phases 50–55). Phas
 | Phase 49 P03 | 11min | 4 tasks | 7 files |
 | Phase 49 P04 | 26min | 3 tasks | 5 files |
 | Phase 49 P05 | 12min | 2 tasks | 2 files |
+| Phase 51 P01 | 9min | 3 tasks | 2 files |
+| Phase 51 P03 | 45min | 4 tasks | 12 files |
+| Phase 51 P04 | 12min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -285,9 +288,9 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-06-19
+Last activity: 2026-06-20
 
-Last session: 2026-06-19T19:14:41.467Z
+Last session: 2026-06-19T23:48:07.982Z
 
 ## Decisions
 
@@ -309,3 +312,7 @@ Last session: 2026-06-19T19:14:41.467Z
 - [Phase 49-05]: SharedMoveDialogPage.dialog() scoped via .move-dialog-folder-list filter (avoids collision with private MoveDialog)
 - [Phase 49-05]: readContentViaEditor dispatches rightClickFolderItem vs rightClickItem based on instanceof check (shared vs private browser page)
 - [Phase 49-05]: Alice decrypt assertion uses FileListPage (private vault view), not SharedFileBrowserPage — owner reads own files via vault browser
+- [Phase 51-01]: CAS ConflictException (409) check placed before S1 BadRequestException (400) sequence check so concurrent-modification signals remain authoritative; S1 reuses anti-rollback incomingParsed to avoid double parse
+- [Phase 51-03]: resolve_folder_key_cached cache left as HashMap<String, Vec<u8>> (not Zeroizing); cache is short-lived, cleared on replay_for_vault drop — only BFS queue and get_folder_key return changed
+- [Phase 51-03]: verify_ipns_resolve_signature absent-fields path returns Ok(None) + warn (D-03), not error; verify gate in resolve_folder_key BFS only (not fetch_merge_publish_parent replay path)
+- [Phase 51-04]: updateFolderMetadataAndPublish SKIP zeroing — all client.ts call sites pass live session keys from folderTree state reused across session lifetime; caller retains ownership (T-47-01 documented skip with guard test)

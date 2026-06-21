@@ -1,11 +1,11 @@
 /**
  * Generate cross-language test vectors for Rust crypto module verification.
  *
- * Uses @cipherbox/crypto TypeScript module to produce deterministic test vectors
- * that the Rust tests will verify against.
+ * Uses @cipherbox/crypto + @cipherbox/core TypeScript modules to produce
+ * deterministic test vectors that the Rust tests verify against.
  *
- * Usage: node generate-test-vectors.mjs
- * Requires: pnpm build in packages/crypto first
+ * Usage: tsx generate-test-vectors.ts
+ * Requires: pnpm build in packages/crypto and packages/core first
  */
 
 import {
@@ -17,21 +17,20 @@ import {
   unwrapKey,
   signEd25519,
   verifyEd25519,
-  createIpnsRecord,
-  marshalIpnsRecord,
   deriveIpnsName,
+  deriveEd25519PublicKey,
   hexToBytes,
   bytesToHex,
-} from '../../../packages/crypto/dist/index.mjs';
+} from '@cipherbox/crypto';
+// createIpnsRecord/marshalIpnsRecord live in @cipherbox/core, NOT @cipherbox/crypto.
+import { createIpnsRecord, marshalIpnsRecord } from '@cipherbox/core';
+import { getPublicKey } from '@noble/secp256k1';
 
-import { getPublicKey } from '../../../packages/crypto/node_modules/@noble/secp256k1/index.js';
-import * as ed from '../../../packages/crypto/node_modules/@noble/ed25519/index.js';
-
-function toHex(bytes) {
+function toHex(bytes: Uint8Array | ArrayLike<number>): string {
   return bytesToHex(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
 }
 
-async function main() {
+async function main(): Promise<void> {
   console.log('=== CipherBox Cross-Language Test Vectors ===\n');
 
   // ---- Fixed keys for deterministic tests ----
@@ -76,7 +75,7 @@ async function main() {
   const ed25519PrivateKey = hexToBytes(
     '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60'
   );
-  const ed25519PublicKey = ed.getPublicKey(ed25519PrivateKey);
+  const ed25519PublicKey = deriveEd25519PublicKey(ed25519PrivateKey);
   console.log(`ED25519_PRIVATE_KEY: "${toHex(ed25519PrivateKey)}"`);
   console.log(`ED25519_PUBLIC_KEY: "${toHex(ed25519PublicKey)}"`);
 
@@ -120,7 +119,7 @@ async function main() {
   const ipnsPrivateKey = hexToBytes(
     '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60'
   );
-  const ipnsPublicKey = ed.getPublicKey(ipnsPrivateKey);
+  const ipnsPublicKey = deriveEd25519PublicKey(ipnsPrivateKey);
   const ipnsValue = '/ipfs/bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4';
   const ipnsSequence = 42n;
   const ipnsLifetimeMs = 86400000; // 24h
@@ -143,7 +142,7 @@ async function main() {
   console.log(`IPNS_DATA_CBOR: "${toHex(ipnsRecord.data)}"`);
   console.log(`IPNS_DATA_CBOR_LEN: ${ipnsRecord.data.length}`);
 
-  if (ipnsRecord.signatureV1) {
+  if ('signatureV1' in ipnsRecord && ipnsRecord.signatureV1) {
     console.log(`IPNS_SIGNATURE_V1: "${toHex(ipnsRecord.signatureV1)}"`);
     console.log(`IPNS_SIGNATURE_V1_LEN: ${ipnsRecord.signatureV1.length}`);
   }
@@ -163,4 +162,7 @@ async function main() {
   console.log('=== Test Vector Generation Complete ===');
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

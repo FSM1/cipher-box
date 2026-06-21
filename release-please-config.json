@@ -80,10 +80,7 @@
       "component": "cipherbox-desktop",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "extra-files": [
-        "src-tauri/tauri.conf.json",
-        "src-tauri/Cargo.toml"
-      ],
+      "extra-files": ["src-tauri/tauri.conf.json", "src-tauri/Cargo.toml"],
       "release-as": "0.43.0"
     },
     "apps/tee-worker": {
@@ -97,15 +94,13 @@
       "release-type": "node",
       "component": "@cipherbox/core",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "release-as": "0.31.0"
+      "bump-minor-pre-major": true
     },
     "packages/crypto": {
       "release-type": "node",
       "component": "@cipherbox/crypto",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "release-as": "0.33.0"
+      "bump-minor-pre-major": true
     },
     "packages/api-client": {
       "release-type": "node",
@@ -119,7 +114,7 @@
       "component": "@cipherbox/sdk-core",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.37.2"
+      "release-as": "0.38.0"
     },
     "packages/sdk": {
       "release-type": "node",
@@ -132,14 +127,15 @@
       "release-type": "rust",
       "component": "cipherbox-crypto",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.6.0"
     },
     "crates/core": {
       "release-type": "rust",
       "component": "cipherbox-core",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.5.1"
+      "release-as": "0.5.2"
     },
     "crates/api-client": {
       "release-type": "rust",
@@ -153,14 +149,14 @@
       "component": "cipherbox-fuse",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.6.2"
+      "release-as": "0.7.0"
     },
     "crates/sdk": {
       "release-type": "rust",
       "component": "cipherbox-sdk",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.6.1"
+      "release-as": "0.7.0"
     }
   }
 }

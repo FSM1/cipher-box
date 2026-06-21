@@ -8,6 +8,8 @@ on:
       - '.github/workflows/deploy-landing.yml'
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   build-and-deploy:
     name: Build & Pin to IPFS
@@ -16,9 +18,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           cache: 'npm'
@@ -31,7 +33,7 @@ jobs:
           npm run build
 
       - name: Upload dist to VPS
-        uses: appleboy/scp-action@v1.0.0
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
@@ -42,16 +44,37 @@ jobs:
 
       - name: Pin to IPFS via Kubo
         id: ipfs
-        uses: appleboy/ssh-action@v1.2.5
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
           capture_stdout: true
           script: |
-            CID=$(ipfs add -Qr --pin /tmp/cipherbox-landing)
-            rm -rf /tmp/cipherbox-landing
+            set -euo pipefail
+            # Kubo runs as a Docker container on the staging host (compose service
+            # "ipfs", image ipfs/kubo:v0.40.0) — there is no host-level ipfs CLI, so a
+            # bare `ipfs` here fails with "command not found". Run it inside the container.
+            # Capture the container list first, THEN take the first line: piping
+            # `docker ps` straight into `head` can SIGPIPE docker ps (exit 141) under
+            # `pipefail` and abort before the empty-KUBO guard runs.
+            KUBO_IDS=$(docker ps -q --filter ancestor=ipfs/kubo:v0.40.0)
+            KUBO=$(printf '%s\n' "${KUBO_IDS}" | head -n1)
+            if [ -z "${KUBO}" ]; then
+              echo "::error::No running ipfs/kubo container found on staging host"
+              exit 1
+            fi
+            # The SCP step landed the build at host /tmp/cipherbox-landing; the container
+            # has no /tmp bind-mount, so copy it in before adding. Redirect docker cp's
+            # stdout to stderr so capture_stdout returns ONLY the CID.
+            docker cp /tmp/cipherbox-landing "${KUBO}:/tmp/cipherbox-landing" 1>&2
+            CID=$(docker exec "${KUBO}" ipfs add -Qr --pin /tmp/cipherbox-landing)
+            # Emit the CID immediately — the pin is already committed to Kubo, so a failure
+            # in the best-effort cleanup below must never drop it from stdout (that would
+            # fail the step and leave DNSLink pointing at the now-stale CID).
             echo "${CID}"
+            docker exec "${KUBO}" rm -rf /tmp/cipherbox-landing || true
+            rm -rf /tmp/cipherbox-landing || true
 
       - name: Validate CID
         run: |
@@ -81,7 +104,9 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## Landing Page Deployed" >> $GITHUB_STEP_SUMMARY
-          echo "- **CID:** ${CID}" >> $GITHUB_STEP_SUMMARY
-          echo "- **IPFS Gateway:** https://ipfs.io/ipfs/${CID}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Landing Page Deployed"
+            echo "- **CID:** ${CID}"
+            echo "- **IPFS Gateway:** https://ipfs.io/ipfs/${CID}"
+            echo "- **Commit:** ${{ github.sha }}"
+          } >> "$GITHUB_STEP_SUMMARY"

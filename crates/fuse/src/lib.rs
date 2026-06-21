@@ -56,7 +56,7 @@ use cipherbox_api_client::ApiClient;
 
 /// Timeout for network I/O in filesystem callbacks to prevent blocking the mount thread.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Run an async future with a timeout on the tokio runtime.
 /// Prevents filesystem thread hangs from indefinite network I/O.
@@ -743,8 +743,8 @@ pub fn spawn_file_meta_reencrypt(
     rt: tokio::runtime::Handle,
     file_meta_ipns_name: String,
     file_ipns_private_key: Zeroizing<Vec<u8>>,
-    source_folder_key: Vec<u8>,
-    dest_folder_key: Vec<u8>,
+    source_folder_key: Zeroizing<Vec<u8>>,
+    dest_folder_key: Zeroizing<Vec<u8>>,
     coordinator: Arc<PublishCoordinator>,
     tee_public_key: Option<Vec<u8>>,
     tee_key_epoch: Option<u32>,
@@ -756,17 +756,19 @@ pub fn spawn_file_meta_reencrypt(
     }
     std::thread::spawn(move || {
         // Fixed-size keys; a bad length is a terminal misconfiguration, not retryable.
-        let source_key_arr: [u8; 32] = match source_folder_key.as_slice().try_into() {
-            Ok(arr) => arr,
-            Err(_) => {
-                log::error!(
-                    "File metadata re-encrypt on move failed: invalid source folder key length"
-                );
-                return;
-            }
-        };
-        let dest_key_arr: [u8; 32] = match dest_folder_key.as_slice().try_into() {
-            Ok(arr) => arr,
+        // Wrap the copies in `Zeroizing` so the fixed-size key bytes are wiped on drop.
+        let source_key_arr: Zeroizing<[u8; 32]> =
+            match source_folder_key.as_slice().try_into() {
+                Ok(arr) => Zeroizing::new(arr),
+                Err(_) => {
+                    log::error!(
+                        "File metadata re-encrypt on move failed: invalid source folder key length"
+                    );
+                    return;
+                }
+            };
+        let dest_key_arr: Zeroizing<[u8; 32]> = match dest_folder_key.as_slice().try_into() {
+            Ok(arr) => Zeroizing::new(arr),
             Err(_) => {
                 log::error!(
                     "File metadata re-encrypt on move failed: invalid destination folder key length"
@@ -930,12 +932,16 @@ pub struct CipherBoxFS {
 
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 impl CipherBoxFS {
-    pub fn get_folder_key(&self, folder_ino: u64) -> Option<Vec<u8>> {
+    pub fn get_folder_key(&self, folder_ino: u64) -> Option<Zeroizing<Vec<u8>>> {
         self.inodes
             .get(folder_ino)
             .and_then(|inode| match &inode.kind {
-                inode::InodeKind::Root { .. } => Some(self.root_folder_key.to_vec()),
-                inode::InodeKind::Folder { folder_key, .. } => Some(folder_key.to_vec()),
+                inode::InodeKind::Root { .. } => {
+                    Some(Zeroizing::new(self.root_folder_key.to_vec()))
+                }
+                inode::InodeKind::Folder { folder_key, .. } => {
+                    Some(Zeroizing::new(folder_key.to_vec()))
+                }
                 _ => None,
             })
     }
@@ -1440,9 +1446,12 @@ pub async fn replay_for_vault(
     // #15: local to one replay_for_vault call; never persisted.
     // Seeded with the root key so that root-shortcut lookups (folder_ipns_name == root)
     // are served directly from the cache without entering resolve_folder_key at all.
-    let mut folder_key_cache: std::collections::HashMap<String, Vec<u8>> =
+    let mut folder_key_cache: std::collections::HashMap<String, Zeroizing<Vec<u8>>> =
         std::collections::HashMap::new();
-    folder_key_cache.insert(root_ipns_name.to_string(), root_folder_key.to_vec());
+    folder_key_cache.insert(
+        root_ipns_name.to_string(),
+        Zeroizing::new(root_folder_key.to_vec()),
+    );
 
     for entry in &ordered {
         // Skip already-failed entries (user must manually intervene for those).
@@ -1464,34 +1473,52 @@ pub async fn replay_for_vault(
                 child_ipns_key_hex,
                 parent_folder_ipns_name,
                 parent_ipns_key_hex,
-                name,
+                name_encrypted_hex,
                 created_at_ms,
             } => {
-                let result = replay_mkdir_entry(
-                    &api,
-                    private_key,
-                    root_folder_key,
-                    root_ipns_name,
-                    &mut folder_key_cache,
-                    coordinator.clone(),
-                    child_ipns_name,
-                    child_folder_key_hex,
-                    child_ipns_key_hex,
-                    parent_folder_ipns_name,
-                    parent_ipns_key_hex,
-                    name,
-                    *created_at_ms,
-                    tee_public_key,
-                    tee_key_epoch,
+                // D-03 (WR-07): bound the replay network ops so a hung IPNS/upload call can
+                // neither stall the mount nor spin forever. mkdir is metadata-only → 3×.
+                // A timeout becomes an Err routed through record_failure (park/retry), exactly
+                // like a network error.
+                let result = tokio::time::timeout(
+                    NETWORK_TIMEOUT * 3,
+                    replay_mkdir_entry(
+                        &api,
+                        private_key,
+                        root_folder_key,
+                        root_ipns_name,
+                        &mut folder_key_cache,
+                        coordinator.clone(),
+                        child_ipns_name,
+                        child_folder_key_hex,
+                        child_ipns_key_hex,
+                        parent_folder_ipns_name,
+                        parent_ipns_key_hex,
+                        name_encrypted_hex,
+                        *created_at_ms,
+                        tee_public_key,
+                        tee_key_epoch,
+                    ),
                 )
-                .await;
+                .await
+                .unwrap_or_else(|_| {
+                    Err(format!(
+                        "replay_mkdir_entry timed out after {}s",
+                        (NETWORK_TIMEOUT * 3).as_secs()
+                    ))
+                });
                 match result {
                     Ok(()) => {
                         log::info!(
                             "replay_for_vault: MkdirPublish {} replayed successfully",
                             entry.id
                         );
-                        let _ = journal.remove(&entry.id);
+                        if let Err(e) = journal.remove(&entry.id) {
+                            log::warn!(
+                                "replay_for_vault: MkdirPublish {} failed to remove journal entry after success: {}; entry may replay again on next mount",
+                                entry.id, e
+                            );
+                        }
                     }
                     Err(e) => {
                         // F2: record the failure so retries accumulate across mounts and the
@@ -1515,64 +1542,99 @@ pub async fn replay_for_vault(
                 }
             }
             cipherbox_sdk::JournalOp::UploadFile {
-                ciphertext_b64,
+                sidecar_path,
+                sidecar_sha256,
+                legacy_ciphertext_b64,
                 wrapped_key_hex,
                 iv_hex,
                 file_meta_ipns_name,
                 file_ipns_key_hex,
                 parent_folder_ipns_name,
                 parent_ipns_key_hex,
-                filename,
+                filename_encrypted_hex,
                 size,
                 created_at_ms,
             } => {
-                let result = replay_upload_entry(
-                    &api,
-                    private_key,
-                    public_key,
-                    root_folder_key,
-                    root_ipns_name,
-                    &mut folder_key_cache,
-                    coordinator.clone(),
-                    ciphertext_b64,
-                    wrapped_key_hex,
-                    iv_hex,
-                    file_meta_ipns_name.as_deref(),
-                    file_ipns_key_hex.as_deref(),
-                    parent_folder_ipns_name,
-                    parent_ipns_key_hex,
-                    filename,
-                    *size,
-                    *created_at_ms,
-                    tee_public_key,
-                    tee_key_epoch,
+                // D-02: never trust the persisted JSON `sidecar_path` for a non-legacy entry —
+                // re-derive the canonical <journal_dir>/<id>.bin from the journal id so an
+                // out-of-band-edited/redirected path cannot make replay read an attacker-chosen
+                // file. The empty-path branch (legacy/inline ciphertext) is preserved verbatim.
+                // `derived_sidecar_path` is bound here so the derived owned PathBuf outlives the
+                // borrow passed into the (awaited) replay call below.
+                let derived_sidecar_path: std::path::PathBuf;
+                let replay_sidecar_path: &std::path::Path = if sidecar_path.as_os_str().is_empty() {
+                    sidecar_path
+                } else {
+                    derived_sidecar_path = journal.sidecar_path_for(&entry.id);
+                    &derived_sidecar_path
+                };
+                // D-03 (WR-07): bound the replay network ops. upload may re-stream a multi-GB
+                // sidecar → 18× (~180s). Idempotent re-upload means a timeout safely retains
+                // the entry via record_failure.
+                let result = tokio::time::timeout(
+                    NETWORK_TIMEOUT * 18,
+                    replay_upload_entry(
+                        &api,
+                        private_key,
+                        public_key,
+                        root_folder_key,
+                        root_ipns_name,
+                        &mut folder_key_cache,
+                        coordinator.clone(),
+                        replay_sidecar_path,
+                        sidecar_sha256,
+                        legacy_ciphertext_b64,
+                        wrapped_key_hex,
+                        iv_hex,
+                        file_meta_ipns_name.as_deref(),
+                        file_ipns_key_hex.as_deref(),
+                        parent_folder_ipns_name,
+                        parent_ipns_key_hex,
+                        filename_encrypted_hex,
+                        *size,
+                        *created_at_ms,
+                        tee_public_key,
+                        tee_key_epoch,
+                    ),
                 )
-                .await;
+                .await
+                .unwrap_or_else(|_| {
+                    Err(format!(
+                        "replay_upload_entry timed out after {}s",
+                        (NETWORK_TIMEOUT * 18).as_secs()
+                    ))
+                });
                 match result {
                     Ok(()) => {
                         log::info!(
-                            "replay_for_vault: UploadFile {} ('{}') replayed successfully",
-                            entry.id,
-                            filename
+                            "replay_for_vault: UploadFile {} replayed successfully",
+                            entry.id
                         );
-                        let _ = journal.remove(&entry.id);
+                        if let Err(e) = journal.remove(&entry.id) {
+                            log::warn!(
+                                "replay_for_vault: UploadFile {} failed to remove journal entry after success: {}; entry may replay again on next mount",
+                                entry.id, e
+                            );
+                        }
                     }
                     Err(e) => {
                         // F2: record the failure so retries accumulate across mounts and the
                         // entry parks as Failed at max_retries (D-09), making the WriteParked
                         // notification reachable at runtime instead of retrying forever.
+                        // Note: the plaintext filename is not logged here — it is ECIES-encrypted
+                        // at rest (D-04) and only decrypted transiently inside replay_upload_entry.
                         match journal.record_failure(entry, &e) {
                             Ok(cipherbox_sdk::JournalEntryStatus::Failed { .. }) => log::error!(
-                                "replay_for_vault: UploadFile {} ('{}') parked as Failed after {} retries: {}",
-                                entry.id, filename, journal.max_retries, e
+                                "replay_for_vault: UploadFile {} parked as Failed after {} retries: {}",
+                                entry.id, journal.max_retries, e
                             ),
                             Ok(_) => log::warn!(
-                                "replay_for_vault: UploadFile {} ('{}') failed: {} (retry {}/{}, will retry on next mount)",
-                                entry.id, filename, e, entry.retries + 1, journal.max_retries
+                                "replay_for_vault: UploadFile {} failed: {} (retry {}/{}, will retry on next mount)",
+                                entry.id, e, entry.retries + 1, journal.max_retries
                             ),
                             Err(re) => log::warn!(
-                                "replay_for_vault: UploadFile {} ('{}') failed: {}; record_failure also errored: {}",
-                                entry.id, filename, e, re
+                                "replay_for_vault: UploadFile {} failed: {}; record_failure also errored: {}",
+                                entry.id, e, re
                             ),
                         }
                     }
@@ -1598,20 +1660,24 @@ async fn resolve_folder_key(
     root_folder_key: &[u8],
     root_ipns_name: &str,
     folder_ipns_name: &str,
-) -> Result<Vec<u8>, String> {
+) -> Result<Zeroizing<Vec<u8>>, String> {
     // Node-visit cap: bounds total network round trips and prevents infinite loops
     // (WR-02). This counts nodes visited across the BFS, not tree depth.
     const MAX_RESOLVE_NODES: usize = 32;
 
     if folder_ipns_name == root_ipns_name {
-        return Ok(root_folder_key.to_vec());
+        return Ok(Zeroizing::new(root_folder_key.to_vec()));
     }
 
     // BFS queue: (ipns_name_of_this_folder, unwrapped_folder_key_for_this_folder).
     // Starts at root; each step expands to all subfolder children of the current node.
-    let mut queue: std::collections::VecDeque<(String, Vec<u8>)> =
+    // Keys are Zeroizing so they are wiped from memory on drop.
+    let mut queue: std::collections::VecDeque<(String, Zeroizing<Vec<u8>>)> =
         std::collections::VecDeque::new();
-    queue.push_back((root_ipns_name.to_string(), root_folder_key.to_vec()));
+    queue.push_back((
+        root_ipns_name.to_string(),
+        Zeroizing::new(root_folder_key.to_vec()),
+    ));
     let mut nodes_visited = 0usize;
 
     while let Some((current_ipns, current_folder_key)) = queue.pop_front() {
@@ -1627,6 +1693,36 @@ async fn resolve_folder_key(
         let resolve = cipherbox_api_client::ipns::resolve_ipns(api, &current_ipns)
             .await
             .map_err(|e| format!("resolve IPNS {}: {}", current_ipns, e))?;
+
+        // S2/D-04: verify the IPNS signed-record signature before trusting the CID.
+        // D-03: absent signature fields → warn and continue (DB CID authoritative,
+        //   backward-compatible with legacy records that predate signedRecord).
+        // D-02: present but invalid → fail closed (compromised-server defense).
+        match cipherbox_api_client::ipns::verify_ipns_resolve_signature(&resolve, &current_ipns) {
+            Ok(None) => {
+                log::warn!(
+                    "resolve_folder_key: IPNS {} resolved without signature fields — \
+                     proceeding (D-03, DB CID authoritative)",
+                    current_ipns
+                );
+            }
+            Ok(Some(true)) => {
+                // Signature valid and IPNS name matches — proceed.
+            }
+            Ok(Some(false)) => {
+                return Err(format!(
+                    "IPNS {} signature verification failed — refusing to use CID (D-02)",
+                    current_ipns
+                ));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "IPNS {} signature verification error: {} — refusing to use CID",
+                    current_ipns, e
+                ));
+            }
+        }
+
         let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolve.cid)
             .await
             .map_err(|e| format!("fetch metadata for {}: {}", current_ipns, e))?;
@@ -1639,6 +1735,7 @@ async fn resolve_folder_key(
                 let enc_key_bytes = hex::decode(&f.folder_key_encrypted).map_err(|e| {
                     format!("hex decode folder_key_encrypted for {}: {}", f.ipns_name, e)
                 })?;
+                // unwrap_key now returns Zeroizing<Vec<u8>> — key is wiped on drop.
                 let child_folder_key =
                     cipherbox_crypto::ecies::unwrap_key(&enc_key_bytes, private_key)
                         .map_err(|e| format!("unwrap folder key for {}: {}", f.ipns_name, e))?;
@@ -1670,13 +1767,13 @@ async fn resolve_folder_key(
 /// it is never persisted and never shared with the running filesystem.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 async fn resolve_folder_key_cached(
-    cache: &mut std::collections::HashMap<String, Vec<u8>>,
+    cache: &mut std::collections::HashMap<String, Zeroizing<Vec<u8>>>,
     api: &ApiClient,
     private_key: &[u8],
     root_folder_key: &[u8],
     root_ipns_name: &str,
     folder_ipns_name: &str,
-) -> Result<Vec<u8>, String> {
+) -> Result<Zeroizing<Vec<u8>>, String> {
     if let Some(key) = cache.get(folder_ipns_name) {
         return Ok(key.clone());
     }
@@ -1688,8 +1785,13 @@ async fn resolve_folder_key_cached(
         folder_ipns_name,
     )
     .await?;
-    cache.insert(folder_ipns_name.to_string(), key.clone());
-    Ok(key)
+    // Store the key wrapped in `Zeroizing` so it is wiped from memory when the cache
+    // is dropped at the end of `replay_for_vault`. `resolve_folder_key` already returns
+    // `Zeroizing<Vec<u8>>`, so this is a single clone into the cache.
+    let cached = cache
+        .entry(folder_ipns_name.to_string())
+        .or_insert_with(|| key.clone());
+    Ok(cached.clone())
 }
 
 /// Fetch, decrypt, merge, and CAS-publish a parent folder update.
@@ -1921,7 +2023,7 @@ async fn replay_mkdir_entry(
     root_folder_key: &[u8],
     root_ipns_name: &str,
     // #15: per-replay folder-key cache; seeded with root key in replay_for_vault.
-    folder_key_cache: &mut std::collections::HashMap<String, Vec<u8>>,
+    folder_key_cache: &mut std::collections::HashMap<String, Zeroizing<Vec<u8>>>,
     coordinator: Arc<PublishCoordinator>,
     child_ipns_name: &str,
     child_folder_key_hex: &str,
@@ -1930,13 +2032,18 @@ async fn replay_mkdir_entry(
     parent_folder_ipns_name: &str,
     // parent_ipns_key_hex: user-ECIES-wrapped parent IPNS key from journal (CR-01).
     parent_ipns_key_hex: &str,
-    name: &str,
+    // D-04: ECIES-encrypted directory name hex; decrypted transiently via decrypt_journal_name.
+    name_encrypted_hex: &str,
     created_at_ms: u64,
     // TEE key/epoch for child-folder first-publish enrollment when the child's seq-0 IPNS
     // record was never created in the original (failed) session.
     tee_public_key: Option<&[u8]>,
     tee_key_epoch: Option<u32>,
 ) -> Result<(), String> {
+    // D-04: decrypt the directory name transiently (legacy plaintext passes through; a
+    // corrupt ECIES name returns Err so the entry is retained, never replayed as garbage).
+    let name = decrypt_journal_name(name_encrypted_hex, private_key)?;
+
     let parent_folder_key = resolve_folder_key_cached(
         folder_key_cache,
         api,
@@ -1986,21 +2093,21 @@ async fn replay_mkdir_entry(
                 let child_ipns_key_wrapped = hex::decode(child_ipns_key_hex).map_err(|e| {
                     format!("hex decode child_ipns_key_hex: {} — retaining entry", e)
                 })?;
-                let child_ipns_key_raw = zeroize::Zeroizing::new(
+                // unwrap_key returns Zeroizing<Vec<u8>> directly (S3/D-05).
+                let child_ipns_key_raw =
                     cipherbox_crypto::ecies::unwrap_key(&child_ipns_key_wrapped, private_key)
                         .map_err(|e| {
                             format!("ecies unwrap child IPNS key: {} — retaining entry", e)
-                        })?,
-                );
+                        })?;
                 let child_folder_key_wrapped = hex::decode(child_folder_key_hex).map_err(|e| {
                     format!("hex decode child_folder_key_hex: {} — retaining entry", e)
                 })?;
-                let child_folder_key_raw = zeroize::Zeroizing::new(
+                // unwrap_key returns Zeroizing<Vec<u8>> directly (S3/D-05).
+                let child_folder_key_raw =
                     cipherbox_crypto::ecies::unwrap_key(&child_folder_key_wrapped, private_key)
                         .map_err(|e| {
                             format!("ecies unwrap child folder key: {} — retaining entry", e)
-                        })?,
-                );
+                        })?;
                 publish_child_folder_metadata(
                     api,
                     &child_folder_key_raw,
@@ -2047,6 +2154,52 @@ async fn replay_mkdir_entry(
     .await
 }
 
+/// Decrypt a journaled name field (D-04, IN-03) with passthrough-once legacy compat.
+///
+/// `encrypted_hex` is normally a hex-encoded ECIES ciphertext of the name, produced
+/// write-side by `cipherbox_crypto::ecies::wrap_key`. This helper hex-decodes then
+/// `ecies::unwrap_key`s it with the user private key and returns the plaintext name.
+///
+/// Failure handling distinguishes the legacy signal from genuine corruption:
+///
+/// * **Not valid hex** → treated as a pre-Phase-52 legacy plaintext name: a `log::warn!`
+///   is emitted once and the input is returned verbatim (`Ok`) for this single replay.
+/// * **Valid hex but too short to be an ECIES ciphertext** (fewer than
+///   `ECIES_MIN_CIPHERTEXT_SIZE` decoded bytes) → also a legacy plaintext name. Hex-validity
+///   alone does NOT prove a Phase-52 name: a pre-Phase-52 filename can itself be pure
+///   even-length hex (a hyphen-less UUID, a SHA-1/SHA-256 digest, a git object id, …). A
+///   genuine ECIES name is always `ephemeral_pubkey(65) || nonce(16) || tag(16) ||
+///   ciphertext`, and bit-rot flips bytes in place without shrinking it, so anything below
+///   the unwrap floor cannot be one. Pass it through verbatim rather than parking it for a
+///   retry it can never pass — a parked entry is age-purged by `gc_failed_entries` (sidecar
+///   `.bin` and all), which would destroy the captured write.
+/// * **Valid hex, long enough, but ECIES-unwrap fails or unwraps to non-UTF-8** → the
+///   at-rest ciphertext is corrupt (e.g. bit-rot). Returning the raw hex as a filename would
+///   publish a garbage name AND discard the original write (a successful replay removes
+///   the entry). Instead return `Err` so the caller retains/parks the entry for retry.
+///   The error message deliberately leaks neither the name nor any host path (D-04).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+fn decrypt_journal_name(encrypted_hex: &str, private_key: &[u8]) -> Result<String, String> {
+    // Legacy passthrough applies to any value that cannot be a Phase-52 ECIES name: a
+    // non-hex value, OR hex that decodes to fewer bytes than the minimum ECIES ciphertext
+    // (a hex-shaped legacy plaintext filename — UUID, SHA digest, etc.).
+    let decoded = match hex::decode(encrypted_hex) {
+        Ok(bytes) if bytes.len() >= cipherbox_crypto::ecies::ECIES_MIN_CIPHERTEXT_SIZE => bytes,
+        _ => {
+            log::warn!(
+                "replay: legacy plaintext journal name — replaying once, not re-persisting"
+            );
+            return Ok(encrypted_hex.to_string());
+        }
+    };
+    // Long enough to be an ECIES ciphertext: it must decrypt. A failure here is corruption,
+    // not a legacy name — do NOT pass the raw hex through as a filename; retain the entry.
+    let plaintext = cipherbox_crypto::ecies::unwrap_key(&decoded, private_key)
+        .map_err(|_| "corrupt encrypted journal name — retaining entry".to_string())?;
+    String::from_utf8(plaintext.to_vec())
+        .map_err(|_| "corrupt encrypted journal name — retaining entry".to_string())
+}
+
 /// Replay a single `UploadFile` journal entry.
 /// Re-uploads ciphertext (idempotent CID), re-publishes file IPNS, merges file pointer
 /// into current parent metadata.
@@ -2059,9 +2212,14 @@ async fn replay_upload_entry(
     root_folder_key: &[u8],
     root_ipns_name: &str,
     // #15: per-replay folder-key cache; seeded with root key in replay_for_vault.
-    folder_key_cache: &mut std::collections::HashMap<String, Vec<u8>>,
+    folder_key_cache: &mut std::collections::HashMap<String, Zeroizing<Vec<u8>>>,
     coordinator: Arc<PublishCoordinator>,
-    ciphertext_b64: &str,
+    // D-01: ciphertext is read from the sidecar .bin (path + sha256), not an inline blob.
+    sidecar_path: &std::path::Path,
+    sidecar_sha256: &str,
+    // Compat-only: pre-Phase-52 inline base64 ciphertext, present only on legacy entries that
+    // have no sidecar. Used for a one-time passthrough replay so the upload is not lost.
+    legacy_ciphertext_b64: &str,
     wrapped_key_hex: &str,
     iv_hex: &str,
     file_meta_ipns_name: Option<&str>,
@@ -2069,7 +2227,8 @@ async fn replay_upload_entry(
     parent_folder_ipns_name: &str,
     // parent_ipns_key_hex: user-ECIES-wrapped parent IPNS private key from journal (CR-01).
     parent_ipns_key_hex: &str,
-    filename: &str,
+    // D-04: ECIES-encrypted filename hex; decrypted transiently via decrypt_journal_name.
+    filename_encrypted_hex: &str,
     size: u64,
     created_at_ms: u64,
     // F3: TEE key/epoch for first-publish enrollment when the per-file IPNS record
@@ -2077,7 +2236,9 @@ async fn replay_upload_entry(
     tee_public_key: Option<&[u8]>,
     tee_key_epoch: Option<u32>,
 ) -> Result<(), String> {
-    use base64::Engine;
+    // D-04: decrypt the filename transiently (legacy plaintext passes through; a corrupt
+    // ECIES name returns Err so the entry is retained, never replayed as garbage).
+    let filename = decrypt_journal_name(filename_encrypted_hex, private_key)?;
 
     // REQ-4: park legacy entries with no per-file IPNS name rather than publishing an
     // empty, unresolvable FilePointer (id "replay-", file_meta_ipns_name ""). Returning
@@ -2105,9 +2266,44 @@ async fn replay_upload_entry(
     };
 
     // Step 1: re-upload ciphertext (idempotent — same plaintext → same ciphertext → same CID).
-    let ciphertext = base64::engine::general_purpose::STANDARD
-        .decode(ciphertext_b64)
-        .map_err(|e| format!("base64 decode ciphertext: {}", e))?;
+    // D-01: read the ciphertext from the sidecar .bin and verify its SHA-256 before re-upload.
+    // A missing sidecar (legacy in-flight entry, or an already-cleaned happy-path entry) or a
+    // hash mismatch returns Err so the entry is RETAINED (record_failure) — never re-upload
+    // corrupted or absent ciphertext, and never publish a bad CID.
+    let ciphertext = if sidecar_path.as_os_str().is_empty() {
+        // Legacy pre-Phase-52 entry: no sidecar, ciphertext stored inline as base64. Honor it
+        // for a one-time passthrough replay so the pending upload is not lost at upgrade. The
+        // entry is removed (not re-persisted) once replay succeeds, so this only runs once.
+        if legacy_ciphertext_b64.is_empty() {
+            return Err(
+                "UploadFile entry has no sidecar and no legacy inline ciphertext — retaining entry"
+                    .to_string(),
+            );
+        }
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(legacy_ciphertext_b64)
+            .map_err(|e| format!("decode legacy inline ciphertext: {} — retaining entry", e))?
+    } else {
+        // D-01: read the ciphertext from the sidecar .bin and verify its SHA-256 before re-upload.
+        // The sidecar path is NOT included in the error (it can leak host directories through
+        // logs / record_failure — the scrubbing this phase adds, D-05).
+        let ciphertext = std::fs::read(sidecar_path)
+            .map_err(|e| format!("read ciphertext sidecar: {} — retaining entry", e))?;
+        let actual_sha256 = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&ciphertext);
+            hex::encode(hasher.finalize())
+        };
+        if actual_sha256 != sidecar_sha256 {
+            return Err(format!(
+                "sidecar hash mismatch (expected {}, got {}) — retaining entry",
+                sidecar_sha256, actual_sha256
+            ));
+        }
+        ciphertext
+    };
     let file_cid = cipherbox_api_client::ipfs::upload_content(api, &ciphertext)
         .await
         .map_err(|e| format!("upload ciphertext: {}", e))?;
@@ -2143,13 +2339,12 @@ async fn replay_upload_entry(
                 // Directly casting the wrapped bytes always fails (they're ~117 bytes, not 32).
                 let file_ipns_key_wrapped = hex::decode(file_ipns_key_hex_str)
                     .map_err(|e| format!("hex decode file_ipns_key: {}", e))?;
-                let file_ipns_key_raw =
-                    cipherbox_crypto::ecies::unwrap_key(&file_ipns_key_wrapped, private_key)
-                        .map_err(|e| format!("ecies unwrap file IPNS key: {}", e))?;
-                // Step 1 complete: `file_ipns_key` is the unwrapped Zeroizing key.
+                // unwrap_key returns Zeroizing<Vec<u8>> directly (S3/D-05).
                 // CR-02: the raw key is zeroized on drop; no cast to [u8;32] needed here
                 // because publish_file_metadata accepts &Zeroizing<Vec<u8>> and casts internally.
-                let file_ipns_key = zeroize::Zeroizing::new(file_ipns_key_raw);
+                let file_ipns_key =
+                    cipherbox_crypto::ecies::unwrap_key(&file_ipns_key_wrapped, private_key)
+                        .map_err(|e| format!("ecies unwrap file IPNS key: {}", e))?;
 
                 let file_meta = cipherbox_core::folder::FileMetadata {
                     version: "v1".to_string(),
@@ -2272,6 +2467,8 @@ pub fn mount_point() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::next_file_publish_sequence;
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    use zeroize::Zeroizing;
 
     #[test]
     fn next_file_publish_sequence_starts_new_records_at_zero() {
@@ -2355,17 +2552,16 @@ mod tests {
             id: "failed-t4506".to_string(),
             vault_root_ipns: vault.to_string(),
             op: JournalOp::UploadFile {
-                ciphertext_b64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"ct",
-                ),
+                sidecar_path: std::path::PathBuf::from("/tmp/failed-t4506.bin"),
+                sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: Some("k51filemeta45t06".to_string()),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: vault.to_string(),
                 parent_ipns_key_hex: hex::encode(b"ecies-parent-key"),
-                filename: "t4506.txt".to_string(),
+                filename_encrypted_hex: hex::encode("t4506.txt".as_bytes()),
                 size: 1,
                 created_at_ms: 1_700_000_000_000,
             },
@@ -2428,9 +2624,12 @@ mod tests {
         let api = Arc::new(cipherbox_api_client::ApiClient::new("http://127.0.0.1:1"));
 
         // Seed the cache exactly as replay_for_vault does (#15).
-        let mut cache: std::collections::HashMap<String, Vec<u8>> =
+        let mut cache: std::collections::HashMap<String, Zeroizing<Vec<u8>>> =
             std::collections::HashMap::new();
-        cache.insert(root_ipns_name.to_string(), root_folder_key.to_vec());
+        cache.insert(
+            root_ipns_name.to_string(),
+            Zeroizing::new(root_folder_key.to_vec()),
+        );
 
         // First lookup: cache hit (seeded above) — no BFS, no network.
         let key1 = super::resolve_folder_key_cached(
@@ -2477,8 +2676,8 @@ mod tests {
         );
         // The returned value is the root folder key (root-shortcut / cache-seeded invariant).
         assert_eq!(
-            key1,
-            root_folder_key.to_vec(),
+            key1.as_slice(),
+            root_folder_key.as_slice(),
             "cached resolve must return root_folder_key unchanged"
         );
     }
@@ -2639,17 +2838,16 @@ mod tests {
             id: "legacy-none-name".to_string(),
             vault_root_ipns: vault.to_string(),
             op: JournalOp::UploadFile {
-                ciphertext_b64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"ct",
-                ),
+                sidecar_path: std::path::PathBuf::from("/tmp/legacy-none-name.bin"),
+                sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: None,
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: vault.to_string(),
                 parent_ipns_key_hex: hex::encode(b"ecies-parent-key"),
-                filename: "legacy.txt".to_string(),
+                filename_encrypted_hex: hex::encode("legacy.txt".as_bytes()),
                 size: 1,
                 created_at_ms: 1_700_000_000_000,
             },
@@ -2731,17 +2929,16 @@ mod tests {
             id: "transient-retain".to_string(),
             vault_root_ipns: vault.to_string(),
             op: JournalOp::UploadFile {
-                ciphertext_b64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"ct",
-                ),
+                sidecar_path: std::path::PathBuf::from("/tmp/transient-retain.bin"),
+                sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: Some(file_meta.to_string()),
                 file_ipns_key_hex: Some(hex::encode(b"ecies-file-key")),
                 parent_folder_ipns_name: vault.to_string(),
                 parent_ipns_key_hex: hex::encode(b"ecies-parent-key"),
-                filename: "transient.txt".to_string(),
+                filename_encrypted_hex: hex::encode("transient.txt".as_bytes()),
                 size: 1,
                 created_at_ms: 1_700_000_000_000,
             },
@@ -2867,17 +3064,16 @@ mod tests {
             id: "f2entry".to_string(),
             vault_root_ipns: vault.to_string(),
             op: JournalOp::UploadFile {
-                ciphertext_b64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"ct",
-                ),
+                sidecar_path: std::path::PathBuf::from("/tmp/f2entry.bin"),
+                sidecar_sha256: hex::encode([0u8; 32]),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: hex::encode(b"wk"),
                 iv_hex: hex::encode(b"iv"),
                 file_meta_ipns_name: Some("k51filemeta".to_string()),
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: vault.to_string(),
                 parent_ipns_key_hex: String::new(), // empty -> immediate Err in replay
-                filename: "f2.txt".to_string(),
+                filename_encrypted_hex: hex::encode("f2.txt".as_bytes()),
                 size: 2,
                 created_at_ms: 1_700_000_000_000,
             },
@@ -2987,7 +3183,6 @@ mod durability_characterization_tests {
     use crate::test_support::{
         make_test_fs, make_test_fs_with_keypair, reply_error_code, CaptureSender,
     };
-    use base64::Engine;
     use fuser::{Reply, ReplyEntry};
     use std::sync::{Arc, Mutex};
     use zeroize::Zeroizing;
@@ -3115,8 +3310,7 @@ mod durability_characterization_tests {
         // Create a new file under root via handle_create so the inode + write
         // handle exist exactly as the OS would have set them up.
         let cap_create = Arc::new(Mutex::new(Vec::new()));
-        let reply_create =
-            <fuser::ReplyCreate as Reply>::new(1, CaptureSender(cap_create.clone()));
+        let reply_create = <fuser::ReplyCreate as Reply>::new(1, CaptureSender(cap_create.clone()));
         crate::write_ops::implementation::handle_create(
             &mut fs,
             crate::inode::ROOT_INO,
@@ -3159,23 +3353,44 @@ mod durability_characterization_tests {
         // (3) Reply is success.
         assert_eq!(reply_error_code(&cap), 0, "release must reply ok");
 
-        // (1) A journal entry exists whose ciphertext_b64 is non-empty.
+        // (1) A journal entry exists referencing a ciphertext sidecar .bin (D-01), and the
+        // sidecar was durably written BEFORE the reply (durable-ack with sidecar). The
+        // release callback blocked on the bounded oneshot until put_with_sidecar fsynced,
+        // so by the time we reach here both the .json entry and the .bin must exist on disk.
         let entries = fs
             .journal
             .load_all_for_vault(&vault)
             .expect("journal load must succeed");
-        let upload = entries
+        let (sidecar_path, sidecar_sha256) = entries
             .iter()
             .find_map(|e| match &e.op {
-                cipherbox_sdk::JournalOp::UploadFile { ciphertext_b64, .. } => {
-                    Some(ciphertext_b64.clone())
-                }
+                cipherbox_sdk::JournalOp::UploadFile {
+                    sidecar_path,
+                    sidecar_sha256,
+                    ..
+                } => Some((sidecar_path.clone(), sidecar_sha256.clone())),
                 _ => None,
             })
             .expect("release must journal an UploadFile entry before cleanup (D-04)");
         assert!(
-            !upload.is_empty(),
-            "journalled ciphertext_b64 must be non-empty"
+            sidecar_path.exists(),
+            "the ciphertext sidecar .bin must be durably written before the OS ack (D-01)"
+        );
+        assert!(
+            !sidecar_sha256.is_empty(),
+            "sidecar_sha256 must be recorded for replay integrity verification"
+        );
+        // The sidecar bytes must hash to the recorded sidecar_sha256.
+        let bin_bytes = std::fs::read(&sidecar_path).expect("read sidecar .bin");
+        let actual = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(&bin_bytes);
+            hex::encode(h.finalize())
+        };
+        assert_eq!(
+            actual, sidecar_sha256,
+            "sidecar bytes must match the recorded SHA-256"
         );
 
         // (2) The temp file was deleted by handle.cleanup() (read_ops.rs:882).
@@ -3210,35 +3425,43 @@ mod durability_characterization_tests {
         );
     }
 
-    /// REQ-2 replay: a pure `WriteQueue` round-trip — the journalled ciphertext
-    /// survives independently of any temp file. Build an UploadFile entry with a
-    /// known ciphertext, `put` it, then a FRESH `WriteQueue` over the same dir
-    /// reloads it and the `ciphertext_b64` base64-decodes to the original bytes.
-    /// No network, no spawn (crash simulation: the upload thread never runs).
+    /// REQ-2 replay (D-01 sidecar shape): the journalled ciphertext survives in the
+    /// `<id>.bin` sidecar independently of any temp file. Build an UploadFile entry,
+    /// `put_with_sidecar` it, then a FRESH `WriteQueue` over the same dir reloads the
+    /// entry and the sidecar bytes round-trip to the original ciphertext (and match the
+    /// recorded sidecar_sha256). No network, no spawn (crash simulation).
     #[tokio::test]
     async fn replay_reuploads_ciphertext() {
-        // Isolated journal dir owned by this test — `put` here, reload via a fresh
+        // Isolated journal dir owned by this test — write here, reload via a fresh
         // WriteQueue (no fs handle needed; the round-trip is the unit under test).
         let journal_dir = crate::test_support::make_isolated_journal_dir();
         let vault = "k51replay-vault".to_string();
         let put_queue = cipherbox_sdk::WriteQueue::new(journal_dir.clone(), 5);
 
         let original_ciphertext: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03];
-        let ciphertext_b64 =
-            base64::engine::general_purpose::STANDARD.encode(original_ciphertext);
+        let entry_id = "replay-test-entry".to_string();
+        let sidecar_path = put_queue.sidecar_path_for(&entry_id);
+        let sidecar_sha256 = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(original_ciphertext);
+            hex::encode(h.finalize())
+        };
 
         let entry = cipherbox_sdk::JournalEntry {
-            id: "replay-test-entry".to_string(),
+            id: entry_id.clone(),
             vault_root_ipns: vault.clone(),
             op: cipherbox_sdk::JournalOp::UploadFile {
-                ciphertext_b64: ciphertext_b64.clone(),
+                sidecar_path: sidecar_path.clone(),
+                sidecar_sha256: sidecar_sha256.clone(),
+                legacy_ciphertext_b64: String::new(),
                 wrapped_key_hex: "deadbeef".to_string(),
                 iv_hex: "00112233445566778899aabb".to_string(),
                 file_meta_ipns_name: None,
                 file_ipns_key_hex: None,
                 parent_folder_ipns_name: vault.clone(),
                 parent_ipns_key_hex: String::new(),
-                filename: "replay.bin".to_string(),
+                filename_encrypted_hex: hex::encode(b"enc-replay.bin"),
                 size: original_ciphertext.len() as u64,
                 created_at_ms: 1_700_000_000_000,
             },
@@ -3246,7 +3469,9 @@ mod durability_characterization_tests {
             status: cipherbox_sdk::JournalEntryStatus::Pending,
         };
 
-        put_queue.put(&entry).expect("journal put must succeed");
+        put_queue
+            .put_with_sidecar(&entry, original_ciphertext)
+            .expect("journal put_with_sidecar must succeed");
 
         // A FRESH WriteQueue over the same dir — simulates next-mount replay load.
         let reloaded_queue = cipherbox_sdk::WriteQueue::new(journal_dir, 5);
@@ -3254,23 +3479,146 @@ mod durability_characterization_tests {
             .load_all_for_vault(&vault)
             .expect("reload must succeed");
 
-        let reloaded_b64 = reloaded
+        let (reloaded_path, reloaded_sha) = reloaded
             .iter()
             .find_map(|e| match &e.op {
-                cipherbox_sdk::JournalOp::UploadFile { ciphertext_b64, .. } => {
-                    Some(ciphertext_b64.clone())
-                }
+                cipherbox_sdk::JournalOp::UploadFile {
+                    sidecar_path,
+                    sidecar_sha256,
+                    ..
+                } => Some((sidecar_path.clone(), sidecar_sha256.clone())),
                 _ => None,
             })
             .expect("reloaded UploadFile entry present");
 
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(&reloaded_b64)
-            .expect("reloaded ciphertext_b64 must base64-decode");
+        let decoded = std::fs::read(&reloaded_path).expect("reloaded sidecar must read");
         assert_eq!(
             decoded.as_slice(),
             original_ciphertext,
-            "replay must recover the exact journalled ciphertext bytes"
+            "replay must recover the exact journalled ciphertext bytes from the sidecar"
+        );
+        assert_eq!(
+            reloaded_sha, sidecar_sha256,
+            "reloaded sidecar_sha256 must match the original"
+        );
+    }
+
+    /// D-06: a genuine `journal.remove` I/O failure must be an `Err` (the shape the
+    /// `if let Err(e) = journal.remove(...)` logging path in `replay_for_vault` handles),
+    /// not a silently-swallowed `let _`. This proves that logging path is not dead code.
+    #[test]
+    fn remove_failure_is_logged() {
+        use cipherbox_sdk::WriteQueue;
+
+        let dir = std::env::temp_dir()
+            .join("cb-t52-01-remove-failure")
+            .join(format!("{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = WriteQueue::new(dir.clone(), 5);
+
+        // `remove` of a non-existent id is idempotent (NotFound -> Ok).
+        assert!(
+            journal.remove("nonexistent-id").is_ok(),
+            "remove of a missing entry must be Ok (idempotent NotFound path)"
+        );
+
+        // Drive the genuine (non-NotFound) error branch deterministically and
+        // root-independently: place a DIRECTORY at `<id>.json`. `WriteQueue::remove`
+        // unlinks the `.json` first via `remove_file`, which on a directory returns
+        // EISDIR (Unix) / ACCESS_DENIED (Windows) — never NotFound — regardless of
+        // CAP_DAC_OVERRIDE/root (unlink() cannot remove a directory). This avoids the
+        // permission-chmod approach, which 0o500 does not enforce for privileged CI runners.
+        let id = "remove-fail-t5201";
+        let json_path = dir.join(format!("{}.json", id));
+        std::fs::create_dir(&json_path).unwrap();
+
+        assert!(
+            journal.remove(id).is_err(),
+            "removing an entry whose .json is a directory must return Err (the `if let Err` logging shape)"
+        );
+
+        // `remove_dir_all` handles the leftover `<id>.json` directory.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D-03 (WR-07): the timeout→Err conversion that `replay_for_vault` relies on. A future
+    /// that sleeps past a short timeout must resolve to the `Err("... timed out ...")` value
+    /// (the shape routed through record_failure), not hang and not Ok.
+    #[tokio::test]
+    async fn replay_entry_timeout() {
+        // Mirror the production wrapping shape verbatim with a tiny real timeout so the test
+        // is fast (<1s) without needing tokio's test-util paused clock. The future never
+        // completes within the timeout, so it must resolve to the Err timeout value.
+        let timeout = std::time::Duration::from_millis(20);
+        let slow = async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            Ok::<(), String>(())
+        };
+        let result = tokio::time::timeout(timeout, slow)
+            .await
+            .unwrap_or_else(|_| Err(format!("replay timed out after {}ms", timeout.as_millis())));
+        assert!(
+            matches!(result, Err(ref e) if e.contains("timed out")),
+            "a future exceeding the timeout must become Err(\"... timed out ...\"), got {:?}",
+            result
+        );
+    }
+
+    /// D-04: the replay name-decrypt helper round-trips an ECIES-wrapped name, passes a
+    /// non-hex legacy plaintext through once, but RETAINS (Err) a valid-hex-but-corrupt
+    /// ECIES name rather than replaying it verbatim as a garbage filename.
+    #[test]
+    fn decrypt_journal_name_round_trip_and_legacy_compat() {
+        let (private_key, public_key) = real_keypair();
+
+        // Round-trip: wrap_key → hex → decrypt_journal_name recovers the plaintext.
+        let encrypted_hex =
+            hex::encode(cipherbox_crypto::ecies::wrap_key(b"report.txt", &public_key).unwrap());
+        assert_eq!(
+            super::decrypt_journal_name(&encrypted_hex, &private_key).unwrap(),
+            "report.txt",
+            "ECIES-encrypted name must decrypt back to the plaintext"
+        );
+
+        // Legacy passthrough-once: a non-hex plaintext value is returned verbatim (Ok).
+        assert_eq!(
+            super::decrypt_journal_name("legacy-plain.txt", &private_key).unwrap(),
+            "legacy-plain.txt",
+            "a non-hex legacy plaintext name must pass through unchanged"
+        );
+
+        // Hex-SHAPED legacy plaintext names: a pre-Phase-52 filename can itself be pure
+        // even-length hex (hyphen-less UUID, SHA-1, SHA-256, …). Such a name hex-decodes
+        // but is far shorter than ECIES_MIN_CIPHERTEXT_SIZE, so it must pass through
+        // verbatim — NOT be mistaken for a corrupt ciphertext, parked, and GC-purged.
+        for legacy_hex in [
+            "550e8400e29b41d4a716446655440000",                         // UUID, no hyphens (16 bytes)
+            "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3",                 // SHA-1 (20 bytes)
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // SHA-256 (32 bytes)
+        ] {
+            assert_eq!(
+                super::decrypt_journal_name(legacy_hex, &private_key).unwrap(),
+                legacy_hex,
+                "hex-decodable legacy name below the ECIES floor must pass through, not park"
+            );
+        }
+
+        // Valid hex, long enough to be an ECIES ciphertext, but NOT a valid one is
+        // corruption (e.g. in-place bit-rot of a real ECIES name keeps its length): it must
+        // return Err so the entry is retained, never replayed as a garbage filename.
+        let not_ecies = hex::encode([0xABu8; cipherbox_crypto::ecies::ECIES_MIN_CIPHERTEXT_SIZE]);
+        let err = super::decrypt_journal_name(&not_ecies, &private_key)
+            .expect_err("valid-hex-but-corrupt ECIES name must be retained, not passed through");
+        assert!(
+            err.contains("retaining entry"),
+            "corruption error must signal retention, got: {}",
+            err
+        );
+        // The error must not leak the (raw hex) name or any path (D-04).
+        assert!(
+            !err.contains(&not_ecies),
+            "corruption error must not embed the name"
         );
     }
 }

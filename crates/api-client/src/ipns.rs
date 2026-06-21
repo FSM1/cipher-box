@@ -15,10 +15,7 @@ pub async fn resolve_ipns(
     client: &ApiClient,
     ipns_name: &str,
 ) -> Result<IpnsResolveResponse, ApiError> {
-    let path = format!(
-        "/ipns/resolve?ipnsName={}",
-        urlencoding::encode(ipns_name)
-    );
+    let path = format!("/ipns/resolve?ipnsName={}", urlencoding::encode(ipns_name));
     let resp = client.authenticated_get(&path).await?;
 
     if resp.status().as_u16() == 404 {
@@ -53,6 +50,80 @@ pub async fn resolve_ipns(
     Ok(body)
 }
 
+/// Verify an IPNS resolve response signature.
+///
+/// Implements D-03 (all fields absent → None, allow+warn), D-02 (invalid → Some(false)),
+/// and D-04 (valid + name binding → Some(true)).
+///
+/// Returns:
+/// - `Ok(None)` ONLY when ALL THREE signature fields (signatureV2, data, pubKey) are
+///   absent — a true legacy record (backward-compat allow path).
+/// - `Ok(Some(false))` when SOME but not all three fields are present (partial/downgrade
+///   record — fail closed), when signature verification fails, or when the derived IPNS
+///   name does not match `ipns_name`.
+/// - `Ok(Some(true))` when the signature is valid and the public key derives to `ipns_name`.
+/// - `Err` when base64 decoding or IPNS name derivation fails on present fields.
+pub fn verify_ipns_resolve_signature(
+    resp: &crate::types::IpnsResolveResponse,
+    ipns_name: &str,
+) -> Result<Option<bool>, crate::error::ApiError> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+
+    let sig_present = resp.signature_v2.is_some();
+    let data_present = resp.data.is_some();
+    let pub_key_present = resp.pub_key.is_some();
+
+    // D-03: ALL fields absent → true legacy record, allow + flag (caller warns and continues).
+    if !sig_present && !data_present && !pub_key_present {
+        return Ok(None);
+    }
+
+    // Partial fields (some but not all present) → fail closed. A record carrying 1 or 2
+    // of the 3 fields is a downgrade vector, not a legacy record.
+    let (Some(sig_b64), Some(data_b64), Some(pub_key_b64)) = (
+        resp.signature_v2.as_ref(),
+        resp.data.as_ref(),
+        resp.pub_key.as_ref(),
+    ) else {
+        return Ok(Some(false));
+    };
+
+    let decode_field = |label: &str, s: &str| -> Result<Vec<u8>, crate::error::ApiError> {
+        STANDARD.decode(s).map_err(|e| {
+            crate::error::ApiError::DeserializationFailed(format!(
+                "IPNS {} base64 decode failed: {}",
+                label, e
+            ))
+        })
+    };
+    let sig = decode_field("signatureV2", sig_b64)?;
+    let cbor_data = decode_field("data", data_b64)?;
+    let pub_key = decode_field("pubKey", pub_key_b64)?;
+
+    // Build signed bytes: "ipns-signature:" prefix || CBOR data.
+    let mut signed_data = b"ipns-signature:".to_vec();
+    signed_data.extend_from_slice(&cbor_data);
+
+    // D-02: invalid signature → fail closed.
+    if !cipherbox_crypto::verify_ed25519(&signed_data, &sig, &pub_key) {
+        return Ok(Some(false));
+    }
+
+    // Convert decoded pub_key to fixed 32-byte array; wrong length → treat as invalid.
+    let pubkey_arr: [u8; 32] = match pub_key.as_slice().try_into() {
+        Ok(arr) => arr,
+        Err(_) => return Ok(Some(false)),
+    };
+
+    // Derive IPNS name and check it binds to the resolved name.
+    let derived_name = cipherbox_crypto::derive_ipns_name(&pubkey_arr).map_err(|e| {
+        crate::error::ApiError::DeserializationFailed(format!("IPNS name derivation failed: {}", e))
+    })?;
+
+    Ok(Some(derived_name == ipns_name))
+}
+
 /// Publish a signed IPNS record via the backend.
 ///
 /// POST /ipns/publish with the signed record. The backend relays
@@ -65,9 +136,7 @@ pub async fn publish_ipns(
     client: &ApiClient,
     request: &IpnsPublishRequest,
 ) -> Result<PublishResult, ApiError> {
-    let resp = client
-        .authenticated_post("/ipns/publish", request)
-        .await?;
+    let resp = client.authenticated_post("/ipns/publish", request).await?;
 
     if resp.status().as_u16() == 409 {
         // Parse conflict response body: { currentSequenceNumber: "..." }
@@ -98,4 +167,158 @@ pub async fn publish_ipns(
     }
 
     Ok(PublishResult::Success)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify_ipns_resolve_signature;
+    use crate::types::IpnsResolveResponse;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+
+    fn make_resolve_response_no_sig() -> IpnsResolveResponse {
+        IpnsResolveResponse {
+            success: true,
+            cid: "bafytest".to_string(),
+            sequence_number: "1".to_string(),
+            signature_v2: None,
+            data: None,
+            pub_key: None,
+        }
+    }
+
+    fn make_resolve_response_with_sig(
+        signature_v2: &str,
+        data: &str,
+        pub_key: &str,
+    ) -> IpnsResolveResponse {
+        IpnsResolveResponse {
+            success: true,
+            cid: "bafytest".to_string(),
+            sequence_number: "1".to_string(),
+            signature_v2: Some(signature_v2.to_string()),
+            data: Some(data.to_string()),
+            pub_key: Some(pub_key.to_string()),
+        }
+    }
+
+    /// Test 1: serde deserialization of optional sig fields.
+    #[test]
+    fn deserialize_with_sig_fields() {
+        let json = r#"{
+            "success": true,
+            "cid": "bafytest",
+            "sequenceNumber": "1",
+            "signatureV2": "AAAA",
+            "data": "BBBB",
+            "pubKey": "CCCC"
+        }"#;
+        let resp: IpnsResolveResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.signature_v2, Some("AAAA".to_string()));
+        assert_eq!(resp.data, Some("BBBB".to_string()));
+        assert_eq!(resp.pub_key, Some("CCCC".to_string()));
+    }
+
+    /// Test 1b: serde deserialization without sig fields.
+    #[test]
+    fn deserialize_without_sig_fields() {
+        let json = r#"{"success": true, "cid": "bafytest", "sequenceNumber": "1"}"#;
+        let resp: IpnsResolveResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.signature_v2, None);
+        assert_eq!(resp.data, None);
+        assert_eq!(resp.pub_key, None);
+    }
+
+    /// Test 2: all sig fields absent → Ok(None) — D-03 allow+flag (true legacy record).
+    #[test]
+    fn absent_fields_returns_none() {
+        let resp = make_resolve_response_no_sig();
+        let result = verify_ipns_resolve_signature(&resp, "k51anyname");
+        assert_eq!(result.unwrap(), None);
+    }
+
+    /// Test 2b: only signatureV2 present (1 of 3) → Ok(Some(false)) — fail closed on partial.
+    #[test]
+    fn partial_fields_only_signature_returns_some_false() {
+        let mut resp = make_resolve_response_no_sig();
+        resp.signature_v2 = Some("AAAA".to_string());
+        let result = verify_ipns_resolve_signature(&resp, "k51anyname");
+        assert_eq!(result.unwrap(), Some(false));
+    }
+
+    /// Test 2c: two of three fields present (signatureV2 + data, no pubKey) →
+    /// Ok(Some(false)) — fail closed on partial/downgrade record.
+    #[test]
+    fn partial_fields_two_of_three_returns_some_false() {
+        let mut resp = make_resolve_response_no_sig();
+        resp.signature_v2 = Some("AAAA".to_string());
+        resp.data = Some("BBBB".to_string());
+        // pub_key intentionally left None.
+        let result = verify_ipns_resolve_signature(&resp, "k51anyname");
+        assert_eq!(result.unwrap(), Some(false));
+    }
+
+    /// Test 3: invalid Ed25519 signature → Ok(Some(false)) — D-02.
+    #[test]
+    fn invalid_signature_returns_some_false() {
+        let (pub_key_bytes, private_key) = cipherbox_crypto::generate_ed25519_keypair();
+        let data_bytes = b"some-cbor-data";
+        // Sign DIFFERENT bytes (wrong data) to create an invalid signature.
+        let wrong_message = b"wrong-message";
+        let sig_bytes = cipherbox_crypto::sign_ed25519(wrong_message, &private_key).unwrap();
+
+        let resp = make_resolve_response_with_sig(
+            &STANDARD.encode(&sig_bytes),
+            &STANDARD.encode(data_bytes),
+            &STANDARD.encode(&pub_key_bytes),
+        );
+        let ipns_name =
+            cipherbox_crypto::derive_ipns_name(pub_key_bytes.as_slice().try_into().unwrap())
+                .unwrap();
+        let result = verify_ipns_resolve_signature(&resp, &ipns_name);
+        assert_eq!(result.unwrap(), Some(false));
+    }
+
+    /// Test 4: valid signature and matching derived IPNS name → Ok(Some(true)) — D-04.
+    #[test]
+    fn valid_signature_matching_name_returns_some_true() {
+        let (pub_key_bytes, private_key) = cipherbox_crypto::generate_ed25519_keypair();
+        let data_bytes = b"some-cbor-data";
+
+        // Build signed_data exactly as verify_ipns_resolve_signature expects.
+        let mut signed_data = b"ipns-signature:".to_vec();
+        signed_data.extend_from_slice(data_bytes);
+        let sig_bytes = cipherbox_crypto::sign_ed25519(&signed_data, &private_key).unwrap();
+
+        let pubkey_arr: [u8; 32] = pub_key_bytes.as_slice().try_into().unwrap();
+        let ipns_name = cipherbox_crypto::derive_ipns_name(&pubkey_arr).unwrap();
+
+        let resp = make_resolve_response_with_sig(
+            &STANDARD.encode(&sig_bytes),
+            &STANDARD.encode(data_bytes),
+            &STANDARD.encode(&pub_key_bytes),
+        );
+        let result = verify_ipns_resolve_signature(&resp, &ipns_name);
+        assert_eq!(result.unwrap(), Some(true));
+    }
+
+    /// Test 5: valid signature but IPNS name doesn't match derived name → Ok(Some(false)).
+    #[test]
+    fn valid_signature_wrong_name_returns_some_false() {
+        let (pub_key_bytes, private_key) = cipherbox_crypto::generate_ed25519_keypair();
+        let data_bytes = b"some-cbor-data";
+
+        let mut signed_data = b"ipns-signature:".to_vec();
+        signed_data.extend_from_slice(data_bytes);
+        let sig_bytes = cipherbox_crypto::sign_ed25519(&signed_data, &private_key).unwrap();
+
+        let resp = make_resolve_response_with_sig(
+            &STANDARD.encode(&sig_bytes),
+            &STANDARD.encode(data_bytes),
+            &STANDARD.encode(&pub_key_bytes),
+        );
+        // Pass a deliberately wrong IPNS name.
+        let result = verify_ipns_resolve_signature(&resp, "k51wrongname123");
+        assert_eq!(result.unwrap(), Some(false));
+    }
 }

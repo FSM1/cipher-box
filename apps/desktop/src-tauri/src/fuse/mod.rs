@@ -76,7 +76,7 @@ pub async fn mount_filesystem(
     rt: tokio::runtime::Handle,
     private_key: Vec<u8>,
     public_key: Vec<u8>,
-    root_folder_key: Vec<u8>,
+    root_folder_key: Zeroizing<Vec<u8>>,
     root_ipns_name: String,
     root_ipns_private_key: Option<Vec<u8>>,
     tee_public_key: Option<Vec<u8>>,
@@ -198,7 +198,7 @@ pub async fn mount_filesystem(
                         // Resolve root FilePointers
                         let unresolved = inodes.get_unresolved_file_pointers();
                         if !unresolved.is_empty() {
-                            if let Ok(fk) = <[u8; 32]>::try_from(root_folder_key.as_slice()) {
+                            if let Ok(fk) = <[u8; 32]>::try_from(root_folder_key.as_slice()).map(Zeroizing::new) {
                                 for (fp_ino, fp_ipns) in &unresolved {
                                     let fp_result: Result<Vec<u8>, String> = async {
                                         let resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, fp_ipns).await.map_err(|e| format!("{}", e))?;
@@ -236,7 +236,7 @@ pub async fn mount_filesystem(
                                     metadata_cache.set(sub_ipns, sub_meta.clone(), sub_cid);
                                     if let Ok(()) = inodes.populate_folder(*sub_ino, &sub_meta, &private_key, &public_key, false) {
                                         let sub_unresolved = inodes.get_unresolved_file_pointers();
-                                        if let Ok(sk) = <[u8; 32]>::try_from(sub_key.as_slice()) {
+                                        if let Ok(sk) = <[u8; 32]>::try_from(sub_key.as_slice()).map(Zeroizing::new) {
                                             for (fp_ino, fp_ipns) in &sub_unresolved {
                                                 let fp_result: Result<Vec<u8>, String> = async {
                                                     let resp = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, fp_ipns).await.map_err(|e| format!("{}", e))?;
@@ -273,20 +273,55 @@ pub async fn mount_filesystem(
         coord
     };
 
-    // Replay journal entries for this vault before mounting (D-06, D-07, D-08).
-    // Errors are logged but never fail the mount — partial replay is better than no mount.
-    cipherbox_fuse::replay_for_vault(
-        &journal,
-        state.sdk.api.clone(),
-        &private_key,
-        &public_key,
-        &root_folder_key,
-        &root_ipns_name,
-        publish_coordinator.clone(),
-        tee_public_key.as_deref(),
-        tee_key_epoch,
-    )
-    .await;
+    // D-02: GC parked Failed journal entries + orphaned sidecars at mount. No background
+    // scheduler exists for the journal, so mount is the natural sweep point (mirrors where
+    // replay runs). This is synchronous and fast (a directory scan), only touches Failed
+    // entries, and must never fail the mount — best-effort, non-fatal on Err (T-52-16, DoS).
+    match journal.gc_failed_entries(
+        cipherbox_sdk::JOURNAL_GC_MAX_AGE_DAYS,
+        cipherbox_sdk::JOURNAL_GC_MAX_SIZE_BYTES,
+    ) {
+        Ok(n) if n > 0 => log::info!("Mount GC: removed {} parked/orphaned journal item(s)", n),
+        Ok(_) => {}
+        Err(e) => log::warn!("Mount GC failed (will continue mount): {}", e),
+    }
+
+    // Replay journal entries for this vault CONCURRENTLY with mount (D-03 / WR-07).
+    // Previously this blocked the mount with `.await` — a hung IPNS/upload call could stall
+    // the mount indefinitely. Now replay runs on a background tokio task (each entry's network
+    // ops are individually bounded by `tokio::time::timeout` inside replay_for_vault), and the
+    // mount proceeds immediately. Errors are logged but never fail the mount.
+    //
+    // Clone every borrowed argument into owned values BEFORE `private_key`/`public_key`/
+    // `root_folder_key` are moved into CipherBoxFS (wrapped in Zeroizing) below — so both the
+    // replay task and the FS own their own copies (no move-then-borrow). Replay sends no
+    // FsEvent::UploadComplete, so spawning before CipherBoxFS construction is race-free.
+    {
+        let replay_journal = journal.clone();
+        let replay_api = state.sdk.api.clone();
+        let replay_private_key = private_key.clone();
+        let replay_public_key = public_key.clone();
+        let replay_root_folder_key = root_folder_key.clone();
+        let replay_root_ipns_name = root_ipns_name.clone();
+        let replay_coordinator = publish_coordinator.clone();
+        let replay_tee_public_key = tee_public_key.clone();
+        let replay_tee_key_epoch = tee_key_epoch;
+        rt.spawn(async move {
+            cipherbox_fuse::replay_for_vault(
+                &replay_journal,
+                replay_api,
+                &replay_private_key,
+                &replay_public_key,
+                &replay_root_folder_key,
+                &replay_root_ipns_name,
+                replay_coordinator,
+                replay_tee_public_key.as_deref(),
+                replay_tee_key_epoch,
+            )
+            .await;
+            log::info!("Background replay_for_vault complete");
+        });
+    }
 
     let fs = CipherBoxFS {
         inodes, metadata_cache,
@@ -294,7 +329,7 @@ pub async fn mount_filesystem(
         api: state.sdk.api.clone(),
         private_key: Zeroizing::new(private_key),
         public_key: Zeroizing::new(public_key),
-        root_folder_key: Zeroizing::new(root_folder_key),
+        root_folder_key,
         root_ipns_name, rt,
         next_fh: std::sync::atomic::AtomicU64::new(1),
         open_files: HashMap::new(),
