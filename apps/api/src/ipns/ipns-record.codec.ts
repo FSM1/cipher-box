@@ -16,7 +16,7 @@ export interface IpnsRecordFields {
  */
 export async function parseIpnsRecordBytes(
   recordBytes: Uint8Array,
-  logger: Logger,
+  logger: Logger
 ): Promise<IpnsRecordFields> {
   try {
     const record = await parseIpnsRecord(recordBytes);
@@ -52,7 +52,7 @@ export async function parseIpnsRecordBytes(
 
 export async function parseCachedRecord(
   cached: FolderIpns | null,
-  logger: Logger,
+  logger: Logger
 ): Promise<IpnsRecordFields | null> {
   if (!cached?.latestCid) {
     return null;
@@ -62,14 +62,14 @@ export async function parseCachedRecord(
     try {
       const parsed = withCachedPublicKey(
         await parseIpnsRecordBytes(cached.signedRecord, logger),
-        cached.publicKey ?? undefined,
+        cached.publicKey ?? undefined
       );
       // Use the DB columns as authoritative — sequenceNumber is always
       // incremented by upsertFolderIpns, while the record bytes may contain
       // the client's pre-increment value (e.g. sequence 0 on first publish).
       if (parsed.cid !== cached.latestCid) {
         logger.warn(
-          `Cached signed record CID mismatch for ${cached.ipnsName}: signedRecord=${parsed.cid}, latestCid=${cached.latestCid}`,
+          `Cached signed record CID mismatch for ${cached.ipnsName}: signedRecord=${parsed.cid}, latestCid=${cached.latestCid}`
         );
       }
       return { ...parsed, cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
@@ -84,7 +84,7 @@ export async function parseCachedRecord(
 
 export function withCachedPublicKey(
   result: IpnsRecordFields,
-  publicKey?: Buffer,
+  publicKey?: Buffer
 ): IpnsRecordFields {
   if (result.pubKey || !result.signatureV2 || !result.data || !publicKey) {
     return result;

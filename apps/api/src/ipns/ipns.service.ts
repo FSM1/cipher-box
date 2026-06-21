@@ -22,11 +22,7 @@ import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { deriveIpnsName, parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
-import {
-  parseIpnsRecordBytes,
-  parseCachedRecord,
-  withCachedPublicKey,
-} from './ipns-record.codec';
+import { parseIpnsRecordBytes, parseCachedRecord, withCachedPublicKey } from './ipns-record.codec';
 
 @Injectable()
 export class IpnsService {
@@ -542,5 +538,4 @@ export class IpnsService {
       }
     }
   }
-
 }
