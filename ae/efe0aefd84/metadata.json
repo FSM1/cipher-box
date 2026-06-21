@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "aeefe0aefd84",
+  "strategy": "manual-commit",
+  "branch": "feat/api-cid-and-provider-hardening-and-module-dedup",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ae/efe0aefd84/0/metadata.json",
+      "transcript": "/ae/efe0aefd84/0/full.jsonl",
+      "content_hash": "/ae/efe0aefd84/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26049,
+    "cache_creation_tokens": 216500,
+    "cache_read_tokens": 8539754,
+    "output_tokens": 101311,
+    "api_call_count": 58
+  }
+}
