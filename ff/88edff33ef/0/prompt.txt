@@ -1,0 +1,5 @@
+yes please
+
+---
+
+using fix(e2e) for this has caused a number of version bumps - can you rewrite the commit message to be chore(e2e): and hoefully no unnecessary bumps

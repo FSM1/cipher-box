@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ff88edff33ef",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-ipns-cjs-esm-resolution",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/sdk-core/scripts/edit-filepointer.mts",
+    "packages/sdk-core/scripts/edit-filepointer.ts",
+    "packages/sdk-core/scripts/rename-folder.mts",
+    "packages/sdk-core/scripts/rename-folder.ts",
+    "packages/sdk-core/scripts/verify-filepointer.mts",
+    "packages/sdk-core/scripts/verify-filepointer.ts",
+    "tests/desktop-e2e/scripts/test-cross-client-sync.ps1",
+    "tests/desktop-e2e/scripts/test-cross-client-sync.sh",
+    "tests/desktop-e2e/scripts/test-move-content.ts",
+    "tests/desktop-e2e/scripts/test-round-trip.ps1",
+    "tests/desktop-e2e/scripts/test-round-trip.sh",
+    "tests/e2e-helpers/auth.ts",
+    "tsconfig.scripts.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ff/88edff33ef/0/metadata.json",
+      "transcript": "/ff/88edff33ef/0/full.jsonl",
+      "content_hash": "/ff/88edff33ef/0/content_hash.txt",
+      "prompt": "/ff/88edff33ef/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 147,
+    "cache_creation_tokens": 11018,
+    "cache_read_tokens": 1115207,
+    "output_tokens": 10297,
+    "api_call_count": 9
+  }
+}
