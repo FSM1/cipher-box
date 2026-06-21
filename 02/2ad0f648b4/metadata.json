@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "022ad0f648b4",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-helper-script-module-resolution",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/desktop-e2e/package.json",
+    "tests/e2e-helpers/package.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/02/2ad0f648b4/0/metadata.json",
+      "transcript": "/02/2ad0f648b4/0/full.jsonl",
+      "content_hash": "/02/2ad0f648b4/0/content_hash.txt",
+      "prompt": "/02/2ad0f648b4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 697,
+    "cache_creation_tokens": 66402,
+    "cache_read_tokens": 5943335,
+    "output_tokens": 46716,
+    "api_call_count": 26
+  }
+}

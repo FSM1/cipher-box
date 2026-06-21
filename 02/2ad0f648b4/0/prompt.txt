@@ -1,0 +1,1 @@
+the desktop e2e tests are failing after the FUSE mount changes https://github.com/FSM1/cipher-box/actions/runs/27887243716
