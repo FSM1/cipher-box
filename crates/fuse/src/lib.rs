@@ -72,6 +72,13 @@ pub mod replay;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use replay::replay_for_vault;
 
+// Tier-2 dedup: shared async crypto/IPNS helpers (fetch_and_decrypt_content_async,
+// publish_file_metadata). The sync wrapper fetch_and_decrypt_file_content stays in
+// each operations.rs because macOS FUSE uses a 3s private timeout while Windows uses
+// the 10s crate::block_with_timeout (A2 scope narrowing — see content_ops.rs doc).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub mod content_ops;
+
 
 // REQ-6: Sample handler tests proving the test_support harness works. Gated on
 // `feature = "fuse"` because they construct `fuser::Reply*` values and use the
