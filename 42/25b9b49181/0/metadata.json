@@ -1,0 +1,120 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "4225b9b49181",
+  "session_id": "6a129c27-23dd-4a6f-8cae-5329bec3991d",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-21T13:18:15.938986Z",
+  "branch": "feat/large-source-file-refactor",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "04e344707f08",
+  "token_usage": {
+    "input_tokens": 37120,
+    "cache_creation_tokens": 804784,
+    "cache_read_tokens": 35297181,
+    "output_tokens": 280857,
+    "api_call_count": 164
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01EXYJdwGnGdsdoBEpK6pdtK",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "04e344707f08",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 96,
+        "end": 97,
+        "entry_ids": [
+          "ec41216c-2347-4e4b-a7dc-934c87c1d49d"
+        ],
+        "tool_use_id": "toolu_01EXYJdwGnGdsdoBEpK6pdtK"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01EXYJdwGnGdsdoBEpK6pdtK"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_017m2xe1PKVjiYQapSs6wVHF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "04e344707f08",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 405,
+        "end": 406,
+        "entry_ids": [
+          "084b0919-560e-4531-8eb9-046a05a16a28"
+        ],
+        "tool_use_id": "toolu_017m2xe1PKVjiYQapSs6wVHF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_017m2xe1PKVjiYQapSs6wVHF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
