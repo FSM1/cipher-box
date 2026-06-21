@@ -840,7 +840,7 @@ pub(crate) mod implementation {
                         // genuinely needs >3 minutes means a wedged/failing disk; acking
                         // success then would violate the durable-ack contract, and blocking
                         // forever would hang the whole FS — the DoS this phase removes.
-                        match rx.recv_timeout(crate::NETWORK_TIMEOUT * 18) {
+                        match rx.recv_timeout(crate::runtime::NETWORK_TIMEOUT * 18) {
                             Ok((Ok(()), ciphertext)) => {
                                 result.ciphertext = ciphertext;
                                 Ok(result)
@@ -850,7 +850,7 @@ pub(crate) mod implementation {
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
                                 "journal sidecar write timed out after {}s",
-                                (crate::NETWORK_TIMEOUT * 18).as_secs()
+                                (crate::runtime::NETWORK_TIMEOUT * 18).as_secs()
                             )),
                             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                                 Err("journal sidecar writer dropped before durability".to_string())
