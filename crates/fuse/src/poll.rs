@@ -1,9 +1,11 @@
-//! Shared IPNS FilePointer resolution polling for macOS FUSE and Windows WinFsp.
+//! IPNS FilePointer resolution polling for the macOS FUSE read path.
 //!
-//! Both `read_ops.rs` (macOS) and `platform/windows/read_ops.rs` (Windows) need
-//! to poll for in-flight async FilePointer resolution to complete. This module
-//! provides the `PollResult` enum and `poll_filepointer_resolution` function so
-//! both paths can share the same logic.
+//! The macOS read path (`read_ops.rs`) polls for an in-flight async FilePointer
+//! resolution to complete via `poll_filepointer_resolution`. The Windows/WinFsp
+//! read path (`platform/windows/read_ops.rs`) has its own inline polling loop
+//! (different mutex semantics) and does not use this function, so
+//! `poll_filepointer_resolution` is gated `#[cfg(feature = "fuse")]`. The
+//! `PollResult` enum is gated for both feature sets.
 
 /// Why did polling for a FilePointer resolution stop?
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
@@ -18,7 +20,8 @@ pub(crate) enum PollResult {
 /// Only blocks if an async resolution task is actually in-flight for `ino`.
 /// Uses a 5-second total deadline with 100ms sleep intervals.
 ///
-/// This is `pub(crate)` so `platform/windows/read_ops.rs` can also call it.
+/// This is `pub(crate)` so the macOS read path in `read_ops.rs` can call it
+/// from a sibling module.
 #[cfg(feature = "fuse")]
 pub(crate) fn poll_filepointer_resolution(
     fs: &mut crate::CipherBoxFS,
