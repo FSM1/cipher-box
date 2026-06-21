@@ -16,7 +16,6 @@
     }
   },
   "include": [
-    "packages/sdk-core/scripts/*.ts",
     "packages/sdk-core/scripts/*.mts",
     "tests/desktop-e2e/scripts/*.ts",
     "tests/web-e2e/staging-perf-wallet.ts",
