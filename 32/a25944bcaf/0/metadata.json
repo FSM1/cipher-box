@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "32a25944bcaf",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T15:45:55.890814Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "111bb344ee63",
+  "token_usage": {
+    "input_tokens": 13897,
+    "cache_creation_tokens": 255401,
+    "cache_read_tokens": 6875252,
+    "output_tokens": 96991,
+    "api_call_count": 42
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "111bb344ee63",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Plan and execute Phase 58 (ipns-signature-verify-coverage) of CipherBox — adding cryptographic IPNS signature verification coverage across Rust (crates/core, crates/fuse) and TypeScript (sdk-core, web) with TDD discipline and all decision gates D-01..D-13.",
+    "outcome": "Phase 58 fully planned (4 plans, 2 waves) and executed: all plans complete, cargo/jest/SDK-E2E gates passed (core 75, fuse 87, api jest 913/913, SDK E2E 89/89), phase verification passed 7/7 must-haves, VERIFICATION.md written, and advisory code-review findings queued for application.",
+    "learnings": {
+      "repo": [
+        "crates/crypto cannot dev-depend on api-client or core due to dependency cycles — cross-language verify vectors must live in crates/fuse/tests/ not crates/crypto/tests/",
+        "TEST_LOGIN_SECRET in apps/api/.env is 'e2e-test-secret-ci-only' but the SDK E2E harness defaults to 'e2e-test-secret-do-not-use-in-production' — they don't match; the gate silently skips if wrong secret is used",
+        "D-09 sequence-validation tightening historically broke 48/89 SDK E2E tests; this class of change requires explicit E2E gate confirmation before phase sign-off",
+        "The D-09 idempotent path (same sequence, update latestCid, no increment) is intentional and must not be removed",
+        "replay.rs uses unchecked seq + 1 arithmetic while the rest of the crate uses checked_add — inconsistency flagged as WR-01 in code review",
+        "9 FUSE resolve sites needed routing through resolve_ipns_verified; 1 folder-key descent site intentionally kept as hard-fail (not routed)",
+        "Local dev stack topology: redis:6380, api:3000, postgres, ipfs/kubo — all must be running for SDK E2E gate"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "New file — resolve_ipns_verified chokepoint wrapper; ciborium dep must be in crates/fuse/Cargo.toml (not just crates/core) for this to compile"
+        },
+        {
+          "path": "apps/api/src/",
+          "line": 245,
+          "end_line": 245,
+          "finding": "expectedSequenceNumber guard at line 245 is the CAS 409 conflict check — intentionally left unchanged by D-09 work, not a D-09 regression"
+        }
+      ],
+      "workflow": [
+        "Sequential executor on the feature branch is the correct mode for security/crypto phases where parallel-worktree merge failures would be catastrophic",
+        "commit_failed from the GSD commit helper is a known false negative — always verify with git log before retrying",
+        "Plan checker cosmetic warnings (missing RESOLVED marker on Open Questions) are cheaper to fix by direct file edit than by re-running the planner",
+        "When an executor dies mid-task via socket error, assess git log + uncommitted diff before spawning a continuation — partial work is often committed and only the tail needs redoing",
+        "Phase verifier and code reviewer can be spawned in parallel after all plans complete — they are fully independent",
+        "An executor may overrun its scoped plan and continue into the next sequential plan in the same run; treat resulting commits as valid but adjust wave checkpoint accounting"
+      ]
+    },
+    "friction": [
+      "58-01 executor hit an API socket error mid-execution, dropping ~40% of the plan uncommitted and requiring a manual continuation agent",
+      "SDK E2E gate silently produced 0 results (skipped) due to TEST_LOGIN_SECRET mismatch between API .env and SDK E2E harness default — looked like a pass until investigated",
+      "58-02 executor scope-crept into 58-03 in the same run without being asked, requiring post-hoc wave checkpoint reconciliation",
+      "ciborium-not-a-fuse-dep diagnostic from the crashed executor was stale (the dep was already added) — caused unnecessary alarm during recovery assessment",
+      "commit_failed false negative after writing VALIDATION.md required an extra git log verification step"
+    ],
+    "open_items": [
+      "Code review findings (WR-01: unchecked seq+1 in replay.rs; plus 3 robustness/parity items) sent to code-fixer agent — transcript ends before confirmation they were applied and tests re-run",
+      "TEST_LOGIN_SECRET mismatch between apps/api/.env and SDK E2E harness should be documented or normalized so the gate cannot silently skip in future phases",
+      "58-02 full-SDK-E2E gate was infra-limited during plan execution and only ran correctly via a separate gate agent — the executor-level E2E gate setup needs the secret alignment fix to be reliable"
+    ]
+  }
+}
