@@ -1,0 +1,159 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "c477ad416aa9",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T16:50:17.396302Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-22-phase58-simplify-cleanup.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "a39a658fbdf4",
+  "token_usage": {
+    "input_tokens": 23577,
+    "cache_creation_tokens": 387758,
+    "cache_read_tokens": 19960218,
+    "output_tokens": 197253,
+    "api_call_count": 81
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a39a658fbdf4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Plan, execute, and ship Phase 58 (IPNS Signature-Verify Coverage) of CipherBox using the GSD workflow — covering research, planning, wave-based execution, verification, security audit, and PR creation with full quality gates.",
+    "outcome": "Phase 58 was fully planned (4 plans/2 waves), executed, verified (7/7 must-haves, 89/89 SDK E2E), and PR #544 was opened. CI lint is failing at session end due to the new generator script being `.mjs` instead of `.ts`, which also bypassed pre-commit hooks — a fix agent was spawned but not yet completed.",
+    "learnings": {
+      "repo": [
+        "Scripts in `scripts/` must be `.ts` run via `tsx` (convention: `generate-test-vectors.ts`, `backfill-pinned-cids.ts`); `tsconfig.scripts.json` provides typechecking for that directory.",
+        "lint-staged globs cover `*.{ts,tsx,js,jsx}` but NOT `mjs`/`mts` — a `.mjs` file silently bypasses all pre-commit linting, letting errors through to CI.",
+        "eslint `files` glob covers `{js,mjs,cjs,ts,tsx}` but NOT `mts`/`cts` — both lint-staged and eslint config need extending.",
+        "`check-vector-parity.sh` is a meta-check only (validates hardcoded vector file list exists); it does NOT run the generator and does not yet include `tests/vectors/ipns/verify.json`.",
+        "SDK E2E `SDK_E2E_SECRET` must match `TEST_LOGIN_SECRET` in `apps/api/.env` (`e2e-test-secret-ci-only`); vitest does NOT auto-load `tests/sdk-e2e/.env`, so a mismatch causes silent 401→suite-skip misread as 'infra-limited'.",
+        "`crates/fuse` cannot dev-depend on `api-client`/`core` (dependency cycle); cross-language test vectors belong in `crates/fuse/tests/`, not `crates/crypto/tests/`.",
+        "The commit helper can report `commit_failed` while the commit actually lands — always verify with `git log --oneline -1`, never blindly retry.",
+        "`gh pr edit` fails on this repo (Projects-classic GraphQL) — patch body via `gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file`.",
+        "Parallel worktree execution is unsafe for multi-crate crypto phases sharing `target/`/`node_modules`; sequential execution on the feature branch is the correct mode.",
+        "`git filter-branch --msg-filter` is the commit-reword tool here (`git rebase -i` is unavailable in this environment).",
+        "Desktop IPNS resolve sites (`apps/desktop/src-tauri/prepopulate.rs`, `vault.rs`) still use unverified `resolve_ipns` — explicitly out of scope for Phase 58 baseline."
+      ],
+      "code": [
+        {
+          "path": "scripts/gen-ipns-verify-vectors.mjs",
+          "line": 67,
+          "end_line": 67,
+          "finding": "Unused `createIpnsRecord` variable — eslint error caught only by CI (pre-commit hook skips .mjs files)."
+        },
+        {
+          "path": "scripts/gen-ipns-verify-vectors.mjs",
+          "line": 329,
+          "end_line": 351,
+          "finding": "Two prettier violations not caught locally due to .mjs extension being excluded from lint-staged."
+        },
+        {
+          "path": "packages/sdk-e2e/ipns.test.ts",
+          "line": 155,
+          "end_line": 267,
+          "finding": "`btoa(String.fromCharCode(...cbor))` pattern — CodeRabbit flagged as potentially corrupting bytes >127; replaced with `Buffer.from(cbor).toString('base64')` for clarity."
+        },
+        {
+          "path": "crates/core/src/ipns.rs",
+          "finding": "Missing unit tests for u64-overflow sequence rejection and invalid-UTF-8 CBOR Value rejection — genuine coverage gaps added post-CodeRabbit-CLI."
+        },
+        {
+          "path": "packages/sdk-core/ipns/index.ts",
+          "finding": "Missing explicit existence check on `cborFields['Sequence']` before BigInt coercion — added defensive guard with binding-mismatch error per CodeRabbit-CLI finding."
+        },
+        {
+          "path": "crates/fuse/src/replay.rs",
+          "finding": "Sequence increment used unchecked `seq + 1`; replaced with `checked_add` per crate convention to prevent u64 overflow silently wrapping."
+        }
+      ],
+      "workflow": [
+        "When an executor crashes mid-plan (socket close), assess git state first — committed tasks are safe, uncommitted diffs may still be on disk; a targeted continuation agent is cheaper than a full re-run.",
+        "CodeRabbit CLI (`coderabbit review --agent --base main --type committed`) catches issues before PR open; the PR-level re-review then re-examines fix commits and may raise new findings — both passes must be triaged.",
+        "Commit reword (to strip parentheses for commitlint) must happen after all doc commits land but before the first push — rewording after push requires a force-push that can race the release-bot's `chore(release)` commit.",
+        "A security-audit agent that writes to repo-root `SECURITY.md` must be corrected to write the phase-scoped doc instead; always verify the destination path.",
+        "Running the SDK E2E gate requires rebuilding the full client chain (`crypto→core→api-client→sdk-core→sdk→api`) from source before starting the API from dist — skipping the rebuild risks testing stale code."
+      ]
+    },
+    "friction": [
+      "58-01 executor crashed mid-task due to API socket close after committing 3 of 5 tasks — required manual state assessment and a targeted continuation agent.",
+      "SDK E2E was misclassified as 'infra-limited' by the executor due to TEST_LOGIN_SECRET mismatch; the real suite had to be run manually with the correct secret.",
+      "One executor spawned for 58-02 silently also executed 58-03 in the same run — unplanned scope bleed that happened to be harmless but was hard to detect until checking git log.",
+      "The `commit_failed` false-negative from the commit helper required git log verification at multiple points throughout the session.",
+      "`gh pr edit` is broken for this repo (Projects-classic GraphQL error) — required a workaround via raw `gh api -X PATCH`.",
+      "CI lint failure from `.mjs` script discovered only after PR creation — the pre-commit hook gap (extension not in lint-staged) is what allowed the errors to reach CI.",
+      "`git push`/`git fetch` are blocked in sandbox and require disabling the sandbox for every push operation."
+    ],
+    "open_items": [
+      "CI lint fix for `scripts/gen-ipns-verify-vectors.mjs → .ts` conversion + lint-staged/eslint glob extension: agent spawned but not completed at session end — PR #544 lint check is currently failing.",
+      "CodeRabbit PR-level review on PR #544 still pending — threads not yet triaged or resolved.",
+      "Desktop unverified `resolve_ipns` call sites in `apps/desktop/src-tauri/prepopulate.rs` and `vault.rs` — deferred to `2026-06-22-desktop-resolve-ipns-verified-coverage.md`.",
+      "Phase 58 simplify cleanup (dead `signature_verified` field, test-string rename, dead `journal_entry` branch, unused vector fixture fields) — deferred to `2026-06-22-phase58-simplify-cleanup.md`.",
+      "`check-vector-parity.sh` does not include `tests/vectors/ipns/verify.json` (new Phase 58 artifact) — needs adding to the hardcoded list.",
+      "Pre-existing hygiene: 5 REQ-IDs missing from REQUIREMENTS.md traceability table (IPNS-05/06, DB-01/02, BYO-08) — flagged by `phase.complete` but unrelated to Phase 58 scope.",
+      "Milestone v1.1-hardening is complete (Phase 58 was the last phase) — `/gsd-complete-milestone` archival not yet run."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-22T16:49:02.403695Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 413,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 413,
+    "total_lines_changed": 800,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
