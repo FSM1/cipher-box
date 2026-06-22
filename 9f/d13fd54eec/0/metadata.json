@@ -1,0 +1,133 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9fd13fd54eec",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T16:09:58.390494Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/58-ipns-signature-verify-coverage/58-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "bf33d919d497",
+  "token_usage": {
+    "input_tokens": 19388,
+    "cache_creation_tokens": 324508,
+    "cache_read_tokens": 13277453,
+    "output_tokens": 145205,
+    "api_call_count": 63
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bf33d919d497",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Plan and execute Phase 58 (IPNS Signature-Verify Coverage) of the CipherBox project using the GSD workflow system, then run the full autonomous ship pipeline: verify → secure → validate → simplify → SDK E2E → CodeRabbit → ship → resolve PR reviews.",
+    "outcome": "Phase 58 was fully planned (4 plans, 2 waves), executed, and verified (7/7 must-haves, HARD-09 satisfied). The ship pipeline reached the Nyquist validation gate with security audit (19/19 threats closed), SDK E2E (89/89 passing), 4 code-review findings applied, and 2 deferred todos captured. The transcript ends before PR creation.",
+    "learnings": {
+      "repo": [
+        "TEST_LOGIN_SECRET in apps/api/.env is 'e2e-test-secret-ci-only', but the SDK E2E default SDK_E2E_SECRET is 'e2e-test-secret-do-not-use-in-production' — a mismatch causes silent 401s that make the entire suite appear skipped rather than failed.",
+        "vitest 3 does not auto-load tests/sdk-e2e/.env; the secret must be explicitly passed via SDK_E2E_SECRET env var on the command line.",
+        "crates/fuse cannot dev-depend on api-client/core due to a circular dependency; cross-language vector test consumers must live in crates/fuse/tests/, not crates/crypto/tests/.",
+        "gh pr edit fails on this repo due to Projects-classic GraphQL restrictions; PR body must be patched via 'env -u GITHUB_TOKEN gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file'.",
+        "github-actions[bot] pushes a chore(release) commit to the branch after PR creation and after a passing Release Preview — git fetch + rebase is required before any subsequent push.",
+        "The commit helper reports commit_failed while the commit actually lands; always verify with 'git log --oneline -1' rather than retrying.",
+        "phase.complete warns about 5 pre-existing REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) missing from the traceability table — these are pre-existing hygiene gaps unrelated to HARD-09.",
+        "6 unverified resolve_ipns call sites exist in apps/desktop/src-tauri/ (prepopulate.rs, vault.rs) — explicitly deferred in 58-01, no regression from baseline.",
+        "markdownlint excludes .planning/ on commit, but prettier still runs there.",
+        "GSD executor commits use a non-conventional 'feat 51-03:' style that fails Release Please CI; must reword before the first push using git filter-branch --msg-filter (git rebase -i is unavailable in this environment).",
+        "D-09 gate (upsertFolderIpns): the idempotent TEE re-sign path must not increment the DB sequence number, but must still update latestCid."
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "Adding a temporary axios response interceptor logging err.response.data is the correct technique to surface real 400 error reasons from the API, since the API does not log handled 4xx by default."
+        },
+        {
+          "path": "apps/api/.env",
+          "finding": "Contains TEST_LOGIN_SECRET and THROTTLE_BYPASS_SECRET; the SDK E2E suite must be invoked with these values extracted via grep rather than using hardcoded defaults."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "New module introduced as the IPNS verification chokepoint; imports ciborium which must be listed as a dependency of the fuse crate (not just core) for the build to succeed."
+        }
+      ],
+      "workflow": [
+        "Sequential execution on the feature branch (rather than parallel worktrees) is the safer choice for multi-crate crypto phases where merge conflicts and cwd-drift are high-risk.",
+        "When a subagent crashes mid-task due to an API socket error, check git state (git log, git diff) before spawning a continuation — partial commits may have already landed and must not be re-applied.",
+        "A subagent spawned for one plan may complete multiple plans opportunistically (58-02 executor also completed 58-03); this is harmless when plans are sequential but requires careful state tracking.",
+        "SDK E2E suite skipping silently (no failures, just 0 tests run) is a symptom of a secret mismatch or auth failure, not an infra outage — never accept 'infra-limited' without confirming the auth flow works.",
+        "Commit history reword must happen after all doc/artifact commits land on the branch but before the first push; rewording during an in-flight agent commit race risks losing commits.",
+        "For verified crypto code immediately before ship, defer all marginal simplifications to a todo rather than churning audited code — operating rule: risky/large/marginal → defer with file refs.",
+        "Running the phase verifier and advisory code reviewer in parallel is safe and efficient since both are read-only analysis of the same artifact set.",
+        "The 'fix commit scope mislabeled' pattern (e.g., fix(58-03) touching a 58-01 file) is a known fixer artifact — cosmetic only if the actual file edits are correct and tests pass; not worth rewriting history.",
+        "Post-plan gap analysis and requirements/decision coverage gates should run immediately after all plans are committed, before spawning the verifier, to surface scope gaps cheaply."
+      ]
+    },
+    "friction": [
+      "58-01 executor crashed mid-task due to an API socket close after committing 3 of 5 tasks, leaving uncommitted FUSE routing changes and requiring a manual continuation agent.",
+      "SDK E2E was initially misclassified as 'infra-limited' by the executor due to a TEST_LOGIN_SECRET/SDK_E2E_SECRET mismatch that caused silent 401s, requiring a separate dedicated agent to run the gate correctly.",
+      "One executor spawned for 58-02 autonomously completed 58-03 as well, making wave-tracking and checkpoint accounting ambiguous mid-run.",
+      "The commit helper false-negative (reporting commit_failed on success) required verification via git log after every commit operation.",
+      "gh pr edit is broken on this repo, requiring a less ergonomic gh api PATCH workaround for PR body updates.",
+      "Fix commits from the code-fixer had mislabeled scopes (e.g., fix(58-03) touching a 58-01 file) — cosmetic but confusing in git history.",
+      "git push and git fetch are blocked in the sandbox environment, requiring explicit sandbox-disable for push operations.",
+      "The test-login payload shape was not immediately obvious, making it impossible to probe :3000 directly to diagnose the secret mismatch without reading the harness first."
+    ],
+    "open_items": [
+      "6 unverified resolve_ipns call sites in apps/desktop/src-tauri/ (prepopulate.rs, vault.rs) deferred to todo: .planning/todos/pending/2026-06-22-desktop-resolve-ipns-verified-coverage.md",
+      "Phase 58 simplify cleanup items deferred: dead signature_verified field, test-string clarity rename, dead journal_entry if/else branch, unused public_key/private_key fields in the vector fixture — captured in .planning/todos/pending/2026-06-22-phase58-simplify-cleanup.md",
+      "Pre-existing REQ-ID traceability gap: IPNS-05/06, DB-01/02, BYO-08 missing from the REQUIREMENTS.md traceability table — needs a dedicated cleanup pass.",
+      "Ship pipeline incomplete at transcript end: Nyquist validation gate, CodeRabbit CLI review, conventional commit reword (one commit with parens in subject), PR creation, and PR review resolution all still pending.",
+      "Merge decision for feat/ipns-signature-verify-coverage PR left to user.",
+      "v1.1-hardening milestone archival (/gsd-complete-milestone) not yet run — Phase 58 was the last phase in the milestone."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-22T16:08:40.515592Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 65,
+    "human_modified": 28,
+    "human_removed": 0,
+    "total_committed": 65,
+    "total_lines_changed": 93,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
