@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "82c79f102e57",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T15:04:38.010551Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "111bb344ee63",
+  "token_usage": {
+    "input_tokens": 13619,
+    "cache_creation_tokens": 211883,
+    "cache_read_tokens": 4398412,
+    "output_tokens": 66107,
+    "api_call_count": 32
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "111bb344ee63",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Plan and begin executing Phase 58 (ipns-signature-verify-coverage): add CBOR cid/sequence binding and a Rust `resolve_ipns_verified` chokepoint across 9 FUSE resolve sites, plus a non-CAS embedded-sequence gate in `upsertFolderIpns`, with TDD mode and ASVS L1 threat models required in every PLAN.md.",
+    "outcome": "Planning completed fully (4 plans, 2 waves, HARD-09 1/1 covered, 0 blockers from plan-checker). Wave 1 execution: 58-01 finished after a mid-run socket crash required a continuation executor (all 5 tasks committed, 9 FUSE sites routed, sdk-core JS binding green). 58-02 was spawned but the transcript ends before its result.",
+    "learnings": {
+      "repo": [
+        "`crates/crypto` cannot dev-depend on `api-client` or `crates/core` — dependency cycle forces cross-language verify vectors into `crates/fuse/tests/` instead of `crates/crypto/tests/`.",
+        "The IPNS verification chokepoint pattern is a `resolve_ipns_verified` wrapper in `crates/fuse/src/verify.rs` that all 9 FUSE resolve sites must route through; the folder-key descent remains a hard-fail.",
+        "VALIDATION.md (Nyquist architecture) must be written with frontmatter before the planner runs when the Nyquist flag is on — body scaffold is owned by execute/validate tooling, not the orchestrator.",
+        "Phase 58 ROADMAP.md already contained wave-dependency annotations before this run; the post-planning idempotent write was a no-op.",
+        "The local dev stack (redis:6380, api:3000, postgres, ipfs/kubo) was confirmed up before Wave 1, which unblocked 58-02's full-SDK-E2E gate from needing a manual start."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/Cargo.toml",
+          "line": 43,
+          "end_line": 43,
+          "finding": "`ciborium` dependency is present here — a mid-crash diagnostic falsely reported it missing; the dep was committed in an earlier atomic commit before the socket drop."
+        },
+        {
+          "path": ".planning/phases/58-ipns-signature-verify-coverage/58-RESEARCH.md",
+          "finding": "Plan-checker flags `## Open Questions` headings that lack a `(RESOLVED)` marker as a warning; fix is an inline heading rename, not a planner revision cycle."
+        }
+      ],
+      "workflow": [
+        "The `commit_failed` return from the commit helper is a known false negative — always verify with `git log` rather than retrying the commit.",
+        "API socket errors can drop an executor mid-task, leaving later tasks uncommitted on disk but not lost; a continuation executor prompt that includes the committed/uncommitted split and remaining task list recovers cleanly.",
+        "Sequential execution on the feature branch (rather than parallel worktree isolation) is the safer default for multi-crate crypto phases — avoids worktree-merge failures and cwd-drift documented in project memory.",
+        "A cosmetic plan-checker warning (doc heading style) does not warrant a full planner revision cycle; a direct file edit is sufficient to clear it before the requirements/decision coverage gates."
+      ]
+    },
+    "friction": [
+      "58-01 executor lost its connection via an API socket error mid-task-3, leaving +265/-83 lines of FUSE routing uncommitted and requiring a manual continuation spawn.",
+      "Plan-checker emitted a false-friction warning on RESEARCH.md's `## Open Questions` heading (missing `(RESOLVED)` marker) — substantively all questions were handled in-plan, costing an extra edit + commit cycle.",
+      "The `commit_failed` signal from the commit helper is unreliable (known false negative), requiring an extra `git log` verification step after every commit."
+    ],
+    "open_items": [
+      "58-02 (non-CAS embedded-sequence D-09 gate in `upsertFolderIpns`) was spawned but did not complete before the transcript ended — has a non-autonomous human checkpoint at the D-10 full-SDK-E2E gate.",
+      "Wave 2 not yet started: 58-03 (web/sdk-core resolve dedup, D-13) and 58-04 (shared cross-language verify vectors, 7 cases, D-11/D-12) are both pending.",
+      "Phase-level verification (gsd-verify-work) and phase completion state update not yet run — blocked on all 4 plans finishing."
+    ]
+  }
+}
