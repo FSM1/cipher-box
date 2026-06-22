@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "572bed975484",
+  "strategy": "manual-commit",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/config.json",
+    "Cargo.lock"
+  ],
+  "sessions": [
+    {
+      "metadata": "/57/2bed975484/0/metadata.json",
+      "transcript": "/57/2bed975484/0/full.jsonl",
+      "content_hash": "/57/2bed975484/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13375,
+    "cache_creation_tokens": 205250,
+    "cache_read_tokens": 3949847,
+    "output_tokens": 60916,
+    "api_call_count": 30
+  }
+}
