@@ -153,7 +153,7 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
 /// - `cipherbox_core::ipns::decode_ipns_cbor_data` (the CBOR field extraction)
 ///
 /// Both are exercised against vectors whose bytes were produced by the JS
-/// generator (`scripts/gen-ipns-verify-vectors.mjs`), so any Rust↔JS drift
+/// generator (`scripts/gen-ipns-verify-vectors.ts`), so any Rust↔JS drift
 /// in byte-construction fails this test — satisfying D-12.
 #[test]
 fn ipns_verify_cross_language() {

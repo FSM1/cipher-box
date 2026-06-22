@@ -9,7 +9,7 @@ files:
   - crates/fuse/src/events.rs
   - crates/fuse/src/metadata.rs
   - crates/fuse/tests/ipns_verify_vectors.rs
-  - scripts/gen-ipns-verify-vectors.mjs
+  - scripts/gen-ipns-verify-vectors.ts
   - tests/vectors/ipns/verify.json
 ---
 
@@ -32,7 +32,7 @@ None are correctness bugs.
    `if journal_entry.is_some()` and `else` arms return identical `Err`; the `Some` arm is unreachable
    (param is always `None`). Collapse the branch body to the single `Err`; keep the `journal_entry`
    parameter for deferred D-01a journal work.
-4. **Unused `public_key`/`private_key` in the vector fixture** — `scripts/gen-ipns-verify-vectors.mjs`
+4. **Unused `public_key`/`private_key` in the vector fixture** — `scripts/gen-ipns-verify-vectors.ts`
    emits `public_key` and `private_key` (filler `0101…`, not a real secret) into every entry of
    `tests/vectors/ipns/verify.json`, but neither the Rust nor JS consumer reads them. Remove from the
    7 `vectors.push(...)` sites, re-run the generator, confirm both consumers stay green.

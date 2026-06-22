@@ -10,10 +10,10 @@
  *   partial-fields, legacy-absent
  *
  * Run from the repo root (packages/core must be built first):
- *   node scripts/gen-ipns-verify-vectors.mjs
+ *   npx tsx scripts/gen-ipns-verify-vectors.ts
  *
  * Or run with packages/core as the working directory:
- *   cd packages/core && node ../../scripts/gen-ipns-verify-vectors.mjs
+ *   cd packages/core && npx tsx ../../scripts/gen-ipns-verify-vectors.ts
  *
  * The cid-swapped and seq-mismatch vectors carry REAL Ed25519 signatures over
  * their (mis-matching) CBOR data — meaning Ed25519 verification PASSES
@@ -62,9 +62,12 @@ if (!existsSync(CORE_PATH)) {
   process.exit(1);
 }
 
-const { encode: cborEncode } = await import(pathToFileURL(CBORG_PATH).toString());
-const ed = await import(pathToFileURL(ED25519_PATH).toString());
-const { createIpnsRecord, deriveIpnsName } = await import(pathToFileURL(CORE_PATH).toString());
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { encode: cborEncode } = (await import(pathToFileURL(CBORG_PATH).toString())) as any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ed = (await import(pathToFileURL(ED25519_PATH).toString())) as any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { deriveIpnsName } = (await import(pathToFileURL(CORE_PATH).toString())) as any;
 
 // ---------------------------------------------------------------------------
 // Deterministic test key material (DO NOT use in production)
@@ -80,10 +83,27 @@ const CID_A = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
 const CID_B = 'bafybeif2pall7dybz7vecqka3zo24irdwabwdi4wc55mdgataz3a5fmfkq';
 
 // ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface VectorEntry {
+  description: string;
+  ipns_name: string;
+  public_key: string;
+  private_key: string;
+  cid: string;
+  sequence_number: string;
+  signature_v2: string | null;
+  data: string | null;
+  pub_key: string | null;
+  expected_result: string;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function hexToBytes(hex) {
+function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
     bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
@@ -91,13 +111,13 @@ function hexToBytes(hex) {
   return bytes;
 }
 
-function bytesToHex(bytes) {
+function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
 
-function bytesToBase64(bytes) {
+function bytesToBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64');
 }
 
@@ -111,21 +131,21 @@ function bytesToBase64(bytes) {
  * IMPORTANT: Uses cborg directly so we can build CBOR for "wrong" cid/seq values
  * (cid-swapped and seq-mismatch cases) without going through createIpnsRecord.
  */
-function buildCborData(cid, sequenceNumber) {
+function buildCborData(cid: string, sequenceNumber: number): Uint8Array {
   return cborEncode({
     TTL: 300000000000,
     Value: new TextEncoder().encode(`/ipfs/${cid}`),
     Sequence: sequenceNumber,
     Validity: new TextEncoder().encode('2099-01-01T00:00:00.000000000Z'),
     ValidityType: 0,
-  });
+  }) as Uint8Array;
 }
 
 /**
  * Build the signed bytes per IPFS IPNS spec:
  * "ipns-signature:" || CBOR data
  */
-function buildSignedBytes(cborData) {
+function buildSignedBytes(cborData: Uint8Array): Uint8Array {
   const prefix = new TextEncoder().encode('ipns-signature:');
   const signed = new Uint8Array(prefix.length + cborData.length);
   signed.set(prefix, 0);
@@ -137,14 +157,14 @@ function buildSignedBytes(cborData) {
 // Main generator
 // ---------------------------------------------------------------------------
 
-async function main() {
+async function main(): Promise<void> {
   const primaryPriv = hexToBytes(PRIMARY_PRIV_KEY_HEX);
-  const primaryPub = ed.getPublicKey(primaryPriv);
-  const primaryIpnsName = await deriveIpnsName(primaryPub);
+  const primaryPub = (await ed.getPublicKeyAsync(primaryPriv)) as Uint8Array;
+  const primaryIpnsName = (await deriveIpnsName(primaryPub)) as string;
 
   const secondaryPriv = hexToBytes(SECONDARY_PRIV_KEY_HEX);
-  const secondaryPub = ed.getPublicKey(secondaryPriv);
-  const secondaryIpnsName = await deriveIpnsName(secondaryPub);
+  const secondaryPub = (await ed.getPublicKeyAsync(secondaryPriv)) as Uint8Array;
+  const secondaryIpnsName = (await deriveIpnsName(secondaryPub)) as string;
 
   console.log('Primary IPNS name:', primaryIpnsName);
   console.log('Secondary IPNS name:', secondaryIpnsName);
@@ -155,7 +175,7 @@ async function main() {
   const SEQ = 5;
   const SEQ_DIFFERENT = 99;
 
-  const vectors = [];
+  const vectors: VectorEntry[] = [];
 
   // ------------------------------------------------------------------
   // Case 1: valid — signature, name, cid, and sequence all match
@@ -163,7 +183,7 @@ async function main() {
   {
     const cborData = buildCborData(CID_A, SEQ);
     const signedBytes = buildSignedBytes(cborData);
-    const sig = await ed.sign(signedBytes, primaryPriv);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
 
     vectors.push({
       description: 'valid — signature, name, cid, and sequence all match',
@@ -187,7 +207,7 @@ async function main() {
   {
     const cborData = buildCborData(CID_A, SEQ);
     const signedBytes = buildSignedBytes(cborData);
-    const sig = await ed.sign(signedBytes, primaryPriv);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
     const tamperedSig = new Uint8Array(sig);
     tamperedSig[0] ^= 0xff;
 
@@ -215,7 +235,7 @@ async function main() {
   {
     const cborData = buildCborData(CID_A, SEQ);
     const signedBytes = buildSignedBytes(cborData);
-    const sig = await ed.sign(signedBytes, secondaryPriv);
+    const sig = (await ed.signAsync(signedBytes, secondaryPriv)) as Uint8Array;
 
     vectors.push({
       description: 'name-mismatch — valid sig but pubKey derives to different IPNS name',
@@ -244,7 +264,7 @@ async function main() {
   {
     const cborData = buildCborData(CID_A, SEQ);
     const signedBytes = buildSignedBytes(cborData);
-    const sig = await ed.sign(signedBytes, primaryPriv);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
 
     vectors.push({
       description:
@@ -274,7 +294,7 @@ async function main() {
   {
     const cborData = buildCborData(CID_A, SEQ_DIFFERENT);
     const signedBytes = buildSignedBytes(cborData);
-    const sig = await ed.sign(signedBytes, primaryPriv);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
 
     vectors.push({
       description:
@@ -301,7 +321,7 @@ async function main() {
   {
     const cborData = buildCborData(CID_A, SEQ);
     const signedBytes = buildSignedBytes(cborData);
-    const sig = await ed.sign(signedBytes, primaryPriv);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
 
     vectors.push({
       description:
@@ -326,8 +346,7 @@ async function main() {
   // ------------------------------------------------------------------
   {
     vectors.push({
-      description:
-        'legacy-absent — all three signature fields null (pre-signing legacy record)',
+      description: 'legacy-absent — all three signature fields null (pre-signing legacy record)',
       ipns_name: primaryIpnsName,
       public_key: bytesToHex(primaryPub),
       private_key: PRIMARY_PRIV_KEY_HEX,
@@ -348,7 +367,15 @@ async function main() {
     throw new Error(`Expected 7 vectors, got ${vectors.length}`);
   }
 
-  const expectedResults = ['valid', 'invalid', 'invalid', 'invalid', 'invalid', 'invalid', 'legacy'];
+  const expectedResults = [
+    'valid',
+    'invalid',
+    'invalid',
+    'invalid',
+    'invalid',
+    'invalid',
+    'legacy',
+  ];
   const expectedDescriptions = [
     'valid',
     'tampered-sig',
