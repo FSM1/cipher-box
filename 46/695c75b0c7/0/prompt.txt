@@ -3,3 +3,7 @@
 ---
 
 honestly I am not at all sure exactly what problem this phase is trying to solve in the first place - can you explain to me in simple terms exactly what the problems are, and how the various options solve the issues.
+
+---
+
+so for problem 1, the tiered recommendation - logging a warning on the desktop client will not exactly help with resolving a problem - there is no way for the user to resolve this
