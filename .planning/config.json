@@ -12,7 +12,7 @@
     "verifier": true,
     "auto_advance": true,
     "nyquist_validation": true,
-    "_auto_chain_active": false,
+    "_auto_chain_active": true,
     "pattern_mapper": true,
     "ui_phase": true,
     "ui_safety_gate": true,
