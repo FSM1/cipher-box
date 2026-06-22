@@ -248,21 +248,14 @@ pub fn spawn_metadata_publish(
             // old_cids_to_unpin: the previous metadata CID (if any) — unpinned on success.
             let old_cids: Vec<String> = old_metadata_cid.into_iter().collect();
 
-            // make_record closure: folder-specific — on conflict it re-fetches, merges, and
-            // re-encrypts remote metadata before retrying (D-03: domain logic at call site).
-            // Cloning here because the closure may be called twice (initial + retry).
+            // make_record: builds the signed IPNS record for the initial (non-conflict)
+            // publish, reusing the pre-uploaded blob CID. It is sync, so it cannot perform
+            // the async merge-on-conflict the folder path needs — hence the folder site does
+            // NOT route through publish_with_cas_retry; it runs its own inline CAS loop below
+            // (D-03). Cloned because the closure captures the CID by value.
             let initial_cid_for_closure = initial_cid.clone();
             let make_record = |new_seq: u64| -> Result<(String, String), String> {
                 use base64::Engine;
-                // On the first call (new_seq == initial seq + 1), reuse the pre-uploaded CID.
-                // On the conflict retry, new_seq > initial seq + 1 so we must re-encrypt
-                // with a merged metadata. However, this closure is synchronous while the merge
-                // requires async network calls — so the folder site keeps its own conflict
-                // merge logic outside of publish_with_cas_retry (D-03: folder-specific domain
-                // logic stays at the call site via the make_record closure, not the helper).
-                // The closure cannot do async, so for the folder site we call the helper only
-                // for the initial attempt and implement the conflict-merge loop here directly.
-                // This is the "folder remains the canonical template" path documented in SUMMARY.
                 let value = format!("/ipfs/{}", initial_cid_for_closure);
                 let record = cipherbox_core::create_ipns_record(
                     &ipns_key_arr,
@@ -278,30 +271,15 @@ pub fn spawn_metadata_publish(
                 Ok((record_b64, initial_cid_for_closure.clone()))
             };
 
-            // Resolve initial seq + publish via the shared CAS helper (D-03).
-            // The helper handles the first publish attempt and the one-retry CAS loop.
-            // For the folder site's conflict arm the make_record closure re-uses the
-            // pre-uploaded blob (sync closure limitation). If the retry also conflicts,
-            // the helper returns Err → logged below at error level (D-01a: folder also
-            // surfaces persistent conflict as Err since there is no JournalOp::MkdirPublish
-            // variant that covers standalone re-publish; MkdirPublish is for mkdir only).
-            //
-            // NOTE: the folder conflict arm does NOT call merge_folder_children here
-            // because the make_record closure is synchronous and cannot do async network
-            // fetches. The merge-on-conflict logic is the folder site's only deviation
-            // from the shared helper pattern — it runs AFTER the helper returns Err for
-            // the first conflict, then re-calls publish_with_cas_retry with a merged blob.
-            // This is the "folder uses helper for both attempts, merge happens between them"
-            // design recorded in SUMMARY as D-03 deviation.
-            //
-            // ACTUAL IMPLEMENTATION: Because merge requires async, we do it here inline.
-            // The shared helper provides the correct CAS decision point for per-file/bin.
-            // The folder site implements its own CAS loop (which was the template) to
-            // preserve the merge-on-conflict semantic — this IS the canonical template.
-            // D-03: all three sites share the same decision policy; the folder loop
-            // below is the reference implementation the helper was extracted FROM.
+            // Folder CAS loop: own retry path (NOT publish_with_cas_retry) because the
+            // conflict arm must async-fetch + merge_folder_children + re-encrypt remote
+            // metadata before retrying, which the sync make_record closure can't express.
+            // publish_with_cas_retry covers the per-file/bin sites; this loop is the
+            // reference implementation it was extracted from and shares the same decision
+            // policy (D-03). On persistent conflict it returns Err (D-01a: no
+            // JournalOp variant for standalone folder re-publish; surfaced as Err).
 
-            // --- Folder CAS loop (canonical template, kept as-is per D-03) ---
+            // --- Folder CAS loop ---
             let seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
             let new_seq = seq
                 .checked_add(1)
