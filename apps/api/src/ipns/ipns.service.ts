@@ -271,28 +271,35 @@ export class IpnsService {
         `signedRecord value does not match metadataCid: embedded=${incomingParsed.value}, expected=${expectedIpfsValue}`
       );
     }
-    // S1 sequence check (offset-aware for the first-publish pre-increment convention):
-    // clients sign seq 0n or 1n on first publish (DB stores '1'). On subsequent publishes
-    // clients sign expectedSequenceNumber + 1n. Only runs when expectedSequenceNumber given.
-    if (expectedSequenceNumber !== undefined) {
-      const expectedSeqBigInt = BigInt(expectedSequenceNumber);
-      const isFirstPublish = !existing;
-      if (isFirstPublish) {
-        // Accept embedded seq equal to expectedSeqBigInt (0n) or expectedSeqBigInt + 1n (1n)
-        const diff = incomingParsed.sequence - expectedSeqBigInt;
-        if (diff !== 0n && diff !== 1n) {
-          throw new BadRequestException(
-            `signedRecord sequence does not match expectedSequenceNumber on first publish: embedded=${incomingParsed.sequence}, expected=${expectedSequenceNumber}`
-          );
-        }
+    // D-09 (Plan 58-02): unconditional embedded-sequence gate.
+    // Runs after the CAS 409 check so concurrent-modification keeps its 409 status.
+    // Reuses incomingParsed from the single-parse guard above (never calls parseIpnsRecord twice).
+    const embeddedSeq = incomingParsed.sequence; // bigint
+    let isIdempotentRepublish = false;
+    if (!existing) {
+      // First publish: allow embedded ∈ {0n, 1n} only (wedge-poison prevention — T-58-08).
+      if (embeddedSeq !== 0n && embeddedSeq !== 1n) {
+        throw new BadRequestException(
+          `First publish: embedded sequence must be 0 or 1, got ${embeddedSeq}`
+        );
+      }
+    } else {
+      const dbSeq = BigInt(existing.sequenceNumber);
+      if (embeddedSeq === dbSeq) {
+        // Idempotent republish — TEE 6-hour re-sign path (D-09 / Pitfall 4).
+        // Do NOT increment the DB sequence, but still update latestCid/signedRecord below.
+        isIdempotentRepublish = true;
+      } else if (embeddedSeq === dbSeq + 1n) {
+        // Normal forward publish — increment allowed.
+      } else if (embeddedSeq < dbSeq) {
+        throw new BadRequestException(
+          `Rollback rejected: embedded sequence ${embeddedSeq} < stored ${dbSeq}`
+        );
       } else {
-        // Non-first publish: embedded must be exactly expectedSeqBigInt + 1n
-        const expectedEmbedded = expectedSeqBigInt + 1n;
-        if (incomingParsed.sequence !== expectedEmbedded) {
-          throw new BadRequestException(
-            `signedRecord sequence does not match expectedSequenceNumber: embedded=${incomingParsed.sequence}, expected=${expectedEmbedded}`
-          );
-        }
+        // embeddedSeq > dbSeq + 1n — wild jump / wedge poison (T-58-10).
+        throw new BadRequestException(
+          `Sequence jump rejected: embedded ${embeddedSeq}, expected ${dbSeq + 1n}`
+        );
       }
     }
 
@@ -301,9 +308,13 @@ export class IpnsService {
         throw new BadRequestException('publicKey does not match the existing IPNS entry');
       }
 
-      // Update existing entry
+      // Update existing entry.
+      // D-09: skip sequence increment on idempotent republish (TEE re-sign path);
+      // still update latestCid and signedRecord (Pitfall 4 — must not skip CID update).
+      if (!isIdempotentRepublish) {
+        existing.sequenceNumber = (BigInt(existing.sequenceNumber) + 1n).toString();
+      }
       existing.latestCid = metadataCid;
-      existing.sequenceNumber = (BigInt(existing.sequenceNumber) + 1n).toString();
       existing.signedRecord = Buffer.from(signedRecord);
       existing.publicKey = publicKey ? Buffer.from(publicKey) : existing.publicKey;
       existing.recordType = recordType;
