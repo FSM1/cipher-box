@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "cb7bcf6e8475",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T14:22:26.457054Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "111bb344ee63",
+  "token_usage": {
+    "input_tokens": 12303,
+    "cache_creation_tokens": 192959,
+    "cache_read_tokens": 3308220,
+    "output_tokens": 52145,
+    "api_call_count": 27
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "111bb344ee63",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Plan and execute Phase 58 (`ipns-signature-verify-coverage`), a backend crypto/security phase adding IPNS signature verification coverage across Rust (`crates/fuse`, `crates/core`) and SDK layers.",
+    "outcome": "Phase 58 was fully planned (4 plans, 2 waves, VALIDATION.md + PATTERNS.md written, plan checker passed 0 blockers), and Wave 1 execution was initiated with subagent 58-01 spawned; session ends mid-execution.",
+    "learnings": {
+      "repo": [
+        "Phase 58 (`ipns-signature-verify-coverage`) uses TDD mode, fine granularity, 4 plans across 2 waves, requirement HARD-09, and decisions D-01..D-13.",
+        "`crates/crypto` cannot dev-depend on `api-client/core` (dependency cycle), so cross-language Rust test vectors must live in `crates/fuse/tests/` rather than `crates/crypto/tests/`.",
+        "9 FUSE resolve sites call IPNS resolution without signature verification; they will be routed through a new `resolve_ipns_verified` chokepoint in `crates/fuse`.",
+        "Plan 58-02 has a mandatory human checkpoint at the D-10 full-SDK-E2E gate; it requires the local stack to be running (redis:6380, api:3000, postgres, ipfs/kubo).",
+        "The local stack (redis:6380, api:3000, postgres, ipfs/kubo) was confirmed up at plan time.",
+        "Execution branch is `feat/ipns-signature-verify-coverage`; AUTO_MODE=true so GSD checkpoints auto-advance unless a plan marks a hard stop."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/58-ipns-signature-verify-coverage/58-RESEARCH.md",
+          "finding": "The `## Open Questions` section heading must carry a `(RESOLVED)` marker or the plan checker flags it as a warning, even if all questions are substantively addressed in-plan."
+        },
+        {
+          "path": ".planning/phases/58-ipns-signature-verify-coverage/58-VALIDATION.md",
+          "finding": "VALIDATION.md frontmatter is filled by the orchestrator; body scaffold is owned by execute/validate tooling — do not pre-fill the body."
+        }
+      ],
+      "workflow": [
+        "The GSD commit helper can report `commit_failed` as a false negative; always verify with `git log` rather than retrying the commit.",
+        "For delicate security/crypto phases, sequential execution on the feature branch is preferable to parallel worktree execution to avoid cwd-drift, merge failures, and stranded worktrees.",
+        "A plan checker cosmetic warning (doc heading style) is cheaper to fix directly in the artifact than to trigger a full planner revision cycle.",
+        "RESEARCH.md `## Open Questions` section should have inline resolution markers added before plan checker runs to avoid spurious warnings."
+      ]
+    },
+    "friction": [
+      "`commit_failed` false negative from the GSD commit helper required an extra `git log` verification step to confirm the commit actually landed.",
+      "Plan checker flagged RESEARCH.md `## Open Questions` heading for missing `(RESOLVED)` marker — a cosmetic issue that still required a manual edit + re-commit.",
+      "Dependency cycle between `crates/crypto` and `crates/fuse`/`api-client` forced test placement in a non-obvious location (`crates/fuse/tests/` instead of `crates/crypto/tests/`)."
+    ],
+    "open_items": [
+      "Plan 58-01 execution was in-progress (subagent spawned) when the transcript ended — outcome unknown.",
+      "Wave 2 plans (58-03: web/sdk-core resolve dedup, 58-04: shared cross-language verify vectors) not yet executed.",
+      "Plan 58-02 requires a human checkpoint at the D-10 full-SDK-E2E gate — cannot be auto-advanced."
+    ]
+  }
+}
