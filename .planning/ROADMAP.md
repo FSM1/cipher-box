@@ -1015,7 +1015,7 @@ Verification gate: apps/api jest specs; `pnpm api:generate` + commit regenerated
 **Goal:** Finish the IPNS signed-record verification story left after Phase 51 / PR #529: bind every resolved record to its CID/sequence by decoding the signed CBOR and comparing (closing the swap gap on both Rust and JS), fold verification into a single Rust `resolve_ipns_verified` chokepoint so all ~11 resolve sites are safe-by-default (today only 1 verifies), validate the embedded publish sequence even when CAS is omitted without regressing the non-CAS publish paths, de-duplicate the web vs sdk-core resolve/verify copies, and add shared cross-language verify test vectors.
 **Requirements**: HARD-09
 **Depends on:** Phase 51 (S1/S2/S3 baseline), Phase 56 (overlapping FUSE resolve sites)
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Scope (captured todos):
 
@@ -1025,7 +1025,7 @@ Scope (captured todos):
 Plans:
 **Wave 1**
 
-- [ ] 58-01-PLAN.md — CBOR cid/sequence binding + Rust `resolve_ipns_verified` chokepoint: decode signed `data`, compare to `resp.cid`/`sequence`, route all FUSE/sdk resolve sites through the verified wrapper (Rust + JS parity)
+- [x] 58-01-PLAN.md — CBOR cid/sequence binding + Rust `resolve_ipns_verified` chokepoint: decode signed `data`, compare to `resp.cid`/`sequence`, route all FUSE/sdk resolve sites through the verified wrapper (Rust + JS parity)
 - [ ] 58-02-PLAN.md — Non-CAS embedded-sequence validation: enumerate every publish path that omits `expectedSequenceNumber` (vault init, per-file, file-pointer), enforce DB+1 / idempotent-equal without breaking them (full SDK E2E gate)
 
 **Wave 2** *(blocked on Wave 1 completion)*
@@ -1086,7 +1086,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 55. Large Source-File Refactor            | v1.1-hardening | 4/4 | Complete    | 2026-06-21 |
 | 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | 3/3 | Complete    | 2026-06-22 |
 | 57. API CID/Provider Hardening & Dedup     | v1.1-hardening | 2/2 | Complete    | 2026-06-22 |
-| 58. IPNS Signature-Verify Coverage         | v1.1-hardening | 0/4 | Planned     | -          |
+| 58. IPNS Signature-Verify Coverage         | v1.1-hardening | 1/4 | In Progress|  |
 
 _Roadmap created: 2026-03-07_
 _Last updated: 2026-06-18 — added phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation; closes todos #8 + #7, builds on phase 48 shared-folder ownership)_
