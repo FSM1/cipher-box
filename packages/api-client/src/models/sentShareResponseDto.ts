@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.41.0
+ * OpenAPI spec version: 0.42.0
  */
 import type { SentShareResponseDtoItemType } from './sentShareResponseDtoItemType';
 import type { SentShareResponseDtoPermission } from './sentShareResponseDtoPermission';

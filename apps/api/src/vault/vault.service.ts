@@ -14,6 +14,7 @@ import { VaultConfigResponseDto } from './dto/vault-config.dto';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
 import { TeeKeysDto } from '../tee/dto/tee-keys.dto';
 import { IPFS_PROVIDER, IpfsProvider } from '../ipfs/providers';
+import { withCidLock } from '../ipfs/pending-unpin/unpin-helpers';
 import { MetricsService } from '../metrics/metrics.service';
 
 /**
@@ -260,52 +261,51 @@ export class VaultService {
       const pinnedCidRepo = manager.getRepository(PinnedCid);
       const pendingUnpinRepo = manager.getRepository(PendingUnpin);
 
-      // 1. Advisory xact lock — MUST be the first transactional statement (D-04)
-      // abs() was incorrectly applied to int4 before the bigint cast, overflowing for INT_MIN
-      // (-2147483648); pg_advisory_xact_lock accepts signed bigint so sign-extending
-      // hashtext int4→bigint is safe (D-01 / WR-01).
-      await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [cid]);
-
-      // 2. Ownership check (D-01)
-      const row = await pinnedCidRepo.findOne({ where: { userId, cid } });
-      if (!row) {
-        const otherRow = await pinnedCidRepo.findOne({ where: { cid } });
-        if (otherRow && !options?.suppressCrossUserAudit) {
-          this.logger.warn(`Cross-user unpin attempt userId=${userId} cid=${cid}`);
-          this.metricsService.unpinCrossUserAttempts.inc();
+      // 1. Advisory xact lock — MUST be the first transactional statement (D-04).
+      // Lock is acquired via withCidLock (unpin-helpers.ts) which runs the verbatim
+      // INT_MIN-safe SQL: pg_advisory_xact_lock(hashtext($1)::bigint) with NO abs().
+      await withCidLock(manager, cid, async () => {
+        // 2. Ownership check (D-01)
+        const row = await pinnedCidRepo.findOne({ where: { userId, cid } });
+        if (!row) {
+          const otherRow = await pinnedCidRepo.findOne({ where: { cid } });
+          if (otherRow && !options?.suppressCrossUserAudit) {
+            this.logger.warn(`Cross-user unpin attempt userId=${userId} cid=${cid}`);
+            this.metricsService.unpinCrossUserAttempts.inc();
+          }
+          return; // silent 2XX (D-01: no oracle — same response for unknown vs cross-user)
         }
-        return; // silent 2XX (D-01: no oracle — same response for unknown vs cross-user)
-      }
 
-      // 3. Delete caller's row — this IS the quota decrement (D-03)
-      const deleteResult = await pinnedCidRepo.delete({ userId, cid });
-      rowDeleted = (deleteResult.affected ?? 0) > 0; // IN-01: only true on an actual row deletion
+        // 3. Delete caller's row — this IS the quota decrement (D-03)
+        const deleteResult = await pinnedCidRepo.delete({ userId, cid });
+        rowDeleted = (deleteResult.affected ?? 0) > 0; // IN-01: only true on an actual row deletion
 
-      // 4. Refcount across all users (D-05, D-07: no origin filtering)
-      // WR-07 disposition: BYO advisory rows intentionally count toward the hosted
-      // refcount — this is the D-07 design: a BYO advisory row blocks physical unpin
-      // of hosted content until that BYO row is removed. See docs/CAPACITY.md §7 for
-      // the retention consequence. (WR-07 accepted: filtering BYO rows would change
-      // refcount semantics and break the shared-owner-vs-BYO invariant from D-07.)
-      const result = await manager
-        .createQueryBuilder(PinnedCid, 'pc')
-        .select('COUNT(*)', 'count')
-        .where('pc.cid = :cid', { cid })
-        .getRawOne<{ count: string }>();
-      const refcount = parseInt(result?.count ?? '0', 10);
+        // 4. Refcount across all users (D-05, D-07: no origin filtering)
+        // WR-07 disposition: BYO advisory rows intentionally count toward the hosted
+        // refcount — this is the D-07 design: a BYO advisory row blocks physical unpin
+        // of hosted content until that BYO row is removed. See docs/CAPACITY.md §7 for
+        // the retention consequence. (WR-07 accepted: filtering BYO rows would change
+        // refcount semantics and break the shared-owner-vs-BYO invariant from D-07.)
+        const result = await manager
+          .createQueryBuilder(PinnedCid, 'pc')
+          .select('COUNT(*)', 'count')
+          .where('pc.cid = :cid', { cid })
+          .getRawOne<{ count: string }>();
+        const refcount = parseInt(result?.count ?? '0', 10);
 
-      if (refcount === 0) {
-        // 5. Queue physical unpin via outbox — orIgnore dedupes concurrent inserts (Pitfall 5)
-        await pendingUnpinRepo
-          .createQueryBuilder()
-          .insert()
-          .into(PendingUnpin)
-          .values({ cid })
-          .orIgnore()
-          .execute();
-        shouldAttemptPhysicalUnpin = true; // IN-06: flag gates the post-commit Kubo call
-      }
-      // Transaction commits; advisory lock released automatically at end of transaction
+        if (refcount === 0) {
+          // 5. Queue physical unpin via outbox — orIgnore dedupes concurrent inserts (Pitfall 5)
+          await pendingUnpinRepo
+            .createQueryBuilder()
+            .insert()
+            .into(PendingUnpin)
+            .values({ cid })
+            .orIgnore()
+            .execute();
+          shouldAttemptPhysicalUnpin = true; // IN-06: flag gates the post-commit Kubo call
+        }
+        // Transaction commits; advisory lock released automatically at end of transaction
+      });
     });
 
     // 6. Post-commit best-effort Kubo call (D-03 ordering: NEVER inside transaction, Pitfall 3)
@@ -319,8 +319,11 @@ export class VaultService {
         // Kubo call stays outside the lock/transaction (D-03 ordering, Pitfall 3); only
         // the row delete is serialized.
         await this.dataSource.transaction(async (manager) => {
-          await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [cid]);
-          await manager.getRepository(PendingUnpin).delete({ cid });
+          // Post-commit: Kubo call already ran outside this transaction (D-03 ordering).
+          // Only the outbox-row delete is serialized under the advisory lock.
+          await withCidLock(manager, cid, async () => {
+            await manager.getRepository(PendingUnpin).delete({ cid });
+          });
         });
       } catch {
         // Leave outbox row for BullMQ retry worker — Kubo failure is not a request failure

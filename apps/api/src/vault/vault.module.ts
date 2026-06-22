@@ -1,42 +1,23 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { VaultController } from './vault.controller';
 import { VaultService } from './vault.service';
 import { Vault, PinnedCid, PendingUnpin } from './entities';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
 import { User } from '../auth/entities/user.entity';
 import { TeeModule } from '../tee/tee.module';
-import { IPFS_PROVIDER, LocalProvider } from '../ipfs/providers';
+import { IpfsProviderModule } from '../ipfs/providers';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Vault, PinnedCid, FolderIpns, User, PendingUnpin]),
     ConfigModule,
     TeeModule,
+    IpfsProviderModule,
   ],
   controllers: [VaultController],
-  providers: [
-    VaultService,
-    // IN-04 (accepted): IPFS_PROVIDER useFactory is duplicated across VaultModule,
-    // IpfsModule, and PendingUnpinModule. This instance avoids a circular import:
-    // IpfsModule imports VaultModule, so re-importing IpfsModule here would create
-    // a cycle. Each module self-provides to break the cycle. Extraction into a shared
-    // IpfsProviderCoreModule is deferred — it would require restructuring the full
-    // import graph. Accepted with this comment.
-    {
-      provide: IPFS_PROVIDER,
-      useFactory: (configService: ConfigService) => {
-        const apiUrl = configService.get<string>('IPFS_LOCAL_API_URL', 'http://localhost:5001');
-        const gatewayUrl = configService.get<string>(
-          'IPFS_LOCAL_GATEWAY_URL',
-          'http://localhost:8080'
-        );
-        return new LocalProvider(apiUrl, gatewayUrl);
-      },
-      inject: [ConfigService],
-    },
-  ],
+  providers: [VaultService],
   exports: [VaultService],
 })
 export class VaultModule {}

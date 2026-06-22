@@ -136,6 +136,16 @@ describe('LocalProvider', () => {
   describe('unpinFile', () => {
     const mockCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
 
+    // RED: URL-encoding test — CID with reserved chars must be percent-encoded in the query string
+    it('should percent-encode a CID with reserved chars in pin/rm URL (D-04)', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+      const reservedCid = 'bafk&evil=1';
+      await provider.unpinFile(reservedCid);
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).not.toContain('&evil');
+      expect(url).toContain('bafk%26evil%3D1');
+    });
+
     it('should return void on successful unpin', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -197,6 +207,20 @@ describe('LocalProvider', () => {
   describe('getFile', () => {
     const mockCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
     const mockContent = Buffer.from('encrypted file content');
+
+    // RED: URL-encoding test — CID with reserved chars must be percent-encoded in the query string
+    it('should percent-encode a CID with reserved chars in cat URL (D-04)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      });
+      const reservedCid = 'bafk&evil=1';
+      await provider.getFile(reservedCid);
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).not.toContain('&evil');
+      expect(url).toContain('bafk%26evil%3D1');
+    });
 
     it('should return buffer on successful get', async () => {
       const contentArrayBuffer = new Uint8Array(mockContent).buffer;

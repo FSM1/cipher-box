@@ -7,6 +7,7 @@ import { Job } from 'bullmq';
 import { PendingUnpin } from '../../vault/entities/pending-unpin.entity';
 import { PinnedCid } from '../../vault/entities/pinned-cid.entity';
 import { IPFS_PROVIDER, IpfsProvider } from '../providers';
+import { withCidLock, refcountAndMaybeUnpin } from './unpin-helpers';
 import { MetricsService } from '../../metrics/metrics.service';
 
 const BATCH_SIZE = 50;
@@ -71,49 +72,22 @@ export class PendingUnpinProcessor extends WorkerHost {
    * guardedUnpin uses (vault.service.ts), serializing the refcount re-check +
    * physical unpin against concurrent recordPin/guardedUnpin for the same CID.
    *
-   * WR-01: Previously the count + unpinFile ran in autocommit with no lock, so the
-   * drain's refcount recheck and physical unpin were not serialized against a
-   * concurrent guardedUnpin for the same CID. Taking pg_advisory_xact_lock(hashtext(cid))
-   * as the first statement and holding it across the recheck + unpin serializes the
-   * drain against guardedUnpin (which takes the same lock), so the two unpin paths
-   * for one CID cannot interleave. The under-lock recheck also means we never unpin a
-   * CID whose re-pin has already committed (refs > 0 → skip).
-   *
-   * Precision (per review): recordPin does NOT take this lock, so a concurrent
-   * re-upload that re-pins the CID is not blocked by it. The residual drain↔recordPin
-   * window — a re-upload commits a fresh pinned_cids row in the gap between our recheck
-   * and the Kubo unpin — is therefore NOT closed by the lock; it is covered by D-13
-   * (colliding on the same CID requires re-uploading byte-identical ciphertext+IV,
-   * which is cryptographically negligible) and by the drift report. The unpin is
-   * idempotent (LocalProvider swallows "not pinned"), so holding the lock across the
-   * network call is acceptable for the drain's low-frequency, batched path.
+   * WR-01: D-02 / WR-01: Run refcount recheck + conditional unpin + outbox delete under
+   * the per-CID advisory lock via shared helpers (withCidLock + refcountAndMaybeUnpin).
+   * The lock is the first transactional statement, mirroring guardedUnpin (D-04).
    */
   private async drainRow(cid: string): Promise<void> {
-    await this.dataSource.transaction(async (manager) => {
-      // Advisory xact lock — MUST be the first transactional statement, mirroring
-      // guardedUnpin (D-04). Released automatically when the transaction ends.
-      await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [cid]);
-
-      // D-02 / WR-01: Re-check refcount UNDER the lock before unpinning. A concurrent
-      // re-upload or pin-migration may have re-pinned this CID while it sat in the
-      // outbox. Unpinning a live pin would cause Kubo GC → data loss. Skip the
-      // physical unpin but still delete the stale outbox row so it is not retried.
-      const refs = await manager.getRepository(PinnedCid).count({ where: { cid } });
-      if (refs > 0) {
-        await manager.getRepository(PendingUnpin).delete({ cid });
-        this.logger.log(
-          `Drain: skipped unpin for cid=${cid} — CID is re-pinned (refs=${refs}); stale outbox row discarded`
-        );
-        return;
-      }
-
-      // D-05: Call through provider so "not pinned" is treated as success
-      // (LocalProvider.unpinFile swallows "not pinned" at local.provider.ts:94).
-      // Inside the lock so a racing guardedUnpin cannot re-pin between recheck and unpin.
-      await this.ipfsProvider.unpinFile(cid);
-      await manager.getRepository(PendingUnpin).delete({ cid });
+    const result = await this.dataSource.transaction((manager) =>
+      withCidLock(manager, cid, () => refcountAndMaybeUnpin(manager, cid, this.ipfsProvider))
+    );
+    if (result.outcome === 'skipped-repinned') {
+      // Preserve the distinct skip-path signal so re-pin races stay auditable in prod logs.
+      this.logger.log(
+        `Drain: skipped unpin for cid=${cid} — CID is re-pinned (refs=${result.refs}); stale outbox row discarded`
+      );
+    } else {
       this.logger.log(`Drained cid=${cid}`);
-    });
+    }
   }
 
   private async runDriftReport(): Promise<void> {
