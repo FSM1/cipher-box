@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/FSM1/cipher-box/compare/cipherbox-core-v0.5.1...cipherbox-core-v0.6.0) (2026-06-22)
+
+
+### Bug Fixes
+
+* IPNS signed-record verify coverage chokepoint and non-CAS sequence gate ([#544](https://github.com/FSM1/cipher-box/issues/544)) ([cd173c9](https://github.com/FSM1/cipher-box/commit/cd173c9c20c50d29ea211f00efa84291d7a3178f))
+
 ## [0.5.1](https://github.com/FSM1/cipher-box/compare/cipherbox-core-v0.5.0...cipherbox-core-v0.5.1) (2026-06-17)
 
 

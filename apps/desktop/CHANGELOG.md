@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.43.0...cipherbox-desktop-v0.44.0) (2026-06-22)
+
+
+### Bug Fixes
+
+* FUSE and IPNS write-path durability hardening ([#543](https://github.com/FSM1/cipher-box/issues/543)) ([5d5daaa](https://github.com/FSM1/cipher-box/commit/5d5daaaf69aeb030ae9aa828ac4245525e0215fd))
+
 ## [0.43.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.42.0...cipherbox-desktop-v0.43.0) (2026-06-21)
 
 

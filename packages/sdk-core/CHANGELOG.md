@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.38.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.37.1...@cipherbox/sdk-core-v0.38.0) (2026-06-22)
+
+
+### Bug Fixes
+
+* FUSE and IPNS write-path durability hardening ([#543](https://github.com/FSM1/cipher-box/issues/543)) ([5d5daaa](https://github.com/FSM1/cipher-box/commit/5d5daaaf69aeb030ae9aa828ac4245525e0215fd))
+* IPNS signed-record verify coverage chokepoint and non-CAS sequence gate ([#544](https://github.com/FSM1/cipher-box/issues/544)) ([cd173c9](https://github.com/FSM1/cipher-box/commit/cd173c9c20c50d29ea211f00efa84291d7a3178f))
+
 ## [0.37.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-core-v0.37.0...@cipherbox/sdk-core-v0.37.1) (2026-06-17)
 
 

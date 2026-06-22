@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.44.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.43.0...cipher-box-v0.44.0) (2026-06-22)
+
+
+### Features
+
+* **api:** API CID and provider hardening with unpin module dedup ([#541](https://github.com/FSM1/cipher-box/issues/541)) ([106ee88](https://github.com/FSM1/cipher-box/commit/106ee8816339385c46f4352402c8a1acecb366bb))
+
+
+### Bug Fixes
+
+* FUSE and IPNS write-path durability hardening ([#543](https://github.com/FSM1/cipher-box/issues/543)) ([5d5daaa](https://github.com/FSM1/cipher-box/commit/5d5daaaf69aeb030ae9aa828ac4245525e0215fd))
+* IPNS signed-record verify coverage chokepoint and non-CAS sequence gate ([#544](https://github.com/FSM1/cipher-box/issues/544)) ([cd173c9](https://github.com/FSM1/cipher-box/commit/cd173c9c20c50d29ea211f00efa84291d7a3178f))
+
 ## [0.43.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.42.0...cipher-box-v0.43.0) (2026-06-21)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-client-v0.42.0...@cipherbox/api-client-v0.43.0) (2026-06-22)
+
+
+### Features
+
+* **api:** API CID and provider hardening with unpin module dedup ([#541](https://github.com/FSM1/cipher-box/issues/541)) ([106ee88](https://github.com/FSM1/cipher-box/commit/106ee8816339385c46f4352402c8a1acecb366bb))
+
 ## [0.42.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-client-v0.41.0...@cipherbox/api-client-v0.42.0) (2026-06-21)
 
 
