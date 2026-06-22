@@ -371,6 +371,189 @@ describe('IPNS operations', () => {
 });
 
 // ---------------------------------------------------------------------------
+// D-11/D-12: Cross-language verify vector tests
+//
+// Loads the shared fixture tests/vectors/ipns/verify.json (7 cases) and drives
+// resolveIpnsRecord against each vector, mocking only the crypto signature and
+// name-binding primitives to reflect the case — the REAL CBOR `data` bytes from
+// the fixture are passed through to cborDecode so the binding check exercises
+// the actual byte-construction from the generator.
+//
+// This is the JS side of D-12: both Rust (crates/fuse/tests/ipns_verify_vectors.rs)
+// and JS consume the SAME fixture, so Rust↔JS byte-construction drift fails an
+// already-required CI check.
+// ---------------------------------------------------------------------------
+
+import vectors from '../../../../tests/vectors/ipns/verify.json';
+
+describe('D-11/D-12 cross-language IPNS verify vectors', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fixture has exactly 7 cases', () => {
+    expect(vectors).toHaveLength(7);
+  });
+
+  it('valid — resolves with signatureVerified=true', async () => {
+    const v = vectors.find((x) => x.description.startsWith('valid'));
+    if (!v) throw new Error('valid vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue(v.ipns_name);
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number,
+      signatureV2: v.signature_v2 ?? undefined,
+      data: v.data ?? undefined,
+      pubKey: v.pub_key ?? undefined,
+    });
+
+    const result = await resolveIpnsRecord(v.ipns_name);
+
+    expect(result, `${v.description}`).not.toBeNull();
+    expect(result!.signatureVerified, `${v.description}`).toBe(true);
+    expect(result!.cid, `${v.description}`).toBe(v.cid);
+  });
+
+  it('tampered-sig — throws on invalid signature', async () => {
+    const v = vectors.find((x) => x.description.startsWith('tampered-sig'));
+    if (!v) throw new Error('tampered-sig vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    // Tampered signature: verifyEd25519 returns false (Ed25519 check fails)
+    vi.mocked(verifyEd25519).mockResolvedValue(false);
+    vi.mocked(deriveIpnsName).mockResolvedValue(v.ipns_name);
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number,
+      signatureV2: v.signature_v2 ?? undefined,
+      data: v.data ?? undefined,
+      pubKey: v.pub_key ?? undefined,
+    });
+
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(
+      /signature verification failed/i
+    );
+  });
+
+  it('name-mismatch — throws on pubKey-to-name binding failure', async () => {
+    const v = vectors.find((x) => x.description.startsWith('name-mismatch'));
+    if (!v) throw new Error('name-mismatch vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    // pub_key derives to a DIFFERENT name than ipns_name
+    vi.mocked(deriveIpnsName).mockResolvedValue('k51different-name-from-vector');
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number,
+      signatureV2: v.signature_v2 ?? undefined,
+      data: v.data ?? undefined,
+      pubKey: v.pub_key ?? undefined,
+    });
+
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(
+      /public key does not match/i
+    );
+  });
+
+  it('cid-swapped — throws on cid binding mismatch (real data bytes)', async () => {
+    // The fixture data field embeds CID_A but response.cid is CID_B.
+    // The Ed25519 sig is valid over the data (mock returns true); only the binding fails.
+    const v = vectors.find((x) => x.description.startsWith('cid-swapped'));
+    if (!v) throw new Error('cid-swapped vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue(v.ipns_name);
+    // response.cid is the swapped CID (CID_B), data contains the original CID_A
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid, // This is CID_B (the swapped value)
+      sequenceNumber: v.sequence_number,
+      signatureV2: v.signature_v2 ?? undefined,
+      data: v.data ?? undefined, // This encodes /ipfs/CID_A — REAL bytes from fixture
+      pubKey: v.pub_key ?? undefined,
+    });
+
+    // Binding check must throw because embedded CID_A != response CID_B
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(
+      /cid binding mismatch/i
+    );
+  });
+
+  it('seq-mismatch — throws on sequence binding mismatch (real data bytes)', async () => {
+    // The fixture data field encodes seq=99 but response.sequenceNumber is 5.
+    // Ed25519 sig is valid (mock returns true); only the binding fails.
+    const v = vectors.find((x) => x.description.startsWith('seq-mismatch'));
+    if (!v) throw new Error('seq-mismatch vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue(v.ipns_name);
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number, // "5"
+      signatureV2: v.signature_v2 ?? undefined,
+      data: v.data ?? undefined, // REAL bytes: encodes Sequence=99
+      pubKey: v.pub_key ?? undefined,
+    });
+
+    // Binding check must throw because embedded seq=99 != response seq=5
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(
+      /sequence binding mismatch/i
+    );
+  });
+
+  it('partial-fields — throws on incomplete signature data (downgrade vector)', async () => {
+    const v = vectors.find((x) => x.description.startsWith('partial-fields'));
+    if (!v) throw new Error('partial-fields vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number,
+      signatureV2: v.signature_v2 ?? undefined, // present
+      data: v.data ?? undefined, // null
+      pubKey: v.pub_key ?? undefined, // null
+    });
+
+    // Partial fields: fail-closed before even reaching verification
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(
+      /incomplete signature data/i
+    );
+    // Verify was never called (guard fires first)
+    expect(verifyEd25519).not.toHaveBeenCalled();
+    expect(deriveIpnsName).not.toHaveBeenCalled();
+  });
+
+  it('legacy-absent — resolves with signatureVerified=false (D-04)', async () => {
+    const v = vectors.find((x) => x.description.startsWith('legacy-absent'));
+    if (!v) throw new Error('legacy-absent vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number,
+      // All three signature fields absent
+    });
+
+    const result = await resolveIpnsRecord(v.ipns_name);
+
+    expect(result, `${v.description}`).not.toBeNull();
+    expect(result!.signatureVerified, `${v.description}`).toBe(false);
+    expect(result!.cid, `${v.description}`).toBe(v.cid);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // S3 caller-owns-key guard tests (D-05 / T-47-01)
 // createAndPublishIpnsRecord is a CALLEE: it must NOT zero the caller-passed
 // ipnsPrivateKey buffer. Callers reuse the same buffer across operations (the SDK
