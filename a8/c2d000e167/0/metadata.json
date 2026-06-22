@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "a8c2d000e167",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T15:52:12.073517Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "111bb344ee63",
+  "token_usage": {
+    "input_tokens": 14036,
+    "cache_creation_tokens": 271400,
+    "cache_read_tokens": 8269969,
+    "output_tokens": 103430,
+    "api_call_count": 47
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "111bb344ee63",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Plan and execute Phase 58 ('ipns-signature-verify-coverage') of the CipherBox project — adding IPNS signature verification as a hard-enforcement chokepoint across Rust (crates/core, crates/fuse) and TypeScript (sdk-core, web) layers, with 4 plans in 2 waves using TDD mode.",
+    "outcome": "Phase 58 completed fully: all 4 plans executed, 7/7 verifier must-haves confirmed in code, all test suites green (cargo core 75, fuse 87, api jest 913/913, sdk-core vitest 243, SDK E2E 89/89), code-review findings applied, and phase marked complete in STATE.md/ROADMAP.md.",
+    "learnings": {
+      "repo": [
+        "crates/crypto cannot dev-depend on api-client/core, so cross-language verify vectors belong in crates/fuse/tests/ not crates/crypto/tests/ — a real dependency-cycle constraint the planner caught",
+        "API .env TEST_LOGIN_SECRET is 'e2e-test-secret-ci-only' but SDK E2E default SDK_E2E_SECRET is 'e2e-test-secret-do-not-use-in-production' — mismatched env causes test-login 401s and silently skips the E2E suite",
+        "RESEARCH.md '## Open Questions' heading must be annotated '(RESOLVED)' after planning or plan-checker emits a cosmetic warning",
+        "gsd 'phase complete' helper reports commit_failed as a known false negative — verify via git log rather than retrying",
+        "D-09 gate (non-CAS embedded-sequence enforcement) in upsertFolderIpns uses an idempotent branch: no-increment but update latestCid; the CAS expectedSequenceNumber guard at line 245 is intentionally separate",
+        "This D-09 tightening class previously broke 48/89 SDK E2E tests — treat any change to upsertFolderIpns/publish path as high-risk and require full SDK E2E gate before marking complete",
+        "5 REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) are absent from the traceability table — pre-existing hygiene debt unrelated to HARD-09"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/Cargo.toml",
+          "line": 43,
+          "end_line": 43,
+          "finding": "ciborium is a direct dependency of the fuse crate — the executor's mid-crash diagnostic claiming it was missing was stale/incorrect"
+        },
+        {
+          "path": "crates/fuse/src/replay.rs",
+          "finding": "Had unchecked seq + 1 arithmetic (WR-01 from code review) while the rest of the crate uses checked_add — fixed during post-verification review application"
+        }
+      ],
+      "workflow": [
+        "Sequential execution on the feature branch is safer than worktree-parallel isolation for security/crypto phases — avoids merge failures and cwd-drift at the cost of wall-clock time",
+        "Run SDK E2E gate via a focused subagent with full harness context rather than inline — the test-login payload shape and env wiring are non-obvious and fail silently with wrong credentials",
+        "Apply advisory code-review findings on security phases before marking complete even after the verifier passes — the incremental cost is low and findings directly strengthen the hardening",
+        "An executor subagent can overrun its plan boundary and execute the next plan in the same agent run — track what actually landed in git by commit rather than by what you dispatched",
+        "A socket-dropped executor leaves partial work uncommitted; diagnose via git diff before spawning a continuation to avoid duplicating completed tasks"
+      ]
+    },
+    "friction": [
+      "58-01 executor lost its API socket connection mid-execution, leaving Task 3 (FUSE routing) done but uncommitted and Task 4 (sdk-core binding) not started — required a manual continuation subagent",
+      "SDK E2E gate silently skipped during 58-02 execution due to TEST_LOGIN_SECRET mismatch — executor labeled it 'infra-limited' rather than failing loudly, masking the gap until a dedicated re-run",
+      "58-02 executor overran into 58-03 and executed both plans in a single agent run — useful outcome but unexpected and makes it hard to reason about plan boundaries",
+      "gsd commit helper emits false commit_failed signals requiring git log verification after every phase-tracking commit",
+      "test-login endpoint payload shape is undocumented — probing :3000 manually with curl returned 400s rather than the expected 401/200, making the credential mismatch hard to diagnose inline"
+    ],
+    "open_items": [
+      "TEST_LOGIN_SECRET / SDK_E2E_SECRET env mismatch should be aligned across API .env and SDK E2E defaults to prevent future silent E2E skips",
+      "5 pre-existing missing REQ-IDs in traceability table (IPNS-05/06, DB-01/02, BYO-08) — unblocking hygiene work deferred",
+      "Source todos lacked resolves_phase: 58 tag so the auto-closer skipped them; they were manually moved to completed/ — consider tagging todos with phase refs at creation time",
+      "replay.rs checked_add pattern should be audited in sibling crates for the same unchecked arithmetic (WR-01 was fixed here but the pattern may exist elsewhere)"
+    ]
+  }
+}
