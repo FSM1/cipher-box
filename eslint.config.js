@@ -17,7 +17,7 @@ export default [
       'target/**',
     ],
   },
-  { files: ['**/*.{js,mjs,cjs,ts,tsx}'] },
+  { files: ['**/*.{js,mjs,cjs,mts,cts,ts,tsx}'] },
   { languageOptions: { globals: { ...globals.browser, ...globals.node } } },
   pluginJs.configs.recommended,
   ...tseslint.configs.recommended,
