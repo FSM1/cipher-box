@@ -65,6 +65,45 @@ pub struct IpnsRecord {
     pub public_key: Vec<u8>,
 }
 
+/// Decode the CBOR-encoded data field from a signed IPNS record.
+///
+/// This is the inverse of `build_cbor_data`. Extracts the `Value` (IPFS path)
+/// and `Sequence` (monotonic counter) fields from the CBOR map.
+///
+/// # Errors
+///
+/// Returns `Err(IpnsError::CborEncodingFailed)` if:
+/// - The buffer is not valid CBOR
+/// - The top-level value is not a map
+/// - The map is missing the "Value" or "Sequence" key
+/// - The "Value" bytes are not valid UTF-8
+/// - The "Sequence" integer cannot be converted to u64 (e.g. negative)
+pub fn decode_ipns_cbor_data(data: &[u8]) -> Result<(String, u64), IpnsError> {
+    let map: CborValue = ciborium::from_reader(data).map_err(|_| IpnsError::CborEncodingFailed)?;
+    let entries = match map {
+        CborValue::Map(m) => m,
+        _ => return Err(IpnsError::CborEncodingFailed),
+    };
+    let mut value_bytes: Option<Vec<u8>> = None;
+    let mut sequence: Option<u64> = None;
+    for (k, v) in entries {
+        match (k, v) {
+            (CborValue::Text(s), CborValue::Bytes(b)) if s == "Value" => {
+                value_bytes = Some(b);
+            }
+            (CborValue::Text(s), CborValue::Integer(i)) if s == "Sequence" => {
+                let raw: i128 = i.into();
+                sequence = u64::try_from(raw).ok();
+            }
+            _ => {}
+        }
+    }
+    let value = String::from_utf8(value_bytes.ok_or(IpnsError::CborEncodingFailed)?)
+        .map_err(|_| IpnsError::CborEncodingFailed)?;
+    let seq = sequence.ok_or(IpnsError::CborEncodingFailed)?;
+    Ok((value, seq))
+}
+
 /// Build the CBOR-encoded data field for an IPNS record.
 ///
 /// The field order matches the ipns npm package: TTL, Value, Sequence, Validity, ValidityType.
