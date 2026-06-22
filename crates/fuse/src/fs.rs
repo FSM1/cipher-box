@@ -431,16 +431,25 @@ impl CipherBoxFS {
                     // on each refresh cycle so nothing is lost between cycles.
                     const MAX_CONCURRENT_FP_RESOLVES: usize = 10;
                     let mut spawned = 0;
+                    // Inodes staged or re-queued THIS cycle. resolving_file_pointers is only
+                    // updated in the spawn loop below (after both passes), so without this a
+                    // drained entry and the same still-unresolved fresh entry would both be
+                    // staged → two resolve tasks racing on one inode. Also prevents re-queueing
+                    // an inode already sitting in pending_fp_resolves.
+                    let mut scheduled_this_cycle = std::collections::HashSet::<u64>::new();
 
                     // Drain pending_fp_resolves first (entries that overflowed in a prior cycle).
                     // Each carries the folder key of the folder it originated from.
                     let mut pending_drain: Vec<(u64, String, [u8; 32])> = Vec::new();
                     while let Some(entry) = self.pending_fp_resolves.pop_front() {
-                        if self.resolving_file_pointers.contains(&entry.0) {
-                            continue; // Already in-flight from a prior cycle
+                        if self.resolving_file_pointers.contains(&entry.0)
+                            || !scheduled_this_cycle.insert(entry.0)
+                        {
+                            continue; // Already in-flight, or already drained this cycle
                         }
                         if spawned >= MAX_CONCURRENT_FP_RESOLVES {
                             // Still over cap — put it back at the front and stop draining
+                            scheduled_this_cycle.remove(&entry.0);
                             self.pending_fp_resolves.push_front(entry);
                             break;
                         }
@@ -453,14 +462,18 @@ impl CipherBoxFS {
                     // belong to the folder being refreshed this cycle, so they carry fk_arr.
                     // Entries exceeding the cap are pushed onto pending_fp_resolves with fk_arr.
                     for (fp_ino, fp_ipns) in unresolved {
-                        if self.resolving_file_pointers.contains(&fp_ino) {
-                            continue; // Already in-flight
+                        if self.resolving_file_pointers.contains(&fp_ino)
+                            || scheduled_this_cycle.contains(&fp_ino)
+                        {
+                            continue; // Already in-flight, or already staged/queued this cycle
                         }
                         if spawned >= MAX_CONCURRENT_FP_RESOLVES {
                             // D-09: push to continuation queue instead of silent drop.
+                            scheduled_this_cycle.insert(fp_ino);
                             self.pending_fp_resolves.push_back((fp_ino, fp_ipns, fk_arr));
                             continue;
                         }
+                        scheduled_this_cycle.insert(fp_ino);
                         pending_drain.push((fp_ino, fp_ipns, fk_arr));
                         spawned += 1;
                     }

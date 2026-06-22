@@ -157,10 +157,11 @@ pub async fn publish_file_metadata(
     // Deferred Ideas). On retry exhaustion: return Err, which the fire-and-forget caller
     // (spawn_file_meta_reencrypt) or the blocking/sync path logs at log::error! → EIO.
     //
-    // TEE enrollment fields (encrypted_ipns_for_tee, tee_epoch) are passed on the first
-    // publish only. The make_record closure captures them and includes them in the record.
-    // On the retry path (conflict → re-resolve → retry), make_record is called a second
-    // time with a higher new_seq — the TEE fields are preserved across both calls.
+    // TEE enrollment fields (encrypted_ipns_for_tee, tee_epoch) are used ONLY on the
+    // is_first_publish branch below, which builds its own IpnsPublishRequest and does NOT
+    // route through publish_with_cas_retry. The update path (the CAS helper) never carries
+    // TEE fields — the helper always sets encrypted_ipns_private_key/key_epoch to None, and
+    // updates need no re-enrollment. The make_record closure only re-signs (record, cid).
     let file_meta_cid_for_closure = file_meta_cid.clone();
 
     // For is_first_publish, there is no prior sequence to CAS against. The helper
