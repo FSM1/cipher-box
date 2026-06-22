@@ -3,22 +3,20 @@
  *
  * Creates IPNS records locally using @cipherbox/core and publishes
  * via the backend API relay to the delegated routing service.
+ *
+ * Resolution is delegated to sdk-core's resolveIpnsRecord, which carries
+ * the CBOR cid/sequence binding (D-07/D-08, 58-01) and partial-fields
+ * fail-closed check (D-02/D-03). The web axios instance is threaded via
+ * SdkContext so the sdk-core function uses the same authenticated client.
  */
 
-import { createIpnsRecord, marshalIpnsRecord, IPNS_SIGNATURE_PREFIX } from '@cipherbox/core';
-import {
-  verifyEd25519,
-  concatBytes,
-  deriveIpnsName,
-  deriveEd25519PublicKey,
-} from '@cipherbox/crypto';
-import {
-  ipnsControllerPublishRecord,
-  ipnsControllerPublishBatch,
-  ipnsControllerResolveRecord,
-} from '@cipherbox/api-client';
+import { createIpnsRecord, marshalIpnsRecord } from '@cipherbox/core';
+import { deriveEd25519PublicKey } from '@cipherbox/crypto';
+import { ipnsControllerPublishRecord, ipnsControllerPublishBatch } from '@cipherbox/api-client';
 import type { PublishIpnsEntryDtoRecordType } from '@cipherbox/api-client';
-import { logger } from '../lib/logger';
+import { resolveIpnsRecord as resolveIpnsRecordCore } from '@cipherbox/sdk-core';
+import { apiAxios, apiUrl } from '../lib/api-config';
+import { useAuthStore } from '../stores/auth.store';
 
 /**
  * Create an IPNS record locally and publish via backend.
@@ -128,34 +126,17 @@ export async function batchPublishIpnsRecords(
 }
 
 /**
- * Verify the Ed25519 signature on an IPNS record.
- * Per IPFS spec, the signature is over "ipns-signature:" + cborData.
- *
- * @param signatureV2 - base64 Ed25519 signature (64 bytes)
- * @param data - base64 CBOR data that was signed
- * @param pubKey - base64 raw Ed25519 public key (32 bytes)
- * @returns true if valid
- */
-export async function verifyIpnsSignature(
-  signatureV2: string,
-  data: string,
-  pubKey: string
-): Promise<boolean> {
-  const sigBytes = Uint8Array.from(atob(signatureV2), (c) => c.charCodeAt(0));
-  const dataBytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
-  const pubKeyBytes = Uint8Array.from(atob(pubKey), (c) => c.charCodeAt(0));
-
-  // Per IPFS IPNS spec, signature is over "ipns-signature:" + cborData
-  const signedData = concatBytes(IPNS_SIGNATURE_PREFIX, dataBytes);
-  return verifyEd25519(sigBytes, signedData, pubKeyBytes);
-}
-
-/**
  * Resolve an IPNS name to its current CID and sequence number.
  *
- * Calls backend API which relays to the delegated routing service for resolution.
- * When the response includes IPNS signature data (from delegated routing),
- * verifies the Ed25519 signature before trusting the CID.
+ * Delegates to the sdk-core resolveIpnsRecord chokepoint, which carries:
+ * - Ed25519 signature verification (D-02/D-03)
+ * - Partial-fields fail-closed check
+ * - CBOR cid/sequence binding (D-07/D-08, 58-01)
+ * - Public-key → IPNS name derivation check
+ *
+ * The web axios instance (apiAxios) is threaded via SdkContext so all API
+ * calls use the same authenticated, token-refreshing client (D-13).
+ * Perf instrumentation is provided by sdk-core's internal withPerf('ipns:resolve', …).
  *
  * @param ipnsName - IPNS name to resolve (k51.../bafzaa... format)
  * @returns Current CID, sequence number, and signature verification status, or null if not found
@@ -163,69 +144,9 @@ export async function verifyIpnsSignature(
 export async function resolveIpnsRecord(
   ipnsName: string
 ): Promise<{ cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null> {
-  try {
-    const response = await ipnsControllerResolveRecord({ ipnsName });
-
-    if (!response.success) {
-      return null;
-    }
-
-    // Verify IPNS signature if all signature fields are present.
-    // D-02: present-but-invalid → throw (fail closed; mirrors sdk-core behavior)
-    // D-03: ALL fields absent → allow + flag (signatureVerified=false); legacy records
-    //        are allowed because the DB CID is authoritative.
-    // Partial signature fields (some but not all three present) → fail closed: a record
-    // that carries unverifiable signature material must not be downgraded to the legacy
-    // allow path, or an attacker could strip fields to bypass D-02.
-    let signatureVerified = false;
-    const { signatureV2, data, pubKey } = response;
-    const hasSignatureV2 = signatureV2 != null;
-    const hasData = data != null;
-    const hasPubKey = pubKey != null;
-    if (hasSignatureV2 || hasData || hasPubKey) {
-      if (!hasSignatureV2 || !hasData || !hasPubKey || !signatureV2 || !data || !pubKey) {
-        throw new Error(
-          'IPNS resolve returned incomplete signature data - record cannot be verified'
-        );
-      }
-
-      const valid = await verifyIpnsSignature(signatureV2, data, pubKey);
-      if (!valid) {
-        throw new Error('IPNS signature verification failed - record may be tampered');
-      }
-
-      // Verify the returned public key derives to the requested IPNS name
-      const pubKeyBytes = Uint8Array.from(atob(pubKey), (c) => c.charCodeAt(0));
-      const derivedName = await deriveIpnsName(pubKeyBytes);
-      if (derivedName !== ipnsName) {
-        throw new Error(
-          'IPNS public key does not match requested name - possible key substitution'
-        );
-      }
-
-      signatureVerified = true;
-    } else {
-      // D-03: all signature fields absent (legacy record) — allow + flag
-      logger.warn('[IPNS] IPNS resolve returned without signature data, skipping verification');
-    }
-
-    return {
-      cid: response.cid,
-      sequenceNumber: BigInt(response.sequenceNumber),
-      signatureVerified,
-    };
-  } catch (error) {
-    // 404 means IPNS name not found - return null
-    // Other errors (network, API) should propagate
-    // axios errors from the api-client customInstance surface HTTP status at
-    // error.response?.status; some paths set error.status directly. Check both.
-    if (error instanceof Error) {
-      const anyError = error as Error & { status?: number; response?: { status?: number } };
-      const status = anyError.status ?? anyError.response?.status;
-      if (status === 404) {
-        return null;
-      }
-    }
-    throw error;
-  }
+  return resolveIpnsRecordCore(ipnsName, {
+    apiUrl,
+    getAccessToken: async () => useAuthStore.getState().accessToken || '',
+    axiosInstance: apiAxios,
+  });
 }
