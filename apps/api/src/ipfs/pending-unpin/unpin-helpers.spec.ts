@@ -1,6 +1,7 @@
 import { withCidLock, refcountAndMaybeUnpin } from './unpin-helpers';
 import { PinnedCid } from '../../vault/entities/pinned-cid.entity';
 import { PendingUnpin } from '../../vault/entities/pending-unpin.entity';
+import { IpfsProvider } from '../providers/ipfs-provider.interface';
 
 describe('withCidLock', () => {
   it('executes the exact pg_advisory_xact_lock SQL with [cid] and returns fn result', async () => {
@@ -29,7 +30,8 @@ describe('refcountAndMaybeUnpin', () => {
       return {};
     }),
   } as any;
-  const mockIpfsProvider = { unpinFile: jest.fn() };
+  const mockIpfsProvider = { unpinFile: jest.fn<Promise<void>, [string]>() };
+  const ipfsProvider = mockIpfsProvider as unknown as IpfsProvider;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -44,7 +46,7 @@ describe('refcountAndMaybeUnpin', () => {
     mockPinnedCidRepository.count.mockResolvedValue(2);
     mockPendingUnpinRepository.delete.mockResolvedValue({ affected: 1 });
 
-    const result = await refcountAndMaybeUnpin(mockManager, 'bafkcid', mockIpfsProvider as any);
+    const result = await refcountAndMaybeUnpin(mockManager, 'bafkcid', ipfsProvider);
 
     expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
     expect(mockPendingUnpinRepository.delete).toHaveBeenCalledWith({ cid: 'bafkcid' });
@@ -56,7 +58,7 @@ describe('refcountAndMaybeUnpin', () => {
     mockIpfsProvider.unpinFile.mockResolvedValue(undefined);
     mockPendingUnpinRepository.delete.mockResolvedValue({ affected: 1 });
 
-    const result = await refcountAndMaybeUnpin(mockManager, 'bafkcid', mockIpfsProvider as any);
+    const result = await refcountAndMaybeUnpin(mockManager, 'bafkcid', ipfsProvider);
 
     expect(mockIpfsProvider.unpinFile).toHaveBeenCalledWith('bafkcid');
     expect(mockPendingUnpinRepository.delete).toHaveBeenCalledWith({ cid: 'bafkcid' });
