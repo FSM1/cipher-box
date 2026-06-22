@@ -1,0 +1,125 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "0275822bfd94",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T16:25:40.704439Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "0d6e02ca5a56",
+  "token_usage": {
+    "input_tokens": 22973,
+    "cache_creation_tokens": 340461,
+    "cache_read_tokens": 15381148,
+    "output_tokens": 157475,
+    "api_call_count": 69
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0d6e02ca5a56",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan and execute Phase 58 (IPNS Signature-Verify Coverage) end-to-end via the GSD pipeline, then ship it through the full post-execution loop: verify, secure, validate, simplify, SDK E2E gate, CodeRabbit CLI review, PR creation, and review resolution.",
+    "outcome": "Phase 58 was fully planned (4 plans, 2 waves), executed (4/4 complete), and verified (7/7 must-haves, all D-01..D-13 decisions confirmed in code). The ship pipeline completed gates 1–6 (verify, secure, validate, simplify, SDK E2E 89/89, CodeRabbit CLI 5 findings triaged) and was mid-application of CodeRabbit fixes before the transcript ends; the PR had not yet been pushed.",
+    "learnings": {
+      "repo": [
+        "Phase 58 was the last phase in the v1.1-hardening milestone; STATE.md was set to 'Milestone complete' on completion.",
+        "The SDK E2E secret is TEST_LOGIN_SECRET from apps/api/.env (value: e2e-test-secret-ci-only); vitest 3 does NOT auto-load tests/sdk-e2e/.env, so the env var must be passed explicitly as SDK_E2E_SECRET.",
+        "A secret mismatch causes the entire SDK E2E suite to silently 401 and skip — it reports 0 failures, not an error, so it's indistinguishable from a passing run without checking skip counts.",
+        "crates/fuse cannot dev-depend on api-client or core (circular dependency), so cross-language vector test consumers go in crates/fuse/tests/ not crates/crypto/tests/.",
+        "commit_failed from the GSD commit helper is a known false-negative — always verify with 'git log --oneline -1' rather than retrying.",
+        "6 unverified resolve_ipns call sites remain in apps/desktop/src-tauri/ (prepopulate.rs, vault.rs) — explicitly deferred in 58-01, no regression from baseline.",
+        "REQUIREMENTS.md traceability table is missing 5 REQ-IDs: IPNS-05/06, DB-01/02, BYO-08 — pre-existing hygiene debt unrelated to HARD-09.",
+        "github-actions[bot] pushes a chore(release) commit to the branch after 'gh pr create' and after a passing Release Preview — git fetch + rebase required before the next push or it will be rejected.",
+        "gh pr edit fails on this repo due to Projects-classic GraphQL; PR body must be patched via 'env -u GITHUB_TOKEN gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file'.",
+        "markdownlint excludes .planning/ but prettier still runs there.",
+        "git push / git fetch are blocked in the sandbox — must run with sandbox disabled.",
+        "CodeRabbit bundles findings in both the review body AND inline review threads; /resolve-pr-reviews may find 0 threads if only the body is checked."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/ipns/index.ts",
+          "finding": "Missing explicit existence check on cborFields['Sequence'] before BigInt coercion — should guard with a clear binding-mismatch error when the field is absent (CodeRabbit minor finding)."
+        },
+        {
+          "path": "packages/sdk-core/ipns/ipns.test.ts",
+          "line": 155,
+          "end_line": 267,
+          "finding": "btoa(String.fromCharCode(...cbor)) used for base64 encoding — CodeRabbit flagged it as potentially corrupting bytes >127. Technically valid for 0-255 but Buffer.from(cbor).toString('base64') is the idiomatic Node.js form and silences the finding."
+        },
+        {
+          "path": "crates/core/src/ipns.rs",
+          "finding": "Missing unit tests for two edge cases: u64 sequence overflow (should return error, not wrap) and invalid-UTF-8 CBOR Value rejection. These are genuine coverage gaps flagged by CodeRabbit."
+        },
+        {
+          "path": "crates/fuse/src/replay.rs",
+          "finding": "Uses unchecked 'seq + 1' for sequence increment — the crate convention is checked_add to avoid silent wrapping on u64 overflow (code review finding WR-01, applied during phase)."
+        }
+      ],
+      "workflow": [
+        "Sequential execution on the feature branch (not parallel worktrees) is the safer choice for multi-crate crypto phases — avoids cwd-drift, merge failures, and stranded worktrees.",
+        "Running the security audit and simplify review in parallel during the ship pipeline saves significant wall-clock time since both are read-only analysis of the same diff.",
+        "GSD executor commits may use a non-conventional 'feat 51-03:' style that fails pr-release-preview CI; reword with 'git filter-branch --msg-filter' (not git rebase -i, which is unavailable in this environment) before the first push.",
+        "The plan checker will flag RESEARCH.md 'Open Questions' sections that lack a '(RESOLVED)' marker even when all questions are substantively answered in-plan — a cosmetic fix avoids a false verification warning.",
+        "Phase verifier confirms decisions in code (not just SUMMARY claims), which is more reliable than trusting executor self-reports — use it to validate executor accuracy, not just as a formality.",
+        "An executor spawned for plan N may continue into plan N+1 if plans are logically adjacent and auto-mode is on — harmless in sequential execution but means plan-boundary tracking must come from git log, not the executor's return message.",
+        "The full SDK E2E recipe (pnpm chain rebuild + fresh API start + correct secrets) must be run explicitly; the executor's 'infra-limited' skip label is a misclassification when the real issue is a secret mismatch.",
+        "CodeRabbit CLI review ('coderabbit review --agent --base main --type committed') takes 5-15 min and blocks the ship pipeline — kick it off as early as possible and work on other pre-push steps in parallel."
+      ]
+    },
+    "friction": [
+      "58-01 executor crashed mid-task due to an API socket close after committing 3 of 5 tasks, leaving uncommitted FUSE routing changes and no SUMMARY.md — required a manual continuation agent.",
+      "SDK E2E gate was initially misclassified as 'infra-limited' by the executor due to TEST_LOGIN_SECRET mismatch; the entire suite silently skipped (0 failures, not an error), masking the gap.",
+      "One executor spawned for 58-02 also completed 58-03 without being asked — plan-boundary enforcement was not respected.",
+      "The commit helper's false-negative 'commit_failed' response created unnecessary uncertainty at multiple points in the pipeline.",
+      "RESEARCH.md's '## Open Questions' heading lacking '(RESOLVED)' triggered a plan-checker warning and required a manual doc edit to clear.",
+      "Fix commits applied by the code-fixer had mislabeled scopes (e.g., fix(58-03) touching a 58-01 file) — cosmetically wrong, though functionally correct.",
+      "CodeRabbit CLI review is a synchronous 5-15 min blocking step mid-pipeline with no progress indicator.",
+      "The 'phase uat-passed' CLI command appears in help output but has no handler — a pre-existing dead stub that can cause confusion."
+    ],
+    "open_items": [
+      "6 unverified resolve_ipns call sites in apps/desktop/src-tauri/prepopulate.rs and vault.rs — deferred to .planning/todos/pending/2026-06-22-desktop-resolve-ipns-verified-coverage.md.",
+      "Phase 58 simplify cleanup: dead 'signature_verified' field, dead 'journal_entry' if/else branch, unused 'public_key'/'private_key' fields in the vector fixture, test-string clarity rename — deferred to .planning/todos/pending/2026-06-22-phase58-simplify-cleanup.md.",
+      "REQUIREMENTS.md traceability table missing entries for IPNS-05/06, DB-01/02, BYO-08 — pre-existing hygiene, needs a dedicated cleanup pass.",
+      "PR not yet pushed or created — step 7 (reword one commit) and step 8 (push + open PR) still pending at transcript end.",
+      "CodeRabbit PR-level review findings (step 9) not yet triaged — will require fetching inline review threads via GraphQL after PR opens.",
+      "CI check confirmation (step 10) pending — all checks must settle green before leaving the merge decision to the user."
+    ]
+  }
+}
