@@ -1031,7 +1031,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 58-03-PLAN.md — web/sdk-core resolve dedup: web imports sdk-core `resolveIpnsRecord` (ctx axios injection), delete the duplicated web `verifyIpnsSignature`/`resolveIpnsRecord`
-- [ ] 58-04-PLAN.md — shared cross-language IPNS verify test vectors (valid / tampered / name-mismatch / cid-swapped) consumed by Rust + TS
+- [x] 58-04-PLAN.md — shared cross-language IPNS verify test vectors (valid / tampered / name-mismatch / cid-swapped) consumed by Rust + TS
 
 Verification gate: full SDK E2E suite (local; redis 6380), apps/api specs, `cargo test`.
 
