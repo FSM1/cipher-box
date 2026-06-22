@@ -624,22 +624,24 @@ These are ALL publish calls with `expected_sequence_number: None` (Rust) or omit
 | A3 | TEE republish path always sends `embedded = DB_stored_seq` (not DB+1)                       | D-09 idempotent path         | If TEE sends DB+1, the idempotent branch is never triggered; no regression but the branch is dead code |
 | A4 | `VerifyError::Legacy` variant for all-absent records is the right modeling choice            | Pattern 2 (API shape)        | Planner may prefer a different return shape; adjust in planning without security impact |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All three questions have a concrete in-plan resolution path; none block execution.
 
 1. **`parseCborData` direct import from `ipns` package**
    - What we know: `parseCborData` is in `ipns/dist/src/utils.js` and used internally.
    - What's unclear: Whether it is re-exported from `ipns/dist/src/index.js`.
-   - Recommendation: Wave-0 probe in the plan: `node --input-type=module -e "import { parseCborData } from 'ipns'; console.log(typeof parseCborData)"`. If undefined, use `cborg.decode` directly.
+   - RESOLVED: Deferred to a Wave-0 runtime probe in 58-01 (`node --input-type=module -e "import { parseCborData } from 'ipns'; console.log(typeof parseCborData)"`). If undefined, fall back to `cborg.decode` directly. Low-risk — both paths decode the same bytes.
 
 2. **Device registry sequence on update (registry.rs:145)**
    - What we know: Current code publishes with `expected_sequence_number: None`. Comment says "serialized by caller."
    - What's unclear: On a registry update (not first publish), what sequence does it sign? Is it always first-publish (seq 0)?
-   - Recommendation: 58-02 enumeration task must check `crates/sdk/src/registry.rs` update path to confirm the signed sequence. If it signs a non-first sequence without CAS, the D-09 gate may reject it if it does not sign DB+1 exactly.
+   - RESOLVED: Deferred to the 58-02 enumeration task (Task 1), which inspects `crates/sdk/src/registry.rs` and confirms it signs `DB+1` (or only ever publishes seq 0). The enumeration is a BLOCKER-if-unresolved gate before D-09 enforcement, so this cannot silently regress.
 
 3. **IpnsResolveResponse.data field availability**
    - What we know: `IpnsResolveResponse` has `data: Option<String>` (base64 CBOR). The CBOR `data` is included in the resolve response when the delegated routing provider returns it.
    - What's unclear: Is `data` always populated when `signatureV2` is present? (Expected yes — all three fields come from the same IPNS record protobuf field 9.)
-   - Recommendation: Treat absent `data` when `signatureV2` is present as partial-fields (fail closed, D-05) — same as existing logic. No special case needed.
+   - RESOLVED: Treat absent `data` when `signatureV2` is present as partial-fields (fail closed, D-05) — identical to existing logic. No special case needed.
 
 ## Sources
 
