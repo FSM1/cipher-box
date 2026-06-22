@@ -1,0 +1,5 @@
+/gsd:discuss-phase 58
+
+---
+
+honestly I am not at all sure exactly what problem this phase is trying to solve in the first place - can you explain to me in simple terms exactly what the problems are, and how the various options solve the issues.
