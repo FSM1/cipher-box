@@ -27,9 +27,16 @@ export async function fetchAndDecryptMetadata(
 
     // All folder metadata (including root) is v1 JSON {iv, data}.
     // v2 blob format is only for the vault key blob (separate IPNS name).
-    const encryptedJson = new TextDecoder().decode(encryptedBytes);
-    const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
-    return decryptFolderMetadata(encrypted, folderKey);
+    try {
+      const encryptedJson = new TextDecoder().decode(encryptedBytes);
+      const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
+      return await decryptFolderMetadata(encrypted, folderKey);
+    } catch (cause) {
+      throw new Error(
+        `Failed to decode or decrypt folder metadata for CID ${cid}: ${String(cause)}`,
+        { cause }
+      );
+    }
   });
 }
 

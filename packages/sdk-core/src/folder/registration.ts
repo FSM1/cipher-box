@@ -58,16 +58,19 @@ export async function createSubfolder(params: {
   // 2. Generate random AES-256 folder key
   const folderKey = generateRandomBytes(32);
 
-  // 3. Wrap keys with user's public key (ECIES encryption)
-  const ipnsPrivateKeyEncrypted = bytesToHex(
-    await wrapKey(ipnsKeypair.privateKey, params.userPublicKey)
-  );
-  const folderKeyEncrypted = bytesToHex(await wrapKey(folderKey, params.userPublicKey));
-
+  // 3. Wrap keys with user's public key (ECIES encryption).
+  //    Both wrapKey calls are inside the try/catch so that a wrapKey failure
+  //    still triggers the catch block that zeroes ipnsKeypair.privateKey and
+  //    folderKey. Both buffers are generated fresh in this call and not reused
+  //    by the caller — the catch is the terminal owner.
+  //
   // 4. TEE-02: Encrypt IPNS private key with TEE public key for republishing.
-  //    Wrap remaining steps in try/catch to zero key material on error.
   //    On success the caller receives the keys, so we only zero on failure.
   try {
+    const ipnsPrivateKeyEncrypted = bytesToHex(
+      await wrapKey(ipnsKeypair.privateKey, params.userPublicKey)
+    );
+    const folderKeyEncrypted = bytesToHex(await wrapKey(folderKey, params.userPublicKey));
     let encryptedIpnsPrivateKey: string | undefined;
     let keyEpoch: number | undefined;
 
