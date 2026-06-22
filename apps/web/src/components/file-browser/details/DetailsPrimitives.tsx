@@ -16,8 +16,10 @@ export function CopyableValue({ value }: { value: string }) {
 
   const handleCopy = useCallback(async () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    let success = false;
     try {
       await navigator.clipboard.writeText(value);
+      success = true;
     } catch {
       // Fallback for older browsers
       const textarea = document.createElement('textarea');
@@ -26,11 +28,13 @@ export function CopyableValue({ value }: { value: string }) {
       textarea.style.opacity = '0';
       document.body.appendChild(textarea);
       textarea.select();
-      document.execCommand('copy');
+      success = document.execCommand('copy');
       document.body.removeChild(textarea);
     }
-    setCopied(true);
-    timeoutRef.current = setTimeout(() => setCopied(false), 2000);
+    if (success) {
+      setCopied(true);
+      timeoutRef.current = setTimeout(() => setCopied(false), 2000);
+    }
   }, [value]);
 
   return (

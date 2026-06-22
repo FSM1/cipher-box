@@ -34,7 +34,10 @@ export function VersionHistory({
   const handleDownloadVersion = useCallback(
     async (version: VersionEntry) => {
       const privateKey = useAuthStore.getState().vaultKeypair?.privateKey;
-      if (!privateKey) return;
+      if (!privateKey) {
+        setActionError('Cannot download: vault key not available');
+        return;
+      }
 
       setLoadingAction('download');
       setActionError(null);
