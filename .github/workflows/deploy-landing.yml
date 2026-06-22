@@ -77,8 +77,17 @@ jobs:
             rm -rf /tmp/cipherbox-landing || true
 
       - name: Validate CID
+        env:
+          # appleboy/ssh-action's capture_stdout appends the drone-ssh banner
+          # ("✅ Successfully executed commands to all hosts") to the remote stdout,
+          # so outputs.stdout is MULTI-LINE even though the script echoes only the CID.
+          # Pass it via env (not inline ${{ }} interpolation) to avoid script injection.
+          RAW_STDOUT: ${{ steps.ipfs.outputs.stdout }}
         run: |
-          CID="${{ steps.ipfs.outputs.stdout }}"
+          # Extract just the IPFS CID (CIDv0 "Qm…" or CIDv1 "baf…") from the captured
+          # output. A bare multi-line value breaks `>> "$GITHUB_ENV"` with
+          # "Unable to process file command 'env' … Value cannot be null. (Parameter 'name')".
+          CID=$(printf '%s\n' "$RAW_STDOUT" | grep -oE -m1 'Qm[1-9A-HJ-NP-Za-km-z]{44}|baf[a-z2-7]{20,}')
           if [ -z "${CID}" ]; then
             echo "::error::No CID returned from IPFS pin step"
             exit 1
