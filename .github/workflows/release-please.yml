@@ -85,7 +85,7 @@ jobs:
       # updates in monorepo mode). Instead we cargo update --precise each bumped
       # first-party crate, guard with git diff --exit-code, and push the synced
       # lock. First-party crates ONLY — no transitive re-resolution.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         if: steps.release.outputs.releases_created == 'true'
         with:
           token: ${{ steps.app-token.outputs.token }}
