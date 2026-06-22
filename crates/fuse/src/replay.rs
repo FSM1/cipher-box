@@ -330,40 +330,37 @@ async fn resolve_folder_key(
         nodes_visited += 1;
 
         // Fetch and decrypt this folder's metadata.
-        let resolve = cipherbox_api_client::ipns::resolve_ipns(api, &current_ipns)
-            .await
-            .map_err(|e| format!("resolve IPNS {}: {}", current_ipns, e))?;
+        // D-01: route through the verified chokepoint.
+        // D-03 (security boundary): hard fail-closed on Invalid/Api; Legacy is warn+continue.
+        let resolved_cid =
+            match crate::verify::resolve_ipns_verified(api, &current_ipns).await {
+                Ok(verified) => verified.cid,
+                Err(crate::verify::VerifyError::Legacy) => {
+                    // D-03: all-absent legacy record — warn and continue (DB CID authoritative;
+                    // backward-compatible with pre-signing records).
+                    log::warn!(
+                        "resolve_folder_key: IPNS {} resolved without signature fields — \
+                         proceeding (D-03, DB CID authoritative)",
+                        current_ipns
+                    );
+                    // Re-resolve to get the raw cid for the Legacy path.
+                    cipherbox_api_client::ipns::resolve_ipns(api, &current_ipns)
+                        .await
+                        .map_err(|e| format!("resolve IPNS {}: {}", current_ipns, e))?.cid
+                }
+                Err(crate::verify::VerifyError::Invalid(msg)) => {
+                    // D-03 hard fail-closed: invalid/partial signature → refuse CID.
+                    return Err(format!(
+                        "IPNS {} signature verification failed — refusing to use CID (D-02): {}",
+                        current_ipns, msg
+                    ));
+                }
+                Err(crate::verify::VerifyError::Api(e)) => {
+                    return Err(format!("resolve IPNS {}: {}", current_ipns, e));
+                }
+            };
 
-        // S2/D-04: verify the IPNS signed-record signature before trusting the CID.
-        // D-03: absent signature fields → warn and continue (DB CID authoritative,
-        //   backward-compatible with legacy records that predate signedRecord).
-        // D-02: present but invalid → fail closed (compromised-server defense).
-        match cipherbox_api_client::ipns::verify_ipns_resolve_signature(&resolve, &current_ipns) {
-            Ok(None) => {
-                log::warn!(
-                    "resolve_folder_key: IPNS {} resolved without signature fields — \
-                     proceeding (D-03, DB CID authoritative)",
-                    current_ipns
-                );
-            }
-            Ok(Some(true)) => {
-                // Signature valid and IPNS name matches — proceed.
-            }
-            Ok(Some(false)) => {
-                return Err(format!(
-                    "IPNS {} signature verification failed — refusing to use CID (D-02)",
-                    current_ipns
-                ));
-            }
-            Err(e) => {
-                return Err(format!(
-                    "IPNS {} signature verification error: {} — refusing to use CID",
-                    current_ipns, e
-                ));
-            }
-        }
-
-        let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolve.cid)
+        let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolved_cid)
             .await
             .map_err(|e| format!("fetch metadata for {}: {}", current_ipns, e))?;
         let meta =
@@ -466,10 +463,32 @@ async fn fetch_merge_publish_parent(
     let _guard = lock.lock().await;
 
     // D-06: fetch CURRENT remote metadata (not the stale journaled snapshot).
-    let resolve = cipherbox_api_client::ipns::resolve_ipns(api, parent_ipns_name)
-        .await
-        .map_err(|e| format!("resolve parent IPNS {}: {}", parent_ipns_name, e))?;
-    let remote_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolve.cid)
+    // D-01: route through the verified chokepoint.
+    let parent_cid = match crate::verify::resolve_ipns_verified(api, parent_ipns_name).await {
+        Ok(verified) => verified.cid,
+        Err(crate::verify::VerifyError::Legacy) => {
+            // D-04: legacy record — warn and proceed with DB CID.
+            log::warn!(
+                "fetch_merge_publish_parent: IPNS {} resolved without signature fields \
+                 — using DB CID (D-04)",
+                parent_ipns_name
+            );
+            cipherbox_api_client::ipns::resolve_ipns(api, parent_ipns_name)
+                .await
+                .map_err(|e| format!("resolve parent IPNS {}: {}", parent_ipns_name, e))?.cid
+        }
+        Err(crate::verify::VerifyError::Invalid(msg)) => {
+            // Journal entry retained — return Err so the replay loop keeps the entry.
+            return Err(format!(
+                "parent IPNS {} verify failed — retaining journal entry: {}",
+                parent_ipns_name, msg
+            ));
+        }
+        Err(crate::verify::VerifyError::Api(e)) => {
+            return Err(format!("resolve parent IPNS {}: {}", parent_ipns_name, e));
+        }
+    };
+    let remote_bytes = cipherbox_api_client::ipfs::fetch_content(api, &parent_cid)
         .await
         .map_err(|e| format!("fetch parent metadata: {}", e))?;
     let remote_meta = cipherbox_core::decrypt_metadata_from_ipfs_public(&remote_bytes, folder_key)
@@ -545,7 +564,7 @@ async fn fetch_merge_publish_parent(
             coordinator.record_publish(parent_ipns_name, new_seq);
             // T-43-19: unpin the OLD CID (the one the live IPNS record no longer references)
             // only AFTER the new record is confirmed live.
-            let _ = cipherbox_api_client::ipfs::unpin_content(api, &resolve.cid).await;
+            let _ = cipherbox_api_client::ipfs::unpin_content(api, &parent_cid).await;
             log::info!(
                 "replay: parent IPNS published for {} (new_seq={}, new_cid={})",
                 parent_ipns_name,

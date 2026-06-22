@@ -86,11 +86,36 @@ pub fn spawn_metadata_refresh(
             match tokio::time::timeout(
                 crate::runtime::NETWORK_TIMEOUT,
                 async {
-                    let resolve_resp = cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name)
-                        .await
-                        .map_err(|e| format!("resolve: {}", e))?;
+                    // D-01: route through the verified chokepoint.
+                    let verified = match crate::verify::resolve_ipns_verified(&api, &ipns_name).await {
+                        Ok(v) => v,
+                        Err(crate::verify::VerifyError::Legacy) => {
+                            // D-04: all-absent legacy record — re-resolve to get the raw cid,
+                            // warn and proceed (30s poll self-heals; D-02 scoped).
+                            log::warn!(
+                                "spawn_metadata_refresh: IPNS {} resolved without signature fields \
+                                 — proceeding with DB CID (D-04)",
+                                ipns_name
+                            );
+                            let raw = cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name)
+                                .await
+                                .map_err(|e| format!("resolve fallback: {}", e))?;
+                            crate::verify::VerifiedResolve {
+                                cid: raw.cid,
+                                sequence_number: raw.sequence_number.parse().unwrap_or(0),
+                                signature_verified: false,
+                            }
+                        }
+                        Err(crate::verify::VerifyError::Invalid(msg)) => {
+                            // D-02: fail only this operation; poll loop self-heals.
+                            return Err(format!("IPNS {} verify failed: {}", ipns_name, msg));
+                        }
+                        Err(crate::verify::VerifyError::Api(e)) => {
+                            return Err(format!("resolve: {}", e));
+                        }
+                    };
                     let encrypted_bytes =
-                        cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid)
+                        cipherbox_api_client::ipfs::fetch_content(&api, &verified.cid)
                             .await
                             .map_err(|e| format!("fetch: {}", e))?;
                     let metadata = cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
@@ -98,7 +123,7 @@ pub fn spawn_metadata_refresh(
                         &folder_key,
                     )
                     .map_err(|e| format!("decrypt: {}", e))?;
-                    Ok((metadata, resolve_resp.cid))
+                    Ok((metadata, verified.cid))
                 },
             )
             .await
