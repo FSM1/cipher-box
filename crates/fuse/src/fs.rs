@@ -56,8 +56,11 @@ pub struct CipherBoxFS {
     pub resolving_file_pointers: std::collections::HashSet<u64>,
     /// D-09: continuation queue for FilePointer resolve entries that exceeded the
     /// MAX_CONCURRENT_FP_RESOLVES cap. Entries here are drained first on the next
-    /// refresh cycle so nothing is silently dropped.
-    pub pending_fp_resolves: std::collections::VecDeque<(u64, String)>,
+    /// refresh cycle so nothing is silently dropped. Each entry carries its own
+    /// parent folder key (`[u8; 32]`) so a drained entry is decrypted with the key
+    /// of the folder it originated from, not whatever folder the draining cycle is
+    /// refreshing (the two can differ across cycles).
+    pub pending_fp_resolves: std::collections::VecDeque<(u64, String, [u8; 32])>,
     pub pending_content: HashMap<u64, Vec<u8>>,
     pub upload_rx: std::sync::mpsc::Receiver<FsEvent>,
     pub upload_tx: std::sync::mpsc::Sender<FsEvent>,
@@ -430,7 +433,8 @@ impl CipherBoxFS {
                     let mut spawned = 0;
 
                     // Drain pending_fp_resolves first (entries that overflowed in a prior cycle).
-                    let mut pending_drain: Vec<(u64, String)> = Vec::new();
+                    // Each carries the folder key of the folder it originated from.
+                    let mut pending_drain: Vec<(u64, String, [u8; 32])> = Vec::new();
                     while let Some(entry) = self.pending_fp_resolves.pop_front() {
                         if self.resolving_file_pointers.contains(&entry.0) {
                             continue; // Already in-flight from a prior cycle
@@ -445,23 +449,26 @@ impl CipherBoxFS {
                     }
 
                     // Build the full list of entries to spawn: drained-from-queue first,
-                    // then fresh unresolved entries (up to the remaining cap).
-                    // Entries exceeding the cap are pushed onto pending_fp_resolves.
+                    // then fresh unresolved entries (up to the remaining cap). Fresh entries
+                    // belong to the folder being refreshed this cycle, so they carry fk_arr.
+                    // Entries exceeding the cap are pushed onto pending_fp_resolves with fk_arr.
                     for (fp_ino, fp_ipns) in unresolved {
                         if self.resolving_file_pointers.contains(&fp_ino) {
                             continue; // Already in-flight
                         }
                         if spawned >= MAX_CONCURRENT_FP_RESOLVES {
                             // D-09: push to continuation queue instead of silent drop.
-                            self.pending_fp_resolves.push_back((fp_ino, fp_ipns));
+                            self.pending_fp_resolves.push_back((fp_ino, fp_ipns, fk_arr));
                             continue;
                         }
-                        pending_drain.push((fp_ino, fp_ipns));
+                        pending_drain.push((fp_ino, fp_ipns, fk_arr));
                         spawned += 1;
                     }
 
                     // Spawn tasks for all entries collected (drained queue + fresh, up to cap).
-                    for (fp_ino, fp_ipns) in pending_drain {
+                    // Each entry decrypts with its OWN folder key (entry_fk), not the current
+                    // cycle's fk_arr — drained entries may come from a different parent folder.
+                    for (fp_ino, fp_ipns, entry_fk) in pending_drain {
                         self.resolving_file_pointers.insert(fp_ino);
                         let api = self.api.clone();
                         let tx = self.filepointer_tx.clone();
@@ -475,7 +482,7 @@ impl CipherBoxFS {
                                         .await
                                         .map_err(|e| format!("{}", e))?;
                                 cipherbox_core::decrypt_file_metadata_from_ipfs_public(
-                                    &enc_bytes, &fk_arr,
+                                    &enc_bytes, &entry_fk,
                                 )
                             })
                             .await;
