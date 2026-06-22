@@ -260,6 +260,11 @@ export async function resolveIpnsRecord(
 
         // D-07: embedded sequence must equal response sequenceNumber
         const embeddedSeq = cborFields['Sequence'];
+        if (embeddedSeq === undefined || embeddedSeq === null) {
+          throw new Error(
+            `IPNS sequence binding mismatch: embedded=undefined, response sequenceNumber=${response.sequenceNumber}`
+          );
+        }
         const embeddedSeqBigInt =
           typeof embeddedSeq === 'bigint' ? embeddedSeq : BigInt(embeddedSeq as number);
         if (embeddedSeqBigInt !== BigInt(response.sequenceNumber)) {
