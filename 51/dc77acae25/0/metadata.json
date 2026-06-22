@@ -1,0 +1,125 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "51dc77acae25",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T17:16:08.210038Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "72c141b6cab3",
+  "token_usage": {
+    "input_tokens": 25426,
+    "cache_creation_tokens": 450443,
+    "cache_read_tokens": 28817883,
+    "output_tokens": 234415,
+    "api_call_count": 101
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "72c141b6cab3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Plan, execute, verify, and ship Phase 58 (IPNS Signature-Verify Coverage) — adding a Rust CBOR decode/verify chokepoint, routing all FUSE resolve sites through it, adding SDK-core symmetry, and a shared cross-language test vector fixture. Then run the full ship loop: audit gates, CodeRabbit review, PR creation, and review thread resolution.",
+    "outcome": "Phase 58 fully executed (4/4 plans), independently verified (7/7 must-haves, HARD-09 satisfied, SDK E2E 89/89), and PR #544 opened. A post-ship lint CI failure caused by a non-typechecked `.mjs` script was diagnosed and fixed by converting to `.ts` + extending lint-staged/eslint hooks to cover `mjs`/`mts`/`cts`. CodeRabbit raised 4 review threads; 3 were resolved (2 symmetric fail-closed CBOR hardening fixes applied, 1 outdated); 1 large refactor deferred as a todo.",
+    "learnings": {
+      "repo": [
+        "SDK E2E secret mismatch trap: apps/api/.env uses TEST_LOGIN_SECRET=e2e-test-secret-ci-only but the sdk-e2e harness defaults to a different value. vitest 3 does NOT auto-load tests/sdk-e2e/.env — must pass SDK_E2E_SECRET explicitly. A mismatch causes silent 401→skip of the entire suite, which an executor misclassified as 'infra-limited'.",
+        "scripts/ convention is .ts run via tsx (tsconfig.scripts.json covers them). The new gen-ipns-verify-vectors.mjs was the lone .mjs, bypassing both tsconfig and lint-staged — caught only by CI's full eslint run.",
+        "lint-staged glob was *.{ts,tsx,js,jsx} — missing mjs/mts/cjs/cts. eslint.config.js files glob was {js,mjs,cjs,ts,tsx} — missing mts/cts. .mts SDK helpers were silently excluded from local lint.",
+        "check-vector-parity.sh is a meta-check that only validates hardcoded file existence — it does NOT run the generator and does not reference the new tests/vectors/ipns/verify.json.",
+        "gh pr edit fails on this repo (Projects-classic GraphQL). Patch PR body via: env -u GITHUB_TOKEN gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file",
+        "Release bot pushes a chore(release) commit to the branch after PR creation. Must verify it is an ancestor of HEAD before pushing (fast-forward is safe; a rebase is needed if commits diverge).",
+        "phase.complete flags 5 REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) as missing from the traceability table — pre-existing hygiene unrelated to HARD-09.",
+        "Duplicate-key/wrong-typed-key CBOR parsing is an attack surface in the signed-IPNS binding: both Rust (reject duplicate Value/Sequence keys) and JS (strict type-guard before BigInt coercion) needed symmetric hardening.",
+        "The 48/89 SDK E2E regression risk class from Phase 51 was re-run and cleared: D-09 non-CAS sequence gate did not break any of the 89 E2E cases.",
+        "commit_failed from the GSD commit helper is a known false negative — always verify with git log --oneline -1 rather than retrying."
+      ],
+      "code": [
+        {
+          "path": "crates/core/src/ipns.rs",
+          "line": 99,
+          "end_line": 99,
+          "finding": "Needed to reject duplicate or ambiguous Value/Sequence CBOR keys and fail closed on wrong-typed known keys — duplicate-key handling is a real attack surface in signed-record parsing."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "line": 23,
+          "end_line": 23,
+          "finding": "CodeRabbit flagged that the legacy fallback path does a second raw resolve instead of carrying the legacy response in a VerifyError::Legacy enum variant. Deferred — multi-site enum refactor, DB-authoritative legacy path is low risk."
+        },
+        {
+          "path": "sdk-core/ipns/index.ts",
+          "line": 270,
+          "end_line": 270,
+          "finding": "BigInt(embeddedSeq) silently coerces wrong types (BigInt(true)→1n, BigInt('5')→5n). Needed an explicit type guard rejecting non-number/non-bigint Sequence values to stay symmetric with the Rust hardening."
+        },
+        {
+          "path": "scripts/gen-ipns-verify-vectors.mjs",
+          "finding": "Converted to gen-ipns-verify-vectors.ts (tsx runtime, added to tsconfig.scripts.json). The .mjs bypassed lint-staged hooks and tsconfig entirely — only caught by CI's full eslint sweep."
+        }
+      ],
+      "workflow": [
+        "Sequential execution on the feature branch is safer than parallel worktrees for multi-crate crypto phases — avoids cwd-drift, merge failures, and stranded worktrees.",
+        "Pre-push commit reword via filter-branch: git filter-branch --msg-filter 'sed -E \"1 s/^([a-z]+) [0-9][0-9A-Za-z.-]*: /\\1: /\"' <base>..HEAD. Verify tree-identical with git diff <old-head> before cleaning backup refs.",
+        "1Password SSH signing can wedge transiently during parallel agent commits — not a permanent state. Test with a timeout before asking the user to intervene.",
+        "Adversarial typecheck-wiring probe: inject a deliberate type error → confirm tsc errors on the target file → revert. Proves the file is actually in scope, not just renamed.",
+        "CodeRabbit re-reviews fix commits and raises new findings. Expect a second review wave after any push; budget time for it in the ship pipeline.",
+        "All GitHub CLI calls require env -u GITHUB_TOKEN gh … prefix in this environment.",
+        "git push and git fetch are blocked in-sandbox — must disable sandbox for those commands."
+      ]
+    },
+    "friction": [
+      "58-01 executor crashed mid-task (API socket close) after committing 3 of 5 tasks, leaving FUSE routing uncommitted and JS binding unstarted — required a manual continuation agent.",
+      "One executor completed two plans (58-02 and 58-03) when spawned only for 58-02, making progress tracking ambiguous mid-run.",
+      "SDK E2E gate was skipped by the executor as 'infra-limited' due to TEST_LOGIN_SECRET mismatch — a misclassification that required a separate agent run to correctly execute the gate.",
+      "The .mjs script bypassed all local hooks (lint-staged glob didn't cover it, tsconfig excluded it) and only failed in CI, adding a push/fix cycle after the PR was opened.",
+      "1Password SSH signing wedged during the CodeRabbit-fix agent's commit attempt, requiring a manual fallback commit.",
+      "CodeRabbit's PR-level review re-raised findings on committed fix commits, requiring a second round of triage and fixes.",
+      "The commit_failed false negative from the GSD commit helper required an extra git log verification step on every commit."
+    ],
+    "open_items": [
+      "6 unverified resolve_ipns call sites in apps/desktop/src-tauri/ (prepopulate.rs, vault.rs) — explicitly deferred from 58-01; captured as todo 2026-06-22-desktop-resolve-ipns-verified-coverage.md.",
+      "Phase 58 simplify cleanup: dead signature_verified field, test-string clarity rename, dead journal_entry if/else branch, unused public_key/private_key fields in vector fixture — captured as todo 2026-06-22-phase58-simplify-cleanup.md.",
+      "crates/fuse/src/verify.rs: carry legacy response in VerifyError::Legacy instead of a second raw resolve — multi-site enum refactor, captured as todo 2026-06-22-verify-rs-carry-legacy-response.md.",
+      "Pre-existing hygiene: 5 REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) missing from REQUIREMENTS.md traceability table — flagged by phase.complete, unrelated to HARD-09.",
+      "check-vector-parity.sh does not reference tests/vectors/ipns/verify.json — the new cross-language fixture is not covered by the parity CI check.",
+      "PR #544 merge decision left to the user — CI was still running Cargo Check & Test (macOS/Windows/Linux) and SDK E2E Tests at end of session."
+    ]
+  }
+}
