@@ -1,0 +1,117 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "7b22b6f3c1cc",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T15:51:12.717556Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/58-ipns-signature-verify-coverage/58-REVIEW.md",
+    ".planning/phases/58-ipns-signature-verify-coverage/58-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "111bb344ee63",
+  "token_usage": {
+    "input_tokens": 13901,
+    "cache_creation_tokens": 262533,
+    "cache_read_tokens": 7424064,
+    "output_tokens": 100019,
+    "api_call_count": 44
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "111bb344ee63",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Plan and execute Phase 58 (ipns-signature-verify-coverage) of CipherBox using the GSD workflow — creating PLAN.md files via the plan-phase orchestrator, then executing all 4 plans across 2 waves via execute-phase.",
+    "outcome": "Phase 58 fully planned (4 plans, 2 waves), executed, verified (7/7 must-haves), and marked complete. All test suites green: cargo core 75, fuse 87, apps/api jest 913/913, sdk-core vitest 243, SDK E2E 89/89. Four advisory code-review findings applied and committed before close.",
+    "learnings": {
+      "repo": [
+        "crates/crypto cannot dev-depend on api-client/core, so cross-language Rust test vectors must live in crates/fuse/tests/ rather than crates/crypto/tests/ to avoid a dependency cycle.",
+        "The non-CAS D-09 sequence-validation change class has a known history of breaking SDK E2E (previously caused 48/89 failures), making the full SDK E2E gate load-bearing for 58-02.",
+        "TEST_LOGIN_SECRET in the API .env is 'e2e-test-secret-ci-only', which differs from the SDK E2E harness default 'e2e-test-secret-do-not-use-in-production' — a mismatch that silently skips the suite with 401s.",
+        "replay.rs in crates/fuse uses bare seq + 1 arithmetic rather than the crate's checked_add convention — flagged as WR-01 in code review and patched in this phase.",
+        "Five REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) are absent from the traceability table — pre-existing hygiene debt unrelated to HARD-09.",
+        "The commit helper script emits commit_failed as a false negative on success; authoritative verification requires git log, not the helper's exit signal."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/Cargo.toml",
+          "line": 43,
+          "end_line": 43,
+          "finding": "ciborium dependency is present in the fuse crate — a mid-execution diagnostic claiming it was missing was stale/incorrect."
+        },
+        {
+          "path": "apps/api/src/...",
+          "line": 245,
+          "end_line": 245,
+          "finding": "expectedSequenceNumber guard at line 245 is the CAS 409 conflict check and must be preserved; it is distinct from the D-09 non-CAS sequence gate added in 58-02."
+        }
+      ],
+      "workflow": [
+        "Sequential subagent execution is safer than parallel worktree execution for security-critical multi-crate phases where correctness outweighs speed.",
+        "Spawning verifier and advisory code reviewer in parallel after execution completes is an efficient pattern when their inputs are independent.",
+        "An executor subagent overran its plan boundary and executed both 58-02 and 58-03 in a single run — plan boundary enforcement needs explicit prompting or scoping.",
+        "When an executor drops mid-task due to a socket error, checking git log and the uncommitted diff before re-spawning avoids duplicating completed work.",
+        "Delegating a fiddly infra probe (SDK E2E secret mismatch + correct payload shape) to a focused subagent is more reliable than inline curl experimentation."
+      ]
+    },
+    "friction": [
+      "58-01 executor hit an API socket error mid-Task-3, leaving 5 files with uncommitted changes and no SUMMARY — required a manual state assessment and a continuation subagent.",
+      "SDK E2E gate silently skipped during 58-02 execution because the running API was compiled from dist with a mismatched TEST_LOGIN_SECRET, producing 401s rather than a clear error.",
+      "Probing the test-login endpoint inline with curl failed (both secrets returned 400) because the payload shape was unknown — the investigation had to be delegated.",
+      "The 58-02 executor silently continued into 58-03 without stopping at the plan boundary, requiring post-hoc git forensics to understand what actually ran.",
+      "commit_failed false-negative from the commit helper caused unnecessary git log investigation after every commit."
+    ],
+    "open_items": [
+      "Traceability table is missing 5 REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) — pre-existing hygiene debt, not caused by this phase.",
+      "PROJECT.md update was initiated at phase close but its final committed state was not confirmed in the transcript.",
+      "RESEARCH.md Open Questions section needed a manual (RESOLVED) marker fix — the plan checker caught this but the planner did not emit it automatically, suggesting a gap in the research agent's output format.",
+      "SDK E2E secret alignment between API .env and SDK harness is fragile and undocumented — a shared config or CI env var would prevent silent skips in future phases."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-22T15:50:24.41688Z",
+    "agent_lines": 230,
+    "agent_removed": 0,
+    "human_added": 8,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 238,
+    "total_lines_changed": 246,
+    "agent_percentage": 93.4959349593496,
+    "metric_version": 2
+  }
+}
