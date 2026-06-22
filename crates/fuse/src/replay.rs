@@ -537,7 +537,9 @@ async fn fetch_merge_publish_parent(
             parent_ipns_private_key_raw.len()
         )
     })?;
-    let new_seq = seq + 1;
+    let new_seq = seq
+        .checked_add(1)
+        .ok_or_else(|| "IPNS sequence number overflow".to_string())?;
     let parent_value = format!("/ipfs/{}", new_cid);
     let parent_record =
         cipherbox_core::create_ipns_record(&parent_key_arr, &parent_value, new_seq, 86_400_000)
