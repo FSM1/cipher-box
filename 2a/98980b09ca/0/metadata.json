@@ -1,0 +1,128 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2a98980b09ca",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T16:24:16.256365Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "0d6e02ca5a56",
+  "token_usage": {
+    "input_tokens": 22973,
+    "cache_creation_tokens": 340461,
+    "cache_read_tokens": 15381148,
+    "output_tokens": 157475,
+    "api_call_count": 69
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0d6e02ca5a56",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan and execute Phase 58 (IPNS Signature-Verify Coverage) of the CipherBox project end-to-end: generate PLAN.md files via research → plan → verify, then run the full ship pipeline (security audit, Nyquist validation, SDK E2E gate, CodeRabbit CLI, conventional-commit reword, PR creation, and review resolution).",
+    "outcome": "Phase 58 was fully planned (4 plans, 2 waves), executed (all 4 plans complete), and passed formal verification (7/7 must-haves, D-01..D-13 confirmed in code). The ship pipeline completed gates 1–6; CodeRabbit CLI returned 5 findings that were being applied by a sub-agent before the reword/push/PR steps.",
+    "learnings": {
+      "repo": [
+        "SDK E2E secret: `TEST_LOGIN_SECRET` in `apps/api/.env` is `e2e-test-secret-ci-only`; pass it as `SDK_E2E_SECRET` when running the suite. A mismatch silently causes 401 → whole suite skips, which executors misclassify as 'infra-limited'.",
+        "vitest 3 does not auto-load `tests/sdk-e2e/.env`; env vars must be set explicitly on the CLI.",
+        "The commit helper reports `commit_failed` as a known false negative — always verify with `git log --oneline -1`, never blindly retry.",
+        "`gh pr edit` fails on this repo (Projects-classic GraphQL); patch PR body via `env -u GITHUB_TOKEN gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file`.",
+        "`github-actions[bot]` pushes a `chore(release)` commit to the branch after PR creation; `git fetch` + rebase before any subsequent push or it is rejected.",
+        "Conventional-commit subjects with parentheses (e.g. `feat(58-04): ... (7 cases)`) fail the `pr-release-preview` CI gate and `lint-pr-title`; strip trailing parens before push.",
+        "`markdownlint` runs on commit but excludes `.planning/`; no need to lint files there.",
+        "`git rebase -i` is unavailable in this environment; use `git filter-branch --msg-filter` for commit subject rewording.",
+        "5 REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) are missing from the REQUIREMENTS.md traceability table — pre-existing hygiene debt unrelated to HARD-09.",
+        "Desktop Tauri codebase (`apps/desktop/src-tauri/`) has 6 unverified `resolve_ipns` call sites in prepopulate.rs and vault.rs that were explicitly deferred in 58-01 and remain at baseline.",
+        "`phase.complete` reports false-positive 'needs human verification' when `previous_status: human_needed` appears in frontmatter history."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-e2e/src/ipns.test.ts",
+          "line": 155,
+          "end_line": 267,
+          "finding": "Uses `btoa(String.fromCharCode(...cbor))` for CBOR→base64; CodeRabbit flagged as potentially corrupting bytes >127. Replace with `Buffer.from(cbor).toString('base64')` for clarity and silence pre-ship warnings."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "finding": "Missing explicit existence check on `cborFields['Sequence']` before BigInt coercion; should throw a clear binding-mismatch error if the field is absent."
+        },
+        {
+          "path": "crates/core/src/ipns.rs",
+          "finding": "Missing unit tests for u64-overflow sequence wrapping and invalid-UTF-8 CBOR Value rejection — genuine coverage gaps identified by CodeRabbit CLI."
+        },
+        {
+          "path": "crates/fuse/src/replay.rs",
+          "finding": "Uses unchecked `seq + 1` arithmetic where the crate convention is `checked_add`; fixed by code-review agent (WR-01) to prevent silent overflow."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "Imports `ciborium` directly; requires `ciborium` in `crates/fuse/Cargo.toml` (line 43). The 58-01 executor's mid-crash diagnostic falsely reported this as missing — the dep was already added."
+        }
+      ],
+      "workflow": [
+        "For multi-crate crypto phases, sequential execution on the feature branch is safer than parallel worktrees — avoids cwd-drift, merge failures, and stranded worktree machinery.",
+        "Executor agents spawned for one plan can silently continue into the next plan if not explicitly bounded; validate which plans actually landed via `git log` after each agent returns.",
+        "The SDK E2E suite is the only gate that exercises the real client→API IPNS publish/resolve round-trip; unit suites mock the boundary and miss integration regressions.",
+        "Full client-chain rebuild (`pnpm --filter ... build` across crypto→core→api-client→sdk-core→sdk→api) is required before running SDK E2E to ensure `dist/` matches CI.",
+        "Commit history reword must happen before the first push; rewording after push requires a force-push that risks clobbering the `github-actions[bot]` `chore(release)` commit.",
+        "CodeRabbit CLI (`coderabbit review --agent --base main --type committed`) should run pre-ship to triage findings before the PR-level re-review adds noise.",
+        "Pattern mapper agent (produces PATTERNS.md classifying relevant files) is a useful pre-planning step for large multi-file phases.",
+        "A socket-dropped executor leaves partial progress in uncommitted diffs; a continuation agent that validates the existing commits and resumes from the exact incomplete task is more reliable than a full re-run."
+      ]
+    },
+    "friction": [
+      "58-01 executor crashed mid-task due to API socket close after committing 3 of 5 tasks; Task 3 (FUSE routing) was done-but-uncommitted and Task 4 (JS binding) was not started, requiring a separate continuation agent.",
+      "SDK E2E was silently skipped by the executor as 'infra-limited' due to TEST_LOGIN_SECRET mismatch; the suite 401s and skips entirely with no diagnostic output, making it look like an infra problem rather than a config error.",
+      "One executor dispatched for 58-02 autonomously continued into 58-03 without being asked, blurring plan attribution and making it harder to audit which plan produced which commits.",
+      "The `commit_failed` false negative from the commit helper caused unnecessary uncertainty and required `git log` verification after every commit.",
+      "Probing the test-login endpoint shape to diagnose the SDK E2E secret issue required guessing the payload format; `curl` returned 400 (wrong payload shape) for both secrets, masking the actual secret mismatch.",
+      "CodeRabbit CLI review took 10+ minutes, creating a blocking wait in the ship pipeline.",
+      "The `(7 cases)` parens in one commit subject (`f882d02ea`) require a `filter-branch` reword before push — a mechanical step that must not be forgotten."
+    ],
+    "open_items": [
+      "PR not yet created: conventional-commit reword of `f882d02ea`, push to origin, and `gh pr create` still pending after CodeRabbit CLI fix agent completes.",
+      "CodeRabbit CLI fixes (5 findings: 2× btoa→Buffer.from in ipns.test.ts, 2× Rust coverage gaps in crates/core/src/ipns.rs, 1× BigInt guard in sdk-core/ipns/index.ts) being applied by sub-agent — not yet committed.",
+      "PR review threads not yet resolved; PR-level CodeRabbit re-review will re-examine fix commits and may raise new findings.",
+      "Deferred todo: 6 unverified `resolve_ipns` call sites in `apps/desktop/src-tauri/prepopulate.rs` and `vault.rs` — captured at `.planning/todos/pending/2026-06-22-desktop-resolve-ipns-verified-coverage.md`.",
+      "Deferred todo: Phase 58 simplify cleanup (dead `signature_verified` field, test-string rename, dead `journal_entry` branch, unused vector fixture fields) — captured at `.planning/todos/pending/2026-06-22-phase58-simplify-cleanup.md`.",
+      "Pre-existing traceability hygiene: 5 REQ-IDs (IPNS-05/06, DB-01/02, BYO-08) missing from REQUIREMENTS.md traceability table — deferred, unrelated to HARD-09.",
+      "Merge decision left to the user after all CI checks pass."
+    ]
+  }
+}
