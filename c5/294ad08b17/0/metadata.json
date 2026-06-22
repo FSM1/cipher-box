@@ -1,0 +1,109 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "c5294ad08b17",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T15:23:03.120458Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "111bb344ee63",
+  "token_usage": {
+    "input_tokens": 13625,
+    "cache_creation_tokens": 226000,
+    "cache_read_tokens": 5095339,
+    "output_tokens": 74724,
+    "api_call_count": 35
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "111bb344ee63",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Plan and execute Phase 58 (`ipns-signature-verify-coverage`) for CipherBox — a backend crypto/security phase adding IPNS signature verification coverage across Rust (`crates/core`, `crates/fuse`) and TypeScript (`sdk-core`, `web`) layers. Invoked via the GSD `--chain` flag to auto-advance from planning into execution.",
+    "outcome": "Planning fully completed (RESEARCH.md, PATTERNS.md, VALIDATION.md, 4 PLAN.md files committed). Execution reached 3/4 plans done (58-01 CBOR chokepoint, 58-02 D-09 sequence gate, 58-03 web dedup all committed with SUMMARYs); 58-04 (cross-language verify vectors) was dispatched but the transcript ends before it returns.",
+    "learnings": {
+      "repo": [
+        "Phase 58 routes 9 FUSE resolve sites through a new `resolve_ipns_verified` chokepoint in `crates/fuse/src/verify.rs`; the folder-key descent path is a hard-fail, not a soft verify.",
+        "`crates/crypto` cannot dev-depend on `api-client` or `core`, so cross-language CBOR test vectors must live in `crates/fuse/tests/` rather than `crates/crypto/tests/`.",
+        "The D-09 `upsertFolderIpns` sequence gate enumerates 8 non-CAS paths; the idempotent branch (no sequence increment but latestCid update) is intentional and must be preserved.",
+        "58-02's change class (non-CAS sequence enforcement) previously broke 48/89 SDK E2E tests — it is a high-risk category requiring full SDK E2E gate validation.",
+        "Local stack runs redis on :6380, API on :3000, postgres, and ipfs/kubo; the SDK E2E gate requires `TEST_LOGIN_SECRET` to match what the compiled dist API was started with, otherwise test-login 401s and the suite silently skips.",
+        "ROADMAP.md already had the wave dependency annotations present (idempotent write confirmed).",
+        "14 files were pattern-mapped for Phase 58; sdk-core has 14 web-delegate callers that were unaffected by the 58-03 dedup refactor."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/Cargo.toml",
+          "line": 43,
+          "end_line": 43,
+          "finding": "ciborium dependency is present here; a stale mid-edit diagnostic incorrectly reported it missing during 58-01 partial execution."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "New file added in 58-01: `resolve_ipns_verified` wrapper that all 9 FUSE resolve sites route through."
+        },
+        {
+          "path": "apps/api",
+          "line": 245,
+          "end_line": 245,
+          "finding": "`expectedSequenceNumber` guard at this line is the CAS 409 conflict check — intentionally retained, not part of the D-09 non-CAS gate."
+        }
+      ],
+      "workflow": [
+        "Sequential execution on the feature branch was chosen over parallel worktree execution for a crypto/security phase to avoid cwd-drift, merge failures, and stranded worktrees — despite the workflow supporting parallelism.",
+        "GSD `commit_failed` responses from the commit helper can be false negatives; verify with `git log` rather than retrying the commit.",
+        "RESEARCH.md `## Open Questions` must be annotated with `(RESOLVED)` after planning; the plan checker flags its absence as a cosmetic warning even when all questions are substantively addressed in-plan.",
+        "Subagent scope containment is unreliable: the 58-02 executor overran into 58-03 and completed both in a single run — useful here but a pattern to watch.",
+        "VALIDATION.md frontmatter (Nyquist config) is written by the orchestrator; the body scaffold is owned by execute/validate tooling and must not be pre-filled.",
+        "Agent API socket errors mid-task leave uncommitted diffs on disk; a continuation subagent can pick up from committed progress and stage+commit the stale diff before proceeding."
+      ]
+    },
+    "friction": [
+      "58-01 executor hit an API socket connection-closed error mid-execution (after Task 2, during Task 3 routing), requiring manual state assessment and a separate continuation subagent.",
+      "SDK E2E gate for 58-02 never validly ran: the API process was started from compiled dist with a mismatched `TEST_LOGIN_SECRET`, causing 401s and silent test-suite skip rather than a real gate result.",
+      "The 58-02 executor overran its scope and executed 58-03 in the same subagent run — required post-hoc investigation via `git log` to understand what actually landed.",
+      "RESEARCH.md cosmetic warning (missing `(RESOLVED)` marker) required a manual orchestrator edit rather than being handled by the plan checker's suggested revision cycle.",
+      "commit_failed false negatives from the GSD commit helper added diagnostic overhead on every commit (required `git log` cross-checks throughout)."
+    ],
+    "open_items": [
+      "Plan 58-04 (shared cross-language CBOR verify vectors, 7 cases, Rust + sdk-core) was dispatched but not yet returned at transcript end.",
+      "SDK E2E gate for 58-02 was not genuinely executed — deferred to phase verification with a note to fix the `TEST_LOGIN_SECRET` mismatch before running.",
+      "Phase verification (`verify-work` / `gsd phase verify`) not yet triggered — all 4 plans must complete first.",
+      "Pre-existing `Cargo.lock` modification was present throughout and explicitly left untouched; it will need resolution before the branch can merge.",
+      "58-02's `registry.rs` Open Question #2 was resolved inline by the executor (no embedded-sequence in registry paths) but was not separately documented in RESEARCH.md."
+    ]
+  }
+}
