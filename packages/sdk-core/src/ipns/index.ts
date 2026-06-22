@@ -265,6 +265,11 @@ export async function resolveIpnsRecord(
             `IPNS sequence binding mismatch: embedded=undefined, response sequenceNumber=${response.sequenceNumber}`
           );
         }
+        if (typeof embeddedSeq !== 'number' && typeof embeddedSeq !== 'bigint') {
+          throw new Error(
+            `IPNS sequence binding mismatch: embedded type ${typeof embeddedSeq}, response sequenceNumber=${response.sequenceNumber}`
+          );
+        }
         const embeddedSeqBigInt =
           typeof embeddedSeq === 'bigint' ? embeddedSeq : BigInt(embeddedSeq as number);
         if (embeddedSeqBigInt !== BigInt(response.sequenceNumber)) {

@@ -307,6 +307,36 @@ describe('IPNS operations', () => {
         );
       });
 
+      it('throws on wrong-typed Sequence in CBOR (D-07 type guard)', async () => {
+        const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+        const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+        vi.mocked(verifyEd25519).mockResolvedValue(true);
+        // Encode CBOR with a boolean Sequence — cborg passes booleans through as CBOR true/false.
+        // The implementation must reject this rather than silently coercing (BigInt(true) = 1n).
+        const { encode } = await import('cborg');
+        const cbor = encode({
+          TTL: 300000000000,
+          Value: new TextEncoder().encode('/ipfs/bafyTYPEGUARD'),
+          Sequence: true, // boolean, not number or bigint
+          Validity: new TextEncoder().encode('2099-01-01T00:00:00.000000000Z'),
+          ValidityType: 0,
+        });
+        const data = Buffer.from(cbor).toString('base64');
+        vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+          success: true,
+          cid: 'bafyTYPEGUARD',
+          sequenceNumber: '1',
+          signatureV2: btoa('valid-sig'),
+          data,
+          pubKey: btoa('pubkey'),
+        });
+        vi.mocked(deriveIpnsName).mockResolvedValue('k51typeguard');
+
+        await expect(resolveIpnsRecord('k51typeguard')).rejects.toThrow(
+          /sequence binding mismatch/i
+        );
+      });
+
       it('resolves with matching cid and sequence (D-07/D-08 positive)', async () => {
         const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
         const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
