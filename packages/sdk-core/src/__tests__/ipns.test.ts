@@ -143,12 +143,22 @@ describe('IPNS operations', () => {
     it('verifies signature and pubKey-to-ipnsName binding when signature fields present', async () => {
       const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
       const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+      // Use real CBOR data that matches cid/sequenceNumber for the D-07/D-08 binding check.
+      const { encode: cborEncode } = await import('cborg');
+      const cbor = cborEncode({
+        TTL: 300000000000,
+        Value: new TextEncoder().encode('/ipfs/QmSignedCid'),
+        Sequence: 10,
+        Validity: new TextEncoder().encode('2099-01-01T00:00:00.000000000Z'),
+        ValidityType: 0,
+      });
+      const data = btoa(String.fromCharCode(...cbor));
       vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
         success: true,
         cid: 'QmSignedCid',
         sequenceNumber: '10',
         signatureV2: btoa('fake-sig-bytes'),
-        data: btoa('fake-cbor-data'),
+        data,
         pubKey: btoa('fake-pubkey-bytes'),
       });
       vi.mocked(deriveIpnsName).mockResolvedValue('k51verified');
