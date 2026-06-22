@@ -983,7 +983,7 @@ Plans:
 **Wave 1** *(all parallel-safe — disjoint files)*
 
 - [x] 56-01-PLAN.md — Rust write-path safety: file_data.rs offset validation (EINVAL) + checked_add (EFBIG), create/mkdir duplicate-name EEXIST guards, publish.rs next-sequence checked/saturating_add
-- [ ] 56-02-PLAN.md — Rust IPNS/durability: per-file (content_ops) + bin (metadata) Conflict re-resolve/retry, fs.rs wrap_key error propagation + write_generation-guarded unpin + FilePointer-resolve continuation, events.rs refresh NETWORK_TIMEOUT, spawn_metadata_publish Zeroizing, inode identity-reset (macOS+Windows lockstep)
+- [x] 56-02-PLAN.md — Rust IPNS/durability: per-file (content_ops) + bin (metadata) Conflict re-resolve/retry, fs.rs wrap_key error propagation + write_generation-guarded unpin + FilePointer-resolve continuation, events.rs refresh NETWORK_TIMEOUT, spawn_metadata_publish Zeroizing, inode identity-reset (macOS+Windows lockstep)
 - [ ] 56-03-PLAN.md — sdk-core/web spillovers: folder/load.ts decode try-catch (typed failure), folder/registration.ts wrapKey inside try (zeroize on throw), DetailsPrimitives copy-success gating, VersionHistory version-download error surfacing
 
 Verification gate: `cargo test` (fuse + winfsp feature sets), winfsp Windows CI, desktop E2E (dispatch-gated).
@@ -1084,7 +1084,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
 | 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |
 | 55. Large Source-File Refactor            | v1.1-hardening | 4/4 | Complete    | 2026-06-21 |
-| 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | 1/3 | In Progress|  |
+| 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | 2/3 | In Progress| 2026-06-22 |
 | 57. API CID/Provider Hardening & Dedup     | v1.1-hardening | -   | Planned     | -          |
 | 58. IPNS Signature-Verify Coverage         | v1.1-hardening | -   | Planned     | -          |
 

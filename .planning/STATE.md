@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-06-21T23:49:45.620Z"
-last_activity: 2026-06-21
+last_updated: "2026-06-22T00:15:00.000Z"
+last_activity: 2026-06-22
 progress:
   total_phases: 43
   completed_phases: 40
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 56 (fuse-and-ipns-durability-hardening) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 56 (recommended order: 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts predate this and were left unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics
@@ -154,6 +154,8 @@ Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases
 | Phase 51 P01 | 9min | 3 tasks | 2 files |
 | Phase 51 P03 | 45min | 4 tasks | 12 files |
 | Phase 51 P04 | 12min | 3 tasks | 6 files |
+| Phase 56 P01 | 45min | 3 tasks | 5 files |
+| Phase 56 P02 | 90min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -182,6 +184,9 @@ Recent for v1.1:
 - Share module accepts callback functions for API calls to stay transport-decoupled
 - Moved @cipherbox/core from dependencies to devDependencies in crypto (test-only cross-package assertions)
 - Kubo pebbleds datastore (LSM-tree) configured via IPFS_PROFILE=server,pebbleds; requires fresh volume on deploy
+- [Phase 56 P02] publish_with_cas_retry uses sync Fn(u64) closure seam; folder site keeps its own CAS loop (async merge-on-conflict path cannot delegate to sync helper)
+- [Phase 56 P02] D-01a: per-file/bin publish Conflict exhaustion returns Err→EIO; journal-on-exhaustion deferred (no JournalOp::FilePublish/BinPublish variant)
+- [Phase 56 P02] D-11: matched_by_stable_id=false clears children_loaded and children to force fresh subtree load on display-name-only fallback match
 - SDK concurrent pins require pebbleds datastore (synergistic); concurrent pins alone cause regression at 50 clients
 - Combined per-task commits into single commit due to pre-commit hook requiring api-client regeneration with entity/dto/controller changes
 - Desktop root folder detected by inode::ROOT_INO at publish call sites (simpler than modifying build_folder_metadata return type)
