@@ -249,7 +249,7 @@ export async function resolveIpnsRecord(
         // D-08: embedded value must be "/ipfs/<response.cid>"
         const embeddedValue =
           cborFields['Value'] instanceof Uint8Array
-            ? new TextDecoder().decode(cborFields['Value']).trim()
+            ? new TextDecoder().decode(cborFields['Value'])
             : null;
         const expectedValue = `/ipfs/${response.cid}`;
         if (embeddedValue !== expectedValue) {
