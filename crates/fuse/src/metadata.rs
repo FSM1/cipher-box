@@ -492,37 +492,69 @@ pub fn spawn_bin_entry_publish(
                 Zeroizing::new(arr)
             };
 
-            // Route through the shared CAS publish helper (D-03 / D-02).
-            // The make_record closure builds and signs a bin IPNS record for a given
-            // sequence number using the pre-uploaded CID. The new_cid is captured so
-            // both the initial and the retry publish point to the same blob.
-            //
-            // D-01a: no JournalOp::BinPublish variant exists in crates/sdk/src/queue.rs
-            // (only UploadFile/MkdirPublish); journaling bin publish is deferred (CONTEXT
-            // Deferred Ideas). On retry exhaustion: return Err → log::error! → EIO.
+            // `existing_cid` is None when the bin IPNS record does not exist yet (first
+            // publish for this vault's bin). The CAS helper's resolve_sequence would treat
+            // that not-found as a fatal error, so the first publish must NOT go through the
+            // CAS helper — it publishes directly at seq 0 with expected_sequence_number: None
+            // (no prior record to compare against), mirroring the per-file first-publish path.
+            let is_first_bin_publish = existing_cid.is_none();
             let new_cid_for_record = new_cid.clone();
             let old_cids: Vec<String> = existing_cid.into_iter().collect();
-            {
-                use base64::Engine;
+            use base64::Engine;
+
+            let make_bin_record = |seq_for_record: u64| -> Result<(String, String), String> {
+                let value = format!("/ipfs/{}", new_cid_for_record);
+                let record = cipherbox_core::create_ipns_record(
+                    &bin_ipns_key_arr,
+                    &value,
+                    seq_for_record,
+                    86_400_000,
+                )
+                .map_err(|e| format!("Bin IPNS record creation failed: {}", e))?;
+                let marshaled = cipherbox_core::marshal_ipns_record(&record)
+                    .map_err(|e| format!("Bin IPNS marshal failed: {}", e))?;
+                let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
+                Ok((record_b64, new_cid_for_record.clone()))
+            };
+
+            if is_first_bin_publish {
+                // First publish: no prior record, so no CAS. Publish at seq 0.
+                let (record_b64, _cid) = make_bin_record(0)?;
+                let req = cipherbox_api_client::IpnsPublishRequest {
+                    ipns_name: bin_ipns_name.clone(),
+                    record: record_b64,
+                    metadata_cid: new_cid.clone(),
+                    encrypted_ipns_private_key: None,
+                    key_epoch: None,
+                    expected_sequence_number: None,
+                };
+                match cipherbox_api_client::ipns::publish_ipns(&api, &req)
+                    .await
+                    .map_err(|e| format!("{}", e))?
+                {
+                    cipherbox_api_client::PublishResult::Success => {
+                        coordinator.record_publish(&bin_ipns_name, 0);
+                        log::info!("Bin entry published (first publish)");
+                    }
+                    cipherbox_api_client::PublishResult::Conflict { .. } => {
+                        // Another client raced to create the bin record. D-01a: no
+                        // JournalOp::BinPublish variant — surface as Err → EIO.
+                        return Err(format!(
+                            "Conflict on first bin IPNS publish for {} — another client raced",
+                            bin_ipns_name
+                        ));
+                    }
+                }
+            } else {
+                // Update publish: route through the shared CAS helper (D-03 / D-02).
+                // D-01a: no JournalOp::BinPublish variant exists in crates/sdk/src/queue.rs
+                // (only UploadFile/MkdirPublish); journaling bin publish is deferred (CONTEXT
+                // Deferred Ideas). On retry exhaustion: return Err → log::error! → EIO.
                 publish_with_cas_retry(
                     &api,
                     &coordinator,
                     &bin_ipns_name,
-                    |seq_for_record: u64| {
-                        let value = format!("/ipfs/{}", new_cid_for_record);
-                        let record = cipherbox_core::create_ipns_record(
-                            &bin_ipns_key_arr,
-                            &value,
-                            seq_for_record,
-                            86_400_000,
-                        )
-                        .map_err(|e| format!("Bin IPNS record creation failed: {}", e))?;
-                        let marshaled = cipherbox_core::marshal_ipns_record(&record)
-                            .map_err(|e| format!("Bin IPNS marshal failed: {}", e))?;
-                        let record_b64 =
-                            base64::engine::general_purpose::STANDARD.encode(&marshaled);
-                        Ok((record_b64, new_cid_for_record.clone()))
-                    },
+                    make_bin_record,
                     &old_cids,
                     None, // D-01a: no JournalOp::BinPublish variant; exhaustion → Err → EIO
                 )
