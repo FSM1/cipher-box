@@ -1005,8 +1005,8 @@ Scope (captured todos):
 Plans:
 **Wave 1** *(parallel-safe — DTO/provider vs module graph)*
 
-- [ ] 57-01-PLAN.md — Data-integrity (coupled WR-02→WR-05): shared `CID_REGEX` + `@MaxLength(255)` on `RegisterCidDto`; `encodeURIComponent`/`URLSearchParams` in `LocalProvider` pin/rm + cat URLs (TDD). Run `pnpm api:generate` if the DTO change alters the OpenAPI spec.
-- [ ] 57-02-PLAN.md — apps/api module dedup: leaf `IpfsProviderModule` (imports ConfigModule, exports `IPFS_PROVIDER`) imported by Ipfs/Vault/PendingUnpin with IN-04 comments corrected; `withCidLock` + `refcountAndMaybeUnpin` helpers routing guardedUnpin (txn + post-commit) and drainRow
+- [x] 57-01-PLAN.md — Data-integrity (coupled WR-02→WR-05): shared `CID_REGEX` + `@MaxLength(255)` on `RegisterCidDto`; `encodeURIComponent`/`URLSearchParams` in `LocalProvider` pin/rm + cat URLs (TDD). Run `pnpm api:generate` if the DTO change alters the OpenAPI spec.
+- [x] 57-02-PLAN.md — apps/api module dedup: leaf `IpfsProviderModule` (imports ConfigModule, exports `IPFS_PROVIDER`) imported by Ipfs/Vault/PendingUnpin with IN-04 comments corrected; `withCidLock` + `refcountAndMaybeUnpin` helpers routing guardedUnpin (txn + post-commit) and drainRow
 
 Verification gate: apps/api jest specs; `pnpm api:generate` + commit regenerated client iff the `RegisterCidDto` change alters the OpenAPI spec.
 
@@ -1084,8 +1084,8 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
 | 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |
 | 55. Large Source-File Refactor            | v1.1-hardening | 4/4 | Complete    | 2026-06-21 |
-| 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | 3/3 | Complete   | 2026-06-22 |
-| 57. API CID/Provider Hardening & Dedup     | v1.1-hardening | -   | Planned     | -          |
+| 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | 3/3 | Complete    | 2026-06-22 |
+| 57. API CID/Provider Hardening & Dedup     | v1.1-hardening | 2/2 | Complete    | 2026-06-22 |
 | 58. IPNS Signature-Verify Coverage         | v1.1-hardening | -   | Planned     | -          |
 
 _Roadmap created: 2026-03-07_

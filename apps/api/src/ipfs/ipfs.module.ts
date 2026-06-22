@@ -1,6 +1,6 @@
 import { Module, DynamicModule } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { IPFS_PROVIDER, LocalProvider } from './providers';
+import { ConfigModule } from '@nestjs/config';
+import { IpfsProviderModule } from './providers';
 import { IpfsController } from './ipfs.controller';
 import { VaultModule } from '../vault/vault.module';
 
@@ -9,28 +9,14 @@ export class IpfsModule {
   static forRootAsync(): DynamicModule {
     return {
       module: IpfsModule,
-      imports: [ConfigModule, VaultModule],
+      imports: [ConfigModule, VaultModule, IpfsProviderModule],
       controllers: [IpfsController],
-      providers: [
-        {
-          // IN-04 (accepted): IPFS_PROVIDER useFactory is duplicated across IpfsModule,
-          // VaultModule, and PendingUnpinModule. Extraction into a shared IpfsProviderCoreModule
-          // is avoided because IpfsModule imports VaultModule and VaultModule imports
-          // IpfsModule's provider — a shared module would create a circular dependency.
-          // Each module self-provides to break the cycle. Accepted with this comment.
-          provide: IPFS_PROVIDER,
-          useFactory: (configService: ConfigService) => {
-            const apiUrl = configService.get<string>('IPFS_LOCAL_API_URL', 'http://localhost:5001');
-            const gatewayUrl = configService.get<string>(
-              'IPFS_LOCAL_GATEWAY_URL',
-              'http://localhost:8080'
-            );
-            return new LocalProvider(apiUrl, gatewayUrl);
-          },
-          inject: [ConfigService],
-        },
-      ],
-      exports: [IPFS_PROVIDER],
+      providers: [],
+      // Re-export the imported IpfsProviderModule (which exports IPFS_PROVIDER) so
+      // downstream importers like AuthModule can inject the token. A bare
+      // `exports: [IPFS_PROVIDER]` fails at boot because the token is not a local
+      // provider of IpfsModule — Nest only re-exports a token via its owning module.
+      exports: [IpfsProviderModule],
     };
   }
 }

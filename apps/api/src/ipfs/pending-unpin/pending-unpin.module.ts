@@ -1,11 +1,11 @@
 import { Module, Logger, OnModuleInit } from '@nestjs/common';
 import { BullModule, InjectQueue } from '@nestjs/bullmq';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import { PendingUnpin } from '../../vault/entities/pending-unpin.entity';
 import { PinnedCid } from '../../vault/entities/pinned-cid.entity';
-import { IPFS_PROVIDER, LocalProvider } from '../providers';
+import { IpfsProviderModule } from '../providers';
 import { PendingUnpinProcessor } from './pending-unpin.processor';
 
 @Module({
@@ -13,27 +13,9 @@ import { PendingUnpinProcessor } from './pending-unpin.processor';
     BullModule.registerQueue({ name: 'pending-unpins' }),
     TypeOrmModule.forFeature([PendingUnpin, PinnedCid]),
     ConfigModule,
+    IpfsProviderModule,
   ],
-  providers: [
-    PendingUnpinProcessor,
-    {
-      // IN-04 (accepted): IPFS_PROVIDER useFactory is duplicated across IpfsModule,
-      // VaultModule, and PendingUnpinModule. This instance exists to avoid importing
-      // IpfsModule (IpfsModule → VaultModule → circular). Each module self-provides
-      // to break the cycle. Extraction into a shared module would not eliminate the
-      // cycle without restructuring the import graph. Accepted with this comment.
-      provide: IPFS_PROVIDER,
-      useFactory: (configService: ConfigService) => {
-        const apiUrl = configService.get<string>('IPFS_LOCAL_API_URL', 'http://localhost:5001');
-        const gatewayUrl = configService.get<string>(
-          'IPFS_LOCAL_GATEWAY_URL',
-          'http://localhost:8080'
-        );
-        return new LocalProvider(apiUrl, gatewayUrl);
-      },
-      inject: [ConfigService],
-    },
-  ],
+  providers: [PendingUnpinProcessor],
 })
 export class PendingUnpinModule implements OnModuleInit {
   private readonly logger = new Logger(PendingUnpinModule.name);
