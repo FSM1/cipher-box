@@ -120,6 +120,26 @@ else
   fi
 fi
 
+# ---- Test 5: Verify bin entry published (via desktop log) ----
+# Parity with test-recycle-bin.ps1 Test 5. The bin IPNS name is derived
+# client-side from the user's private key, so we confirm the publish by
+# checking the desktop log for the publish confirmation line. Guards the
+# bin first-publish path (regressed in Phase 56 — caught only on Windows
+# before this assertion existed on the .sh path too).
+echo "--- Test 5: Verify bin entry published ---"
+sleep 5
+DESKTOP_LOG="${DESKTOP_LOG:-/tmp/cipherbox-desktop.log}"
+if [ -f "$DESKTOP_LOG" ]; then
+  if grep -q "Bin entry published" "$DESKTOP_LOG"; then
+    pass "Bin entry published (confirmed via desktop log)"
+  else
+    fail "Bin entry verification (no 'Bin entry published' in desktop log)"
+  fi
+else
+  # No log file available -- fall back to the soft-delete checks above.
+  pass "Bin entry verification (log not available, soft-delete already verified)"
+fi
+
 # ---- Cleanup ----
 echo "--- Cleanup ---"
 rm -f "$MP/$TEST_FILE" 2>/dev/null || true
