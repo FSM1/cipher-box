@@ -970,14 +970,14 @@ Plans:
 **Goal:** Close the pre-existing FUSE write-path and per-file IPNS durability gaps surfaced (byte-identical to main) by the PR #538 / Phase 55 refactor review: per-file and bin-entry IPNS `Conflict` re-resolves/retries instead of being recorded as a local success, write-path offset/size and duplicate-name (create/mkdir) operations are bounds- and existence-checked (EINVAL/EFBIG/EEXIST), key-wrap and metadata-decode failures propagate instead of silently corrupting state, the inode stable-ID lookup resets identity on a display-name-only fallback, and `spawn_metadata_publish` key params are zeroized — macOS and Windows (winfsp) paths in lockstep, no durability decision left to a swallowed warning.
 **Requirements**: HARD-07
 **Depends on:** Phase 55 (post-refactor module layout)
-**Plans:** 1/3 plans executed
+**Plans:** 3/3 plans executed
 
 Scope (captured todos):
 
-- [ ] FUSE per-file/bin IPNS Conflict-as-success + 6 robustness gaps (content_ops/metadata/fs/events/publish + sdk-core load.ts) — `2026-06-21-fuse-ipns-robustness-findings-from-pr538-review.md` (absorbs the superseded `2026-06-20-fuse-per-file-ipns-publish-conflict-recorded-as-success.md`)
-- [ ] Second CodeRabbit pass: write-path overflow/EEXIST guards + sdk-core wrapKey-in-try + web copy/version-download UX — `2026-06-21-pr538-second-coderabbit-pass-preexisting-findings.md`
-- [ ] FUSE inode stable-ID identity reset on display-name fallback — `2026-06-20-fuse-inode-stable-id-identity-reset.md`
-- [ ] Zeroize `spawn_metadata_publish` key params (other 2 helpers already `Zeroizing`) — `2026-06-21-zeroize-fuse-metadata-publish-key-params.md`
+- [x] FUSE per-file/bin IPNS Conflict-as-success + 6 robustness gaps (content_ops/metadata/fs/events/publish + sdk-core load.ts) — `2026-06-21-fuse-ipns-robustness-findings-from-pr538-review.md` (absorbs the superseded `2026-06-20-fuse-per-file-ipns-publish-conflict-recorded-as-success.md`)
+- [x] Second CodeRabbit pass: write-path overflow/EEXIST guards + sdk-core wrapKey-in-try + web copy/version-download UX — `2026-06-21-pr538-second-coderabbit-pass-preexisting-findings.md`
+- [x] FUSE inode stable-ID identity reset on display-name fallback — `2026-06-20-fuse-inode-stable-id-identity-reset.md`
+- [x] Zeroize `spawn_metadata_publish` key params (other 2 helpers already `Zeroizing`) — `2026-06-21-zeroize-fuse-metadata-publish-key-params.md`
 
 Plans:
 **Wave 1** *(all parallel-safe — disjoint files)*
@@ -1084,7 +1084,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 53. Release & Supply-Chain Engineering    | v1.1-hardening | -         | Planned  | -          |
 | 54. E2E Test-Infra Typing                 | v1.1-hardening | -         | Planned  | -          |
 | 55. Large Source-File Refactor            | v1.1-hardening | 4/4 | Complete    | 2026-06-21 |
-| 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | 2/3 | In Progress| 2026-06-22 |
+| 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | 3/3 | Complete   | 2026-06-22 |
 | 57. API CID/Provider Hardening & Dedup     | v1.1-hardening | -   | Planned     | -          |
 | 58. IPNS Signature-Verify Coverage         | v1.1-hardening | -   | Planned     | -          |
 

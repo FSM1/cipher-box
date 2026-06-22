@@ -95,7 +95,7 @@ None — plan executed as written.
 - **Found during:** Task 1 implementation
 - **Issue:** `publish_with_cas_retry` uses a synchronous `Fn(u64)` closure for `make_record`. The folder Conflict path needs async network I/O (resolve+fetch+decrypt+merge) before re-encrypting, which cannot be expressed in a sync closure without significant helper redesign.
 - **Decision:** Keep folder site's own CAS loop as canonical template. The per-file and bin sites (which only need a pure crypto operation for `make_record`) route through the shared helper.
-- **Impact:** D-03 criterion "all three sites route through the helper" technically met via per-file+bin; folder has its own equivalent loop documented as the template.
+- **Impact:** Documented deviation from the literal D-03 criterion "all three sites route through the helper": per-file and bin sites do route through the shared helper; the folder site keeps its own equivalent inline CAS loop (the reference the helper was extracted from) because its conflict arm requires async merge-on-conflict that a sync closure cannot express. Same decision policy across all three sites; only the folder's call shape deviates.
 
 ## Known Stubs
 
