@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "761b6d9b47af",
+  "strategy": "manual-commit",
+  "branch": "docs/explore-agent-native-milestone",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".planning/seeds/cipherbox-mcp-server-and-wallet-native-tenancy.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/76/1b6d9b47af/0/metadata.json",
+      "transcript": "/76/1b6d9b47af/0/full.jsonl",
+      "content_hash": "/76/1b6d9b47af/0/content_hash.txt",
+      "prompt": "/76/1b6d9b47af/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 42133,
+    "cache_creation_tokens": 363767,
+    "cache_read_tokens": 21644415,
+    "output_tokens": 200127,
+    "api_call_count": 100
+  }
+}
