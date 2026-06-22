@@ -93,11 +93,23 @@ pub(crate) fn bind_verified(
             }
 
             // D-07: embedded sequence must match response sequence_number.
+            //
+            // First-publish exception (mirrors the API's publish-side D-09 gate in
+            // ipns.service.ts::upsertFolderIpns): on a brand-new IPNS name the API accepts an
+            // embedded sequence of 0 OR 1 and unconditionally stores DB sequenceNumber=1. The
+            // Rust/FUSE publish paths embed the IPNS-native 0 (next_file_publish_sequence, the
+            // first child-folder publish) while the TS SDK embeds 1 — both legitimate per D-09.
+            // So a resolved first-generation record (resp_seq == 1) may legitimately carry an
+            // embedded 0. Accept that single documented skew; require strict equality for every
+            // other sequence. The cid binding above stays strict and DB CID remains the
+            // authoritative trust root, so this does not widen the attack surface: a record can
+            // only reach the network with embedded 0 while DB is 1 (the first-publish window).
             let resp_seq = resp
                 .sequence_number
                 .parse::<u64>()
                 .map_err(|e| VerifyError::Invalid(format!("parse response sequence_number: {}", e)))?;
-            if embedded_seq != resp_seq {
+            let seq_ok = embedded_seq == resp_seq || (resp_seq == 1 && embedded_seq == 0);
+            if !seq_ok {
                 return Err(VerifyError::Invalid(format!(
                     "IPNS sequence binding mismatch: embedded={}, response seq={}",
                     embedded_seq, resp_seq
@@ -110,9 +122,13 @@ pub(crate) fn bind_verified(
                 .unwrap_or(&embedded_value)
                 .to_string();
 
+            // Return the DB-authoritative sequence (resp_seq): downstream sequence math
+            // (resolve_sequence → next publish = seq + 1) keys off the API's DB counter, and
+            // the binding above guarantees resp_seq == embedded_seq except for the benign
+            // first-publish skew, where resp_seq (1) is the correct forward base.
             Ok(VerifiedResolve {
                 cid,
-                sequence_number: embedded_seq,
+                sequence_number: resp_seq,
                 signature_verified: true,
             })
         }
@@ -206,6 +222,31 @@ mod tests {
     fn bind_verified_seq_mismatch_returns_invalid() {
         // Valid signature verdict, cid matches, but embedded seq != response seq — Invalid.
         let resp = make_resp_with_cbor("bafyCID", 99, "bafyCID", 5);
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(ref msg) if msg.contains("sequence binding mismatch")),
+            "expected sequence binding mismatch, got: {:?}", err
+        );
+    }
+
+    #[test]
+    fn bind_verified_first_publish_seq_skew_returns_ok() {
+        // First-publish skew (D-09 mirror): FUSE/Rust publish paths embed the IPNS-native
+        // sequence 0 while the API stores DB sequenceNumber=1. The binding must accept
+        // embedded=0 when resp_seq==1, and return the DB-authoritative seq (1) so downstream
+        // forward math (next publish = seq + 1) computes 2, not a re-sign at 1.
+        let resp = make_resp_with_cbor("bafyFIRST", 0, "bafyFIRST", 1);
+        let result = bind_verified(&resp, Some(true)).unwrap();
+        assert_eq!(result.cid, "bafyFIRST");
+        assert_eq!(result.sequence_number, 1, "returns DB-authoritative seq, not embedded 0");
+        assert!(result.signature_verified);
+    }
+
+    #[test]
+    fn bind_verified_seq_skew_only_applies_to_first_publish() {
+        // The skew allowance is scoped to resp_seq==1. embedded=0 with resp_seq=2
+        // (a rollback or tamper, not a first publish) must still be rejected.
+        let resp = make_resp_with_cbor("bafyCID", 0, "bafyCID", 2);
         let err = bind_verified(&resp, Some(true)).unwrap_err();
         assert!(
             matches!(err, VerifyError::Invalid(ref msg) if msg.contains("sequence binding mismatch")),

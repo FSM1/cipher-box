@@ -5,9 +5,9 @@
  * fixture consumed by both the Rust (crates/fuse/tests/ipns_verify_vectors.rs)
  * and the sdk-core (packages/sdk-core/src/__tests__/ipns.test.ts) test suites.
  *
- * 7 cases (D-11):
+ * 8 cases (D-11):
  *   valid, tampered-sig, name-mismatch, cid-swapped, seq-mismatch,
- *   partial-fields, legacy-absent
+ *   partial-fields, legacy-absent, first-publish-skew
  *
  * Run from the repo root (packages/core must be built first):
  *   npx tsx scripts/gen-ipns-verify-vectors.ts
@@ -361,10 +361,42 @@ async function main(): Promise<void> {
   }
 
   // ------------------------------------------------------------------
+  // Case 8: first-publish-skew — sig valid over CBOR data with embedded
+  // Sequence=0, but response `sequence_number` is 1.
+  //
+  // This is the documented first-publish skew (D-09): the API accepts an
+  // embedded sequence ∈ {0,1} on first publish and unconditionally stores
+  // DB sequenceNumber=1. The Rust/FUSE publish paths embed the IPNS-native 0
+  // while the TS SDK embeds 1 — both legitimate. The resolve-side binding must
+  // accept embedded=0 when response sequenceNumber==1 (it is NOT a tamper).
+  // Expected result: "valid".
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, 0);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description:
+        'first-publish-skew — valid sig over CBOR data with seq=0, response sequenceNumber is 1',
+      ipns_name: primaryIpnsName,
+      public_key: bytesToHex(primaryPub),
+      private_key: PRIMARY_PRIV_KEY_HEX,
+      cid: CID_A,
+      sequence_number: '1',
+      signature_v2: bytesToBase64(sig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(primaryPub),
+      expected_result: 'valid',
+    });
+    console.log('Case 8 (first-publish-skew): done — sig covers CBOR with seq=0, response.seq=1');
+  }
+
+  // ------------------------------------------------------------------
   // Sanity checks
   // ------------------------------------------------------------------
-  if (vectors.length !== 7) {
-    throw new Error(`Expected 7 vectors, got ${vectors.length}`);
+  if (vectors.length !== 8) {
+    throw new Error(`Expected 8 vectors, got ${vectors.length}`);
   }
 
   const expectedResults = [
@@ -375,6 +407,7 @@ async function main(): Promise<void> {
     'invalid',
     'invalid',
     'legacy',
+    'valid',
   ];
   const expectedDescriptions = [
     'valid',
@@ -384,6 +417,7 @@ async function main(): Promise<void> {
     'seq-mismatch',
     'partial-fields',
     'legacy-absent',
+    'first-publish-skew',
   ];
   for (let i = 0; i < vectors.length; i++) {
     if (vectors[i].expected_result !== expectedResults[i]) {

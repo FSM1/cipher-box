@@ -272,7 +272,20 @@ export async function resolveIpnsRecord(
         }
         const embeddedSeqBigInt =
           typeof embeddedSeq === 'bigint' ? embeddedSeq : BigInt(embeddedSeq as number);
-        if (embeddedSeqBigInt !== BigInt(response.sequenceNumber)) {
+        const responseSeqBigInt = BigInt(response.sequenceNumber);
+        // First-publish exception (mirrors the API's publish-side D-09 gate in
+        // ipns.service.ts::upsertFolderIpns): on a brand-new IPNS name the API accepts an
+        // embedded sequence of 0 OR 1 and unconditionally stores DB sequenceNumber=1. The
+        // Rust/FUSE publish paths embed the IPNS-native 0 while the TS SDK embeds 1 — both
+        // legitimate per D-09. So a resolved first-generation record (sequenceNumber==1) may
+        // legitimately carry an embedded 0. Accept that single documented skew; require strict
+        // equality otherwise. The cid binding above stays strict and DB CID remains the
+        // authoritative trust root, so this does not widen the attack surface (embedded 0 can
+        // only reach the network while DB==1, the first-publish window).
+        const seqOk =
+          embeddedSeqBigInt === responseSeqBigInt ||
+          (responseSeqBigInt === 1n && embeddedSeqBigInt === 0n);
+        if (!seqOk) {
           throw new Error(
             `IPNS sequence binding mismatch: embedded=${embeddedSeq}, response sequenceNumber=${response.sequenceNumber}`
           );

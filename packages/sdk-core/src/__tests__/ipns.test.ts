@@ -307,6 +307,51 @@ describe('IPNS operations', () => {
         );
       });
 
+      it('accepts first-publish skew: embedded seq=0 with response sequenceNumber=1 (D-09)', async () => {
+        const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+        const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+        vi.mocked(verifyEd25519).mockResolvedValue(true);
+        // CBOR embeds seq=0 (IPNS-native first publish), response.sequenceNumber = "1" (DB).
+        const data = await makeCborData('bafyFIRST', 0);
+        vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+          success: true,
+          cid: 'bafyFIRST',
+          sequenceNumber: '1',
+          signatureV2: btoa('valid-sig'),
+          data,
+          pubKey: btoa('pubkey'),
+        });
+        vi.mocked(deriveIpnsName).mockResolvedValue('k51first-publish');
+
+        const result = await resolveIpnsRecord('k51first-publish');
+        expect(result).not.toBeNull();
+        expect(result!.signatureVerified).toBe(true);
+        // Returns the DB-authoritative sequenceNumber (1), not the embedded 0.
+        expect(result!.sequenceNumber).toBe(1n);
+      });
+
+      it('skew allowance is scoped to first publish: embedded seq=0 with response=2 still throws', async () => {
+        const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+        const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+        vi.mocked(verifyEd25519).mockResolvedValue(true);
+        // embedded seq=0 but response.sequenceNumber = "2" — a rollback/tamper, not a first
+        // publish (DB==2 means the record has already advanced past its first generation).
+        const data = await makeCborData('bafyCID', 0);
+        vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+          success: true,
+          cid: 'bafyCID',
+          sequenceNumber: '2',
+          signatureV2: btoa('valid-sig'),
+          data,
+          pubKey: btoa('pubkey'),
+        });
+        vi.mocked(deriveIpnsName).mockResolvedValue('k51skew-scope');
+
+        await expect(resolveIpnsRecord('k51skew-scope')).rejects.toThrow(
+          /sequence binding mismatch/i
+        );
+      });
+
       it('throws on wrong-typed Sequence in CBOR (D-07 type guard)', async () => {
         const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
         const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
@@ -403,7 +448,7 @@ describe('IPNS operations', () => {
 // ---------------------------------------------------------------------------
 // D-11/D-12: Cross-language verify vector tests
 //
-// Loads the shared fixture tests/vectors/ipns/verify.json (7 cases) and drives
+// Loads the shared fixture tests/vectors/ipns/verify.json (8 cases) and drives
 // resolveIpnsRecord against each vector, mocking only the crypto signature and
 // name-binding primitives to reflect the case — the REAL CBOR `data` bytes from
 // the fixture are passed through to cborDecode so the binding check exercises
@@ -421,8 +466,8 @@ describe('D-11/D-12 cross-language IPNS verify vectors', () => {
     vi.clearAllMocks();
   });
 
-  it('fixture has exactly 7 cases', () => {
-    expect(vectors).toHaveLength(7);
+  it('fixture has exactly 8 cases', () => {
+    expect(vectors).toHaveLength(8);
   });
 
   it('valid — resolves with signatureVerified=true', async () => {
@@ -539,6 +584,33 @@ describe('D-11/D-12 cross-language IPNS verify vectors', () => {
     await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(
       /sequence binding mismatch/i
     );
+  });
+
+  it('first-publish-skew — resolves with embedded seq=0 vs response sequenceNumber=1', async () => {
+    // D-09 first-publish skew: the fixture data field embeds Sequence=0 but
+    // response.sequenceNumber is "1" (FUSE/Rust paths embed IPNS-native 0; the API
+    // stores DB sequenceNumber=1). The binding must ACCEPT this — it is not a tamper.
+    const v = vectors.find((x) => x.description.startsWith('first-publish-skew'));
+    if (!v) throw new Error('first-publish-skew vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue(v.ipns_name);
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number, // "1"
+      signatureV2: v.signature_v2 ?? undefined,
+      data: v.data ?? undefined, // REAL bytes: encodes Sequence=0
+      pubKey: v.pub_key ?? undefined,
+    });
+
+    const result = await resolveIpnsRecord(v.ipns_name);
+
+    expect(result, `${v.description}`).not.toBeNull();
+    expect(result!.signatureVerified, `${v.description}`).toBe(true);
+    // Returns the DB-authoritative sequenceNumber (1), not the embedded 0.
+    expect(result!.sequenceNumber, `${v.description}`).toBe(BigInt(v.sequence_number));
   });
 
   it('partial-fields — throws on incomplete signature data (downgrade vector)', async () => {

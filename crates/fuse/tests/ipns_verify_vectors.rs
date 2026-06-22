@@ -10,7 +10,7 @@
 //! `cipherbox-crypto` cannot dev-depend on either without a cycle. `cipherbox-fuse`
 //! already depends on both, making it the cycle-free home for this test (D-12).
 //!
-//! See: tests/vectors/ipns/verify.json for the 7 cases (D-11).
+//! See: tests/vectors/ipns/verify.json for the 8 cases (D-11).
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -122,7 +122,8 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
                 return "invalid".to_string();
             }
 
-            // D-07: embedded seq must match response sequence_number
+            // D-07: embedded seq must match response sequence_number, with the documented
+            // first-publish skew allowance (resp_seq==1 && embedded==0) — mirrors bind_verified.
             let resp_seq = match resp.sequence_number.parse::<u64>() {
                 Ok(s) => s,
                 Err(e) => {
@@ -130,7 +131,8 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
                     return "invalid".to_string();
                 }
             };
-            if embedded_seq != resp_seq {
+            let seq_ok = embedded_seq == resp_seq || (resp_seq == 1 && embedded_seq == 0);
+            if !seq_ok {
                 eprintln!(
                     "[{}] seq binding mismatch: embedded={}, response={}",
                     v.description, embedded_seq, resp_seq
@@ -145,7 +147,7 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
 
 /// Cross-language IPNS verify parity test.
 ///
-/// Loads the 7-case shared fixture and asserts that Rust produces the same
+/// Loads the 8-case shared fixture and asserts that Rust produces the same
 /// verdict as the expected_result field. This pins:
 ///
 /// - `cipherbox_api_client::ipns::verify_ipns_resolve_signature` (the signed-bytes
@@ -159,7 +161,7 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
 fn ipns_verify_cross_language() {
     let vectors: Vec<IpnsVerifyVector> = load_vectors("ipns/verify.json");
     assert!(!vectors.is_empty(), "No IPNS verify vectors loaded");
-    assert_eq!(vectors.len(), 7, "Expected exactly 7 IPNS verify vectors");
+    assert_eq!(vectors.len(), 8, "Expected exactly 8 IPNS verify vectors");
 
     for v in &vectors {
         let actual = classify_vector(v);
