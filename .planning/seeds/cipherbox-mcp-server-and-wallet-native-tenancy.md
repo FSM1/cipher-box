@@ -32,7 +32,7 @@ builds no key custody.
 - **Two-plane identity** over one keypair: payment plane (x402/USDC) + identity plane
   (SIWE over the same address mints a session). The wallet address is an **access
   handle, never a decryption key** — content keys (AES/ECIES) stay separate. Frame it
-  "wallet IS the key," never "keyless."
+  "wallet IS the key to access," never "keyless."
 - **Usage ledger + pluggable settlement** — one internal ledger (extend the existing
   quota + refcounted `pinned_cids` accounting) with adapters: **Stripe for humans**,
   **x402 for agents**. x402 is a **prepaid-credit top-up + `upto` egress** rail, NOT
