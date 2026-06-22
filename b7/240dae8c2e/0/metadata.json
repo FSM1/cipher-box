@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b7240dae8c2e",
+  "session_id": "daa6a41b-fb89-4407-90cc-7bd9e04874cc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T15:48:07.594484Z",
+  "branch": "feat/ipns-signature-verify-coverage",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "111bb344ee63",
+  "token_usage": {
+    "input_tokens": 13897,
+    "cache_creation_tokens": 255401,
+    "cache_read_tokens": 6875252,
+    "output_tokens": 96991,
+    "api_call_count": 42
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "111bb344ee63",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Plan and execute Phase 58 (`ipns-signature-verify-coverage`) of the CipherBox project using the GSD workflow — adding IPNS signature verification coverage across Rust (`crates/core`, `crates/fuse`) and TypeScript (`sdk-core`, `web`) via a 4-plan, 2-wave TDD execution.",
+    "outcome": "All 4 plans executed and verified: cargo tests (core 75, fuse 87), apps/api jest (913/913), and SDK E2E (89/89) all passing; VERIFICATION.md written with `status: passed` (7/7 must-haves, D-01..D-13 confirmed in code); advisory code review findings queued for application.",
+    "learnings": {
+      "repo": [
+        "`crates/crypto` cannot dev-depend on `api-client/core` due to dependency cycles — shared Rust test vectors must live in `crates/fuse/tests/`, not `crates/crypto/tests/`",
+        "The D-09 tightening change-class (non-CAS embedded-sequence enforcement) historically broke 48/89 SDK E2E tests — treat any upsertFolderIpns changes as high-risk",
+        "API `.env` uses `TEST_LOGIN_SECRET=e2e-test-secret-ci-only` but SDK E2E harness defaults `SDK_E2E_SECRET` to `e2e-test-secret-do-not-use-in-production` — these must be aligned before running the E2E suite locally",
+        "The `expectedSequenceNumber` guard at the CAS 409 conflict path is intentional and must not be removed during D-09 enforcement work",
+        "`commit_failed` from the GSD commit helper is a known false-negative — always verify with `git log` rather than retrying the commit",
+        "RESEARCH.md `## Open Questions` sections must be annotated with `(RESOLVED)` markers or the plan-checker emits a cosmetic warning that blocks clean verification"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/Cargo.toml",
+          "line": 43,
+          "end_line": 43,
+          "finding": "`ciborium` dependency is present here — a mid-execution diagnostic falsely reported it missing, likely reading a stale pre-commit view"
+        },
+        {
+          "path": "crates/fuse/src/replay.rs",
+          "finding": "Uses unchecked `seq + 1` arithmetic; crate convention is `checked_add` — flagged as WR-01 in code review and queued for fix"
+        }
+      ],
+      "workflow": [
+        "Sequential execution on the feature branch is safer than parallel worktrees for security/crypto phases — avoids cwd-drift, merge conflicts, and stranded worktree cleanup",
+        "Executor subagents can overflow into subsequent plans in the same run (58-02 agent also completed 58-03) — always verify which plans actually executed by reading git log, not just the agent's return value",
+        "When an executor agent crashes mid-plan due to a socket error, partial work (including uncommitted diffs) survives on disk — assess actual disk+git state before spawning a continuation to avoid re-doing committed tasks",
+        "Phase verifier and code reviewer are fully independent and should always be spawned in parallel to save wall-clock time",
+        "SDK E2E test-login endpoint returns 400 (not 401) for wrong payload shape, making secret-mismatch diagnosis non-obvious — probe payload shape from the harness source before assuming a secret issue"
+      ]
+    },
+    "friction": [
+      "58-01 executor crashed mid-execution (API socket error / connection closed) with Task 3 done but uncommitted and Task 4 not started — required a manual continuation agent",
+      "58-02 executor skipped the full SDK E2E gate (labeled 'infra-limited') due to TEST_LOGIN_SECRET mismatch, requiring a separate focused agent to run the gate post-hoc",
+      "58-02 executor overflowed into 58-03 without being instructed to — created plan-tracking confusion and required auditing git log to determine actual state",
+      "`commit_failed` false-negative from the GSD commit helper caused unnecessary alarm and investigation before `git log` confirmed the commit landed",
+      "test-login endpoint returned 400 rather than 401 when probed with wrong payload shape, obscuring whether the secret or the request format was the issue"
+    ],
+    "open_items": [
+      "4 code review findings (including WR-01: unchecked `seq + 1` in `replay.rs`) were queued for a code-fixer agent — transcript ends before confirming the fixes landed and suites re-passed",
+      "TEST_LOGIN_SECRET / SDK_E2E_SECRET env mismatch between API `.env` and SDK E2E harness should be permanently resolved (e.g., via a shared `.env.test` or documented alignment step) to prevent future E2E gate failures",
+      "RESEARCH.md open-question `(RESOLVED)` marker convention should be enforced earlier in the research subagent to avoid cosmetic plan-checker warnings"
+    ]
+  }
+}
