@@ -473,6 +473,40 @@ mod tests {
         assert!(matches!(err, IpnsError::CborEncodingFailed));
     }
 
+    #[test]
+    fn decode_ipns_cbor_data_rejects_overflow_sequence() {
+        // Sequence value greater than u64::MAX (encoded as CBOR bignum tag 2,
+        // representing 2^64 = u64::MAX + 1).  ciborium parses tag 2 as a
+        // CborValue::Tag, which does not match the Integer arm, so `sequence`
+        // stays None and decode returns Err(CborEncodingFailed).
+        //
+        // Raw CBOR: 0xa2 (map/2) + "Value" key + b"/ipfs/x" bytes value +
+        //           "Sequence" key + 0xc2 0x49 <9 bytes: 2^64> bignum value.
+        let buf: Vec<u8> = vec![
+            0xa2,                                           // map(2)
+            0x65, 0x56, 0x61, 0x6c, 0x75, 0x65,           // text(5): "Value"
+            0x47, 0x2f, 0x69, 0x70, 0x66, 0x73, 0x2f, 0x78, // bytes(7): "/ipfs/x"
+            0x68, 0x53, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63, 0x65, // text(8): "Sequence"
+            0xc2, 0x49, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // tag(2)/bignum: 2^64
+        ];
+        let err = decode_ipns_cbor_data(&buf).unwrap_err();
+        assert!(matches!(err, IpnsError::CborEncodingFailed));
+    }
+
+    #[test]
+    fn decode_ipns_cbor_data_rejects_invalid_utf8_value() {
+        // Value bytes that are not valid UTF-8 → String::from_utf8 fails →
+        // decode returns Err(CborEncodingFailed).
+        let cbor_map = CborValue::Map(vec![
+            (CborValue::Text("Value".to_string()), CborValue::Bytes(vec![0xFF, 0xFF])),
+            (CborValue::Text("Sequence".to_string()), CborValue::Integer(1u64.into())),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let err = decode_ipns_cbor_data(&buf).unwrap_err();
+        assert!(matches!(err, IpnsError::CborEncodingFailed));
+    }
+
     // ---------- end decode_ipns_cbor_data tests ----------
 
     #[test]
