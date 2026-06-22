@@ -77,10 +77,17 @@ export class PendingUnpinProcessor extends WorkerHost {
    * The lock is the first transactional statement, mirroring guardedUnpin (D-04).
    */
   private async drainRow(cid: string): Promise<void> {
-    await this.dataSource.transaction(async (manager) => {
-      await withCidLock(manager, cid, () => refcountAndMaybeUnpin(manager, cid, this.ipfsProvider));
-    });
-    this.logger.log(`Drained cid=${cid}`);
+    const result = await this.dataSource.transaction((manager) =>
+      withCidLock(manager, cid, () => refcountAndMaybeUnpin(manager, cid, this.ipfsProvider))
+    );
+    if (result.outcome === 'skipped-repinned') {
+      // Preserve the distinct skip-path signal so re-pin races stay auditable in prod logs.
+      this.logger.log(
+        `Drain: skipped unpin for cid=${cid} — CID is re-pinned (refs=${result.refs}); stale outbox row discarded`
+      );
+    } else {
+      this.logger.log(`Drained cid=${cid}`);
+    }
   }
 
   private async runDriftReport(): Promise<void> {

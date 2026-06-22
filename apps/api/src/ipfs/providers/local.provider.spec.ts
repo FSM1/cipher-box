@@ -140,9 +140,7 @@ describe('LocalProvider', () => {
     it('should percent-encode a CID with reserved chars in pin/rm URL (D-04)', async () => {
       mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
       const reservedCid = 'bafk&evil=1';
-      await provider.unpinFile(reservedCid).catch(() => {
-        // may throw due to the fake CID; we only care about the URL passed to fetch
-      });
+      await provider.unpinFile(reservedCid);
       const [url] = mockFetch.mock.calls[0];
       expect(url).not.toContain('&evil');
       expect(url).toContain('bafk%26evil%3D1');
@@ -218,9 +216,7 @@ describe('LocalProvider', () => {
         arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
       });
       const reservedCid = 'bafk&evil=1';
-      await provider.getFile(reservedCid).catch(() => {
-        // may throw due to the fake CID; we only care about the URL passed to fetch
-      });
+      await provider.getFile(reservedCid);
       const [url] = mockFetch.mock.calls[0];
       expect(url).not.toContain('&evil');
       expect(url).toContain('bafk%26evil%3D1');

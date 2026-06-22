@@ -44,10 +44,11 @@ describe('refcountAndMaybeUnpin', () => {
     mockPinnedCidRepository.count.mockResolvedValue(2);
     mockPendingUnpinRepository.delete.mockResolvedValue({ affected: 1 });
 
-    await refcountAndMaybeUnpin(mockManager, 'bafkcid', mockIpfsProvider as any);
+    const result = await refcountAndMaybeUnpin(mockManager, 'bafkcid', mockIpfsProvider as any);
 
     expect(mockIpfsProvider.unpinFile).not.toHaveBeenCalled();
     expect(mockPendingUnpinRepository.delete).toHaveBeenCalledWith({ cid: 'bafkcid' });
+    expect(result).toEqual({ outcome: 'skipped-repinned', refs: 2 });
   });
 
   it('calls unpinFile then deletes outbox row when refs === 0', async () => {
@@ -55,9 +56,10 @@ describe('refcountAndMaybeUnpin', () => {
     mockIpfsProvider.unpinFile.mockResolvedValue(undefined);
     mockPendingUnpinRepository.delete.mockResolvedValue({ affected: 1 });
 
-    await refcountAndMaybeUnpin(mockManager, 'bafkcid', mockIpfsProvider as any);
+    const result = await refcountAndMaybeUnpin(mockManager, 'bafkcid', mockIpfsProvider as any);
 
     expect(mockIpfsProvider.unpinFile).toHaveBeenCalledWith('bafkcid');
     expect(mockPendingUnpinRepository.delete).toHaveBeenCalledWith({ cid: 'bafkcid' });
+    expect(result).toEqual({ outcome: 'unpinned', refs: 0 });
   });
 });

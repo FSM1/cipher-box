@@ -8,7 +8,7 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024;
 export class RegisterCidDto {
   @ApiProperty({
     description: 'IPFS CID pinned to external provider (CIDv0 or CIDv1)',
-    pattern: '^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{58,})$',
+    pattern: CID_REGEX.source,
     maxLength: 255,
   })
   @IsString()
