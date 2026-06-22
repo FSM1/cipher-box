@@ -1,7 +1,6 @@
 import { Module, DynamicModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { IPFS_PROVIDER } from './providers';
-import { IpfsProviderModule } from './providers';
+import { IPFS_PROVIDER, IpfsProviderModule } from './providers';
 import { IpfsController } from './ipfs.controller';
 import { VaultModule } from '../vault/vault.module';
 
