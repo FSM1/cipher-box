@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { copyTextToClipboard } from './copy-clipboard';
 
 /**
  * Copyable value with a copy button.
@@ -16,21 +17,8 @@ export function CopyableValue({ value }: { value: string }) {
 
   const handleCopy = useCallback(async () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    let success = false;
-    try {
-      await navigator.clipboard.writeText(value);
-      success = true;
-    } catch {
-      // Fallback for older browsers
-      const textarea = document.createElement('textarea');
-      textarea.value = value;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      success = document.execCommand('copy');
-      document.body.removeChild(textarea);
-    }
+    // D-14: only show "Copied!" when the copy actually succeeded.
+    const success = await copyTextToClipboard(value);
     if (success) {
       setCopied(true);
       timeoutRef.current = setTimeout(() => setCopied(false), 2000);

@@ -1,68 +1,27 @@
 /**
  * VersionHistory — error surfacing on missing vault private key (D-14)
  *
- * The handleDownloadVersion callback must call setActionError with a user-visible
- * message when vaultKeypair?.privateKey is undefined, instead of silently returning.
- *
- * Tests cover:
- *  1. privateKey undefined → setActionError called with a message (not silent return)
- *  2. privateKey present → download proceeds (setActionError NOT called for missing key)
- *
- * We test the pure guard logic extracted from the callback to avoid a DOM/RTL
- * dependency in the node test environment.
+ * Exercises the REAL production guard `vaultKeyMissingError` used by
+ * VersionHistory.handleDownloadVersion: when the vault private key is missing it
+ * returns a user-visible message (the callback surfaces it via setActionError and
+ * aborts) instead of silently returning; when present it returns null so the
+ * download proceeds. Testing the shared helper means a regression here fails.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
+import { vaultKeyMissingError } from '../version-download-guard';
 
-/**
- * Extracted download guard logic mirroring handleDownloadVersion.
- * Returns true if execution proceeded past the guard, false if guarded early-exit.
- */
-async function handleDownloadGuard(
-  privateKey: Uint8Array | undefined,
-  setActionError: (msg: string) => void,
-  doDownload: () => Promise<void>
-): Promise<boolean> {
-  if (!privateKey) {
-    setActionError('Cannot download: vault key not available');
-    return false;
-  }
-  await doDownload();
-  return true;
-}
-
-describe('handleDownloadVersion guard (D-14 error surfacing)', () => {
-  let setActionError: ReturnType<typeof vi.fn>;
-  let doDownload: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    setActionError = vi.fn();
-    doDownload = vi.fn().mockResolvedValue(undefined);
+describe('vaultKeyMissingError (D-14 error surfacing)', () => {
+  it('returns a user-visible message when privateKey is undefined', () => {
+    expect(vaultKeyMissingError(undefined)).toBe('Cannot download: vault key not available');
   });
 
-  afterEach(() => {
-    vi.clearAllMocks();
+  it('returns a user-visible message when privateKey is null', () => {
+    expect(vaultKeyMissingError(null)).toBe('Cannot download: vault key not available');
   });
 
-  it('calls setActionError when privateKey is undefined (no silent return)', async () => {
-    // RED: current code does `if (!privateKey) return;` with no setActionError call
-    const proceeded = await handleDownloadGuard(undefined, setActionError, doDownload);
-
-    expect(setActionError).toHaveBeenCalledWith('Cannot download: vault key not available');
-    expect(setActionError).toHaveBeenCalledTimes(1);
-    expect(proceeded).toBe(false);
-    // Download must NOT be attempted when key is missing
-    expect(doDownload).not.toHaveBeenCalled();
-  });
-
-  it('proceeds with download and does not call setActionError when privateKey is present', async () => {
+  it('returns null when privateKey is present so the download proceeds', () => {
     const privateKey = new Uint8Array(32).fill(1);
-
-    const proceeded = await handleDownloadGuard(privateKey, setActionError, doDownload);
-
-    expect(proceeded).toBe(true);
-    expect(doDownload).toHaveBeenCalledTimes(1);
-    // setActionError not called for the missing-key guard
-    expect(setActionError).not.toHaveBeenCalled();
+    expect(vaultKeyMissingError(privateKey)).toBeNull();
   });
 });

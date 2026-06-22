@@ -1,85 +1,73 @@
 /**
  * DetailsPrimitives — copy-success gating (D-14)
  *
- * The handleCopy logic in CopyableValue must gate setCopied(true) on an
- * actual successful copy. Tests cover:
- *  1. clipboard.writeText resolves → setCopied called
- *  2. clipboard.writeText rejects AND execCommand returns false → setCopied NOT called
- *  3. clipboard.writeText rejects but execCommand returns true → setCopied called
+ * Exercises the REAL production helper `copyTextToClipboard` (used by
+ * CopyableValue.handleCopy), so a regression in the copy path fails this suite.
+ * The helper returns whether the copy actually succeeded; CopyableValue gates
+ * its "Copied!" state on that boolean.
  *
- * We test the pure copy logic extracted from the component callback to avoid
- * a DOM/RTL dependency in the node test environment.
+ * The web vitest environment is `node` (no DOM), so we stub the minimal
+ * `navigator.clipboard` / `document` surface the helper touches.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { copyTextToClipboard } from '../copy-clipboard';
 
-/**
- * Extracted copy logic that mirrors the handleCopy implementation.
- * This is the exact shape from 56-PATTERNS.md (D-14 fix).
- */
-async function handleCopyLogic(
-  value: string,
-  setCopied: (v: boolean) => void,
-  writeText: (v: string) => Promise<void>,
-  execCommandImpl: (cmd: string) => boolean,
-  createTextarea: () => { select: () => void; remove: () => void }
-): Promise<void> {
-  let success = false;
-  try {
-    await writeText(value);
-    success = true;
-  } catch {
-    const el = createTextarea();
-    el.select();
-    success = execCommandImpl('copy');
-    el.remove();
-  }
-  if (success) {
-    setCopied(true);
-  }
-}
-
-describe('handleCopy logic (D-14 copy-success gating)', () => {
-  let setCopied: ReturnType<typeof vi.fn>;
-  let createTextarea: ReturnType<typeof vi.fn>;
+describe('copyTextToClipboard (D-14 copy-success gating)', () => {
+  let writeText: ReturnType<typeof vi.fn>;
+  let execCommand: ReturnType<typeof vi.fn>;
+  let removeChild: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    setCopied = vi.fn();
-    createTextarea = vi.fn(() => ({ select: vi.fn(), remove: vi.fn() }));
+    writeText = vi.fn();
+    execCommand = vi.fn();
+    removeChild = vi.fn();
+
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    // Minimal DOM surface for the execCommand fallback path.
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => ({ style: {}, select: vi.fn(), value: '' })),
+      body: { appendChild: vi.fn(), removeChild },
+      execCommand,
+    });
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
 
-  it('calls setCopied(true) when clipboard.writeText resolves', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    const execCommand = vi.fn().mockReturnValue(false);
+  it('returns true when clipboard.writeText resolves', async () => {
+    writeText.mockResolvedValue(undefined);
 
-    await handleCopyLogic('test-value', setCopied, writeText, execCommand, createTextarea);
+    const ok = await copyTextToClipboard('test-value');
 
-    expect(setCopied).toHaveBeenCalledWith(true);
-    expect(setCopied).toHaveBeenCalledTimes(1);
+    expect(ok).toBe(true);
+    expect(writeText).toHaveBeenCalledWith('test-value');
+    // Async clipboard path must not touch the fallback.
+    expect(execCommand).not.toHaveBeenCalled();
   });
 
-  it('does NOT call setCopied(true) when clipboard rejects and execCommand returns false', async () => {
-    // Both paths fail — no successful copy
-    const writeText = vi.fn().mockRejectedValue(new Error('clipboard denied'));
-    const execCommand = vi.fn().mockReturnValue(false);
+  it('returns false when clipboard rejects and execCommand returns false', async () => {
+    writeText.mockRejectedValue(new Error('clipboard denied'));
+    execCommand.mockReturnValue(false);
 
-    await handleCopyLogic('test-value', setCopied, writeText, execCommand, createTextarea);
+    const ok = await copyTextToClipboard('test-value');
 
-    // RED: current code calls setCopied(true) unconditionally
-    expect(setCopied).not.toHaveBeenCalled();
+    expect(ok).toBe(false);
+    expect(execCommand).toHaveBeenCalledWith('copy');
+    // The fallback textarea must be cleaned up even on failure.
+    expect(removeChild).toHaveBeenCalled();
   });
 
-  it('calls setCopied(true) when clipboard rejects but execCommand returns true (fallback success)', async () => {
-    const writeText = vi.fn().mockRejectedValue(new Error('clipboard denied'));
-    const execCommand = vi.fn().mockReturnValue(true);
+  it('returns true when clipboard rejects but execCommand fallback succeeds', async () => {
+    writeText.mockRejectedValue(new Error('clipboard denied'));
+    execCommand.mockReturnValue(true);
 
-    await handleCopyLogic('test-value', setCopied, writeText, execCommand, createTextarea);
+    const ok = await copyTextToClipboard('test-value');
 
-    expect(setCopied).toHaveBeenCalledWith(true);
-    expect(setCopied).toHaveBeenCalledTimes(1);
+    expect(ok).toBe(true);
+    expect(execCommand).toHaveBeenCalledWith('copy');
+    expect(removeChild).toHaveBeenCalled();
   });
 });
