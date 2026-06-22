@@ -69,7 +69,12 @@ pub(crate) fn bind_verified(
         Some(true) => {
             // Signature is valid. Now decode the CBOR `data` and bind the embedded
             // cid/sequence back to the response fields (D-07/D-08).
-            let data_b64 = resp.data.as_deref().unwrap_or("");
+            let data_b64 = resp
+                .data
+                .as_deref()
+                .ok_or_else(|| VerifyError::Invalid(
+                    "sig_verdict=Some(true) but resp.data is None — contract violation".to_string(),
+                ))?;
             let data_bytes = STANDARD
                 .decode(data_b64)
                 .map_err(|e| VerifyError::Invalid(format!("base64 decode of CBOR data failed: {}", e)))?;
