@@ -211,6 +211,13 @@ where
     }
 }
 
+/// Classify an IPNS resolve error string as "record does not exist yet" (so the caller
+/// can treat it as an empty/first-publish case) vs a genuine failure to surface.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+fn is_ipns_not_found(error_message: &str) -> bool {
+    error_message.to_lowercase().contains("not found")
+}
+
 /// Spawn a background OS thread to upload encrypted metadata and publish via IPNS.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub fn spawn_metadata_publish(
@@ -457,7 +464,7 @@ pub fn spawn_bin_entry_publish(
                     }
                     Err(e) => {
                         let e_str = format!("{}", e);
-                        if e_str.to_lowercase().contains("not found") {
+                        if is_ipns_not_found(&e_str) {
                             (cipherbox_core::empty_bin_metadata(), None)
                         } else {
                             log::warn!("Failed to resolve bin IPNS: {}", e);
@@ -535,6 +542,16 @@ pub fn spawn_bin_entry_publish(
 /// Mirrors the durable journal's bounded-retry-then-park bound (D-09).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 const REENCRYPT_MAX_ATTEMPTS: u32 = 5;
+
+/// Base exponential-backoff delay (in ms, pre-jitter) before re-encrypt attempt `attempt`.
+/// `attempt` is 1-based; the delay applies before the *next* attempt. Yields 0.5s, 1s,
+/// 2s, 4s for attempts 1..4. Saturates instead of overflowing the shift for large inputs.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+fn reencrypt_backoff_base_ms(attempt: u32) -> u64 {
+    500u64
+        .checked_shl(attempt.saturating_sub(1))
+        .unwrap_or(u64::MAX)
+}
 
 /// Outcome of a single re-encrypt attempt, used to decide whether to retry.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
@@ -708,7 +725,7 @@ pub fn spawn_file_meta_reencrypt(
                         if attempt < REENCRYPT_MAX_ATTEMPTS {
                             // Exponential backoff (0.5s, 1s, 2s, 4s) + jitter, matching the
                             // publish-conflict backoff idiom elsewhere in this file.
-                            let base_ms = 500u64 << (attempt - 1);
+                            let base_ms = reencrypt_backoff_base_ms(attempt);
                             let jitter_ms = (std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
@@ -1024,5 +1041,33 @@ mod tests {
             1,
             "two distinct empty-name FilePointers collapse to one (they collide on the \"\" key)"
         );
+    }
+
+    #[test]
+    fn reencrypt_backoff_base_ms_doubles_per_attempt() {
+        // 1-based attempt index: 0.5s, 1s, 2s, 4s, 8s ...
+        assert_eq!(super::reencrypt_backoff_base_ms(1), 500);
+        assert_eq!(super::reencrypt_backoff_base_ms(2), 1000);
+        assert_eq!(super::reencrypt_backoff_base_ms(3), 2000);
+        assert_eq!(super::reencrypt_backoff_base_ms(4), 4000);
+    }
+
+    #[test]
+    fn reencrypt_backoff_base_ms_saturates_on_huge_attempt() {
+        // A pathological attempt value must not overflow the left shift.
+        assert_eq!(super::reencrypt_backoff_base_ms(u32::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn is_ipns_not_found_matches_case_insensitively() {
+        assert!(super::is_ipns_not_found("IPNS record Not Found"));
+        assert!(super::is_ipns_not_found("404 not found"));
+    }
+
+    #[test]
+    fn is_ipns_not_found_rejects_other_errors() {
+        assert!(!super::is_ipns_not_found("connection refused"));
+        assert!(!super::is_ipns_not_found("500 internal server error"));
+        assert!(!super::is_ipns_not_found(""));
     }
 }
