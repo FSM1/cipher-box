@@ -68,6 +68,11 @@ pub mod implementation {
             return Err(status_object_name_not_found());
         }
 
+        // D-06: reject duplicate child names before any inode mutation (EEXIST equivalent)
+        if fs.inodes.find_child(parent_ino, name).is_some() {
+            return Err(status_object_name_collision());
+        }
+
         // FILE_DIRECTORY_FILE = 0x00000001
         let is_dir = (create_options & 0x00000001) != 0;
 
@@ -420,6 +425,19 @@ pub mod implementation {
             offset
         };
 
+        // D-05: write_at takes an i64 offset; a u64 offset above i64::MAX would wrap to a
+        // negative value. Reject it as an invalid parameter (mirrors the macOS EINVAL guard)
+        // before the narrowing cast below.
+        if actual_offset > i64::MAX as u64 {
+            return Err(status_invalid_parameter());
+        }
+
+        // D-05: guard offset+len overflow before write_at (winfsp offset is u64, no <0 check)
+        let new_end = match actual_offset.checked_add(buffer.len() as u64) {
+            Some(end) => end,
+            None => return Err(status_io_device_error()),
+        };
+
         let handle = match fs.open_files.get_mut(&fh) {
             Some(h) => h,
             None => return Err(status_invalid_handle()),
@@ -427,7 +445,6 @@ pub mod implementation {
 
         match handle.write_at(actual_offset as i64, buffer) {
             Ok(written) => {
-                let new_end = actual_offset + buffer.len() as u64;
                 if let Some(inode) = fs.inodes.get_mut(ino) {
                     if new_end > inode.attr.size {
                         inode.attr.size = new_end;

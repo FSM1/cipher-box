@@ -189,6 +189,7 @@ mod mount_impl {
             filepointer_rx,
             filepointer_tx,
             resolving_file_pointers: std::collections::HashSet::new(),
+            pending_fp_resolves: std::collections::VecDeque::new(), // D-09
             pending_content: HashMap::new(),
             upload_rx,
             upload_tx,

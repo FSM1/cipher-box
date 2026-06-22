@@ -27,9 +27,23 @@ intent: *no durability decision is left to a swallowed warning.*
 - **D-01:** Split failure handling by failure class:
   - **Transient** (per-file/bin IPNS `Conflict`): bounded re-resolve + retry with the
     server's resolved sequence as `expected_sequence_number`. On **retry exhaustion**,
-    enqueue to the existing **Phase 43/46 persisted out-of-callback journal** and ack —
-    data is durable (survives crash, replays), the FS thread is not blocked, and nothing
-    is silently dropped.
+    surface the failure — **never** record it as a local success and **never** swallow it in
+    a warn-and-ack.
+    - **D-01a (AMENDED 2026-06-22, plan-checker BLOCKER-2 / RESEARCH §6):** The premise that
+      the existing Phase 43/46 journal can hold a per-file or bin publish is **false** — the
+      `JournalOp` enum (`crates/sdk/src/queue.rs`) has only `UploadFile` and `MkdirPublish`
+      variants; there is **no** standalone per-file-publish or bin-publish variant, and the
+      `JournalEntry` fields cannot represent one without a new variant + new `replay.rs` match
+      arm + threading a `journal: &WriteQueue` arg through `publish_file_metadata` /
+      `spawn_bin_entry_publish` and all their call sites (a 3–5 task cross-crate `crates/sdk`
+      journal-schema change). That is out of scope for this behavior-correctness pass
+      (CONTEXT boundary: "Build on, do not reinvent — No new persistence mechanism needed").
+    - **Resolution for Phase 56:** on retry exhaustion, **return `Err` → `EIO`** for the
+      blocking/sync per-file and bin publish paths (a surfaced, non-swallowed failure — the OS
+      sees the write fail rather than a false success). This delivers D-01's INTENT ("nothing
+      silently dropped; no durability decision left to a swallowed warning") with the substrate
+      that exists today. The journal-on-exhaustion path is **deferred** to the dedicated
+      `JournalOp::FilePublish` / `JournalOp::BinPublish` work (see Deferred Ideas).
   - **Hard** failures (`wrap_key` cannot encrypt — finding #3; decode of our *own*
     metadata fails — finding #8; a doomed/non-recoverable publish): **return `EIO`** to
     the OS immediately. No false success ack. A doomed op must surface, not loop forever
@@ -207,6 +221,19 @@ All four are the literal scope of this phase (the ROADMAP absorbed them):
 - **Consolidating mkdir's `MkdirConflict` event-channel re-arm** into the shared CAS helper —
   larger refactor, intentionally excluded (D-04). Revisit if a future durability bug spans
   both mechanisms.
+
+- **`JournalOp::FilePublish` / `JournalOp::BinPublish` journal-on-exhaustion path
+  (deferred from D-01a, 2026-06-22).** Delivering D-01's *journal-and-ack* semantics for
+  per-file and bin IPNS publish on retry exhaustion requires a new persistence substrate that
+  does not exist today: two new `JournalOp` variants in `crates/sdk/src/queue.rs` (with their
+  own field sets — the bin variant must re-derive the bin IPNS keypair at replay), matching
+  `replay.rs` match arms + two new `replay_*_entry` helpers, and threading a
+  `journal: &WriteQueue` argument through `publish_file_metadata` and `spawn_bin_entry_publish`
+  to all call sites (incl. `platform/windows/write_ops.rs`). Estimated 3–5 tasks, cross-crate
+  (`sdk` + `fuse`). Out of scope for the Phase 56 behavior-correctness pass (which honors
+  "no new persistence mechanism"); Phase 56 returns `Err → EIO` on exhaustion instead (D-01a).
+  Promote to its own phase if/when a crash-durability requirement for standalone per-file/bin
+  publishes is confirmed.
 
 ### Reviewed Todos (not folded)
 

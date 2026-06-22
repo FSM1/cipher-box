@@ -54,6 +54,13 @@ pub struct CipherBoxFS {
     pub filepointer_rx: std::sync::mpsc::Receiver<PendingFilePointer>,
     pub filepointer_tx: std::sync::mpsc::Sender<PendingFilePointer>,
     pub resolving_file_pointers: std::collections::HashSet<u64>,
+    /// D-09: continuation queue for FilePointer resolve entries that exceeded the
+    /// MAX_CONCURRENT_FP_RESOLVES cap. Entries here are drained first on the next
+    /// refresh cycle so nothing is silently dropped. Each entry carries its own
+    /// parent folder key (`[u8; 32]`) so a drained entry is decrypted with the key
+    /// of the folder it originated from, not whatever folder the draining cycle is
+    /// refreshing (the two can differ across cycles).
+    pub pending_fp_resolves: std::collections::VecDeque<(u64, String, [u8; 32])>,
     pub pending_content: HashMap<u64, Vec<u8>>,
     pub upload_rx: std::sync::mpsc::Receiver<FsEvent>,
     pub upload_tx: std::sync::mpsc::Sender<FsEvent>,
@@ -249,12 +256,15 @@ impl CipherBoxFS {
             .insert(folder_ino, std::time::Instant::now());
         let (metadata, folder_key, ipns_private_key, ipns_name, old_cid) =
             self.build_folder_metadata(folder_ino)?;
+        // D-12: wrap owned clones in Zeroizing before passing to spawn_metadata_publish.
+        // build_folder_metadata returns .to_vec()/.clone() copies — the inode's own
+        // Zeroizing fields are NOT consumed. Ownership-transfer is safe here.
         spawn_metadata_publish(
             self.api.clone(),
             self.rt.clone(),
             metadata,
-            folder_key,
-            ipns_private_key,
+            Zeroizing::new(folder_key),
+            Zeroizing::new(ipns_private_key),
             ipns_name,
             old_cid,
             self.publish_coordinator.clone(),
@@ -278,14 +288,20 @@ impl CipherBoxFS {
                             if let Some(plaintext) = self.pending_content.remove(&result.ino) {
                                 self.content_cache.set(&result.new_cid, plaintext);
                             }
+                            // D-08: unpin pruned CIDs INSIDE the write_generation guard so a
+                            // superseded write cannot unpin CIDs the current generation still
+                            // references. A stale completion (write_generation mismatch) must
+                            // not unpin anything — those CIDs may still be live.
+                            for pruned_cid in &result.pruned_cids {
+                                let api = self.api.clone();
+                                let cid = pruned_cid.clone();
+                                self.rt.spawn(async move {
+                                    let _ =
+                                        cipherbox_api_client::ipfs::unpin_content(&api, &cid)
+                                            .await;
+                                });
+                            }
                         }
-                    }
-                    for pruned_cid in &result.pruned_cids {
-                        let api = self.api.clone();
-                        let cid = pruned_cid.clone();
-                        self.rt.spawn(async move {
-                            let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid).await;
-                        });
                     }
                     if let Some(entry) = self.publish_queue.get_mut(&result.parent_ino) {
                         entry.pending_uploads = entry.pending_uploads.saturating_sub(1);
@@ -338,8 +354,8 @@ impl CipherBoxFS {
                     self.api.clone(),
                     self.rt.clone(),
                     m,
-                    fk,
-                    ipk,
+                    Zeroizing::new(fk), // D-12: wrap owned clone in Zeroizing
+                    Zeroizing::new(ipk), // D-12: wrap owned clone in Zeroizing
                     in_,
                     oc,
                     self.publish_coordinator.clone(),
@@ -409,18 +425,64 @@ impl CipherBoxFS {
                             continue;
                         }
                     };
-                    // Cap concurrent resolution tasks to avoid network thrashing in large folders
+                    // Cap concurrent resolution tasks to avoid network thrashing in large folders.
+                    // D-09: entries exceeding the cap are pushed onto pending_fp_resolves (a
+                    // VecDeque) instead of being silently dropped. The queue is drained first
+                    // on each refresh cycle so nothing is lost between cycles.
                     const MAX_CONCURRENT_FP_RESOLVES: usize = 10;
                     let mut spawned = 0;
-                    for (ino, fp_ipns) in unresolved {
-                        if self.resolving_file_pointers.contains(&ino) {
-                            continue; // Already in-flight
+                    // Inodes staged or re-queued THIS cycle. resolving_file_pointers is only
+                    // updated in the spawn loop below (after both passes), so without this a
+                    // drained entry and the same still-unresolved fresh entry would both be
+                    // staged → two resolve tasks racing on one inode. Also prevents re-queueing
+                    // an inode already sitting in pending_fp_resolves.
+                    let mut scheduled_this_cycle = std::collections::HashSet::<u64>::new();
+
+                    // Drain pending_fp_resolves first (entries that overflowed in a prior cycle).
+                    // Each carries the folder key of the folder it originated from.
+                    let mut pending_drain: Vec<(u64, String, [u8; 32])> = Vec::new();
+                    while let Some(entry) = self.pending_fp_resolves.pop_front() {
+                        if self.resolving_file_pointers.contains(&entry.0)
+                            || !scheduled_this_cycle.insert(entry.0)
+                        {
+                            continue; // Already in-flight, or already drained this cycle
                         }
                         if spawned >= MAX_CONCURRENT_FP_RESOLVES {
-                            break; // Remaining will be picked up on next refresh cycle
+                            // Still over cap — put it back at the front and stop draining
+                            scheduled_this_cycle.remove(&entry.0);
+                            self.pending_fp_resolves.push_front(entry);
+                            break;
                         }
-                        self.resolving_file_pointers.insert(ino);
+                        pending_drain.push(entry);
                         spawned += 1;
+                    }
+
+                    // Build the full list of entries to spawn: drained-from-queue first,
+                    // then fresh unresolved entries (up to the remaining cap). Fresh entries
+                    // belong to the folder being refreshed this cycle, so they carry fk_arr.
+                    // Entries exceeding the cap are pushed onto pending_fp_resolves with fk_arr.
+                    for (fp_ino, fp_ipns) in unresolved {
+                        if self.resolving_file_pointers.contains(&fp_ino)
+                            || scheduled_this_cycle.contains(&fp_ino)
+                        {
+                            continue; // Already in-flight, or already staged/queued this cycle
+                        }
+                        if spawned >= MAX_CONCURRENT_FP_RESOLVES {
+                            // D-09: push to continuation queue instead of silent drop.
+                            scheduled_this_cycle.insert(fp_ino);
+                            self.pending_fp_resolves.push_back((fp_ino, fp_ipns, fk_arr));
+                            continue;
+                        }
+                        scheduled_this_cycle.insert(fp_ino);
+                        pending_drain.push((fp_ino, fp_ipns, fk_arr));
+                        spawned += 1;
+                    }
+
+                    // Spawn tasks for all entries collected (drained queue + fresh, up to cap).
+                    // Each entry decrypts with its OWN folder key (entry_fk), not the current
+                    // cycle's fk_arr — drained entries may come from a different parent folder.
+                    for (fp_ino, fp_ipns, entry_fk) in pending_drain {
+                        self.resolving_file_pointers.insert(fp_ino);
                         let api = self.api.clone();
                         let tx = self.filepointer_tx.clone();
                         self.rt.spawn(async move {
@@ -433,7 +495,7 @@ impl CipherBoxFS {
                                         .await
                                         .map_err(|e| format!("{}", e))?;
                                 cipherbox_core::decrypt_file_metadata_from_ipfs_public(
-                                    &enc_bytes, &fk_arr,
+                                    &enc_bytes, &entry_fk,
                                 )
                             })
                             .await;
@@ -442,11 +504,11 @@ impl CipherBoxFS {
                                 Ok(Ok(fm)) => {
                                     log::debug!(
                                         "FilePointer async resolved for ino {} (cid={})",
-                                        ino,
+                                        fp_ino,
                                         &fm.cid[..fm.cid.len().min(12)]
                                     );
                                     let _ = tx.send(PendingFilePointer::Success {
-                                        ino,
+                                        ino: fp_ino,
                                         cid: fm.cid,
                                         encrypted_file_key: fm.file_key_encrypted,
                                         iv: fm.file_iv,
@@ -456,16 +518,20 @@ impl CipherBoxFS {
                                     });
                                 }
                                 Ok(Err(e)) => {
-                                    log::warn!("FilePointer resolve failed for ino {}: {}", ino, e);
-                                    let _ = tx.send(PendingFilePointer::Failure { ino });
+                                    log::warn!(
+                                        "FilePointer resolve failed for ino {}: {}",
+                                        fp_ino,
+                                        e
+                                    );
+                                    let _ = tx.send(PendingFilePointer::Failure { ino: fp_ino });
                                 }
                                 Err(_) => {
                                     log::warn!(
                                         "FilePointer resolve timed out for ino {} ({}s)",
-                                        ino,
+                                        fp_ino,
                                         NETWORK_TIMEOUT.as_secs()
                                     );
-                                    let _ = tx.send(PendingFilePointer::Failure { ino });
+                                    let _ = tx.send(PendingFilePointer::Failure { ino: fp_ino });
                                 }
                             }
                         });

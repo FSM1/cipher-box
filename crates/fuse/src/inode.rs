@@ -395,7 +395,9 @@ impl InodeTable {
         for child in &metadata.children {
             match child {
                 FolderChild::Folder(folder) => {
-                    // Reuse existing ino: prefer stable IPNS name, fall back to display name
+                    // Reuse existing ino: prefer stable IPNS name, fall back to display name.
+                    // D-11: track whether the match was via stable IPNS id or display-name only.
+                    let matched_by_stable_id = ipns_to_ino.contains_key(&folder.ipns_name);
                     let existing_ino = ipns_to_ino
                         .get(&folder.ipns_name)
                         .copied()
@@ -458,8 +460,12 @@ impl InodeTable {
                     let created = UNIX_EPOCH + Duration::from_millis(folder.created_at);
                     let modified = UNIX_EPOCH + Duration::from_millis(folder.modified_at);
 
-                    // Preserve existing children list and loaded state for existing folders
-                    let (existing_children, was_loaded) = if existing_ino.is_some() {
+                    // Preserve existing children list and loaded state for existing folders.
+                    // D-11: only preserve children/loaded-state when matched by stable IPNS id.
+                    // A display-name-only fallback means the folder identity changed (e.g. a
+                    // shared subfolder replaced by a different one with the same display name),
+                    // so we must reset loaded state and children to force a fresh load.
+                    let (existing_children, was_loaded) = if existing_ino.is_some() && matched_by_stable_id {
                         let old = self.inodes.get(&ino);
                         let ch = old.and_then(|o| o.children.clone());
                         let loaded = old
@@ -474,6 +480,13 @@ impl InodeTable {
                             })
                             .unwrap_or(false);
                         (ch, loaded)
+                    } else if existing_ino.is_some() {
+                        // Display-name fallback: identity changed — clear loaded state (D-11).
+                        log::info!(
+                            "Folder '{}': stable-ID mismatch on fallback match, clearing loaded state (D-11)",
+                            folder.name
+                        );
+                        (Some(vec![]), false)
                     } else {
                         (Some(vec![]), false)
                     };
@@ -1553,6 +1566,305 @@ mod tests {
                     file_ipns_key_encrypted_hex.as_deref(),
                     Some("newencryptedkey"),
                     "IPNS encrypted key should come from new FilePointer"
+                );
+            }
+            _ => panic!("Expected File kind"),
+        }
+    }
+
+    // --- D-11: inode stable-ID identity reset tests ---
+    //
+    // These tests verify that populate_folder distinguishes a stable-ID match
+    // (ipns_to_ino lookup) from a display-name-only fallback (find_child), and
+    // that a fallback-only match clears loaded state and forces re-resolution.
+
+    // Test 1: stable-ID match preserves loaded state.
+    // Seed a folder registered in ipns_to_ino (same ipns_name); on refresh the
+    // children + children_loaded state must be preserved.
+    #[test]
+    fn d11_stable_id_match_preserves_children_loaded_state() {
+        let (private_key, public_key) = generate_test_keypair();
+
+        let folder_key_raw = vec![42u8; 32];
+        let folder_key_encrypted_hex =
+            hex::encode(cipherbox_crypto::ecies::wrap_key(&folder_key_raw, &public_key).unwrap());
+        let ipns_key_raw = vec![7u8; 32];
+        let ipns_key_encrypted_hex =
+            hex::encode(cipherbox_crypto::ecies::wrap_key(&ipns_key_raw, &public_key).unwrap());
+
+        let folder_ipns = "k51stable-id-test-folder";
+
+        let mut table = InodeTable::new();
+
+        // Initial population
+        let meta_v1 = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![FolderChild::Folder(cipherbox_core::folder::FolderEntry {
+                id: "f1".to_string(),
+                name: "MyFolder".to_string(),
+                ipns_name: folder_ipns.to_string(),
+                folder_key_encrypted: folder_key_encrypted_hex.clone(),
+                ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
+                created_at: 1000,
+                modified_at: 1000,
+            })],
+        };
+        table
+            .populate_folder(ROOT_INO, &meta_v1, &private_key, &public_key, false)
+            .unwrap();
+
+        let child_ino = {
+            let root = table.get(ROOT_INO).unwrap();
+            root.children.as_ref().unwrap()[0]
+        };
+
+        // Manually mark the folder as having children loaded with a child
+        let child_ino_2 = table.allocate_ino();
+        {
+            let folder = table.get_mut(child_ino).unwrap();
+            folder.children = Some(vec![child_ino_2]);
+            if let InodeKind::Folder {
+                ref mut children_loaded,
+                ..
+            } = folder.kind
+            {
+                *children_loaded = true;
+            }
+        }
+
+        // Refresh with same ipns_name (stable-ID match) — same folder, different modified_at
+        let meta_v2 = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![FolderChild::Folder(cipherbox_core::folder::FolderEntry {
+                id: "f1".to_string(),
+                name: "MyFolder".to_string(),
+                ipns_name: folder_ipns.to_string(), // SAME stable ID
+                folder_key_encrypted: folder_key_encrypted_hex.clone(),
+                ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
+                created_at: 1000,
+                modified_at: 2000, // updated timestamp
+            })],
+        };
+        table
+            .populate_folder(ROOT_INO, &meta_v2, &private_key, &public_key, true)
+            .unwrap();
+
+        let refreshed = table.get(child_ino).unwrap();
+        // D-11: stable-ID match MUST preserve children_loaded and children
+        match &refreshed.kind {
+            InodeKind::Folder { children_loaded, .. } => {
+                assert!(
+                    *children_loaded,
+                    "D-11: stable-ID match must preserve children_loaded=true"
+                );
+            }
+            _ => panic!("Expected Folder kind"),
+        }
+        assert_eq!(
+            refreshed.children.as_ref().map(|v| v.len()),
+            Some(1),
+            "D-11: stable-ID match must preserve children list"
+        );
+    }
+
+    // Test 2: display-name fallback resets loaded state.
+    // Seed a folder reachable only via find_child (NOT in ipns_to_ino under the
+    // incoming ipns_name) — matched_by_stable_id == false — so children must be
+    // cleared to Some(vec![]) and children_loaded forced to false.
+    #[test]
+    fn d11_display_name_fallback_clears_loaded_state() {
+        let (private_key, public_key) = generate_test_keypair();
+
+        let folder_key_raw = vec![42u8; 32];
+        let folder_key_encrypted_hex =
+            hex::encode(cipherbox_crypto::ecies::wrap_key(&folder_key_raw, &public_key).unwrap());
+        let ipns_key_raw = vec![7u8; 32];
+        let ipns_key_encrypted_hex =
+            hex::encode(cipherbox_crypto::ecies::wrap_key(&ipns_key_raw, &public_key).unwrap());
+
+        let old_ipns = "k51old-ipns-name";
+        let new_ipns = "k51new-ipns-name-different"; // different IPNS name = display-name fallback
+
+        let mut table = InodeTable::new();
+
+        // Seed with old_ipns — this puts the folder in ipns_to_ino under old_ipns
+        let meta_v1 = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![FolderChild::Folder(cipherbox_core::folder::FolderEntry {
+                id: "f1".to_string(),
+                name: "SharedFolder".to_string(),
+                ipns_name: old_ipns.to_string(),
+                folder_key_encrypted: folder_key_encrypted_hex.clone(),
+                ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
+                created_at: 1000,
+                modified_at: 1000,
+            })],
+        };
+        table
+            .populate_folder(ROOT_INO, &meta_v1, &private_key, &public_key, false)
+            .unwrap();
+
+        let child_ino = {
+            let root = table.get(ROOT_INO).unwrap();
+            root.children.as_ref().unwrap()[0]
+        };
+
+        // Manually mark the folder as children_loaded with some children
+        let dummy_child_ino = table.allocate_ino();
+        {
+            let folder = table.get_mut(child_ino).unwrap();
+            folder.children = Some(vec![dummy_child_ino]);
+            if let InodeKind::Folder {
+                ref mut children_loaded,
+                ..
+            } = folder.kind
+            {
+                *children_loaded = true;
+            }
+        }
+
+        // Refresh with a DIFFERENT ipns_name but SAME display name "SharedFolder"
+        // → ipns_to_ino lookup misses (new_ipns not registered), find_child hits by name
+        // → matched_by_stable_id == false → identity changed → must clear loaded state
+        let meta_v2 = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![FolderChild::Folder(cipherbox_core::folder::FolderEntry {
+                id: "f2".to_string(),
+                name: "SharedFolder".to_string(), // same display name
+                ipns_name: new_ipns.to_string(), // DIFFERENT IPNS → display-name fallback
+                folder_key_encrypted: folder_key_encrypted_hex.clone(),
+                ipns_private_key_encrypted: ipns_key_encrypted_hex.clone(),
+                created_at: 1000,
+                modified_at: 2000,
+            })],
+        };
+        table
+            .populate_folder(ROOT_INO, &meta_v2, &private_key, &public_key, true)
+            .unwrap();
+
+        let root = table.get(ROOT_INO).unwrap();
+        let refreshed_ino = root.children.as_ref().unwrap()[0];
+        let refreshed = table.get(refreshed_ino).unwrap();
+
+        // D-11: display-name fallback must clear children_loaded and children
+        match &refreshed.kind {
+            InodeKind::Folder { children_loaded, .. } => {
+                assert!(
+                    !*children_loaded,
+                    "D-11: display-name fallback must clear children_loaded (force re-load)"
+                );
+            }
+            _ => panic!("Expected Folder kind"),
+        }
+        assert_eq!(
+            refreshed.children.as_ref().map(|v| v.len()),
+            Some(0),
+            "D-11: display-name fallback must clear children to empty vec"
+        );
+    }
+
+    // Test 3: file pointer — display-name fallback forces same_pointer = false.
+    // When the incoming FilePointer has a DIFFERENT file_meta_ipns_name than what
+    // the inode holds, the inode should be treated as a different file and re-resolved.
+    // Additionally, when matched only by display name (not by file_ipns_to_ino stable id),
+    // same_pointer must be false regardless of IPNS name string comparison.
+    #[test]
+    fn d11_file_display_name_fallback_forces_re_resolution() {
+        let mut table = InodeTable::new();
+
+        let old_file_ipns = "k51old-file-ipns";
+        let new_file_ipns = "k51new-file-ipns-different"; // different IPNS → pointer changed
+
+        // Seed with old_file_ipns and simulate a resolved file state
+        let meta_v1 = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![FolderChild::File(cipherbox_core::folder::FilePointer {
+                id: "fp1".to_string(),
+                name: "document.txt".to_string(),
+                file_meta_ipns_name: old_file_ipns.to_string(),
+                ipns_private_key_encrypted: None,
+                created_at: 1000,
+                modified_at: 1000,
+            })],
+        };
+
+        let private_key = vec![0u8; 32];
+        let public_key = vec![0u8; 33];
+        table
+            .populate_folder(ROOT_INO, &meta_v1, &private_key, &public_key, false)
+            .unwrap();
+
+        let file_ino = {
+            let root = table.get(ROOT_INO).unwrap();
+            root.children.as_ref().unwrap()[0]
+        };
+
+        // Manually resolve the file and set a modified_at timestamp
+        {
+            let file = table.get_mut(file_ino).unwrap();
+            file.attr.mtime = std::time::UNIX_EPOCH + std::time::Duration::from_millis(1000);
+            file.kind = InodeKind::File {
+                cid: "bafyold".to_string(),
+                encrypted_file_key: "oldkey".to_string(),
+                iv: "oldiv".to_string(),
+                size: 100,
+                encryption_mode: "GCM".to_string(),
+                file_meta_ipns_name: Some(old_file_ipns.to_string()),
+                file_meta_resolved: true,
+                file_ipns_private_key: Some(Zeroizing::new(vec![1u8; 32])),
+                file_ipns_key_encrypted_hex: Some("oldencryptedkey".to_string()),
+                versions: None,
+            };
+        }
+
+        // Refresh with a DIFFERENT file_meta_ipns_name AND a modified_at that triggers
+        // the re-resolution path (modified_at changed). Since the new IPNS name is
+        // different, this is NOT in file_ipns_to_ino → display-name fallback.
+        // D-11: the different file_meta_ipns_name must force same_pointer = false
+        // → IPNS private key NOT preserved (it belongs to the old IPNS identity).
+        let meta_v2 = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![FolderChild::File(cipherbox_core::folder::FilePointer {
+                id: "fp2".to_string(),
+                name: "document.txt".to_string(), // same display name
+                file_meta_ipns_name: new_file_ipns.to_string(), // DIFFERENT IPNS → fallback
+                ipns_private_key_encrypted: Some("newencryptedkey".to_string()),
+                created_at: 1000,
+                modified_at: 2000, // changed → triggers re-resolution path
+            })],
+        };
+
+        table
+            .populate_folder(ROOT_INO, &meta_v2, &private_key, &public_key, true)
+            .unwrap();
+
+        let root = table.get(ROOT_INO).unwrap();
+        let refreshed_ino = root.children.as_ref().unwrap()[0];
+        let refreshed = table.get(refreshed_ino).unwrap();
+
+        match &refreshed.kind {
+            InodeKind::File {
+                file_meta_ipns_name,
+                file_meta_resolved,
+                file_ipns_private_key,
+                ..
+            } => {
+                // D-11: file_meta_ipns_name must be the new pointer's IPNS name
+                assert_eq!(
+                    file_meta_ipns_name.as_deref(),
+                    Some(new_file_ipns),
+                    "D-11: new IPNS name must be set on display-name fallback"
+                );
+                assert!(
+                    !*file_meta_resolved,
+                    "D-11: file must be unresolved after identity reset (display-name fallback)"
+                );
+                // D-11: IPNS private key must NOT be preserved from the old identity
+                // (same_pointer = false means we use the new FilePointer's encrypted key,
+                //  not the old private key from the stale identity)
+                assert!(
+                    file_ipns_private_key.is_none(),
+                    "D-11: IPNS private key from old identity must NOT be preserved on fallback"
                 );
             }
             _ => panic!("Expected File kind"),

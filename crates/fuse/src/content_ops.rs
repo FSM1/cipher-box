@@ -148,31 +148,104 @@ pub async fn publish_file_metadata(
             _ => (None, None),
         };
 
-    // Per-file IPNS publishes do not use conflict detection -- file metadata
-    // is owned by the file's own IPNS keypair and conflicts are inherently
-    // avoided by the per-file sequence number management.
-    let req = cipherbox_api_client::IpnsPublishRequest {
-        ipns_name: file_ipns_name.to_string(),
-        record: record_b64,
-        metadata_cid: file_meta_cid.clone(),
-        encrypted_ipns_private_key: encrypted_ipns_for_tee,
-        key_epoch: tee_epoch,
-        expected_sequence_number: None,
-    };
-    match cipherbox_api_client::ipns::publish_ipns(api, &req)
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        cipherbox_api_client::PublishResult::Success => {}
-        cipherbox_api_client::PublishResult::Conflict { .. } => {
-            log::warn!(
-                "Unexpected conflict on per-file IPNS publish for {}",
-                file_ipns_name
-            );
+    // Route through the shared CAS publish helper (D-02 / D-03).
+    // Per-file IPNS publishes now use expected_sequence_number: Some(seq) via the helper —
+    // the previous None was the D-01/D-02 bug (Conflict fell through to record_publish).
+    //
+    // D-01a: no JournalOp::FilePublish variant exists in crates/sdk/src/queue.rs
+    // (only UploadFile/MkdirPublish); journaling per-file publish is deferred (CONTEXT
+    // Deferred Ideas). On retry exhaustion: return Err, which the fire-and-forget caller
+    // (spawn_file_meta_reencrypt) or the blocking/sync path logs at log::error! → EIO.
+    //
+    // TEE enrollment fields (encrypted_ipns_for_tee, tee_epoch) are used ONLY on the
+    // is_first_publish branch below, which builds its own IpnsPublishRequest and does NOT
+    // route through publish_with_cas_retry. The update path (the CAS helper) never carries
+    // TEE fields — the helper always sets encrypted_ipns_private_key/key_epoch to None, and
+    // updates need no re-enrollment. The make_record closure only re-signs (record, cid).
+    let file_meta_cid_for_closure = file_meta_cid.clone();
+
+    // For is_first_publish, there is no prior sequence to CAS against. The helper
+    // calls coordinator.resolve_sequence first; for a first publish the server returns
+    // sequence 0 or "not found" which is handled by next_file_publish_sequence above.
+    // On a genuine first publish the expected_sequence_number should be None (no prior
+    // sequence). We only apply CAS for update publishes (not is_first_publish).
+    if is_first_publish {
+        // First publish: no CAS expected_sequence_number (no prior record exists).
+        let req = cipherbox_api_client::IpnsPublishRequest {
+            ipns_name: file_ipns_name.to_string(),
+            record: record_b64,
+            metadata_cid: file_meta_cid.clone(),
+            encrypted_ipns_private_key: encrypted_ipns_for_tee,
+            key_epoch: tee_epoch,
+            expected_sequence_number: None,
+        };
+        match cipherbox_api_client::ipns::publish_ipns(api, &req)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            cipherbox_api_client::PublishResult::Success => {}
+            cipherbox_api_client::PublishResult::Conflict { .. } => {
+                // On first publish, a conflict means another client raced to create.
+                // D-01a: no JournalOp::FilePublish variant — return Err → EIO.
+                return Err(format!(
+                    "Conflict on first per-file IPNS publish for {} — another client raced",
+                    file_ipns_name
+                ));
+            }
         }
+        coordinator.record_publish(file_ipns_name, new_seq);
+    } else {
+        // Update publish: use CAS via the shared helper (D-02 / D-03).
+        // The make_record closure builds a new IPNS record for a given sequence number.
+        // For update publishes, current_seq is Some(resolved_seq) so new_seq = resolved_seq + 1.
+        // The helper re-resolves on conflict and calls make_record again with the fresh seq.
+        let current_seq_for_cas = current_seq
+            .ok_or_else(|| "resolve_sequence returned None for update publish".to_string())?;
+
+        crate::metadata::publish_with_cas_retry(
+            api,
+            coordinator,
+            file_ipns_name,
+            |new_seq_for_record: u64| {
+                // Re-sign the SAME metadata blob with the new sequence number.
+                // The CID (file_meta_cid_for_closure) does not change on retry — only the
+                // sequence embedded in the IPNS record signature changes.
+                let value = format!("/ipfs/{}", file_meta_cid_for_closure);
+                let record = cipherbox_core::ipns::create_ipns_record(
+                    &ipns_key_arr,
+                    &value,
+                    new_seq_for_record,
+                    86_400_000,
+                )
+                .map_err(|e| format!("File IPNS record creation failed on retry: {}", e))?;
+                let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
+                    .map_err(|e| format!("File IPNS record marshal failed on retry: {}", e))?;
+                use base64::Engine;
+                let retry_record_b64 =
+                    base64::engine::general_purpose::STANDARD.encode(&marshaled);
+                Ok((retry_record_b64, file_meta_cid_for_closure.clone()))
+            },
+            &[], // no old CIDs to unpin on per-file publish (caller handles pruned_cids)
+            None, // D-01a: no JournalOp::FilePublish variant; exhaustion → Err → EIO
+        )
+        .await?;
+
+        // NOTE: publish_with_cas_retry calls coordinator.record_publish on success.
+        // The initial record_b64 built above is NOT used on the retry path — the closure
+        // re-signs with the fresh sequence. This is correct: the first publish attempt
+        // uses expected_sequence_number: Some(current_seq_for_cas) which is already
+        // baked into the helper's initial publish call via the helper's resolve_sequence.
+        // The make_record closure is only called with the sequence numbers the HELPER
+        // computes — so the pre-built record_b64 for the initial call is not reused.
+        //
+        // To feed the pre-built record_b64 to the helper's first call, we must match
+        // what the helper does: it calls make_record(resolve_sequence()+1). Since we
+        // already computed new_seq = current_seq + 1 above, the first closure call will
+        // get new_seq again (same value). The record produced by the closure must match
+        // the seq, and the closure re-signs with the seq it receives — this is correct.
+        let _ = current_seq_for_cas; // used above in comment; suppress unused-variable warning
     }
 
-    coordinator.record_publish(file_ipns_name, new_seq);
     log::info!("Per-file IPNS publish succeeded for {}", file_ipns_name);
 
     Ok(())

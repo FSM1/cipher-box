@@ -5,6 +5,7 @@ import { downloadFile, triggerBrowserDownload } from '../../../services/download
 import { useFolder } from '../../../hooks/useFolder';
 import { formatDate, formatBytes } from '../../../utils/format';
 import { formatDateWithTime } from './DetailsPrimitives';
+import { vaultKeyMissingError } from './version-download-guard';
 
 /**
  * Version history component for files with past versions.
@@ -34,7 +35,13 @@ export function VersionHistory({
   const handleDownloadVersion = useCallback(
     async (version: VersionEntry) => {
       const privateKey = useAuthStore.getState().vaultKeypair?.privateKey;
-      if (!privateKey) return;
+      const keyError = vaultKeyMissingError(privateKey);
+      if (keyError || !privateKey) {
+        // keyError is non-null exactly when privateKey is missing; the explicit
+        // !privateKey also narrows the type for the downloadFile call below.
+        setActionError(keyError ?? 'Cannot download: vault key not available');
+        return;
+      }
 
       setLoadingAction('download');
       setActionError(null);
