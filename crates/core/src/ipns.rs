@@ -366,6 +366,76 @@ mod tests {
         assert_eq!((y, m, d), (2024, 1, 1));
     }
 
+    // ---------- decode_ipns_cbor_data tests (RED first, then implemented) ----------
+
+    #[test]
+    fn decode_ipns_cbor_data_round_trips_build() {
+        // A CBOR buffer produced by build_cbor_data for known value and sequence
+        // must decode back to the same pair via decode_ipns_cbor_data.
+        let data = build_cbor_data("/ipfs/bafyTESTcid", "2024-01-01T00:00:00.000000000Z", 7, 300_000_000_000).unwrap();
+        let (value, seq) = decode_ipns_cbor_data(&data).unwrap();
+        assert_eq!(value, "/ipfs/bafyTESTcid");
+        assert_eq!(seq, 7u64);
+    }
+
+    #[test]
+    fn decode_ipns_cbor_data_round_trips_sequences() {
+        let validity = "2024-01-01T00:00:00.000000000Z";
+        for &seq in &[0u64, 1u64, u64::MAX / 2] {
+            let data = build_cbor_data("/ipfs/bafyRTcid", validity, seq, 300_000_000_000).unwrap();
+            let (_, decoded_seq) = decode_ipns_cbor_data(&data).unwrap();
+            assert_eq!(decoded_seq, seq, "round-trip failed for seq={}", seq);
+        }
+    }
+
+    #[test]
+    fn decode_ipns_cbor_data_rejects_non_map() {
+        // Encode a plain integer — not a map — must return Err(CborEncodingFailed).
+        let mut buf = Vec::new();
+        ciborium::into_writer(&CborValue::Integer(42u64.into()), &mut buf).unwrap();
+        let err = decode_ipns_cbor_data(&buf).unwrap_err();
+        assert!(matches!(err, IpnsError::CborEncodingFailed));
+    }
+
+    #[test]
+    fn decode_ipns_cbor_data_rejects_missing_value_key() {
+        // Map without "Value" key must return Err.
+        let cbor_map = CborValue::Map(vec![
+            (CborValue::Text("Sequence".to_string()), CborValue::Integer(1u64.into())),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let err = decode_ipns_cbor_data(&buf).unwrap_err();
+        assert!(matches!(err, IpnsError::CborEncodingFailed));
+    }
+
+    #[test]
+    fn decode_ipns_cbor_data_rejects_missing_sequence_key() {
+        // Map without "Sequence" key must return Err.
+        let cbor_map = CborValue::Map(vec![
+            (CborValue::Text("Value".to_string()), CborValue::Bytes(b"/ipfs/bafy".to_vec())),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let err = decode_ipns_cbor_data(&buf).unwrap_err();
+        assert!(matches!(err, IpnsError::CborEncodingFailed));
+    }
+
+    #[test]
+    fn decode_ipns_cbor_data_rejects_negative_sequence() {
+        // Negative integer for "Sequence" must fail u64::try_from → Err.
+        let cbor_map = CborValue::Map(vec![
+            (CborValue::Text("Value".to_string()), CborValue::Bytes(b"/ipfs/bafy".to_vec())),
+            (CborValue::Text("Sequence".to_string()), CborValue::Integer((-1i64).into())),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let err = decode_ipns_cbor_data(&buf).unwrap_err();
+        assert!(matches!(err, IpnsError::CborEncodingFailed));
+    }
+
+    // ---------- end decode_ipns_cbor_data tests ----------
+
     #[test]
     fn build_cbor_data_produces_valid_cbor() {
         let data = build_cbor_data("/ipfs/bafytest", "2024-01-01T00:00:00.000000000Z", 5, 300_000_000_000).unwrap();
