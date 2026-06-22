@@ -152,7 +152,7 @@ describe('IPNS operations', () => {
         Validity: new TextEncoder().encode('2099-01-01T00:00:00.000000000Z'),
         ValidityType: 0,
       });
-      const data = btoa(String.fromCharCode(...cbor));
+      const data = Buffer.from(cbor).toString('base64');
       vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
         success: true,
         cid: 'QmSignedCid',
@@ -264,7 +264,7 @@ describe('IPNS operations', () => {
           Validity: new TextEncoder().encode('2099-01-01T00:00:00.000000000Z'),
           ValidityType: 0,
         });
-        return btoa(String.fromCharCode(...cbor));
+        return Buffer.from(cbor).toString('base64');
       }
 
       it('throws on cid binding mismatch (D-08)', async () => {
