@@ -19,6 +19,40 @@
     "output_tokens": 10273,
     "api_call_count": 6
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VTZePvVLeYqvAgLFpZoKY5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "111bb344ee63",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 123,
+        "end": 124,
+        "entry_ids": [
+          "0f7fd0cc-d9e2-4fcf-8077-fddbe6a22397"
+        ],
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VTZePvVLeYqvAgLFpZoKY5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
   "summary": {
     "intent": "Execute the GSD plan-phase workflow for phase 58 (ipns-signature-verify-coverage) with --chain flag, running research automatically before planning.",
     "outcome": "The researcher subagent was spawned and completed, writing RESEARCH.md for phase 58. The session ended at the research stage before planning began.",
