@@ -13,6 +13,7 @@ import {
   deriveEd25519PublicKey,
   deriveIpnsName,
 } from '@cipherbox/crypto';
+import { decode as cborDecode } from 'cborg';
 import {
   ipnsControllerPublishRecord,
   ipnsControllerPublishBatch,
@@ -236,6 +237,59 @@ export async function resolveIpnsRecord(
         }
 
         signatureVerified = true;
+
+        // D-07/D-08: bind the signed CBOR `data` back to the response cid and sequenceNumber.
+        // The Ed25519 signature only covers the CBOR `data` field — the top-level cid and
+        // sequenceNumber are NOT covered and can be tampered independently by a MITM server.
+        // Decode the signed CBOR and require that its embedded Value matches the response cid
+        // and its embedded Sequence matches the response sequenceNumber.
+        const dataBytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+        const cborFields = cborDecode(dataBytes) as Record<string, unknown>;
+
+        // D-08: embedded value must be "/ipfs/<response.cid>"
+        const embeddedValue =
+          cborFields['Value'] instanceof Uint8Array
+            ? new TextDecoder().decode(cborFields['Value'])
+            : null;
+        const expectedValue = `/ipfs/${response.cid}`;
+        if (embeddedValue !== expectedValue) {
+          throw new Error(
+            `IPNS cid binding mismatch: embedded=${embeddedValue}, response cid=${response.cid}`
+          );
+        }
+
+        // D-07: embedded sequence must equal response sequenceNumber
+        const embeddedSeq = cborFields['Sequence'];
+        if (embeddedSeq === undefined || embeddedSeq === null) {
+          throw new Error(
+            `IPNS sequence binding mismatch: embedded=undefined, response sequenceNumber=${response.sequenceNumber}`
+          );
+        }
+        if (typeof embeddedSeq !== 'number' && typeof embeddedSeq !== 'bigint') {
+          throw new Error(
+            `IPNS sequence binding mismatch: embedded type ${typeof embeddedSeq}, response sequenceNumber=${response.sequenceNumber}`
+          );
+        }
+        const embeddedSeqBigInt =
+          typeof embeddedSeq === 'bigint' ? embeddedSeq : BigInt(embeddedSeq as number);
+        const responseSeqBigInt = BigInt(response.sequenceNumber);
+        // First-publish exception (mirrors the API's publish-side D-09 gate in
+        // ipns.service.ts::upsertFolderIpns): on a brand-new IPNS name the API accepts an
+        // embedded sequence of 0 OR 1 and unconditionally stores DB sequenceNumber=1. The
+        // Rust/FUSE publish paths embed the IPNS-native 0 while the TS SDK embeds 1 — both
+        // legitimate per D-09. So a resolved first-generation record (sequenceNumber==1) may
+        // legitimately carry an embedded 0. Accept that single documented skew; require strict
+        // equality otherwise. The cid binding above stays strict and DB CID remains the
+        // authoritative trust root, so this does not widen the attack surface (embedded 0 can
+        // only reach the network while DB==1, the first-publish window).
+        const seqOk =
+          embeddedSeqBigInt === responseSeqBigInt ||
+          (responseSeqBigInt === 1n && embeddedSeqBigInt === 0n);
+        if (!seqOk) {
+          throw new Error(
+            `IPNS sequence binding mismatch: embedded=${embeddedSeq}, response sequenceNumber=${response.sequenceNumber}`
+          );
+        }
       } else {
         console.warn('IPNS resolve returned without signature data, skipping verification');
       }

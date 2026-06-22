@@ -1,0 +1,444 @@
+/**
+ * IPNS Verify Vector Generator
+ *
+ * Generates tests/vectors/ipns/verify.json — the shared cross-language
+ * fixture consumed by both the Rust (crates/fuse/tests/ipns_verify_vectors.rs)
+ * and the sdk-core (packages/sdk-core/src/__tests__/ipns.test.ts) test suites.
+ *
+ * 8 cases (D-11):
+ *   valid, tampered-sig, name-mismatch, cid-swapped, seq-mismatch,
+ *   partial-fields, legacy-absent, first-publish-skew
+ *
+ * Run from the repo root (packages/core must be built first):
+ *   npx tsx scripts/gen-ipns-verify-vectors.ts
+ *
+ * Or run with packages/core as the working directory:
+ *   cd packages/core && npx tsx ../../scripts/gen-ipns-verify-vectors.ts
+ *
+ * The cid-swapped and seq-mismatch vectors carry REAL Ed25519 signatures over
+ * their (mis-matching) CBOR data — meaning Ed25519 verification PASSES
+ * but the binding check (embedded value/seq vs response cid/sequenceNumber)
+ * fails. This is intentional: these vectors test the binding layer, not
+ * the signature layer.
+ */
+
+import { fileURLToPath, pathToFileURL } from 'url';
+import { dirname, join, resolve } from 'path';
+import { writeFileSync, existsSync } from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const REPO_ROOT = join(__dirname, '..');
+
+// ---------------------------------------------------------------------------
+// Resolve package paths — packages/core provides @noble/ed25519 and @cipherbox/core;
+// cborg is in the pnpm virtual store as a dep of ipns@10.1.3.
+// ---------------------------------------------------------------------------
+
+// Determine the cborg path from the pnpm virtual store
+const CBORG_PATH = resolve(REPO_ROOT, 'node_modules/.pnpm/cborg@4.5.8/node_modules/cborg/cborg.js');
+if (!existsSync(CBORG_PATH)) {
+  console.error('cborg not found at expected path:', CBORG_PATH);
+  console.error('Run: pnpm install (from repo root)');
+  process.exit(1);
+}
+
+// @noble/ed25519 is in the pnpm virtual store
+const ED25519_PATH = resolve(
+  REPO_ROOT,
+  'node_modules/.pnpm/@noble+ed25519@2.3.0/node_modules/@noble/ed25519/index.js'
+);
+if (!existsSync(ED25519_PATH)) {
+  console.error('@noble/ed25519 not found at expected path:', ED25519_PATH);
+  console.error('Run: pnpm install (from repo root)');
+  process.exit(1);
+}
+
+// @cipherbox/core dist (packages/core/dist/index.mjs)
+const CORE_PATH = resolve(REPO_ROOT, 'packages/core/dist/index.mjs');
+if (!existsSync(CORE_PATH)) {
+  console.error('@cipherbox/core dist not found at:', CORE_PATH);
+  console.error('Run: pnpm --filter @cipherbox/core build');
+  process.exit(1);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { encode: cborEncode } = (await import(pathToFileURL(CBORG_PATH).toString())) as any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ed = (await import(pathToFileURL(ED25519_PATH).toString())) as any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { deriveIpnsName } = (await import(pathToFileURL(CORE_PATH).toString())) as any;
+
+// ---------------------------------------------------------------------------
+// Deterministic test key material (DO NOT use in production)
+// ---------------------------------------------------------------------------
+
+// Primary keypair — used for most cases
+const PRIMARY_PRIV_KEY_HEX = '0101010101010101010101010101010101010101010101010101010101010101';
+// Secondary keypair — used for name-mismatch (different name derived from it)
+const SECONDARY_PRIV_KEY_HEX = '0202020202020202020202020202020202020202020202020202020202020202';
+
+// Test CIDs (valid-looking base32 CIDv1 strings for vector purposes)
+const CID_A = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+const CID_B = 'bafybeif2pall7dybz7vecqka3zo24irdwabwdi4wc55mdgataz3a5fmfkq';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface VectorEntry {
+  description: string;
+  ipns_name: string;
+  public_key: string;
+  private_key: string;
+  cid: string;
+  sequence_number: string;
+  signature_v2: string | null;
+  data: string | null;
+  pub_key: string | null;
+  expected_result: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64');
+}
+
+/**
+ * Build CBOR data matching the Rust build_cbor_data / cipherbox-core layout.
+ *
+ * Field order: TTL (int), Value (bytes), Sequence (int), Validity (bytes), ValidityType (int).
+ * This layout matches what the Rust build_cbor_data encodes and what the ipns npm package
+ * generates — the same bytes are on both sides of the cross-language boundary.
+ *
+ * IMPORTANT: Uses cborg directly so we can build CBOR for "wrong" cid/seq values
+ * (cid-swapped and seq-mismatch cases) without going through createIpnsRecord.
+ */
+function buildCborData(cid: string, sequenceNumber: number): Uint8Array {
+  return cborEncode({
+    TTL: 300000000000,
+    Value: new TextEncoder().encode(`/ipfs/${cid}`),
+    Sequence: sequenceNumber,
+    Validity: new TextEncoder().encode('2099-01-01T00:00:00.000000000Z'),
+    ValidityType: 0,
+  }) as Uint8Array;
+}
+
+/**
+ * Build the signed bytes per IPFS IPNS spec:
+ * "ipns-signature:" || CBOR data
+ */
+function buildSignedBytes(cborData: Uint8Array): Uint8Array {
+  const prefix = new TextEncoder().encode('ipns-signature:');
+  const signed = new Uint8Array(prefix.length + cborData.length);
+  signed.set(prefix, 0);
+  signed.set(cborData, prefix.length);
+  return signed;
+}
+
+// ---------------------------------------------------------------------------
+// Main generator
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  const primaryPriv = hexToBytes(PRIMARY_PRIV_KEY_HEX);
+  const primaryPub = (await ed.getPublicKeyAsync(primaryPriv)) as Uint8Array;
+  const primaryIpnsName = (await deriveIpnsName(primaryPub)) as string;
+
+  const secondaryPriv = hexToBytes(SECONDARY_PRIV_KEY_HEX);
+  const secondaryPub = (await ed.getPublicKeyAsync(secondaryPriv)) as Uint8Array;
+  const secondaryIpnsName = (await deriveIpnsName(secondaryPub)) as string;
+
+  console.log('Primary IPNS name:', primaryIpnsName);
+  console.log('Secondary IPNS name:', secondaryIpnsName);
+  if (primaryIpnsName === secondaryIpnsName) {
+    throw new Error('Primary and secondary IPNS names must differ');
+  }
+
+  const SEQ = 5;
+  const SEQ_DIFFERENT = 99;
+
+  const vectors: VectorEntry[] = [];
+
+  // ------------------------------------------------------------------
+  // Case 1: valid — signature, name, cid, and sequence all match
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, SEQ);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description: 'valid — signature, name, cid, and sequence all match',
+      ipns_name: primaryIpnsName,
+      public_key: bytesToHex(primaryPub),
+      private_key: PRIMARY_PRIV_KEY_HEX,
+      cid: CID_A,
+      sequence_number: String(SEQ),
+      signature_v2: bytesToBase64(sig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(primaryPub),
+      expected_result: 'valid',
+    });
+    console.log('Case 1 (valid): done');
+  }
+
+  // ------------------------------------------------------------------
+  // Case 2: tampered-sig — flip one byte of signatureV2 over an
+  // otherwise-valid record. Ed25519 verification fails → "invalid".
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, SEQ);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+    const tamperedSig = new Uint8Array(sig);
+    tamperedSig[0] ^= 0xff;
+
+    vectors.push({
+      description: 'tampered-sig — flip one byte of signatureV2',
+      ipns_name: primaryIpnsName,
+      public_key: bytesToHex(primaryPub),
+      private_key: PRIMARY_PRIV_KEY_HEX,
+      cid: CID_A,
+      sequence_number: String(SEQ),
+      signature_v2: bytesToBase64(tamperedSig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(primaryPub),
+      expected_result: 'invalid',
+    });
+    console.log('Case 2 (tampered-sig): done');
+  }
+
+  // ------------------------------------------------------------------
+  // Case 3: name-mismatch — CBOR data and sig are from the secondary
+  // keypair, but ipns_name is the primary name. secondaryPub derives to
+  // secondaryIpnsName, which does NOT match ipns_name (primaryIpnsName).
+  // Ed25519 sig is valid; name binding check fails → "invalid".
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, SEQ);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, secondaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description: 'name-mismatch — valid sig but pubKey derives to different IPNS name',
+      ipns_name: primaryIpnsName,
+      public_key: bytesToHex(secondaryPub),
+      private_key: SECONDARY_PRIV_KEY_HEX,
+      cid: CID_A,
+      sequence_number: String(SEQ),
+      signature_v2: bytesToBase64(sig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(secondaryPub),
+      expected_result: 'invalid',
+    });
+    console.log('Case 3 (name-mismatch): done');
+  }
+
+  // ------------------------------------------------------------------
+  // Case 4: cid-swapped — sig valid over CBOR data containing CID_A,
+  // but response `cid` field is CID_B.
+  //
+  // Ed25519 signature covers: "ipns-signature:" + CBOR{Value="/ipfs/CID_A", ...}
+  // → verify_ipns_resolve_signature returns Ok(Some(true)).
+  // Binding check: embedded value "/ipfs/CID_A" != "/ipfs/CID_B" → fail.
+  // Expected result: "invalid" (caught by binding layer, not sig layer).
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, SEQ);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description:
+        'cid-swapped — valid sig over CBOR data with CID_A, but response cid field is CID_B',
+      ipns_name: primaryIpnsName,
+      public_key: bytesToHex(primaryPub),
+      private_key: PRIMARY_PRIV_KEY_HEX,
+      cid: CID_B,
+      sequence_number: String(SEQ),
+      signature_v2: bytesToBase64(sig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(primaryPub),
+      expected_result: 'invalid',
+    });
+    console.log('Case 4 (cid-swapped): done — sig covers CBOR with CID_A, response.cid=CID_B');
+  }
+
+  // ------------------------------------------------------------------
+  // Case 5: seq-mismatch — sig valid over CBOR data with seq=99,
+  // but response `sequence_number` is 5.
+  //
+  // Ed25519 signature covers: "ipns-signature:" + CBOR{Sequence=99, ...}
+  // → verify_ipns_resolve_signature returns Ok(Some(true)).
+  // Binding check: embedded seq 99 != response seq 5 → fail.
+  // Expected result: "invalid" (caught by binding layer, not sig layer).
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, SEQ_DIFFERENT);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description:
+        'seq-mismatch — valid sig over CBOR data with seq=99, but response sequenceNumber is 5',
+      ipns_name: primaryIpnsName,
+      public_key: bytesToHex(primaryPub),
+      private_key: PRIMARY_PRIV_KEY_HEX,
+      cid: CID_A,
+      sequence_number: String(SEQ),
+      signature_v2: bytesToBase64(sig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(primaryPub),
+      expected_result: 'invalid',
+    });
+    console.log('Case 5 (seq-mismatch): done — sig covers CBOR with seq=99, response.seq=5');
+  }
+
+  // ------------------------------------------------------------------
+  // Case 6: partial-fields (downgrade vector) — only signatureV2 present,
+  // data and pub_key are null. Fails the partial-fields guard before
+  // Ed25519 verification is even attempted.
+  // Expected result: "invalid" (fail-closed on partial fields).
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, SEQ);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description:
+        'partial-fields — only signatureV2 present, data and pub_key null (downgrade vector)',
+      ipns_name: primaryIpnsName,
+      public_key: bytesToHex(primaryPub),
+      private_key: PRIMARY_PRIV_KEY_HEX,
+      cid: CID_A,
+      sequence_number: String(SEQ),
+      signature_v2: bytesToBase64(sig),
+      data: null,
+      pub_key: null,
+      expected_result: 'invalid',
+    });
+    console.log('Case 6 (partial-fields): done');
+  }
+
+  // ------------------------------------------------------------------
+  // Case 7: legacy-absent — all three of signatureV2, data, pub_key null.
+  // Only all-absent records are treated as legacy (D-04).
+  // Expected result: "legacy" (allowed, signatureVerified=false).
+  // ------------------------------------------------------------------
+  {
+    vectors.push({
+      description: 'legacy-absent — all three signature fields null (pre-signing legacy record)',
+      ipns_name: primaryIpnsName,
+      public_key: bytesToHex(primaryPub),
+      private_key: PRIMARY_PRIV_KEY_HEX,
+      cid: CID_A,
+      sequence_number: String(SEQ),
+      signature_v2: null,
+      data: null,
+      pub_key: null,
+      expected_result: 'legacy',
+    });
+    console.log('Case 7 (legacy-absent): done');
+  }
+
+  // ------------------------------------------------------------------
+  // Case 8: first-publish-skew — sig valid over CBOR data with embedded
+  // Sequence=0, but response `sequence_number` is 1.
+  //
+  // This is the documented first-publish skew (D-09): the API accepts an
+  // embedded sequence ∈ {0,1} on first publish and unconditionally stores
+  // DB sequenceNumber=1. The Rust/FUSE publish paths embed the IPNS-native 0
+  // while the TS SDK embeds 1 — both legitimate. The resolve-side binding must
+  // accept embedded=0 when response sequenceNumber==1 (it is NOT a tamper).
+  // Expected result: "valid".
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, 0);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description:
+        'first-publish-skew — valid sig over CBOR data with seq=0, response sequenceNumber is 1',
+      ipns_name: primaryIpnsName,
+      public_key: bytesToHex(primaryPub),
+      private_key: PRIMARY_PRIV_KEY_HEX,
+      cid: CID_A,
+      sequence_number: '1',
+      signature_v2: bytesToBase64(sig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(primaryPub),
+      expected_result: 'valid',
+    });
+    console.log('Case 8 (first-publish-skew): done — sig covers CBOR with seq=0, response.seq=1');
+  }
+
+  // ------------------------------------------------------------------
+  // Sanity checks
+  // ------------------------------------------------------------------
+  if (vectors.length !== 8) {
+    throw new Error(`Expected 8 vectors, got ${vectors.length}`);
+  }
+
+  const expectedResults = [
+    'valid',
+    'invalid',
+    'invalid',
+    'invalid',
+    'invalid',
+    'invalid',
+    'legacy',
+    'valid',
+  ];
+  const expectedDescriptions = [
+    'valid',
+    'tampered-sig',
+    'name-mismatch',
+    'cid-swapped',
+    'seq-mismatch',
+    'partial-fields',
+    'legacy-absent',
+    'first-publish-skew',
+  ];
+  for (let i = 0; i < vectors.length; i++) {
+    if (vectors[i].expected_result !== expectedResults[i]) {
+      throw new Error(
+        `Vector ${i} expected_result mismatch: got ${vectors[i].expected_result}, want ${expectedResults[i]}`
+      );
+    }
+    if (!vectors[i].description.startsWith(expectedDescriptions[i])) {
+      throw new Error(
+        `Vector ${i} description should start with "${expectedDescriptions[i]}", got "${vectors[i].description}"`
+      );
+    }
+  }
+
+  const outPath = join(REPO_ROOT, 'tests', 'vectors', 'ipns', 'verify.json');
+  writeFileSync(outPath, JSON.stringify(vectors, null, 2) + '\n', 'utf-8');
+  console.log(`\nWrote ${vectors.length} vectors to: ${outPath}`);
+  console.log('expected_results:', vectors.map((v) => v.expected_result).join(', '));
+}
+
+main().catch((err) => {
+  console.error('Error:', err);
+  process.exit(1);
+});

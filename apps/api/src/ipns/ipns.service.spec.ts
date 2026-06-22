@@ -166,6 +166,8 @@ describe('IpnsService', () => {
     it('should publish record for existing folder and increment sequence', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
       mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '6' });
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       const result = await service.publishRecord(
         testUserId,
@@ -272,6 +274,8 @@ describe('IpnsService', () => {
       mockDelegatedRoutingClient.publish.mockRejectedValue(
         new HttpException('Failed to publish', HttpStatus.BAD_GATEWAY)
       );
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       const result = await service.publishRecord(testUserId, createDto());
       expect(result.success).toBe(true);
@@ -282,6 +286,8 @@ describe('IpnsService', () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
       mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
       mockDelegatedRoutingClient.publish.mockRejectedValue(new Error('Network error'));
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       const result = await service.publishRecord(testUserId, createDto());
       expect(result.success).toBe(true);
@@ -291,6 +297,8 @@ describe('IpnsService', () => {
     it('should update encrypted key on key rotation for existing folder', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity });
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       const newKeyEpoch = 2;
       const newEncryptedKey = 'b'.repeat(128);
@@ -315,6 +323,8 @@ describe('IpnsService', () => {
       const originalEntity = { ...mockFolderEntity };
       mockFolderIpnsRepo.findOne.mockResolvedValue(originalEntity);
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       await service.publishRecord(
         testUserId,
@@ -424,8 +434,11 @@ describe('IpnsService', () => {
       const existingFolder = { ...mockFolderEntity, sequenceNumber: '10' };
       mockFolderIpnsRepo.findOne.mockResolvedValue(existingFolder);
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
-      // S1 validates embedded CID vs metadataCid — use testMetadataCid so the default
-      // parseIpnsRecord mock (value: /ipfs/testMetadataCid) aligns with the DTO value.
+      // D-09: existing row at seq 10, forward publish requires embedded = 11n.
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 11n,
+      });
 
       await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
@@ -448,8 +461,11 @@ describe('IpnsService', () => {
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(largeSeqFolder);
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
-      // S1 validates embedded CID vs metadataCid — use testMetadataCid so the default
-      // parseIpnsRecord mock aligns with the DTO value.
+      // D-09: existing row at MAX_SAFE_INTEGER, forward publish requires embedded = MAX_SAFE_INTEGER + 1.
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: BigInt('9007199254740992'), // MAX_SAFE_INTEGER + 1
+      });
 
       await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
@@ -471,8 +487,8 @@ describe('IpnsService', () => {
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(existingFolder);
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
-      // S1 validates embedded CID vs metadataCid — use testMetadataCid so the default
-      // parseIpnsRecord mock aligns with the DTO value.
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       const beforeTest = new Date();
       await service.publishRecord(testUserId, {
@@ -1151,6 +1167,8 @@ describe('IpnsService', () => {
     beforeEach(() => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
       mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
     });
 
     it('should succeed when delegated routing rejects with string error', async () => {
@@ -1311,6 +1329,8 @@ describe('IpnsService', () => {
       mockDelegatedRoutingClient.publish.mockRejectedValue(
         new HttpException('Failed to publish', HttpStatus.BAD_GATEWAY)
       );
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
@@ -1335,6 +1355,8 @@ describe('IpnsService', () => {
       mockDelegatedRoutingClient.publish.mockRejectedValue(
         new HttpException('Failed to publish', HttpStatus.BAD_GATEWAY)
       );
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
@@ -1423,6 +1445,8 @@ describe('IpnsService', () => {
     it('accepts publish without expectedSequenceNumber (backward compat)', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '5' });
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       const dto = createDto(); // No expectedSequenceNumber
       const result = await service.publishRecord(testUserId, dto);
@@ -1474,12 +1498,16 @@ describe('IpnsService', () => {
     });
 
     it('batch succeeds when folder record has matching sequence', async () => {
+      // All records (file and folder) have an existing row at seq 5 so that a uniform
+      // embedded sequence of 6n satisfies D-09's forward-publish rule for every entry.
+      // This avoids an order-dependent mock (Promise.allSettled processes them concurrently).
       mockFolderIpnsRepo.findOne.mockImplementation(
         async ({ where }: { where: { ipnsName: string } }) => {
           if (where.ipnsName === testIpnsName) {
             return { ...mockFolderEntity, sequenceNumber: '5' };
           }
-          return null;
+          // File records: existing entry at seq 5 (forward-publish with embedded=6n).
+          return { ...mockFolderEntity, ipnsName: where.ipnsName, sequenceNumber: '5' };
         }
       );
       mockFolderIpnsRepo.create.mockImplementation((data) => ({
@@ -1488,12 +1516,7 @@ describe('IpnsService', () => {
         sequenceNumber: '1',
       }));
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
-      // S1 sequence check for the folder expects embedded = 5 + 1 = 6n. The file record
-      // has no expectedSequenceNumber, so its S1 seq check is skipped and any sequence is
-      // fine. Both records share `testRecord` bytes and the records publish concurrently —
-      // `Promise.allSettled` preserves RESULT order, not the order each call reaches
-      // parseIpnsRecord — so an order-keyed mock would flake. Return a single value that
-      // satisfies both (CID matches; sequence 6n satisfies the folder, ignored by the file).
+      // D-09: all rows at seq 5; embedded=6n satisfies forward-publish for all entries.
       mockParseIpnsRecord.mockResolvedValue({
         value: `/ipfs/${testMetadataCid}`,
         sequence: 6n,
@@ -1536,6 +1559,8 @@ describe('IpnsService', () => {
       // One canonical row per ipnsName, created by testUserId; looked up by name.
       mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity });
       mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '6' });
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       const dto: PublishIpnsDto = {
         ipnsName: testIpnsName,
@@ -1574,6 +1599,8 @@ describe('IpnsService', () => {
       const otherUser = '660e8400-e29b-41d4-a716-446655440001';
       mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity });
       mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '6' });
+      // D-09: existing row at seq 5, forward publish requires embedded = 6n.
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
 
       const dto: PublishIpnsDto = {
         ipnsName: testIpnsName,
@@ -1700,6 +1727,163 @@ describe('IpnsService', () => {
     it('should handle empty array', async () => {
       const result = await service.unenrollBatch('user-1', []);
       expect(result.totalUnenrolled).toBe(0);
+    });
+  });
+
+  // =========================================================================
+  // D-09: unconditional embedded-sequence gate (Plan 58-02)
+  // =========================================================================
+
+  describe('upsertFolderIpns D-09 embedded-sequence gate', () => {
+    // Helper: build a publishRecord call without CAS (no expectedSequenceNumber)
+    const publishNoCas = (overrides?: Partial<{ metadataCid: string; record: string }>) =>
+      service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: overrides?.record ?? testRecord,
+        metadataCid: overrides?.metadataCid ?? testMetadataCid,
+        // intentionally no expectedSequenceNumber
+      });
+
+    it('rejects first publish with embedded sequence > 1 (wedge-poison prevention)', async () => {
+      // No existing row — first publish path.
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      // Embedded seq 2n: not in the first-publish allow set {0n, 1n}.
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 2n,
+      });
+
+      await expect(publishNoCas()).rejects.toThrow(BadRequestException);
+      await expect(publishNoCas()).rejects.toThrow(/first publish.*embedded sequence/i);
+    });
+
+    it('allows first publish with embedded sequence 0n', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 0n,
+      });
+
+      await expect(publishNoCas()).resolves.toBeDefined();
+    });
+
+    it('allows first publish with embedded sequence 1n', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 1n,
+      });
+
+      await expect(publishNoCas()).resolves.toBeDefined();
+    });
+
+    it('allows idempotent republish (embedded = DB seq) without incrementing DB sequenceNumber', async () => {
+      // Existing row at seq 5 — TEE re-sign path sends embedded=5n.
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      const newCid = 'bafkreinewcidforteeresign000000000000000000000000000000000000000';
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${newCid}`,
+        sequence: 5n, // embedded = DB seq = 5n → idempotent
+      });
+
+      const result = await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: newCid, // new CID (TEE may re-sign after content update)
+      });
+
+      // DB sequenceNumber must stay at '5' — not incremented.
+      const savedEntity = mockFolderIpnsRepo.save.mock.calls[0][0];
+      expect(savedEntity.sequenceNumber).toBe('5');
+      // But latestCid must be updated (Pitfall 4 — idempotent still updates CID).
+      expect(savedEntity.latestCid).toBe(newCid);
+      expect(result.success).toBe(true);
+    });
+
+    it('allows forward publish (embedded = DB seq + 1) and increments DB sequenceNumber', async () => {
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 6n, // embedded = DB+1 = 6n → forward
+      });
+
+      await expect(publishNoCas()).resolves.toBeDefined();
+
+      const savedEntity = mockFolderIpnsRepo.save.mock.calls[0][0];
+      expect(savedEntity.sequenceNumber).toBe('6');
+    });
+
+    it('rejects rollback (embedded < DB seq)', async () => {
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 4n, // 4n < 5n → rollback
+      });
+
+      await expect(publishNoCas()).rejects.toThrow(BadRequestException);
+      await expect(publishNoCas()).rejects.toThrow(/rollback rejected/i);
+    });
+
+    it('rejects wild jump (embedded > DB seq + 1)', async () => {
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 7n, // 7n > 5n+1=6n → wild jump
+      });
+
+      await expect(publishNoCas()).rejects.toThrow(BadRequestException);
+      await expect(publishNoCas()).rejects.toThrow(/sequence jump rejected/i);
+    });
+
+    it('rejects first publish with embedded=2n even when expectedSequenceNumber is undefined (gate runs unconditionally)', async () => {
+      // This test explicitly asserts the gate fires WITHOUT a CAS parameter.
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 2n,
+      });
+
+      // Call without expectedSequenceNumber — the gate must still fire.
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+          // no expectedSequenceNumber
+        })
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('CAS-409 takes precedence over D-09 when expectedSequenceNumber is stale', async () => {
+      // Existing row at seq 5; CAS expected='3' (stale) → 409 fires before D-09 400.
+      // Even if the embedded sequence would also trigger D-09, the 409 should win.
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      // Embedded sequence that would trigger D-09 rollback (4n < 5n)
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 4n,
+      });
+
+      // The CAS check fires first and throws 409, not D-09 400.
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+          expectedSequenceNumber: '3', // stale → CAS 409
+        })
+      ).rejects.toThrow(ConflictException);
     });
   });
 });

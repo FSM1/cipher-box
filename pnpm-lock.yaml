@@ -588,6 +588,9 @@ importers:
       axios:
         specifier: 1.13.2
         version: 1.13.2
+      cborg:
+        specifier: ^4.5.8
+        version: 4.5.8
     devDependencies:
       '@vitest/coverage-v8':
         specifier: ^3.2.4

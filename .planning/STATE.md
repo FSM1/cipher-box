@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: IPFS Infrastructure
-status: Phase 56 complete
-last_updated: "2026-06-22T03:30:00.000Z"
+milestone_name: milestone
+status: Milestone complete
+last_updated: "2026-06-22T15:50:02.496Z"
 last_activity: 2026-06-22
 progress:
   total_phases: 43
-  completed_phases: 42
-  total_plans: 182
-  completed_plans: 182
-  percent: 97
+  completed_phases: 43
+  total_plans: 186
+  completed_plans: 186
+  percent: 100
 ---
 
 # Project State
@@ -20,19 +20,19 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 58 — IPNS signature-verify coverage (next)
+**Current focus:** Phase 58 — IPNS Signature-Verify Coverage
 
 ## Current Position
 
-Phase: 56 (fuse-and-ipns-durability-hardening) — COMPLETE (3 of 3 plans; verified, secured, validated; shipping). Phase 57 (API CID/provider hardening) merged to main (#541).
-Plan: 3 of 3
+Phase: 58
+Plan: Not started
 Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 58 (recommended order was 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 160 (all 34 milestone v1.1 phases; every PLAN has a SUMMARY)
+- Total plans completed: 164 (all 34 milestone v1.1 phases; every PLAN has a SUMMARY)
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
@@ -156,6 +156,9 @@ Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases
 | Phase 51 P04 | 12min | 3 tasks | 6 files |
 | Phase 56 P01 | 45min | 3 tasks | 5 files |
 | Phase 56 P02 | 90min | 3 tasks | 8 files |
+| Phase 58 P01 | 45 | 5 tasks | 10 files |
+| Phase 58-ipns-signature-verify-coverage P02 | 30min | 3 tasks | 2 files |
+| Phase 58-ipns-signature-verify-coverage P04 | 25min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -299,7 +302,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-22
 
-Last session: 2026-06-22T03:30:00.000Z
+Last session: 2026-06-22T15:10:07.635Z
 
 ## Decisions
 
@@ -325,3 +328,4 @@ Last session: 2026-06-22T03:30:00.000Z
 - [Phase 51-03]: resolve_folder_key_cached cache left as HashMap<String, Vec<u8>> (not Zeroizing); cache is short-lived, cleared on replay_for_vault drop — only BFS queue and get_folder_key return changed
 - [Phase 51-03]: verify_ipns_resolve_signature absent-fields path returns Ok(None) + warn (D-03), not error; verify gate in resolve_folder_key BFS only (not fetch_merge_publish_parent replay path)
 - [Phase 51-04]: updateFolderMetadataAndPublish SKIP zeroing — all client.ts call sites pass live session keys from folderTree state reused across session lifetime; caller retains ownership (T-47-01 documented skip with guard test)
+- [Phase ?]: CBOR import: cborg decode used in sdk-core; parseCborData from ipns unavailable

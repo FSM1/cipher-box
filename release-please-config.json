@@ -138,7 +138,7 @@
       "component": "cipherbox-core",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.5.2"
+      "release-as": "0.6.0"
     },
     "crates/api-client": {
       "release-type": "rust",

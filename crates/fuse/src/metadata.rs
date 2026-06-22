@@ -326,11 +326,28 @@ pub fn spawn_metadata_publish(
                     );
 
                     let fresh_seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
-                    let remote_resolve = cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name)
-                        .await
-                        .map_err(|e| format!("{}", e))?;
+                    // D-01/D-02: route through verified chokepoint; fail only this merge operation.
+                    let remote_cid = match crate::verify::resolve_ipns_verified(&api, &ipns_name).await {
+                        Ok(v) => v.cid,
+                        Err(crate::verify::VerifyError::Legacy) => {
+                            log::warn!(
+                                "remote_merge: IPNS {} resolved without signature fields \
+                                 — using DB CID for merge (D-04)",
+                                ipns_name
+                            );
+                            cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name)
+                                .await
+                                .map_err(|e| format!("{}", e))?.cid
+                        }
+                        Err(crate::verify::VerifyError::Invalid(msg)) => {
+                            return Err(format!("IPNS {} verify failed on merge: {}", ipns_name, msg));
+                        }
+                        Err(crate::verify::VerifyError::Api(e)) => {
+                            return Err(format!("{}", e));
+                        }
+                    };
                     let remote_bytes =
-                        cipherbox_api_client::ipfs::fetch_content(&api, &remote_resolve.cid)
+                        cipherbox_api_client::ipfs::fetch_content(&api, &remote_cid)
                             .await
                             .map_err(|e| format!("{}", e))?;
                     let remote_metadata = cipherbox_core::decrypt_metadata_from_ipfs_public(
@@ -440,16 +457,17 @@ pub fn spawn_bin_entry_publish(
             let lock = coordinator.get_lock(&bin_ipns_name);
             let _guard = lock.lock().await;
 
+            // D-01: route bin IPNS resolve through the verified chokepoint.
             let (mut bin_metadata, existing_cid) =
-                match cipherbox_api_client::ipns::resolve_ipns(&api, &bin_ipns_name).await {
-                    Ok(resp) => {
-                        match cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid).await {
+                match crate::verify::resolve_ipns_verified(&api, &bin_ipns_name).await {
+                    Ok(verified) => {
+                        match cipherbox_api_client::ipfs::fetch_content(&api, &verified.cid).await {
                             Ok(bytes) => {
                                 match cipherbox_core::decrypt_bin_metadata(
                                     &bytes,
                                     &user_private_key,
                                 ) {
-                                    Ok(meta) => (meta, Some(resp.cid)),
+                                    Ok(meta) => (meta, Some(verified.cid)),
                                     Err(e) => {
                                         log::warn!("Failed to decrypt bin metadata: {}", e);
                                         return Err(format!("Bin decrypt failed: {}", e));
@@ -462,7 +480,41 @@ pub fn spawn_bin_entry_publish(
                             }
                         }
                     }
-                    Err(e) => {
+                    Err(crate::verify::VerifyError::Legacy) => {
+                        // D-04: legacy record — re-resolve and proceed with DB CID.
+                        log::warn!(
+                            "spawn_bin_entry_publish: IPNS {} resolved without signature fields \
+                             — using DB CID (D-04)",
+                            bin_ipns_name
+                        );
+                        match cipherbox_api_client::ipns::resolve_ipns(&api, &bin_ipns_name).await {
+                            Ok(resp) => {
+                                match cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid).await {
+                                    Ok(bytes) => {
+                                        match cipherbox_core::decrypt_bin_metadata(&bytes, &user_private_key) {
+                                            Ok(meta) => (meta, Some(resp.cid)),
+                                            Err(e) => return Err(format!("Bin decrypt failed: {}", e)),
+                                        }
+                                    }
+                                    Err(e) => return Err(format!("Bin fetch failed: {}", e)),
+                                }
+                            }
+                            Err(e) => {
+                                let e_str = format!("{}", e);
+                                if is_ipns_not_found(&e_str) {
+                                    (cipherbox_core::empty_bin_metadata(), None)
+                                } else {
+                                    return Err(format!("Bin resolve failed: {}", e));
+                                }
+                            }
+                        }
+                    }
+                    Err(crate::verify::VerifyError::Invalid(msg)) => {
+                        // D-02: fail only this operation.
+                        log::warn!("spawn_bin_entry_publish: IPNS {} verify failed: {}", bin_ipns_name, msg);
+                        return Err(format!("Bin IPNS verify failed: {}", msg));
+                    }
+                    Err(crate::verify::VerifyError::Api(e)) => {
                         let e_str = format!("{}", e);
                         if is_ipns_not_found(&e_str) {
                             (cipherbox_core::empty_bin_metadata(), None)
@@ -604,10 +656,32 @@ async fn resolve_and_fetch_file_meta(
     api: &ApiClient,
     file_meta_ipns_name: &str,
 ) -> Result<Vec<u8>, String> {
-    let resp = cipherbox_api_client::ipns::resolve_ipns(api, file_meta_ipns_name)
-        .await
-        .map_err(|e| format!("resolve file IPNS: {}", e))?;
-    let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resp.cid)
+    // D-01: route through the verified chokepoint.
+    let cid = match crate::verify::resolve_ipns_verified(api, file_meta_ipns_name).await {
+        Ok(v) => v.cid,
+        Err(crate::verify::VerifyError::Legacy) => {
+            // D-04: legacy record — re-resolve and proceed with DB CID.
+            log::warn!(
+                "resolve_and_fetch_file_meta: IPNS {} resolved without signature fields \
+                 — using DB CID (D-04)",
+                file_meta_ipns_name
+            );
+            cipherbox_api_client::ipns::resolve_ipns(api, file_meta_ipns_name)
+                .await
+                .map_err(|e| format!("resolve file IPNS: {}", e))?.cid
+        }
+        Err(crate::verify::VerifyError::Invalid(msg)) => {
+            // D-02: fail only this operation.
+            return Err(format!(
+                "file IPNS {} verify failed: {}",
+                file_meta_ipns_name, msg
+            ));
+        }
+        Err(crate::verify::VerifyError::Api(e)) => {
+            return Err(format!("resolve file IPNS: {}", e));
+        }
+    };
+    let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &cid)
         .await
         .map_err(|e| format!("fetch file metadata: {}", e))?;
     Ok(enc_bytes)

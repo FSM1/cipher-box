@@ -487,11 +487,31 @@ impl CipherBoxFS {
                         let tx = self.filepointer_tx.clone();
                         self.rt.spawn(async move {
                             let result = tokio::time::timeout(NETWORK_TIMEOUT, async {
-                                let resp = cipherbox_api_client::ipns::resolve_ipns(&api, &fp_ipns)
-                                    .await
-                                    .map_err(|e| format!("{}", e))?;
+                                // D-01: route through the verified chokepoint.
+                                let cid = match crate::verify::resolve_ipns_verified(&api, &fp_ipns).await {
+                                    Ok(v) => v.cid,
+                                    Err(crate::verify::VerifyError::Legacy) => {
+                                        log::warn!(
+                                            "FilePointer resolve: IPNS {} without signature fields \
+                                             — using DB CID (D-04)",
+                                            fp_ipns
+                                        );
+                                        cipherbox_api_client::ipns::resolve_ipns(&api, &fp_ipns)
+                                            .await
+                                            .map_err(|e| format!("{}", e))?.cid
+                                    }
+                                    Err(crate::verify::VerifyError::Invalid(msg)) => {
+                                        return Err(format!(
+                                            "FilePointer IPNS {} verify failed: {}",
+                                            fp_ipns, msg
+                                        ));
+                                    }
+                                    Err(crate::verify::VerifyError::Api(e)) => {
+                                        return Err(format!("{}", e));
+                                    }
+                                };
                                 let enc_bytes =
-                                    cipherbox_api_client::ipfs::fetch_content(&api, &resp.cid)
+                                    cipherbox_api_client::ipfs::fetch_content(&api, &cid)
                                         .await
                                         .map_err(|e| format!("{}", e))?;
                                 cipherbox_core::decrypt_file_metadata_from_ipfs_public(

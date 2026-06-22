@@ -92,29 +92,71 @@ impl PublishCoordinator {
         api: &cipherbox_api_client::ApiClient,
         ipns_name: &str,
     ) -> Result<u64, String> {
-        match cipherbox_api_client::ipns::resolve_ipns(api, ipns_name).await {
-            Ok(resp) => {
-                let resolved = resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
-                    log::warn!(
-                        "Failed to parse IPNS sequence '{}' for {}: {}",
-                        resp.sequence_number,
-                        ipns_name,
-                        e
-                    );
-                    0
-                });
+        // D-01: route through the verified chokepoint.
+        match crate::verify::resolve_ipns_verified(api, ipns_name).await {
+            Ok(verified) => {
+                // D-08: use sequence from signed CBOR data.
+                let resolved = verified.sequence_number;
                 let cached = self.get_cached(ipns_name).unwrap_or(0);
                 let seq = std::cmp::max(resolved, cached);
                 self.update_cache(ipns_name, seq);
                 Ok(seq)
             }
-            Err(e) => match self.get_cached(ipns_name) {
+            Err(crate::verify::VerifyError::Legacy) => {
+                // D-04: legacy record — re-resolve to get the raw sequence, warn and proceed.
+                match cipherbox_api_client::ipns::resolve_ipns(api, ipns_name).await {
+                    Ok(resp) => {
+                        let resolved = resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
+                            log::warn!(
+                                "Failed to parse IPNS sequence '{}' for {}: {}",
+                                resp.sequence_number, ipns_name, e
+                            );
+                            0
+                        });
+                        log::warn!(
+                            "resolve_sequence: IPNS {} resolved without signature fields \
+                             — using DB sequence (D-04)",
+                            ipns_name
+                        );
+                        let cached = self.get_cached(ipns_name).unwrap_or(0);
+                        let seq = std::cmp::max(resolved, cached);
+                        self.update_cache(ipns_name, seq);
+                        Ok(seq)
+                    }
+                    Err(e) => match self.get_cached(ipns_name) {
+                        Some(cached) => {
+                            log::warn!(
+                                "IPNS resolve failed for {}, using cached seq {}: {}",
+                                ipns_name, cached, e
+                            );
+                            Ok(cached)
+                        }
+                        None => Err(format!(
+                            "IPNS resolve failed and no cached sequence for {}: {}",
+                            ipns_name, e
+                        )),
+                    },
+                }
+            }
+            Err(crate::verify::VerifyError::Invalid(msg)) => {
+                // D-02: verify failure on soft resolve — fall back to cache (never wedge).
+                log::warn!(
+                    "resolve_sequence: IPNS {} verify failed: {} — falling back to cache (D-02)",
+                    ipns_name, msg
+                );
+                match self.get_cached(ipns_name) {
+                    Some(cached) => Ok(cached),
+                    None => Err(format!(
+                        "IPNS verify failed and no cached sequence for {}: {}",
+                        ipns_name, msg
+                    )),
+                }
+            }
+            Err(crate::verify::VerifyError::Api(e)) => match self.get_cached(ipns_name) {
                 Some(cached) => {
                     log::warn!(
                         "IPNS resolve failed for {}, using cached seq {}: {}",
-                        ipns_name,
-                        cached,
-                        e
+                        ipns_name, cached, e
                     );
                     Ok(cached)
                 }
@@ -134,19 +176,43 @@ impl PublishCoordinator {
         api: &cipherbox_api_client::ApiClient,
         ipns_name: &str,
     ) -> Result<u64, String> {
-        let resp = cipherbox_api_client::ipns::resolve_ipns(api, ipns_name)
-            .await
-            .map_err(|e| format!("IPNS resolve failed for {}: {}", ipns_name, e))?;
-        let resolved = resp.sequence_number.parse::<u64>().map_err(|e| {
-            format!(
-                "Invalid IPNS sequence '{}' for {}: {}",
-                resp.sequence_number, ipns_name, e
-            )
-        })?;
-        let cached = self.get_cached(ipns_name).unwrap_or(0);
-        let seq = std::cmp::max(resolved, cached);
-        self.update_cache(ipns_name, seq);
-        Ok(seq)
+        // D-01: route through the verified chokepoint.
+        match crate::verify::resolve_ipns_verified(api, ipns_name).await {
+            Ok(verified) => {
+                // D-08: use sequence from signed CBOR data.
+                let cached = self.get_cached(ipns_name).unwrap_or(0);
+                let seq = std::cmp::max(verified.sequence_number, cached);
+                self.update_cache(ipns_name, seq);
+                Ok(seq)
+            }
+            Err(crate::verify::VerifyError::Legacy) => {
+                // D-04: legacy record — re-resolve to get the raw sequence, warn and proceed
+                // (strict contract: only fails on resolve failure, not legacy; legacy is a
+                // successful-but-unverified resolve — proceed with DB sequence).
+                log::warn!(
+                    "resolve_sequence_strict: IPNS {} resolved without signature fields \
+                     — proceeding with DB sequence (D-04)",
+                    ipns_name
+                );
+                let resp = cipherbox_api_client::ipns::resolve_ipns(api, ipns_name)
+                    .await
+                    .map_err(|e| format!("IPNS resolve failed for {}: {}", ipns_name, e))?;
+                let resolved = resp.sequence_number.parse::<u64>().map_err(|e| {
+                    format!("Invalid IPNS sequence '{}' for {}: {}", resp.sequence_number, ipns_name, e)
+                })?;
+                let cached = self.get_cached(ipns_name).unwrap_or(0);
+                let seq = std::cmp::max(resolved, cached);
+                self.update_cache(ipns_name, seq);
+                Ok(seq)
+            }
+            Err(crate::verify::VerifyError::Invalid(msg)) => {
+                // Strict: verify failure → Err.
+                Err(format!("IPNS {} verify failed: {}", ipns_name, msg))
+            }
+            Err(crate::verify::VerifyError::Api(e)) => {
+                Err(format!("IPNS resolve failed for {}: {}", ipns_name, e))
+            }
+        }
     }
 
     pub fn record_publish(&self, ipns_name: &str, published_seq: u64) {

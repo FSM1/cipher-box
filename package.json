@@ -50,7 +50,7 @@
     ]
   },
   "lint-staged": {
-    "*.{ts,tsx,js,jsx}": [
+    "*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}": [
       "eslint --fix",
       "prettier --write"
     ],

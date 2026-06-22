@@ -1015,7 +1015,7 @@ Verification gate: apps/api jest specs; `pnpm api:generate` + commit regenerated
 **Goal:** Finish the IPNS signed-record verification story left after Phase 51 / PR #529: bind every resolved record to its CID/sequence by decoding the signed CBOR and comparing (closing the swap gap on both Rust and JS), fold verification into a single Rust `resolve_ipns_verified` chokepoint so all ~11 resolve sites are safe-by-default (today only 1 verifies), validate the embedded publish sequence even when CAS is omitted without regressing the non-CAS publish paths, de-duplicate the web vs sdk-core resolve/verify copies, and add shared cross-language verify test vectors.
 **Requirements**: HARD-09
 **Depends on:** Phase 51 (S1/S2/S3 baseline), Phase 56 (overlapping FUSE resolve sites)
-**Plans:** 4 plans
+**Plans:** 4/4 plans complete
 
 Scope (captured todos):
 
@@ -1025,13 +1025,13 @@ Scope (captured todos):
 Plans:
 **Wave 1**
 
-- [ ] 58-01-PLAN.md — CBOR cid/sequence binding + Rust `resolve_ipns_verified` chokepoint: decode signed `data`, compare to `resp.cid`/`sequence`, route all FUSE/sdk resolve sites through the verified wrapper (Rust + JS parity)
-- [ ] 58-02-PLAN.md — Non-CAS embedded-sequence validation: enumerate every publish path that omits `expectedSequenceNumber` (vault init, per-file, file-pointer), enforce DB+1 / idempotent-equal without breaking them (full SDK E2E gate)
+- [x] 58-01-PLAN.md — CBOR cid/sequence binding + Rust `resolve_ipns_verified` chokepoint: decode signed `data`, compare to `resp.cid`/`sequence`, route all FUSE/sdk resolve sites through the verified wrapper (Rust + JS parity)
+- [x] 58-02-PLAN.md — Non-CAS embedded-sequence validation: enumerate every publish path that omits `expectedSequenceNumber` (vault init, per-file, file-pointer), enforce DB+1 / idempotent-equal without breaking them (full SDK E2E gate)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 58-03-PLAN.md — web/sdk-core resolve dedup: web imports sdk-core `resolveIpnsRecord` (ctx axios injection), delete the duplicated web `verifyIpnsSignature`/`resolveIpnsRecord`
-- [ ] 58-04-PLAN.md — shared cross-language IPNS verify test vectors (valid / tampered / name-mismatch / cid-swapped) consumed by Rust + TS
+- [x] 58-03-PLAN.md — web/sdk-core resolve dedup: web imports sdk-core `resolveIpnsRecord` (ctx axios injection), delete the duplicated web `verifyIpnsSignature`/`resolveIpnsRecord`
+- [x] 58-04-PLAN.md — shared cross-language IPNS verify test vectors (valid / tampered / name-mismatch / cid-swapped) consumed by Rust + TS
 
 Verification gate: full SDK E2E suite (local; redis 6380), apps/api specs, `cargo test`.
 
@@ -1086,10 +1086,11 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 2
 | 55. Large Source-File Refactor            | v1.1-hardening | 4/4 | Complete    | 2026-06-21 |
 | 56. FUSE & IPNS Durability Hardening       | v1.1-hardening | 3/3 | Complete    | 2026-06-22 |
 | 57. API CID/Provider Hardening & Dedup     | v1.1-hardening | 2/2 | Complete    | 2026-06-22 |
-| 58. IPNS Signature-Verify Coverage         | v1.1-hardening | -   | Planned     | -          |
+| 58. IPNS Signature-Verify Coverage         | v1.1-hardening | 4/4 | Complete    | 2026-06-22 |
 
 _Roadmap created: 2026-03-07_
 _Last updated: 2026-06-18 — added phase 49 (shared-folder intra-share move + useFolderNavigation unwrap consolidation; closes todos #8 + #7, builds on phase 48 shared-folder ownership)_
 _Last updated: 2026-06-19 — reopened v1.1 with hardening block; added phases 50–55 (HARD-01..06); backfilled progress table for phases 40–55; corrected phases 38/39 status to Complete_
 _Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 5 phases (36-40) | Gap closure: 3 phases (42-44) | Hardening block: 6 phases (50-55)_
 _Last updated: 2026-06-21 — added deferred-findings hardening Phases 56–58 (HARD-07..09): FUSE/IPNS durability, API CID/provider hardening, IPNS signature-verify coverage; sourced from the Phase 50–55 / PR #529 + #538 review backlog. Filed resolved todos #5 (IPNS S1/S2/S3 → #529) and #10 (Tier-1/2 refactor → #538) to completed/._
+_Last updated: 2026-06-22 — Phase 58 planned: 4 plans (58-01 CBOR binding + resolve_ipns_verified chokepoint, 58-02 non-CAS D-09 sequence gate, 58-03 web/sdk-core resolve dedup, 58-04 shared cross-language verify vectors) in 2 waves (W1: 58-01/02; W2: 58-03/04 depends_on 58-01)._
