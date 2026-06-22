@@ -54,6 +54,10 @@ pub struct CipherBoxFS {
     pub filepointer_rx: std::sync::mpsc::Receiver<PendingFilePointer>,
     pub filepointer_tx: std::sync::mpsc::Sender<PendingFilePointer>,
     pub resolving_file_pointers: std::collections::HashSet<u64>,
+    /// D-09: continuation queue for FilePointer resolve entries that exceeded the
+    /// MAX_CONCURRENT_FP_RESOLVES cap. Entries here are drained first on the next
+    /// refresh cycle so nothing is silently dropped.
+    pub pending_fp_resolves: std::collections::VecDeque<(u64, String)>,
     pub pending_content: HashMap<u64, Vec<u8>>,
     pub upload_rx: std::sync::mpsc::Receiver<FsEvent>,
     pub upload_tx: std::sync::mpsc::Sender<FsEvent>,
@@ -281,14 +285,20 @@ impl CipherBoxFS {
                             if let Some(plaintext) = self.pending_content.remove(&result.ino) {
                                 self.content_cache.set(&result.new_cid, plaintext);
                             }
+                            // D-08: unpin pruned CIDs INSIDE the write_generation guard so a
+                            // superseded write cannot unpin CIDs the current generation still
+                            // references. A stale completion (write_generation mismatch) must
+                            // not unpin anything — those CIDs may still be live.
+                            for pruned_cid in &result.pruned_cids {
+                                let api = self.api.clone();
+                                let cid = pruned_cid.clone();
+                                self.rt.spawn(async move {
+                                    let _ =
+                                        cipherbox_api_client::ipfs::unpin_content(&api, &cid)
+                                            .await;
+                                });
+                            }
                         }
-                    }
-                    for pruned_cid in &result.pruned_cids {
-                        let api = self.api.clone();
-                        let cid = pruned_cid.clone();
-                        self.rt.spawn(async move {
-                            let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid).await;
-                        });
                     }
                     if let Some(entry) = self.publish_queue.get_mut(&result.parent_ino) {
                         entry.pending_uploads = entry.pending_uploads.saturating_sub(1);
@@ -412,18 +422,47 @@ impl CipherBoxFS {
                             continue;
                         }
                     };
-                    // Cap concurrent resolution tasks to avoid network thrashing in large folders
+                    // Cap concurrent resolution tasks to avoid network thrashing in large folders.
+                    // D-09: entries exceeding the cap are pushed onto pending_fp_resolves (a
+                    // VecDeque) instead of being silently dropped. The queue is drained first
+                    // on each refresh cycle so nothing is lost between cycles.
                     const MAX_CONCURRENT_FP_RESOLVES: usize = 10;
                     let mut spawned = 0;
-                    for (ino, fp_ipns) in unresolved {
-                        if self.resolving_file_pointers.contains(&ino) {
+
+                    // Drain pending_fp_resolves first (entries that overflowed in a prior cycle).
+                    let mut pending_drain: Vec<(u64, String)> = Vec::new();
+                    while let Some(entry) = self.pending_fp_resolves.pop_front() {
+                        if self.resolving_file_pointers.contains(&entry.0) {
+                            continue; // Already in-flight from a prior cycle
+                        }
+                        if spawned >= MAX_CONCURRENT_FP_RESOLVES {
+                            // Still over cap — put it back at the front and stop draining
+                            self.pending_fp_resolves.push_front(entry);
+                            break;
+                        }
+                        pending_drain.push(entry);
+                        spawned += 1;
+                    }
+
+                    // Build the full list of entries to spawn: drained-from-queue first,
+                    // then fresh unresolved entries (up to the remaining cap).
+                    // Entries exceeding the cap are pushed onto pending_fp_resolves.
+                    for (fp_ino, fp_ipns) in unresolved {
+                        if self.resolving_file_pointers.contains(&fp_ino) {
                             continue; // Already in-flight
                         }
                         if spawned >= MAX_CONCURRENT_FP_RESOLVES {
-                            break; // Remaining will be picked up on next refresh cycle
+                            // D-09: push to continuation queue instead of silent drop.
+                            self.pending_fp_resolves.push_back((fp_ino, fp_ipns));
+                            continue;
                         }
-                        self.resolving_file_pointers.insert(ino);
+                        pending_drain.push((fp_ino, fp_ipns));
                         spawned += 1;
+                    }
+
+                    // Spawn tasks for all entries collected (drained queue + fresh, up to cap).
+                    for (fp_ino, fp_ipns) in pending_drain {
+                        self.resolving_file_pointers.insert(fp_ino);
                         let api = self.api.clone();
                         let tx = self.filepointer_tx.clone();
                         self.rt.spawn(async move {
@@ -445,11 +484,11 @@ impl CipherBoxFS {
                                 Ok(Ok(fm)) => {
                                     log::debug!(
                                         "FilePointer async resolved for ino {} (cid={})",
-                                        ino,
+                                        fp_ino,
                                         &fm.cid[..fm.cid.len().min(12)]
                                     );
                                     let _ = tx.send(PendingFilePointer::Success {
-                                        ino,
+                                        ino: fp_ino,
                                         cid: fm.cid,
                                         encrypted_file_key: fm.file_key_encrypted,
                                         iv: fm.file_iv,
@@ -459,16 +498,20 @@ impl CipherBoxFS {
                                     });
                                 }
                                 Ok(Err(e)) => {
-                                    log::warn!("FilePointer resolve failed for ino {}: {}", ino, e);
-                                    let _ = tx.send(PendingFilePointer::Failure { ino });
+                                    log::warn!(
+                                        "FilePointer resolve failed for ino {}: {}",
+                                        fp_ino,
+                                        e
+                                    );
+                                    let _ = tx.send(PendingFilePointer::Failure { ino: fp_ino });
                                 }
                                 Err(_) => {
                                     log::warn!(
                                         "FilePointer resolve timed out for ino {} ({}s)",
-                                        ino,
+                                        fp_ino,
                                         NETWORK_TIMEOUT.as_secs()
                                     );
-                                    let _ = tx.send(PendingFilePointer::Failure { ino });
+                                    let _ = tx.send(PendingFilePointer::Failure { ino: fp_ino });
                                 }
                             }
                         });

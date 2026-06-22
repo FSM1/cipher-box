@@ -63,8 +63,13 @@ pub struct UploadComplete {
 
 /// Spawn a background metadata refresh task that resolves IPNS, fetches content,
 /// decrypts metadata, and sends the result (success or failure) over `tx`.
-/// On any error path, sends `PendingRefresh::Failure` so the caller's
-/// `refreshing_metadata` set is always cleaned up.
+/// On any error path (including timeout), sends `PendingRefresh::Failure` so the
+/// caller's `refreshing_metadata` set is ALWAYS cleaned up (D-10).
+///
+/// D-10: the inner async block is wrapped in `tokio::time::timeout(NETWORK_TIMEOUT, ...)`
+/// matching the FP-resolve timeout pattern in `fs.rs`. A hung resolve/fetch can no
+/// longer hold `refreshing_metadata` indefinitely — the Elapsed arm sends Failure
+/// so the next refresh cycle can proceed.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub fn spawn_metadata_refresh(
     rt: &tokio::runtime::Handle,
@@ -75,22 +80,39 @@ pub fn spawn_metadata_refresh(
     folder_key: zeroize::Zeroizing<Vec<u8>>,
 ) {
     rt.spawn(async move {
-        let result: Result<(cipherbox_core::folder::FolderMetadata, String), String> = async {
-            let resolve_resp = cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name)
-                .await
-                .map_err(|e| format!("resolve: {}", e))?;
-            let encrypted_bytes =
-                cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid)
-                    .await
-                    .map_err(|e| format!("fetch: {}", e))?;
-            let metadata = cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
-                &encrypted_bytes,
-                &folder_key,
+        // D-10: bound the entire refresh with NETWORK_TIMEOUT so a hung resolve/fetch
+        // never holds refreshing_metadata open indefinitely.
+        let result: Result<(cipherbox_core::folder::FolderMetadata, String), String> =
+            match tokio::time::timeout(
+                crate::runtime::NETWORK_TIMEOUT,
+                async {
+                    let resolve_resp = cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name)
+                        .await
+                        .map_err(|e| format!("resolve: {}", e))?;
+                    let encrypted_bytes =
+                        cipherbox_api_client::ipfs::fetch_content(&api, &resolve_resp.cid)
+                            .await
+                            .map_err(|e| format!("fetch: {}", e))?;
+                    let metadata = cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
+                        &encrypted_bytes,
+                        &folder_key,
+                    )
+                    .map_err(|e| format!("decrypt: {}", e))?;
+                    Ok((metadata, resolve_resp.cid))
+                },
             )
-            .map_err(|e| format!("decrypt: {}", e))?;
-            Ok((metadata, resolve_resp.cid))
-        }
-        .await;
+            .await
+            {
+                Ok(inner) => inner,
+                Err(_elapsed) => {
+                    // D-10: timeout elapsed — map to Err so the Failure arm below
+                    // sends PendingRefresh::Failure and always clears refreshing_metadata.
+                    Err(format!(
+                        "metadata refresh timed out after {}s",
+                        crate::runtime::NETWORK_TIMEOUT.as_secs()
+                    ))
+                }
+            };
 
         match result {
             Ok((metadata, cid)) => {

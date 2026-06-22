@@ -115,6 +115,7 @@ pub(crate) fn make_test_fs_with_keypair(
         filepointer_rx,
         filepointer_tx,
         resolving_file_pointers: HashSet::new(),
+        pending_fp_resolves: std::collections::VecDeque::new(), // D-09
         pending_content: HashMap::new(),
         upload_rx,
         upload_tx,
