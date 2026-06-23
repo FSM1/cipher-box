@@ -256,17 +256,23 @@ mod tests {
 
     #[test]
     fn bind_verified_legacy_returns_legacy() {
-        // None verdict → Legacy error.
+        // None verdict → Legacy { cid, sequence_number } carrying the input response fields.
         let resp = IpnsResolveResponse {
             success: true,
             cid: "bafyLEGACY".to_string(),
-            sequence_number: "1".to_string(),
+            sequence_number: "7".to_string(),
             signature_v2: None,
             data: None,
             pub_key: None,
         };
         let err = bind_verified(&resp, None).unwrap_err();
-        assert!(matches!(err, VerifyError::Legacy));
+        match err {
+            VerifyError::Legacy { cid, sequence_number } => {
+                assert_eq!(cid, resp.cid, "Legacy must carry resp.cid");
+                assert_eq!(sequence_number, resp.sequence_number, "Legacy must carry resp.sequence_number");
+            }
+            other => panic!("expected VerifyError::Legacy, got {:?}", other),
+        }
     }
 
     #[test]
