@@ -10,7 +10,7 @@
 //! `cipherbox-crypto` cannot dev-depend on either without a cycle. `cipherbox-fuse`
 //! already depends on both, making it the cycle-free home for this test (D-12).
 //!
-//! See: tests/vectors/ipns/verify.json for the 8 cases (D-11).
+//! See: tests/vectors/ipns/verify.json for the 8 cases (D-11; case 8 expected_result updated in Phase 59 Finding F).
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -122,8 +122,10 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
                 return "invalid".to_string();
             }
 
-            // D-07: embedded seq must match response sequence_number, with the documented
-            // first-publish skew allowance (resp_seq==1 && embedded==0) — mirrors bind_verified.
+            // D-07: embedded seq must match response sequence_number (strict equality).
+            // The first-publish skew allowance (resp_seq==1 && embedded==0) was removed in
+            // Phase 59 Finding F: FUSE now embeds 1 on first publish, unifying with the TS SDK.
+            // Mirrors the strict equality in bind_verified after skew-allowance removal.
             let resp_seq = match resp.sequence_number.parse::<u64>() {
                 Ok(s) => s,
                 Err(e) => {
@@ -131,7 +133,7 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
                     return "invalid".to_string();
                 }
             };
-            let seq_ok = embedded_seq == resp_seq || (resp_seq == 1 && embedded_seq == 0);
+            let seq_ok = embedded_seq == resp_seq;
             if !seq_ok {
                 eprintln!(
                     "[{}] seq binding mismatch: embedded={}, response={}",
@@ -157,6 +159,10 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
 /// Both are exercised against vectors whose bytes were produced by the JS
 /// generator (`scripts/gen-ipns-verify-vectors.ts`), so any Rust↔JS drift
 /// in byte-construction fails this test — satisfying D-12.
+///
+/// Phase 59 Finding F: case 8 ("first-publish-skew") expected_result changed from
+/// "valid" to "invalid" — strict embedded_seq == resp_seq now applies universally
+/// (skew allowance removed; FUSE first-publish now embeds 1, matching the TS SDK).
 #[test]
 fn ipns_verify_cross_language() {
     let vectors: Vec<IpnsVerifyVector> = load_vectors("ipns/verify.json");

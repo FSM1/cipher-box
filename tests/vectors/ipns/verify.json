@@ -70,13 +70,13 @@
     "expected_result": "legacy"
   },
   {
-    "description": "first-publish-skew — valid sig over CBOR data with seq=0, response sequenceNumber is 1",
+    "description": "first-publish-skew — valid sig over CBOR data with seq=0, response sequenceNumber is 1 (now rejected: strict equality after Phase 59 Finding F)",
     "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
     "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
     "sequence_number": "1",
     "signature_v2": "6fFNCGqZvMwGtaVCyReFxm15je5WOhwSwm5Q6qaHyIxNpwoaA7tNd20l4zrLEtwrYZCkJzx7s9QKkW0ESKVqAw==",
     "data": "pWNUVEwbAAAARdlkuABlVmFsdWVYQS9pcGZzL2JhZnliZWlnZHlyenQ1c2ZwN3VkbTdodTc2dWg3eTI2bmYzZWZ1eWxxYWJmM29jbGd0cXk1NWZiemRpaFNlcXVlbmNlAGhWYWxpZGl0eVgeMjA5OS0wMS0wMVQwMDowMDowMC4wMDAwMDAwMDBabFZhbGlkaXR5VHlwZQA=",
     "pub_key": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
-    "expected_result": "valid"
+    "expected_result": "invalid"
   }
 ]

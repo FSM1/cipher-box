@@ -15,7 +15,7 @@ pub fn next_file_publish_sequence(
     current_sequence: Option<u64>,
 ) -> Result<u64, String> {
     if is_first_publish {
-        return Ok(0);
+        return Ok(1);
     }
 
     current_sequence
@@ -219,9 +219,11 @@ mod tests {
     use super::next_file_publish_sequence;
 
     #[test]
-    fn next_file_publish_sequence_starts_new_records_at_zero() {
-        assert_eq!(next_file_publish_sequence(true, None).unwrap(), 0);
-        assert_eq!(next_file_publish_sequence(true, Some(99)).unwrap(), 0);
+    fn next_file_publish_sequence_starts_new_records_at_one() {
+        // First-publish embeds sequence 1 (matching the TS SDK `file/index.ts` which embeds 1n
+        // and the API comment at ipns.service.ts:357 that assumes clients compute 0+1=1).
+        assert_eq!(next_file_publish_sequence(true, None).unwrap(), 1);
+        assert_eq!(next_file_publish_sequence(true, Some(99)).unwrap(), 1);
     }
 
     #[test]

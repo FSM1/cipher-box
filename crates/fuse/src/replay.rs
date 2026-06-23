@@ -589,12 +589,13 @@ async fn fetch_merge_publish_parent(
     }
 }
 
-/// Publish a child folder's initial empty `FolderMetadata` (seq 0) during replay.
+/// Publish a child folder's initial empty `FolderMetadata` (seq 1) during replay.
 ///
 /// Mirrors the live mkdir background publish (`write_ops.rs`) and
 /// [`publish_file_metadata`]: encrypt the empty `{ version: "v2", children: [] }`
-/// metadata with the child folder key, upload, create a seq-0 IPNS record signed by the
-/// child IPNS key, enroll the child key with the TEE on first publish, then publish.
+/// metadata with the child folder key, upload, create a seq-1 IPNS record signed by the
+/// child IPNS key (Phase 59 Finding F: unified with TS SDK first-publish convention),
+/// enroll the child key with the TEE on first publish, then publish.
 /// Closes the crash window where `MkdirPublish` was fsynced but the child's own IPNS
 /// record was never created — which would otherwise leave the merged parent pointing at
 /// an unresolvable child IPNS name.
@@ -624,7 +625,7 @@ async fn publish_child_folder_metadata(
         .try_into()
         .map_err(|_| "Invalid child IPNS key length".to_string())?;
     let value = format!("/ipfs/{}", initial_cid);
-    let record = cipherbox_core::ipns::create_ipns_record(&ipns_key_arr, &value, 0, 86_400_000)
+    let record = cipherbox_core::ipns::create_ipns_record(&ipns_key_arr, &value, 1, 86_400_000)
         .map_err(|e| format!("child IPNS record creation failed: {}", e))?;
     let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
         .map_err(|e| format!("child IPNS marshal failed: {}", e))?;
@@ -662,9 +663,9 @@ async fn publish_child_folder_metadata(
             );
         }
     }
-    coordinator.record_publish(child_ipns_name, 0);
+    coordinator.record_publish(child_ipns_name, 1);
     log::info!(
-        "replay: child folder IPNS published (seq 0) for {}",
+        "replay: child folder IPNS published (seq 1) for {}",
         child_ipns_name
     );
     Ok(())
@@ -1019,10 +1020,10 @@ async fn replay_upload_entry(
 
                 // F3: determine whether the per-file IPNS record already exists. If the original
                 // upload failed before ever creating it, resolve returns not-found and this is a
-                // FIRST publish (seq 0 + TEE enrollment), mirroring the live path
-                // (operations.rs::publish_file_metadata). Otherwise it is an update (seq + 1).
-                // A transient resolve error (not "not found") is propagated so the entry is
-                // retained for retry rather than creating a duplicate record at seq 0.
+                // FIRST publish (seq 1 + TEE enrollment — Phase 59 Finding F: unified with TS SDK),
+                // mirroring the live path (operations.rs::publish_file_metadata). Otherwise it is
+                // an update (seq + 1). A transient resolve error (not "not found") is propagated
+                // so the entry is retained for retry rather than creating a duplicate record at seq 1.
                 // #19: classification is centralised in resolve_ipns_for_replay; the typed
                 // IpnsResolveOutcome replaces the brittle .contains("not found") inline match.
                 let is_first_publish = {
@@ -1033,7 +1034,7 @@ async fn replay_upload_entry(
                         IpnsResolveOutcome::Found(_) => false,
                         IpnsResolveOutcome::NotFound => {
                             log::info!(
-                                "replay: per-file IPNS '{}' not found — creating as first publish (seq 0)",
+                                "replay: per-file IPNS '{}' not found — creating as first publish (seq 1)",
                                 file_meta_ipns_name
                             );
                             true
@@ -1430,7 +1431,8 @@ mod tests {
     // without any network access. This test exercises the classification → sequence
     // computation directly, mirroring the branch logic inside replay_upload_entry.
     //
-    // NotFound  -> is_first_publish=true,  new_seq=0  (next_file_publish_sequence(true, None))
+    // NotFound  -> is_first_publish=true,  new_seq=1  (next_file_publish_sequence(true, None))
+    //             Phase 59 Finding F: FUSE now embeds 1 on first publish (was 0).
     // Found(7)  -> is_first_publish=false, new_seq=8  (current_seq + 1)
     // Error(_)  -> Err propagated (entry retained, no sequence produced)
     #[test]
@@ -1438,7 +1440,7 @@ mod tests {
         use super::super::next_file_publish_sequence;
         use crate::error::IpnsResolveOutcome;
 
-        // NotFound -> first publish at seq 0
+        // NotFound -> first publish at seq 1 (Phase 59 Finding F: unify with TS SDK convention)
         let outcome_not_found = IpnsResolveOutcome::NotFound;
         let (is_first, new_seq) = match outcome_not_found {
             IpnsResolveOutcome::Found(seq) => {
@@ -1448,7 +1450,7 @@ mod tests {
             IpnsResolveOutcome::Error(e) => panic!("unexpected Error variant: {}", e),
         };
         assert!(is_first, "NotFound must set is_first_publish=true");
-        assert_eq!(new_seq, 0, "NotFound must produce seq 0");
+        assert_eq!(new_seq, 1, "NotFound must produce seq 1 (Phase 59 Finding F: unified with TS SDK)");
 
         // Found(7) -> update at seq 8
         let outcome_found = IpnsResolveOutcome::Found(7);
