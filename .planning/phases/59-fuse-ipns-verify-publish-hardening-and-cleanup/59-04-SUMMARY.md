@@ -46,13 +46,15 @@ completed: "2026-06-23"
 
 FUSE first-publish embedded sequence unified to 1 (matching TS SDK and API convention); verify.rs strict equality closes the skew window; six Phase 59 source todos archived.
 
+> **Post-revert amendment (2026-06-23):** the resolve-side hardening described below as "delivered" — F.3 (skew-allowance removal / strict `embedded_seq == resp_seq` in `verify.rs`) and F.4 (case-8 vector flipped to `invalid`) — was **REVERTED** in commit `0256ea486` after the deep code review caught CR-01 (strict equality would fail-close resolution of every freshly-created folder while the live `mkdir`/Windows paths still embed 0). The forward embed-1 changes in `publish.rs`/`replay.rs` are **KEPT**. The full cross-layer cutover (mkdir/windows embed 1 + existing-record republish migration + strict equality + case-8 `invalid`) is **deferred to Phase 60** — see `59-VERIFICATION.md` Post-Review Amendment and `.planning/todos/pending/2026-06-23-phase60-ipns-first-publish-strict-equality-cutover.md`. The frontmatter `provides`/`patterns` and the F.3/F.4 lines below reflect the pre-revert execution state, retained as the historical record.
+
 ## Performance
 
 - **Duration:** ~15 min
 - **Started:** 2026-06-23T20:30:00Z
 - **Completed:** 2026-06-23T21:00:00Z
 - **Tasks:** 2
-- **Files modified:** 7 (5 Rust/JSON + 6 todos via git mv)
+- **Files modified:** 11 (5 Rust/JSON + 6 todos via git mv)
 
 ## Accomplishments
 

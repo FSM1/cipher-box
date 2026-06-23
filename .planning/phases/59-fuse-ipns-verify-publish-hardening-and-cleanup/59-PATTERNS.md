@@ -513,5 +513,5 @@ Command: `cargo check -p cipherbox-fuse --features winfsp` (macOS gate for type 
 ## Metadata
 
 **Analog search scope:** `crates/fuse/src/` (sibling files only — all findings are intra-crate)
-**Files scanned:** 9 source files
+**Files scanned:** 8 source files (the 8 modified `crates/fuse/src/` files; the cross-language vector test under `tests/` and the 2 TS/JSON fixtures are out of the `src/` analog scope)
 **Pattern extraction date:** 2026-06-23
