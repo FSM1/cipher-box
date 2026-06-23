@@ -222,9 +222,12 @@ impl CipherBoxFS {
                     let ipns_key_encrypted = if let Some(h) = file_ipns_key_encrypted_hex {
                         Some(h.clone())
                     } else if let Some(key) = file_ipns_private_key {
-                        cipherbox_crypto::wrap_key(key, &self.public_key)
-                            .ok()
-                            .map(|w| hex::encode(&w))
+                        Some(
+                            hex::encode(
+                                cipherbox_crypto::wrap_key(key, &self.public_key)
+                                    .map_err(|e| format!("Wrap IPNS key: {}", e))?,
+                            ),
+                        )
                     } else {
                         None
                     };
