@@ -1,0 +1,109 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e0520628baf3",
+  "session_id": "d71a5998-d7f6-46df-b358-10dd6a4b8937",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T16:39:54.701274Z",
+  "branch": "chore/staging-kubo-tuning",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "63ec39df2def",
+  "checkpoint_transcript_start": 143,
+  "transcript_lines_at_start": 143,
+  "token_usage": {
+    "input_tokens": 4951,
+    "cache_creation_tokens": 88782,
+    "cache_read_tokens": 4272934,
+    "output_tokens": 65319,
+    "api_call_count": 27
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Fix the structural failure where release-please's post-merge workflow attempted to push a synced Cargo.lock directly to protected main branch (always rejected by GH006), and unblock PR #548 whose Lint was failing due to stale release-as pins.",
+    "outcome": "PR #550 created with a two-part fix: a new pre-merge workflow (cargo-lock-release-sync.yml) that syncs Cargo.lock onto the release-please PR branch before merge, and a reworked post-merge fallback that opens a chore PR instead of pushing to main. PR #548 was unblocked by removing 7 stale release-as pins from release-please-config.json and completing the Cargo.lock sync (core + fuse crates).",
+    "learnings": {
+      "repo": [
+        "classic branch protection with enforce_admins:true + 13 required checks blocks all direct pushes to main, including from GitHub App tokens — per-App bypass actors only exist on rulesets, not classic protection",
+        "release-please does NOT auto-remove release-as pins after a release ships; removal is always manual (precedent: PR #521 chore(ci): break sdk changelog self-compare loop)",
+        "check-stale-release-as.js flags staleness via strict equality: release-as === manifest version",
+        "pr-release-preview.js (Section 7.5, lines 644-652) preserves release-as entries inherited from origin/main, so stale pins on main propagate to every PR branch and never auto-clear",
+        "cipherbox-desktop Rust crate (src-tauri/Cargo.toml) versions independently from the apps/desktop node package — Cargo.lock must be checked against Cargo.toml, not the node manifest",
+        "No CI job uses --locked on workspace builds, so a stale Cargo.lock does not break CI directly",
+        "The root workspace has a single Cargo.lock covering all 6 crates including cipherbox-desktop"
+      ],
+      "code": [
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 644,
+          "end_line": 652,
+          "finding": "Bot preserves release-as entries from origin/main when building preview, causing stale pins to propagate indefinitely to all PR branches"
+        },
+        {
+          "path": ".github/scripts/check-stale-release-as.js",
+          "finding": "Staleness check uses strict equality (release-as === manifest version), comparing release-please-config.json against .release-please-manifest.json"
+        }
+      ],
+      "workflow": [
+        "git verify-commit showing 'N' status does not mean unsigned — it means allowedSignersFile is not configured locally; SSH signatures are still present",
+        "When diagnosing CI failures, read the actual log output rather than assuming the reported symptom matches the hypothesis — the #548 Lint failure was release-as pins, not Cargo.lock",
+        "Pre-merge workflow hooks on pull_request with synchronize trigger are idempotent-safe for release-please PR branches since release-please force-pushes re-trigger them",
+        "zizmor requires permission-contents: write scoped to jobs that push, and flags github-app token scope as High severity"
+      ]
+    },
+    "friction": [
+      "Multiple bash commands were needed to get a simple Cargo.lock vs Cargo.toml comparison due to shell variable scoping issues across tool calls",
+      "Initial diagnosis incorrectly flagged cipherbox-desktop Cargo.lock as stale by comparing against the node manifest version (0.44.0) instead of the Rust crate version (0.35.0)",
+      "The post-merge retry/rebase loop in release-please.yml was silently futile — logs showed 'Current branch main is up to date' before each GH006 rejection, masking that the failure was structural not transient",
+      "actionlint had a pre-existing SC2129 style nit on an untouched step that couldn't be cleanly fixed in scope"
+    ],
+    "open_items": [
+      "The node-manifest-vs-Rust-crate version gap for cipherbox-desktop (apps/desktop 0.44.0 vs crates/cipherbox-desktop 0.35.0) may indicate a release-please extra-files propagation issue — flagged but not investigated",
+      "PR #550 (cargo-lock-release-sync fix) was created but not yet merged — needs review and merge before next Rust crate release",
+      "PR #548 (staging-kubo-tuning) had commit staged but not yet pushed at end of transcript — needs push to complete unblocking",
+      "Migrating from classic branch protection to rulesets would enable per-App bypass actors and simplify future release automation, but was explicitly deferred as posture-weakening"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2650,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2650,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2650,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
