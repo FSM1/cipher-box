@@ -563,6 +563,7 @@ impl InodeTable {
                         match &existing.kind {
                             InodeKind::File {
                                 file_meta_resolved: true,
+                                file_meta_ipns_name: existing_ipns_name,
                                 ..
                             } => {
                                 // Compare the incoming modified_at with the
@@ -588,18 +589,10 @@ impl InodeTable {
                                     // even though mtime is unchanged.  A swapped remote
                                     // pointer under the same display name + mtime would
                                     // otherwise leave the cache serving stale CID/keys.
-                                    let same_pointer = match &existing.kind {
-                                        InodeKind::File {
-                                            file_meta_ipns_name,
-                                            ..
-                                        } => {
-                                            file_meta_ipns_name.as_deref()
-                                                == Some(
-                                                    file_pointer.file_meta_ipns_name.as_str(),
-                                                )
-                                        }
-                                        _ => false,
-                                    };
+                                    // The outer arm already guarantees File, so read
+                                    // file_meta_ipns_name directly (no redundant re-match).
+                                    let same_pointer = existing_ipns_name.as_deref()
+                                        == Some(file_pointer.file_meta_ipns_name.as_str());
                                     if same_pointer {
                                         (true, Some(existing.kind.clone()))
                                     } else {
@@ -647,6 +640,45 @@ impl InodeTable {
                                 }
                                 _ => (None, None, None, false),
                             };
+                        // CR-553: when the pointer identity changed (same_pointer == false)
+                        // the replacement is a different file at a new IPNS identity. Unwrap
+                        // the NEW pointer's ipns_private_key_encrypted into the raw signing key
+                        // (mirroring the fresh-FilePointer path below) instead of dropping it to
+                        // None. Otherwise resolve_file_pointer carries None forward and the
+                        // swapped file can be read but never publishes per-file IPNS updates and
+                        // is skipped on cross-folder-move re-encryption (both read the raw key
+                        // directly from this inode field). Both swap entry points (same-mtime and
+                        // mtime-change with a changed pointer) flow through this rebuild branch.
+                        let swapped_ipns_key = if same_pointer {
+                            None
+                        } else {
+                            file_pointer.ipns_private_key_encrypted.as_ref().and_then(
+                                |encrypted_hex| match hex::decode(encrypted_hex) {
+                                    Ok(bytes) => {
+                                        match cipherbox_crypto::ecies::unwrap_key(
+                                            &bytes,
+                                            private_key,
+                                        ) {
+                                            Ok(key) => Some(key),
+                                            Err(e) => {
+                                                log::error!(
+                                                    "File '{}': failed to decrypt swapped ipnsPrivateKeyEncrypted: {}",
+                                                    file_pointer.name, e
+                                                );
+                                                None
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "File '{}': invalid swapped ipnsPrivateKeyEncrypted hex: {}",
+                                            file_pointer.name, e
+                                        );
+                                        None
+                                    }
+                                },
+                            )
+                        };
                         InodeKind::File {
                             cid: String::new(),
                             encrypted_file_key: String::new(),
@@ -659,7 +691,11 @@ impl InodeTable {
                                 Some(file_pointer.file_meta_ipns_name.clone())
                             },
                             file_meta_resolved: false,
-                            file_ipns_private_key: if same_pointer { prev_ipns_key } else { None },
+                            file_ipns_private_key: if same_pointer {
+                                prev_ipns_key
+                            } else {
+                                swapped_ipns_key
+                            },
                             file_ipns_key_encrypted_hex: if same_pointer {
                                 prev_ipns_key_enc_hex
                             } else {
@@ -2099,6 +2135,82 @@ mod tests {
                 assert!(
                     !*file_meta_resolved,
                     "Regression guard: changed mtime must still force re-resolution"
+                );
+            }
+            _ => panic!("Expected File kind"),
+        }
+    }
+
+    /// CR-553 (PR #553 CodeRabbit Major, workflow-verified real bug): a pointer swap
+    /// must hydrate the NEW pointer's raw IPNS signing key from its
+    /// `ipns_private_key_encrypted`, not leave `file_ipns_private_key: None`. With None,
+    /// `resolve_file_pointer` carries None forward (file_meta_resolved flips to true while
+    /// the raw key stays None), so the swapped file can be read but never publishes per-file
+    /// IPNS updates and is skipped on cross-folder-move re-encryption (both read the raw key
+    /// directly from this inode field).
+    #[test]
+    fn upsert_children_pointer_swap_hydrates_new_ipns_signing_key() {
+        // Real ECIES keypair so wrap/unwrap round-trips (a zero key is not a valid point).
+        let (sk, pk) = ecies::utils::generate_keypair();
+        let private_key = sk.serialize().to_vec(); // 32 bytes
+        let public_key = pk.serialize().to_vec(); // 33 bytes (compressed)
+
+        let mut table = InodeTable::new();
+        let old_ipns = "k51old-swap-file";
+        let new_ipns = "k51new-swap-file";
+        let mtime_ms = 7000u64;
+        let _file_ino = seed_resolved_file(&mut table, old_ipns, mtime_ms);
+
+        // The NEW pointer's per-file IPNS private key, wrapped to public_key.
+        let new_file_ipns_key = vec![3u8; 32];
+        let wrapped = cipherbox_crypto::ecies::wrap_key(&new_file_ipns_key, &public_key).unwrap();
+        let encrypted_hex = hex::encode(&wrapped);
+
+        // Refresh with a DIFFERENT ipns_name (pointer swap) under the SAME mtime,
+        // carrying the new pointer's encrypted IPNS key.
+        let meta_v2 = cipherbox_core::FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![cipherbox_core::FolderChild::File(
+                cipherbox_core::folder::FilePointer {
+                    id: "fp-swap".to_string(),
+                    name: "report.txt".to_string(),
+                    file_meta_ipns_name: new_ipns.to_string(),
+                    ipns_private_key_encrypted: Some(encrypted_hex),
+                    created_at: 1000,
+                    modified_at: mtime_ms, // SAME mtime — only pointer identity changed
+                },
+            )],
+        };
+        table
+            .populate_folder(ROOT_INO, &meta_v2, &private_key, &public_key, true)
+            .unwrap();
+
+        let root = table.get(ROOT_INO).unwrap();
+        let refreshed_ino = root.children.as_ref().unwrap()[0];
+        let refreshed = table.get(refreshed_ino).unwrap();
+        match &refreshed.kind {
+            InodeKind::File {
+                file_meta_resolved,
+                file_meta_ipns_name,
+                file_ipns_private_key,
+                ..
+            } => {
+                assert!(
+                    !*file_meta_resolved,
+                    "pointer swap must mark the file unresolved for re-resolution"
+                );
+                assert_eq!(
+                    file_meta_ipns_name.as_deref(),
+                    Some(new_ipns),
+                    "the new pointer identity must be recorded"
+                );
+                let raw = file_ipns_private_key.as_ref().expect(
+                    "CR-553: swapped pointer's raw IPNS signing key must be hydrated, not None",
+                );
+                assert_eq!(
+                    raw.as_slice(),
+                    new_file_ipns_key.as_slice(),
+                    "hydrated key must equal the unwrapped new-pointer key"
                 );
             }
             _ => panic!("Expected File kind"),
