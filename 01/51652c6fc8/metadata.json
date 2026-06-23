@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "0151652c6fc8",
+  "strategy": "manual-commit",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-04-PLAN.md",
+    ".planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-04-SUMMARY.md",
+    ".planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-PATTERNS.md",
+    ".planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-VALIDATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/01/51652c6fc8/0/metadata.json",
+      "transcript": "/01/51652c6fc8/0/full.jsonl",
+      "content_hash": "/01/51652c6fc8/0/content_hash.txt",
+      "prompt": "/01/51652c6fc8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12818,
+    "cache_creation_tokens": 197783,
+    "cache_read_tokens": 4543779,
+    "output_tokens": 46398,
+    "api_call_count": 41
+  }
+}
