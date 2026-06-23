@@ -1052,10 +1052,20 @@ Scope (captured todos):
 - [ ] Unify first-publish IPNS embedded-sequence convention (FUSE 0 vs SDK 1) + verify TEE re-sign path [bridges to Phase 60] — `2026-06-22-ipns-first-publish-sequence-convention.md`
 
 Plans:
+**Wave 1**
 
 - [ ] 59-01-PLAN.md — Findings A+B: propagate file IPNS key-wrap error (fs.rs) + re-resolve file inode on changed file_meta_ipns_name (inode.rs) [tdd]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 59-02-PLAN.md — Finding C: migrate VerifyError::Legacy to carry { cid, sequence_number } across all 9 arms (atomic enum migration) [tdd]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 59-03-PLAN.md — Findings D+E: collapse dead journal_entry branch + content_ops dead bindings, remove dead signature_verified field, fix is_ipns_not_found test + vector fixture [execute]
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 59-04-PLAN.md — Finding F: unify FUSE first-publish embedded sequence to 1 + remove verify.rs skew allowance; archive the 6 source todos [execute]
 
 Verification gate: `cargo test` (fuse + winfsp feature sets), winfsp Windows CI, full SDK E2E (local; redis 6380), desktop E2E (dispatch-gated).
