@@ -656,7 +656,9 @@ async fn publish_child_folder_metadata(
     {
         cipherbox_api_client::PublishResult::Success => {}
         cipherbox_api_client::PublishResult::Conflict { .. } => {
-            // Seq 0 should never conflict — log and continue (matches the live mkdir path).
+            // A brand-new child IPNS name should never conflict on first publish — log and
+            // continue. (Replay embeds seq 1 here; the live mkdir path still embeds 0; both are
+            // accepted as a first publish — full embed unification deferred to Phase 60.)
             log::warn!(
                 "replay: unexpected conflict on child folder IPNS publish for {}",
                 child_ipns_name
@@ -672,7 +674,7 @@ async fn publish_child_folder_metadata(
 }
 
 /// Replay a single `MkdirPublish` journal entry.
-/// Re-publishes the child folder's seq-0 IPNS record (idempotent), then fetches current
+/// Re-publishes the child folder's first-publish IPNS record at seq 1 (idempotent), then fetches current
 /// parent metadata, merges the child folder entry, and CAS-publishes the parent.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 #[allow(clippy::too_many_arguments)]
@@ -694,7 +696,7 @@ async fn replay_mkdir_entry(
     // D-04: ECIES-encrypted directory name hex; decrypted transiently via decrypt_journal_name.
     name_encrypted_hex: &str,
     created_at_ms: u64,
-    // TEE key/epoch for child-folder first-publish enrollment when the child's seq-0 IPNS
+    // TEE key/epoch for child-folder first-publish enrollment when the child's first-publish IPNS
     // record was never created in the original (failed) session.
     tee_public_key: Option<&[u8]>,
     tee_key_epoch: Option<u32>,
@@ -728,7 +730,7 @@ async fn replay_mkdir_entry(
 
     // CR-491: re-publish the child folder's own initial (empty) FolderMetadata before
     // merging it into the parent. A crash after the MkdirPublish journal fsync but before
-    // the live background thread created the child's seq-0 IPNS record would otherwise leave
+    // the live background thread created the child's first-publish IPNS record would otherwise leave
     // the parent pointing at a child IPNS name that resolves to nothing. Idempotent: if the
     // child record already exists (publish completed pre-crash), skip; a transient resolve
     // error retains the entry for retry.
@@ -742,7 +744,7 @@ async fn replay_mkdir_entry(
         match resolve_ipns_for_replay(coordinator.as_ref(), api, child_ipns_name).await {
             IpnsResolveOutcome::Found(_) => {
                 log::info!(
-                    "replay: child folder IPNS '{}' already published — skipping seq-0 publish",
+                    "replay: child folder IPNS '{}' already published — skipping first-publish",
                     child_ipns_name
                 );
             }

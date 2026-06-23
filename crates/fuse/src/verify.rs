@@ -97,19 +97,31 @@ pub(crate) fn bind_verified(
                 )));
             }
 
-            // D-07: embedded sequence must match response sequence_number (strict equality).
+            // D-07: embedded sequence must match response sequence_number.
             //
-            // The historical first-publish skew allowance (resp_seq == 1 && embedded_seq == 0)
-            // is removed as of Phase 59 Finding F: FUSE now embeds 1 on first publish
-            // (next_file_publish_sequence returns 1; replay.rs child-folder first-publish also
-            // embeds 1), matching the TS SDK convention. All clients now embed 1 on first
-            // publish, so the skew window no longer exists. Strict equality tightens the
-            // anti-rollback check (T-59-10).
+            // First-publish exception (mirrors the API's publish-side D-09 gate in
+            // ipns.service.ts::upsertFolderIpns): on a brand-new IPNS name the API accepts an
+            // embedded sequence of 0 OR 1 and unconditionally stores DB sequenceNumber=1. The
+            // Rust/FUSE publish paths embed the IPNS-native 0 (next_file_publish_sequence, the
+            // first child-folder publish) while the TS SDK embeds 1 — both legitimate per D-09.
+            // So a resolved first-generation record (resp_seq == 1) may legitimately carry an
+            // embedded 0. Accept that single documented skew; require strict equality for every
+            // other sequence. The cid binding above stays strict and DB CID remains the
+            // authoritative trust root, so this does not widen the attack surface: a record can
+            // only reach the network with embedded 0 while DB is 1 (the first-publish window).
+            //
+            // NOTE (Phase 59 Finding F / CR-01): dropping this allowance for strict
+            // `embedded_seq == resp_seq` is DEFERRED to Phase 60. The interactive folder-create
+            // paths (write_ops/implementation/mkdir.rs, platform/windows/write_ops.rs) still
+            // embed 0, and existing signed records embed 0; tightening here before those publish
+            // sites are unified to 1 and existing records are republished would fail-close
+            // resolution of every freshly-created folder. Keep the skew allowance until the
+            // Phase 60 cross-layer cutover lands the publish-side change + a republish migration.
             let resp_seq = resp
                 .sequence_number
                 .parse::<u64>()
                 .map_err(|e| VerifyError::Invalid(format!("parse response sequence_number: {}", e)))?;
-            let seq_ok = embedded_seq == resp_seq;
+            let seq_ok = embedded_seq == resp_seq || (resp_seq == 1 && embedded_seq == 0);
             if !seq_ok {
                 return Err(VerifyError::Invalid(format!(
                     "IPNS sequence binding mismatch: embedded={}, response seq={}",
@@ -221,6 +233,30 @@ mod tests {
     fn bind_verified_seq_mismatch_returns_invalid() {
         // Valid signature verdict, cid matches, but embedded seq != response seq — Invalid.
         let resp = make_resp_with_cbor("bafyCID", 99, "bafyCID", 5);
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(ref msg) if msg.contains("sequence binding mismatch")),
+            "expected sequence binding mismatch, got: {:?}", err
+        );
+    }
+
+    #[test]
+    fn bind_verified_first_publish_seq_skew_returns_ok() {
+        // First-publish skew (D-09 mirror): FUSE/Rust publish paths embed the IPNS-native
+        // sequence 0 while the API stores DB sequenceNumber=1. The binding must accept
+        // embedded=0 when resp_seq==1, and return the DB-authoritative seq (1) so downstream
+        // forward math (next publish = seq + 1) computes 2, not a re-sign at 1.
+        let resp = make_resp_with_cbor("bafyFIRST", 0, "bafyFIRST", 1);
+        let result = bind_verified(&resp, Some(true)).unwrap();
+        assert_eq!(result.cid, "bafyFIRST");
+        assert_eq!(result.sequence_number, 1, "returns DB-authoritative seq, not embedded 0");
+    }
+
+    #[test]
+    fn bind_verified_seq_skew_only_applies_to_first_publish() {
+        // The skew allowance is scoped to resp_seq==1. embedded=0 with resp_seq=2
+        // (a rollback or tamper, not a first publish) must still be rejected.
+        let resp = make_resp_with_cbor("bafyCID", 0, "bafyCID", 2);
         let err = bind_verified(&resp, Some(true)).unwrap_err();
         assert!(
             matches!(err, VerifyError::Invalid(ref msg) if msg.contains("sequence binding mismatch")),
