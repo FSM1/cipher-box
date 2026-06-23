@@ -49,6 +49,37 @@
         "label": "Skill: gsd:capture",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_015Dw2qhaMP2rGyccyBdmfUa",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c373bf9d920c",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 390,
+        "end": 391,
+        "entry_ids": [
+          "85fce10e-ccfe-438f-a7c1-8c8fccac5eb5"
+        ],
+        "tool_use_id": "toolu_015Dw2qhaMP2rGyccyBdmfUa"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015Dw2qhaMP2rGyccyBdmfUa"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:code-review",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
