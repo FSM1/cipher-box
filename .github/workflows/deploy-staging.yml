@@ -461,7 +461,7 @@ jobs:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
-          source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile,docker/alloy-config.river'
+          source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile,docker/alloy-config.river,docker/ipfs-init/001-provide-strategy.sh'
           target: /opt/cipherbox
           strip_components: 0
 

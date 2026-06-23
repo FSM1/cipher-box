@@ -125,7 +125,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       ipfs:
-        image: ipfs/kubo:v0.40.0
+        image: ipfs/kubo:v0.42.0
         ports:
           - 5001:5001
           - 8080:8080
@@ -301,7 +301,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       ipfs:
-        image: ipfs/kubo:v0.40.0
+        image: ipfs/kubo:v0.42.0
         ports:
           - 5001:5001
           - 8080:8080
@@ -406,7 +406,7 @@ jobs:
           --health-retries 5
 
       ipfs:
-        image: ipfs/kubo:v0.40.0
+        image: ipfs/kubo:v0.42.0
         ports:
           - 5001:5001
           - 8080:8080

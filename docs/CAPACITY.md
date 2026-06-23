@@ -3,8 +3,8 @@
 > Observed performance limits, infrastructure bottlenecks, and scaling recommendations.
 > Based on baseline data captured during Phases 18, 19, 19.2, and 22.
 >
-> **Last updated:** 2026-03-25
-> **Environment:** Single API server + single Kubo node + PostgreSQL
+> **Last updated:** 2026-06-23
+> **Environment:** Single API server + single Kubo node + someguy routing sidecar + PostgreSQL
 
 ## Table of Contents
 
@@ -21,7 +21,7 @@
 
 ### 1.1 Single-User Performance (Phase 18)
 
-Client-side round-trip timings captured against staging (4 vCPU, 8GB RAM VPS) using `curl` with a 10KB test file:
+Client-side round-trip timings captured against staging (2 vCPU, 8GB RAM VPS) using `curl` with a 10KB test file:
 
 | Operation           | p50   | p95   | p99   |
 | ------------------- | ----- | ----- | ----- |
@@ -113,6 +113,28 @@ Kubo pin latency distribution captured from staging after 20,944 pin operations 
 
 **Mean pin latency:** 1.37s (down from 1.73s pre-optimization, -20.8%)
 
+### 1.5 Re-baseline (2026-06): provider CPU and someguy contention
+
+A 2026-06 staging re-baseline (upload-throughput @ 50 clients) measured ~10 ops/s versus the 15.10 ops/s recorded in Phase 19.2 (§1.2). Object count was ruled out as the cause: a garbage-collection from 294,811 to 20,038 datastore objects did not change throughput.
+
+CPU-limit sweep (all runs share the same datastore state, `Provide.Strategy=roots`, on the 2 vCPU staging host):
+
+| ipfs cpus | someguy cpus | uploadFile p50 | uploadFile p95 | Throughput  |
+| --------- | ------------ | -------------- | -------------- | ----------- |
+| 1.0       | 1.0          | 5,779ms        | 8,001ms        | 8.71 ops/s  |
+| 1.5       | 1.0          | 4,894ms        | 6,506ms        | 10.28 ops/s |
+| 2.0       | 1.0          | 5,105ms        | 7,385ms        | 9.80 ops/s  |
+| 2.0       | 0.4          | 5,855ms        | 7,501ms        | 8.66 ops/s  |
+
+Findings:
+
+- **Two cores are the wall.** During load, ipfs and someguy together saturate the host's two cores (combined CPU 160-176% of 200%). Raising ipfs past 1.5 gives nothing (2.0 ties 1.5) because the physical cores, shared with someguy, are the ceiling. 1.5 is the measured knee (+18% over 1.0).
+- **someguy is a per-upload participant, not a parasite.** Each upload publishes two IPNS records through the API's delegated-routing client (someguy): one per-file record and one parent-folder record. Throttling someguy to 0.4 made throughput _worse_ (8.66 ops/s) by bottlenecking the publish path - it is on the critical path and must not be starved.
+- **Object count is not the throughput driver** (GC test above). It affects background provide/DHT CPU, which `Provide.Strategy=roots` already bounds to the pin-root count (~18k roots vs ~76k blocks under the default `all`).
+- **Hardware note:** the host is a 2 vCPU / 8 GB / 100 GB NVMe plan (Hostinger KVM 2) and always has been - a 4 vCPU / 8 GB host is not an offered Hostinger plan, so the "4 vCPU" figure once in §1.1 was a documentation error (now corrected). The 15.10 ops/s Phase 19.2 figure is therefore same-hardware, making the drop to ~10 ops/s a software/contention regression on the same two cores, not a hardware change.
+
+Applied remediation (PR): Kubo upgraded v0.40.0 -> v0.42.0, ipfs limits raised to `cpus: 1.5` / `memory: 3G`, `Provide.Strategy=roots` made reproducible via a `/container-init.d` script. Recommended next: defer the per-file IPNS publish off the upload critical path (§3.2, a same-hardware win), and/or upgrade to the next Hostinger tier (4 vCPU / 16 GB) to lift the two-core ceiling.
+
 ---
 
 ## 2. Infrastructure Bottlenecks
@@ -134,6 +156,8 @@ Kubo's `pin add` operation is the **dominant bottleneck**, consuming ~95% of upl
 Concurrent pins from multiple clients cause contention on the Kubo datastore. At 50 clients, throughput plateaus at ~3.4-3.7 ops/s locally and ~15-19 ops/s on staging. At 75 clients with flatfs, errors begin appearing; pebbleds eliminates this failure mode entirely.
 
 **Memory and CPU:** Kubo uses Go's goroutine scheduler. Pin operations are I/O-bound on the datastore. The pebbleds LSM-tree datastore batches writes, reducing I/O contention under concurrent load.
+
+**CPU contention (2026-06):** On the 2 vCPU staging host, Kubo's container CPU cap is the binding constraint under concurrent uploads, not datastore I/O. At a 1.0 cap Kubo pegs at 100% during load; raising it to `cpus: 1.5` yields +18% throughput (§1.5). Kubo shares the two cores with the someguy sidecar, which is active on the upload path, so they contend at peak. Kubo runs `v0.42.0` with `Provide.Strategy=roots` (announces pin roots only; the 0.40 `Reprovider.*` keys were renamed to `Provide.*`).
 
 ### 2.2 PostgreSQL
 
@@ -174,6 +198,8 @@ IPNS publish DHT propagation happens asynchronously and does not block client re
 
 DHT propagation errors do not affect client-facing operations (fire-and-forget). Someguy's warm DHT is critical for IPNS resolution performance in non-API contexts (recovery tool, TEE republishing).
 
+**Per-upload load (2026-06):** someguy is also on the upload critical path - each `uploadFile` publishes two IPNS records through it (per-file + parent-folder), so its CPU tracks upload volume (spiking to 80-90% under 50-client load). Throttling it _reduces_ upload throughput (§1.5). Note someguy is a read/proxy delegated-routing _resolver_ and cannot accept provide writes, so Kubo's content announcing cannot be offloaded to it; reducing per-upload publishes (§3.2) is the lever, not delegating providing to someguy.
+
 ---
 
 ## 3. Scaling Recommendations
@@ -198,6 +224,8 @@ DHT propagation errors do not affect client-facing operations (fire-and-forget).
 - **Vertical:** Increase CPU/RAM/SSD. Pebbleds datastore benefits significantly from faster I/O. Move from HDD to NVMe SSD for pin operations.
 - **Horizontal:** Run multiple Kubo nodes behind the API. Each API instance pins to a designated Kubo node. Requires content routing coordination (IPFS Cluster or custom routing).
 - **Cluster mode:** [IPFS Cluster](https://cluster.ipfs.io/) adds pinning coordination but introduces operational complexity. Recommended only when single-node Kubo reaches sustained saturation.
+- **CPU sizing (2026-06):** The host is 2 vCPU; under 50-client load ipfs and the someguy sidecar saturate both cores (§1.5). Upgrading to the next Hostinger tier (4 vCPU / 16 GB) lets ipfs (`cpus: 1.5`) and someguy (`cpus: 1.0`) run without contending, or move someguy to its own host/cores.
+- **Reduce per-upload IPNS publishes:** Each upload issues two someguy publishes (per-file + parent-folder). The per-file record is published at sequence 1 on every upload but is only needed for later in-place version updates - deferring it off the upload critical path (publish lazily on first file mutation) would roughly halve someguy's per-upload load with no hardware change.
 
 **API Server (NestJS):**
 

@@ -20,7 +20,7 @@ This starts the `cipherbox-infrastructure` compose project (containers are named
 | Service             | Image                                 | Host Port(s)                                     | Purpose                                  |
 | :------------------ | :------------------------------------ | :----------------------------------------------- | :--------------------------------------- |
 | `postgres`          | `postgres:16-alpine`                  | 5432 (`DB_PORT`)                                 | Database                                 |
-| `ipfs`              | `ipfs/kubo:v0.40.0`                   | 5001 (API), 8080 (gateway), 4001 tcp/udp (swarm) | Decentralized storage (Kubo)             |
+| `ipfs`              | `ipfs/kubo:v0.42.0`                   | 5001 (API), 8080 (gateway), 4001 tcp/udp (swarm) | Decentralized storage (Kubo)             |
 | `redis`             | `redis:7-alpine`                      | 6380 (`REDIS_PORT`) → container 6379             | BullMQ job queue                         |
 | `someguy`           | `ghcr.io/ipfs/someguy:v0.11.1`        | 8190 (routing API), 4004 tcp/udp (libp2p swarm)  | Delegated IPFS routing (accelerated DHT) |
 | `mock-ipns-routing` | built from `tools/mock-ipns-routing/` | 3001 (loopback only)                             | Local IPNS resolution for dev/E2E        |
