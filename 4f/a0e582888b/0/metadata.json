@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "4fa0e582888b",
+  "session_id": "ee764e72-7c6a-455e-8494-6efa906c7f74",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T19:10:22.656609Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-PATTERNS.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fdf251b4a24d",
+  "token_usage": {
+    "input_tokens": 12215,
+    "cache_creation_tokens": 116205,
+    "cache_read_tokens": 1833368,
+    "output_tokens": 28974,
+    "api_call_count": 19
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for phase 59 (fuse-ipns-verify-publish-hardening-and-cleanup) end-to-end: research, pattern mapping, planning, and verification.",
+    "outcome": "Four plans and four waves were created, consolidated onto the correct feat branch, and the plan-checker verification agent was spawned. PATTERNS.md was committed as a late fix after discovering a gap in the workflow.",
+    "learnings": {
+      "repo": [
+        "Phase 59 is 'fuse-ipns-verify-publish-hardening-and-cleanup', req HARD-10, six todo writeups in .planning/todos/pending/ with file/line-level findings on durability-critical FUSE Rust files.",
+        "TEE re-sign risk (Finding F) is NOT present: TEE republish path bypasses the embedded-sequence gate entirely. Unifying FUSE to embed=1 is still recommended to allow removal of a verify.rs hotfix.",
+        "TS API surface extractor finds nothing on Rust-only phases; safe to omit as a planner hint.",
+        "Nyquist, pattern-mapper, and security threat-model gates are all enabled for this project.",
+        "Pattern mapper found 9/9 analogs for phase 59.",
+        "auto_chain_active flag in phase frontmatter must be cleared when plan-phase is invoked manually without --auto/--chain."
+      ],
+      "code": [],
+      "workflow": [
+        "GSD planner creates a stray branch (docs/plan-phase-<N>) instead of committing to the feat/<slug> branch — documented gotcha requiring manual consolidation via fast-forward merge and branch deletion.",
+        "PATTERNS.md is written by gsd-pattern-mapper but no plan-phase step commits it; it becomes an untracked orphan unless explicitly staged. Gap exists in step 13d of the workflow.",
+        "commit_failed in the GSD commit helper is a known false-negative; actual commits land correctly.",
+        "The feat/<slug> branch is auto-created by the commit helper when committing RESEARCH/VALIDATION; the planner then opens a separate docs/ branch, so the final consolidation step is always necessary."
+      ]
+    },
+    "friction": [
+      "GSD planner violated the Git Branch Invariant by committing to docs/plan-phase-59 instead of feat/fuse-ipns-verify-publish-hardening-and-cleanup, requiring manual branch consolidation.",
+      "PATTERNS.md was left as an untracked orphan because no plan-phase step is responsible for committing it — discovered and fixed manually mid-session.",
+      "commit_failed false-negative from commit helper creates ambiguity about whether commits actually landed, requiring a separate verification step."
+    ],
+    "open_items": [
+      "Plan-checker (gsd-plan-checker) verification result was still pending at session end — outcome unknown.",
+      "Six todos in .planning/todos/pending/ must be archived to .planning/todos/completed/ as part of phase execution (injected as a planner requirement but not yet done).",
+      "Unify FUSE publish path to embed=1 to allow removal of the verify.rs hotfix (TEE re-sign risk is absent but the unification cleanup is still recommended).",
+      "Plan-phase workflow should be updated to explicitly commit PATTERNS.md after gsd-pattern-mapper completes."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T19:09:51.105354Z",
+    "agent_lines": 517,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 517,
+    "total_lines_changed": 517,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
