@@ -1,0 +1,152 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2684f3a69532",
+  "session_id": "a86cad4e-ef33-4c8d-97df-fe773a25c7ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T18:31:33.597962Z",
+  "branch": "docs/roadmap-phases-59-60",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "80fc0f646165",
+  "checkpoint_transcript_start": 387,
+  "transcript_lines_at_start": 387,
+  "token_usage": {
+    "input_tokens": 1408,
+    "cache_creation_tokens": 80341,
+    "cache_read_tokens": 5385826,
+    "output_tokens": 36575,
+    "api_call_count": 21
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01NFEE1eLaqpwVoxchec8wW3",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "80fc0f646165",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 412,
+        "end": 413,
+        "entry_ids": [
+          "d48e48b3-496a-46ac-83fe-0ffb9f760a35"
+        ],
+        "tool_use_id": "toolu_01NFEE1eLaqpwVoxchec8wW3"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01NFEE1eLaqpwVoxchec8wW3"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Add two new phases (59 and 60) to the CipherBox ROADMAP extending the v1.1 hardening block after Phase 58: Phase 59 for FUSE IPNS Verify/Publish Hardening & Cleanup, and Phase 60 for IPNS Verification Cross-Layer Closeout (Desktop + API).",
+    "outcome": "Both phases were scaffolded and fully enriched in ROADMAP.md with Goal/Requirements/Scope/Verification-gate sections, REQUIREMENTS.md was updated with HARD-10 and HARD-11 entries, STATE.md roadmap evolution log was updated, and all changes were committed on a new branch separate from PR #552.",
+    "learnings": {
+      "repo": [
+        "Phases follow HARD-NN requirement ID convention; HARD-07/08/09 covered Phases 56/57/58, so 59/60 use HARD-10/11",
+        "`gsd-tools query phase.add` creates only skeletal ROADMAP entries (Goal/Depends on/Plans stubs) — full enrichment with Scope, captured-todos, and Verification gate must be done manually afterward",
+        "`phase.add` automatically creates `.gitkeep` files in the new phase directories, making them git-trackable without manual intervention",
+        "The Execution Order section in ROADMAP.md is NOT automatically extended by `phase.add` — must be manually appended after scaffolding",
+        "REQUIREMENTS.md has a mapping table, coverage count, and header range that must all be updated together when adding new requirements",
+        "Phase 59 bridges to Phase 60 via the unified first-publish IPNS embedded-sequence convention (FUSE 0 vs SDK 1)"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "line": 225,
+          "end_line": 227,
+          "finding": "File branch uses `wrap_key(...).ok()` which swallows a key-wrap error and publishes a FilePointer with `ipns_private_key_encrypted: None`; should propagate the error like the Folder branch at lines 153-157 (targeted in Phase 59)"
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "line": 574,
+          "end_line": 574,
+          "finding": "File-side re-resolution only triggers on `modified_at` change, not on a changed `file_meta_ipns_name`, allowing a file to retain stale CID/keys after identity reset (targeted in Phase 59)"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/prepopulate.rs",
+          "line": 43,
+          "end_line": 236,
+          "finding": "Four `resolve_ipns` call sites (~43, ~110, ~177, ~236) that bypass verified resolution — targeted in Phase 60 to route through a verified resolver with fail-closed parity"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/vault.rs",
+          "line": 21,
+          "end_line": 250,
+          "finding": "Two additional unverified `resolve_ipns` sites (~21, ~250) targeted in Phase 60"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "finding": "API publish/resolve hot path re-verifies IPNS signatures even for DB-authoritative records this server just signed; Phase 60 targets a short-TTL verified-record cache keyed by (ipnsName, sequenceNumber, signature), while still verifying DHT/externally-sourced records"
+        }
+      ],
+      "workflow": [
+        "Always branch off main before adding phases so scaffolding commits don't pollute in-flight PRs (here, kept off PR #552)",
+        "Re-read ROADMAP.md after `phase.add` tool calls — the file is mutated by the CLI, invalidating any previously-read content",
+        "The `state.add-roadmap-evolution` handler is SDK-only and may not be available via bare CLI invocation; direct STATE.md edit is the fallback",
+        "ROADMAP integrity should be verified after bulk edits by checking line count and phase heading count to catch silent truncation"
+      ]
+    },
+    "friction": [
+      "`gsd:phase` (phase.add) only scaffolds skeletal entries — every field beyond Goal/Depends on/Plans required manual multi-edit enrichment to match the Phase 56–58 format",
+      "ROADMAP.md was modified between the initial read and the enrichment edits (by phase.add calls), causing the first edit attempt to fail and requiring a re-read mid-task",
+      "The Execution Order section was not updated by phase.add, requiring a separate manual edit to append phases 59 and 60",
+      "`state.add-roadmap-evolution` CLI handler was unavailable in this context, falling back to direct STATE.md editing",
+      "A garbled clause in the Phase 60 STATE.md evolution entry required a follow-up corrective edit"
+    ],
+    "open_items": [
+      "PR #552 (frontmatter format fix) is unmerged — its changes reverted on main; will need to be re-applied or merged before Phase 59/60 work begins",
+      "PR #543 resolved most FUSE/IPNS robustness findings but left two residuals explicitly deferred to Phase 59: fs.rs key-wrap error swallowing and inode.rs file-side identity-reset trigger",
+      "Phase 59 planning not yet done — next step is `/gsd-plan-phase 59`",
+      "Phase 60 planning not yet done — blocked on Phase 59 completion (unified sequence convention bridge)",
+      "Phase 60 requires a measured benchmark/prototype to quantify per-op verification-cost recovery on the API hot path before the short-circuit cache can be considered complete",
+      "The roadmap branch with Phases 59/60 additions needs a PR opened and merged (transcript ends at commit)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T18:30:46.25215Z",
+    "agent_lines": 51,
+    "agent_removed": 3,
+    "human_added": 2,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 53,
+    "total_lines_changed": 56,
+    "agent_percentage": 96.42857142857143,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

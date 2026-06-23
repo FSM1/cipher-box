@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2684f3a69532",
+  "strategy": "manual-commit",
+  "branch": "docs/roadmap-phases-59-60",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/26/84f3a69532/0/metadata.json",
+      "transcript": "/26/84f3a69532/0/full.jsonl",
+      "content_hash": "/26/84f3a69532/0/content_hash.txt",
+      "prompt": "/26/84f3a69532/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1408,
+    "cache_creation_tokens": 80341,
+    "cache_read_tokens": 5385826,
+    "output_tokens": 36575,
+    "api_call_count": 21
+  }
+}
