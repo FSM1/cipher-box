@@ -583,7 +583,32 @@ impl InodeTable {
                                     // existing inode so its IPNS keys can be preserved.
                                     (true, None)
                                 } else {
-                                    (true, Some(existing.kind.clone()))
+                                    // B-59-02: Also force re-resolution when the pointer
+                                    // identity changed (different file_meta_ipns_name)
+                                    // even though mtime is unchanged.  A swapped remote
+                                    // pointer under the same display name + mtime would
+                                    // otherwise leave the cache serving stale CID/keys.
+                                    let same_pointer = match &existing.kind {
+                                        InodeKind::File {
+                                            file_meta_ipns_name,
+                                            ..
+                                        } => {
+                                            file_meta_ipns_name.as_deref()
+                                                == Some(
+                                                    file_pointer.file_meta_ipns_name.as_str(),
+                                                )
+                                        }
+                                        _ => false,
+                                    };
+                                    if same_pointer {
+                                        (true, Some(existing.kind.clone()))
+                                    } else {
+                                        log::info!(
+                                            "File '{}': file_meta_ipns_name changed (pointer replaced), marking for re-resolution",
+                                            file_pointer.name
+                                        );
+                                        (true, None)
+                                    }
                                 }
                             }
                             _ => (false, None),
