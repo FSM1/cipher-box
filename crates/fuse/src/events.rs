@@ -101,7 +101,6 @@ pub fn spawn_metadata_refresh(
                             crate::verify::VerifiedResolve {
                                 cid,
                                 sequence_number: sequence_number.parse().unwrap_or(0),
-                                signature_verified: false,
                             }
                         }
                         Err(crate::verify::VerifyError::Invalid(msg)) => {

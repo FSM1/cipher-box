@@ -89,8 +89,6 @@ const CID_B = 'bafybeif2pall7dybz7vecqka3zo24irdwabwdi4wc55mdgataz3a5fmfkq';
 interface VectorEntry {
   description: string;
   ipns_name: string;
-  public_key: string;
-  private_key: string;
   cid: string;
   sequence_number: string;
   signature_v2: string | null;
@@ -109,12 +107,6 @@ function hexToBytes(hex: string): Uint8Array {
     bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
   }
   return bytes;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -188,8 +180,6 @@ async function main(): Promise<void> {
     vectors.push({
       description: 'valid — signature, name, cid, and sequence all match',
       ipns_name: primaryIpnsName,
-      public_key: bytesToHex(primaryPub),
-      private_key: PRIMARY_PRIV_KEY_HEX,
       cid: CID_A,
       sequence_number: String(SEQ),
       signature_v2: bytesToBase64(sig),
@@ -214,8 +204,6 @@ async function main(): Promise<void> {
     vectors.push({
       description: 'tampered-sig — flip one byte of signatureV2',
       ipns_name: primaryIpnsName,
-      public_key: bytesToHex(primaryPub),
-      private_key: PRIMARY_PRIV_KEY_HEX,
       cid: CID_A,
       sequence_number: String(SEQ),
       signature_v2: bytesToBase64(tamperedSig),
@@ -240,8 +228,6 @@ async function main(): Promise<void> {
     vectors.push({
       description: 'name-mismatch — valid sig but pubKey derives to different IPNS name',
       ipns_name: primaryIpnsName,
-      public_key: bytesToHex(secondaryPub),
-      private_key: SECONDARY_PRIV_KEY_HEX,
       cid: CID_A,
       sequence_number: String(SEQ),
       signature_v2: bytesToBase64(sig),
@@ -270,8 +256,6 @@ async function main(): Promise<void> {
       description:
         'cid-swapped — valid sig over CBOR data with CID_A, but response cid field is CID_B',
       ipns_name: primaryIpnsName,
-      public_key: bytesToHex(primaryPub),
-      private_key: PRIMARY_PRIV_KEY_HEX,
       cid: CID_B,
       sequence_number: String(SEQ),
       signature_v2: bytesToBase64(sig),
@@ -300,8 +284,6 @@ async function main(): Promise<void> {
       description:
         'seq-mismatch — valid sig over CBOR data with seq=99, but response sequenceNumber is 5',
       ipns_name: primaryIpnsName,
-      public_key: bytesToHex(primaryPub),
-      private_key: PRIMARY_PRIV_KEY_HEX,
       cid: CID_A,
       sequence_number: String(SEQ),
       signature_v2: bytesToBase64(sig),
@@ -327,8 +309,6 @@ async function main(): Promise<void> {
       description:
         'partial-fields — only signatureV2 present, data and pub_key null (downgrade vector)',
       ipns_name: primaryIpnsName,
-      public_key: bytesToHex(primaryPub),
-      private_key: PRIMARY_PRIV_KEY_HEX,
       cid: CID_A,
       sequence_number: String(SEQ),
       signature_v2: bytesToBase64(sig),
@@ -348,8 +328,6 @@ async function main(): Promise<void> {
     vectors.push({
       description: 'legacy-absent — all three signature fields null (pre-signing legacy record)',
       ipns_name: primaryIpnsName,
-      public_key: bytesToHex(primaryPub),
-      private_key: PRIMARY_PRIV_KEY_HEX,
       cid: CID_A,
       sequence_number: String(SEQ),
       signature_v2: null,
@@ -380,8 +358,6 @@ async function main(): Promise<void> {
       description:
         'first-publish-skew — valid sig over CBOR data with seq=0, response sequenceNumber is 1',
       ipns_name: primaryIpnsName,
-      public_key: bytesToHex(primaryPub),
-      private_key: PRIMARY_PRIV_KEY_HEX,
       cid: CID_A,
       sequence_number: '1',
       signature_v2: bytesToBase64(sig),

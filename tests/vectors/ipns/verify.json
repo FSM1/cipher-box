@@ -2,8 +2,6 @@
   {
     "description": "valid — signature, name, cid, and sequence all match",
     "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
-    "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-    "private_key": "0101010101010101010101010101010101010101010101010101010101010101",
     "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
     "sequence_number": "5",
     "signature_v2": "Mrfkvxcc2SwD1uxzPEzbGiYqZMS9qhh0MCe5sOviTXRddqz46qdaj4WwJkKSvY9VWkK7I2c8k46MhMomGng+AQ==",
@@ -14,8 +12,6 @@
   {
     "description": "tampered-sig — flip one byte of signatureV2",
     "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
-    "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-    "private_key": "0101010101010101010101010101010101010101010101010101010101010101",
     "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
     "sequence_number": "5",
     "signature_v2": "zbfkvxcc2SwD1uxzPEzbGiYqZMS9qhh0MCe5sOviTXRddqz46qdaj4WwJkKSvY9VWkK7I2c8k46MhMomGng+AQ==",
@@ -26,8 +22,6 @@
   {
     "description": "name-mismatch — valid sig but pubKey derives to different IPNS name",
     "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
-    "public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
-    "private_key": "0202020202020202020202020202020202020202020202020202020202020202",
     "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
     "sequence_number": "5",
     "signature_v2": "8SPdw4tDa9gi3ustHSnvMrIMrsGPqIr1+riUIKEHlh3j7aKDZFoAbpmWSFOWTuLjSMol52oUb/WJn4Bg4Dx8Bg==",
@@ -38,8 +32,6 @@
   {
     "description": "cid-swapped — valid sig over CBOR data with CID_A, but response cid field is CID_B",
     "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
-    "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-    "private_key": "0101010101010101010101010101010101010101010101010101010101010101",
     "cid": "bafybeif2pall7dybz7vecqka3zo24irdwabwdi4wc55mdgataz3a5fmfkq",
     "sequence_number": "5",
     "signature_v2": "Mrfkvxcc2SwD1uxzPEzbGiYqZMS9qhh0MCe5sOviTXRddqz46qdaj4WwJkKSvY9VWkK7I2c8k46MhMomGng+AQ==",
@@ -50,8 +42,6 @@
   {
     "description": "seq-mismatch — valid sig over CBOR data with seq=99, but response sequenceNumber is 5",
     "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
-    "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-    "private_key": "0101010101010101010101010101010101010101010101010101010101010101",
     "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
     "sequence_number": "5",
     "signature_v2": "COh7OnhmvBXH5+zg1ZJLSJ3SBkjNBiiMIrzW2V/OGfYoYR5aWxZfiCzGVLaC20CfPCBXoNSa8ocMNpbSABp1BA==",
@@ -62,8 +52,6 @@
   {
     "description": "partial-fields — only signatureV2 present, data and pub_key null (downgrade vector)",
     "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
-    "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-    "private_key": "0101010101010101010101010101010101010101010101010101010101010101",
     "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
     "sequence_number": "5",
     "signature_v2": "Mrfkvxcc2SwD1uxzPEzbGiYqZMS9qhh0MCe5sOviTXRddqz46qdaj4WwJkKSvY9VWkK7I2c8k46MhMomGng+AQ==",
@@ -74,8 +62,6 @@
   {
     "description": "legacy-absent — all three signature fields null (pre-signing legacy record)",
     "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
-    "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-    "private_key": "0101010101010101010101010101010101010101010101010101010101010101",
     "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
     "sequence_number": "5",
     "signature_v2": null,
@@ -86,8 +72,6 @@
   {
     "description": "first-publish-skew — valid sig over CBOR data with seq=0, response sequenceNumber is 1",
     "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
-    "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-    "private_key": "0101010101010101010101010101010101010101010101010101010101010101",
     "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
     "sequence_number": "1",
     "signature_v2": "6fFNCGqZvMwGtaVCyReFxm15je5WOhwSwm5Q6qaHyIxNpwoaA7tNd20l4zrLEtwrYZCkJzx7s9QKkW0ESKVqAw==",

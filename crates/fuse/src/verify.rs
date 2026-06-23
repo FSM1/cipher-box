@@ -47,8 +47,6 @@ pub struct VerifiedResolve {
     pub cid: String,
     /// Sequence number from the signed CBOR data (authoritative; D-08).
     pub sequence_number: u64,
-    /// Always `true` for a `VerifiedResolve` (binding succeeded).
-    pub signature_verified: bool,
 }
 
 /// Pure helper that classifies a resolve response given the signature verdict.
@@ -136,7 +134,6 @@ pub(crate) fn bind_verified(
             Ok(VerifiedResolve {
                 cid,
                 sequence_number: resp_seq,
-                signature_verified: true,
             })
         }
     }
@@ -211,7 +208,6 @@ mod tests {
         let result = bind_verified(&resp, Some(true)).unwrap();
         assert_eq!(result.cid, "bafyREAL");
         assert_eq!(result.sequence_number, 5);
-        assert!(result.signature_verified);
     }
 
     #[test]
@@ -246,7 +242,6 @@ mod tests {
         let result = bind_verified(&resp, Some(true)).unwrap();
         assert_eq!(result.cid, "bafyFIRST");
         assert_eq!(result.sequence_number, 1, "returns DB-authoritative seq, not embedded 0");
-        assert!(result.signature_verified);
     }
 
     #[test]
