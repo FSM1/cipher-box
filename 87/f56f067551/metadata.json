@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "87f56f067551",
+  "strategy": "manual-commit",
+  "branch": "chore/staging-kubo-tuning",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "docs/DEVELOPMENT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/87/f56f067551/0/metadata.json",
+      "transcript": "/87/f56f067551/0/full.jsonl",
+      "content_hash": "/87/f56f067551/0/content_hash.txt",
+      "prompt": "/87/f56f067551/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 283,
+    "cache_creation_tokens": 230300,
+    "cache_read_tokens": 2730238,
+    "output_tokens": 17757,
+    "api_call_count": 13
+  }
+}
