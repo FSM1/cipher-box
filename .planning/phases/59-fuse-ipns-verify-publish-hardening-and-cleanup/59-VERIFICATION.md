@@ -112,6 +112,14 @@ No TBD, FIXME, or XXX markers in any of the eight modified source files. The `le
 
 No gaps. All six observable truths are verified against live source code. The three human verification items are pre-acknowledged durability gates deferred at the phase level per the verification prompt and plan acceptance criteria — they are not failures in the implemented code.
 
+## Post-Review Amendment (2026-06-23, after deep code review)
+
+The deep code review (`59-REVIEW.md`) found a BLOCKER (CR-01) in Finding F that this goal-backward pass missed: removing the resolve-side first-publish skew allowance (`resp_seq == 1 && embedded_seq == 0`) while the live folder-creation paths (`write_ops/implementation/mkdir.rs`, `platform/windows/write_ops.rs`) still embed `0` would fail-close resolution of every freshly-created folder, and would also break existing signed records that embed 0.
+
+Resolution (user-selected): the resolve-side strict-equality tightening was REVERTED in commit `0256ea486` (skew allowance + its two unit tests restored; case-8 vector reverted to `valid`, which also resolves CR-02). The forward embed-1 changes in `publish.rs`/`replay.rs` are KEPT. The full first-publish unification (mkdir/windows embed 1 + an existing-record republish migration + strict equality) is DEFERRED to Phase 60, consistent with the ROADMAP note that Finding F "bridges to Phase 60."
+
+Amended Finding F status: PARTIAL — embed-1 forward changes delivered; resolve-side strict cutover deferred to Phase 60. Findings A–E remain fully delivered. Phase remains `human_needed` for the three durability/CI gates above.
+
 ---
 
 _Verified: 2026-06-23_

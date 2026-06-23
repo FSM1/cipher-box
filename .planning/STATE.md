@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Phase 59 COMPLETE
+status: Phase 59 executed — human_needed (winfsp / SDK-E2E / desktop-E2E gates); Finding F partial, deferred to Phase 60
 last_updated: "2026-06-23T21:00:00.000Z"
 last_activity: 2026-06-23
 progress:
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 
 ## Current Position
 
-Phase: 59 (fuse-ipns-verify-publish-hardening-and-cleanup) — COMPLETE
-Plan: 4 of 4
+Phase: 59 (fuse-ipns-verify-publish-hardening-and-cleanup) — EXECUTED, NOT yet complete (human_needed)
+Plan: 4 of 4 executed. Deep code review found a Finding F blocker (CR-01: resolve-side strict-equality removed while the live mkdir paths still embed 0 → would fail-close resolution of freshly-created folders). Fixed by reverting the strict-equality tightening and restoring the skew allowance (commit 0256ea486); forward embed-1 changes kept; full first-publish unification + strict cutover deferred to Phase 60. Remaining to close Phase 59: winfsp Windows CI, SDK-E2E (redis 6380), desktop-E2E — see 59-UAT.md, then run /gsd:verify-work 59.
 Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 58 (recommended order was 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics
@@ -290,7 +290,7 @@ Recent for v1.1:
 
 ### Pending Todos
 
-**2026-06-23:** Captured a high-severity storage/quota bug — bin delete + empty-bin never unpin content/version CIDs (client SDK `packages/sdk/src/bin/index.ts`), confirmed on staging (a user with empty vault+bin showing 442 MB quota used; 9 orphaned content CIDs = 439 MB still pinned). See `2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md`.
+**2026-06-23:** Captured a high-severity storage/quota bug — bin delete + empty-bin never unpin content/version CIDs (client SDK `packages/sdk/src/bin/index.ts`), confirmed on staging (a user with empty vault+bin showing 442 MB quota used; 9 orphaned content CIDs = 439 MB still pinned). See `2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md`. Also captured the Phase 59 Finding F deferral as a Phase 60 carry-forward: `2026-06-23-phase60-ipns-first-publish-strict-equality-cutover.md` (resolves_phase: 60).
 
 See `/gsd:check-todos` for the full pending list. **2026-06-21:** filed resolved/superseded todos #5 (IPNS S1/S2/S3 → PR #529), #10 (refactor Tier-1/2 → PR #538), and the per-file-IPNS-conflict todo (folded into the PR #538 robustness todo) to `completed/`; re-captured the 14 Tier-3 refactor items as a new todo; grouped the FUSE/IPNS, API-CID, and IPNS-verify deferred-findings todos into new Phases 56–58. **2026-06-19:** todos #7 (useFolderNavigation consolidation) and #8 (shared-move re-encrypt) were verified already-resolved by Phase 49 (confirmed in live code) and moved to `completed/`; ten remaining tech-debt/security todos were grouped into the reopened v1.1 hardening block (Phases 50–55, see Roadmap Evolution). The four older feature todos (ERC-1271 wallet auth, CRDT IPNS inbox research, async search index, alternative MFA factors) and the GSD-tooling STATE regression (#10) remain unscheduled. _Historical:_ the desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. The architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; bin-restore gap surfaced while combing the #494 fix) was completed 2026-06-16 in PR #498 (branch `feat/sdk-client-self-bootstrap-folder-tree`) and moved to `.planning/todos/completed/`; its follow-ups (delete the now-redundant web `ensureFolderRegistered`/`useFolderNavigation` unwrap paths once self-heal proves out; optional negative-cache) were captured as a new pending todo. Remaining pending still includes the route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47. The v1.1 verification-ledger todo (phases 18/31/32 missing VERIFICATION.md) was completed 2026-06-19 — all three reports authored (goal-backward, adversarially spot-checked), PERF-01..04 closed (PERF-03 via accepted override), and the milestone audit verdict flipped to `passed` (66/66, 20/20); moved to `.planning/todos/completed/`.
 
