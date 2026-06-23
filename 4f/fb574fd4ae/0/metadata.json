@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "4ffb574fd4ae",
+  "session_id": "a86cad4e-ef33-4c8d-97df-fe773a25c7ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T18:13:16.420554Z",
+  "branch": "docs/archive-resolved-todos",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-22-desktop-e2e-recycle-bin-test-parity-sh-vs-ps1.md",
+    ".planning/todos/pending/2026-06-22-fuse-cas-helper-dead-param-and-content-ops-cleanup.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "9b64122ca3b0",
+  "checkpoint_transcript_start": 341,
+  "transcript_lines_at_start": 341,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 9544,
+    "cache_read_tokens": 367510,
+    "output_tokens": 5320,
+    "api_call_count": 2
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Fix YAML frontmatter missing from two newly created todo files so the GSD planning tooling can parse them, then commit and push to open a PR.",
+    "outcome": "Both todo files received proper YAML frontmatter (converting H1 headings to title fields matching existing conventions), were verified to parse correctly, committed, and pushed.",
+    "learnings": {
+      "repo": [
+        "GSD todo files under .planning/todos/pending/ require YAML frontmatter with at least a title: field; a bare H1 heading is not sufficient for the parser."
+      ],
+      "code": [
+        {
+          "path": ".planning/todos/pending/2026-06-22-desktop-e2e-recycle-bin-test-parity-sh-vs-ps1.md",
+          "line": 1,
+          "finding": "File lacked YAML frontmatter; H1 title had to be converted to a title: frontmatter field."
+        },
+        {
+          "path": ".planning/todos/pending/2026-06-22-fuse-cas-helper-dead-param-and-content-ops-cleanup.md",
+          "line": 1,
+          "finding": "Same issue: missing YAML frontmatter causing parse failure."
+        }
+      ],
+      "workflow": [
+        "Always verify todo files parse via GSD tooling before committing to catch missing frontmatter early."
+      ]
+    },
+    "friction": [
+      "Two todo files were created without the required YAML frontmatter, requiring a follow-up fix before the PR could be opened."
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T18:13:08.278976Z",
+    "agent_lines": 21,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 21,
+    "total_lines_changed": 26,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
