@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f0ba2aba7247",
+  "session_id": "ee764e72-7c6a-455e-8494-6efa906c7f74",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T19:12:25.891772Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fdf251b4a24d",
+  "token_usage": {
+    "input_tokens": 16772,
+    "cache_creation_tokens": 142264,
+    "cache_read_tokens": 3152927,
+    "output_tokens": 38144,
+    "api_call_count": 28
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for phase 59 (fuse-ipns-verify-publish-hardening-and-cleanup) to produce executable PLAN.md files with integrated research and verification.",
+    "outcome": "Research, pattern mapping, and planning completed with 4 plans across 4 waves. A plan-checker blocker (unresolved Open Questions markers in RESEARCH.md) and warning (stub VALIDATION.md table) were fixed inline; checker re-run is pending confirmation of clean pass.",
+    "learnings": {
+      "repo": [
+        "Phase 59 is keyed to requirement HARD-10 and covers six durability-critical FUSE Rust files with pre-existing todo writeups in .planning/todos/pending/",
+        "The TEE re-sign risk (Finding F in research) is NOT present — the TEE republish path bypasses the embedded-sequence gate entirely, making the unify-to-embed=1 change a cleanup rather than a security fix",
+        "API surface extraction (TypeScript extractor) produces empty output for Rust-only phases and should be omitted as a planner hint in those cases",
+        "GSD planner creates a stray docs/plan-phase-<N> branch when it commits; the commit helper auto-switches main to feat/<slug>; consolidation onto feat/ branch is always needed post-planning",
+        "PATTERNS.md written by gsd-pattern-mapper is never committed by any plan-phase step — it becomes an untracked orphan unless explicitly added"
+      ],
+      "code": [],
+      "workflow": [
+        "gsd-planner stray branch gotcha: docs/plan-phase-<N> fast-forwards cleanly onto feat/<slug> when the feat branch is the planner's parent commit; safe to rebase and delete stray",
+        "Plan-checker doc-level blockers (missing RESOLVED markers, stub tables) are cheaper to fix inline than to re-spawn the full planner",
+        "auto_chain_active flag in phase frontmatter must be cleared on manual invocations to prevent unintended auto-advance behavior",
+        "RESEARCH.md Open Questions section requires explicit (RESOLVED) markers with citations to adopting plan actions to pass the plan-checker gate"
+      ]
+    },
+    "friction": [
+      "gsd-planner created a stray docs/plan-phase-59 branch instead of committing directly to feat/<slug>, requiring manual branch consolidation",
+      "PATTERNS.md has no commit step in the plan-phase workflow, leaving it as an untracked orphan after the pattern-mapper subagent runs",
+      "commit helper emits a known false-negative 'commit_failed' even when the commit lands successfully, causing confusion when verifying git state",
+      "Plan-checker flagged RESEARCH.md Open Questions as a blocker even though both questions were already answered in the plans — the marker format is a mechanical requirement not enforced earlier in the flow"
+    ],
+    "open_items": [
+      "Plan-checker re-run (iteration 2/3) was pending at transcript end — clean pass not yet confirmed",
+      "Todo archival (moving six .planning/todos/pending/ entries to completed/) is queued as a task in the final plan but not yet executed",
+      "PATTERNS.md commit step is missing from the plan-phase workflow — should be added after the pattern-mapper subagent returns",
+      "Unify FUSE to embed=1 to allow removal of verify.rs hotfix — recommended by research but deferred to execution"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T19:12:04.693555Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 7,
+    "human_modified": 18,
+    "human_removed": 0,
+    "total_committed": 7,
+    "total_lines_changed": 26,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
