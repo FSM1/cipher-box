@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Milestone complete
-last_updated: "2026-06-23T19:13:58.520Z"
+status: Executing Phase 59
+last_updated: "2026-06-23T19:19:20.759Z"
 last_activity: 2026-06-23
 progress:
-  total_phases: 43
+  total_phases: 45
   completed_phases: 43
-  total_plans: 186
+  total_plans: 190
   completed_plans: 186
-  percent: 100
+  percent: 96
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 58 — IPNS Signature-Verify Coverage
+**Current focus:** Phase 59 — fuse-ipns-verify-publish-hardening-and-cleanup
 
 ## Current Position
 
-Phase: 58
-Plan: Not started
+Phase: 59 (fuse-ipns-verify-publish-hardening-and-cleanup) — EXECUTING
+Plan: 1 of 4
 Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 58 (recommended order was 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics

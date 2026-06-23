@@ -1040,7 +1040,7 @@ Verification gate: full SDK E2E suite (local; redis 6380), apps/api specs, `carg
 **Goal:** Close out the Phase 58 IPNS verification long-tail on the FUSE crate — finish the two partially-done durability fixes and clear the dead-code/cleanup debt across the same durability-critical files (`verify.rs`, `events.rs`, `metadata.rs`, `content_ops.rs`, `fs.rs`, `inode.rs`, `publish.rs`, `replay.rs`), so the verify/publish/CAS paths carry no swallowed errors, no dead seams, and a single first-publish embedded-sequence convention. Touches durability-critical publish paths, so full SDK-E2E + desktop-E2E gated.
 **Requirements**: HARD-10
 **Depends on:** Phase 58 (resolve_ipns_verified chokepoint), Phase 56 (FUSE durability baseline)
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Scope (captured todos):
 
@@ -1054,7 +1054,7 @@ Scope (captured todos):
 Plans:
 **Wave 1**
 
-- [ ] 59-01-PLAN.md — Findings A+B: propagate file IPNS key-wrap error (fs.rs) + re-resolve file inode on changed file_meta_ipns_name (inode.rs) [tdd]
+- [x] 59-01-PLAN.md — Findings A+B: propagate file IPNS key-wrap error (fs.rs) + re-resolve file inode on changed file_meta_ipns_name (inode.rs) [tdd]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
