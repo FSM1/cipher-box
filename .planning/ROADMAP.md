@@ -1066,7 +1066,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [x] 59-04-PLAN.md — Finding F: unify FUSE first-publish embedded sequence to 1 + remove verify.rs skew allowance; archive the 6 source todos [execute]
+- [x] 59-04-PLAN.md — Finding F (PARTIAL): unify FUSE first-publish embedded sequence to 1 (forward embed-1 changes in publish.rs/replay.rs delivered); the resolve-side strict-equality cutover / verify.rs skew-allowance removal was REVERTED (CR-01 blocker) and deferred to Phase 60; archive the 6 source todos [execute]
 
 Verification gate: `cargo test` (fuse + winfsp feature sets), winfsp Windows CI, full SDK E2E (local; redis 6380), desktop E2E (dispatch-gated).
 
