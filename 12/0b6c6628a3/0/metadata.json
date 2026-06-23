@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "120b6c6628a3",
+  "session_id": "ee764e72-7c6a-455e-8494-6efa906c7f74",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T18:50:16.159407Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fdf251b4a24d",
+  "checkpoint_transcript_start": 56,
+  "transcript_lines_at_start": 56,
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 8837,
+    "cache_read_tokens": 417572,
+    "output_tokens": 3627,
+    "api_call_count": 4
+  },
+  "summary": {
+    "intent": "Complete FUSE IPNS verify-publish hardening and cleanup (phase 59) by writing the VALIDATION.md file and running validation gates.",
+    "outcome": "VALIDATION.md was written to the phase 59 planning directory and committed; UI/schema gate checks were initiated.",
+    "learnings": {
+      "repo": [
+        "Phase 59 involves FUSE IPNS verify-publish hardening; the TEE republish path bypasses the embedded-sequence gate entirely, meaning the TEE re-sign risk (Finding F) is not present in practice.",
+        "Unifying FUSE to embed=1 is recommended to allow removal of a verify.rs hotfix, even though the risk is absent.",
+        "GSD planning structure uses per-phase directories under .planning/phases/<id>-<slug>/ with RESEARCH.md, VALIDATION.md, and other artifacts."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-VALIDATION.md",
+          "finding": "Newly created VALIDATION.md for phase 59; contains frontmatter and cargo test infrastructure for Nyquist validation strategy."
+        },
+        {
+          "path": ".claude/gsd-core/templates/VALIDATION.md",
+          "finding": "GSD validation template includes a Validation Architecture section used as the basis for phase-specific VALIDATION.md files."
+        }
+      ],
+      "workflow": [
+        "GSD phase workflow: RESEARCH.md is written first (with confidence level), then VALIDATION.md, followed by committing both and running UI/schema gates.",
+        "Researcher subagent outputs a confidence rating (HIGH/MEDIUM/LOW) alongside findings in the RESEARCH.md file."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Unifying FUSE to embed=1 to allow removal of verify.rs hotfix — recommended but not yet implemented.",
+      "UI/schema gate results not shown in transcript; outcome of those checks is unknown.",
+      "Nyquist validation strategy details not fully captured — VALIDATION.md content not shown."
+    ]
+  }
+}
