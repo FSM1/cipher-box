@@ -7,6 +7,8 @@ files:
   - crates/fuse/src/events.rs
 ---
 
+> **Resolved by PR #543** (merged 2026-06-22). Verified already-fixed in the 2026-06-23 pending-todo audit (independent adversarial re-check confirmed). Archived from pending.
+
 ## Context
 
 CodeRabbit flagged `spawn_metadata_publish` (and siblings) in `crates/fuse/src/metadata.rs:85-86` taking `folder_key: Vec<u8>` and `ipns_private_key: Vec<u8>` as plain `Vec<u8>` rather than `zeroize::Zeroizing<Vec<u8>>`, so the key material is not cleared on drop. `events.rs` already wraps `folder_key` in `Zeroizing`, so the pattern is inconsistent.

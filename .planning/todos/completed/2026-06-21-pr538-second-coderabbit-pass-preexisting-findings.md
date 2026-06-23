@@ -10,6 +10,8 @@ files:
   - packages/sdk-core/src/folder/registration.ts
 ---
 
+> **Resolved by PR #543** (merged 2026-06-22). Verified already-fixed in the 2026-06-23 pending-todo audit (independent adversarial re-check confirmed). Archived from pending.
+
 ## Context
 
 A second CodeRabbit review of PR `#538` (phase 55 refactor) surfaced 6 more findings (3 Major,

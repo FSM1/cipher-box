@@ -9,6 +9,8 @@ files:
   - apps/api/src/ipfs/pending-unpin/pending-unpin.module.ts
 ---
 
+> **Resolved by PR #541** (merged 2026-06-22). Verified already-fixed in the 2026-06-23 pending-todo audit (independent adversarial re-check confirmed). Archived from pending.
+
 ## Problem
 
 The IN-04 "accepted circular-dependency" comments in `ipfs.module.ts`,

@@ -9,6 +9,8 @@ files:
   - apps/api/src/ipfs/dto/unpin.dto.ts
 ---
 
+> **Resolved by PR #541** (merged 2026-06-22). Verified already-fixed in the 2026-06-23 pending-todo audit (independent adversarial re-check confirmed). Archived from pending.
+
 ## Problem
 
 `UnpinDto` validates CIDv0 as `Qm[1-9A-HJ-NP-Za-km-z]{44}` (exactly 46 chars,
