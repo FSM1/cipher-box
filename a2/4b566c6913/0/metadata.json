@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "a24b566c6913",
+  "session_id": "f4dbe4bc-e7cc-4e1a-a9d7-881fe8f116bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T19:47:54.900573Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fb72c7487437",
+  "token_usage": {
+    "input_tokens": 18056,
+    "cache_creation_tokens": 150848,
+    "cache_read_tokens": 3133176,
+    "output_tokens": 40713,
+    "api_call_count": 26
+  },
+  "summary": {
+    "intent": "Execute Phase 59 of the GSD workflow (FUSE IPNS verify/publish hardening and cleanup) — 4 plans in a strict sequential dependency chain, all Rust, TDD mode on.",
+    "outcome": "Wave 1 (plan 59-01) fully landed with 95 passing tests after recovering a SUMMARY.md commit lost to a 522 error; the session switched from worktree to sequential execution for Waves 2–4, and Wave 2 was dispatched at transcript end.",
+    "learnings": {
+      "repo": [
+        "Phase 59 is a strict sequential chain (59-01→02→03→04); no plan can run until the prior merges.",
+        "Root `npm test` runs `pnpm --parallel -r run test` (full monorepo) — RAM-starving for a Rust-only phase; post-merge gate must be scoped to `cargo` on `cipherbox-fuse` only.",
+        "winfsp feature builds are CI-only on macOS; crypto-clippy warnings are pre-existing — both are known non-blockers.",
+        "The cleanup-wave helper fails closed on untracked files in the worktree (e.g. a node_modules symlink), preventing merge until they're removed.",
+        "The tracking commit helper prints `commit_failed` as a false-negative even when the commit actually lands — do not retry."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "finding": "Finding A (59-01): `build_folder_metadata` was swallowing `wrap_key` errors and publishing a FilePointer with `ipns_private_key_encrypted: None`, making the file permanently unrecoverable."
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "finding": "Finding B (59-01): inode resolution was not re-triggered when `file_meta_ipns_name` changed under an unchanged mtime, causing stale CID/key reads."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "Finding C (59-02): `VerifyError::Legacy` was a unit variant; needed migration to `Legacy { cid: String, sequence_number: String }` across 9 match-arm sites in 6 files to eliminate a redundant second resolve_ipns call and close a race window."
+        }
+      ],
+      "workflow": [
+        "Worktree isolation only pays off for concurrent parallel executors; sequential single-plan waves have no parallelism to isolate and only add merge/cleanup overhead.",
+        "GSD #2070: executor writes SUMMARY.md but the worktree is force-removed before that file is committed → summary permanently lost. Sequential mode eliminates this failure mode.",
+        "When a subagent worktree genuinely needs node_modules, it must run `pnpm i` to initialize its own copy — never symlink back to the parent checkout.",
+        "The cleanup-wave `mktemp` template must be unique per invocation; reuse causes an empty manifest variable and a silent no-op merge."
+      ]
+    },
+    "friction": [
+      "Two Cloudflare 522 errors: one mid-Wave-1 subagent run (nearly lost the SUMMARY.md commit), one during the worktree merge step.",
+      "Worktree execution was activated unnecessarily for a fully sequential phase — added merge/cleanup overhead with no benefit.",
+      "cleanup-wave helper failed with an empty `--manifest` due to a `mktemp` template collision; required manual path fix.",
+      "cleanup-wave rejected the worktree merge because the subagent had created an untracked `node_modules` symlink back to the parent tree.",
+      "Tracking commit helper emitted a false `commit_failed` message even though the commit succeeded, creating momentary confusion."
+    ],
+    "open_items": [
+      "Waves 2–4 (plans 59-02, 59-03, 59-04) still pending execution.",
+      "GSD workflow default could detect single-plan-per-wave sequential chains and skip worktree isolation automatically rather than requiring manual override."
+    ]
+  }
+}
