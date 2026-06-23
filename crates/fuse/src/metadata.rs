@@ -194,17 +194,11 @@ where
                     let _ = cipherbox_api_client::ipfs::unpin_content(api, &metadata_cid).await;
                     let _ = cipherbox_api_client::ipfs::unpin_content(api, &retry_cid).await;
 
-                    if journal_entry.is_some() {
-                        // D-01a: future path — journal enqueue (no call site supplies Some this phase)
-                        // queue.put(&entry).map_err(|e| format!("journal enqueue failed: {}", e))?;
-                        // return Ok(());
-                        // For now return Err (journal_entry is always None this phase)
-                        Err(format!("persistent conflict for {}", ipns_name))
-                    } else {
-                        // D-01a: per-file/bin path — no JournalOp::FilePublish/BinPublish variant;
-                        // journaling deferred (CONTEXT Deferred Ideas). On exhaustion: Err → EIO.
-                        Err(format!("persistent conflict for {}", ipns_name))
-                    }
+                    // D-01a: journal_entry param reserved for future journal-enqueue path
+                    // (no JournalOp::FilePublish/BinPublish variant this phase; all call sites
+                    // pass None). On persistent conflict: Err → EIO.
+                    let _ = &journal_entry; // suppress unused warning until D-01a is wired
+                    Err(format!("persistent conflict for {}", ipns_name))
                 }
             }
         }
@@ -1154,8 +1148,15 @@ mod tests {
 
     #[test]
     fn is_ipns_not_found_matches_case_insensitively() {
+        // Predicate matches on "not found" substring (case-insensitive).
         assert!(super::is_ipns_not_found("IPNS record Not Found"));
-        assert!(super::is_ipns_not_found("404 not found"));
+        // Use a legible case that documents what the predicate actually matches.
+        assert!(super::is_ipns_not_found("record not found"));
+        // Negative: "404" alone must NOT match — the predicate is "not found", not "404".
+        assert!(
+            !super::is_ipns_not_found("404"),
+            "bare '404' without 'not found' must not match is_ipns_not_found"
+        );
     }
 
     #[test]

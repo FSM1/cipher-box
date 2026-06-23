@@ -118,20 +118,13 @@ pub async fn publish_file_metadata(
         Some(coordinator.resolve_sequence(api, file_ipns_name).await?)
     };
 
-    // Create and sign IPNS record
+    // Create IPNS key material shared by both branches (D.2: only signing steps move inside is_first_publish).
     let ipns_key_arr = zeroizing_32_from_slice(
         file_ipns_private_key.as_slice(),
         "Invalid file IPNS private key length",
     )?;
     let new_seq = crate::next_file_publish_sequence(is_first_publish, current_seq)?;
     let value = format!("/ipfs/{}", file_meta_cid);
-    let record =
-        cipherbox_core::ipns::create_ipns_record(&ipns_key_arr, &value, new_seq, 86_400_000)
-            .map_err(|e| format!("File IPNS record creation failed: {}", e))?;
-    let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
-        .map_err(|e| format!("File IPNS record marshal failed: {}", e))?;
-
-    let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
 
     // TEE enrollment on first publish only (same pattern as folder creation in write_ops.rs)
     let (encrypted_ipns_for_tee, tee_epoch) =
@@ -171,6 +164,13 @@ pub async fn publish_file_metadata(
     // sequence). We only apply CAS for update publishes (not is_first_publish).
     if is_first_publish {
         // First publish: no CAS expected_sequence_number (no prior record exists).
+        // D.2: record/marshaled/record_b64 only needed here; build inside the branch.
+        let record =
+            cipherbox_core::ipns::create_ipns_record(&ipns_key_arr, &value, new_seq, 86_400_000)
+                .map_err(|e| format!("File IPNS record creation failed: {}", e))?;
+        let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
+            .map_err(|e| format!("File IPNS record marshal failed: {}", e))?;
+        let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
         let req = cipherbox_api_client::IpnsPublishRequest {
             ipns_name: file_ipns_name.to_string(),
             record: record_b64,
@@ -196,11 +196,10 @@ pub async fn publish_file_metadata(
         coordinator.record_publish(file_ipns_name, new_seq);
     } else {
         // Update publish: use CAS via the shared helper (D-02 / D-03).
-        // The make_record closure builds a new IPNS record for a given sequence number.
-        // For update publishes, current_seq is Some(resolved_seq) so new_seq = resolved_seq + 1.
-        // The helper re-resolves on conflict and calls make_record again with the fresh seq.
-        let current_seq_for_cas = current_seq
-            .ok_or_else(|| "resolve_sequence returned None for update publish".to_string())?;
+        // D.3: guard directly; current_seq_for_cas binding was dead (helper re-resolves internally).
+        if current_seq.is_none() {
+            return Err("resolve_sequence returned None for update publish".to_string());
+        }
 
         crate::metadata::publish_with_cas_retry(
             api,
@@ -229,21 +228,8 @@ pub async fn publish_file_metadata(
             None, // D-01a: no JournalOp::FilePublish variant; exhaustion → Err → EIO
         )
         .await?;
-
-        // NOTE: publish_with_cas_retry calls coordinator.record_publish on success.
-        // The initial record_b64 built above is NOT used on the retry path — the closure
-        // re-signs with the fresh sequence. This is correct: the first publish attempt
-        // uses expected_sequence_number: Some(current_seq_for_cas) which is already
-        // baked into the helper's initial publish call via the helper's resolve_sequence.
-        // The make_record closure is only called with the sequence numbers the HELPER
-        // computes — so the pre-built record_b64 for the initial call is not reused.
-        //
-        // To feed the pre-built record_b64 to the helper's first call, we must match
-        // what the helper does: it calls make_record(resolve_sequence()+1). Since we
-        // already computed new_seq = current_seq + 1 above, the first closure call will
-        // get new_seq again (same value). The record produced by the closure must match
-        // the seq, and the closure re-signs with the seq it receives — this is correct.
-        let _ = current_seq_for_cas; // used above in comment; suppress unused-variable warning
+        // publish_with_cas_retry calls coordinator.record_publish on success.
+        // The closure re-signs with the sequence number the helper computes on each attempt.
     }
 
     log::info!("Per-file IPNS publish succeeded for {}", file_ipns_name);
