@@ -1040,7 +1040,7 @@ Verification gate: full SDK E2E suite (local; redis 6380), apps/api specs, `carg
 **Goal:** Close out the Phase 58 IPNS verification long-tail on the FUSE crate — finish the two partially-done durability fixes and clear the dead-code/cleanup debt across the same durability-critical files (`verify.rs`, `events.rs`, `metadata.rs`, `content_ops.rs`, `fs.rs`, `inode.rs`, `publish.rs`, `replay.rs`), so the verify/publish/CAS paths carry no swallowed errors, no dead seams, and a single first-publish embedded-sequence convention. Touches durability-critical publish paths, so full SDK-E2E + desktop-E2E gated.
 **Requirements**: HARD-10
 **Depends on:** Phase 58 (resolve_ipns_verified chokepoint), Phase 56 (FUSE durability baseline)
-**Plans:** 1/4 plans executed
+**Plans:** 3/4 plans executed
 
 Scope (captured todos):
 
@@ -1062,7 +1062,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 59-03-PLAN.md — Findings D+E: collapse dead journal_entry branch + content_ops dead bindings, remove dead signature_verified field, fix is_ipns_not_found test + vector fixture [execute]
+- [x] 59-03-PLAN.md — Findings D+E: collapse dead journal_entry branch + content_ops dead bindings, remove dead signature_verified field, fix is_ipns_not_found test + vector fixture [execute]
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
