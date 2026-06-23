@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "839d796a27f8",
+  "strategy": "manual-commit",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/config.json",
+    ".planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-SECURITY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/83/9d796a27f8/0/metadata.json",
+      "transcript": "/83/9d796a27f8/0/full.jsonl",
+      "content_hash": "/83/9d796a27f8/0/content_hash.txt",
+      "prompt": "/83/9d796a27f8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10736,
+    "cache_creation_tokens": 150494,
+    "cache_read_tokens": 1338881,
+    "output_tokens": 19336,
+    "api_call_count": 18
+  }
+}
