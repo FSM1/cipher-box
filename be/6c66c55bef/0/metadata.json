@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "be6c66c55bef",
+  "session_id": "8f1f51ad-c2b4-4d1c-a945-8248921b9e05",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T21:20:18.741039Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "crates/fuse/src/content_ops.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a989b8d925b5",
+  "checkpoint_transcript_start": 191,
+  "transcript_lines_at_start": 191,
+  "token_usage": {
+    "input_tokens": 1721,
+    "cache_creation_tokens": 30733,
+    "cache_read_tokens": 2073353,
+    "output_tokens": 18485,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Triage and resolve CodeRabbit CLI review findings on a committed CipherBox FUSE phase, fixing valid issues and dismissing false positives.",
+    "outcome": "Removed one dead unreachable guard in content_ops.rs, corrected file-count arithmetic and post-revert accuracy in 4 planning docs, and confirmed the MAJOR inode.rs finding was a false positive. All 95 FUSE unit tests passed; changes committed.",
+    "learnings": {
+      "repo": [
+        "Phase 59 planning docs (SUMMARY, VALIDATION, PATTERNS, PLAN) still described the pre-revert strict-equality endpoint after a post-revert amendment was recorded only in VERIFICATION.md and UAT.md — doc accuracy drifts when amendments are added to some files but not others.",
+        "PATTERNS.md header said '8 modified Rust files' but footer said '9 source files'; the discrepancy was because the vector test lives under tests/ not crates/fuse/src/, so the scan-scope count was wrong.",
+        "Raw IPNS private keys are never carried in folder-metadata FilePointers — they are unwrapped from encrypted hex on re-resolution, so None for file_ipns_private_key in the pointer-change path is correct behavior, not a bug."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/content_ops.rs",
+          "line": 200,
+          "end_line": 200,
+          "finding": "current_seq.is_none() guard was unreachable in the else branch because current_seq was always Some(...) when is_first_publish == false; dead guard removed as part of D.3 cleanup."
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "line": 659,
+          "end_line": 669,
+          "finding": "CodeRabbit flagged the same_pointer==false path as failing to initialize key material, but lines 659 and 666 correctly set file_meta_ipns_name and file_ipns_key_encrypted_hex from the new pointer — false positive."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit MAJOR severity ratings can be false positives on crypto/key-management code where the reviewer misreads ownership vs. initialization semantics — always read the surrounding context before acting.",
+        "Splitting the code fix commit from planning-doc reconciliation commits produces a cleaner changelog when the changes are logically independent.",
+        "Generated FFI bindings (fuse_abi.rs) and test mocks produce pre-existing compiler warnings unrelated to edits — verify warning source before treating as regression."
+      ]
+    },
+    "friction": [
+      "CodeRabbit's MAJOR finding required manual code reading to confirm as false positive — no way to dismiss it in the tool without investigation.",
+      "Post-revert amendments were recorded in VERIFICATION.md/UAT.md but not propagated to SUMMARY/VALIDATION/PATTERNS/PLAN, creating inconsistent doc state that CodeRabbit surfaced as review findings."
+    ],
+    "open_items": [
+      "The 4 planning docs were corrected with amendment notes rather than full rewrites — they still describe the pre-revert strict-equality endpoint as the original design intent, which may confuse future readers.",
+      "phase uat-passed CLI handler remains unimplemented (pre-existing); workaround of editing VERIFICATION.md + phase complete is still in use."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T21:19:59.726842Z",
+    "agent_lines": 3,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "total_lines_changed": 8,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
