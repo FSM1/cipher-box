@@ -19,8 +19,9 @@ pub enum VerifyError {
     /// API-level error (network failure, 404, etc.).
     Api(cipherbox_api_client::error::ApiError),
     /// All three signature fields absent — legacy record (D-04).
-    /// Callers should warn and proceed using `resp.cid` directly (DB-authoritative path).
-    Legacy,
+    /// Carries the already-resolved `cid` and `sequence_number` so callers need not
+    /// issue a second `resolve_ipns` call (eliminates the TOCTOU race window, T-59-04).
+    Legacy { cid: String, sequence_number: String },
     /// Invalid/partial signature or CBOR cid/sequence binding mismatch (D-02/D-07).
     /// Callers should fail the operation (not the whole mount).
     Invalid(String),
@@ -30,7 +31,10 @@ impl std::fmt::Display for VerifyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Api(e) => write!(f, "API error: {}", e),
-            Self::Legacy => write!(f, "legacy record: all signature fields absent"),
+            Self::Legacy { cid, sequence_number } => write!(
+                f,
+                "legacy record: all signature fields absent (cid={cid}, seq={sequence_number})"
+            ),
             Self::Invalid(msg) => write!(f, "verification failed: {}", msg),
         }
     }
@@ -64,7 +68,10 @@ pub(crate) fn bind_verified(
     sig_verdict: Option<bool>,
 ) -> Result<VerifiedResolve, VerifyError> {
     match sig_verdict {
-        None => Err(VerifyError::Legacy),
+        None => Err(VerifyError::Legacy {
+            cid: resp.cid.clone(),
+            sequence_number: resp.sequence_number.clone(),
+        }),
         Some(false) => Err(VerifyError::Invalid("signature verification failed".to_string())),
         Some(true) => {
             // Signature is valid. Now decode the CBOR `data` and bind the embedded

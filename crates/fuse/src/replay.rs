@@ -335,18 +335,16 @@ async fn resolve_folder_key(
         let resolved_cid =
             match crate::verify::resolve_ipns_verified(api, &current_ipns).await {
                 Ok(verified) => verified.cid,
-                Err(crate::verify::VerifyError::Legacy) => {
-                    // D-03: all-absent legacy record — warn and continue (DB CID authoritative;
-                    // backward-compatible with pre-signing records).
+                Err(crate::verify::VerifyError::Legacy { cid, .. }) => {
+                    // D-03: all-absent legacy record — use the carried cid (no second resolve_ipns).
+                    // T-59-04: eliminates the TOCTOU race window.
+                    // DB CID authoritative; backward-compatible with pre-signing records.
                     log::warn!(
                         "resolve_folder_key: IPNS {} resolved without signature fields — \
                          proceeding (D-03, DB CID authoritative)",
                         current_ipns
                     );
-                    // Re-resolve to get the raw cid for the Legacy path.
-                    cipherbox_api_client::ipns::resolve_ipns(api, &current_ipns)
-                        .await
-                        .map_err(|e| format!("resolve IPNS {}: {}", current_ipns, e))?.cid
+                    cid
                 }
                 Err(crate::verify::VerifyError::Invalid(msg)) => {
                     // D-03 hard fail-closed: invalid/partial signature → refuse CID.
@@ -466,16 +464,15 @@ async fn fetch_merge_publish_parent(
     // D-01: route through the verified chokepoint.
     let parent_cid = match crate::verify::resolve_ipns_verified(api, parent_ipns_name).await {
         Ok(verified) => verified.cid,
-        Err(crate::verify::VerifyError::Legacy) => {
-            // D-04: legacy record — warn and proceed with DB CID.
+        Err(crate::verify::VerifyError::Legacy { cid, .. }) => {
+            // D-04: legacy record — use the carried cid (no second resolve_ipns).
+            // T-59-04: eliminates the TOCTOU race window.
             log::warn!(
                 "fetch_merge_publish_parent: IPNS {} resolved without signature fields \
                  — using DB CID (D-04)",
                 parent_ipns_name
             );
-            cipherbox_api_client::ipns::resolve_ipns(api, parent_ipns_name)
-                .await
-                .map_err(|e| format!("resolve parent IPNS {}: {}", parent_ipns_name, e))?.cid
+            cid
         }
         Err(crate::verify::VerifyError::Invalid(msg)) => {
             // Journal entry retained — return Err so the replay loop keeps the entry.

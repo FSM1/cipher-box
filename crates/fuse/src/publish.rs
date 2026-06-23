@@ -102,41 +102,26 @@ impl PublishCoordinator {
                 self.update_cache(ipns_name, seq);
                 Ok(seq)
             }
-            Err(crate::verify::VerifyError::Legacy) => {
-                // D-04: legacy record — re-resolve to get the raw sequence, warn and proceed.
-                match cipherbox_api_client::ipns::resolve_ipns(api, ipns_name).await {
-                    Ok(resp) => {
-                        let resolved = resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
-                            log::warn!(
-                                "Failed to parse IPNS sequence '{}' for {}: {}",
-                                resp.sequence_number, ipns_name, e
-                            );
-                            0
-                        });
-                        log::warn!(
-                            "resolve_sequence: IPNS {} resolved without signature fields \
-                             — using DB sequence (D-04)",
-                            ipns_name
-                        );
-                        let cached = self.get_cached(ipns_name).unwrap_or(0);
-                        let seq = std::cmp::max(resolved, cached);
-                        self.update_cache(ipns_name, seq);
-                        Ok(seq)
-                    }
-                    Err(e) => match self.get_cached(ipns_name) {
-                        Some(cached) => {
-                            log::warn!(
-                                "IPNS resolve failed for {}, using cached seq {}: {}",
-                                ipns_name, cached, e
-                            );
-                            Ok(cached)
-                        }
-                        None => Err(format!(
-                            "IPNS resolve failed and no cached sequence for {}: {}",
-                            ipns_name, e
-                        )),
-                    },
-                }
+            Err(crate::verify::VerifyError::Legacy { sequence_number, .. }) => {
+                // D-04: legacy record — use the carried sequence_number (no second resolve_ipns).
+                // T-59-04: carrying the already-classified response eliminates the TOCTOU race
+                // window where a concurrent publish could change the record in the ~1ms gap.
+                log::warn!(
+                    "resolve_sequence: IPNS {} resolved without signature fields \
+                     — using DB sequence (D-04)",
+                    ipns_name
+                );
+                let resolved = sequence_number.parse::<u64>().unwrap_or_else(|e| {
+                    log::warn!(
+                        "Failed to parse carried IPNS sequence '{}' for {}: {}",
+                        sequence_number, ipns_name, e
+                    );
+                    0
+                });
+                let cached = self.get_cached(ipns_name).unwrap_or(0);
+                let seq = std::cmp::max(resolved, cached);
+                self.update_cache(ipns_name, seq);
+                Ok(seq)
             }
             Err(crate::verify::VerifyError::Invalid(msg)) => {
                 // D-02: verify failure on soft resolve — fall back to cache (never wedge).
@@ -185,20 +170,17 @@ impl PublishCoordinator {
                 self.update_cache(ipns_name, seq);
                 Ok(seq)
             }
-            Err(crate::verify::VerifyError::Legacy) => {
-                // D-04: legacy record — re-resolve to get the raw sequence, warn and proceed
-                // (strict contract: only fails on resolve failure, not legacy; legacy is a
-                // successful-but-unverified resolve — proceed with DB sequence).
+            Err(crate::verify::VerifyError::Legacy { sequence_number, .. }) => {
+                // D-04: legacy record — use the carried sequence_number (no second resolve_ipns).
+                // T-59-04: carrying the already-classified response eliminates the TOCTOU race
+                // window (strict contract: only fails on resolve failure, not legacy).
                 log::warn!(
                     "resolve_sequence_strict: IPNS {} resolved without signature fields \
                      — proceeding with DB sequence (D-04)",
                     ipns_name
                 );
-                let resp = cipherbox_api_client::ipns::resolve_ipns(api, ipns_name)
-                    .await
-                    .map_err(|e| format!("IPNS resolve failed for {}: {}", ipns_name, e))?;
-                let resolved = resp.sequence_number.parse::<u64>().map_err(|e| {
-                    format!("Invalid IPNS sequence '{}' for {}: {}", resp.sequence_number, ipns_name, e)
+                let resolved = sequence_number.parse::<u64>().map_err(|e| {
+                    format!("Invalid IPNS sequence '{}' for {}: {}", sequence_number, ipns_name, e)
                 })?;
                 let cached = self.get_cached(ipns_name).unwrap_or(0);
                 let seq = std::cmp::max(resolved, cached);
