@@ -65,26 +65,20 @@
       "release-type": "node",
       "component": "@cipherbox/api",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "release-as": "0.43.0"
+      "bump-minor-pre-major": true
     },
     "apps/web": {
       "release-type": "node",
       "component": "@cipherbox/web",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "release-as": "0.46.0"
+      "bump-minor-pre-major": true
     },
     "apps/desktop": {
       "release-type": "node",
       "component": "cipherbox-desktop",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "extra-files": [
-        "src-tauri/tauri.conf.json",
-        "src-tauri/Cargo.toml"
-      ],
-      "release-as": "0.44.0"
+      "extra-files": ["src-tauri/tauri.conf.json", "src-tauri/Cargo.toml"]
     },
     "apps/tee-worker": {
       "release-type": "node",
@@ -109,15 +103,13 @@
       "release-type": "node",
       "component": "@cipherbox/api-client",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "release-as": "0.43.0"
+      "bump-minor-pre-major": true
     },
     "packages/sdk-core": {
       "release-type": "node",
       "component": "@cipherbox/sdk-core",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "release-as": "0.38.0"
+      "bump-minor-pre-major": true
     },
     "packages/sdk": {
       "release-type": "node",
@@ -137,8 +129,7 @@
       "release-type": "rust",
       "component": "cipherbox-core",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "release-as": "0.6.0"
+      "bump-minor-pre-major": true
     },
     "crates/api-client": {
       "release-type": "rust",
@@ -151,8 +142,7 @@
       "release-type": "rust",
       "component": "cipherbox-fuse",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true,
-      "release-as": "0.8.0"
+      "bump-minor-pre-major": true
     },
     "crates/sdk": {
       "release-type": "rust",
