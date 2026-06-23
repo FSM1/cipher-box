@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "7fbf038a9e1d",
+  "session_id": "c95465c8-9342-45df-8c03-82934945aca7",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T23:21:03.323657Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/60-ipns-verification-cross-layer-closeout-desktop-and-api/60-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "213985f00737",
+  "checkpoint_transcript_start": 169,
+  "transcript_lines_at_start": 169,
+  "token_usage": {
+    "input_tokens": 135,
+    "cache_creation_tokens": 6852,
+    "cache_read_tokens": 674445,
+    "output_tokens": 5766,
+    "api_call_count": 3
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Create and commit a VALIDATION.md file for phase 60 (IPNS verification cross-layer closeout desktop and API) using a template, with test infrastructure details for a polyglot phase covering Rust, Jest, Vitest, and E2E gates.",
+    "outcome": "VALIDATION.md was written to .planning/phases/60-ipns-verification-cross-layer-closeout-desktop-and-api/60-VALIDATION.md and committed (commit 358c65815 referenced for prior research; VALIDATION.md committed separately). Per-task test map was left unpopulated for the planner/Wave-0 to fill in.",
+    "learnings": {
+      "repo": [
+        "Phase 60 is polyglot: Rust (cargo), API (jest), SDK/web (vitest), cross-language vector tests, and E2E gates all coexist in a single planning phase.",
+        "Research content (Validation Architecture section) was committed at 358c65815, line 522 of the research document.",
+        "VALIDATION.md files follow a frontmatter + test infra template pattern stored in .planning/phases/<phase-dir>/."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/60-ipns-verification-cross-layer-closeout-desktop-and-api/60-VALIDATION.md",
+          "line": 1,
+          "finding": "Newly created VALIDATION.md with frontmatter and test infrastructure filled in; per-task map left blank for planner/Wave-0 population."
+        }
+      ],
+      "workflow": [
+        "Pattern-mapper run was planned after committing VALIDATION.md to surface concrete analog excerpts for the planner, specifically for api-client verified-resolve wrapper and fail-closed test patterns.",
+        "When instantiating VALIDATION.md templates for polyglot phases, fill infra accurately but defer per-task mapping to the planning/Wave-0 stage."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Per-task test map in 60-VALIDATION.md is unpopulated — needs to be filled by planner or during Wave-0.",
+      "Pattern-mapper run to extract api-client verified-resolve wrapper and fail-closed test pattern analogs was planned but not yet executed at transcript end."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T23:20:51.125227Z",
+    "agent_lines": 83,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 83,
+    "total_lines_changed": 83,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
