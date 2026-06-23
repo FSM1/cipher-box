@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "7c58b52354d2",
+  "session_id": "f4dbe4bc-e7cc-4e1a-a9d7-881fe8f116bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T20:00:15.231585Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "610447593110",
+  "token_usage": {
+    "input_tokens": 20198,
+    "cache_creation_tokens": 182648,
+    "cache_read_tokens": 4809568,
+    "output_tokens": 60576,
+    "api_call_count": 35
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Execute Phase 59 (FUSE IPNS Verify/Publish Hardening and Cleanup) — 4 sequential plans addressing file key-wrap error propagation, VerifyError::Legacy enum enrichment, dead-code removal, and first-publish sequence unification across the cipherbox-fuse crate.",
+    "outcome": "Waves 1 and 2 (plans 59-01 and 59-02) completed and verified with 95 passing tests. Wave 3 (59-03) was running at transcript end. A parallel staging DB query to count legacy IPNS records was in-flight but results not yet shown.",
+    "learnings": {
+      "repo": [
+        "Root `npm test` is `pnpm --parallel -r run test` (full monorepo) — always scope post-merge gates to `cargo -p cipherbox-fuse` for Rust-only phases to avoid RAM starvation.",
+        "`VerifyError::Legacy` was a unit variant; migrated in 59-02 to carry `{ cid: String, sequence_number: String }` across 9 match-arm sites in 6 files, eliminating a redundant IPNS resolve round-trip and a ~1ms race window.",
+        "Legacy IPNS records are discriminated by `signed_record IS NULL` in the `folder_ipns` table — signing convention landed 2026-04-04 (PR #448) which added nullable `signed_record`/`public_key` columns.",
+        "Staging Postgres: container `cipherbox-staging-postgres-1`, user `cipherbox`, db `cipherbox_staging`. Nested quoting breaks inside `docker exec` — use stdin-piped psql (`docker exec -i ... psql ... <<< 'SQL'`).",
+        "TEE re-signs enrolled IPNS names every 6h, so any vault touched since 2026-04-04 has self-healed legacy rows. Surviving legacy records are only dormant names created in the ~1-month window before signing shipped.",
+        "winfsp and crypto-clippy build failures on macOS are pre-existing CI-only issues, not regressions — documented in 59-01 SUMMARY as known caveats."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "finding": "Finding A (59-01): `build_folder_metadata` was swallowing `wrap_key` errors and publishing a FilePointer with `ipns_private_key_encrypted: None`, making the file unrecoverable. Fixed to propagate the error."
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "finding": "Finding B (59-01): inode cache was not re-resolving when a file's `file_meta_ipns_name` pointer changed under an unchanged mtime, returning stale CID/keys. Fixed to force re-resolution on pointer identity change."
+        },
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 651,
+          "finding": "Transient compile errors at this line are expected during the atomic VerifyError::Legacy enum migration — all 9 arms must be updated before the crate compiles again."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "Contains legacy-record discriminator (absence of all three Ed25519 sig fields) and a skew allowance to be removed in 59-04. Also the location of the `VerifyError` enum definition."
+        }
+      ],
+      "workflow": [
+        "Worktree isolation is wasteful and harmful for single-plan sequential waves: adds merge/cleanup overhead with zero parallelism benefit, and forces subagents to improvise node_modules access. Use sequential mode (executor runs directly on the phase branch) when plans are strictly chained one-at-a-time.",
+        "When a worktree genuinely needs node_modules, the subagent must run `pnpm i` inside the worktree — never symlink back to the parent checkout's node_modules.",
+        "GSD failure mode #2070: executor writes SUMMARY.md but the worktree is cleaned up before the file is committed → summary lost. Mitigation: inspect the worktree after a 522 interruption; if work is complete, commit SUMMARY manually before merging.",
+        "After a 522 mid-run, inspect the worktree git log before declaring failure — the agent may have finished all substantive work and only lost the final SUMMARY commit.",
+        "`cleanup-wave` helper requires a populated `--manifest` arg; a `mktemp` template collision that produces an empty variable causes a silent no-op. Always verify the manifest variable is non-empty before invoking.",
+        "The `cleanup-wave` helper may print `commit_failed` as a false-negative even when the tracking commit lands — verify with `git log` rather than trusting the helper's exit message.",
+        "Staging DB queries are independent of in-progress local file edits and can run concurrently with a subagent mid-execution."
+      ]
+    },
+    "friction": [
+      "Two Cloudflare 522 connection timeouts interrupted the session — one mid-Wave-1 executor run, one mid-merge step — requiring manual rescue of work.",
+      "`mktemp` template name collision produced an empty manifest variable, causing the `cleanup-wave` helper to silently no-op on first attempt.",
+      "Wave 1 worktree required a node_modules symlink hack by the subagent because husky pre-commit hook couldn't find lint-staged in a fresh worktree — a consequence of using worktrees unnecessarily for a sequential phase.",
+      "Nested shell quoting broke the staging `docker exec psql` invocation, requiring a fallback to stdin-piped SQL.",
+      "`cleanup-wave` tracking commit false-negative (`commit_failed` printed despite commit succeeding) required manual verification."
+    ],
+    "open_items": [
+      "Wave 3 (59-03): dead-code removal — collapse dead `journal_entry` branch in CAS helper, remove `content_ops` dead bindings, drop `signature_verified` field, fix `is_ipns_not_found` test and vector fixture in `scripts/gen-ipns-verify-vectors.ts` and `tests/vectors/ipns/verify.json`.",
+      "Wave 4 (59-04): unify FUSE first-publish embedded sequence to `1` and remove the `verify.rs` skew allowance.",
+      "Phase 59 verification and completion steps not yet run.",
+      "Staging legacy-record count (`SELECT count(*) WHERE signed_record IS NULL FROM folder_ipns`) was in-flight at transcript end — result not captured."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 8,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      },
+      "user_removed_per_file": {
+        "crates/fuse/src/events.rs": 1,
+        "crates/fuse/src/verify.rs": 5,
+        "scripts/gen-ipns-verify-vectors.ts": 2
+      }
+    }
+  ]
+}
