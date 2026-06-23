@@ -222,9 +222,12 @@ impl CipherBoxFS {
                     let ipns_key_encrypted = if let Some(h) = file_ipns_key_encrypted_hex {
                         Some(h.clone())
                     } else if let Some(key) = file_ipns_private_key {
-                        cipherbox_crypto::wrap_key(key, &self.public_key)
-                            .ok()
-                            .map(|w| hex::encode(&w))
+                        Some(
+                            hex::encode(
+                                cipherbox_crypto::wrap_key(key, &self.public_key)
+                                    .map_err(|e| format!("Wrap IPNS key: {}", e))?,
+                            ),
+                        )
                     } else {
                         None
                     };
@@ -628,4 +631,174 @@ pub fn mount_point() -> PathBuf {
     dirs::home_dir()
         .expect("Could not determine home directory")
         .join("CipherBox")
+}
+
+/// Tests for `build_folder_metadata` key-wrap error propagation (Finding A / T-59-01).
+///
+/// These tests verify that a `wrap_key` failure in the `InodeKind::File` arm
+/// returns `Err("Wrap IPNS key: ...")` rather than silently producing a
+/// `FilePointer` with `ipns_private_key_encrypted: None`.
+#[cfg(all(test, feature = "fuse"))]
+mod build_folder_metadata_tests {
+    use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
+    use crate::test_support::make_test_fs_with_keypair;
+    use std::time::SystemTime;
+    use zeroize::Zeroizing;
+
+    /// Generate a real secp256k1 keypair via the `ecies` dev-dep.
+    /// A zero vec is NOT a valid curve point (wrap_key fails on it).
+    fn real_keypair() -> (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) {
+        let (sk, pk) = ecies::utils::generate_keypair();
+        (
+            Zeroizing::new(sk.serialize().to_vec()),
+            Zeroizing::new(pk.serialize().to_vec()),
+        )
+    }
+
+    /// Build a minimal file inode with `file_ipns_private_key` set and insert it
+    /// as a child of root.  Returns the child inode number.
+    fn insert_file_with_private_key(
+        fs: &mut crate::CipherBoxFS,
+        file_ipns_private_key: Option<Zeroizing<Vec<u8>>>,
+        file_ipns_key_encrypted_hex: Option<String>,
+    ) -> u64 {
+        let ino = fs.inodes.allocate_ino();
+        let now = SystemTime::now();
+        let data = InodeData {
+            ino,
+            parent_ino: ROOT_INO,
+            name: "test.txt".to_string(),
+            kind: InodeKind::File {
+                cid: "bafytest".to_string(),
+                encrypted_file_key: "deadbeef".to_string(),
+                iv: "aabbccdd".to_string(),
+                size: 100,
+                encryption_mode: "GCM".to_string(),
+                file_meta_ipns_name: Some("k51file-ipns-name".to_string()),
+                file_meta_resolved: true,
+                file_ipns_private_key,
+                file_ipns_key_encrypted_hex,
+                versions: None,
+            },
+            attr: FileAttrs {
+                ino,
+                size: 100,
+                blocks: 1,
+                atime: now,
+                mtime: now,
+                ctime: now,
+                crtime: now,
+                is_dir: false,
+                perm: 0o644,
+                nlink: 1,
+            },
+            children: None,
+            write_generation: 0,
+        };
+        fs.inodes.insert(data);
+        // Register as child of root
+        if let Some(root) = fs.inodes.get_mut(ROOT_INO) {
+            if let Some(ref mut children) = root.children {
+                children.push(ino);
+            }
+        }
+        ino
+    }
+
+    /// Test 1 (RED): A file child with a `file_ipns_private_key` and an INVALID
+    /// public_key (zero vec — not a valid secp256k1 point) causes `wrap_key` to
+    /// fail.  `build_folder_metadata` MUST return `Err` whose message starts with
+    /// "Wrap IPNS key:" and must NOT silently return `Ok` with
+    /// `ipns_private_key_encrypted: None`.
+    ///
+    /// This test is RED under the broken `.ok()` code and GREEN after the fix.
+    #[tokio::test]
+    async fn build_folder_metadata_wrap_key_error_propagates_as_err() {
+        // Zero public_key is NOT a valid secp256k1 point → wrap_key will Err.
+        let private_key = Zeroizing::new(vec![0u8; 32]);
+        let invalid_public_key = Zeroizing::new(vec![0u8; 33]);
+        let mut fs = make_test_fs_with_keypair(private_key, invalid_public_key);
+
+        let _ino = insert_file_with_private_key(
+            &mut fs,
+            Some(Zeroizing::new(vec![1u8; 32])), // non-empty private key → triggers wrap
+            None,                                  // no pre-wrapped hex → forces wrap path
+        );
+
+        let result = fs.build_folder_metadata(ROOT_INO);
+        assert!(
+            result.is_err(),
+            "build_folder_metadata MUST return Err when wrap_key fails; got Ok instead"
+        );
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.starts_with("Wrap IPNS key:"),
+            "Error message must start with 'Wrap IPNS key:'; got: {err_msg:?}"
+        );
+    }
+
+    /// Test 2: When `file_ipns_key_encrypted_hex` is already `Some(hex)`, the
+    /// pre-wrapped hex is carried through unchanged (the already-wrapped path is
+    /// not affected by this fix).
+    #[tokio::test]
+    async fn build_folder_metadata_pre_wrapped_hex_passes_through() {
+        let (private_key, public_key) = real_keypair();
+        let mut fs = make_test_fs_with_keypair(private_key, public_key);
+
+        let pre_wrapped_hex = "deadbeef1234".to_string();
+        let _ino = insert_file_with_private_key(
+            &mut fs,
+            None,                                    // no raw private key
+            Some(pre_wrapped_hex.clone()),            // pre-wrapped hex present
+        );
+
+        let result = fs.build_folder_metadata(ROOT_INO);
+        assert!(result.is_ok(), "build_folder_metadata must succeed when hex is pre-wrapped");
+        let (metadata, _, _, _, _) = result.unwrap();
+        let file_child = metadata.children.iter().find_map(|c| {
+            if let cipherbox_core::FolderChild::File(fp) = c {
+                Some(fp)
+            } else {
+                None
+            }
+        });
+        assert!(file_child.is_some(), "Must have one File child");
+        assert_eq!(
+            file_child.unwrap().ipns_private_key_encrypted.as_deref(),
+            Some(pre_wrapped_hex.as_str()),
+            "Pre-wrapped hex must be carried through unchanged"
+        );
+    }
+
+    /// Test 3: When the file has NEITHER a private key NOR a pre-wrapped hex,
+    /// `ipns_private_key_encrypted` is `None` and `build_folder_metadata` returns
+    /// `Ok` (the genuinely-absent path stays `None` — only the wrap-FAILURE path
+    /// becomes `Err`).
+    #[tokio::test]
+    async fn build_folder_metadata_absent_key_produces_none_not_err() {
+        let (private_key, public_key) = real_keypair();
+        let mut fs = make_test_fs_with_keypair(private_key, public_key);
+
+        let _ino = insert_file_with_private_key(
+            &mut fs,
+            None, // no private key
+            None, // no pre-wrapped hex
+        );
+
+        let result = fs.build_folder_metadata(ROOT_INO);
+        assert!(result.is_ok(), "build_folder_metadata must succeed when key is absent");
+        let (metadata, _, _, _, _) = result.unwrap();
+        let file_child = metadata.children.iter().find_map(|c| {
+            if let cipherbox_core::FolderChild::File(fp) = c {
+                Some(fp)
+            } else {
+                None
+            }
+        });
+        assert!(file_child.is_some(), "Must have one File child");
+        assert!(
+            file_child.unwrap().ipns_private_key_encrypted.is_none(),
+            "ipns_private_key_encrypted must be None when no key is present"
+        );
+    }
 }
