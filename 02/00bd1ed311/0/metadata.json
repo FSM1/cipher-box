@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "0200bd1ed311",
+  "session_id": "ee764e72-7c6a-455e-8494-6efa906c7f74",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T19:06:04.609557Z",
+  "branch": "docs/plan-phase-59",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fdf251b4a24d",
+  "token_usage": {
+    "input_tokens": 11974,
+    "cache_creation_tokens": 97678,
+    "cache_read_tokens": 1342838,
+    "output_tokens": 19770,
+    "api_call_count": 15
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for phase 59 (fuse-ipns-verify-publish-hardening-and-cleanup) to produce a structured PLAN.md via the research → plan → verify pipeline.",
+    "outcome": "Research (59-RESEARCH.md), validation (59-VALIDATION.md), and pattern mapping (59-PATTERNS.md) completed successfully; the planner subagent was spawned but the transcript ends before its result is returned.",
+    "learnings": {
+      "repo": [
+        "Phase 59 targets durability-critical FUSE Rust files with six concrete todo writeups in .planning/todos/pending/ — no CONTEXT.md was needed because the todos serve as the spec.",
+        "TEE republish path bypasses the embedded-sequence gate in verify.rs entirely — the re-sign risk (Finding F) is not present, but unifying FUSE to embed=1 is still recommended to allow removal of the verify.rs hotfix.",
+        "auto_chain_active flag in phase frontmatter must be cleared when the workflow is invoked manually (without --auto/--chain) to prevent unintended auto-advance.",
+        "The TS API surface extractor produces empty output for pure Rust phases — this is expected and the artifact should be omitted from planner hints rather than treated as an error.",
+        "Pattern mapper produced 9/9 analogs (59-PATTERNS.md), indicating strong prior-art coverage for this phase's scope."
+      ],
+      "code": [],
+      "workflow": [
+        "The commit_failed signal after git commits is a known false-negative in this repo's GSD tooling — actual commit success should be verified separately.",
+        "Todo-archival (moving completed todos from .planning/todos/pending/ to .planning/todos/completed/) should be included as an explicit task in the generated PLAN.md when todos are the phase spec.",
+        "Research-only mode (--research-phase N) exists as a cheaper iteration loop when replanning is not needed — useful for correction-without-replanning cycles.",
+        "VALIDATION.md is committed before the planner runs, so the planner can reference the validated test infrastructure strategy."
+      ]
+    },
+    "friction": [
+      "commit_failed false-negative requires a secondary verification step after every git commit, adding noise to the workflow.",
+      "Transcript ends mid-planner-run — planner result and verification loop outcome are unknown."
+    ],
+    "open_items": [
+      "Planner subagent result not captured — 59-PLAN.md may or may not have been written; verification loop (gsd-plan-checker) has not run.",
+      "verify.rs hotfix removal is deferred pending the embed=1 unification work identified in research Finding F.",
+      "Six todo writeups in .planning/todos/pending/ need to be archived to .planning/todos/completed/ once the plan is executed."
+    ]
+  }
+}
