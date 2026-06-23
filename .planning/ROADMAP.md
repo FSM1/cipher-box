@@ -1040,7 +1040,7 @@ Verification gate: full SDK E2E suite (local; redis 6380), apps/api specs, `carg
 **Goal:** Close out the Phase 58 IPNS verification long-tail on the FUSE crate — finish the two partially-done durability fixes and clear the dead-code/cleanup debt across the same durability-critical files (`verify.rs`, `events.rs`, `metadata.rs`, `content_ops.rs`, `fs.rs`, `inode.rs`, `publish.rs`, `replay.rs`), so the verify/publish/CAS paths carry no swallowed errors, no dead seams, and a single first-publish embedded-sequence convention. Touches durability-critical publish paths, so full SDK-E2E + desktop-E2E gated.
 **Requirements**: HARD-10
 **Depends on:** Phase 58 (resolve_ipns_verified chokepoint), Phase 56 (FUSE durability baseline)
-**Plans:** TBD (run /gsd-plan-phase 59)
+**Plans:** 4 plans
 
 Scope (captured todos):
 
@@ -1053,7 +1053,10 @@ Scope (captured todos):
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 59 to break down)
+- [ ] 59-01-PLAN.md — Findings A+B: propagate file IPNS key-wrap error (fs.rs) + re-resolve file inode on changed file_meta_ipns_name (inode.rs) [tdd]
+- [ ] 59-02-PLAN.md — Finding C: migrate VerifyError::Legacy to carry { cid, sequence_number } across all 9 arms (atomic enum migration) [tdd]
+- [ ] 59-03-PLAN.md — Findings D+E: collapse dead journal_entry branch + content_ops dead bindings, remove dead signature_verified field, fix is_ipns_not_found test + vector fixture [execute]
+- [ ] 59-04-PLAN.md — Finding F: unify FUSE first-publish embedded sequence to 1 + remove verify.rs skew allowance; archive the 6 source todos [execute]
 
 Verification gate: `cargo test` (fuse + winfsp feature sets), winfsp Windows CI, full SDK E2E (local; redis 6380), desktop E2E (dispatch-gated).
 
