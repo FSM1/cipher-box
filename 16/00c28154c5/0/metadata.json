@@ -1,0 +1,155 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1600c28154c5",
+  "session_id": "f4dbe4bc-e7cc-4e1a-a9d7-881fe8f116bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T20:29:23.6611Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "c373bf9d920c",
+  "token_usage": {
+    "input_tokens": 20758,
+    "cache_creation_tokens": 279019,
+    "cache_read_tokens": 10072007,
+    "output_tokens": 108582,
+    "api_call_count": 57
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01HB29MWnEJRNXm1V6nmoF3d",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c373bf9d920c",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 321,
+        "end": 322,
+        "entry_ids": [
+          "ddc2cbfa-6afa-46f8-af6d-979671bb7312"
+        ],
+        "tool_use_id": "toolu_01HB29MWnEJRNXm1V6nmoF3d"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HB29MWnEJRNXm1V6nmoF3d"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute Phase 59 (FUSE IPNS Verify/Publish Hardening and Cleanup) across 4 sequential waves, each containing one plan (59-01 through 59-04). Additionally, investigate why a staging user showed 441MB quota used with an empty vault and bin.",
+    "outcome": "All 4 plans executed and verified successfully (96 tests passing, zero new clippy warnings). The staging quota discrepancy was diagnosed as a client-SDK bug where bin delete/empty-bin never unpins file content or version CIDs — confirmed by querying the staging Postgres DB. The bug was captured as a structured todo on the feature branch.",
+    "learnings": {
+      "repo": [
+        "Phase 59 has a strict sequential dependency chain (59-01→02→03→04) with one plan per wave — worktree isolation adds no parallelism benefit in this topology; sequential mode is correct.",
+        "Root npm test script is `pnpm --parallel -r run test` (entire monorepo); for Rust-only phases, scope the post-merge gate to `cargo test -p cipherbox-fuse` to avoid RAM starvation.",
+        "CI does not run clippy — no `.github/workflows/` references it; 24 pre-existing fuse crate clippy warnings exist (vendored ABI structs + too_many_arguments), none introduced by phase 59.",
+        "Staging `folder_ipns`: 43 total published rows, 23 legacy/unsigned (53%), 2 partial (signed_record present, public_key NULL), 18 fully modern. Oldest row 2026-03-28, signing convention landed 2026-04-04 (#448). The Legacy verify path is hot, not dead.",
+        "Server quota accounting: quota_used = live SUM(pinned_cids.size_bytes) per user; server has no files/file_versions table — file structure lives in client-encrypted IPNS metadata. The only decrement path is POST /ipfs/unpin → VaultService.guardedUnpin.",
+        "The `gsd_run query commit` tool prints `commit_failed` even when the commit lands (known false-negative); do not retry.",
+        "STATE.md Pending Todos section is hand-maintained narrative, not computed from directory count — it drifts stale."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 241,
+          "end_line": 290,
+          "finding": "addToBin builds BinEntry but never populates contentCid or versionCids; the real content CID lives in the file's own IPNS record (FileMetadata.cid via FilePointer.fileMetaIpnsName) which addToBin never resolves."
+        },
+        {
+          "path": "packages/core/src/bin/types.ts",
+          "line": 37,
+          "end_line": 41,
+          "finding": "BinEntry has optional contentCid and versionCids fields that are never populated by addToBin, causing all downstream unpin guards to short-circuit."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 557,
+          "end_line": 557,
+          "finding": "emptyBin gates unpin on `if (entry.contentCid)` — always undefined since addToBin never sets it — so emptying the bin releases zero bytes."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 514,
+          "end_line": 514,
+          "finding": "permanentDeleteFromBin has the same `if (entry.contentCid)` dead guard; also leaks all FileMetadata.versions[].cid for versioned files."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 599,
+          "end_line": 599,
+          "finding": "purgeExpiredEntries same dead unpin guard; expired bin entries never release their pinned bytes."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "finding": "updateFolderMetadataAndPublish → addToIpfs → recordPin uploads a fresh pinned metadata blob on every CAS publish and never unpins the superseded one, producing a <10KB metadata-blob accumulation tail."
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "getQuota/recordPin/guardedUnpin — quota is live SUM(pinned_cids.size_bytes); pinned_cids is the only byte table; no server-side file structure."
+        }
+      ],
+      "workflow": [
+        "For single-plan-per-wave sequential phases, dispatch executors directly on the main branch (no worktree) — worktree isolation exists for concurrent parallel agents and adds pure overhead when there is no concurrency.",
+        "When a worktree genuinely needs node_modules (parallel waves with husky hooks), the subagent must run `pnpm i` in its own worktree root — never symlink back to the parent checkout's node_modules.",
+        "GSD #2070 failure mode: executor writes SUMMARY.md but a 522/interruption fires before the commit; rescue by committing SUMMARY in the worktree before running the cleanup-wave helper.",
+        "The cleanup-wave helper requires a non-empty --manifest argument; use an absolute path stored before mktemp, not a template variable that can expand empty.",
+        "Query the staging DB for legacy record ratios before concluding a code path is dead — 53% legacy on staging proved the VerifyError::Legacy path is actively exercised."
+      ]
+    },
+    "friction": [
+      "Two Cloudflare 522 connection timeouts during the session — one interrupted the Wave 1 executor mid-SUMMARY commit, requiring a manual rescue; one interrupted the cleanup-wave merge step.",
+      "Wave 1 was incorrectly dispatched into a worktree despite having no parallel plans in the wave; the worktree overhead (symlink hack, merge dance, 522 rescue) was avoidable.",
+      "The subagent created a node_modules symlink pointing to the parent repo checkout instead of initializing its own, breaking the isolation contract and requiring manual cleanup.",
+      "mktemp template name collision produced an empty manifest variable in the cleanup-wave helper, causing it to fail closed and requiring a retry with a fixed absolute path.",
+      "cargo clippy -D warnings fails on the pre-existing cipherbox-crypto dependency warnings before reaching any fuse-crate findings, making the plan's acceptance criterion (clippy exits 0) literally unachievable as written.",
+      "STATE.md Pending Todos count was stale (21 vs actual 15+), requiring a dated narrative append rather than a clean count update."
+    ],
+    "open_items": [
+      "Fix bin delete/empty-bin IPFS quota leak: addToBin must resolve and store contentCid + versionCids; emptyBin/permanentDeleteFromBin/purgeExpiredEntries must unpin them; add SDK/E2E test that asserts quota drops after empty-bin (captured as todo 2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md).",
+      "Secondary leak: unpin superseded metadata CID on CAS publish to stop the <10KB metadata-blob accumulation tail.",
+      "One-off staging remediation: reclaim the staging user's 442 MB by deleting orphaned pinned_cids rows + Kubo unpin for the 9 large CIDs (needs client keys to verify CIDs are unreachable from current IPNS metadata).",
+      "2 partial-field rows in staging folder_ipns (signed_record present, public_key NULL) — neither cleanly legacy nor modern; worth understanding before Phase 60 sequence unification.",
+      "D-01a TODO in publish.rs: `journal_entry` param retained with a note but the dead branch was collapsed — the param itself may be removable in a follow-on cleanup.",
+      "Phase 60 depends on Phase 59's sequence-unification work (59-04 flips first-publish embedded sequence to 1); Phase 60 scope not yet defined.",
+      "Pre-existing cipherbox-crypto clippy warnings should be fixed to make -D warnings meaningful as a gate; currently CI skips clippy entirely."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
