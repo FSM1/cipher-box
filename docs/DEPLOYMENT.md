@@ -103,7 +103,7 @@ Configuration: `docker/docker-compose.staging.yml`
 | `api`        | `ghcr.io/{owner}/cipherbox-api:{tag}`        | NestJS API, port 3000 (loopback only)                                                                                                    |
 | `postgres`   | `postgres:16-alpine`                         | PostgreSQL database, port 5432 (loopback only)                                                                                           |
 | `redis`      | `redis:7-alpine`                             | Redis (password-protected), port 6379 (loopback only)                                                                                    |
-| `ipfs`       | `ipfs/kubo:v0.40.0`                          | Kubo IPFS node (pebbleds profile), p2p port 4001 public, API/gateway loopback                                                            |
+| `ipfs`       | `ipfs/kubo:v0.42.0`                          | Kubo IPFS node (pebbleds profile), p2p port 4001 public, API/gateway loopback                                                            |
 | `tee-worker` | `ghcr.io/{owner}/cipherbox-tee-worker:{tag}` | TEE worker in `TEE_MODE=simulator` for staging                                                                                           |
 | `someguy`    | `ghcr.io/ipfs/someguy:v0.11.1`               | Delegated IPFS routing (accelerated DHT), p2p port 4004 public, routing API 8190 internal-only (unlike local dev, where it is published) |
 | `caddy`      | `caddy:2-alpine`                             | Reverse proxy / TLS termination / web app static serving                                                                                 |

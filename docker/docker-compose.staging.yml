@@ -60,7 +60,7 @@ services:
       retries: 5
 
   ipfs:
-    image: ipfs/kubo:v0.40.0
+    image: ipfs/kubo:v0.42.0
     restart: unless-stopped
     environment:
       # pebbleds: LSM-tree datastore for faster concurrent write throughput (Phase 19.2)
@@ -74,6 +74,9 @@ services:
       - '127.0.0.1:8080:8080'
     volumes:
       - ipfs_staging:/data/ipfs
+      # Kubo runs /container-init.d/*.sh on every boot (sourced before the daemon);
+      # 001-provide-strategy.sh sets Provide.Strategy=roots idempotently.
+      - ./ipfs-init:/container-init.d:ro
     logging: *default-logging
     healthcheck:
       test: ['CMD-SHELL', 'ipfs id || exit 1']
@@ -84,8 +87,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: '1.0'
+          # Kubo is load-bearing and shares the 2-vCPU box with someguy. Load
+          # testing (2026-06) showed the 1.0 cap pegged under concurrent uploads;
+          # 1.5 is the measured throughput knee (+18%), 2.0 gave no further gain.
+          memory: 3G
+          cpus: '1.5'
 
   tee-worker:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-OWNER}/cipherbox-tee-worker:${TAG:-latest}

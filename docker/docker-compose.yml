@@ -19,7 +19,7 @@ services:
       retries: 5
 
   ipfs:
-    image: ipfs/kubo:v0.40.0
+    image: ipfs/kubo:v0.42.0
     container_name: cipherbox-ipfs
     restart: unless-stopped
     environment:
@@ -30,6 +30,9 @@ services:
       - IPFS_PROFILE=server,pebbleds
     volumes:
       - ipfs_data:/data/ipfs
+      # Kubo runs /container-init.d/*.sh on every boot (sourced before the daemon);
+      # 001-provide-strategy.sh sets Provide.Strategy=roots idempotently.
+      - ./ipfs-init:/container-init.d:ro
     ports:
       # Swarm - P2P connections
       - '4001:4001/tcp'
@@ -50,8 +53,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: '1.0'
+          # Kubo is load-bearing; mirror the staging tuning (see docs/CAPACITY.md).
+          memory: 3G
+          cpus: '1.5'
 
   redis:
     image: redis:7-alpine
