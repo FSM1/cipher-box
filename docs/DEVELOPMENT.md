@@ -28,7 +28,7 @@ This starts the `cipherbox-infrastructure` compose project (containers are named
 Notes:
 
 - The IPFS node runs with the `server,pebbleds` datastore profile. If you have an `ipfs_data` volume created before the pebbleds switch, recreate it first: `docker compose -f docker/docker-compose.yml down -v --remove-orphans`.
-- The `ipfs` and `someguy` containers are each capped at 2 GB memory / 1 CPU.
+- The `ipfs` container is capped at 3 GB memory / 1.5 CPU; the `someguy` container is capped at 2 GB memory / 1 CPU.
 - The staging stack runs a different set of containers (adds `api`, `tee-worker`, `caddy`, `alloy`; drops `mock-ipns-routing`) — see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Environment
