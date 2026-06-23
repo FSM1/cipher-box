@@ -196,11 +196,9 @@ pub async fn publish_file_metadata(
         coordinator.record_publish(file_ipns_name, new_seq);
     } else {
         // Update publish: use CAS via the shared helper (D-02 / D-03).
-        // D.3: guard directly; current_seq_for_cas binding was dead (helper re-resolves internally).
-        if current_seq.is_none() {
-            return Err("resolve_sequence returned None for update publish".to_string());
-        }
-
+        // current_seq is always Some here (is_first_publish == false) and is consumed only by
+        // next_file_publish_sequence above; the helper re-resolves the sequence internally, so
+        // no local unwrap/guard is needed.
         crate::metadata::publish_with_cas_retry(
             api,
             coordinator,
