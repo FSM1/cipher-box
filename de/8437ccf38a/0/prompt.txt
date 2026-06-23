@@ -168,3 +168,93 @@ if cleanup is the fix that has me really worried about scalability - 17k objects
 ---
 
 land #1, handle #4, then investigate #3
+
+---
+
+<task-notification>
+<task-id>a04db359a7ff8f593</task-id>
+<tool-use-id>toolu_01MrQgGG2YSQQn2bB25GXcjm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/a04db359a7ff8f593.output</output-file>
+<status>completed</status>
+<summary>Agent "Vet Kubo 0.41/0.42 changelogs" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed: both v0.40.0 and v0.42.0 use `RepoVersion = 18`. No repo migration occurs across the jump. I now have everything verified against authoritative sources.
+
+# Kubo v0.40.0 → v0.42.0 Upgrade Risk Report
+
+Scope: jumping across v0.41.0 and v0.42.0, for a Docker `ipfs/kubo` node with `IPFS_PROFILE=server,pebbleds`, `Provide.Strategy=roots`, deprecated `Reprovider.*` keys already removed, on a persistent fs-repo volume.
+
+## 1. Breaking changes / fatal-on-boot config keys
+
+| Version | Breaking item | Applies to us? | Action |
+|---|---|---|---|
+| v0.41.0 | None labeled "Breaking." Only behavioral note: `ipfs files chcid /` (MFS root) no longer accepted. | No | None |
+| v0.42.0 | `[!IMPORTANT]` — daemon **refuses to start when `Provide.DHT.Interval=0` is set without an explicit `Provide.Enabled`**. | **No** — only triggers if you have `Provide.DHT.Interval=0`. Our config uses `Provide.Strategy=roots` and does not set `Interval=0`. | None required. (If you ever set `Interval=0`, you must also set `Provide.Enabled=false` or `=true`.) |
+
+There is **no key that fatals on boot for our config** in either release — unlike the `Reprovider.*` removal in 0.40. `Provide.Strategy=roots` is unchanged and still valid in both releases. No config keys are removed or renamed in 0.41 or 0.42. (Sources: v0.42 changelog `[!IMPORTANT]` block; v0.41 changelog has no Breaking section — confirmed "NOT PRESENT".)
+
+## 2. fs-repo version / migration
+
+**No repo migration occurs.** Verified directly from source: `version.go` defines `const RepoVersion = 18` in **both v0.40.0 and v0.42.0** (and 0.41 sits between, same value). Since the on-disk repo version is unchanged, first boot on 0.42.0 performs **no one-way fs-repo migration** — rollback to 0.40.0 is safe at the repo-format level.
+
+Caveats:
+- v0.41 does a transparent, automatic one-time cleanup: the provider keystore relocates to `$IPFS_PATH/provider-keystore/` and stale keystore data is purged from the shared datastore on first start. This is not a repo-version migration and is not gated by repo version, but it does mutate the datastore — take a volume snapshot before upgrading if you want a clean rollback.
+- The only "migration" text in the 0.42 changelog refers to the legacy one-time migration for repos older than **v0.27** (gateway-download robustness). Irrelevant to a repo already at v18.
+
+(Sources: `version.go` at tags v0.40.0 and v0.42.0 = `RepoVersion = 18`; v0.41 changelog keystore-relocation note; v0.42 changelog migration note scoped to pre-v0.27.)
+
+## 3. Provide / Reprovide / DHT-announcement changes
+
+`Provide.Strategy=roots` semantics are preserved. Notable additions/changes:
+
+- **v0.42 — pinner lock fix (positive for us):** the pinner no longer holds a read lock for the whole reprovide cycle for `roots` (and `pinned`, `pinned+mfs`, `+unique`/`+entities`). The index is snapshotted under the lock then released, eliminating multi-hour blocking of `ipfs pin ls` / `ipfs add` during reprovide. Default `all` was unaffected; `roots` benefits directly.
+- **v0.42 — new `ipfs provide once &lt;cid&gt;`** for immediate announcement (streams from stdin); `ipfs routing provide` is now deprecated. Additive.
+- **v0.42 — new `Provide.DHT.SendProviderRecordTimeout`** caps per-peer provider-record sends so unresponsive peers can't stall reprovide cycles. Additive, has a default.
+- **v0.42 — `Provide.DHT.Interval=0` semantic change:** now disables only the periodic reprovide schedule (new CIDs still announce via fast-provide-root / `provide once`); full disable is `Provide.Enabled=false`. Only relevant if you set `Interval=0` (see §1).
+- **v0.41 — new strategy modifiers** `+unique` (bloom-dedup across recursive pins) and `+entities` (announce only entity roots, skip internal chunks), plus `Provide.BloomFPRate`. Additive; defaults unchanged for `roots`.
+
+(Source: v0.42 changelog pinner-lock + `provide once` + `SendProviderRecordTimeout` + `Interval=0` notes; v0.41 changelog strategy modifiers + `BloomFPRate`.)
+
+## 4. pebbleds / Datastore changes (server,pebbleds)
+
+- No breaking schema changes for pebble; profile string `pebbleds` is unchanged and valid.
+- **v0.42:** pinner now cancels and waits for in-flight pin work before the datastore closes — removes `"pebble: closed"` panic traces from shutdown logs. Pure robustness improvement.
+- **v0.41:** provider keystore moved out of the shared datastore into `$IPFS_PATH/provider-keystore/`; after each reprovide cycle the old keystore datastore is removed from disk, reclaiming space immediately (fixes unbounded `datastore/` growth with DHT sweep). Affects all backends including pebble; transparent.
+
+(Source: v0.42 changelog pebble-shutdown note; v0.41 changelog keystore relocation.)
+
+## 5. Go version, default config, gateway/RPC behind reverse proxy
+
+- **Go:** v0.41 returns to Go 1.26.2 (after a 0.40.1 downgrade); v0.42 → Go 1.26.4. Lower memory / reduced GC pauses (Green Tea GC). No action.
+- **Reverse-proxy / loopback gotcha (applies to both 0.41 and 0.42):** the `server` profile's `Swarm.AddrFilters` includes `/ip4/127.0.0.0/ipcidr/8`, which blocks loopback **swarm** listeners. v0.42 now logs one ERROR per blocked listener.
+  - This only matters if you add a **loopback entry to `Addresses.Swarm`** (e.g. a `/ip4/127.0.0.1/.../ws` swarm transport for the proxy). A standard setup with **API and Gateway** bound to loopback (`Addresses.API` / `Addresses.Gateway`) is **not** affected — `AddrFilters` governs the libp2p swarm, not the HTTP API/gateway listeners. Fix only if you proxy a loopback *swarm* listener: remove `/ip4/127.0.0.0/ipcidr/8` from `Swarm.AddrFilters`.
+- **v0.42 health/shutdown (relevant to Docker):** new `Internal.ShutdownTimeout` (default 12h; `0` disables) bounds graceful shutdown, exits status 1 on expiry. New `ipfs diag healthy` command; the Docker image `HEALTHCHECK` now uses it (returns non-zero once shutdown begins). No action needed unless you have custom healthchecks/`stop_grace_period`.
+
+(Source: v0.41 changelog Go-1.26.2 + server-profile loopback filtering; v0.42 changelog Go-1.26.4, `Internal.ShutdownTimeout`, `ipfs diag healthy`, reverse-proxy loopback ERROR.)
+
+## 6. New recommended config for our use case
+
+- **No change required.** For DHT-record / provide-CPU reduction on large pinned repos, 0.41 offers `Provide.Strategy="pinned+mfs+entities"` and the `+unique`/`+entities` modifiers — optional, only if you switch off `roots`. Since you announce **pin roots**, `roots` already minimizes records; the new modifiers mainly help `pinned`/`all` strategies.
+- The 0.42 pinner-lock fix already improves provide responsiveness for `roots` with zero config.
+
+---
+
+## VERDICT
+
+**Bumping v0.40.0 → v0.42.0 is safe for your config as-is. No config or init changes are required, and no one-way fs-repo migration will occur.**
+
+- **No fatal-on-boot key for you.** The only 0.42 boot-refusal is gated on `Provide.DHT.Interval=0` + missing `Provide.Enabled`, which your `Provide.Strategy=roots` config does not hit. `Provide.Strategy=roots` and `pebbleds` remain valid. (Source: v0.42 changelog `[!IMPORTANT]`; v0.41 changelog — no Breaking section.)
+- **No repo migration / rollback-safe at the format level:** `RepoVersion = 18` in both v0.40.0 and v0.42.0 (verified in `version.go`). Rollback to 0.40.0 is not blocked by a version-stamp migration. Take a volume snapshot first anyway, because v0.41 mutates the datastore on first boot (provider-keystore relocation + stale-data cleanup) — that change is not reverted on downgrade. (Source: `version.go` @ v0.40.0/v0.42.0; v0.41 changelog keystore note.)
+- **Net positive for your workload:** v0.42's pinner-lock fix removes long reprovide-cycle blocking of `pin ls`/`add` for the `roots` strategy.
+
+Pre-flight checklist:
+1. Snapshot the persistent fs-repo volume (covers the irreversible v0.41 keystore relocation).
+2. Confirm you do not set `Provide.DHT.Interval=0` (you don't). If you ever do, add `Provide.Enabled`.
+3. Only if you proxy a **loopback swarm** listener: remove `/ip4/127.0.0.0/ipcidr/8` from `Swarm.AddrFilters` (loopback API/Gateway are unaffected).
+4. If you rely on custom Docker healthchecks/stop timeouts, note the new `ipfs diag healthy` HEALTHCHECK and `Internal.ShutdownTimeout` (12h default).
+
+Sources: [v0.41.0 release](https://github.com/ipfs/kubo/releases/tag/v0.41.0), [v0.42.0 release](https://github.com/ipfs/kubo/releases/tag/v0.42.0), [v0.41 changelog](https://raw.githubusercontent.com/ipfs/kubo/master/docs/changelogs/v0.41.md), [v0.42 changelog](https://raw.githubusercontent.com/ipfs/kubo/master/docs/changelogs/v0.42.md), and `version.go` at tags v0.40.0/v0.42.0 (`RepoVersion = 18`).
+
+Note: WebFetch summaries are produced by a small model and occasionally embellish; every load-bearing claim above (no Breaking section in 0.41, the single 0.42 boot-refusal condition, and the unchanged `RepoVersion = 18`) was re-verified against the raw changelog text or source constant rather than taken from a summary.</result>
+<usage><subagent_tokens>39647</subagent_tokens><tool_uses>14</tool_uses><duration_ms>138930</duration_ms></usage>
+</task-notification>
