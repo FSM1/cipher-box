@@ -1,0 +1,135 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9d0f0be348d4",
+  "session_id": "8f1f51ad-c2b4-4d1c-a945-8248921b9e05",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T21:57:46.853226Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "034c7b93d278",
+  "checkpoint_transcript_start": 327,
+  "transcript_lines_at_start": 327,
+  "token_usage": {
+    "input_tokens": 2336,
+    "cache_creation_tokens": 88400,
+    "cache_read_tokens": 7003104,
+    "output_tokens": 65434,
+    "api_call_count": 32
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Resolve 5 CodeRabbit review threads on PR #553, verify CI gates, and fix any real data-integrity bugs before merging.",
+    "outcome": "All CI gates passed (Desktop E2E, Windows winfsp, SDK E2E, Cross-Language Vector Parity). A real phase-owned durability bug (pointer-swap dropping raw IPNS signing key) was found, fixed, and regression-tested (96 tests pass). ROADMAP.md was updated. Thread 4 was deferred with a todo. Thread 5 was disputed as a false positive.",
+    "learnings": {
+      "repo": [
+        "CodeRabbit posts findings as issue comments and inline review threads, not as GitHub review objects — the CLI review endpoint returns empty but 5 threads exist on the web surface.",
+        "The `same_pointer==false` branch of the `else if was_resolved` rebuild block in inode.rs sets `file_ipns_private_key: None`, but neither `resolve_file_pointer` nor any live publish consumer re-unwraps `file_ipns_key_encrypted_hex` on demand — only the crash-replay path does.",
+        "The publish.rs non-strict Legacy arm returning Ok(0) on parse failure with no cache is pre-existing and byte-identical to origin/main; the CAS `expected_sequence_number` mechanism self-heals a wrong base-0 via Conflict → re-resolve → republish.",
+        "replay.rs Conflict-branch sequence-number finding (Thread 5) is a false positive: `current_sequence_number` is a String, the suggested fix doesn't compile, and the trigger path is unreachable.",
+        "Local rust-1.91.0 toolchain fires clippy lints (e.g. `too_many_arguments`, `same_item_push`) on pre-existing code that CI's pinned older toolchain accepts — running `--no-deps` or checking only changed lines is needed to distinguish new from pre-existing issues."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "line": 662,
+          "end_line": 666,
+          "finding": "Rebuild branch with same_pointer==false sets file_ipns_private_key: None but file_ipns_key_encrypted_hex: Some(file_pointer.ipns_private_key_encrypted) — raw key is never re-derived for live publish after a pointer swap."
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "line": 884,
+          "end_line": 891,
+          "finding": "resolve_file_pointer copies file_ipns_private_key from existing inode (which is None after swap rebuild) and sets file_meta_resolved: true without re-unwrapping the encrypted hex."
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "line": 674,
+          "end_line": 704,
+          "finding": "Fresh FilePointer path does hex::decode + ecies::unwrap_key — this is the correct template to mirror in the swap rebuild branch."
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "line": 585,
+          "end_line": 612,
+          "finding": "New same-mtime branch added this phase routes same_pointer==false into the key-dropping rebuild path — this is what makes the pre-existing None-key defect phase-owned."
+        },
+        {
+          "path": "crates/fuse/src/journal_helpers.rs",
+          "line": 188,
+          "end_line": 210,
+          "finding": "Edit/version publish path reads file_ipns_private_key directly from inode field — None causes silent skip of per-file IPNS publish."
+        },
+        {
+          "path": "crates/fuse/src/read_ops.rs",
+          "line": 862,
+          "end_line": 881,
+          "finding": "Live per-file publish gated on Some(ipns_key); None logs 'skipping per-file IPNS publish' and never publishes — no on-demand hex unwrap."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/implementation/rename.rs",
+          "line": 104,
+          "end_line": 130,
+          "finding": "Cross-folder move re-encrypt pattern-matches file_ipns_private_key: Some(key); None misses the arm, silently skipping re-encryption under destination folder key."
+        },
+        {
+          "path": "crates/fuse/src/publish.rs",
+          "line": 114,
+          "end_line": 124,
+          "finding": "Non-strict Legacy resolve_sequence returns Ok(0) on parse failure with no cache — pre-existing, CAS-gated, self-heals on Conflict."
+        },
+        {
+          "path": "crates/fuse/src/publish.rs",
+          "line": 182,
+          "end_line": 184,
+          "finding": "Strict resolve_sequence_strict returns Err on parse failure — asymmetry with non-strict arm is real but pre-existing and benign given CAS re-resolve loop."
+        }
+      ],
+      "workflow": [
+        "When a CLI dismissal of a finding conflicts with a web review's specific mechanism, re-verify adversarially against live code rather than trusting the prior read — the web review was right here.",
+        "Parallel adversarial verifier subagents (each reading actual code paths and returning an independent verdict) are effective for high-stakes crypto/durability findings where a single trace can mislead.",
+        "Batching inode.rs edits for multiple threads (Thread 1 dead match arm + Thread 3 key hydration fix) prevents conflicting edits and reduces compile/test cycles.",
+        "Running `cargo test -p cipherbox-fuse` after each inode.rs change catches regressions immediately; adding a targeted regression test alongside a bug fix validates the exact failure mode."
+      ]
+    },
+    "friction": [
+      "Monitor timed out after 15 minutes waiting for CodeRabbit review — required manual polling to check actual state.",
+      "Workflow output was truncated in the task notification, requiring a separate Bash read of the output file to get Thread 5's verdict.",
+      "Python f-string escaping issue required an extra Bash call to print thread bodies correctly.",
+      "Local rust-1.91.0 toolchain fires 24 clippy errors on pre-existing code not touched by this phase, making it hard to distinguish new from pre-existing lint issues without filtering by line number.",
+      "Earlier CLI review dismissed Thread 3 (inode key hydration) as a false positive — required expensive adversarial workflow re-verification to correct."
+    ],
+    "open_items": [
+      "Thread 4 deferred: publish.rs non-strict Legacy parse → CAS base 0 asymmetry with strict path — logged as todo at .planning/todos/pending/2026-06-23-fuse-resolve-sequence-legacy-parse-cas-base-zero.md",
+      "Thread 5 disputed (replay.rs Conflict sequence number) — false positive, but response/resolution comment still needs to be posted to the PR thread.",
+      "No unit test exercises the Legacy/parse-failure path of resolve_sequence or resolve_sequence_strict in publish.rs tests — coverage gap noted by verifier.",
+      "CI toolchain is unpinned — local rust-1.91.0 vs CI's older toolchain creates lint divergence that will worsen over time."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

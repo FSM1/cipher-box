@@ -1,0 +1,13 @@
+also please dispatch a ci-e2e run against this branch
+
+---
+
+absolutely no need to kick off a duplicate ci-e2e run
+
+---
+
+<task-notification>
+<task-id>blq5ywa9f</task-id>
+<summary>Monitor event: "CodeRabbit PR-553 review completion"</summary>
+<event>[Monitor timed out — re-arm if needed.]</event>
+</task-notification>
