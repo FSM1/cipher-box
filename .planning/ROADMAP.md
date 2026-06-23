@@ -1058,7 +1058,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 59-02-PLAN.md — Finding C: migrate VerifyError::Legacy to carry { cid, sequence_number } across all 9 arms (atomic enum migration) [tdd]
+- [x] 59-02-PLAN.md — Finding C: migrate VerifyError::Legacy to carry { cid, sequence_number } across all 9 arms (atomic enum migration) [tdd]
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

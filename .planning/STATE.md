@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: Executing Phase 59
-last_updated: "2026-06-23T19:19:20.759Z"
+last_updated: "2026-06-23T19:48:00.000Z"
 last_activity: 2026-06-23
 progress:
   total_phases: 45
   completed_phases: 43
   total_plans: 190
-  completed_plans: 186
+  completed_plans: 187
   percent: 96
 ---
 
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 59 (fuse-ipns-verify-publish-hardening-and-cleanup) — EXECUTING
-Plan: 1 of 4
+Plan: 2 of 4
 Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 58 (recommended order was 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics
@@ -159,6 +159,8 @@ Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases
 | Phase 58 P01 | 45 | 5 tasks | 10 files |
 | Phase 58-ipns-signature-verify-coverage P02 | 30min | 3 tasks | 2 files |
 | Phase 58-ipns-signature-verify-coverage P04 | 25min | 3 tasks | 4 files |
+| Phase 59 P01 | 35min | 2 tasks | 2 files |
+| Phase 59 P02 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -304,10 +306,13 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-23
 
-Last session: 2026-06-22T15:10:07.635Z
+Last session: 2026-06-23T19:48:00Z
 
 ## Decisions
 
+- [Phase 59-02]: VerifyError::Legacy carries { cid: String, sequence_number: String } from bind_verified — no second resolve_ipns in any Legacy arm (T-59-04 TOCTOU eliminated)
+- [Phase 59-02]: Display for VerifyError::Legacy includes cid and seq: 'legacy record: all signature fields absent (cid={cid}, seq={sequence_number})'
+- [Phase 59-02]: events.rs synthetic VerifiedResolve keeps signature_verified: false until Finding E.1 (plan 03) removes the field
 - [Phase ?]: deser_opt_string maps legacy empty-string file_meta_ipns_name to None; serde compat shim mandatory for pre-Phase-45 journal replay
 - [Phase 45-04]: IpnsResolveOutcome lives in error.rs with #[derive(Debug)] only — not thiserror, it is an outcome not an error
 - [Phase 45-04]: resolve_ipns_for_replay preserves both contains(not found) and contains(404) predicates to avoid classification regression
