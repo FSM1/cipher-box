@@ -1,0 +1,176 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1bc76563e590",
+  "session_id": "f4dbe4bc-e7cc-4e1a-a9d7-881fe8f116bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T20:53:38.532254Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4712be23211e",
+  "token_usage": {
+    "input_tokens": 23232,
+    "cache_creation_tokens": 702506,
+    "cache_read_tokens": 20199679,
+    "output_tokens": 169195,
+    "api_call_count": 86
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01HB29MWnEJRNXm1V6nmoF3d",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4712be23211e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 321,
+        "end": 322,
+        "entry_ids": [
+          "ddc2cbfa-6afa-46f8-af6d-979671bb7312"
+        ],
+        "tool_use_id": "toolu_01HB29MWnEJRNXm1V6nmoF3d"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HB29MWnEJRNXm1V6nmoF3d"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:capture",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015Dw2qhaMP2rGyccyBdmfUa",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4712be23211e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 390,
+        "end": 391,
+        "entry_ids": [
+          "85fce10e-ccfe-438f-a7c1-8c8fccac5eb5"
+        ],
+        "tool_use_id": "toolu_015Dw2qhaMP2rGyccyBdmfUa"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015Dw2qhaMP2rGyccyBdmfUa"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Execute Phase 59 (FUSE IPNS Verify/Publish Hardening and Cleanup) using wave-based sequential execution across 4 plans implementing 6 security/correctness findings in the Rust FUSE crate.",
+    "outcome": "All 4 plans executed and verified; a critical regression (CR-01) caught by deep code review was surgically reverted (restoring skew allowance in verify.rs, deferring full sequence unification to Phase 60), leaving 95 unit + 1 vector tests green and REVIEW.md committed with all blockers resolved.",
+    "learnings": {
+      "repo": [
+        "Root `npm test` runs `pnpm --parallel -r run test` (entire monorepo, RAM-starving); for Rust-only phases, scope post-merge gate to `cargo test -p cipherbox-fuse` instead.",
+        "CI has no clippy step — no `.github/workflows/` file references clippy; the 24 pre-existing warnings (type_complexity, too_many_arguments, vendored ABI structs) are not a gate.",
+        "Staging DB: 23/43 folder_ipns rows are legacy-unsigned (signed_record IS NULL), confirming the VerifyError::Legacy path handles the majority of live data, not dead code.",
+        "Quota accounting: server quota = live SUM(pinned_cids.size_bytes); the server has NO files/file_versions table — file structure lives in client-encrypted IPNS metadata. Only decrement path is POST /ipfs/unpin.",
+        "pending_unpins table had 0 rows for the 442 MB user — the unpin was never even requested, revealing a client-side bug rather than a stuck server queue.",
+        "Two staging rows have signed_record present but public_key NULL ('partial-fields') — treated as potential downgrade attack by verify.rs, not as legacy.",
+        "The GSD commit helper consistently prints `commit_failed` as a false-negative even when commits land successfully; always verify with `git log` rather than trusting the helper output.",
+        "The GSD phase verifier only checks that *claimed* changes landed; it does not audit publish-site completeness across the broader codebase, making it insufficient for catching cross-layer regressions like CR-01."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/write_ops/implementation/mkdir.rs",
+          "line": 173,
+          "end_line": 174,
+          "finding": "Interactive folder-creation path calls create_ipns_record(..., 0, ...) — still embeds sequence 0, missed by 59-04's Finding F. Unification to seq 1 deferred to Phase 60."
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 201,
+          "end_line": 202,
+          "finding": "Windows folder-creation path also embeds sequence 0 — same gap as mkdir.rs, missed by 59-04."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 280,
+          "end_line": 285,
+          "finding": "API stores DB sequenceNumber = '1' for any first publish regardless of the embedded value in the client record, persisting the client's seq-0 record as DB seq-1 — the root of the seq-0/1 skew that Finding F tried to eliminate."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 241,
+          "end_line": 290,
+          "finding": "addToBin builds BinEntry but never populates contentCid or versionCids (optional fields in packages/core/src/bin/types.ts:37-41); the real content CID requires resolving the file's IPNS record which addToBin skips."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 514,
+          "end_line": 599,
+          "finding": "emptyBin, permanentDeleteFromBin, and purgeExpiredEntries all gate their unpin call on `if (entry.contentCid)` — always undefined due to the addToBin gap — so emptying the bin releases zero bytes."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "finding": "updateFolderMetadataAndPublish (via addToIpfs → recordPin) uploads a fresh pinned metadata blob on every CAS publish and never unpins the superseded one, causing a <10KB per-publish metadata-blob accumulation."
+        },
+        {
+          "path": "scripts/gen-ipns-verify-vectors.ts",
+          "line": 366,
+          "end_line": 386,
+          "finding": "CR-02: case-8 in the generator still emits expected_result: 'valid' and sanity array expects 'valid', but 59-04 had hand-edited verify.json to 'invalid'. Generator and fixture were desynced; regenerating would break the cross-language test. Reverted verify.json back to 'valid'."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "line": 112,
+          "end_line": 112,
+          "finding": "Finding F (59-04) tightened this to strict `embedded_seq == resp_seq`; reverted to restore the skew allowance `(resp_seq == 1 && embedded_seq == 0)` pending Phase 60 full unification + migration."
+        }
+      ],
+      "workflow": [
+        "Worktree isolation is unnecessary overhead for strictly sequential single-plan waves — it adds the merge/cleanup dance with no parallelism benefit. Switch to sequential (direct branch execution) when wave fan-out is 1.",
+        "When a worktree genuinely needs node_modules (e.g. for pnpm lint-staged hooks), the subagent must run `pnpm i` inside the worktree — never symlink back to the parent checkout's node_modules.",
+        "Cloudflare 522 errors can interrupt agents mid-run; if the agent's work committed but the SUMMARY commit was lost (GSD #2070), the worktree persists and SUMMARY.md can be committed manually before running the cleanup-wave merge.",
+        "Deep code review is the correct gate for cross-layer changes: it caught the mkdir.rs/windows write_ops missed publish sites that the phase verifier and TDD gates both missed.",
+        "The `cleanup-wave` helper fails if the manifest variable is empty (mktemp template reuse); always capture the manifest path explicitly before entering the cleanup step."
+      ]
+    },
+    "friction": [
+      "Three Cloudflare 522 connection timeout errors interrupted the session mid-execution, requiring manual recovery and worktree inspection.",
+      "The cleanup-wave helper failed with an empty manifest variable due to a mktemp template collision, requiring a second invocation with a fixed path.",
+      "A node_modules symlink created by the Wave 1 subagent (to satisfy the pnpm lint-staged hook in the worktree) blocked the cleanup-wave pre-commit check.",
+      "59-04 under-scoped Finding F: the executor changed publish.rs and replay.rs to embed seq 1 but missed mkdir.rs and platform/windows/write_ops.rs, introducing a regression that only the deep code reviewer caught.",
+      "The phase verifier returned human_needed (6/6 must-haves) despite CR-01 being present — it checked claimed changes but not cross-site completeness, giving a false confidence signal.",
+      "The GSD commit helper's consistent false-negative `commit_failed` output requires a `git log` sanity check after every tracking commit."
+    ],
+    "open_items": [
+      "Phase 60: complete the seq-0→1 unification — update mkdir.rs:174 and platform/windows/write_ops.rs:202 to embed seq 1, remove the verify.rs skew allowance, and coordinate a republish migration for existing embedded-0 signed records on staging.",
+      "Bug fix (captured as todo on this branch): addToBin must resolve and store contentCid + versionCids; emptyBin/permanentDeleteFromBin/purgeExpiredEntries must unpin both; add SDK/E2E test asserting quota drops after empty-bin.",
+      "Staging remediation: reclaim the 442 MB of orphaned pins for user 0e2a64cd (9 large CIDs ≥1 MB pinned Mar 30–Apr 2 and unreferenced) — requires confirming CIDs are unreachable from current IPNS metadata with client keys.",
+      "Investigate the 2 staging `signed_no_pubkey` rows (signed_record present, public_key NULL) — partial-field records treated as downgrade vectors.",
+      "/gsd:secure-phase 59 not yet run — no 59-SECURITY.md created this session.",
+      "WinFSP Windows CI, SDK-E2E, and desktop-E2E gates deferred (noted in phase completion as out-of-scope for this execution).",
+      "IN-01 pre-existing finding: is_ipns_not_found predicate divergence between the Rust test helper and the API response format — left as info-level, not addressed."
+    ]
+  }
+}
