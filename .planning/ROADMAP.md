@@ -1075,7 +1075,7 @@ Verification gate: `cargo test` (fuse + winfsp feature sets), winfsp Windows CI,
 **Goal:** Extend verified IPNS resolution beyond the FUSE crate to the remaining desktop Tauri resolve sites, and recover the per-operation IPNS signature-verification CPU cost on the API publish/resolve hot path — without weakening the zero-knowledge integrity model (untrusted / DHT-sourced records must still be fully verified).
 **Requirements**: HARD-11
 **Depends on:** Phase 58 (resolve_ipns_verified chokepoint), Phase 59 (unified first-publish sequence convention)
-**Plans:** TBD (run /gsd-plan-phase 60)
+**Plans:** 8 plans
 
 Scope (captured todos):
 
@@ -1084,7 +1084,14 @@ Scope (captured todos):
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 60 to break down)
+- [ ] 60-01-PLAN.md — Relocate verified-resolve wrapper to api-client + strict Rust verify (D-08/D-04) + Rust EOL (D-07) [wave 1]
+- [ ] 60-02-PLAN.md — Unify all 9 first-publish producers to embed sequence 1 (D-02) [wave 1]
+- [ ] 60-03-PLAN.md — Strict TS resolve throw-path + EOL (D-05/D-07) + blast-radius audit [wave 1]
+- [ ] 60-04-PLAN.md — Fold 9 FUSE Legacy arms + route sdk/desktop resolve sites through verified wrapper (D-04/D-08/D-09) [wave 2]
+- [ ] 60-05-PLAN.md — API strict gate (embedded 1, D-03) + codec null-signed 404 + remove legacy enrich (D-06) [wave 2]
+- [ ] 60-06-PLAN.md — D-11 hot-path verify-cost benchmark + safe short-TTL verified-record cache (D-11) [wave 3]
+- [ ] 60-07-PLAN.md — Regenerate cross-language verify vector + strict Rust classifier (D-10) [wave 3]
+- [ ] 60-08-PLAN.md — D-01/D-12 lockstep cutover: cross-layer gate confirmation + staging wipe + smoke (autonomous:false) [wave 4]
 
 Verification gate: apps/api jest specs, full SDK E2E, desktop E2E (dispatch-gated); a measured per-op verification-cost recovery (benchmark/prototype) for the API short-circuit.
 
