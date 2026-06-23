@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.8.0...cipherbox-fuse-v0.9.0) (2026-06-23)
+
+
+### Bug Fixes
+
+* **fuse:** harden IPNS verify and publish paths and clear cleanup debt ([#553](https://github.com/FSM1/cipher-box/issues/553)) ([ff9b356](https://github.com/FSM1/cipher-box/commit/ff9b3566991b81d49c0357a38b856f51a4cd0845))
+
 ## [0.8.0](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.7.0...cipherbox-fuse-v0.8.0) (2026-06-22)
 
 
