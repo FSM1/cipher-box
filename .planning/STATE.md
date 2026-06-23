@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Executing Phase 59
-last_updated: "2026-06-23T20:30:00.000Z"
+status: Phase 59 COMPLETE
+last_updated: "2026-06-23T21:00:00.000Z"
 last_activity: 2026-06-23
 progress:
   total_phases: 45
-  completed_phases: 43
+  completed_phases: 44
   total_plans: 190
-  completed_plans: 188
-  percent: 96
+  completed_plans: 190
+  percent: 99
 ---
 
 # Project State
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 
 ## Current Position
 
-Phase: 59 (fuse-ipns-verify-publish-hardening-and-cleanup) — EXECUTING
-Plan: 3 of 4
+Phase: 59 (fuse-ipns-verify-publish-hardening-and-cleanup) — COMPLETE
+Plan: 4 of 4
 Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 58 (recommended order was 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics
@@ -162,6 +162,7 @@ Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases
 | Phase 59 P01 | 35min | 2 tasks | 2 files |
 | Phase 59 P02 | 4min | 2 tasks | 6 files |
 | Phase 59 P03 | 12min | 2 tasks | 6 files |
+| Phase 59 P04 | 15min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -307,10 +308,15 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-23
 
-Last session: 2026-06-23T20:30:00Z
+Last session: 2026-06-23T21:00:00Z — Completed 59-04-PLAN.md (Phase 59 COMPLETE)
 
 ## Decisions
 
+- [Phase 59-04]: F.1 next_file_publish_sequence(is_first_publish=true) returns 1; unified with TS SDK first-publish convention
+- [Phase 59-04]: F.2 replay.rs child-folder first-publish embeds seq=1; record_publish seeds at 1 for coordinator consistency
+- [Phase 59-04]: F.3 verify.rs skew allowance (resp_seq==1 && embedded_seq==0) removed; strict embedded_seq == resp_seq (T-59-10)
+- [Phase 59-04]: F.4 ipns_verify_vectors case-8 expected_result changed valid->invalid; classify_vector uses strict equality
+- [Phase 59-04]: TEE re-sign path confirmed NOT hitting upsertFolderIpns embedded-seq gate (T-59-11 accepted); no API/TS change needed
 - [Phase 59-03]: D.1 journal_entry if/else body collapsed to single Err; param kept with D-01a TODO
 - [Phase 59-03]: D.3 current_seq_for_cas replaced by direct if current_seq.is_none() guard (same error text)
 - [Phase 59-03]: E.1 VerifiedResolve::signature_verified field removed; was never read, only written

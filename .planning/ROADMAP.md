@@ -1040,16 +1040,16 @@ Verification gate: full SDK E2E suite (local; redis 6380), apps/api specs, `carg
 **Goal:** Close out the Phase 58 IPNS verification long-tail on the FUSE crate — finish the two partially-done durability fixes and clear the dead-code/cleanup debt across the same durability-critical files (`verify.rs`, `events.rs`, `metadata.rs`, `content_ops.rs`, `fs.rs`, `inode.rs`, `publish.rs`, `replay.rs`), so the verify/publish/CAS paths carry no swallowed errors, no dead seams, and a single first-publish embedded-sequence convention. Touches durability-critical publish paths, so full SDK-E2E + desktop-E2E gated.
 **Requirements**: HARD-10
 **Depends on:** Phase 58 (resolve_ipns_verified chokepoint), Phase 56 (FUSE durability baseline)
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans executed — COMPLETE
 
 Scope (captured todos):
 
-- [ ] RESIDUAL of HARD-07 (most fixed by PR #543): FUSE/IPNS robustness finding #3 — `fs.rs:225-227` File branch `wrap_key(...).ok()` swallows a key-wrap error and publishes a FilePointer with `ipns_private_key_encrypted: None`; propagate the error like the sibling Folder branch (`fs.rs:153-157`) — `2026-06-21-fuse-ipns-robustness-findings-from-pr538-review.md`
-- [ ] RESIDUAL of HARD-07 (folder side fixed by PR #543): FUSE inode stable-ID — file-side re-resolution must also trigger on a changed `file_meta_ipns_name`, not just `modified_at` (`inode.rs:574`), so a file can't keep stale CID/keys — `2026-06-20-fuse-inode-stable-id-identity-reset.md`
-- [ ] Carry the legacy IPNS response in `VerifyError::Legacy` instead of a second raw resolve — `2026-06-22-verify-rs-carry-legacy-response.md`
-- [ ] FUSE CAS helper dead `journal_entry` param + `content_ops` dead-binding cleanup — `2026-06-22-fuse-cas-helper-dead-param-and-content-ops-cleanup.md`
-- [ ] Phase 58 IPNS verify minor simplify/cleanup follow-ups — `2026-06-22-phase58-simplify-cleanup.md`
-- [ ] Unify first-publish IPNS embedded-sequence convention (FUSE 0 vs SDK 1) + verify TEE re-sign path [bridges to Phase 60] — `2026-06-22-ipns-first-publish-sequence-convention.md`
+- [x] RESIDUAL of HARD-07 (most fixed by PR #543): FUSE/IPNS robustness finding #3 — `fs.rs:225-227` File branch `wrap_key(...).ok()` swallows a key-wrap error and publishes a FilePointer with `ipns_private_key_encrypted: None`; propagate the error like the sibling Folder branch (`fs.rs:153-157`) — `2026-06-21-fuse-ipns-robustness-findings-from-pr538-review.md`
+- [x] RESIDUAL of HARD-07 (folder side fixed by PR #543): FUSE inode stable-ID — file-side re-resolution must also trigger on a changed `file_meta_ipns_name`, not just `modified_at` (`inode.rs:574`), so a file can't keep stale CID/keys — `2026-06-20-fuse-inode-stable-id-identity-reset.md`
+- [x] Carry the legacy IPNS response in `VerifyError::Legacy` instead of a second raw resolve — `2026-06-22-verify-rs-carry-legacy-response.md`
+- [x] FUSE CAS helper dead `journal_entry` param + `content_ops` dead-binding cleanup — `2026-06-22-fuse-cas-helper-dead-param-and-content-ops-cleanup.md`
+- [x] Phase 58 IPNS verify minor simplify/cleanup follow-ups — `2026-06-22-phase58-simplify-cleanup.md`
+- [x] Unify first-publish IPNS embedded-sequence convention (FUSE 0 vs SDK 1) + verify TEE re-sign path [bridges to Phase 60] — `2026-06-22-ipns-first-publish-sequence-convention.md`
 
 Plans:
 **Wave 1**
@@ -1066,7 +1066,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 59-04-PLAN.md — Finding F: unify FUSE first-publish embedded sequence to 1 + remove verify.rs skew allowance; archive the 6 source todos [execute]
+- [x] 59-04-PLAN.md — Finding F: unify FUSE first-publish embedded sequence to 1 + remove verify.rs skew allowance; archive the 6 source todos [execute]
 
 Verification gate: `cargo test` (fuse + winfsp feature sets), winfsp Windows CI, full SDK E2E (local; redis 6380), desktop E2E (dispatch-gated).
 
