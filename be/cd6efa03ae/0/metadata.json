@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "becd6efa03ae",
+  "session_id": "f4dbe4bc-e7cc-4e1a-a9d7-881fe8f116bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T19:44:48.099118Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fb72c7487437",
+  "token_usage": {
+    "input_tokens": 18056,
+    "cache_creation_tokens": 150848,
+    "cache_read_tokens": 3133176,
+    "output_tokens": 40713,
+    "api_call_count": 26
+  },
+  "summary": {
+    "intent": "Execute all 4 plans in Phase 59 (FUSE IPNS Verify/Publish Hardening and Cleanup) using the GSD wave-based orchestration workflow on the cipher-box Rust FUSE crate.",
+    "outcome": "Wave 1 (59-01) completed successfully after rescuing from a mid-run 522 error — 95 tests passing, both findings (A+B) landed with proper TDD RED→GREEN commits. Wave 2 (59-02) was spawned sequentially but the transcript ends before its result. Waves 3–4 are still pending.",
+    "learnings": {
+      "repo": [
+        "Phase 59 has 4 plans in a strict sequential dependency chain (59-01→02→03→04), one per wave — there is no parallelism to isolate, making worktrees counterproductive here.",
+        "Root `npm test` runs `pnpm --parallel -r run test` (full monorepo) — too expensive for a Rust-only phase; scoped post-merge gate should be `cargo test -p cipherbox-fuse` instead.",
+        "winfsp build is CI-only on macOS — local winfsp/crypto-clippy compile failures are pre-existing and expected, not regressions.",
+        "The cleanup-wave tracking helper prints `commit_failed` as a false-negative even when the commit lands — known issue, do not retry.",
+        "config.json `_auto_chain_active` reset shows up as a dirty file between waves — benign, not a real change."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "finding": "Finding A (59-01): `build_folder_metadata` was swallowing `wrap_key` errors and publishing a `FilePointer` with `ipns_private_key_encrypted: None`, making the file permanently unrecoverable. Fixed to propagate the error."
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "finding": "Finding B (59-01): inode resolution used a cached CID/keys even when `file_meta_ipns_name` changed under an unchanged mtime, returning stale data. Fixed to force re-resolution on pointer identity change."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "Finding C (59-02): `VerifyError::Legacy` was a unit variant; each match arm triggered a redundant second `resolve_ipns` call with a ~1ms race window against concurrent publishes. Migration to `Legacy { cid: String, sequence_number: String }` across 9 match-arm sites in 6 files eliminates the round-trip."
+        }
+      ],
+      "workflow": [
+        "Worktree isolation is only beneficial when plans run in parallel; a sequential one-plan-per-wave chain should run directly on the phase branch to avoid merge/cleanup overhead and the #2070 SUMMARY-loss failure mode.",
+        "When a worktree genuinely needs node_modules, the subagent should run `pnpm i` inside the worktree — never symlink back to the parent checkout. The symlink approach bypasses husky/lint-staged correctness and leaves behind untracked files that cause cleanup-wave to fail.",
+        "The GSD #2070 failure mode: executor writes SUMMARY.md but the worktree is force-removed before it is committed, losing the summary permanently. Mitigation: rescue by committing the file before running cleanup-wave.",
+        "cleanup-wave helper fails closed on any untracked files in the worktree — must clear them before the merge step."
+      ]
+    },
+    "friction": [
+      "Two Cloudflare 522 (connection timeout) errors hit mid-execution — one interrupted the Wave 1 subagent just before it could commit SUMMARY.md, requiring a manual rescue.",
+      "cleanup-wave helper had a mktemp template collision on first invocation, leaving the manifest variable empty and causing a no-op merge attempt.",
+      "Worktree approach was wrong for this sequential phase but was chosen by default (shouldDegrade=false) — caused unnecessary merge/cleanup complexity, the node_modules symlink hack, and the 522 near-miss on SUMMARY.",
+      "Subagent improvised a node_modules symlink back to the parent repo's copy so husky could find lint-staged — a symptom of using worktrees where they don't belong.",
+      "cleanup-wave blocked on the untracked node_modules symlink; required a manual removal step before merge could proceed."
+    ],
+    "open_items": [
+      "Wave 2 (59-02): VerifyError::Legacy enum migration — spawned but result not yet returned in transcript.",
+      "Wave 3 (59-03): collapse dead `journal_entry` branch + `content_ops` dead bindings, remove dead field, fix test/vector.",
+      "Wave 4 (59-04): unify FUSE first-publish embedded sequence to `1`, remove `verify.rs` skew allowance.",
+      "winfsp and crypto-clippy build failures are documented pre-existing issues — not addressed in this phase.",
+      "GSD workflow default of enabling worktrees even for sequential phases could cause this same friction on future single-plan-per-wave phases."
+    ]
+  }
+}
