@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e885ae5d4daa",
+  "session_id": "a86cad4e-ef33-4c8d-97df-fe773a25c7ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T18:14:53.025833Z",
+  "branch": "docs/archive-resolved-todos",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/completed/2026-06-19-extract-leaf-ipfs-provider-module.md",
+    ".planning/todos/completed/2026-06-19-extract-withcidlock-shared-unpin-primitive.md",
+    ".planning/todos/completed/2026-06-19-local-provider-unescaped-cid-in-pin-url.md",
+    ".planning/todos/completed/2026-06-19-register-cid-dto-validation-inconsistency.md",
+    ".planning/todos/completed/2026-06-21-pr538-second-coderabbit-pass-preexisting-findings.md",
+    ".planning/todos/completed/2026-06-21-zeroize-fuse-metadata-publish-key-params.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "9b64122ca3b0",
+  "checkpoint_transcript_start": 358,
+  "transcript_lines_at_start": 358,
+  "token_usage": {
+    "input_tokens": 137,
+    "cache_creation_tokens": 4441,
+    "cache_read_tokens": 771261,
+    "output_tokens": 3803,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Archive resolved planning TODOs and push a PR to clean up the pending work queue.",
+    "outcome": "6 TODO files were archived and a PR was opened, but resolution annotations were lost from the committed archive files due to lint-staged's partial-staging behavior during `git mv`; a follow-up commit restored them.",
+    "learnings": {
+      "repo": [
+        "lint-staged's hide/restore mechanism during `git mv` commits can silently drop content changes that were staged alongside renames, leaving them uncommitted in the working tree"
+      ],
+      "code": [],
+      "workflow": [
+        "After any commit that involves `git mv` with lint-staged, verify the working tree is clean — partially staged file restores can silently omit content changes",
+        "When content edits co-exist with renames in a single commit, separating the rename commit from the content commit avoids lint-staged interference"
+      ]
+    },
+    "friction": [
+      "lint-staged's partial-staging hide/restore dance during `git mv` silently dropped resolution annotations, requiring a second cleanup commit after the PR was already pushed"
+    ],
+    "open_items": [
+      "Pending count is still 21 (27 − 6 archived); remaining TODOs not addressed in this session"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T18:14:44.706315Z",
+    "agent_lines": 12,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 12,
+    "total_lines_changed": 12,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
