@@ -35,9 +35,12 @@ Pick one:
    for parity).
 2. Cron a `docker compose exec -T ipfs ipfs repo gc --silent` on the VPS.
 
+Already done (PR #548): Kubo's mem cap was raised 2 GB → 3 GB — both
+`docker/docker-compose.staging.yml` (ipfs service) and `docker/docker-compose.yml` set `memory: 3G`.
+No further mem-cap action needed unless the 3 GB store is again exceeded.
+
 Also consider:
 
-- Raising Kubo's mem cap 2 GB → 3-4 GB (host has headroom: ~2.8/7.8 GiB used).
 - Load-test hygiene: the load harness generates most of this garbage. GC before/after baseline runs,
   or have the harness clean up its test accounts' content (it deletes accounts but blocks linger
   until GC).
