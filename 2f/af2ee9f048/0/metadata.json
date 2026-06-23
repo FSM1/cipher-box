@@ -1,0 +1,106 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2faf2ee9f048",
+  "session_id": "f4dbe4bc-e7cc-4e1a-a9d7-881fe8f116bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T20:19:05.956149Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-04-SUMMARY.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4a24ddbe758f",
+  "token_usage": {
+    "input_tokens": 20480,
+    "cache_creation_tokens": 218072,
+    "cache_read_tokens": 7360561,
+    "output_tokens": 87642,
+    "api_call_count": 47
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute all 4 plans in Phase 59 (FUSE IPNS verify/publish hardening and cleanup) using wave-based execution, and investigate a staging storage quota anomaly for a specific user while the final plan ran.",
+    "outcome": "Waves 1–3 (plans 59-01, 59-02, 59-03) completed and verified with 96 tests passing; Wave 4 (59-04) was still running at transcript end. The staging quota investigation identified 239 pinned CIDs totaling 442MB concentrated in 9 large blobs from March 30–April 2, with the unpin pipeline suspected as the root cause.",
+    "learnings": {
+      "repo": [
+        "Root `npm test` runs `pnpm --parallel -r run test` (full monorepo) — for Rust-only phases, scope the post-merge gate to `cargo test -p cipherbox-fuse` to avoid RAM exhaustion.",
+        "CI does not run clippy at all; no `.github/workflows/` file references it. The plans' 'clippy -D warnings exits 0' acceptance criterion is unachievable because the pre-existing `cipherbox-crypto` dependency fails first.",
+        "24 pre-existing clippy warnings exist in the fuse crate (8 vendored `fuse_*` ABI structs, the rest `too_many_arguments`/`div_ceil`/`Default impl`); none were introduced by phase 59.",
+        "Legacy IPNS records: 23/43 rows (53%) on staging have `signed_record IS NULL`, predating the signing convention that landed 2026-04-04 (#448). The legacy verify path fires on the majority of current staging data.",
+        "2 staging rows have partial sig fields (`signed_record` present, `public_key` NULL) — treated as a downgrade vector in verify code, distinct from true-legacy.",
+        "FUSE embeds IPNS sequence `0` on first publish; the TS SDK and API assume `1`. This skew is tolerated by a temporary allowance in `verify.rs` (`resp_seq==1 && embedded_seq==0`) being removed in 59-04.",
+        "Quota accounting is `SUM(pinned_cids.size_bytes)` per user, computed live. The only decrement path is an explicit `/ipfs/unpin` — the client delete→bin→empty-bin pipeline never triggers unpin, causing quota to accumulate indefinitely.",
+        "The 442MB quota anomaly is concentrated: 9 CIDs ≥1MB account for 439MB, all pinned March 30–April 2 (early test vaults, never re-published or unpinned)."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "line": 132,
+          "end_line": 132,
+          "finding": "Write site for `VerifiedResolve::signature_verified` field — removed in 59-03 (E.1 dead-field removal)"
+        },
+        {
+          "path": "crates/fuse/src/events.rs",
+          "line": 104,
+          "end_line": 104,
+          "finding": "Second write site for the now-removed `VerifiedResolve::signature_verified` field"
+        },
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 651,
+          "end_line": 651,
+          "finding": "Surfaced transient compile errors during the 59-02 atomic `VerifyError::Legacy` enum migration — expected during propagation across all 9 match arms"
+        },
+        {
+          "path": "crates/fuse/src/publish.rs",
+          "line": 75,
+          "end_line": 75,
+          "finding": "Pre-existing `Default impl` clippy lint; file also embeds IPNS sequence `0` on first publish (changed to `1` in 59-04)"
+        }
+      ],
+      "workflow": [
+        "Worktree isolation is only justified for concurrent parallel plan execution — single-plan waves should run sequentially on the main branch to avoid the merge dance, node_modules problems, and SUMMARY.md loss risk.",
+        "When a worktree subagent needs `node_modules`, it must run `pnpm i` to initialize its own copy; symlinking back to the parent checkout is wrong and should never be done.",
+        "GSD failure-mode #2070: a subagent may complete all code work and write `SUMMARY.md` but then get interrupted (e.g., 522) before committing it. Rescue: commit the file directly inside the worktree before running any cleanup.",
+        "The `cleanup-wave` helper requires a valid `--manifest` path; a `mktemp` template collision can leave the variable empty and fail the merge silently — always verify the manifest path before invoking.",
+        "The state tracking helper may print `commit_failed` as a false negative while the commit actually succeeds — do not retry based on that message alone.",
+        "Piping SQL to `docker exec` via `-c` flag causes nested quoting failures; use `-i` with stdin redirection (`docker exec -i container psql ... <<< 'SQL'`) instead."
+      ]
+    },
+    "friction": [
+      "Two Cloudflare 522 errors mid-session: one interrupted the Wave 1 subagent after all code work was done (SUMMARY.md not yet committed), one hit during the cleanup-wave merge attempt.",
+      "Wave 1 ran unnecessarily in a worktree (sequential phase, one plan per wave — zero parallelism to isolate), causing avoidable merge/cleanup overhead.",
+      "Wave 1 subagent created a `node_modules` symlink back to the parent repo as a husky/lint-staged workaround in the isolated worktree — required manual cleanup before merge.",
+      "`mktemp` template collision left the cleanup-wave `--manifest` variable empty on the first merge attempt, causing a silent failure requiring a retry with a fixed path.",
+      "Post-merge clippy gate produced confusing output because `cipherbox-crypto` dependency errors intermixed with fuse crate findings, requiring a `--no-deps` invocation to isolate fuse-specific results.",
+      "Nested SQL quoting via `docker exec -c` broke on the first staging DB query attempt."
+    ],
+    "open_items": [
+      "Wave 4 (59-04) was still executing at transcript end — sequence `0→1` unification in `publish.rs`/`replay.rs` and strict `embedded_seq == resp_seq` enforcement in `verify.rs`.",
+      "Phase 59 completion sequence not yet run: TDD RED→GREEN gate check, code review, regression gate, phase-goal verifier.",
+      "Staging quota leak root cause not fully confirmed — `pending_unpins` queue and `folder_ipns` activity check for the affected user was initiated but results not shown.",
+      "Production legacy-record ratio unknown — only staging was queried (23/43 legacy); production may differ and a prod psql path was not available.",
+      "Plans' 'clippy `-D warnings` exits 0' acceptance criterion is unachievable as written (crypto dep fails first) — needs a note to the phase verifier to scope to `--no-deps`.",
+      "D.1 TODO (D-01a): `journal_entry` parameter retained in `publish_with_cas_retry` with a deferred TODO — dead param left in place intentionally for a later phase.",
+      "The 2 partial-field staging rows (`signed_record` present, `public_key` NULL) are an edge case neither cleanly legacy nor modern — worth a targeted investigation/backfill.",
+      "Phase 60 integration: 59-04's sequence unification is documented as 'bridging to Phase 60' — downstream compatibility needs verification."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T20:17:57.485387Z",
+    "agent_lines": 146,
+    "agent_removed": 7,
+    "human_added": 15,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 162,
+    "total_lines_changed": 178,
+    "agent_percentage": 85.95505617977528,
+    "metric_version": 2
+  }
+}
