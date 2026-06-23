@@ -1,0 +1,204 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e7a083b2e55a",
+  "session_id": "c95465c8-9342-45df-8c03-82934945aca7",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T23:44:44.053388Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "6a6ae16cba5e",
+  "token_usage": {
+    "input_tokens": 14411,
+    "cache_creation_tokens": 245186,
+    "cache_read_tokens": 8652628,
+    "output_tokens": 85293,
+    "api_call_count": 47
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Create Phase 60 planning artifacts (PLAN.md files) for an IPNS verification cross-layer closeout covering three work streams: desktop verified-resolve routing, API hot-path verify caching, and first-publish strict-equality cutover — using the GSD plan-phase workflow with two recon passes to establish safe scope before planning.",
+    "outcome": "8 plans in 4 waves committed on `feat/ipns-verification-cross-layer-closeout-desktop-and-api` (ec3f1ab62) with all 12 verification dimensions passing. Scope expanded significantly from the original todos: 9 embed-0 producer sites (up from 3), 14 degraded-acceptance branches across 4 layers, and a verified-resolve wrapper relocation to crates/api-client.",
+    "learnings": {
+      "repo": [
+        "The IPNS embedded sequence lives inside the signed CBOR blob (covered by the V2 signature), not the plaintext protobuf field-5 copy — changing it requires re-signing with the Ed25519 private key; the API server has no signing primitive at all.",
+        "The API hard-codes first-publish DB sequence_number to '1' regardless of whether the client embedded 0 or 1 (ipns.service.ts:356-362), and a prior backfill migration already normalized all '0' rows to '1' — so `sequence_number = 0` cannot be used to identify the embedded-0 population.",
+        "TEE republish is NOT idempotent: it increments sequence by 1n and persists the new signed record (republish.ts:79), so enrolled embedded-0 FUSE folders self-migrate to strict-equality-compatible state within one 6-hour cycle — no bespoke migration tooling needed for enrolled rows.",
+        "TEE republish path bypasses verifyIpnsRecordSignature entirely (calls publishSignedRecord + syncFolderIpnsSequence directly), so the D-11 cache can only short-circuit exact-bytes client re-submission — never untrusted or DHT records.",
+        "The verified-resolve wrapper must be created in crates/api-client, not cipherbox-fuse, because cipherbox-sdk does not depend on cipherbox-fuse.",
+        "There are 9 embed-0 first-publish producers (not 3 as the original todo stated): FUSE mkdir, FUSE windows write_ops, FUSE metadata bin, web useAuth vault-key, web useAuth root-folder, web vault-settings, SDK vault-key, desktop vault.rs vault-key, desktop vault.rs root-folder.",
+        "The two web useAuth.ts sites (vault-key + root-folder) fire on every new vault creation — they are the highest-impact embed-0 sites and must be fixed before any strict-equality flip.",
+        "crates/sdk/src/registry.rs and sync.rs call raw resolve_ipns with zero verification (accepts a tampered CID), strictly worse than the Legacy path — this was unmentioned in the original todos.",
+        "FUSE crash-recovery replay path was already unified to embed 1 in Phase 59 (crates/fuse/src/replay.rs:628); the V1-only acceptance path is structurally impossible at resolve since IpnsResolveResponse carries only signature_v2.",
+        "No production instance exists yet; staging self-bootstraps strict-compliant records on next login after a wipe — eliminates the entire embedded-0 live-migration problem and justifies the clean rip-out approach over a gated migration."
+      ],
+      "code": [
+        {
+          "path": "crates/core/src/ipns.rs",
+          "line": 142,
+          "end_line": 145,
+          "finding": "build_cbor_data places the embedded sequence into signed CBOR; sequence is signature-load-bearing — different sequences produce different signature_v2"
+        },
+        {
+          "path": "crates/core/src/ipns.rs",
+          "line": 220,
+          "end_line": 229,
+          "finding": "compute_v2_signature signs over 'ipns-signature:' || cbor_data"
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "line": 68,
+          "end_line": 72,
+          "finding": "None branch returns Ok(None) / Err(VerifyError::Legacy) — fail-open path to remove"
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "line": 124,
+          "end_line": 124,
+          "finding": "seq_ok skew disjunct: embedded==resp || (resp==1 && embedded==0) — drop the disjunct for strict equality"
+        },
+        {
+          "path": "crates/fuse/src/write_ops/implementation/mkdir.rs",
+          "line": 173,
+          "end_line": 174,
+          "finding": "create_ipns_record embeds sequence 0 on interactive folder create — must change to 1"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 201,
+          "end_line": 202,
+          "finding": "Identical embed-0 site on Windows path — must change to 1"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 191,
+          "end_line": 191,
+          "finding": "Web vault key blob first-publish embeds 0 — fires on every new vault, highest-impact site"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 208,
+          "end_line": 208,
+          "finding": "Web root folder metadata first-publish embeds 0 — fires on every new vault"
+        },
+        {
+          "path": "apps/web/src/services/vault-settings.service.ts",
+          "line": 131,
+          "end_line": 131,
+          "finding": "First-publish stays 0n; catch at :116 leaves sequenceNumber=0n, only +1 when prior record resolves"
+        },
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 557,
+          "end_line": 557,
+          "finding": "FUSE bin first publish via make_bin_record(0), gated on is_first_bin_publish at :555"
+        },
+        {
+          "path": "packages/sdk-core/src/vault/index.ts",
+          "line": 44,
+          "end_line": 44,
+          "finding": "SDK vault key blob first-publish embeds 0"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 109,
+          "end_line": 109,
+          "finding": "Desktop vault key blob embeds 0 — not mentioned in original todos, caught by second recon"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 154,
+          "end_line": 154,
+          "finding": "Desktop root folder init embeds 0 — not mentioned in original todos, caught by second recon"
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 170,
+          "end_line": 170,
+          "finding": "Calls resolve_ipns directly with zero signature verification — accepts tampered CID, worse than Legacy path"
+        },
+        {
+          "path": "crates/sdk/src/sync.rs",
+          "line": 201,
+          "end_line": 201,
+          "finding": "Same unverified resolve bypass as registry.rs"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 279,
+          "end_line": 285,
+          "finding": "First-publish gate accepts embedded ∈ {0n,1n} — must drop 0n after producers are fixed"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-record.codec.ts",
+          "line": 81,
+          "end_line": 82,
+          "finding": "Row with signed_record IS NULL returns cid+seq only (unverifiable) — must return null/404"
+        },
+        {
+          "path": "apps/tee-worker/src/routes/republish.ts",
+          "line": 79,
+          "end_line": 94,
+          "finding": "TEE increments sequence (BigInt(entry.sequenceNumber) + 1n) and re-signs — NOT idempotent; enrolled embedded-0 records self-migrate in one cycle"
+        },
+        {
+          "path": "apps/api/src/migrations/1740500000000-BackfillIpnsSequenceNumbers.ts",
+          "line": 25,
+          "end_line": 27,
+          "finding": "Prior backfill normalized sequence '0' → '1' for all rows with a CID — can't use sequence_number=0 to find embedded-0 population"
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 285,
+          "end_line": 295,
+          "finding": "Same seq skew disjunct (resp==1n && embedded==0n) plus legacy else branch (no-signature → warn + return unverified CID) — both to remove"
+        },
+        {
+          "path": "crates/fuse/src/replay.rs",
+          "line": 628,
+          "end_line": 628,
+          "finding": "FUSE crash-recovery replay already unified to embed 1 in Phase 59 — no change needed here"
+        }
+      ],
+      "workflow": [
+        "Running two independent recon workflows before planning (one on migration mechanics, one on blast radius) was essential — the first corrected a false claim about TEE idempotency, the second expanded producer count from 3 to 9 and found unverified SDK bypasses the todos never mentioned.",
+        "The GSD commit_failed signal from the helper is a known false negative — always verify via git log rather than treating it as a real failure.",
+        "PATTERNS.md is not auto-committed by the plan-phase workflow and requires a manual commit step after the pattern-mapper agent completes.",
+        "The decision-coverage gate parser does not recognize the D-NN bullet format used in CONTEXT.md and silently skips — the plan-checker's substantive review is the real gate; the CLI gate is unreliable for non-standard formats.",
+        "Writing CONTEXT.md with all locked decisions before spawning the planner is the key contract artifact — it lets the planner work from a single authoritative source rather than re-deriving from transcript.",
+        "When multiple independent recon workflows are needed, their findings can contradict each other — always resolve contradictions by reading source directly rather than trusting the summary of either agent."
+      ]
+    },
+    "friction": [
+      "Initial scope (from the todo) named 3 embed-0 producer sites; two recon workflows were required to establish the correct count of 9 — planning would have produced dangerously incomplete plans without this.",
+      "One recon subagent gave a flat-out wrong claim that TEE republish is idempotent; it required a third agent to read source directly and resolve the contradiction before the migration mechanics answer could be trusted.",
+      "The GSD commit_failed false negative from the helper creates uncertainty after every commit — requires a manual `git log` check to confirm success.",
+      "PATTERNS.md is silently dropped by the plan-phase workflow — not auto-committed, not mentioned as a gap in the workflow docs; discovered only when auditing what was and wasn't staged.",
+      "The decision-coverage gate CLI parser doesn't handle the D-NN bullet format in CONTEXT.md and exits silently rather than erroring — gives false confidence that coverage was checked."
+    ],
+    "open_items": [
+      "Windows winfsp CI gate (for windows/write_ops.rs embed-1) and dispatch-gated Desktop E2E must be manually triggered before merging Wave 1 — flagged in Plan 60-04, enforced as gate in Plan 60-08.",
+      "Staging wipe + smoke test is a blocking human action in Wave 4 (Plan 60-08) — cannot be automated.",
+      "Resolve-side expiry check (no EOL validation on resolve in either verifier) is included in scope but represents net-new hardening beyond what the original todos captured — scope increase to monitor during execution.",
+      "The SDK verified-resolve wrapper design (D-08) requires creating a new primitive in crates/api-client — the exact API surface is TBD for the executor of Plan 60-01.",
+      "D-11 hot-path caching requires a benchmark-before-mechanism gate (Plan 60-06 measures first) — if benchmarks show negligible cost, the caching design may be dropped.",
+      "verify.rs comment at :105 is stale (claims next_file_publish_sequence embeds 0; publish.rs:18 actually returns 1) — should be corrected during Plan 60-04 execution."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

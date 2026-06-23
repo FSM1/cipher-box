@@ -1,0 +1,52 @@
+<task-notification>
+<task-id>af4a04c8157c6eb61</task-id>
+<tool-use-id>toolu_01N7taHGw1AtJbW7qZQizHBE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/af4a04c8157c6eb61.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 60 strict IPNS cutover" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Committed cleanly on `feat/ipns-verification-cross-layer-closeout-desktop-and-api`. The two `docs/*` branches are pre-existing (archive-resolved-todos, migrate-perf-todos) — neither is a stray `docs/plan-phase-60` branch, so the planner did not create one this run. Working tree is clean.
+
+## PLANNING COMPLETE
+
+**Phase:** 60 — IPNS Verification Cross-Layer Closeout (Desktop + API)
+**Plans:** 8 plans in 4 waves — committed on `feat/ipns-verification-cross-layer-closeout-desktop-and-api` (`ec3f1ab62`)
+
+### Wave Structure
+
+| Wave | Plans | Autonomous |
+| ---- | ----- | ---------- |
+| 1 | 60-01, 60-02, 60-03 | yes (file-disjoint, parallel) |
+| 2 | 60-04, 60-05 | yes |
+| 3 | 60-06, 60-07 | yes |
+| 4 | 60-08 | no (blocking human-action: staging wipe + smoke) |
+
+### Plans Created
+
+| Plan | Objective | Decisions | Tasks |
+| ---- | --------- | --------- | ----- |
+| 60-01 (tdd) | Relocate verified-resolve wrapper to `crates/api-client` + strict Rust verify + Rust EOL | D-08, D-04, D-07 | 2 |
+| 60-02 | Unify all 9 first-publish producers to embed sequence 1 | D-02 | 2 |
+| 60-03 (tdd) | Strict TS resolve throw-path + EOL + blast-radius consumer audit | D-05, D-07, Q5 | 2 |
+| 60-04 | Fold 9 FUSE Legacy arms + route sdk/desktop resolve sites through the wrapper; delete `verify.rs` | D-04, D-08, D-09 | 2 |
+| 60-05 (tdd) | API strict gate (embedded 1) + codec null-signed→404 + remove legacy enrich | D-03, D-06 | 2 |
+| 60-06 | D-11 hot-path verify-cost benchmark + safe full-triple short-TTL verified-record cache | D-11 | 2 |
+| 60-07 | Regenerate cross-language verify vector + strict Rust classifier | D-10 | 2 |
+| 60-08 | D-01/D-12 lockstep cutover: cross-layer gate confirmation + staging wipe + smoke | D-01, D-12 | 2 |
+
+### Key Decisions Honored
+
+- **D-12 lockstep / D-08-before-routing:** Plan 01 (wrapper relocation) is Wave 1; all Rust routing (Plan 04) and the staging wipe (Plan 08) sequence after it. Producers (Plan 02) land in Wave 1 so no embedded-0 record is produced when strict verify activates; the wipe is the final operational step.
+- **No phase split needed** — the 8 plans fit the context budget at fine granularity.
+- **D-11 measure-before-mechanism:** Plan 06 benchmarks first; I confirmed by reading `republish.service.ts` that the **TEE republish path bypasses `verifyIpnsRecordSignature` entirely** (it calls `publishSignedRecord` + `syncFolderIpnsSequence`), so the RESEARCH-proposed `skipSigVerify` TEE bypass is explicitly prohibited — the cache only short-circuits exact-bytes client re-submission, never untrusted/DHT records.
+- All 8 plans carry `requirements: [HARD-11]`; every decision D-01..D-12 is cited; each task has `&lt;read_first&gt;` + `&lt;action&gt;` + `&lt;acceptance_criteria&gt;`; each plan has a `&lt;threat_model&gt;` (27 STRIDE threats T-60-01..27 + the supply-chain T-60-SC) and an "Artifacts this phase produces" section.
+
+Frontmatter valid on all 8; structure valid on all 8 (the `&lt;files&gt;`-missing notices are expected — these plans use the phase-mandated `&lt;read_first&gt;` and declare `files_modified` in frontmatter).
+
+### Next Steps
+
+Execute: `/gsd-execute-phase 60`
+
+Note before merging Wave 1: the Windows `winfsp` CI gate (for `windows/write_ops.rs` embed-1) and the dispatch-gated Desktop E2E must be triggered — both are flagged in Plan 04 and enforced as gates in Plan 08.</result>
+<usage><subagent_tokens>172189</subagent_tokens><tool_uses>50</tool_uses><duration_ms>794136</duration_ms></usage>
+</task-notification>
