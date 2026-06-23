@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "6b1832e8749d",
+  "session_id": "a86cad4e-ef33-4c8d-97df-fe773a25c7ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T17:33:39.991892Z",
+  "branch": "docs/migrate-perf-todos-from-issues",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-22-periodic-kubo-ipfs-gc-on-staging.md",
+    ".planning/todos/pending/2026-06-23-cache-redundant-ipns-signature-verification-hot-path.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f09db49290be",
+  "token_usage": {
+    "input_tokens": 10300,
+    "cache_creation_tokens": 64145,
+    "cache_read_tokens": 1255628,
+    "output_tokens": 23796,
+    "api_call_count": 22
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "The user noticed that recent todos were being filed as GitHub issues instead of using the established `/gsd:capture --todo` file workflow, and wanted the two misfiled items (#547 GC, #549 IPNS verify-caching) migrated to the correct location and the issues closed.",
+    "outcome": "Root cause identified as assistant drift (not a config change). Two todo files were created in `.planning/todos/pending/` on a docs branch matching existing frontmatter conventions, staged and committed. Issues #547 and #549 are pending closure.",
+    "learnings": {
+      "repo": [
+        "Todos live in `.planning/todos/pending/` and `.planning/todos/completed/` as markdown files with structured frontmatter (area, severity, etc.); they are git-tracked and numbered by reference.",
+        "GSD capture workflow uses `/gsd:capture --todo` skill — never `gh issue create` — for personal task tracking.",
+        "`.planning/config.json` has no issue-routing for capture; GitHub issues are not the intended destination for todos in this repo."
+      ],
+      "code": [],
+      "workflow": [
+        "When rich investigation writeups (Context / Scope / Acceptance) emerge from deep technical sessions, they can superficially feel like GitHub issues but should still go through the file-todo workflow.",
+        "History in `history.jsonl` is the authoritative record for what the user typed vs. what the assistant did — useful for diagnosing behavioral drift.",
+        "When migrating misfiled issues to file-todos, open a docs branch, write the files, commit/push/PR, then close the source issues with a pointer."
+      ]
+    },
+    "friction": [
+      "The `gsd:capture` skill body was not findable via content search — required indirect discovery through plugin manifests and marketplace paths.",
+      "Two todos existed only as GitHub issues with no corresponding file-todo, requiring manual migration work."
+    ],
+    "open_items": [
+      "Push the docs branch and open the PR for the two migrated todo files.",
+      "Close GitHub issues #547 (periodic GC) and #549 (IPNS verify-caching) with a pointer to the new file-todos once the branch is merged."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T17:33:24.492928Z",
+    "agent_lines": 109,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 109,
+    "total_lines_changed": 109,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

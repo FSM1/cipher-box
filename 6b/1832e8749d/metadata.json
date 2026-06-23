@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "6b1832e8749d",
+  "strategy": "manual-commit",
+  "branch": "docs/migrate-perf-todos-from-issues",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-22-periodic-kubo-ipfs-gc-on-staging.md",
+    ".planning/todos/pending/2026-06-23-cache-redundant-ipns-signature-verification-hot-path.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6b/1832e8749d/0/metadata.json",
+      "transcript": "/6b/1832e8749d/0/full.jsonl",
+      "content_hash": "/6b/1832e8749d/0/content_hash.txt",
+      "prompt": "/6b/1832e8749d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10300,
+    "cache_creation_tokens": 64145,
+    "cache_read_tokens": 1255628,
+    "output_tokens": 23796,
+    "api_call_count": 22
+  }
+}

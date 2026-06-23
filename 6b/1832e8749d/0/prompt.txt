@@ -1,0 +1,5 @@
+in the last few session when I asked to create a todo, these were noted down in the repo issues rather than utilizing the `/gsd:capture --todo` workflow. is there any reason for this sudden change in behavior?
+
+---
+
+yeah please create the todos on a docs branch and delete/closee the issues.
