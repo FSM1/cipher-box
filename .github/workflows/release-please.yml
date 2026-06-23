@@ -159,16 +159,36 @@ jobs:
           echo "::warning::Cargo.lock stale after release (pre-merge sync raced the merge) — opening a sync PR."
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Deterministic per-commit branch so a manual re-run of this workflow
+          # (same GITHUB_SHA) targets the same sync branch instead of spawning a
+          # new one. Each step below is made idempotent so a re-run after a prior
+          # fallback does not fail under `set -euo pipefail`.
           SYNC_BRANCH="chore/cargo-lock-sync-${GITHUB_SHA:0:7}"
-          git switch -c "$SYNC_BRANCH"
-          git add Cargo.lock
-          git commit -m "chore(ci): sync Cargo.lock for released crates"
-          git push origin "HEAD:${SYNC_BRANCH}"
-          gh pr create \
-            --repo "${{ github.repository }}" \
-            --base "${GITHUB_REF_NAME:-main}" \
-            --head "$SYNC_BRANCH" \
-            --title "chore(ci): sync Cargo.lock for released crates" \
-            --body "Automated Cargo.lock sync for released crate versions. The release PR merged before the pre-merge \`cargo-lock-release-sync\` job pushed the synced lock, so main's committed Cargo.lock is briefly out of sync with the bumped Cargo.toml versions. Merging this restores lock/manifest parity."
+
+          # Only create+push the branch if a prior run hasn't already. git push of
+          # an existing remote branch would be rejected and abort the step.
+          if git ls-remote --exit-code --heads origin "$SYNC_BRANCH" >/dev/null 2>&1; then
+            echo "Sync branch $SYNC_BRANCH already exists — a prior fallback run pushed it."
+          else
+            git switch -c "$SYNC_BRANCH"
+            git add Cargo.lock
+            git commit -m "chore(ci): sync Cargo.lock for released crates"
+            git push origin "HEAD:${SYNC_BRANCH}"
+          fi
+
+          # Open the PR only if one isn't already open for this branch — gh pr
+          # create exits non-zero when a PR already exists for the head branch.
+          EXISTING_PR=$(gh pr list --repo "${{ github.repository }}" \
+            --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -z "$EXISTING_PR" ]; then
+            gh pr create \
+              --repo "${{ github.repository }}" \
+              --base "${GITHUB_REF_NAME:-main}" \
+              --head "$SYNC_BRANCH" \
+              --title "chore(ci): sync Cargo.lock for released crates" \
+              --body "Automated Cargo.lock sync for released crate versions. The release PR merged before the pre-merge \`cargo-lock-release-sync\` job pushed the synced lock, so main's committed Cargo.lock is briefly out of sync with the bumped Cargo.toml versions. Merging this restores lock/manifest parity."
+          else
+            echo "PR #$EXISTING_PR already open for $SYNC_BRANCH — skipping create."
+          fi
           # Best-effort auto-merge; harmless (|| true) if auto-merge is disabled.
           gh pr merge "$SYNC_BRANCH" --repo "${{ github.repository }}" --squash --auto || true

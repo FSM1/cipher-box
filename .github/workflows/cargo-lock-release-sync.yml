@@ -13,8 +13,10 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened]
 
+# The workflow's GITHUB_TOKEN is unused for writes — checkout and push both
+# authenticate via the scoped app token below — so read is sufficient here.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: cargo-lock-sync-${{ github.event.pull_request.number }}
@@ -40,7 +42,9 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           token: ${{ steps.app-token.outputs.token }}
-          fetch-depth: 0
+          # Only the branch tip is needed for cargo metadata/update + a one-commit
+          # push; no history required.
+          fetch-depth: 1
 
       - name: Install Rust toolchain
         run: rustup default stable
