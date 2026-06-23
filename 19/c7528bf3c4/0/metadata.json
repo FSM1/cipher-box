@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "19c7528bf3c4",
+  "session_id": "8f1f51ad-c2b4-4d1c-a945-8248921b9e05",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T21:58:55.413216Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "034c7b93d278",
+  "token_usage": {
+    "input_tokens": 15343,
+    "cache_creation_tokens": 299292,
+    "cache_read_tokens": 13322021,
+    "output_tokens": 122070,
+    "api_call_count": 83
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T21:57:59.95229Z",
+    "agent_lines": 1,
+    "agent_removed": 1,
+    "human_added": 59,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 60,
+    "total_lines_changed": 61,
+    "agent_percentage": 3.278688524590164,
+    "metric_version": 2
+  }
+}
