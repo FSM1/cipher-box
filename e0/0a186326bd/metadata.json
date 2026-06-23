@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e00a186326bd",
+  "strategy": "manual-commit",
+  "branch": "docs/archive-resolved-todos",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/completed/2026-06-19-extract-leaf-ipfs-provider-module.md",
+    ".planning/todos/completed/2026-06-19-extract-withcidlock-shared-unpin-primitive.md",
+    ".planning/todos/completed/2026-06-19-local-provider-unescaped-cid-in-pin-url.md",
+    ".planning/todos/completed/2026-06-19-register-cid-dto-validation-inconsistency.md",
+    ".planning/todos/completed/2026-06-21-pr538-second-coderabbit-pass-preexisting-findings.md",
+    ".planning/todos/completed/2026-06-21-zeroize-fuse-metadata-publish-key-params.md",
+    ".planning/todos/pending/2026-06-19-extract-leaf-ipfs-provider-module.md",
+    ".planning/todos/pending/2026-06-19-extract-withcidlock-shared-unpin-primitive.md",
+    ".planning/todos/pending/2026-06-19-local-provider-unescaped-cid-in-pin-url.md",
+    ".planning/todos/pending/2026-06-19-register-cid-dto-validation-inconsistency.md",
+    ".planning/todos/pending/2026-06-21-pr538-second-coderabbit-pass-preexisting-findings.md",
+    ".planning/todos/pending/2026-06-21-zeroize-fuse-metadata-publish-key-params.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e0/0a186326bd/0/metadata.json",
+      "transcript": "/e0/0a186326bd/0/full.jsonl",
+      "content_hash": "/e0/0a186326bd/0/content_hash.txt",
+      "prompt": "/e0/0a186326bd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 32746,
+    "cache_creation_tokens": 86564,
+    "cache_read_tokens": 2846098,
+    "output_tokens": 37631,
+    "api_call_count": 20
+  }
+}

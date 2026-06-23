@@ -1,0 +1,154 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e00a186326bd",
+  "session_id": "a86cad4e-ef33-4c8d-97df-fe773a25c7ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T18:12:00.67285Z",
+  "branch": "docs/archive-resolved-todos",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/completed/2026-06-19-extract-leaf-ipfs-provider-module.md",
+    ".planning/todos/completed/2026-06-19-extract-withcidlock-shared-unpin-primitive.md",
+    ".planning/todos/completed/2026-06-19-local-provider-unescaped-cid-in-pin-url.md",
+    ".planning/todos/completed/2026-06-19-register-cid-dto-validation-inconsistency.md",
+    ".planning/todos/completed/2026-06-21-pr538-second-coderabbit-pass-preexisting-findings.md",
+    ".planning/todos/completed/2026-06-21-zeroize-fuse-metadata-publish-key-params.md",
+    ".planning/todos/pending/2026-06-19-extract-leaf-ipfs-provider-module.md",
+    ".planning/todos/pending/2026-06-19-extract-withcidlock-shared-unpin-primitive.md",
+    ".planning/todos/pending/2026-06-19-local-provider-unescaped-cid-in-pin-url.md",
+    ".planning/todos/pending/2026-06-19-register-cid-dto-validation-inconsistency.md",
+    ".planning/todos/pending/2026-06-21-pr538-second-coderabbit-pass-preexisting-findings.md",
+    ".planning/todos/pending/2026-06-21-zeroize-fuse-metadata-publish-key-params.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "9b64122ca3b0",
+  "checkpoint_transcript_start": 199,
+  "transcript_lines_at_start": 199,
+  "token_usage": {
+    "input_tokens": 32746,
+    "cache_creation_tokens": 86564,
+    "cache_read_tokens": 2846098,
+    "output_tokens": 37631,
+    "api_call_count": 20
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Review the 27 pending GSD todos after pulling latest main, verify which were silently resolved by recent PRs (#541/#543), archive the confirmed-resolved ones, and identify thematic groupings for upcoming work.",
+    "outcome": "A 35-agent adversarial audit confirmed 6 todos fully resolved by PRs #541 (API IPFS hardening) and #543 (FUSE/IPNS durability), 2 partially resolved with specific residual gaps. The 6 archived todos were git-moved to completed/ on a docs branch with PR annotations. The remaining 21 todos were clustered into actionable themes for upcoming phases.",
+    "learnings": {
+      "repo": [
+        "PRs #541 and #543 (merged 2026-06-22) silently closed 6 pending todos without any todo archival — the 'resolved without archive' problem recurs; periodic audits are necessary.",
+        "Phase 58 / PRs #538/#543/#544 all churn the same ~5 FUSE files (verify.rs, events.rs, metadata.rs, content_ops.rs, publish.rs, replay.rs) — these files are the highest-churn durability-critical surface in the repo.",
+        "IPNS verification spans 4 layers (FUSE, SDK, API, desktop) and the first-publish embedded-sequence convention is inconsistent between FUSE (starts at 0) and SDK (starts at 1) — #21 is unresolved.",
+        "The ERC-1271 contract wallet feature is entirely unbuilt: siwe.service.ts is EOA-only with no publicClient, no eth_getCode, no isValidSignature fallback.",
+        "Faro transport is defined (registerFaroTransport in faro.ts:177) but has zero call sites — the observability wiring was never completed.",
+        "The web search index (buildFromFolderTree) is fully synchronous with a blocking miniSearch.addAll() call — no chunking, no Worker, no incremental updates.",
+        "FUSE fs.rs has an asymmetry: the Folder branch (153-157) was hardened in #543 to propagate wrap_key errors, but the File branch (225-227) still uses .ok() and silently drops the error, publishing ipns_private_key_encrypted: None."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/auth/services/siwe.service.ts",
+          "line": 71,
+          "end_line": 71,
+          "finding": "verifyMessage called without publicClient — EOA-only, no ERC-1271 contract wallet fallback. Comments at lines 40 and 70 explicitly document this limitation."
+        },
+        {
+          "path": "apps/web/src/services/search-index.service.ts",
+          "line": 111,
+          "end_line": 166,
+          "finding": "buildFromFolderTree() is fully synchronous: builds flat documents[] and calls miniSearch.addAll() in one blocking shot. No chunking, no Web Worker, no incremental add/remove."
+        },
+        {
+          "path": "apps/web/src/lib/logger.ts",
+          "line": 45,
+          "end_line": 73,
+          "finding": "Logger calls console.* directly with no transports[] array and no redact() interceptor — PII in warn/error logs is never filtered."
+        },
+        {
+          "path": "apps/web/src/lib/faro.ts",
+          "line": 177,
+          "end_line": 177,
+          "finding": "registerFaroTransport is defined here but has zero call sites anywhere in apps/web."
+        },
+        {
+          "path": "apps/web/src/main.tsx",
+          "line": 9,
+          "end_line": 9,
+          "finding": "Calls initFaro() but never calls registerFaroTransport — Faro transport is initialized but never wired to the logger."
+        },
+        {
+          "path": ".claude/gsd-core/bin/lib/state.cjs",
+          "line": 1937,
+          "end_line": 2016,
+          "finding": "cmdStateCompletePhase never writes a terminal Current Position ('Plan: M of M — COMPLETE') on the milestone's final phase, causing STATE.md regression."
+        },
+        {
+          "path": ".claude/gsd-core/bin/lib/state.cjs",
+          "line": 1408,
+          "end_line": 1413,
+          "finding": "updatePerformanceMetricsSection does a cumulative newTotal = prevTotal + summaryCount with no milestone-aware recompute, causing inflated velocity metrics across milestones."
+        },
+        {
+          "path": "src/fuse/inode.rs",
+          "line": 574,
+          "end_line": 574,
+          "finding": "File-side re-resolution triggers only on modified_at change, not on a changed file_meta_ipns_name — a file can retain stale CID/keys after IPNS name rotation."
+        },
+        {
+          "path": "src/fuse/fs.rs",
+          "line": 225,
+          "end_line": 227,
+          "finding": "File branch uses .ok() to silently drop wrap_key errors, publishing ipns_private_key_encrypted: None. The sibling Folder branch (153-157) was hardened in #543 but the File branch was not."
+        }
+      ],
+      "workflow": [
+        "gsd_run query init.todos emits a warning to stderr that pollutes JSON parsing — always capture stdout independently from stderr when consuming its output.",
+        "Todo files that open with a `# Heading` instead of YAML frontmatter (--- created/title/area ---) are invisible to --list (show as 'Untitled', no area, no age) — all todos must have valid frontmatter.",
+        "Workflow args passed as a JSON array can arrive as a stringified string inside the workflow script, breaking array methods — hardcoding the list in the script body is a reliable workaround.",
+        "Adversarial re-check (independent second agent trying to refute 'resolved' verdicts) significantly improves confidence before archiving todos — worth the extra agent cost on irreversible moves.",
+        "Multi-agent audit of 27 todos with adversarial verification took ~4 minutes wall-clock with 35 agents and 301 tool uses — viable as a periodic hygiene step after major PR merges."
+      ]
+    },
+    "friction": [
+      "gsd_run query init.todos stderr warning polluted JSON output on the first parse attempt, requiring a second clean-stdout-only invocation.",
+      "Two todo files (#26 desktop E2E recycle-bin, #27 FUSE CAS dead param) had no YAML frontmatter, rendering them as 'Untitled / general / no age' in --list — a persistent capture format inconsistency.",
+      "Workflow args arrived as a string instead of an array when passed to the audit workflow, forcing a re-run with the file list hardcoded directly in the script.",
+      "6 todos were stale-resolved with no signal — PRs #541 and #543 fixed them without any automated todo cross-referencing, making manual audit necessary."
+    ],
+    "open_items": [
+      "FUSE inode.rs:574 — file-side re-resolution gap: stale CID/keys if file_meta_ipns_name changes but modified_at does not (partial resolution of todo #13).",
+      "FUSE fs.rs:225-227 — File branch wrap_key error silently dropped with .ok(), publishing ipns_private_key_encrypted: None (partial resolution of todo #16, the one unfixed finding).",
+      "Frontmatter repair for todos #26 (2026-06-22-desktop-e2e-recycle-bin-test-parity-sh-vs-ps1.md) and #27 (2026-06-22-fuse-cas-helper-dead-param-and-content-ops-cleanup.md) — both committed without YAML frontmatter.",
+      "4 stale feature todos (ERC-1271 wallet auth 129d, CRDT IPNS inbox 121d, async search index 118d, alt MFA 116d) recommended for --backlog promotion to declutter the active list.",
+      "Theme A (FUSE IPNS verify/publish long-tail: ~8 todos touching verify.rs/events.rs/metadata.rs/content_ops.rs) identified as highest-value next phase — not yet scheduled.",
+      "GSD tooling: state.cjs cmdStateCompletePhase still regresses STATE.md on a milestone's final phase (todo #5, gsd-tools internal)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T18:10:49.783919Z",
+    "agent_lines": 256,
+    "agent_removed": 256,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 256,
+    "total_lines_changed": 512,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
