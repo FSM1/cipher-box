@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b14bded3344d",
+  "strategy": "manual-commit",
+  "branch": "chore/staging-kubo-tuning",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Cargo.lock"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b1/4bded3344d/0/metadata.json",
+      "transcript": "/b1/4bded3344d/0/full.jsonl",
+      "content_hash": "/b1/4bded3344d/0/content_hash.txt",
+      "prompt": "/b1/4bded3344d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 15259,
+    "cache_creation_tokens": 187678,
+    "cache_read_tokens": 6515564,
+    "output_tokens": 118358,
+    "api_call_count": 53
+  }
+}

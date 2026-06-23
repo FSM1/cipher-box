@@ -1,0 +1,88 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b14bded3344d",
+  "session_id": "d71a5998-d7f6-46df-b358-10dd6a4b8937",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T16:40:43.210743Z",
+  "branch": "chore/staging-kubo-tuning",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Cargo.lock"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "63ec39df2def",
+  "token_usage": {
+    "input_tokens": 15259,
+    "cache_creation_tokens": 187678,
+    "cache_read_tokens": 6515564,
+    "output_tokens": 118358,
+    "api_call_count": 53
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Fix a CI failure where the post-release Cargo.lock sync job was trying to push directly to the protected `main` branch and failing 100% of the time, and also unblock PR #548 whose Lint was failing due to stale `release-as` pins.",
+    "outcome": "Created PR #550 with a new `cargo-lock-release-sync.yml` workflow that syncs Cargo.lock on the release-please PR branch pre-merge, and replaced the broken direct-push-to-main fallback in `release-please.yml` with a PR-based fallback. Also removed 7 stale `release-as` pins and committed the Cargo.lock sync on #548 to unblock its Lint.",
+    "learnings": {
+      "repo": [
+        "main uses classic branch protection (not rulesets) with enforce_admins: true and 13 required status checks — classic protection has no per-App bypass actor, so direct pushes are impossible for everyone including bots.",
+        "release-please does NOT auto-remove `release-as` pins after shipping a version; removal is always manual (precedent: PR #521 `chore(ci): break sdk changelog self-compare loop`).",
+        "The `pr-release-preview.js` bot (Section 7.5, lines 644-652) preserves `release-as` entries inherited from origin/main, so stale pins propagate to every PR branch and never auto-clear.",
+        "check-stale-release-as.js uses strict equality (release-as === manifest) to flag pins that have already shipped.",
+        "Single root workspace with a single Cargo.lock covering all 6 first-party crates including cipherbox-desktop; no CI job uses --locked on workspace builds.",
+        "cipherbox-desktop Rust crate (in src-tauri/Cargo.toml) versions independently from the apps/desktop node package — the node manifest was 0.44.0 but the Rust crate was 0.35.0.",
+        "zizmor is a hard security gate for workflows; new workflow files must be added to zizmor.yml ignore lists for deferred findings (artipacked) and scoped to least-privilege permissions to clear the github-app High finding."
+      ],
+      "code": [
+        {
+          "path": ".github/scripts/pr-release-preview.js",
+          "line": 644,
+          "end_line": 652,
+          "finding": "Bot preserves release-as entries inherited from origin/main, so stale pins on main propagate to all PR branches indefinitely."
+        },
+        {
+          "path": ".github/scripts/check-stale-release-as.js",
+          "finding": "Staleness check uses strict equality: release-as === manifest version. Any pin where the version has already shipped fails this guard."
+        },
+        {
+          "path": ".github/workflows/release-please.yml",
+          "finding": "Post-merge cargo-lock-sync step did git push origin HEAD:main, which is rejected by GH006 protected branch hook every time — the retry/rebase loop was futile because it was not a non-fast-forward issue but a branch protection rejection."
+        }
+      ],
+      "workflow": [
+        "For repos with protected main branches (classic protection, no bypass actors), Cargo.lock sync must happen on the PR branch pre-merge rather than post-merge to main.",
+        "When diagnosing CI failures, distinguish between protected-branch rejections (GH006, structural) and non-fast-forward races (transient) — the log message 'Current branch main is up to date' before each rejection is a tell for the former.",
+        "actionlint SC2129 style nits on untouched steps are pre-existing noise and not introduced by new changes.",
+        "Template injection (github.head_ref in inline scripts) is flagged by both actionlint and zizmor; use plain git push without interpolation to avoid it.",
+        "SSH commit signature verification showing 'N' locally is a missing allowedSignersFile config issue, not an unsigned commit — verify with git cat-file -p HEAD to confirm the actual signature."
+      ]
+    },
+    "friction": [
+      "The retry/rebase loop in the original release-please.yml masked the root cause — logs showed 'Current branch main is up to date' making it look like a race condition rather than a structural protected-branch rejection.",
+      "Classic branch protection has no per-App bypass actor (only rulesets do), closing off the obvious 'let the bot bypass' fix without requiring a posture-weakening migration.",
+      "Initial Cargo.lock staleness diagnosis was wrong — compared lock against the node manifest version (0.44.0) instead of the Rust crate's Cargo.toml (0.35.0), incorrectly flagging cipherbox-desktop as stale.",
+      "zizmor flagged two findings on the new workflow file that required iterative fixes (github-app High and artipacked Low) before the security gate passed.",
+      "The stale Cargo.lock on main was a red herring for #548's Lint failure — the actual blocker was check-stale-release-as.js, a completely separate check."
+    ],
+    "open_items": [
+      "The node-manifest-vs-Rust-crate version gap for cipherbox-desktop (node: 0.44.0, Rust crate: 0.35.0) may indicate a release-please extra-files propagation issue — flagged but not investigated or fixed.",
+      "Stale Cargo.lock on origin/main (core 0.5.1→0.6.0, fuse 0.7.0→0.8.0) will only be fixed when #548 merges — it was not directly synced to main.",
+      "PR #550 (the CI fix) needs review and merge before the next Rust release to prevent the cargo-lock-sync failure from recurring.",
+      "Classic branch protection vs rulesets: if per-App bypass actors are ever needed for other automation, a migration to rulesets would be required."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T16:40:09.739844Z",
+    "agent_lines": 2,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "total_lines_changed": 4,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
