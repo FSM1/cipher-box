@@ -19,8 +19,9 @@ pub enum VerifyError {
     /// API-level error (network failure, 404, etc.).
     Api(cipherbox_api_client::error::ApiError),
     /// All three signature fields absent — legacy record (D-04).
-    /// Callers should warn and proceed using `resp.cid` directly (DB-authoritative path).
-    Legacy,
+    /// Carries the already-resolved `cid` and `sequence_number` so callers need not
+    /// issue a second `resolve_ipns` call (eliminates the TOCTOU race window, T-59-04).
+    Legacy { cid: String, sequence_number: String },
     /// Invalid/partial signature or CBOR cid/sequence binding mismatch (D-02/D-07).
     /// Callers should fail the operation (not the whole mount).
     Invalid(String),
@@ -30,7 +31,10 @@ impl std::fmt::Display for VerifyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Api(e) => write!(f, "API error: {}", e),
-            Self::Legacy => write!(f, "legacy record: all signature fields absent"),
+            Self::Legacy { cid, sequence_number } => write!(
+                f,
+                "legacy record: all signature fields absent (cid={cid}, seq={sequence_number})"
+            ),
             Self::Invalid(msg) => write!(f, "verification failed: {}", msg),
         }
     }
@@ -43,8 +47,6 @@ pub struct VerifiedResolve {
     pub cid: String,
     /// Sequence number from the signed CBOR data (authoritative; D-08).
     pub sequence_number: u64,
-    /// Always `true` for a `VerifiedResolve` (binding succeeded).
-    pub signature_verified: bool,
 }
 
 /// Pure helper that classifies a resolve response given the signature verdict.
@@ -64,7 +66,10 @@ pub(crate) fn bind_verified(
     sig_verdict: Option<bool>,
 ) -> Result<VerifiedResolve, VerifyError> {
     match sig_verdict {
-        None => Err(VerifyError::Legacy),
+        None => Err(VerifyError::Legacy {
+            cid: resp.cid.clone(),
+            sequence_number: resp.sequence_number.clone(),
+        }),
         Some(false) => Err(VerifyError::Invalid("signature verification failed".to_string())),
         Some(true) => {
             // Signature is valid. Now decode the CBOR `data` and bind the embedded
@@ -104,6 +109,14 @@ pub(crate) fn bind_verified(
             // other sequence. The cid binding above stays strict and DB CID remains the
             // authoritative trust root, so this does not widen the attack surface: a record can
             // only reach the network with embedded 0 while DB is 1 (the first-publish window).
+            //
+            // NOTE (Phase 59 Finding F / CR-01): dropping this allowance for strict
+            // `embedded_seq == resp_seq` is DEFERRED to Phase 60. The interactive folder-create
+            // paths (write_ops/implementation/mkdir.rs, platform/windows/write_ops.rs) still
+            // embed 0, and existing signed records embed 0; tightening here before those publish
+            // sites are unified to 1 and existing records are republished would fail-close
+            // resolution of every freshly-created folder. Keep the skew allowance until the
+            // Phase 60 cross-layer cutover lands the publish-side change + a republish migration.
             let resp_seq = resp
                 .sequence_number
                 .parse::<u64>()
@@ -129,7 +142,6 @@ pub(crate) fn bind_verified(
             Ok(VerifiedResolve {
                 cid,
                 sequence_number: resp_seq,
-                signature_verified: true,
             })
         }
     }
@@ -204,7 +216,6 @@ mod tests {
         let result = bind_verified(&resp, Some(true)).unwrap();
         assert_eq!(result.cid, "bafyREAL");
         assert_eq!(result.sequence_number, 5);
-        assert!(result.signature_verified);
     }
 
     #[test]
@@ -239,7 +250,6 @@ mod tests {
         let result = bind_verified(&resp, Some(true)).unwrap();
         assert_eq!(result.cid, "bafyFIRST");
         assert_eq!(result.sequence_number, 1, "returns DB-authoritative seq, not embedded 0");
-        assert!(result.signature_verified);
     }
 
     #[test]
@@ -256,17 +266,23 @@ mod tests {
 
     #[test]
     fn bind_verified_legacy_returns_legacy() {
-        // None verdict → Legacy error.
+        // None verdict → Legacy { cid, sequence_number } carrying the input response fields.
         let resp = IpnsResolveResponse {
             success: true,
             cid: "bafyLEGACY".to_string(),
-            sequence_number: "1".to_string(),
+            sequence_number: "7".to_string(),
             signature_v2: None,
             data: None,
             pub_key: None,
         };
         let err = bind_verified(&resp, None).unwrap_err();
-        assert!(matches!(err, VerifyError::Legacy));
+        match err {
+            VerifyError::Legacy { cid, sequence_number } => {
+                assert_eq!(cid, resp.cid, "Legacy must carry resp.cid");
+                assert_eq!(sequence_number, resp.sequence_number, "Legacy must carry resp.sequence_number");
+            }
+            other => panic!("expected VerifyError::Legacy, got {:?}", other),
+        }
     }
 
     #[test]

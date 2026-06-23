@@ -89,21 +89,18 @@ pub fn spawn_metadata_refresh(
                     // D-01: route through the verified chokepoint.
                     let verified = match crate::verify::resolve_ipns_verified(&api, &ipns_name).await {
                         Ok(v) => v,
-                        Err(crate::verify::VerifyError::Legacy) => {
-                            // D-04: all-absent legacy record — re-resolve to get the raw cid,
-                            // warn and proceed (30s poll self-heals; D-02 scoped).
+                        Err(crate::verify::VerifyError::Legacy { cid, sequence_number }) => {
+                            // D-04: all-absent legacy record — use the carried cid/sequence_number
+                            // (no second resolve_ipns). T-59-04: eliminates the TOCTOU race window.
+                            // 30s poll self-heals; D-02 scoped.
                             log::warn!(
                                 "spawn_metadata_refresh: IPNS {} resolved without signature fields \
                                  — proceeding with DB CID (D-04)",
                                 ipns_name
                             );
-                            let raw = cipherbox_api_client::ipns::resolve_ipns(&api, &ipns_name)
-                                .await
-                                .map_err(|e| format!("resolve fallback: {}", e))?;
                             crate::verify::VerifiedResolve {
-                                cid: raw.cid,
-                                sequence_number: raw.sequence_number.parse().unwrap_or(0),
-                                signature_verified: false,
+                                cid,
+                                sequence_number: sequence_number.parse().unwrap_or(0),
                             }
                         }
                         Err(crate::verify::VerifyError::Invalid(msg)) => {

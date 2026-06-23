@@ -232,7 +232,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HARD-07     | Phase 56   | Planned  |
 | HARD-08     | Phase 57   | Planned  |
 | HARD-09     | Phase 58   | Planned  |
-| HARD-10     | Phase 59   | Planned  |
+| HARD-10     | Phase 59   | Complete |
 | HARD-11     | Phase 60   | Planned  |
 
 **Coverage:**

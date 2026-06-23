@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Milestone complete
-last_updated: "2026-06-22T15:50:02.496Z"
-last_activity: 2026-06-22
+status: Phase 59 executed — human_needed (winfsp / SDK-E2E / desktop-E2E gates); Finding F partial, deferred to Phase 60
+last_updated: "2026-06-23T21:00:00.000Z"
+last_activity: 2026-06-23
 progress:
-  total_phases: 43
-  completed_phases: 43
-  total_plans: 186
-  completed_plans: 186
-  percent: 100
+  total_phases: 45
+  completed_phases: 44
+  total_plans: 190
+  completed_plans: 190
+  percent: 99
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 58 — IPNS Signature-Verify Coverage
+**Current focus:** Phase 59 — fuse-ipns-verify-publish-hardening-and-cleanup
 
 ## Current Position
 
-Phase: 58
-Plan: Not started
+Phase: 59 (fuse-ipns-verify-publish-hardening-and-cleanup) — EXECUTED, NOT yet complete (human_needed)
+Plan: 4 of 4 executed. Deep code review found a Finding F blocker (CR-01: resolve-side strict-equality removed while the live mkdir paths still embed 0 → would fail-close resolution of freshly-created folders). Fixed by reverting the strict-equality tightening and restoring the skew allowance (commit 0256ea486); forward embed-1 changes kept; full first-publish unification + strict cutover deferred to Phase 60. Remaining to close Phase 59: winfsp Windows CI, SDK-E2E (redis 6380), desktop-E2E — see 59-UAT.md, then run /gsd:verify-work 59.
 Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 58 (recommended order was 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics
@@ -159,6 +159,10 @@ Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases
 | Phase 58 P01 | 45 | 5 tasks | 10 files |
 | Phase 58-ipns-signature-verify-coverage P02 | 30min | 3 tasks | 2 files |
 | Phase 58-ipns-signature-verify-coverage P04 | 25min | 3 tasks | 4 files |
+| Phase 59 P01 | 35min | 2 tasks | 2 files |
+| Phase 59 P02 | 4min | 2 tasks | 6 files |
+| Phase 59 P03 | 12min | 2 tasks | 6 files |
+| Phase 59 P04 | 15min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -286,7 +290,9 @@ Recent for v1.1:
 
 ### Pending Todos
 
-21 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list. **2026-06-21:** filed resolved/superseded todos #5 (IPNS S1/S2/S3 → PR #529), #10 (refactor Tier-1/2 → PR #538), and the per-file-IPNS-conflict todo (folded into the PR #538 robustness todo) to `completed/`; re-captured the 14 Tier-3 refactor items as a new todo; grouped the FUSE/IPNS, API-CID, and IPNS-verify deferred-findings todos into new Phases 56–58. **2026-06-19:** todos #7 (useFolderNavigation consolidation) and #8 (shared-move re-encrypt) were verified already-resolved by Phase 49 (confirmed in live code) and moved to `completed/`; ten remaining tech-debt/security todos were grouped into the reopened v1.1 hardening block (Phases 50–55, see Roadmap Evolution). The four older feature todos (ERC-1271 wallet auth, CRDT IPNS inbox research, async search index, alternative MFA factors) and the GSD-tooling STATE regression (#10) remain unscheduled. _Historical:_ the desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. The architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; bin-restore gap surfaced while combing the #494 fix) was completed 2026-06-16 in PR #498 (branch `feat/sdk-client-self-bootstrap-folder-tree`) and moved to `.planning/todos/completed/`; its follow-ups (delete the now-redundant web `ensureFolderRegistered`/`useFolderNavigation` unwrap paths once self-heal proves out; optional negative-cache) were captured as a new pending todo. Remaining pending still includes the route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47. The v1.1 verification-ledger todo (phases 18/31/32 missing VERIFICATION.md) was completed 2026-06-19 — all three reports authored (goal-backward, adversarially spot-checked), PERF-01..04 closed (PERF-03 via accepted override), and the milestone audit verdict flipped to `passed` (66/66, 20/20); moved to `.planning/todos/completed/`.
+**2026-06-23:** Captured a high-severity storage/quota bug — bin delete + empty-bin never unpin content/version CIDs (client SDK `packages/sdk/src/bin/index.ts`), confirmed on staging (a user with empty vault+bin showing 442 MB quota used; 9 orphaned content CIDs = 439 MB still pinned). See `2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md`. Also captured the Phase 59 Finding F deferral as a Phase 60 carry-forward: `2026-06-23-phase60-ipns-first-publish-strict-equality-cutover.md` (resolves_phase: 60).
+
+See `/gsd:check-todos` for the full pending list. **2026-06-21:** filed resolved/superseded todos #5 (IPNS S1/S2/S3 → PR #529), #10 (refactor Tier-1/2 → PR #538), and the per-file-IPNS-conflict todo (folded into the PR #538 robustness todo) to `completed/`; re-captured the 14 Tier-3 refactor items as a new todo; grouped the FUSE/IPNS, API-CID, and IPNS-verify deferred-findings todos into new Phases 56–58. **2026-06-19:** todos #7 (useFolderNavigation consolidation) and #8 (shared-move re-encrypt) were verified already-resolved by Phase 49 (confirmed in live code) and moved to `completed/`; ten remaining tech-debt/security todos were grouped into the reopened v1.1 hardening block (Phases 50–55, see Roadmap Evolution). The four older feature todos (ERC-1271 wallet auth, CRDT IPNS inbox research, async search index, alternative MFA factors) and the GSD-tooling STATE regression (#10) remain unscheduled. _Historical:_ the desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. The architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; bin-restore gap surfaced while combing the #494 fix) was completed 2026-06-16 in PR #498 (branch `feat/sdk-client-self-bootstrap-folder-tree`) and moved to `.planning/todos/completed/`; its follow-ups (delete the now-redundant web `ensureFolderRegistered`/`useFolderNavigation` unwrap paths once self-heal proves out; optional negative-cache) were captured as a new pending todo. Remaining pending still includes the route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47. The v1.1 verification-ledger todo (phases 18/31/32 missing VERIFICATION.md) was completed 2026-06-19 — all three reports authored (goal-backward, adversarially spot-checked), PERF-01..04 closed (PERF-03 via accepted override), and the milestone audit verdict flipped to `passed` (66/66, 20/20); moved to `.planning/todos/completed/`.
 
 ### Resolved
 
@@ -302,12 +308,24 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-06-22
+Last activity: 2026-06-23
 
-Last session: 2026-06-22T15:10:07.635Z
+Last session: 2026-06-23T21:00:00Z — Completed 59-04-PLAN.md (Phase 59 COMPLETE)
 
 ## Decisions
 
+- [Phase 59-04]: F.1 next_file_publish_sequence(is_first_publish=true) returns 1; unified with TS SDK first-publish convention
+- [Phase 59-04]: F.2 replay.rs child-folder first-publish embeds seq=1; record_publish seeds at 1 for coordinator consistency
+- [Phase 59-04]: F.3 verify.rs skew allowance (resp_seq==1 && embedded_seq==0) removed; strict embedded_seq == resp_seq (T-59-10)
+- [Phase 59-04]: F.4 ipns_verify_vectors case-8 expected_result changed valid->invalid; classify_vector uses strict equality
+- [Phase 59-04]: TEE re-sign path confirmed NOT hitting upsertFolderIpns embedded-seq gate (T-59-11 accepted); no API/TS change needed
+- [Phase 59-03]: D.1 journal_entry if/else body collapsed to single Err; param kept with D-01a TODO
+- [Phase 59-03]: D.3 current_seq_for_cas replaced by direct if current_seq.is_none() guard (same error text)
+- [Phase 59-03]: E.1 VerifiedResolve::signature_verified field removed; was never read, only written
+- [Phase 59-03]: E.4 bytesToHex helper removed alongside the unused public_key/private_key vector fields
+- [Phase 59-02]: VerifyError::Legacy carries { cid: String, sequence_number: String } from bind_verified — no second resolve_ipns in any Legacy arm (T-59-04 TOCTOU eliminated)
+- [Phase 59-02]: Display for VerifyError::Legacy includes cid and seq: 'legacy record: all signature fields absent (cid={cid}, seq={sequence_number})'
+- [Phase 59-02]: events.rs synthetic VerifiedResolve keeps signature_verified: false until Finding E.1 (plan 03) removes the field
 - [Phase ?]: deser_opt_string maps legacy empty-string file_meta_ipns_name to None; serde compat shim mandatory for pre-Phase-45 journal replay
 - [Phase 45-04]: IpnsResolveOutcome lives in error.rs with #[derive(Debug)] only — not thiserror, it is an outcome not an error
 - [Phase 45-04]: resolve_ipns_for_replay preserves both contains(not found) and contains(404) predicates to avoid classification regression
