@@ -1870,4 +1870,213 @@ mod tests {
             _ => panic!("Expected File kind"),
         }
     }
+
+    // ---- Finding B / T-59-02: file_meta_ipns_name change forces re-resolution ----
+    //
+    // These tests verify that when a resolved file's `file_meta_ipns_name` changes
+    // (same mtime), `populate_folder` marks it unresolved instead of carrying over
+    // the stale CID/keys.  The mtime-change path is also regression-guarded.
+
+    /// Helper: seed a resolved file inode in the table under root and return
+    /// the file's ino.
+    fn seed_resolved_file(
+        table: &mut InodeTable,
+        ipns_name: &str,
+        mtime_ms: u64,
+    ) -> u64 {
+        // Initial population with a placeholder FilePointer
+        let meta = cipherbox_core::FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![cipherbox_core::FolderChild::File(
+                cipherbox_core::folder::FilePointer {
+                    id: "fp-seed".to_string(),
+                    name: "report.txt".to_string(),
+                    file_meta_ipns_name: ipns_name.to_string(),
+                    ipns_private_key_encrypted: None,
+                    created_at: 1000,
+                    modified_at: mtime_ms,
+                },
+            )],
+        };
+        let private_key = vec![0u8; 32];
+        let public_key = vec![0u8; 33];
+        table
+            .populate_folder(ROOT_INO, &meta, &private_key, &public_key, false)
+            .unwrap();
+
+        let file_ino = {
+            let root = table.get(ROOT_INO).unwrap();
+            root.children.as_ref().unwrap()[0]
+        };
+
+        // Manually mark as resolved with the stable ipns_name
+        {
+            let file = table.get_mut(file_ino).unwrap();
+            file.attr.mtime = std::time::UNIX_EPOCH + std::time::Duration::from_millis(mtime_ms);
+            file.kind = InodeKind::File {
+                cid: "bafyoriginal".to_string(),
+                encrypted_file_key: "originalkey".to_string(),
+                iv: "originaliv".to_string(),
+                size: 42,
+                encryption_mode: "GCM".to_string(),
+                file_meta_ipns_name: Some(ipns_name.to_string()),
+                file_meta_resolved: true,
+                file_ipns_private_key: Some(Zeroizing::new(vec![9u8; 32])),
+                file_ipns_key_encrypted_hex: Some("enckeyhex".to_string()),
+                versions: None,
+            };
+        }
+        file_ino
+    }
+
+    /// Test 1 (RED): A resolved file with the SAME mtime but a DIFFERENT
+    /// `file_meta_ipns_name` (incoming pointer is a different identity) MUST be
+    /// marked `file_meta_resolved: false` so stale CID/keys are not carried over.
+    ///
+    /// This test is RED under the broken code (which only checks mtime) and GREEN
+    /// after the fix (which also checks pointer identity).
+    #[test]
+    fn upsert_children_file_same_mtime_different_ipns_name_marks_unresolved() {
+        let mut table = InodeTable::new();
+        let old_ipns = "k51old-file-ipns";
+        let new_ipns = "k51new-file-different";
+        let mtime_ms = 5000u64;
+
+        let _file_ino = seed_resolved_file(&mut table, old_ipns, mtime_ms);
+
+        // Refresh with a DIFFERENT ipns_name but the SAME mtime.
+        // Bug: the current code returns (true, Some(existing.kind.clone())) here,
+        // carrying over stale resolved state.  Fix: must return (true, None) when
+        // file_meta_ipns_name differs.
+        let meta_v2 = cipherbox_core::FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![cipherbox_core::FolderChild::File(
+                cipherbox_core::folder::FilePointer {
+                    id: "fp-v2".to_string(),
+                    name: "report.txt".to_string(),
+                    file_meta_ipns_name: new_ipns.to_string(), // DIFFERENT pointer identity
+                    ipns_private_key_encrypted: None,
+                    created_at: 1000,
+                    modified_at: mtime_ms, // SAME mtime — only name changed
+                },
+            )],
+        };
+        let private_key = vec![0u8; 32];
+        let public_key = vec![0u8; 33];
+        table
+            .populate_folder(ROOT_INO, &meta_v2, &private_key, &public_key, true)
+            .unwrap();
+
+        let root = table.get(ROOT_INO).unwrap();
+        let refreshed_ino = root.children.as_ref().unwrap()[0];
+        let refreshed = table.get(refreshed_ino).unwrap();
+        match &refreshed.kind {
+            InodeKind::File {
+                file_meta_resolved,
+                file_meta_ipns_name,
+                ..
+            } => {
+                assert!(
+                    !*file_meta_resolved,
+                    "Finding B: file with changed file_meta_ipns_name (same mtime) MUST be \
+                     marked file_meta_resolved=false; got true (stale state carried over)"
+                );
+                assert_eq!(
+                    file_meta_ipns_name.as_deref(),
+                    Some(new_ipns),
+                    "Finding B: new ipns name must be set after pointer-identity change"
+                );
+            }
+            _ => panic!("Expected File kind"),
+        }
+    }
+
+    /// Test 2: A resolved file with the SAME mtime AND the SAME `file_meta_ipns_name`
+    /// keeps `file_meta_resolved: true` (no spurious re-resolution when the pointer
+    /// is unchanged).
+    #[test]
+    fn upsert_children_file_same_mtime_same_ipns_name_stays_resolved() {
+        let mut table = InodeTable::new();
+        let ipns = "k51same-file-ipns";
+        let mtime_ms = 5000u64;
+
+        let _file_ino = seed_resolved_file(&mut table, ipns, mtime_ms);
+
+        // Refresh with the SAME ipns_name AND same mtime — no re-resolution needed.
+        let meta_v2 = cipherbox_core::FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![cipherbox_core::FolderChild::File(
+                cipherbox_core::folder::FilePointer {
+                    id: "fp-v2".to_string(),
+                    name: "report.txt".to_string(),
+                    file_meta_ipns_name: ipns.to_string(), // SAME pointer identity
+                    ipns_private_key_encrypted: None,
+                    created_at: 1000,
+                    modified_at: mtime_ms, // SAME mtime
+                },
+            )],
+        };
+        let private_key = vec![0u8; 32];
+        let public_key = vec![0u8; 33];
+        table
+            .populate_folder(ROOT_INO, &meta_v2, &private_key, &public_key, true)
+            .unwrap();
+
+        let root = table.get(ROOT_INO).unwrap();
+        let refreshed_ino = root.children.as_ref().unwrap()[0];
+        let refreshed = table.get(refreshed_ino).unwrap();
+        match &refreshed.kind {
+            InodeKind::File { file_meta_resolved, .. } => {
+                assert!(
+                    *file_meta_resolved,
+                    "Finding B: file with same mtime and same ipns_name MUST stay resolved"
+                );
+            }
+            _ => panic!("Expected File kind"),
+        }
+    }
+
+    /// Test 3 (regression guard): A file with a CHANGED mtime still triggers
+    /// re-resolution regardless of ipns_name (the existing mtime path is unchanged).
+    #[test]
+    fn upsert_children_file_changed_mtime_marks_unresolved_regression_guard() {
+        let mut table = InodeTable::new();
+        let ipns = "k51unchanged-file-ipns";
+        let mtime_ms = 5000u64;
+
+        let _file_ino = seed_resolved_file(&mut table, ipns, mtime_ms);
+
+        // Refresh with CHANGED mtime → must force re-resolution (existing behavior).
+        let meta_v2 = cipherbox_core::FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![cipherbox_core::FolderChild::File(
+                cipherbox_core::folder::FilePointer {
+                    id: "fp-v2".to_string(),
+                    name: "report.txt".to_string(),
+                    file_meta_ipns_name: ipns.to_string(), // same name
+                    ipns_private_key_encrypted: None,
+                    created_at: 1000,
+                    modified_at: mtime_ms + 1000, // CHANGED mtime
+                },
+            )],
+        };
+        let private_key = vec![0u8; 32];
+        let public_key = vec![0u8; 33];
+        table
+            .populate_folder(ROOT_INO, &meta_v2, &private_key, &public_key, true)
+            .unwrap();
+
+        let root = table.get(ROOT_INO).unwrap();
+        let refreshed_ino = root.children.as_ref().unwrap()[0];
+        let refreshed = table.get(refreshed_ino).unwrap();
+        match &refreshed.kind {
+            InodeKind::File { file_meta_resolved, .. } => {
+                assert!(
+                    !*file_meta_resolved,
+                    "Regression guard: changed mtime must still force re-resolution"
+                );
+            }
+            _ => panic!("Expected File kind"),
+        }
+    }
 }
