@@ -1,9 +1,9 @@
 ---
 phase: 59
 slug: fuse-ipns-verify-publish-hardening-and-cleanup
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: approved
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-06-23
 ---
 
@@ -38,11 +38,18 @@ created: 2026-06-23
 
 ## Per-Task Verification Map
 
-> Filled by the planner. Behavioural fixes (A swallowed-error propagation, B inode re-resolution, C VerifyError::Legacy carry) get unit tests; pure cleanup (D/E dead-code) is clippy/compile-only.
+> Behavioural fixes (A swallowed-error propagation, B inode re-resolution, C VerifyError::Legacy carry) get unit tests; pure cleanup (D/E dead-code, F constant) is clippy/compile + existing-test-update. Every winfsp-touching task additionally carries `cargo check --features winfsp` (type-level) and the authoritative Windows CI gate. Commands copied verbatim from each plan's `<automated>` block.
 
-| Task ID   | Plan | Wave | Requirement | Threat Ref   | Secure Behavior                     | Test Type | Automated Command | File Exists | Status     |
-| --------- | ---- | ---- | ----------- | ------------ | ----------------------------------- | --------- | ----------------- | ----------- | ---------- |
-| 59-01-01  | 01   | 1    | HARD-10     | —            | {expected secure behavior or "N/A"} | unit      | `{command}`       | ✅ / ❌ W0  | ⬜ pending |
+| Task ID  | Plan | Wave | Requirement | Threat Ref | Secure Behavior                                                                       | Test Type   | Automated Command                                                                                                       | File Exists | Status     |
+| -------- | ---- | ---- | ----------- | ---------- | ------------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------- | ----------- | ---------- |
+| 59-01-01 | 01   | 1    | HARD-10     | T-59-01    | File key-wrap failure → `build_folder_metadata` returns Err; never publishes `ipns_private_key_encrypted: None` | unit (tdd)  | `cargo test -p cipherbox-fuse --features fuse build_folder_metadata`                                                    | ✅          | ⬜ pending |
+| 59-01-02 | 01   | 1    | HARD-10     | —          | File with changed `file_meta_ipns_name` (same `modified_at`) re-resolves fresh CID/keys | unit (tdd)  | `cargo test -p cipherbox-fuse --features fuse file_meta_ipns_name`                                                      | ✅          | ⬜ pending |
+| 59-02-01 | 02   | 2    | HARD-10     | T-59-05    | `VerifyError::Legacy` carries resolved `cid`/`sequence_number` (no second resolve)    | unit (tdd)  | `cargo test -p cipherbox-fuse --features fuse bind_verified_legacy_returns_legacy`                                      | ✅          | ⬜ pending |
+| 59-02-02 | 02   | 2    | HARD-10     | T-59-05    | All 9 Legacy arms migrated atomically; both feature sets compile                      | integration | `cargo test -p cipherbox-fuse --features fuse && cargo check -p cipherbox-fuse --features winfsp`                       | ✅          | ⬜ pending |
+| 59-03-01 | 03   | 3    | HARD-10     | T-59-07    | Dead `journal_entry` branch collapsed; `content_ops` dead bindings removed; conflict test still Err | unit + clippy | `cargo test -p cipherbox-fuse --features fuse publish_with_cas_retry && cargo test -p cipherbox-fuse --features fuse publish_file_metadata` | ✅          | ⬜ pending |
+| 59-03-02 | 03   | 3    | HARD-10     | —          | `VerifiedResolve` has no `signature_verified` field; `is_ipns_not_found` test legible | unit + clippy | `cargo test -p cipherbox-fuse --features fuse is_ipns_not_found && cargo test -p cipherbox-fuse --features fuse ipns_verify && cargo test -p cipherbox-fuse --features fuse verify` | ✅          | ⬜ pending |
+| 59-04-01 | 04   | 4    | HARD-10     | —          | FUSE first publish embeds seq `1` (matches SDK/API); verify skew allowance removed    | unit        | `cargo test -p cipherbox-fuse --features fuse next_file_publish_sequence && cargo test -p cipherbox-fuse --features fuse verify && cargo test -p cipherbox-fuse --features fuse ipns_verify` | ✅          | ⬜ pending |
+| 59-04-02 | 04   | 4    | HARD-10     | —          | Six source todos archived to `completed/` via `git mv` (history preserved)            | static      | `test ! -e .planning/todos/pending/<each-of-6> && test -e .planning/todos/completed/<each-of-6> && echo ALL_SIX_ARCHIVED` | ✅          | ⬜ pending |
 
 _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
@@ -50,10 +57,7 @@ _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ## Wave 0 Requirements
 
-- [ ] Confirm existing `cargo test` harness in the FUSE crate covers the touched modules (verify.rs / fs.rs / inode.rs)
-- [ ] Add unit-test stubs for behavioural fixes A, B, C if no analog test exists
-
-_If none: "Existing infrastructure covers all phase requirements."_
+Existing infrastructure covers all phase requirements. The `cipherbox-fuse` crate already has a `cargo test` harness over the touched modules (verify.rs / fs.rs / inode.rs / metadata.rs / content_ops.rs); the behavioural fixes (A/B/C) add their failing-first tests inline within their `type: tdd` tasks — no separate Wave 0 scaffold task is needed.
 
 ---
 
@@ -70,11 +74,11 @@ _If none: "All phase behaviors have automated verification."_
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 120s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (none — existing infra)
+- [x] No watch-mode flags
+- [x] Feedback latency < 120s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-23

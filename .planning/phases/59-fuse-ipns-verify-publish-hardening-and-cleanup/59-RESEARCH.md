@@ -655,17 +655,19 @@ test-quality changes. They do not touch cryptographic primitives.
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Finding B exact fix scope**
    - What we know: `same_pointer` is already computed in the later `kind =` block at ~line 614; the early `(was_resolved, existing_kind)` block at ~562 does not use it.
    - What's unclear: Whether the cleanest fix is to hoist the `file_meta_ipns_name` comparison into the early block, or restructure the two-step logic into a single pass.
    - Recommendation: Hoist a simple `incoming_ipns_name != existing_inode.file_meta_ipns_name` check into the `modified == mtime` else-arm; return `(true, None)` if names differ. This is a one-line addition and avoids restructuring.
+   - **RESOLVED:** Adopt the minimal one-line hoist (no restructuring). Locked into plan **59-01 Task 2** action ("prefer the minimal one-line hoist, do not restructure").
 
 2. **Finding C: `Display` for `VerifyError::Legacy { cid, seq }`**
    - What we know: The current display is `"legacy record: all signature fields absent"`.
    - What's unclear: Whether to include the cid/seq in the display string (useful for logs) or keep it terse.
    - Recommendation: Include cid and seq: `"legacy record: all signature fields absent (cid={cid}, seq={seq})"`. This is more useful in logs and matches the `Invalid` variant's verbosity.
+   - **RESOLVED:** Include cid and seq in the `Display` string. Locked into plan **59-02 Task 1** action (`"legacy record: all signature fields absent (cid={cid}, seq={sequence_number})"`).
 
 ---
 
