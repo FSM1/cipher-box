@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e32d18a85220",
+  "session_id": "ee764e72-7c6a-455e-8494-6efa906c7f74",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T19:14:52.147388Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fdf251b4a24d",
+  "token_usage": {
+    "input_tokens": 16778,
+    "cache_creation_tokens": 148678,
+    "cache_read_tokens": 3635053,
+    "output_tokens": 41458,
+    "api_call_count": 31
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for Phase 59 (fuse-ipns-verify-publish-hardening-and-cleanup) to produce verified PLAN.md files via the full research → plan → verify pipeline.",
+    "outcome": "All four plans were produced and passed plan-checker verification after one mechanical fix iteration. STATE and ROADMAP were updated and committed to the correct feature branch.",
+    "learnings": {
+      "repo": [
+        "gsd-planner creates a stray `docs/plan-phase-<N>` branch instead of committing to the active feat/<slug> branch — a documented GSD gotcha requiring manual consolidation after every planning run.",
+        "The commit helper auto-switches from main to feat/<slug>; RESEARCH.md and VALIDATION.md land on feat/ while the planner lands on docs/ — they share a common ancestor so fast-forward merge is always clean.",
+        "gsd-pattern-mapper writes PATTERNS.md but no plan-phase step commits it; it becomes an untracked orphan unless explicitly added outside the normal flow.",
+        "auto_chain_active flag must be cleared when invoking plan-phase manually (without --auto/--chain) to prevent unintended auto-advancement.",
+        "The TS API surface extractor returns empty for Rust-only phases and should be omitted from planner hints in that case.",
+        "Phase 59 has six detailed todo writeups in .planning/todos/pending/ with file/line-level findings on durability-critical FUSE Rust files; these are the authoritative spec in the absence of a CONTEXT.md.",
+        "The TEE republish path bypasses the embedded-sequence gate entirely (no TEE re-sign risk), but unifying FUSE to embed=1 is still recommended to allow removal of a verify.rs hotfix.",
+        "commit_failed from the commit helper is a known false-negative — commits succeed regardless."
+      ],
+      "code": [],
+      "workflow": [
+        "Plan-checker blocks on Open Questions sections in RESEARCH.md that lack (RESOLVED) markers even when the answers are present in plan actions — always resolve markers before running the checker.",
+        "Plan-checker warns on VALIDATION.md per-task tables left as template stubs — fill automated commands from actual plan task IDs before the first checker run to avoid an extra iteration.",
+        "Mechanical doc fixes (missing markers, stub tables) do not require re-spawning the planner; fix directly and re-run the checker to clear the iteration count cheaply.",
+        "When plan-checker blockers are doc-level rather than plan defects, diagnose by reading the relevant section first, then edit in place rather than triggering a full planning revision."
+      ]
+    },
+    "friction": [
+      "gsd-planner committed to a stray docs/plan-phase-59 branch, requiring manual branch consolidation and deletion after every planning run.",
+      "PATTERNS.md was left untracked because the plan-phase workflow has no commit step for it — required an out-of-band commit.",
+      "Plan-checker iteration 1 blocked on RESEARCH.md Open Questions missing (RESOLVED) markers, requiring a fix-and-recheck cycle.",
+      "Plan-checker iteration 1 warned on VALIDATION.md per-task table being a template stub, requiring extraction of all 8 task automated commands and a multi-edit fill.",
+      "commit_failed false-negative from the commit helper caused unnecessary verification steps to confirm commits actually landed."
+    ],
+    "open_items": [
+      "Six todo writeups in .planning/todos/pending/ must be moved to .planning/todos/completed/ during phase execution (injected as a task in the final plan).",
+      "Unifying FUSE publish path to embed=1 is recommended to enable removal of the verify.rs hotfix but was deferred to phase execution.",
+      "Post-planning gap analysis ran at session end but results were not captured in the transcript."
+    ]
+  }
+}
