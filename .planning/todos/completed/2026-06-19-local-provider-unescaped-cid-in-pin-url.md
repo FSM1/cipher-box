@@ -8,6 +8,8 @@ files:
   - apps/api/src/ipfs/providers/local.provider.ts
 ---
 
+> **Resolved by PR #541** (merged 2026-06-22). Verified already-fixed in the 2026-06-23 pending-todo audit (independent adversarial re-check confirmed). Archived from pending.
+
 ## Problem
 
 `LocalProvider.unpinFile` (and the symmetric `pin/add` path) builds

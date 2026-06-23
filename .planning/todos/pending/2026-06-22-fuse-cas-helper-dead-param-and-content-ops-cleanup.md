@@ -1,6 +1,15 @@
-# FUSE CAS helper dead param + content_ops dead-binding cleanup
+---
+created: 2026-06-22T00:00:00.000Z
+title: FUSE CAS helper dead param + content_ops dead-binding cleanup
+area: refactor
+severity: low
+source: Phase 56 simplify review (gsd-code-reviewer pass during ship-phase 56)
+files:
+  - crates/fuse/src/metadata.rs
+  - crates/fuse/src/content_ops.rs
+  - crates/fuse/src/fs.rs
+---
 
-Source: Phase 56 simplify review (gsd-code-reviewer pass during ship-phase 56).
 Deferred because these touch the durability-critical IPNS CAS publish path and would
 require changing the durability test seam — out of proportion to a ship-time cleanup.
 

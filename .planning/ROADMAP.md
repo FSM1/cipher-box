@@ -1035,12 +1035,52 @@ Plans:
 
 Verification gate: full SDK E2E suite (local; redis 6380), apps/api specs, `cargo test`.
 
+### Phase 59: FUSE IPNS Verify/Publish Hardening and Cleanup
+
+**Goal:** Close out the Phase 58 IPNS verification long-tail on the FUSE crate — finish the two partially-done durability fixes and clear the dead-code/cleanup debt across the same durability-critical files (`verify.rs`, `events.rs`, `metadata.rs`, `content_ops.rs`, `fs.rs`, `inode.rs`, `publish.rs`, `replay.rs`), so the verify/publish/CAS paths carry no swallowed errors, no dead seams, and a single first-publish embedded-sequence convention. Touches durability-critical publish paths, so full SDK-E2E + desktop-E2E gated.
+**Requirements**: HARD-10
+**Depends on:** Phase 58 (resolve_ipns_verified chokepoint), Phase 56 (FUSE durability baseline)
+**Plans:** TBD (run /gsd-plan-phase 59)
+
+Scope (captured todos):
+
+- [ ] RESIDUAL of HARD-07 (most fixed by PR #543): FUSE/IPNS robustness finding #3 — `fs.rs:225-227` File branch `wrap_key(...).ok()` swallows a key-wrap error and publishes a FilePointer with `ipns_private_key_encrypted: None`; propagate the error like the sibling Folder branch (`fs.rs:153-157`) — `2026-06-21-fuse-ipns-robustness-findings-from-pr538-review.md`
+- [ ] RESIDUAL of HARD-07 (folder side fixed by PR #543): FUSE inode stable-ID — file-side re-resolution must also trigger on a changed `file_meta_ipns_name`, not just `modified_at` (`inode.rs:574`), so a file can't keep stale CID/keys — `2026-06-20-fuse-inode-stable-id-identity-reset.md`
+- [ ] Carry the legacy IPNS response in `VerifyError::Legacy` instead of a second raw resolve — `2026-06-22-verify-rs-carry-legacy-response.md`
+- [ ] FUSE CAS helper dead `journal_entry` param + `content_ops` dead-binding cleanup — `2026-06-22-fuse-cas-helper-dead-param-and-content-ops-cleanup.md`
+- [ ] Phase 58 IPNS verify minor simplify/cleanup follow-ups — `2026-06-22-phase58-simplify-cleanup.md`
+- [ ] Unify first-publish IPNS embedded-sequence convention (FUSE 0 vs SDK 1) + verify TEE re-sign path [bridges to Phase 60] — `2026-06-22-ipns-first-publish-sequence-convention.md`
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 59 to break down)
+
+Verification gate: `cargo test` (fuse + winfsp feature sets), winfsp Windows CI, full SDK E2E (local; redis 6380), desktop E2E (dispatch-gated).
+
+### Phase 60: IPNS Verification Cross-Layer Closeout: Desktop and API
+
+**Goal:** Extend verified IPNS resolution beyond the FUSE crate to the remaining desktop Tauri resolve sites, and recover the per-operation IPNS signature-verification CPU cost on the API publish/resolve hot path — without weakening the zero-knowledge integrity model (untrusted / DHT-sourced records must still be fully verified).
+**Requirements**: HARD-11
+**Depends on:** Phase 58 (resolve_ipns_verified chokepoint), Phase 59 (unified first-publish sequence convention)
+**Plans:** TBD (run /gsd-plan-phase 60)
+
+Scope (captured todos):
+
+- [ ] Route `apps/desktop/src-tauri` `resolve_ipns` sites (`prepopulate.rs` ~43/110/177/236, `vault.rs` ~21/250) through a verified resolver with scoped fail-closed parity — `2026-06-22-desktop-resolve-ipns-verified-coverage.md`
+- [ ] Cache / short-circuit redundant IPNS signature verification on the API publish/resolve hot path (`apps/api/src/ipns/ipns.service.ts`): skip re-verifying DB-authoritative records this server just signed/persisted, and/or a short-TTL verified-record cache keyed by `(ipnsName, sequenceNumber, signature)`; MUST still verify externally-sourced / DHT records (someguy resolves) — `2026-06-23-cache-redundant-ipns-signature-verification-hot-path.md`
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 60 to break down)
+
+Verification gate: apps/api jest specs, full SDK E2E, desktop E2E (dispatch-gated); a measured per-op verification-cost recovery (benchmark/prototype) for the API short-circuit.
+
 ---
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33 -> 34 -> 35 -> 36 -> 37 -> 38 -> 39 -> 40 -> 41 -> 42 -> 43 -> 44 -> 45 -> 46 -> 47 -> 48 -> 49 -> 50 -> 51 -> 52 -> 53 -> 54 -> 55 -> 56 -> 57 -> 58
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22 -> 23 -> 24 -> 25 -> 26 -> 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33 -> 34 -> 35 -> 36 -> 37 -> 38 -> 39 -> 40 -> 41 -> 42 -> 43 -> 44 -> 45 -> 46 -> 47 -> 48 -> 49 -> 50 -> 51 -> 52 -> 53 -> 54 -> 55 -> 56 -> 57 -> 58 -> 59 -> 60
 
 | Phase                                     | Milestone | Plans Complete | Status   | Completed  |
 | ----------------------------------------- | --------- | -------------- | -------- | ---------- |
@@ -1094,3 +1134,4 @@ _Last updated: 2026-06-19 — reopened v1.1 with hardening block; added phases 5
 _Total M1.1 phases: 18 (18-35 complete) | Concern resolution: 5 phases | Post-milestone: 5 phases (36-40) | Gap closure: 3 phases (42-44) | Hardening block: 6 phases (50-55)_
 _Last updated: 2026-06-21 — added deferred-findings hardening Phases 56–58 (HARD-07..09): FUSE/IPNS durability, API CID/provider hardening, IPNS signature-verify coverage; sourced from the Phase 50–55 / PR #529 + #538 review backlog. Filed resolved todos #5 (IPNS S1/S2/S3 → #529) and #10 (Tier-1/2 refactor → #538) to completed/._
 _Last updated: 2026-06-22 — Phase 58 planned: 4 plans (58-01 CBOR binding + resolve_ipns_verified chokepoint, 58-02 non-CAS D-09 sequence gate, 58-03 web/sdk-core resolve dedup, 58-04 shared cross-language verify vectors) in 2 waves (W1: 58-01/02; W2: 58-03/04 depends_on 58-01)._
+_Last updated: 2026-06-23 — added Phases 59–60 (HARD-10..11) from the 2026-06-23 pending-todo audit: 59 FUSE IPNS verify/publish hardening + cleanup (the Phase 56/58 long-tail, incl. 2 partial residuals), 60 IPNS verification cross-layer closeout (desktop verified-resolve + API hot-path verify caching). Not yet planned._

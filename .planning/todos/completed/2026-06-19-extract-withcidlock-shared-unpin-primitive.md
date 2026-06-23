@@ -8,6 +8,8 @@ files:
   - apps/api/src/ipfs/pending-unpin/pending-unpin.processor.ts
 ---
 
+> **Resolved by PR #541** (merged 2026-06-22). Verified already-fixed in the 2026-06-23 pending-todo audit (independent adversarial re-check confirmed). Archived from pending.
+
 ## Problem
 
 The `pg_advisory_xact_lock(hashtext($1)::bigint)` lock SQL plus the

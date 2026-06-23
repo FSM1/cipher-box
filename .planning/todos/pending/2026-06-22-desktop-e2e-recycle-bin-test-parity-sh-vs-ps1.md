@@ -1,6 +1,13 @@
-# Desktop E2E recycle-bin: stronger bin-published assertion (API round-trip)
-
-Source: Phase 56 ship — diagnosing the Windows desktop E2E failure.
+---
+created: 2026-06-22T00:00:00.000Z
+title: "Desktop E2E recycle-bin: stronger bin-published assertion (API round-trip)"
+area: test-infra
+severity: low
+source: Phase 56 ship — diagnosing the Windows desktop E2E failure
+files:
+  - tests/desktop-e2e/scripts/test-recycle-bin.sh
+  - tests/desktop-e2e/scripts/test-recycle-bin.ps1
+---
 
 ## Done in Phase 56
 
