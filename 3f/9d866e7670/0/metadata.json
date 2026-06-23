@@ -1,0 +1,128 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3f9d866e7670",
+  "session_id": "f4dbe4bc-e7cc-4e1a-a9d7-881fe8f116bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T20:13:37.954191Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4a24ddbe758f",
+  "token_usage": {
+    "input_tokens": 20476,
+    "cache_creation_tokens": 207256,
+    "cache_read_tokens": 6901413,
+    "output_tokens": 83010,
+    "api_call_count": 45
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute Phase 59 (FUSE IPNS Verify/Publish Hardening and Cleanup) — 4 sequential plans addressing IPNS error propagation, enum migration, dead-code removal, and sequence unification — using the GSD wave-execution workflow. Mid-execution, the user also asked for a staging DB investigation into a quota discrepancy.",
+    "outcome": "Waves 1–3 (plans 59-01, 59-02, 59-03) completed and verified with 96 tests passing and zero new clippy warnings in the fuse crate. Wave 4 (59-04) was still running at transcript end. The staging DB query confirmed 23/43 folder_ipns records are unsigned legacy records (53%), directly validating the VerifyError::Legacy hardening. The quota investigation was initiated but not resolved.",
+    "learnings": {
+      "repo": [
+        "Root `npm test` runs `pnpm --parallel -r run test` — full monorepo parallel, RAM-starving; scope Rust-only phases to `cargo test -p cipherbox-fuse` instead",
+        "CI does not run clippy — only `cargo test`, winfsp CI, and E2E are enforced gates; clippy clean is advisory not blocking",
+        "Pre-existing `vec-init-then-push` and `type_complexity` clippy warnings in `cipherbox-crypto` cause `cargo clippy -D warnings` to fail at the dependency level before fuse lints are reported; use `--no-deps` to isolate fuse",
+        "53% of staging `folder_ipns` rows are unsigned legacy records (signed_record IS NULL); signing convention landed 2026-04-04 (#448) — rows predating that are never auto-upgraded unless re-published or TEE re-signs (every 6h on enrolled names)",
+        "Two 'partial-fields' rows exist on staging: signed_record present but public_key NULL — verify.rs treats these as a potential downgrade vector (fail-closed), distinct from true legacy",
+        "FUSE embedded sequence 0 on first publish while TS SDK embedded 1 and API assumed 0+1=1 — this skew required a tolerance in verify.rs that plan 59-04 removes",
+        "Worktree isolation adds unnecessary overhead for strictly sequential single-plan-per-wave phases; it only pays off when plans execute concurrently",
+        "Staging Postgres: container `cipherbox-staging-postgres-1`, user `cipherbox`, db `cipherbox_staging`; accessible via SSH to `76.13.151.200`"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "line": 225,
+          "finding": "Finding A: build_folder_metadata was swallowing a wrap_key error and publishing a FilePointer with ipns_private_key_encrypted: None, making the file unrecoverable"
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "finding": "Finding B: no re-resolution occurred when file_meta_ipns_name changed under an unchanged mtime, leaving stale CID/keys cached"
+        },
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 651,
+          "finding": "Transient compile errors at this line during Wave 2's atomic VerifyError::Legacy enum migration — expected while all 9 match arms propagate across 6 files"
+        },
+        {
+          "path": "crates/fuse/src/events.rs",
+          "line": 104,
+          "finding": "One of two write sites for the now-removed VerifiedResolve::signature_verified field (Wave 3, Finding E.1)"
+        },
+        {
+          "path": "scripts/gen-ipns-verify-vectors.ts",
+          "finding": "Vector generator had public_key/private_key in its interface and all 8 push sites; removed in Wave 3 along with unused bytesToHex helper; tests/vectors/ipns/verify.json regenerated"
+        },
+        {
+          "path": "crates/fuse/src/publish.rs",
+          "line": 75,
+          "finding": "Pre-existing clippy Default-impl warning at line 75 — not introduced by phase 59; confirm pre-existing before flagging in review"
+        }
+      ],
+      "workflow": [
+        "GSD #2070: executor writes SUMMARY.md inside a worktree but worktree is force-removed before committing it — summary is lost permanently; mitigation is to commit SUMMARY before triggering cleanup-wave",
+        "When worktrees genuinely need node_modules (parallel concurrent agents), subagents must run `pnpm i` to initialize their own copy — never symlink back to parent checkout; symlinks cause cleanup-wave to fail closed on untracked files",
+        "cleanup-wave helper fails closed on any untracked files in the worktree (including node_modules symlinks) — pre-merge cleanup of untracked files is required",
+        "cleanup-wave prints 'commit_failed' as a false-negative even when the commit lands — do not retry on this message alone; verify with git log",
+        "Sequential phases (one plan per wave, strict dependency chain) should skip worktree isolation entirely; worktrees only add value when multiple plans execute concurrently",
+        "Staging DB legacy-record queries: `SELECT count(*) FILTER (WHERE signed_record IS NULL) AS legacy, count(*) FILTER (WHERE signed_record IS NOT NULL) AS signed FROM folder_ipns WHERE latest_cid IS NOT NULL` is the authoritative check for unsigned IPNS records"
+      ]
+    },
+    "friction": [
+      "Two Cloudflare 522 errors during execution — first hit mid-Wave-1 agent run (agent survived, work was complete but SUMMARY.md uncommmitted); second hit during the cleanup-wave merge step",
+      "mktemp template collision caused cleanup-wave manifest variable to be empty on first attempt, requiring a retry with a fixed path",
+      "Worktrees were used despite the phase being strictly sequential (one plan per wave) — this was unnecessary and caused the node_modules symlink problem and the SUMMARY.md commit risk",
+      "Wave 1 subagent created a node_modules symlink back to parent checkout to satisfy husky pre-commit hooks, which then blocked the cleanup-wave merge",
+      "cargo clippy -D warnings exits non-zero due to pre-existing crypto-crate errors before fuse-crate lints are even checked, making the plans' stated acceptance criterion unachievable as written",
+      "plans' 'clippy -D warnings exits 0' acceptance criterion was never literally satisfiable due to pre-existing crypto dependency failures — required --no-deps workaround to verify fuse-only cleanliness"
+    ],
+    "open_items": [
+      "Wave 4 (59-04) still executing at transcript end — sequence-0-to-1 unification in publish.rs + removal of verify.rs skew allowance + replay.rs changes",
+      "Storage quota discrepancy investigation not completed: user 0x046d97e4bdb4e5f98f86bc9ff0367e1e427e18a28fba558827b01b8133cacdd55f769aebb29e4941e5e70fd0d1303941af252f0411e7c45cabfd2f10697fe02a1b shows 441MB used with empty vault and bin",
+      "D.1 TODO marker left in publish_with_cas_retry: journal_entry param retained with a 'D-01a TODO' comment rather than being removed — deferred cleanup",
+      "Production legacy IPNS record count unknown — staging is 53% unsigned, but prod DB access was not available; same SQL query would answer it",
+      "Two partial-fields folder_ipns rows on staging (signed_record non-null, public_key NULL) warrant monitoring — neither legacy nor fully modern, treated as downgrade vector by verify.rs",
+      "Phase 60 bridges from the sequence-unification change in 59-04 — dependency noted in plan but cross-phase validation deferred"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 9,
+      "user_lines_removed": 6,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        "crates/fuse/src/publish.rs": 6,
+        "crates/fuse/src/replay.rs": 2
+      },
+      "user_removed_per_file": {
+        "crates/fuse/src/publish.rs": 4,
+        "crates/fuse/src/replay.rs": 2
+      }
+    }
+  ]
+}
