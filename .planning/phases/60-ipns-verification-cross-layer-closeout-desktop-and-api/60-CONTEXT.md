@@ -30,7 +30,7 @@ Phase 60 converts IPNS resolution to a **strict, fail-closed, zero-knowledge int
 
 ### Stream A — Strict verify cutover
 
-- **D-02 — Unify ALL first-publish producers to embed sequence `1`.** Seven sites (the two named in the todo plus five the recon found):
+- **D-02 — Unify ALL first-publish producers to embed sequence `1`.** Nine sites (the two named in the todo plus seven the recon + researcher found; verify each by symbol before editing):
   1. `crates/fuse/src/write_ops/implementation/mkdir.rs:173` (FUSE new folder)
   2. `crates/fuse/src/platform/windows/write_ops.rs:201` (Windows new folder)
   3. `crates/fuse/src/metadata.rs:557` (FUSE bin first publish — `make_bin_record(0)`)
@@ -38,6 +38,8 @@ Phase 60 converts IPNS resolution to a **strict, fail-closed, zero-knowledge int
   5. `apps/web/src/hooks/useAuth.ts:191` (web vault-key blob — fires on every new vault)
   6. `apps/web/src/hooks/useAuth.ts:208` (web root-folder metadata — fires on every new vault)
   7. `apps/web/src/services/vault-settings.service.ts:131` (web vault settings first publish)
+  8. `apps/desktop/src-tauri/src/commands/vault.rs:109` (desktop vault-key blob init — researcher addition)
+  9. `apps/desktop/src-tauri/src/commands/vault.rs:154` (desktop root-folder init — researcher addition)
 - **D-03 — Tighten the API first-publish gate to reject embedded `0`.** `apps/api/src/ipns/ipns.service.ts:279-285` currently accepts embedded ∈ {0n, 1n} on first publish; require it to start at `1` so the source of truth matches the unified producers. (`:356-357` already forces DB sequence `1`.)
 - **D-04 — Remove all Rust degraded-acceptance paths.** Delete the all-fields-absent `Ok(None)` legacy branch (`crates/api-client/src/ipns.rs:77-80`); remove the `VerifyError::Legacy` variant (`crates/fuse/src/verify.rs:21-24`, Display `:34-37`) and fold all 9 caller arms (`events.rs`, `metadata.rs` ×3, `publish.rs` ×2, `fs.rs`, `replay.rs` ×2) into their existing fail-closed `Invalid` handling; drop the skew disjunct at `verify.rs:124` to strict `embedded_seq == resp_seq`.
 - **D-05 — Remove all TS degraded-acceptance paths.** Delete the legacy `else` fall-through (`packages/sdk-core/src/ipns/index.ts:293-295`) so a record lacking signature fields throws; drop the skew disjunct (`:285-292`) to strict equality.
@@ -48,7 +50,7 @@ Phase 60 converts IPNS resolution to a **strict, fail-closed, zero-knowledge int
 ### Stream B — Verified-resolve coverage
 
 - **D-08 — Close the `crates/sdk` unverified bypasses via an `api-client` verified-resolve wrapper.** `crates/sdk/src/registry.rs:170` and `crates/sdk/src/sync.rs:201` call raw `resolve_ipns` with zero verification (accept tampered CIDs — broader than the legacy hole). The verified chokepoint currently lives in `cipherbox-fuse`, which the SDK does not depend on; add a verified-resolve wrapper in `crates/api-client` (or another crate the SDK + FUSE + desktop all depend on) and route these sites through it.
-- **D-09 — Route the desktop Tauri `resolve_ipns` sites through the verified resolver.** `apps/desktop/src-tauri/src/prepopulate.rs` (~43/110/177/236) and `apps/desktop/src-tauri/src/vault.rs` (~21/250), with the same per-operation scoped fail-closed posture the FUSE sites use. Verify line numbers by symbol before editing.
+- **D-09 — Route the desktop Tauri `resolve_ipns` sites through the verified resolver.** `apps/desktop/src-tauri/src/fuse/prepopulate.rs` (~43/110/177/236) and `apps/desktop/src-tauri/src/commands/vault.rs` (~21/250) — note the researcher corrected these paths from the todo's `src/prepopulate.rs`/`src/vault.rs`. Apply the same per-operation scoped fail-closed posture the FUSE sites use. Verify line numbers by symbol before editing.
 
 ### Stream C — API hot-path verify caching
 
@@ -117,9 +119,9 @@ Two recon workflows mapped these with file:line precision. The planner should tr
 | 13 | API service | `ipns.service.ts:226`, `:494`, `:512-520` | nullable pubkey/signedRecord enrich | require non-null; remove enrich |
 | 14 | Vector | `tests/vectors/ipns/verify.json` + `crates/fuse/tests/ipns_verify_vectors.rs:88-89/134/164` | `legacy-absent`→legacy, `first-publish-skew`→valid | reclassify both → invalid; regen (D-10) |
 
-### Producers to unify to embed `1` (7) — see D-02
+### Producers to unify to embed `1` (9) — see D-02
 
-mkdir.rs:173, windows/write_ops.rs:201, metadata.rs:557, sdk-core/vault/index.ts:44, useAuth.ts:191, useAuth.ts:208, vault-settings.service.ts:131. (FUSE replay child-folder `replay.rs:628` already embeds 1; all file/folder-update paths use `seq+1` and are out of scope.)
+mkdir.rs:173, windows/write_ops.rs:201, metadata.rs:557, sdk-core/vault/index.ts:44, useAuth.ts:191, useAuth.ts:208, vault-settings.service.ts:131, commands/vault.rs:109, commands/vault.rs:154. (FUSE replay child-folder `replay.rs:628` already embeds 1; all file/folder-update paths use `seq+1` and are out of scope.) Note: the researcher reported several inventory line numbers shifted (e.g. api-client `Ok(None)` at :78-79, `Legacy` arm at :69-71, TS legacy else block at :293-295 with warn at :294, codec change is ADDING `if (!signedRecord) return null`); see 60-RESEARCH.md for the verified line set.
 
 ### Facts that bound the plan
 
