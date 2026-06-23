@@ -1,0 +1,221 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ee36a7ea6464",
+  "session_id": "f4dbe4bc-e7cc-4e1a-a9d7-881fe8f116bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T20:58:12.859628Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4712be23211e",
+  "token_usage": {
+    "input_tokens": 23514,
+    "cache_creation_tokens": 725741,
+    "cache_read_tokens": 25171249,
+    "output_tokens": 187919,
+    "api_call_count": 98
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01HB29MWnEJRNXm1V6nmoF3d",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4712be23211e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 321,
+        "end": 322,
+        "entry_ids": [
+          "ddc2cbfa-6afa-46f8-af6d-979671bb7312"
+        ],
+        "tool_use_id": "toolu_01HB29MWnEJRNXm1V6nmoF3d"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HB29MWnEJRNXm1V6nmoF3d"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:capture",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015Dw2qhaMP2rGyccyBdmfUa",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4712be23211e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 390,
+        "end": 391,
+        "entry_ids": [
+          "85fce10e-ccfe-438f-a7c1-8c8fccac5eb5"
+        ],
+        "tool_use_id": "toolu_015Dw2qhaMP2rGyccyBdmfUa"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015Dw2qhaMP2rGyccyBdmfUa"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Execute Phase 59 of CipherBox (FUSE IPNS Verify/Publish Hardening and Cleanup) across 4 sequential wave plans, and separately diagnose why a staging user showed 441MB quota used with an empty vault and bin.",
+    "outcome": "All 4 plans committed on the feature branch with tests green, but phase is marked human_needed (not complete): a deep code review caught a BLOCKER (CR-01) where Finding F's strict sequence equality broke folder resolution for the still-embedded-0 mkdir path; the resolve-side tightening was reverted and Finding F's strict cutover deferred to Phase 60. The staging quota leak was diagnosed as orphaned IPFS pins from addToBin never populating contentCid, and captured as a bug todo.",
+    "learnings": {
+      "repo": [
+        "Phase 59 has a strict 4-plan sequential dependency chain (01→02→03→04) — one plan per wave — making worktree isolation unnecessary overhead (no parallelism to isolate)",
+        "Root npm test = 'pnpm --parallel -r run test' (full monorepo, would starve RAM); scoped post-merge gates to 'cargo test -p cipherbox-fuse' for Rust-only phases",
+        "CI does not run clippy — no .github/workflows references it; 24 clippy warnings are all pre-existing (8 vendored fuse_* ABI structs, rest are too_many_arguments/div_ceil); --no-deps is needed to isolate fuse from crypto dependency warnings",
+        "VerifyError::Legacy fires on 53% of staging records (23/43 have signed_record IS NULL, predating the 2026-04-04 signing convention); the legacy path is not dead weight",
+        "Server quota = live SUM(pinned_cids.size_bytes); the only decrement path is POST /ipfs/unpin → VaultService.guardedUnpin; server has no files/file_versions table — file structure lives in client-encrypted IPNS metadata",
+        "API stores DB sequenceNumber='1' for any first publish regardless of embedded value, persisting the client's embedded-0 record with a DB seq of 1 — so resp_seq=1, embedded_seq=0 is the expected state for mkdir-created folders",
+        "gsd-tools 'commit' helper consistently prints false-negative 'commit_failed' even on successful commits — verify with git log, not the helper's output",
+        "59-04 executor set STATE.md to 'Phase 59 COMPLETE' prematurely in sequential mode before verification/code review ran — STATE must be corrected after the verifier returns",
+        "The phase verifier checks only that claimed changes landed; it does not audit other publish sites — deep code review is the gate that catches cross-layer regressions"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/write_ops/implementation/mkdir.rs",
+          "line": 174,
+          "end_line": 174,
+          "finding": "Interactive folder creation still embeds sequence 0 in create_ipns_record — missed by 59-04, which only changed publish.rs and replay.rs:628. This causes resp_seq=1 vs embedded_seq=0 → VerifyError::Invalid under strict equality, making newly-created folders unresolvable. Unification deferred to Phase 60."
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 202,
+          "end_line": 202,
+          "finding": "Windows folder creation path also embeds sequence 0 in create_ipns_record — same issue as mkdir.rs:174, also missed by 59-04."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "line": 112,
+          "end_line": 112,
+          "finding": "59-04 changed this to strict embedded_seq == resp_seq, which was reverted back to the skew allowance (resp_seq==1 && embedded_seq==0) because mkdir.rs still embeds 0. Strict cutover deferred to Phase 60 with a deferral comment added."
+        },
+        {
+          "path": "crates/fuse/src/replay.rs",
+          "line": 349,
+          "end_line": 349,
+          "finding": "Hard fail-closed on VerifyError::Invalid ('refusing to use CID'), aborting the entire folder-key BFS. This makes the CR-01 regression (strict equality with embedded-0 mkdir records) a complete vault access failure, not a soft degradation."
+        },
+        {
+          "path": "crates/fuse/src/replay.rs",
+          "line": 628,
+          "end_line": 628,
+          "finding": "59-04 correctly updated replay folder-key BFS to embed sequence 1 (kept as-is after revert); only the resolve-side tolerance in verify.rs was reverted."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 280,
+          "end_line": 285,
+          "finding": "API stores DB sequenceNumber='1' for any first publish regardless of embedded value. Combined with line 362 (same logic), this means resp_seq is always 1 for first-published records even when client embedded 0."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 241,
+          "end_line": 290,
+          "finding": "addToBin builds BinEntry but never resolves or populates contentCid or versionCids — these require reading the file's IPNS record (FileMetadata.cid via FilePointer.fileMetaIpnsName), which addToBin never fetches."
+        },
+        {
+          "path": "packages/core/src/bin/types.ts",
+          "line": 37,
+          "end_line": 41,
+          "finding": "contentCid and versionCids are optional fields in BinEntry — always undefined because addToBin never populates them, causing all unpin gates downstream to silently no-op."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 557,
+          "end_line": 557,
+          "finding": "emptyBin gates its unpin call on 'if (entry.contentCid)' — always undefined, so emptying the bin releases zero bytes. Same pattern at permanentDeleteFromBin (~L514) and purgeExpiredEntries (~L599)."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "finding": "updateFolderMetadataAndPublish → addToIpfs → recordPin uploads a fresh pinned metadata blob on every CAS publish and never unpins the superseded blob — causes <10KB-per-publish metadata accumulation in pinned_cids."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 285,
+          "end_line": 287,
+          "finding": "TS SDK resolve side still contains the skew allowance (resp_seq==1 && embedded_seq==0) — only the Rust resolve side was tightened by 59-04, confirming the cross-layer contract was not actually unified and the strict cutover was premature."
+        },
+        {
+          "path": "scripts/gen-ipns-verify-vectors.ts",
+          "line": 366,
+          "end_line": 386,
+          "finding": "CR-02: after 59-04 updated verify.json case-8 to expected_result='invalid', the generator still emits 'valid' (line 366) and its sanity array still expects 'valid' (line 386). Re-running the generator would overwrite the committed fixture and break ipns_verify_cross_language. Reverted by the gap-closure fix."
+        }
+      ],
+      "workflow": [
+        "Worktree isolation should only be used when multiple agents execute concurrently — sequential single-plan waves have no parallelism to protect and worktrees add merge complexity, node_modules issues, and cleanup-wave failure modes",
+        "When a worktree genuinely needs node_modules (parallel waves), subagents must run 'pnpm i' in their own worktree — never symlink back to the parent checkout's node_modules",
+        "GSD #2070 failure mode: executor writes SUMMARY.md but a 522 interruption can hit before the commit; the SUMMARY must be committed in the worktree before running the merge/cleanup step",
+        "The cleanup-wave helper fails closed on untracked files in the worktree (like a node_modules symlink) — must remove untracked non-gitignored files before merge",
+        "Deep code review at the phase-completion gate catches cross-layer regressions the phase verifier misses; the verifier only checks claimed changes, not audit scope",
+        "When a code reviewer returns a BLOCKER, verify it against live source before acting — the CR-01 claim was verified at mkdir.rs:174 and windows/write_ops.rs:202 before reverting",
+        "Use docker exec -i with stdin-piped SQL (not nested quoting via -c) when running psql through an SSH + docker chain to avoid quoting failures",
+        "The gsd-tools 'phase complete' command should not be called until REVIEW.md + VERIFICATION.md are committed and all blockers resolved — sequential executors may prematurely set STATE to COMPLETE"
+      ]
+    },
+    "friction": [
+      "Two Cloudflare 522 connection timeout errors mid-session (one during Wave 1 subagent execution, one during the worktree merge attempt), requiring manual recovery",
+      "mktemp collision on reused template name caused cleanup-wave manifest variable to come up empty, requiring a retry with a fixed path",
+      "node_modules symlink created by the Wave 1 subagent blocked the cleanup-wave pre-commit hook (lint-staged couldn't find its binary); required manual removal before merge",
+      "gsd-tools commit helper consistently reports false-negative 'commit_failed' even on successful commits, requiring git log verification after every commit",
+      "Worktrees were dispatched for a strictly sequential phase with one agent at a time — all the worktree overhead (merge, cleanup-wave, node_modules) bought nothing",
+      "Nested shell quoting prevented 'docker exec -c' psql invocations over SSH — had to switch to stdin-piped SQL",
+      "The 59-04 sequential executor set STATE.md to 'Phase 59 COMPLETE' before verification ran, requiring a correction commit after the verifier returned",
+      "The phase verifier returned human_needed but missed CR-01 because it only checked that claimed file changes landed — gave a false sense of correctness before the deep review ran"
+    ],
+    "open_items": [
+      "Phase 60: complete Finding F's strict sequence cutover — update mkdir.rs:174 and windows/write_ops.rs:202 to embed sequence 1, then remove the skew allowance in verify.rs:112, plus a republish migration for existing embedded-0 signed records on staging",
+      "Human-needed CI gates for Phase 59: winfsp Windows CI build, SDK-E2E test, desktop-E2E test",
+      "Security review (/gsd:secure-phase 59) not yet run — no 59-SECURITY.md exists and enforcement is on",
+      "Bug todo captured: addToBin never populates contentCid/versionCids → emptyBin/purge never release bytes → permanent IPFS quota leak on delete (packages/sdk/src/bin/index.ts)",
+      "Staging user 0e2a64cd has 442MB of orphaned pins (9 CIDs ≥1MB from Mar 30–Apr 2 2026) that could be reclaimed — offered but not executed; requires confirming CIDs are unreachable from current IPNS metadata",
+      "23/43 staging folder_ipns records are legacy (signed_record IS NULL); TEE re-signing every 6h should self-heal active vaults but dormant ones remain legacy indefinitely",
+      "2 staging records have signed_record but NULL public_key (partial-fields edge case); verify code treats these as potential downgrade vectors (fail-closed), distinct from legacy",
+      "Secondary quota leak: superseded metadata blobs accumulate in pinned_cids on every CAS publish (packages/sdk-core/src/folder/registration.ts) — consider unpinning superseded metadata CID on publish"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T20:56:21.876523Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 108,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 108,
+    "total_lines_changed": 112,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
