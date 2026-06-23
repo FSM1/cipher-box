@@ -1,0 +1,137 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f11b8340fa4d",
+  "session_id": "d71a5998-d7f6-46df-b358-10dd6a4b8937",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T16:16:50.303769Z",
+  "branch": "chore/ci-cargo-lock-release-sync",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/cargo-lock-release-sync.yml",
+    ".github/workflows/release-please.yml",
+    ".github/zizmor.yml"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "831f6b79730f",
+  "token_usage": {
+    "input_tokens": 10306,
+    "cache_creation_tokens": 98046,
+    "cache_read_tokens": 2033333,
+    "output_tokens": 52252,
+    "api_call_count": 25
+  },
+  "summary": {
+    "intent": "Fix a broken cargo lock sync job that fails after release-please PRs are merged, because it tries to push directly to a branch-protected `main`.",
+    "outcome": "Added a new `cargo-lock-release-sync.yml` workflow that syncs `Cargo.lock` on the release-please PR branch pre-merge (avoiding protected-branch restrictions), and replaced the post-merge direct-push loop in `release-please.yml` with a PR-based fallback. Security gates (zizmor, actionlint) pass clean.",
+    "learnings": {
+      "repo": [
+        "main is protected with classic branch protection (enforce_admins: true, 13 required status checks) — classic protection does not support per-App bypass actors, so migrating to rulesets would be required to allow bot direct pushes.",
+        "The repo runs zizmor as a hard CI gate; new workflow files must either fix flagged patterns or be added to .github/zizmor.yml ignore lists.",
+        "Single root Cargo workspace with one Cargo.lock covering all six first-party crates including cipherbox-desktop.",
+        "release-please PR branches follow the pattern release-please--branches--main--components--* and are not branch-protected.",
+        "The existing pr-release-preview.yml and release-please.yml both use the artipacked push pattern and are already deferred in zizmor.yml."
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/cargo-lock-release-sync.yml",
+          "finding": "New workflow: syncs Cargo.lock on the release-please PR branch pre-merge using a GitHub App token scoped to contents:write; avoids template injection by not interpolating github.head_ref inside shell scripts."
+        },
+        {
+          "path": ".github/workflows/release-please.yml",
+          "finding": "Replaced broken post-merge direct-push-to-main + retry loop with a PR-based fallback that never pushes to protected main and never red-fails the release workflow."
+        },
+        {
+          "path": ".github/zizmor.yml",
+          "finding": "Added cargo-lock-release-sync.yml to the artipacked ignore list to match the existing deferred pattern for push workflows."
+        }
+      ],
+      "workflow": [
+        "actionlint SC2129 style nit on pre-existing 'Release summary' step is not a required CI check and was left untouched.",
+        "zizmor github-app finding is best fixed by scoping the App token to least-privilege (contents:write) rather than deferring it.",
+        "Template injection risk: never interpolate github.head_ref or other user-controlled context values directly inside inline shell scripts in GitHub Actions."
+      ]
+    },
+    "friction": [
+      "origin/main ref resolution required extra diagnostic steps (full ref lookup) because the standard remote ref wasn't resolving cleanly.",
+      "Unrelated staging Cargo.lock change was present in the working tree and had to be stashed before branching to avoid contaminating the CI fix.",
+      "zizmor flagged two findings on the new workflow file (github-app and artipacked) that required an additional edit round before the security gate passed."
+    ],
+    "open_items": [
+      "The pre-existing actionlint SC2129 style nit on the 'Release summary' step in release-please.yml was not fixed (pre-existing, not introduced by this change).",
+      "Migrating from classic branch protection to rulesets would allow per-App bypass actors and enable simpler direct-push patterns in the future, but was explicitly deferred as a posture-weakening change."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T16:16:29.601728Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 87,
+    "human_modified": 35,
+    "human_removed": 0,
+    "total_committed": 87,
+    "total_lines_changed": 122,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 2651,
+      "user_lines_removed": 2,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        "Cargo.lock": 2,
+        "loadtest-staging-2026-06-22-postgc/summary.tsv": 4,
+        "loadtest-staging-2026-06-22-postgc/upload-throughput-100c/load-test-metrics-upload-throughput-100clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-2026-06-22-postgc/upload-throughput-100c/load-test-metrics-upload-throughput-100clients/metrics-upload-throughput.json": 25,
+        "loadtest-staging-2026-06-22-postgc/upload-throughput-200c/load-test-metrics-upload-throughput-200clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-2026-06-22-postgc/upload-throughput-200c/load-test-metrics-upload-throughput-200clients/metrics-upload-throughput.json": 25,
+        "loadtest-staging-2026-06-22-postgc/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-2026-06-22-postgc/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-upload-throughput.json": 25,
+        "loadtest-staging-2026-06-22/mixed-workload-100c/load-test-metrics-mixed-workload-100clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-2026-06-22/mixed-workload-100c/load-test-metrics-mixed-workload-100clients/metrics-mixed-cb-only-segment-.json": 25,
+        "loadtest-staging-2026-06-22/mixed-workload-100c/load-test-metrics-mixed-workload-100clients/metrics-mixed-workload.json": 81,
+        "loadtest-staging-2026-06-22/mixed-workload-200c/load-test-metrics-mixed-workload-200clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-2026-06-22/mixed-workload-200c/load-test-metrics-mixed-workload-200clients/metrics-mixed-cb-only-segment-.json": 25,
+        "loadtest-staging-2026-06-22/mixed-workload-200c/load-test-metrics-mixed-workload-200clients/metrics-mixed-workload.json": 81,
+        "loadtest-staging-2026-06-22/mixed-workload-50c/load-test-metrics-mixed-workload-50clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-2026-06-22/mixed-workload-50c/load-test-metrics-mixed-workload-50clients/metrics-mixed-cb-only-segment-.json": 25,
+        "loadtest-staging-2026-06-22/mixed-workload-50c/load-test-metrics-mixed-workload-50clients/metrics-mixed-workload.json": 81,
+        "loadtest-staging-2026-06-22/summary.tsv": 8,
+        "loadtest-staging-2026-06-22/sustained-load-200c/load-test-metrics-sustained-load-200clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-2026-06-22/sustained-load-200c/load-test-metrics-sustained-load-200clients/metrics-sustained-load.json": 53,
+        "loadtest-staging-2026-06-22/upload-throughput-100c/load-test-metrics-upload-throughput-100clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-2026-06-22/upload-throughput-100c/load-test-metrics-upload-throughput-100clients/metrics-upload-throughput.json": 25,
+        "loadtest-staging-2026-06-22/upload-throughput-200c/load-test-metrics-upload-throughput-200clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-2026-06-22/upload-throughput-200c/load-test-metrics-upload-throughput-200clients/metrics-upload-throughput.json": 25,
+        "loadtest-staging-2026-06-22/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-2026-06-22/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-upload-throughput.json": 25,
+        "loadtest-staging-postrestart/summary.tsv": 2,
+        "loadtest-staging-postrestart/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-staging-postrestart/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-upload-throughput.json": 25,
+        "loadtest-validate-roots/A/summary.tsv": 2,
+        "loadtest-validate-roots/A/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-validate-roots/A/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-upload-throughput.json": 25,
+        "loadtest-validate-roots/B/summary.tsv": 2,
+        "loadtest-validate-roots/B/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-validate-roots/B/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-upload-throughput.json": 25,
+        "loadtest-validate-roots/C/summary.tsv": 2,
+        "loadtest-validate-roots/C/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-validate-roots/C/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-upload-throughput.json": 25,
+        "loadtest-validate-roots/D/summary.tsv": 2,
+        "loadtest-validate-roots/D/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-validate-roots/D/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-upload-throughput.json": 25,
+        "loadtest-validate-roots/POSTCLEAN/summary.tsv": 2,
+        "loadtest-validate-roots/POSTCLEAN/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-baseline-pre-19.2.json": 117,
+        "loadtest-validate-roots/POSTCLEAN/upload-throughput-50c/load-test-metrics-upload-throughput-50clients/metrics-upload-throughput.json": 25,
+        "scripts/staging-loadtest-sweep.sh": 81
+      },
+      "user_removed_per_file": {
+        "Cargo.lock": 2
+      }
+    }
+  ]
+}

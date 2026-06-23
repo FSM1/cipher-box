@@ -1,0 +1,3 @@
+theres a slight devops type issue that has cropped up due to the cargo lock sync job - this tries to update the cargo lockfile after the release PR is merged, but the push to main obviously fails. 
+
+https://github.com/FSM1/cipher-box/actions/runs/27976841946
