@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "4db0b7d9558c",
+  "session_id": "c95465c8-9342-45df-8c03-82934945aca7",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T23:19:33.855309Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/60-ipns-verification-cross-layer-closeout-desktop-and-api/60-CONTEXT.md",
+    ".planning/phases/60-ipns-verification-cross-layer-closeout-desktop-and-api/60-RESEARCH.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "213985f00737",
+  "checkpoint_transcript_start": 141,
+  "transcript_lines_at_start": 141,
+  "token_usage": {
+    "input_tokens": 141,
+    "cache_creation_tokens": 12522,
+    "cache_read_tokens": 1300326,
+    "output_tokens": 8814,
+    "api_call_count": 6
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Complete the research phase for Phase 60 (IPNS verification cross-layer closeout for desktop and API), inventorying all IPNS producer sites and resolving open design questions about the verification architecture.",
+    "outcome": "Research phase completed with 9 producer sites identified (up from initial 7), CONTEXT.md corrected with accurate file paths and counts, RESEARCH.md generated with Validation Architecture section satisfying the Nyquist gate requirement, committed as c500c5539.",
+    "learnings": {
+      "repo": [
+        "There are 9 IPNS producer sites total, not 7 — two were missed in initial inventory",
+        "The D-08 verified-resolve wrapper belongs in crates/api-client, not elsewhere",
+        "vault.rs embeds hardcoded 0 for IPNS fields in both vault key blob creation and root folder initialization"
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 109,
+          "end_line": 109,
+          "finding": "IPNS producer site: vault key blob creation embeds 0 for IPNS field"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 154,
+          "end_line": 154,
+          "finding": "IPNS producer site: root folder initialization embeds 0 for IPNS field"
+        }
+      ],
+      "workflow": [
+        "Independent research subagents are valuable for catching producer sites that manual inventory misses — the agent found 2 additional sites beyond the initial count",
+        "The GSD commit_failed field is a known false negative — git log is the authoritative source to confirm commit success",
+        "CONTEXT.md should be updated with researcher corrections before spawning the planner, so the planner works from accurate data"
+      ]
+    },
+    "friction": [
+      "commit_failed false negative from gsd helper required manual git log verification to confirm the commit actually landed"
+    ],
+    "open_items": [
+      "9 producer sites all embed hardcoded 0 for IPNS fields — all need to be updated as part of the implementation phase",
+      "D-08 verified-resolve wrapper still needs to be implemented in crates/api-client",
+      "Expiry mechanics and caching design questions were researched but implementation is deferred to subsequent phases"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T23:19:21.645028Z",
+    "agent_lines": 659,
+    "agent_removed": 0,
+    "human_added": 2,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 665,
+    "total_lines_changed": 665,
+    "agent_percentage": 99.09774436090225,
+    "metric_version": 2
+  }
+}

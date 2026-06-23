@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "4db0b7d9558c",
+  "strategy": "manual-commit",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/60-ipns-verification-cross-layer-closeout-desktop-and-api/60-CONTEXT.md",
+    ".planning/phases/60-ipns-verification-cross-layer-closeout-desktop-and-api/60-RESEARCH.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4d/b0b7d9558c/0/metadata.json",
+      "transcript": "/4d/b0b7d9558c/0/full.jsonl",
+      "content_hash": "/4d/b0b7d9558c/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 141,
+    "cache_creation_tokens": 12522,
+    "cache_read_tokens": 1300326,
+    "output_tokens": 8814,
+    "api_call_count": 6
+  }
+}
