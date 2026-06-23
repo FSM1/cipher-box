@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "405bf9f1dabf",
+  "session_id": "f4dbe4bc-e7cc-4e1a-a9d7-881fe8f116bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T20:15:14.423703Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4a24ddbe758f",
+  "token_usage": {
+    "input_tokens": 20476,
+    "cache_creation_tokens": 207256,
+    "cache_read_tokens": 6901413,
+    "output_tokens": 83010,
+    "api_call_count": 45
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute all 4 plans in Phase 59 (FUSE IPNS Verify/Publish Hardening and Cleanup) using the GSD wave-based execution workflow, and separately investigate a staging DB quota discrepancy (441MB used on an empty vault/bin).",
+    "outcome": "Waves 1–3 (plans 59-01, 59-02, 59-03) completed and verified with 96 passing tests; Wave 4 (59-04) was still executing when the transcript ended. The quota investigation was initiated but not yet resolved.",
+    "learnings": {
+      "repo": [
+        "Root `npm test` runs `pnpm --parallel -r run test` (full monorepo) — starves RAM; post-merge gate must be scoped to `cargo test -p cipherbox-fuse` for Rust-only phases",
+        "CI does not run clippy at all; the plans' 'clippy -D warnings exits 0' acceptance criterion is aspirational, not enforced",
+        "23/43 (53%) of staging `folder_ipns` rows are legacy-unsigned (`signed_record IS NULL`), predating the Ed25519 signing convention that landed in #448 on 2026-04-04; oldest row is 2026-03-28",
+        "2 staging rows are 'partial': `signed_record` present but `public_key` NULL — treated by verify.rs as a potential downgrade vector, neither legacy nor modern",
+        "winfsp build is CI-only on macOS; winfsp and crypto clippy warnings are pre-existing and out-of-scope for this phase",
+        "Staging Postgres: container `cipherbox-staging-postgres-1`, user `cipherbox`, db `cipherbox_staging`, persistent volume (not reseeded between runs)",
+        "Phase 59 is a strict sequential 4-plan chain (59-01→02→03→04); worktree isolation provides no benefit and adds merge complexity for single-plan-per-wave phases"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "line": 93,
+          "end_line": 93,
+          "finding": "Pre-existing complex type clippy warning (not introduced by phase 59)"
+        },
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 138,
+          "end_line": 138,
+          "finding": "Pre-existing unneeded return clippy warning"
+        },
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 217,
+          "end_line": 217,
+          "finding": "Pre-existing too_many_arguments clippy warning; also a transient compile error site during the atomic VerifyError::Legacy enum migration in 59-02"
+        },
+        {
+          "path": "crates/fuse/src/replay.rs",
+          "line": 52,
+          "end_line": 52,
+          "finding": "Pre-existing too_many_arguments clippy warning"
+        },
+        {
+          "path": "crates/fuse/src/content_ops.rs",
+          "line": 81,
+          "end_line": 81,
+          "finding": "Pre-existing too_many_arguments clippy warning"
+        },
+        {
+          "path": "crates/fuse/src/publish.rs",
+          "line": 75,
+          "end_line": 75,
+          "finding": "Pre-existing Default impl clippy warning; also the primary file for 59-04 sequence unification (first-publish seq 0→1)"
+        },
+        {
+          "path": "crates/fuse/src/events.rs",
+          "line": 104,
+          "end_line": 104,
+          "finding": "`signature_verified` field removal site (59-03 Finding E.1); caused transient compile errors during cleanup"
+        }
+      ],
+      "workflow": [
+        "GSD #2070 failure mode: executor writes SUMMARY.md but a 522 timeout hits before it can commit the file; rescue by staging and committing SUMMARY.md inside the worktree before running the merge/cleanup step",
+        "When a worktree subagent needs node_modules (e.g. for husky pre-commit hooks), it must run `pnpm i` to initialize its own copy — never symlink back to the parent checkout's node_modules",
+        "Sequential execution (no worktree) is the correct mode for strictly sequential single-plan waves: no merge step, no cleanup-wave, no symlink workarounds, no SUMMARY commit race",
+        "`docker exec -i` with stdin-piped SQL avoids nested shell quoting failures when running queries over SSH into a Docker container",
+        "`cargo clippy --no-deps` scopes lint output to the target crate only, filtering out pre-existing dependency warnings that would otherwise obscure phase-introduced issues"
+      ]
+    },
+    "friction": [
+      "Two separate Cloudflare 522 timeouts interrupted agent runs mid-execution; one hit after all code was committed but before SUMMARY.md was committed, requiring a manual rescue",
+      "`mktemp` reused a template name causing an empty `--manifest` variable in the cleanup-wave helper, requiring a retry with a fixed path",
+      "Worktree had an untracked `node_modules` symlink (created by subagent as a husky hook workaround) that blocked the pre-commit hook during merge; had to remove it manually before merge could proceed",
+      "Nested shell quoting failures when running SQL via SSH+docker exec; required switching to stdin-piped psql approach",
+      "The cleanup-wave tracking helper printed `commit_failed` despite the commit succeeding — a known false-negative that caused unnecessary concern"
+    ],
+    "open_items": [
+      "Wave 4 (59-04) still in-flight at transcript end: unify first-publish IPNS sequence from 0→1, remove verify.rs skew tolerance — this is the Phase 60 bridge change",
+      "Phase completion gates not yet run: TDD RED→GREEN sequence audit for 59-01/02, code review, full regression gate, phase-goal verifier",
+      "Staging quota discrepancy investigation unresolved: user pubkey 0x046d97... shows 441MB used with empty vault and bin — root cause unknown",
+      "2 partial-field staging rows (`signed_record` present, `public_key` NULL) are an intermediate state that falls outside both legacy and modern handling — worth tracking",
+      "Production legacy record ratio unknown; same `SELECT count(*) FILTER (WHERE signed_record IS NULL)` query on prod would give a complete picture",
+      "D.1 `publish_with_cas_retry` retains an unused `journal_entry` parameter with a TODO (D-01a) deferred from 59-03",
+      "24 pre-existing clippy warnings in cipherbox-fuse (structural, not phase regressions) left unresolved since clippy is not a CI gate"
+    ]
+  }
+}
