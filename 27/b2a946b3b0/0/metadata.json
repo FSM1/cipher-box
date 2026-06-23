@@ -1,0 +1,80 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "27b2a946b3b0",
+  "session_id": "f4dbe4bc-e7cc-4e1a-a9d7-881fe8f116bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T19:50:51.952059Z",
+  "branch": "feat/fuse-ipns-verify-publish-hardening-and-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-02-SUMMARY.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fb72c7487437",
+  "token_usage": {
+    "input_tokens": 18056,
+    "cache_creation_tokens": 150848,
+    "cache_read_tokens": 3133176,
+    "output_tokens": 40713,
+    "api_call_count": 26
+  },
+  "summary": {
+    "intent": "Execute all 4 plans in Phase 59 (FUSE IPNS Verify/Publish Hardening and Cleanup) using the GSD wave-based parallel execution workflow, with each plan in its own wave due to strict sequential dependencies.",
+    "outcome": "Waves 1 and 2 completed successfully (plans 59-01 and 59-02 landed), with the workflow corrected mid-run to use sequential (no-worktree) execution. Waves 3 and 4 remain pending.",
+    "learnings": {
+      "repo": [
+        "Phase 59 has a strict 4-plan sequential dependency chain (59-01→02→03→04); one plan per wave means zero parallelism, making worktree isolation counterproductive.",
+        "Root `npm test` runs `pnpm --parallel -r run test` (full monorepo) — will starve RAM; Rust-only phases must scope the post-merge gate to `cargo test -p cipherbox-fuse` instead.",
+        "The `cleanup-wave` helper prints `commit_failed` even when the tracking commit actually lands — known false-negative, do not retry.",
+        "winfsp and crypto-clippy build failures in worktrees are pre-existing CI-only constraints on macOS, not regressions.",
+        "cipherbox-fuse has 95 tests; the cross-language vector test runs separately and must also pass the post-merge gate."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "finding": "Finding A (59-01): `build_folder_metadata` swallowed `wrap_key` errors and published a `FilePointer` with `ipns_private_key_encrypted: None`, creating unrecoverable files. Fixed with proper error propagation."
+        },
+        {
+          "path": "crates/fuse/src/inode.rs",
+          "finding": "Finding B (59-01): Inode pointer-identity check skipped re-resolution when `file_meta_ipns_name` changed under an unchanged mtime, returning stale CID/keys. Fixed by forcing re-resolution on pointer change."
+        },
+        {
+          "path": "crates/fuse/src/",
+          "finding": "Finding C (59-02): `VerifyError::Legacy` was a unit variant requiring a redundant second `resolve_ipns` call at all 9 match-arm sites across 6 files, creating a race window with concurrent publishes. Migrated to `Legacy { cid: String, sequence_number: String }` carrying the already-resolved data."
+        }
+      ],
+      "workflow": [
+        "Worktree isolation should only be used for genuinely concurrent parallel agents; sequential single-plan waves should execute directly on the phase branch to avoid merge overhead and failure modes.",
+        "When a worktree legitimately needs `node_modules`, the subagent must run `pnpm i` inside its own worktree — never symlink back to the parent checkout's `node_modules`.",
+        "GSD failure mode #2070: if a 522 interrupts after an executor writes SUMMARY.md but before committing it, the file exists in the worktree but is lost on cleanup. Rescue by committing the SUMMARY manually inside the worktree before running the merge helper.",
+        "The `cleanup-wave` helper requires a non-colliding manifest path; `mktemp` with a reused template can produce an empty variable that causes the helper to fail with a missing `--manifest` error.",
+        "522 Cloudflare errors from the Anthropic API are retryable transients (retry_after: 120s); completed agent work in a worktree is not lost and can be rescued."
+      ]
+    },
+    "friction": [
+      "Two separate Cloudflare 522 connection timeout errors interrupted execution mid-wave, one nearly losing the Wave 1 SUMMARY.md.",
+      "Worktree isolation was applied unnecessarily to a strictly sequential phase, adding merge/cleanup overhead with no benefit.",
+      "Wave 1 executor created a `node_modules` symlink inside its worktree to satisfy the husky pre-commit hook — a wrong approach that caused the cleanup-wave helper to fail closed on the untracked file.",
+      "`mktemp` template name collision in the cleanup-wave invocation produced an empty manifest variable, requiring a manual retry with a fixed path.",
+      "The `cleanup-wave` helper's `commit_failed` false-negative output is misleading and requires verifying via git log to confirm the commit actually landed."
+    ],
+    "open_items": [
+      "Wave 3 (59-03): collapse dead `journal_entry` branch and `content_ops` dead bindings, remove dead field, fix test/vector — not yet executed.",
+      "Wave 4 (59-04): unify FUSE first-publish embedded sequence to `1`, remove `verify.rs` skew allowance — not yet executed.",
+      "Phase verification and completion steps not yet run (blocked on Waves 3–4 finishing)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T19:50:07.687443Z",
+    "agent_lines": 124,
+    "agent_removed": 0,
+    "human_added": 10,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 134,
+    "total_lines_changed": 139,
+    "agent_percentage": 89.20863309352518,
+    "metric_version": 2
+  }
+}
