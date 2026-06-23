@@ -1,0 +1,170 @@
+ok I am busy with a full staging deployment, and think that with all the recent changes added to the api it is high time for a new round of load testing to ensure that we know whether there has been a significant impact on api performance. I remember previously that there was a load test that could be fired against the staging environment from GH Actions. Look through the past phases when a lot of this instrumentation was added.
+
+---
+
+staging deploy is done now - one thing to check is what surface the apis use - especially if the only aspect being measured is the upload throughput. Now that the sdk is available, would it not make more sense to simulate a bunch of real users hitting the api using the sdk?
+
+---
+
+ok I think you can start a task to kick off all 3 mentioned workflows in the configurations you mentioned, sequentially.
+
+while I do agree that scenario choice should impact, I have not been rigorous with running and checking these performance baselines, and as such I think a lot of the application has changed greatly since the last baselines were collected.
+
+---
+
+ok I think you can start a task to kick off all 3 mentioned workflows in the configurations you mentioned, sequentially.
+
+while I do agree that scenario choice should track what changed, I have not been rigorous with running and checking these performance baselines, and as such I think a lot of the application has changed greatly since the last baselines were collected.
+
+---
+
+so the 50 client mixed workload failed onCreateFolder p95
+
+---
+
+<task-notification>
+<task-id>bzbctyq64</task-id>
+<tool-use-id>toolu_01Gu1oH3Q5uJiw2hdeBPJtvy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/bzbctyq64.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for sweep completion, then surface log" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yeah go ahead and dig in to the staging instance configs.
+
+---
+
+a is perfectly fine and create a todo for enabling periodic GC
+
+---
+
+the issue created mentions a @scripts/staging-loadtest-sweep.sh but this is a scratch file that is never committed.
+
+---
+
+regarding the `drift orphan pins` are there only 32 items pinned on kubo and not in the database pinned cids?
+
+---
+
+<task-notification>
+<task-id>behyxv30p</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/behyxv30p.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for post-GC recheck completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok, so likely need to run a manual GC on kubo
+
+would restarting the kubo docker container possibly help?
+
+---
+
+could someguy be the cause of the slowdown?
+
+---
+
+<task-notification>
+<task-id>wqmjo44cb</task-id>
+<tool-use-id>toolu_01H5oHjdCLUtCNMFKmiD4CKG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/wqmjo44cb.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Map whether the someguy delegated-routing sidecar is on the upload/pin/publish/resolve critical path in CipherBox" completed</summary>
+<result>[{"area":"apps/api IPFS module — synchronous file-upload / pin path (POST /ipfs/upload)","onCriticalPath":"no","summary":"someguy (delegated-routing) is NOT on the synchronous server-side file-upload/pin path, and the cipherbox_ipfs_ipns_duration_seconds{operation=\"pin\"} metric does NOT include any delegated-routing/DHT-provide call.\n\nThe pin timer wraps exactly one call, ipfsProvider.pinFile(file.buffer) (ipfs.controller.ts:106-117). pinFile makes a single blocking HTTP request to the local Kubo node: POST {apiUrl}/api/v0/add?pin=true&amp;cid-version=1 (local.provider.ts:49). That call blocks only on Kubo ingesting the block and writing the local pin; it returns the CID immediately. There is no someguy call, no delegated-routing call, and no explicit DHT-provide call anywhere on this path. The IPFS provider DI wires only LocalProvider against IPFS_LOCAL_API_URL (Kubo, :5001) and has zero reference to DELEGATED_ROUTING_URL/someguy (ipfs-provider.module.ts, ipfs-provider.interface.ts).\n\nsomeguy/DELEGATED_ROUTING_URL is used only by the IPNS subsystem (delegated-routing.client.ts:28, ipns.service.ts), a different path from file pinning. Even there, publishing to someguy is fire-and-forget: the DB record is saved first, then delegatedRouting.publish(...) runs as a detached promise so the API response never blocks on DHT propagation (ipns.service.ts:105-125).\n\nAnnouncing/providing the uploaded file CID to the DHT is therefore asynchronous and off the synchronous pin path: Kubo (ipfs/kubo:v0.40.0) runs with default routing — there is no Routing.Type override delegating provides to someguy (docker-compose.yml ipfs service, lines 21-54; only CORS config is set in web-e2e.yml). DHT advertisement happens via Kubo's background provider/reprovider after add returns, not inside the timed pin call. Net latency conclusion: the pin metric reflects only Kubo local add+pin time; it does not absorb someguy/DHT provide latency.","evidence":["apps/api/src/ipfs/ipfs.controller.ts:106-117 — pin timer wraps only ipfsProvider.pinFile(file.buffer)","apps/api/src/ipfs/providers/local.provider.ts:32-74 — pinFile implementation","apps/api/src/ipfs/providers/local.provider.ts:49 — POST {apiUrl}/api/v0/add?pin=true&amp;cid-version=1 (only network call on pin path; Kubo, not someguy)","apps/api/src/ipfs/providers/ipfs-provider.module.ts:10-19 — IPFS_PROVIDER bound to LocalProvider using IPFS_LOCAL_API_URL/IPFS_LOCAL_GATEWAY_URL; no DELEGATED_ROUTING_URL","apps/api/src/ipfs/providers/ipfs-provider.interface.ts:1-7 — provider surface is pinFile/unpinFile/getFile only; no provide/announce","apps/api/src/ipns/delegated-routing.client.ts:28-31 — DELEGATED_ROUTING_URL (someguy) is consumed only by the IPNS delegated-routing client","apps/api/src/ipns/ipns.service.ts:105-125 — IPNS publish to someguy is fire-and-forget (DB saved first; detached promise), does not block the response","docker/docker-compose.yml:21-54 — Kubo ipfs/kubo:v0.40.0 service has no Routing.Type override delegating provides to someguy","docker/docker-compose.yml:70-90 — someguy sidecar (SOMEGUY_DHT=accelerated, :8190) is a delegated-routing service, separate from the Kubo pin path",".github/workflows/web-e2e.yml:80-83 — only CORS headers set on Kubo, no routing reconfiguration"]},{"area":"apps/api IPNS delegated-routing (someguy) client and integration","onCriticalPath":"partial","summary":"someguy (DELEGATED_ROUTING_URL=http://someguy:8190 in staging/prod) is the PRIMARY delegated-routing backend on BOTH the IPNS publish and resolve paths; delegated-ipfs.dev (DELEGATED_ROUTING_FALLBACK_URL) is the secondary used only when the primary fails. The single DelegatedRoutingClient implements both via the IPFS delegated routing v1 HTTP API: publish = PUT /routing/v1/ipns/{name} (Content-Type application/vnd.ipfs.ipns-record), resolve = GET /routing/v1/ipns/{name} (Accept application/vnd.ipfs.ipns-record).\\n\\n(1) Path placement: PUBLISH is NOT on the API response critical path — ipns.service.ts saves the record to Postgres first, then calls delegatedRouting.publish() fire-and-forget (.catch/.then) and returns immediately; someguy DHT propagation (~10-30s) is deliberately not awaited (ipns.service.ts:91-130). RESOLVE IS on the request critical path of GET /ipns/resolve — resolveRecord() awaits delegatedRouting.resolve() synchronously (ipns.service.ts:469-485), but it is DB-cache-backed: on a BAD_GATEWAY it logs and falls through to the Postgres-cached CID, and even on success it always reads the DB and prefers whichever has the higher IPNS sequenceNumber. So someguy adds latency to resolve but is not a hard dependency for correctness.\\n\\n(2) Fallback trigger: fallback fires when the PRIMARY backend throws after exhausting its own per-backend retry loop (executePublish/executeResolve, maxRetries=3). Inside that loop: network errors / AbortController timeouts (requestTimeoutMs=5_000ms per attempt) are retried with exponential backoff (baseDelayMs=500 * 2^attempt); HTTP 429 is retried honoring Retry-After (capped maxRetryDelayMs=30_000); any other non-2xx (and not 404) throws DelegatedRoutingHttpError -&gt; HttpException BAD_GATEWAY immediately (no retry, no further backend on that error type within the loop). HTTP 404 on resolve is treated as not-found (returns null, NOT an error, NO fallback). When the primary call ultimately throws AND a fallback URL is configured, the client increments cipherbox_delegated_routing_fallbacks_total{operation} and retries the whole request against delegated-ipfs.dev. If no fallback is configured the primary error propagates.\\n\\n(3) Latency cost: primary someguy is a local Docker sidecar (http://someguy:8190) — sub-millisecond/LAN RTT. Fallback to https://delegated-ipfs.dev is a public-internet HTTPS round-trip (TLS handshake + WAN latency, plus that endpoint is documented as slower/rate-limited). Worst case before fallback even begins: the primary burns up to 3 attempts of 5s timeout + 500ms/1000ms backoff (~16.5s) on a hard-down primary, THEN the public fallback round-trip runs its own up-to-3-attempt cycle. For resolve, BAD_GATEWAY short-circuits to the DB cache so the user-visible cost is bounded; for publish all of this is off the response path.\\n\\nMetrics: cipherbox_delegated_routing_requests_total{operation,backend,outcome} counts every attempt outcome (success/error/not_found, backend=primary|fallback); cipherbox_delegated_routing_fallbacks_total{operation} counts each time primary failed and fallback was attempted (defined metrics.service.ts:163-175, incremented in the client).","evidence":["apps/api/src/ipns/delegated-routing.client.ts:27-32 (primary=DELEGATED_ROUTING_URL default https://delegated-ipfs.dev, fallback=DELEGATED_ROUTING_FALLBACK_URL)","apps/api/src/ipns/delegated-routing.client.ts:18-21 (maxRetries=3, baseDelayMs=500, maxRetryDelayMs=30_000, requestTimeoutMs=5_000)","apps/api/src/ipns/delegated-routing.client.ts:48-67 (publish: try primary then fallback; inc fallbacks{operation:'publish'} on primary failure)","apps/api/src/ipns/delegated-routing.client.ts:75-93 (resolve: try primary then fallback; inc fallbacks{operation:'resolve'}; 404 returns null)","apps/api/src/ipns/delegated-routing.client.ts:95-189 (executePublish: retry loop, 429 retry w/ Retry-After, non-retryable -&gt; DelegatedRoutingHttpError -&gt; BAD_GATEWAY, requests counter inc)","apps/api/src/ipns/delegated-routing.client.ts:191-302 (executeResolve: 404 -&gt; not_found null, ok -&gt; success, 429 retry, else BAD_GATEWAY; requests counter inc)","apps/api/src/ipns/delegated-routing.client.ts:304-317 (fetchWithTimeout via AbortController, 5s timeout per attempt)","apps/api/src/ipns/delegated-routing.client.ts:319-334 (getRetryDelayMs: Retry-After seconds/date, capped at 30s)","apps/api/src/ipns/ipns.service.ts:91-130 (publish: DB upsert first, then delegatedRouting.publish fire-and-forget, response not blocked on DHT propagation ~10-30s)","apps/api/src/ipns/ipns.service.ts:469-485 (resolve: 
+... (truncated 5244 chars, full result in /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/wqmjo44cb.output)</result>
+<usage><agent_count>3</agent_count><subagent_tokens>140441</subagent_tokens><tool_uses>44</tool_uses><duration_ms>87184</duration_ms></usage>
+</task-notification>
+
+---
+
+ok, I think its safe to stop the kubo docker, manually adjust the docker-compose to give it a bit more memory (if this is the bottleneck), start the container up again, let it reach a steady state (15-30 min), and after that you can run both the single file pin test as well as a upload-throughput run.
+
+---
+
+while we are waiting, could you take a look at the pinned cids that are missing from kubo?
+
+---
+
+yeah please try and pull the owners for these files/blobs
+
+Also add a note about the necessary reconciliation before GC on the kubo node
+
+---
+
+Would the CPU contention be caused by kubo keeping track of a lot more objects?
+
+---
+
+I think that utilizing both the `Reprovider.Strategy: "roots"` and delegate provision to someguy should be documented - kubo is load bearing so I think that actually it deserves the extra memory.
+
+---
+
+ok maybe before clearing up this situation on kubo, we should utilize it to our advantage to test the someguy as delegate provider and the Reprovider.Strategy: "roots" actually improves the situation - otherwise, the alternative is to write a lot of content (small files) to the system to recreate the situation we currently find ourselves in.
+
+---
+
+while we wait, can you tell me if cpu can be increased by fractional numbers
+
+---
+
+but wont bumping the cpu and restarting the kubo node mean we need to wait another 15-20 minutes for things to settle again?
+
+---
+
+do you think it makes sense to lower someguy's cpu to 0.5?
+
+---
+
+glad we got that settled,  lets go with your proposed values from earlier then
+
+---
+
+<task-notification>
+<task-id>bzs6bgz3p</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/bzs6bgz3p.output</output-file>
+<status>completed</status>
+<summary>Background command "Dispatch Run A: upload-throughput@50 load test (background)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b5wvdc1dy</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/b5wvdc1dy.output</output-file>
+<status>completed</status>
+<summary>Background command "Dispatch Run B: upload-throughput@50 at ipfs cpus=1.5 (background)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+if cleanup is the fix that has me really worried about scalability - 17k objects is only ~ 7.5k files + folders
+
+---
+
+<task-notification>
+<task-id>bdhy4aau6</task-id>
+<tool-use-id>toolu_01Y9ET2E6wgsxrsbd3ziEdji</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/bdhy4aau6.output</output-file>
+<status>completed</status>
+<summary>Background command "Dispatch Run C: upload-throughput@50 at ipfs cpus=2.0 (background)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b69dkna2p</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/b69dkna2p.output</output-file>
+<status>completed</status>
+<summary>Background command "Dispatch Run D: upload-throughput@50 isolation (background)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+land #1, handle #4, then investigate #3
