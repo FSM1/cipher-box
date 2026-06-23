@@ -1,0 +1,73 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b7717d5b0f0e",
+  "session_id": "a86cad4e-ef33-4c8d-97df-fe773a25c7ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-23T17:43:16.869015Z",
+  "branch": "docs/migrate-perf-todos-from-issues",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-22-periodic-kubo-ipfs-gc-on-staging.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "677f58a3cd20",
+  "checkpoint_transcript_start": 158,
+  "transcript_lines_at_start": 158,
+  "token_usage": {
+    "input_tokens": 138,
+    "cache_creation_tokens": 4829,
+    "cache_read_tokens": 434838,
+    "output_tokens": 3116,
+    "api_call_count": 5
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on PR #551 by triaging, fixing, replying to, and resolving each thread.",
+    "outcome": "One unresolved thread from greptile was addressed: a stale 'raise Kubo mem cap' bullet in a planning TODO was removed after confirming both compose files already set memory: 3G (via PR #548). The fix was committed and pushed.",
+    "learnings": {
+      "repo": [
+        "Both docker-compose files already set ipfs container memory to 3G as of PR #548, making any 'consider raising mem cap' planning notes stale.",
+        "Planning TODOs live under .planning/todos/pending/ as markdown files with dated filenames."
+      ],
+      "code": [
+        {
+          "path": ".planning/todos/pending/2026-06-22-periodic-kubo-ipfs-gc-on-staging.md",
+          "finding": "Contained a stale bullet suggesting raising Kubo's memory cap; removed after verifying the cap was already set to 3G in both compose files."
+        }
+      ],
+      "workflow": [
+        "Greptile automated reviewer (not CodeRabbit) was the source of review comments on this PR.",
+        "Docs-only changes to .planning/ markdown don't require running the test suite before committing."
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-23T17:43:04.567588Z",
+    "agent_lines": 4,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "total_lines_changed": 5,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
