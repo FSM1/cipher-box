@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "8ab7632dedd7",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:29:08.359252Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 12691,
+    "cache_creation_tokens": 111525,
+    "cache_read_tokens": 1212526,
+    "output_tokens": 24161,
+    "api_call_count": 14
+  },
+  "summary": {
+    "intent": "Execute all plans in phase 60 (IPNS Verification Cross-Layer Closeout) using wave-based sequential subagent execution, starting with Wave 1 plans 60-01 and 60-02.",
+    "outcome": "Wave 1 plan 60-01 (relocate+harden Rust verify chokepoint) completed successfully with all VerifyError::Legacy references eliminated and crates compiling clean. Plan 60-02 (unify first-publish seq=1) was dispatched but the transcript ends before its result is returned.",
+    "learnings": {
+      "repo": [
+        "Phase 60 has 8 plans across 4 waves; Wave 4 (60-08) is non-autonomous and requires human action (staging wipe + redeploy + smoke-test).",
+        "The GSD harness worktree isolation via Agent tool cannot reliably merge back branches, so sequential subagents on the main feature branch is the correct execution mode for this phase.",
+        "VerifyError::Legacy variant was removed in 60-01; all 9 FUSE caller arms were folded to use Invalid instead — this was declared as 60-04 scope but 60-01 executor handled it proactively.",
+        "No project-specific executor skills payload exists for CipherBox (gsd-tools query returns empty).",
+        "No submodules present — all plans use worktree isolation when applicable."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Was the last VerifyError::Legacy reference; executor folded it to Invalid. Stale mid-edit snapshot caused a false compile-error diagnostic — actual build was clean."
+        },
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "finding": "Destination for the relocated verified-IPNS-resolve implementation moved from crates/fuse/src/verify.rs — now shared across sdk/fuse/desktop."
+        }
+      ],
+      "workflow": [
+        "Mid-edit compiler snapshots from subagents can show stale errors (E0599 for removed variant) that do not reflect the final committed state; always re-run cargo check on the main tree to confirm.",
+        "Sequential gsd-executor subagents on the feature branch (vs worktree isolation) is preferred for crypto-correctness phases where merge conflicts or partial state are dangerous.",
+        "The GSD orchestrator should verify actual build state independently after each subagent completes rather than trusting the subagent's self-reported diagnostics."
+      ]
+    },
+    "friction": [
+      "Subagent for 60-01 reported a compile error (VerifyError::Legacy E0599) that was actually a stale mid-edit snapshot — required manual grep + cargo check to confirm the tree was actually green.",
+      "Worktree isolation via Agent tool is not reliably usable for merge-back in this harness, forcing sequential execution and losing parallelism potential.",
+      "60-01 executor folded FUSE caller arms that were declared in 60-04's scope, creating scope bleed that could cause confusion or conflicts when 60-04 executes."
+    ],
+    "open_items": [
+      "60-02 through 60-08 plans not yet executed — transcript ends mid-Wave 1.",
+      "Wave 4 plan 60-08 (D-01/D-12 operational cutover) requires a human checkpoint for staging wipe + redeploy + smoke-test.",
+      "Need to verify 60-04 (route all Rust consumers fail-closed) still has meaningful work given 60-01 already folded the FUSE arm references.",
+      "Phase verification and STATE.md completion updates pending all 8 plans finishing."
+    ]
+  }
+}
