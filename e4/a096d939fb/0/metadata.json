@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e4a096d939fb",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:10:58.799573Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "crates/api-client/src/ipns.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 11756,
+    "cache_creation_tokens": 103255,
+    "cache_read_tokens": 843265,
+    "output_tokens": 18470,
+    "api_call_count": 11
+  },
+  "summary": {
+    "intent": "Execute all plans in Phase 60 (IPNS Verification Cross-Layer Closeout) using wave-based parallel execution across 4 waves and 8 plans.",
+    "outcome": "Phase initialization completed and Wave 1 started; only plan 60-01 was dispatched (Rust verify chokepoint relocation to crates/api-client/src/ipns.rs) before the transcript ends — full phase execution was not completed.",
+    "learnings": {
+      "repo": [
+        "Phase 60 has 8 plans across 4 waves; Wave 4 (60-08) is non-autonomous and requires human action (staging wipe + redeploy + smoke-test).",
+        "No project-specific executor skills payload exists for cipher-box.",
+        "No submodules present, so all plans use worktree isolation per harness config.",
+        "The GSD harness's worktree isolation mode (isolation='worktree') does not reliably expose branch/path manifests for merge-back, making it unsafe for a strict-fail-closed crypto-cutover phase.",
+        "Sequential gsd-executor subagents on the main working tree is the safer execution mode for this phase — each subagent commits directly to the feature branch and owns STATE/ROADMAP updates."
+      ],
+      "code": [
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "finding": "Target file for relocating the verified-IPNS-resolve implementation from crates/fuse/src/verify.rs; plan 60-01 moves and hardens this chokepoint to be shared by sdk/fuse/desktop."
+        }
+      ],
+      "workflow": [
+        "The execute-phase orchestrator stays lean (~15% context budget) and delegates full execute-plan context to fresh subagents.",
+        "Wave-based execution supports a --wave N flag for pacing, but flags must appear literally in the phase argument — they are not inferred from documentation.",
+        "For crypto-sensitive phases with strict fail-closed requirements, sequential subagent execution on the main branch is preferred over parallel worktree isolation to ensure correctness and clean per-plan verification.",
+        "Build/test gates are enforced between waves before proceeding."
+      ]
+    },
+    "friction": [
+      "The Agent tool's worktree isolation mode does not expose the worktree path/branch manifest, making automated merge-back unreliable — forced a downgrade from parallel worktree execution to sequential on-branch execution.",
+      "Transcript ends mid-execution after only the first plan was dispatched; the session did not complete."
+    ],
+    "open_items": [
+      "Plans 60-02 through 60-08 are not yet executed.",
+      "Wave 1 plans 60-02 (unify first-publish seq=1) and 60-03 (strict TS resolve) not started.",
+      "Wave 2: route Rust consumers fail-closed (60-04), tighten API regime (60-05), regen cross-lang vectors (60-07).",
+      "Wave 3: API publish-path verify cache for CPU cost recovery (60-06).",
+      "Wave 4: non-autonomous D-01/D-12 operational cutover (60-08) — requires human checkpoint for staging wipe + redeploy.",
+      "Phase verification and completion steps not yet reached."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-24T00:10:41.466325Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 125,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 125,
+    "total_lines_changed": 128,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
