@@ -120,6 +120,41 @@ pub fn decode_ipns_cbor_data(data: &[u8]) -> Result<(String, u64), IpnsError> {
     Ok((value, seq))
 }
 
+/// Decode the `"Validity"` bytes from a signed IPNS CBOR data field.
+///
+/// Companion to `decode_ipns_cbor_data` that extracts only the `Validity` field (the RFC3339
+/// expiry timestamp stored as UTF-8 bytes) from the CBOR map. Used by `bind_verified` in
+/// `cipherbox-api-client` for resolve-side EOL/expiry enforcement (D-07, Plan 60-01).
+///
+/// Returns `Some(validity_bytes)` if the "Validity" key is present and contains bytes,
+/// `None` if the key is absent (caller must treat absent Validity as fail-closed invalid).
+///
+/// # Errors
+///
+/// Returns `Err(IpnsError::CborEncodingFailed)` if the buffer is not valid CBOR,
+/// the top-level value is not a map, or the "Validity" entry is not bytes.
+pub fn decode_ipns_cbor_validity(data: &[u8]) -> Result<Option<Vec<u8>>, IpnsError> {
+    let map: CborValue = ciborium::from_reader(data).map_err(|_| IpnsError::CborEncodingFailed)?;
+    let entries = match map {
+        CborValue::Map(m) => m,
+        _ => return Err(IpnsError::CborEncodingFailed),
+    };
+    for (k, v) in entries {
+        let key = match k {
+            CborValue::Text(s) => s,
+            _ => continue,
+        };
+        if key == "Validity" {
+            return match v {
+                CborValue::Bytes(b) => Ok(Some(b)),
+                _ => Err(IpnsError::CborEncodingFailed),
+            };
+        }
+    }
+    // "Validity" key not present — caller treats as fail-closed.
+    Ok(None)
+}
+
 /// Build the CBOR-encoded data field for an IPNS record.
 ///
 /// The field order matches the ipns npm package: TTL, Value, Sequence, Validity, ValidityType.

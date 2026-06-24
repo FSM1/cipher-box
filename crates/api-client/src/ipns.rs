@@ -109,6 +109,32 @@ pub(crate) fn bind_verified(
                 )));
             }
 
+            // D-07: resolve-side EOL/expiry enforcement with 5-minute clock-skew buffer.
+            // Fail-closed: missing or unparseable Validity is treated as expired.
+            let validity_bytes =
+                cipherbox_core::ipns::decode_ipns_cbor_validity(&data_bytes)
+                    .map_err(|e| VerifyError::Invalid(format!("CBOR Validity decode failed: {}", e)))?
+                    .ok_or_else(|| VerifyError::Invalid("IPNS record has no Validity field — fail closed".to_string()))?;
+
+            let validity_str = std::str::from_utf8(&validity_bytes)
+                .map_err(|_| VerifyError::Invalid("IPNS Validity is not valid UTF-8".to_string()))?;
+
+            let expiry_secs = parse_rfc3339_to_unix_secs(validity_str)
+                .ok_or_else(|| VerifyError::Invalid(format!("IPNS Validity parse failed: {}", validity_str)))?;
+
+            // 5-minute skew buffer: reject when expiry < now - 300s.
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            const SKEW_BUFFER_SECS: u64 = 300;
+            if expiry_secs < now_secs.saturating_sub(SKEW_BUFFER_SECS) {
+                return Err(VerifyError::Invalid(format!(
+                    "IPNS record expired: validity={}, now={}",
+                    validity_str, now_secs
+                )));
+            }
+
             // D-08: use the signed/embedded cid (strip "/ipfs/" prefix).
             let cid = embedded_value
                 .strip_prefix("/ipfs/")
@@ -146,6 +172,52 @@ pub async fn resolve_ipns_verified(
         .map_err(|e| VerifyError::Invalid(format!("signature verification error: {}", e)))?;
 
     bind_verified(&resp, verdict)
+}
+
+/// Parse a fixed-format RFC3339 timestamp string to Unix seconds.
+///
+/// The IPNS Validity field uses the format produced by `format_validity_timestamp` in
+/// `crates/core/src/ipns.rs`: `"YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ"` (nanoseconds, UTC).
+///
+/// Returns `None` if the string cannot be parsed; caller should treat this as fail-closed.
+/// This is a manual parse to avoid adding a chrono dependency to `crates/api-client`.
+fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
+    // Expected format: "2026-01-01T00:00:00.000000000Z" (29 chars minimum, ends with Z).
+    // Tolerate missing nanoseconds: "2026-01-01T00:00:00Z" also valid.
+    let s = s.strip_suffix('Z')?;
+    let (date_part, time_part) = s.split_once('T')?;
+
+    let mut date_parts = date_part.split('-');
+    let year: i64 = date_parts.next()?.parse().ok()?;
+    let month: u32 = date_parts.next()?.parse().ok()?;
+    let day: u32 = date_parts.next()?.parse().ok()?;
+
+    // Split off nanoseconds if present.
+    let time_no_nanos = time_part.split('.').next().unwrap_or(time_part);
+    let mut time_parts = time_no_nanos.split(':');
+    let hour: u64 = time_parts.next()?.parse().ok()?;
+    let minute: u64 = time_parts.next()?.parse().ok()?;
+    let second: u64 = time_parts.next()?.parse().ok()?;
+
+    if month < 1 || month > 12 || day < 1 || day > 31 {
+        return None;
+    }
+
+    // Compute days since Unix epoch using the Hinnant civil_from_days algorithm (inverted).
+    // days_from_civil: given (year, month, day) → days since 1970-01-01.
+    let (y, m) = if month <= 2 { (year - 1, month + 9) } else { (year, month - 3) };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let doy = (153 * m as u64 + 2) / 5 + day as u64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days_since_epoch = (era * 146097) as i64 + doe as i64 - 719468;
+
+    if days_since_epoch < 0 {
+        return None; // Pre-epoch timestamp — treat as expired.
+    }
+
+    let total_secs = days_since_epoch as u64 * 86400 + hour * 3600 + minute * 60 + second;
+    Some(total_secs)
 }
 
 /// Resolve an IPNS name to its current CID via the backend.
