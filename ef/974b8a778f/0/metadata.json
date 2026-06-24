@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "ef974b8a778f",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:22:34.740698Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 13821,
+    "cache_creation_tokens": 133811,
+    "cache_read_tokens": 2330129,
+    "output_tokens": 40227,
+    "api_call_count": 22
+  },
+  "summary": {
+    "intent": "Execute Phase 60 (IPNS Verification Cross-Layer Closeout) wave-by-wave, hardening the IPNS verification stack across Rust and TypeScript layers to be strictly fail-closed and removing all legacy degraded-acceptance paths.",
+    "outcome": "Waves 1 and most of Wave 2 completed: plans 60-01 through 60-04 done (4/8), with Wave 2 continuing into 60-05 at transcript end. All cross-plan build/test gates passed (251/251 sdk-core tests green).",
+    "learnings": {
+      "repo": [
+        "Phase 60 has 8 plans across 4 waves; Wave 4 (60-08) is non-autonomous (operational cutover: staging wipe + redeploy + smoke-test) and requires human action.",
+        "The gsd-executor subagent commits `cargo check` clean but sometimes leaves uncommitted artifacts (Cargo.lock updates, stray SUMMARY footer edits) that need manual cleanup between plans.",
+        "60-01 folded all 9 FUSE VerifyError::Legacy caller arms as a compile necessity, overlapping with 60-04's declared scope — wave boundary between plan scopes can blur when compile errors force broader edits.",
+        "crates/fuse/src/verify.rs was a re-export shim; after 60-01 moved the impl to crates/api-client/src/ipns.rs, 60-04 deleted the now-empty file.",
+        "60-02 seq=1 unification had a downstream effect on vault.test.ts (expected 0n → 1n), which 60-03's executor caught and fixed rather than failing.",
+        "Windows winfsp site is CI-gated and cannot be locally verified; expected gap in local validation for desktop Tauri paths."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Was the last VerifyError::Legacy reference; executor folded it to Invalid. A mid-edit compile snapshot made it look like a remaining error but grep confirmed zero Legacy refs post-60-01."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "Deleted by 60-04 after 60-01 moved the implementation to crates/api-client/src/ipns.rs. Was only a re-export shim."
+        }
+      ],
+      "workflow": [
+        "The gsd-commit helper reports 'commit_failed / No staged files match any configured task' even when the commit lands successfully — a known false-negative; always verify with git log rather than trusting the helper response.",
+        "Sequential gsd-executor subagents on the feature branch (rather than worktree isolation) was chosen for a strict fail-closed crypto-cutover phase because worktree branch manifests aren't reliably accessible for merge-back.",
+        "Cargo.lock must be committed alongside Cargo.toml dep additions; executors adding new crate deps (e.g. ciborium for CBOR Validity parsing) don't always auto-commit the lockfile, which creates a latent --locked CI break.",
+        "Stray artifacts left by one executor (SUMMARY footer, Cargo.lock) should be audited and cleaned before the next plan starts to avoid polluting subsequent executor context.",
+        "Wave 1 post-merge gate (cargo check -p cipherbox-fuse + sdk-core tests) is the right cross-plan integration check for changes spanning fuse/metadata.rs and sdk-core ipns paths."
+      ]
+    },
+    "friction": [
+      "gsd-commit helper false-negative ('commit_failed') required manual git log verification after every commit — caused uncertainty about whether changes landed.",
+      "60-01 executor's mid-edit compile error snapshot (metadata.rs:619 VerifyError::Legacy) was stale and misleading; required a manual grep + cargo check to confirm the build was actually clean.",
+      "60-01 executor left Cargo.lock uncommitted after adding ciborium + cipherbox-core deps to api-client, creating a latent --locked CI break that had to be caught and committed manually between plans.",
+      "60-01 executor appended a stray footer to 60-01-SUMMARY.md after its own commit, leaving the file dirty with factually wrong content (said 'verify.rs FOUND' but 60-04 later deleted it); had to be reverted manually.",
+      "Worktree isolation mode couldn't be used because worktree path/branch manifests aren't exposed to the orchestrator, forcing sequential execution and higher wall-clock time."
+    ],
+    "open_items": [
+      "Plans 60-05, 60-06, 60-07 still pending (Wave 2 and Wave 3) at transcript end.",
+      "Plan 60-08 (Wave 4) is intentionally deferred for human execution — non-autonomous operational cutover: staging wipe, redeploy, smoke-test.",
+      "Windows winfsp desktop Tauri paths cannot be locally verified and depend on CI-gated runs.",
+      "Phase-level verification and completion (ROADMAP/STATE updates, verify-work) not yet triggered — only happens after all 8 plans complete."
+    ]
+  }
+}
