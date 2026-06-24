@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f63fc0de98e2",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:35:25.643708Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 12949,
+    "cache_creation_tokens": 115772,
+    "cache_read_tokens": 1340439,
+    "output_tokens": 26592,
+    "api_call_count": 15
+  },
+  "summary": {
+    "intent": "Execute all plans in Phase 60 (IPNS Verification Cross-Layer Closeout) using wave-based sequential subagent execution across 4 waves and 8 plans.",
+    "outcome": "Wave 1 was partially completed — plans 60-01 (relocate/harden Rust verify chokepoint) and 60-02 (unify first-publish seq=1) were confirmed done; 60-03 (strict fail-closed TS resolve) was spawned but its result is not yet captured in the transcript.",
+    "learnings": {
+      "repo": [
+        "Phase 60 has 8 plans across 4 waves: Wave 1 (60-01, 60-02, 60-03), Wave 2 (60-04, 60-05, 60-07), Wave 3 (60-06), Wave 4 (60-08 — non-autonomous operational cutover requiring human action).",
+        "VerifyError::Legacy variant was removed in 60-01 (D-04); all 9 FUSE caller arms were folded to use Invalid instead, despite 60-04 being the declared scope for routing Rust consumers fail-closed.",
+        "The executor project-skills payload for this phase is empty — no project-specific executor skills are registered.",
+        "No submodules present in the repo, so all plans use worktree isolation path.",
+        "Pre-existing dead-code warnings exist in vendored 'fuser' crate and on a test mock; these are not regressions and should be ignored in build output."
+      ],
+      "code": [
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "finding": "60-01 relocated the verified-IPNS-resolve implementation here from crates/fuse/src/verify.rs so sdk/fuse/desktop share one strict fail-closed impl."
+        },
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "finding": "Was the last remaining VerifyError::Legacy reference mid-edit during 60-01; executor confirmed it was folded to Invalid before the plan completed. Stale diagnostic in mid-execution snapshot caused false alarm."
+        }
+      ],
+      "workflow": [
+        "worktree isolation via Agent tool is unreliable for merge-back in a strict fail-closed crypto phase — the orchestrator switched to sequential gsd-executor subagents on the main feature branch to guarantee clean per-plan STATE/ROADMAP updates.",
+        "A mid-execution compile error diagnostic can be a stale mid-edit snapshot; always verify with a fresh cargo check before treating it as a blocker.",
+        "Executor subagents sometimes exceed their declared scope (60-01 folded arms that were 60-04's declared work); downstream plans must re-verify their preconditions rather than assuming prior plans stayed in scope."
+      ]
+    },
+    "friction": [
+      "False-positive compile error (VerifyError::Legacy E0599) reported by executor mid-run required an extra manual cargo check to confirm the tree was actually green.",
+      "Worktree isolation via Agent tool lacks an exposed branch/path manifest, making reliable merge-back impossible for this phase — forced fallback to sequential on-branch execution.",
+      "60-04's declared scope (routing Rust consumers fail-closed) was partially pre-empted by 60-01, creating potential scope overlap that will need reconciliation when Wave 2 runs."
+    ],
+    "open_items": [
+      "60-03 result not yet confirmed — transcript ends while 60-03 subagent is running.",
+      "Waves 2–4 (plans 60-04, 60-05, 60-06, 60-07, 60-08) not yet executed.",
+      "Plan 60-08 is a non-autonomous human-action checkpoint (staging wipe + redeploy + smoke-test) that must be surfaced to the user when Wave 4 is reached.",
+      "60-04 scope needs re-audit before execution since 60-01 already folded some Rust consumer arms — risk of double-patching or missed consumers.",
+      "Phase verification and completion gating (HARD-11) deferred until all 8 plans are done."
+    ]
+  }
+}
