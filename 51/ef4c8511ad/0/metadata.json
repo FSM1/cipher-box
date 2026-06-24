@@ -1,0 +1,63 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "51ef4c8511ad",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:40:23.682513Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 12949,
+    "cache_creation_tokens": 115772,
+    "cache_read_tokens": 1340439,
+    "output_tokens": 26592,
+    "api_call_count": 15
+  },
+  "summary": {
+    "intent": "Execute all plans in Phase 60 (IPNS Verification Cross-Layer Closeout) using wave-based parallel execution across 8 plans in 4 waves, hardening the IPNS verification stack to be strictly fail-closed.",
+    "outcome": "Wave 1 completed successfully (plans 60-01, 60-02, 60-03 done, 3/8 plans), with the Rust verify chokepoint relocated/hardened, all 9 first-publish producers unified to seq=1, and the TS resolve path converted to strict fail-closed. Wave 2+ not shown in transcript.",
+    "learnings": {
+      "repo": [
+        "Phase 60 has 8 plans across 4 waves; Wave 4 (60-08) is non-autonomous — requires human operational cutover (staging wipe + redeploy + smoke-test)",
+        "The codebase has no submodules, so all plans use worktree isolation per the GSD config",
+        "VerifyError::Legacy variant was removed in 60-01 (D-04 decision); all 9 FUSE caller arms were folded to use VerifyError::Invalid instead",
+        "Pre-existing dead-code warnings exist in the vendored `fuser` crate and on a test mock — these are not regressions",
+        "IPNS first-publish producers span 4 layers: FUSE, desktop Tauri, sdk-core, and web (9 total call sites)"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "Old home of the verified-IPNS-resolve implementation; moved to crates/api-client/src/ipns.rs in 60-01 so sdk/fuse/desktop share one impl"
+        },
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "finding": "New canonical location for the strict fail-closed IPNS resolve chokepoint after 60-01"
+        },
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "finding": "Was flagged as a remaining VerifyError::Legacy reference mid-execution, but grep confirmed it was already updated to use VerifyError::Invalid — the diagnostic was a stale mid-edit snapshot"
+        }
+      ],
+      "workflow": [
+        "Sequential gsd-executor subagents on the main working tree was chosen over worktree-isolated parallel agents because the harness can't reliably merge back worktree agent branches — correctness over wall-clock speed for a crypto-critical phase",
+        "A mid-execution compile-error diagnostic from a subagent can be a stale mid-edit snapshot; always verify with an authoritative `cargo check` before treating it as a blocker",
+        "The GSD execute-phase workflow checks for blocking antipatterns, orphaned worktrees, and partial work before dispatching any waves"
+      ]
+    },
+    "friction": [
+      "False compile error report from the 60-01 executor: it reported E0599 (no variant Legacy) even though it had already folded all 9 call sites — required manual grep + cargo check to confirm the tree was actually green",
+      "The Agent tool worktree isolation path is unsupported for merge-back in this harness, forcing a fallback to slower sequential execution on the main branch"
+    ],
+    "open_items": [
+      "Wave 2 (60-04, 60-05, 60-07): route all Rust consumers fail-closed, tighten API regime, regen cross-lang vectors",
+      "Wave 3 (60-06): API publish-path verify cache for CPU cost recovery",
+      "Wave 4 (60-08): D-01/D-12 operational cutover — non-autonomous, requires human to wipe staging + redeploy + run smoke tests",
+      "Windows WinFSP site validation for 60-02 seq=1 change is CI-gated only, not locally verifiable"
+    ]
+  }
+}
