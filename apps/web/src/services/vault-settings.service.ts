@@ -107,14 +107,14 @@ export async function saveVaultSettings(params: {
   const keypair = await deriveVaultSettingsIpnsKeypair(userPrivateKey);
 
   // 4. Resolve current sequence number for monotonic increment
-  let sequenceNumber = 0n;
+  let sequenceNumber = 1n;
   try {
     const resolved = await resolveIpnsRecord(keypair.ipnsName);
     if (resolved) {
       sequenceNumber = BigInt(resolved.sequenceNumber ?? 0) + 1n;
     }
   } catch {
-    // First publish -- start from 0
+    // First publish -- start from 1 (D-02)
   }
 
   // 5. Wrap IPNS private key for TEE republishing (if available)

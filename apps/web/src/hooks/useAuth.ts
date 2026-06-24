@@ -188,7 +188,7 @@ export function useAuth() {
           ipnsPrivateKey: vaultKeyKeypair.privateKey,
           ipnsName: vaultKeyIpnsName,
           metadataCid: keyBlobUpload.cid,
-          sequenceNumber: 0n,
+          sequenceNumber: 1n,
           expectedSequenceNumber: undefined,
         });
         if (!keyPublishResult.success) {
@@ -205,7 +205,7 @@ export function useAuth() {
           ipnsPrivateKey: newVault.rootIpnsKeypair.privateKey,
           ipnsName: rootIpnsName,
           metadataCid: metadataUpload.cid,
-          sequenceNumber: 0n,
+          sequenceNumber: 1n,
           expectedSequenceNumber: undefined,
         });
         if (!folderPublishResult.success) {
