@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "c5a25a4c02fb",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:31:44.631864Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 12691,
+    "cache_creation_tokens": 111525,
+    "cache_read_tokens": 1212526,
+    "output_tokens": 24161,
+    "api_call_count": 14
+  },
+  "summary": {
+    "intent": "Execute all plans in Phase 60 (IPNS Verification Cross-Layer Closeout) using wave-based sequential subagent execution across 4 waves and 8 plans.",
+    "outcome": "Wave 1 partially completed: 60-01 (relocate+harden Rust verify chokepoint) finished and verified green; 60-02 (unify first-publish seq=1) was spawned but transcript ends before its completion.",
+    "learnings": {
+      "repo": [
+        "Phase 60 has 8 plans across 4 waves; Wave 4 (60-08) is non-autonomous (requires human action: staging wipe + redeploy + smoke-test).",
+        "The worktree isolation mode was intentionally bypassed in favor of sequential subagents on the main feature branch due to inability to reliably merge back worktree agent branches in a strict fail-closed crypto-cutover phase.",
+        "VerifyError::Legacy variant was removed as part of D-04 scope; all 9 FUSE caller arms were folded into the new strict error variants within 60-01, even though 60-04 (wave 2) was the declared scope for caller migration.",
+        "No project-specific executor skills payload exists (gsd-tools query returns empty).",
+        "No submodules present, so all plans use worktree isolation by default (though sequential mode was chosen instead)."
+      ],
+      "code": [
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "finding": "60-01 moved the verified-IPNS-resolve implementation here from crates/fuse/src/verify.rs so sdk/fuse/desktop share one implementation."
+        },
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "finding": "Was the last remaining VerifyError::Legacy reference; executor folded it to Invalid as part of 60-01 (confirmed by grep showing zero remaining Legacy references)."
+        }
+      ],
+      "workflow": [
+        "Mid-edit compiler diagnostics can be stale snapshots — always re-run cargo check authoritatively before flagging a compile failure from executor output.",
+        "Sequential subagent mode (no worktree isolation) is safer for crypto-sensitive phases where merge correctness is critical, trading wall-clock time for correctness.",
+        "The GSD workflow's wave execution model gates phase verification/completion on all incomplete plans finishing, even when running a subset wave."
+      ]
+    },
+    "friction": [
+      "The executor for 60-01 reported a compile error (metadata.rs:619 VerifyError::Legacy E0599) that was actually a stale mid-edit snapshot — required an extra manual cargo check round-trip to confirm the tree was actually green.",
+      "Worktree isolation mode (isolation='worktree' in Agent tool) doesn't expose the worktree path/branch manifest, making merge-back unreliable for multi-plan phases — forced fallback to sequential main-branch execution.",
+      "Transcript ends mid-execution (during 60-02 spawn), so outcome is incomplete."
+    ],
+    "open_items": [
+      "60-02 through 60-08 still need to execute (transcript ends during 60-02 spawn).",
+      "Wave 4 (60-08) requires human action — staging wipe, redeploy, and smoke-test — and will surface as a checkpoint when reached.",
+      "Post-wave build gate between waves needs to run before Wave 2 (60-04, 60-05, 60-07) can start.",
+      "Phase verification and STATE.md completion update pending all 8 plans finishing."
+    ]
+  }
+}
