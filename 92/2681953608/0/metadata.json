@@ -1,0 +1,20 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "922681953608",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:56:02.15853Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 14230,
+    "cache_creation_tokens": 165772,
+    "cache_read_tokens": 4118891,
+    "output_tokens": 62735,
+    "api_call_count": 33
+  }
+}
