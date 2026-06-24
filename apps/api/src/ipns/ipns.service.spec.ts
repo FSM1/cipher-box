@@ -9,6 +9,7 @@ import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
+import { ipnsVerifyCache } from './ipns-verify-cache';
 
 // Mock only the record parse + signature verification; keep deriveIpnsName real
 // (the test IPNS name is derived from testPublicKeyBytes via the real function).
@@ -128,6 +129,9 @@ describe('IpnsService', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    // Clear the module-level verify cache so cross-test cache hits don't produce
+    // false negatives on mockVerifyIpnsRecordSignature call-count assertions.
+    ipnsVerifyCache.clear();
   });
 
   describe('publishRecord', () => {

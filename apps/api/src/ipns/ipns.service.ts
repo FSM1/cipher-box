@@ -23,6 +23,7 @@ import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { deriveIpnsName, parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
 import { parseIpnsRecordBytes, parseCachedRecord } from './ipns-record.codec';
+import { ipnsVerifyCache } from './ipns-verify-cache';
 
 @Injectable()
 export class IpnsService {
@@ -84,8 +85,23 @@ export class IpnsService {
       // encodes. A validly-signed record proves possession of the private key,
       // which IS the authority to update this name — the cache is keyed by
       // ipnsName, not by user, so any holder of the key may publish.
-      if (!(await verifyIpnsRecordSignature(dto.ipnsName, recordBytes))) {
-        throw new BadRequestException('IPNS record signature verification failed');
+      //
+      // D-11 short-circuit: if this exact (ipnsName, recordBytes) combination was
+      // already verified by THIS server within the cache TTL, skip the redundant
+      // Ed25519 call. The cache key is `ipnsName:base64(recordBytes)` — the record
+      // bytes uniquely identify the (ipnsName, sequenceNumber, signatureV2) triple
+      // since any change to signatureV2, seq, or CID produces different bytes.
+      // The cache is ONLY populated from successful in-process verifications — never
+      // from the resolve path or DHT records (T-60-20/T-60-21/D-11 invariant).
+      const recordBytesBase64 = Buffer.from(recordBytes).toString('base64');
+      const cacheHit = ipnsVerifyCache.isVerified(dto.ipnsName, '', recordBytesBase64);
+
+      if (!cacheHit) {
+        if (!(await verifyIpnsRecordSignature(dto.ipnsName, recordBytes))) {
+          throw new BadRequestException('IPNS record signature verification failed');
+        }
+        // Record in cache only after a successful in-process verify.
+        ipnsVerifyCache.recordVerified(dto.ipnsName, '', recordBytesBase64);
       }
 
       // Save to DB first so resolve always has a fallback, even if delegated

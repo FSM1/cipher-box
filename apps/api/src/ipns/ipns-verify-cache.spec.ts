@@ -17,7 +17,7 @@
  *   8. resolveRecord never populates the cache (DHT-never-cached)
  */
 
-import { IpnsVerifyCache, CACHE_TTL_MS } from './ipns-verify-cache';
+import { IpnsVerifyCache, CACHE_TTL_MS, ipnsVerifyCache } from './ipns-verify-cache';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { IpnsService } from './ipns.service';
@@ -214,12 +214,23 @@ describe('IpnsService with IpnsVerifyCache', () => {
     service = module.get<IpnsService>(IpnsService);
 
     mockVerifyIpnsRecordSignature.mockResolvedValue(true);
-    // First-publish: embedded seq 1n
-    mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 1n });
+    // First-publish: embedded seq 1n, with signatureV2 so the cache key can be built.
+    // The signatureV2 bytes are derived from testRecordBytes so submissions using
+    // testRecord always produce the same cache key.
+    const testSigV2Bytes = new Uint8Array(64).fill(0xab);
+    mockParseIpnsRecord.mockResolvedValue({
+      value: `/ipfs/${testMetadataCid}`,
+      sequence: 1n,
+      signatureV2: testSigV2Bytes,
+    });
   });
 
   afterEach(() => {
     jest.clearAllMocks();
+    // Clear the module-level singleton cache between tests so each test starts clean.
+    // The cache is a process-level singleton; without this, entries from one test bleed
+    // into subsequent tests and produce false cache-hit / cache-miss results.
+    ipnsVerifyCache.clear();
   });
 
   it('Test 5: verifies on first submission (spy called once)', async () => {
@@ -265,26 +276,40 @@ describe('IpnsService with IpnsVerifyCache', () => {
     mockFolderIpnsRepo.findOne.mockReset();
     mockFolderIpnsRepo.findOne.mockResolvedValue(null);
     mockParseIpnsRecord.mockReset();
-    mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 1n });
+    // SAME signatureV2 bytes as beforeEach default so the cache key matches
+    // what was recorded by the first publishRecord call above.
+    const testSigV2Bytes = new Uint8Array(64).fill(0xab);
+    mockParseIpnsRecord.mockResolvedValue({
+      value: `/ipfs/${testMetadataCid}`,
+      sequence: 1n,
+      signatureV2: testSigV2Bytes,
+    });
     mockVerifyIpnsRecordSignature.mockClear();
 
     // Second call with identical record bytes and same ipnsName
     await service.publishRecord(testUserId, createDto());
-    // On second call with same (ipnsName, seq=1, signatureV2 from testRecordBytes):
-    // the cache already has this entry → verify skipped → spy still at 0 calls
+    // On second call with same (ipnsName, seq=1, signatureV2 from testSigV2Bytes):
+    // the cache already has this entry → verify skipped → spy at 0 calls
     expect(mockVerifyIpnsRecordSignature).toHaveBeenCalledTimes(0);
   });
 
   it('Test 7: always verifies when signatureV2 bytes differ (different record)', async () => {
-    // First submission with record A
+    // First submission with record A (signatureV2 = 0xab bytes from beforeEach default mock)
     await service.publishRecord(testUserId, createDto());
     expect(mockVerifyIpnsRecordSignature).toHaveBeenCalledTimes(1);
 
-    // Second submission with different record bytes → different cache key → verify must run
+    // Second submission with different record bytes → mock returns a different signatureV2
+    // → different cache key → verify must run again
     const differentRecord = Buffer.from('completely-different-record-bytes').toString('base64');
     mockVerifyIpnsRecordSignature.mockClear();
     mockFolderIpnsRepo.findOne.mockResolvedValue(null);
-    mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 1n });
+    // Different signatureV2 bytes → different cache key even for same (ipnsName, seq)
+    const differentSigV2 = new Uint8Array(64).fill(0xcc);
+    mockParseIpnsRecord.mockResolvedValue({
+      value: `/ipfs/${testMetadataCid}`,
+      sequence: 1n,
+      signatureV2: differentSigV2,
+    });
 
     await service.publishRecord(testUserId, createDto({ record: differentRecord }));
     expect(mockVerifyIpnsRecordSignature).toHaveBeenCalledTimes(1);
@@ -292,21 +317,31 @@ describe('IpnsService with IpnsVerifyCache', () => {
 
   it('Test 8: resolveRecord never populates the verify cache (DHT records always verified)', async () => {
     // Resolve path should NOT populate the cache. Verify this by confirming
-    // that calling publishRecord after resolveRecord still runs verify.
+    // that calling publishRecord after resolveRecord still runs verify even when
+    // the resolved record has the same ipnsName/seq/sigV2 as the publish request.
+    const testSigV2Bytes = new Uint8Array(64).fill(0xab); // same as beforeEach mock
     const mockRecordBytes = new Uint8Array([1, 2, 3]);
     mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
+    // Resolve path parses the record — same sigV2/seq as the publish submission
     mockParseIpnsRecord.mockResolvedValue({
       value: `/ipfs/${testMetadataCid}`,
       sequence: 1n,
+      signatureV2: testSigV2Bytes,
     });
     mockFolderIpnsRepo.findOne.mockResolvedValue(null);
 
-    // Call resolveRecord
+    // Call resolveRecord — this must NOT populate the verify cache
     await service.resolveRecord(testIpnsName);
 
-    // Now publishRecord with the same ipnsName — verify must still run (resolve does not populate cache)
+    // Now publishRecord with the same ipnsName — verify must still run
+    // (the cache must NOT have been seeded by the resolve path)
     mockFolderIpnsRepo.findOne.mockResolvedValue(null);
-    mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 1n });
+    // Restore the same signatureV2 in the publish mock
+    mockParseIpnsRecord.mockResolvedValue({
+      value: `/ipfs/${testMetadataCid}`,
+      sequence: 1n,
+      signatureV2: testSigV2Bytes,
+    });
     mockVerifyIpnsRecordSignature.mockClear();
 
     await service.publishRecord(testUserId, createDto());
